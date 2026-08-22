@@ -164,6 +164,13 @@ class _McpsPageState extends State<McpsPage> {
       );
       if (mounted) _reload();
     } catch (error) {
+      // Same reasoning as _setServerEnabled's catch: a policy update can
+      // commit on the backend and still have its RPC response fail (e.g. a
+      // post-commit audit write erroring out), so the displayed state can
+      // no longer be trusted as-is. Reload before showing the error so the
+      // registry — and this tool's picker — reflect whatever actually
+      // happened, not the pre-mutation snapshot.
+      if (mounted) _reload();
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -387,13 +394,24 @@ class _ServerCard extends StatelessWidget {
                             )
                           : Tooltip(
                               message: server.url,
-                              child: SelectableText(
-                                server.url,
-                                maxLines: 1,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontFamily: 'monospace',
-                                  color: palette.textMuted,
+                              // A SelectionArea makes the Text selectable
+                              // (so the endpoint can still be copied)
+                              // without SelectableText's lack of an
+                              // `overflow` param, which let a long
+                              // endpoint clip raw instead of ellipsizing;
+                              // the Tooltip above still surfaces the full
+                              // value on hover/long-press regardless of
+                              // how much is visually truncated.
+                              child: SelectionArea(
+                                child: Text(
+                                  server.url,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontFamily: 'monospace',
+                                    color: palette.textMuted,
+                                  ),
                                 ),
                               ),
                             ),

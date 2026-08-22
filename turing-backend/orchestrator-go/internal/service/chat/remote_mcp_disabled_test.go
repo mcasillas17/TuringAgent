@@ -17,10 +17,10 @@ func TestDisabledRemoteMCPToolDoesNotRequireEgressConsent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.SetMCPServerEnabled(context.Background(), server.ID, true); err != nil {
+	if err := h.repo.SetMCPServerEnabled(context.Background(), server.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.ReplaceMCPServerTools(context.Background(), server.ID, []repository.MCPServerTool{{
+	if err := h.repo.ReplaceMCPServerTools(context.Background(), server.Server.ID, []repository.MCPServerTool{{
 		Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`,
 	}}); err != nil {
 		t.Fatal(err)
@@ -31,7 +31,7 @@ func TestDisabledRemoteMCPToolDoesNotRequireEgressConsent(t *testing.T) {
 	})
 	worker := connectChatTestWorker(t, h, capabilities)
 	defer func() { _ = worker.CloseSend() }()
-	if err := h.repo.SetMCPToolPolicy(context.Background(), server.ID, "vendor.lookup", "disabled"); err != nil {
+	if err := h.repo.SetMCPToolPolicy(context.Background(), server.Server.ID, "vendor.lookup", "disabled"); err != nil {
 		t.Fatal(err)
 	}
 

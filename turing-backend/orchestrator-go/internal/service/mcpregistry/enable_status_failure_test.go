@@ -104,7 +104,7 @@ func TestSetMcpServerEnabledDisableStatusFailureStillNotifiesAuditsAndReturnsInt
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPServerEnabled(context.Background(), server.ID, true); err != nil {
+	if err := repo.SetMCPServerEnabled(context.Background(), server.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	forceMCPServerStatusUpdateFailure(t, database)
@@ -113,13 +113,13 @@ func TestSetMcpServerEnabledDisableStatusFailureStillNotifiesAuditsAndReturnsInt
 	service.SetRegistryChangeNotifier(notifier)
 
 	_, err = service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: false,
+		ServerId: server.Server.ID, Enabled: false,
 	})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("code = %v, want Internal when the post-commit status write fails", status.Code(err))
 	}
 
-	updated, err := repo.GetMCPServer(context.Background(), server.ID)
+	updated, err := repo.GetMCPServer(context.Background(), server.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,13 +172,13 @@ func TestSetMcpServerEnabledDiscoveryFailureStatusFailureStillNotifiesAuditsAndR
 	service.SetRegistryChangeNotifier(notifier)
 
 	_, err = service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: true,
+		ServerId: server.Server.ID, Enabled: true,
 	})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("code = %v, want Internal when the post-commit status write fails", status.Code(err))
 	}
 
-	updated, err := repo.GetMCPServer(context.Background(), server.ID)
+	updated, err := repo.GetMCPServer(context.Background(), server.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

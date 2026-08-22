@@ -372,7 +372,7 @@ func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMc
 	if err != nil {
 		return nil, err
 	}
-	server, err := s.repo.RegisterMCPServer(ctx, repository.ImportedMCPServer{
+	registration, err := s.repo.RegisterMCPServer(ctx, repository.ImportedMCPServer{
 		Name:        validated.Name,
 		URL:         validated.URL,
 		SealedToken: sealed,
@@ -397,6 +397,7 @@ func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMc
 			return nil, status.Error(codes.Internal, "register MCP server failed")
 		}
 	}
+	server := registration.Server
 	// Notify and audit immediately once the repository mutation has
 	// committed — before building the response descriptor — so an
 	// unexpected descriptor/schema failure below can never leave a real,
@@ -405,12 +406,17 @@ func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMc
 	// server's URL: validateServerDefinition has already canonicalized
 	// and hardened it (no userinfo, query, or fragment; classified into
 	// exactly one tier), so this audits what was actually registered,
-	// not raw operator input.
+	// not raw operator input. `adopted` records whether this call reused
+	// an existing migration-0016 (or otherwise legacy) placeholder row
+	// (true) or inserted a genuinely new one (false) — repository-computed
+	// inside the same transaction that decided which happened, so it can
+	// never diverge from what actually got committed.
 	s.notifyRegistryChanged()
 	s.auditMCPEvent(ctx, "mcp.server.registered", server.ID, map[string]any{
-		"name": server.Name,
-		"tier": string(server.Tier),
-		"url":  server.URL,
+		"name":    server.Name,
+		"tier":    string(server.Tier),
+		"url":     server.URL,
+		"adopted": registration.Adopted,
 	})
 	descriptor, err := s.serverDescriptor(ctx, server)
 	if err != nil {

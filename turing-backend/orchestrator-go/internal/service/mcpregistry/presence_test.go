@@ -15,31 +15,31 @@ func TestWithdrawnToolCannotBeReenabledByServerOrPolicyToggle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPServerEnabled(context.Background(), server.ID, true); err != nil {
+	if err := repo.SetMCPServerEnabled(context.Background(), server.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.RecordDiscovery(context.Background(), server.ID, []DiscoveredTool{
+	if err := service.RecordDiscovery(context.Background(), server.Server.ID, []DiscoveredTool{
 		{Name: "vendor.keep", SchemaJSON: `{"type":"object"}`},
 		{Name: "vendor.removed", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.RecordDiscovery(context.Background(), server.ID, []DiscoveredTool{{
+	if err := service.RecordDiscovery(context.Background(), server.Server.ID, []DiscoveredTool{{
 		Name: "vendor.keep", SchemaJSON: `{"type":"object"}`,
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPServerEnabled(context.Background(), server.ID, false); err != nil {
+	if err := repo.SetMCPServerEnabled(context.Background(), server.Server.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPServerEnabled(context.Background(), server.ID, true); err != nil {
+	if err := repo.SetMCPServerEnabled(context.Background(), server.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPToolPolicy(context.Background(), server.ID, "vendor.removed", "safe"); err != nil {
+	if err := repo.SetMCPToolPolicy(context.Background(), server.Server.ID, "vendor.removed", "safe"); err != nil {
 		t.Fatal(err)
 	}
 
-	tools, err := repo.ListMCPServerTools(context.Background(), server.ID)
+	tools, err := repo.ListMCPServerTools(context.Background(), server.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

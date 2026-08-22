@@ -129,11 +129,11 @@ func TestRegisterMCPServerClearsTombstoneAndCreatesDisabledServer(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if registered.Enabled {
+	if registered.Server.Enabled {
 		t.Fatal("explicit registration must arrive disabled")
 	}
-	if registered.URL != "https://vendor.example/mcp" {
-		t.Fatalf("URL = %q", registered.URL)
+	if registered.Server.URL != "https://vendor.example/mcp" {
+		t.Fatalf("URL = %q", registered.Server.URL)
 	}
 
 	// The tombstone must be gone: a plain import can now create it again

@@ -74,6 +74,18 @@ type MCPImportResult struct {
 	Created bool
 }
 
+// MCPRegisterResult reports what RegisterMCPServer did: Adopted is true when
+// the call reused an existing migration-0016 (or otherwise legacy)
+// placeholder row in place (see adoptMCPServerPlaceholder), false when it
+// inserted a genuinely new row. Computing this inside RegisterMCPServer's
+// own transaction — rather than a separate pre-read the service layer would
+// otherwise need before calling it — is what makes it race-safe: nothing
+// between that read and the mutation can change which branch actually ran.
+type MCPRegisterResult struct {
+	Server  MCPServerRecord
+	Adopted bool
+}
+
 type RemoteMCPServerEgress struct {
 	ServerName   string `json:"serverName"`
 	Endpoint     string `json:"endpoint"`
@@ -236,9 +248,12 @@ func (r *Repository) ImportMCPServer(ctx context.Context, input ImportedMCPServe
 // passes in.
 var ErrMCPServerToolsNotAllowed = errors.New("direct MCP server registration does not accept a tools snapshot")
 
-// RegisterMCPServer explicitly (re)registers a server: it atomically clears
-// any matching import tombstone and inserts a new disabled row. Any existing
-// name is refused (bundled names return ErrMCPServerBundled; a real,
+// RegisterMCPServer explicitly (re)registers a server: depending on what it
+// finds for that name, it either inserts a new disabled row (clearing any
+// matching import tombstone atomically) or adopts an existing legacy
+// placeholder row in place — see MCPRegisterResult.Adopted and
+// adoptMCPServerPlaceholder below for the latter. Any other existing name is
+// refused (bundled names return ErrMCPServerBundled; a real,
 // already-configured row — non-empty url — returns ErrMCPServerNameTaken),
 // and a refusal never clears the tombstone — the existing-name check runs,
 // and fails, before the tombstone delete. A Tools snapshot on input is
@@ -263,14 +278,25 @@ var ErrMCPServerToolsNotAllowed = errors.New("direct MCP server registration doe
 // live discovery and ImportMCPServer both use, called here with a nil
 // snapshot (this RPC never accepts Tools) so nothing is reconfirmed —
 // preserving whatever policy an operator had already edited onto a carried
-// tool, since only its presence/enabled state is touched.
-func (r *Repository) RegisterMCPServer(ctx context.Context, input ImportedMCPServer) (MCPServerRecord, error) {
+// tool, since only its presence/enabled state is touched. That preserved
+// policy intentionally stays on the withdrawn row: it is not reset to a
+// default, and it reapplies only if the newly adopted endpoint later
+// reconfirms that exact tool name (present=1) through live discovery. This
+// is the deliberate migration-recovery contract migration 0016 exists for
+// — fail-closed (present=0 keeps the tool unusable until reconfirmed) while
+// not discarding an operator's prior edit — not an oversight to "fix" by
+// resetting it.
+//
+// Which branch ran is reported back via MCPRegisterResult.Adopted, computed
+// inside this same transaction rather than from a separate pre-read, so it
+// can never race a concurrent registration/import deciding differently.
+func (r *Repository) RegisterMCPServer(ctx context.Context, input ImportedMCPServer) (MCPRegisterResult, error) {
 	if input.Tools != nil {
-		return MCPServerRecord{}, ErrMCPServerToolsNotAllowed
+		return MCPRegisterResult{}, ErrMCPServerToolsNotAllowed
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -279,17 +305,17 @@ func (r *Repository) RegisterMCPServer(ctx context.Context, input ImportedMCPSer
 		Scan(&existingID, &existingTier, &existingURL)
 	switch {
 	case err == nil && MCPServerTier(existingTier) == MCPServerTierBundled:
-		return MCPServerRecord{}, ErrMCPServerBundled
+		return MCPRegisterResult{}, ErrMCPServerBundled
 	case err == nil && existingURL != "":
-		return MCPServerRecord{}, ErrMCPServerNameTaken
+		return MCPRegisterResult{}, ErrMCPServerNameTaken
 	case err == nil:
 		return r.adoptMCPServerPlaceholder(ctx, tx, existingID, input)
 	case !errors.Is(err, sql.ErrNoRows):
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM mcp_import_tombstones WHERE name = ?`, input.Name); err != nil {
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
 
 	serverID := ids.New("mcp")
@@ -299,22 +325,22 @@ func (r *Repository) RegisterMCPServer(ctx context.Context, input ImportedMCPSer
 			id, name, transport, url, sealed_token, tier, enabled, created_at
 		) VALUES (?, ?, 'http', ?, ?, ?, 0, ?)
 	`, serverID, input.Name, input.URL, nullableBytes(input.SealedToken), string(input.Tier), createdAt); err != nil {
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO mcp_server_status (mcp_server_id, status)
 		VALUES (?, 'unknown')
 	`, serverID); err != nil {
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
 	record, err := mcpServerByName(ctx, tx, input.Name)
 	if err != nil {
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
-	return record, nil
+	return MCPRegisterResult{Server: record, Adopted: false}, nil
 }
 
 // adoptMCPServerPlaceholder is RegisterMCPServer's placeholder-adoption
@@ -325,36 +351,45 @@ func (r *Repository) RegisterMCPServer(ctx context.Context, input ImportedMCPSer
 // this call adopts, so it says nothing about it), withdraws every tool the
 // placeholder carried without reconfirming any (RegisterMCPServer never
 // accepts a Tools snapshot, so there is nothing to reconfirm), and returns
-// the adopted record. tx is committed on success; the caller's deferred
-// rollback is a harmless no-op afterward.
-func (r *Repository) adoptMCPServerPlaceholder(ctx context.Context, tx *sql.Tx, existingID string, input ImportedMCPServer) (MCPServerRecord, error) {
+// the adopted record with Adopted set to true. tx is committed on success;
+// the caller's deferred rollback is a harmless no-op afterward.
+//
+// Unlike the fresh-insert branch above, this never touches
+// mcp_import_tombstones: a name reaching this branch is, by construction,
+// not tombstoned. A tombstoned name has no mcp_servers row at all — the row
+// is deleted (see DeleteMCPServer) exactly when the tombstone is written —
+// so a row existing here (the SELECT above found one) and that same name
+// being tombstoned are mutually exclusive states application invariants
+// never let coexist. There is no tombstone-clearing step to add here, not
+// because it was forgotten but because there is nothing for it to clear.
+func (r *Repository) adoptMCPServerPlaceholder(ctx context.Context, tx *sql.Tx, existingID string, input ImportedMCPServer) (MCPRegisterResult, error) {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE mcp_servers
 		SET url = ?, sealed_token = ?, tier = ?, enabled = 0
 		WHERE id = ?
 	`, input.URL, nullableBytes(input.SealedToken), string(input.Tier), existingID); err != nil {
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
 	statusResult, err := tx.ExecContext(ctx, `
 		UPDATE mcp_server_status SET status = 'unknown', error = '', checked_at = NULL WHERE mcp_server_id = ?
 	`, existingID)
 	if err != nil {
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
 	if err := expectOneRow(statusResult, "MCP server status not found"); err != nil {
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
 	record, err := mcpServerByID(ctx, tx, existingID)
 	if err != nil {
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
 	if err := replaceServerToolsTx(ctx, tx, record, nil); err != nil {
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return MCPServerRecord{}, err
+		return MCPRegisterResult{}, err
 	}
-	return record, nil
+	return MCPRegisterResult{Server: record, Adopted: true}, nil
 }
 
 // ReplaceMCPServerToken replaces a non-bundled server's sealed credential in
@@ -706,11 +741,15 @@ func (r *Repository) ReplaceMCPServerTools(ctx context.Context, serverID string,
 // tool currently attributed to server, then reconfirm exactly the tools
 // supplied, refusing a name collision with another server's present tool":
 // ReplaceMCPServerTools uses it for live discovery (opening and committing
-// its own transaction around it), and ImportMCPServer folds it into its
-// own already-open transaction so a static mcp.json snapshot's tool
+// its own transaction around it), ImportMCPServer folds it into its own
+// already-open transaction so a static mcp.json snapshot's tool
 // reconciliation rolls back together with the server row mutation it
-// belongs to. Both callers see identical collision/upsert behavior because
-// there is exactly one implementation of it.
+// belongs to, and adoptMCPServerPlaceholder folds it in the same way — with
+// a nil tools snapshot, since RegisterMCPServer never accepts one — so a
+// legacy placeholder's carried tools are withdrawn (not reconfirmed) in the
+// same transaction as the row it withdraws them from. All three callers see
+// identical collision/upsert behavior because there is exactly one
+// implementation of it.
 func replaceServerToolsTx(ctx context.Context, tx *sql.Tx, server MCPServerRecord, tools []MCPServerTool) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE tools SET present = 0, enabled = 0 WHERE mcp_server_id = ?`, server.ID); err != nil {
 		return err

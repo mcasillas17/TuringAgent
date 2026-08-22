@@ -219,15 +219,15 @@ func newRegistryCallHarness(t *testing.T) *registryCallHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPServerEnabled(context.Background(), server.ID, true); err != nil {
+	if err := repo.SetMCPServerEnabled(context.Background(), server.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	h.serverID = server.ID
+	h.serverID = server.Server.ID
 	bus := events.NewBus(8)
 	h.approvals = approvalsvc.New(repo, bus, "approval-secret")
 	h.registry = New(repo, sealer, vendor.Client())
 	h.registry.SetApprovalEnforcer(h.approvals)
-	if err := h.registry.RecordDiscovery(context.Background(), server.ID, []DiscoveredTool{{
+	if err := h.registry.RecordDiscovery(context.Background(), server.Server.ID, []DiscoveredTool{{
 		Name:       "vendor.write",
 		SchemaJSON: `{"type":"object"}`,
 	}}); err != nil {

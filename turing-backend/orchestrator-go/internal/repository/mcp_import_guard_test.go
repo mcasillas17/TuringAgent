@@ -50,8 +50,8 @@ func TestRegisterMCPServerWithoutToolsStillSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if server.Name != "vendor" {
-		t.Fatalf("Name = %q, want vendor", server.Name)
+	if server.Server.Name != "vendor" {
+		t.Fatalf("Name = %q, want vendor", server.Server.Name)
 	}
 }
 
@@ -72,10 +72,10 @@ func TestImportMCPServerPlaceholderAdoptionResetsLivenessStatusToUnknown(t *test
 		t.Fatal(err)
 	}
 	const wantPriorMessage = "down: last probe failed at 2024-01-01T00:00:00Z"
-	if err := repo.SetMCPServerStatus(ctx, placeholder.ID, "down", wantPriorMessage); err != nil {
+	if err := repo.SetMCPServerStatus(ctx, placeholder.Server.ID, "down", wantPriorMessage); err != nil {
 		t.Fatal(err)
 	}
-	before, err := repo.GetMCPServer(ctx, placeholder.ID)
+	before, err := repo.GetMCPServer(ctx, placeholder.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestImportMCPServerPlaceholderAdoptionResetsLivenessStatusToUnknown(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Created || result.Server.ID != placeholder.ID {
+	if !result.Created || result.Server.ID != placeholder.Server.ID {
 		t.Fatalf("result = %+v, want the placeholder adopted in place", result)
 	}
 	if result.Server.Status != "unknown" {
@@ -99,7 +99,7 @@ func TestImportMCPServerPlaceholderAdoptionResetsLivenessStatusToUnknown(t *test
 		t.Fatalf("StatusError = %q, want empty: adoption must reset a prior status message", result.Server.StatusError)
 	}
 
-	after, err := repo.GetMCPServer(ctx, placeholder.ID)
+	after, err := repo.GetMCPServer(ctx, placeholder.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

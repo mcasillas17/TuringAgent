@@ -77,8 +77,11 @@ func TestRegisterMcpServerIsAuditedWithNameTierAndURL(t *testing.T) {
 	if record.payload["url"] != "https://vendor.example/mcp" {
 		t.Fatalf("payload = %+v, want url=https://vendor.example/mcp", record.payload)
 	}
+	if record.payload["adopted"] != false {
+		t.Fatalf("payload = %+v, want adopted=false: this call created a brand-new row, not adopted a placeholder", record.payload)
+	}
 	for key, value := range record.payload {
-		if key != "name" && key != "tier" && key != "url" {
+		if key != "name" && key != "tier" && key != "url" && key != "adopted" {
 			t.Fatalf("payload has unexpected key %q=%v", key, value)
 		}
 		if s, ok := value.(string); ok && strings.Contains(s, "vendor-secret-token") {
@@ -99,12 +102,12 @@ func TestRotateMcpServerTokenIsAuditedAsRotatedOrCleared(t *testing.T) {
 	}
 
 	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-		ServerId: server.ID, BearerToken: "vendor-secret-token",
+		ServerId: server.Server.ID, BearerToken: "vendor-secret-token",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-		ServerId: server.ID, BearerToken: "",
+		ServerId: server.Server.ID, BearerToken: "",
 	}); err != nil {
 		t.Fatal(err)
 	}

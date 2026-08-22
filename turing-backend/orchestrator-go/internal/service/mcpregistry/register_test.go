@@ -179,7 +179,7 @@ func TestRegisterMcpServerClearsMatchingTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.DeleteMCPServer(context.Background(), server.ID); err != nil {
+	if err := repo.DeleteMCPServer(context.Background(), server.Server.ID); err != nil {
 		t.Fatal(err)
 	}
 	tombstoned, err := repo.MCPServerTombstoned(context.Background(), "vendor")
@@ -240,7 +240,7 @@ func TestRegisterMcpServerAdoptsLegacyPlaceholderInsteadOfAlreadyExists(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(ctx, placeholder.ID, []repository.MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.Server.ID, []repository.MCPServerTool{
 		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)
@@ -252,8 +252,8 @@ func TestRegisterMcpServerAdoptsLegacyPlaceholderInsteadOfAlreadyExists(t *testi
 	if err != nil {
 		t.Fatalf("RegisterMcpServer must adopt the placeholder rather than error: %v", err)
 	}
-	if descriptor.GetServerId() != placeholder.ID {
-		t.Fatalf("ServerId = %q, want the placeholder %q adopted in place", descriptor.GetServerId(), placeholder.ID)
+	if descriptor.GetServerId() != placeholder.Server.ID {
+		t.Fatalf("ServerId = %q, want the placeholder %q adopted in place", descriptor.GetServerId(), placeholder.Server.ID)
 	}
 	if descriptor.GetUrl() != "https://vendor.example/mcp" {
 		t.Fatalf("Url = %q, want the registered endpoint populated", descriptor.GetUrl())
@@ -265,7 +265,7 @@ func TestRegisterMcpServerAdoptsLegacyPlaceholderInsteadOfAlreadyExists(t *testi
 		t.Fatalf("liveness = %v, want unknown after adoption", descriptor.GetLiveness())
 	}
 
-	tools, err := repo.ListMCPServerTools(ctx, placeholder.ID)
+	tools, err := repo.ListMCPServerTools(ctx, placeholder.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

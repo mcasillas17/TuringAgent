@@ -696,7 +696,7 @@ func TestSessionServiceServesPublicReadEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.SetMCPServerEnabled(ctx, customServer.ID, true); err != nil {
+	if err := h.repo.SetMCPServerEnabled(ctx, customServer.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.repo.UpsertTools(ctx, []repository.DiscoveredTool{

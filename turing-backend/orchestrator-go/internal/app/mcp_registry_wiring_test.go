@@ -3,6 +3,8 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"log"
 	"os"
 	"path/filepath"
@@ -451,7 +453,7 @@ func TestRegisterMcpServerThroughPublicRPCAdoptsLegacyPlaceholder(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := app.Repository.ReplaceMCPServerTools(context.Background(), placeholder.ID, []repository.MCPServerTool{
+	if err := app.Repository.ReplaceMCPServerTools(context.Background(), placeholder.Server.ID, []repository.MCPServerTool{
 		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)
@@ -463,8 +465,8 @@ func TestRegisterMcpServerThroughPublicRPCAdoptsLegacyPlaceholder(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RegisterMcpServer must adopt the placeholder rather than error: %v", err)
 	}
-	if descriptor.GetServerId() != placeholder.ID {
-		t.Fatalf("ServerId = %q, want the placeholder %q adopted in place", descriptor.GetServerId(), placeholder.ID)
+	if descriptor.GetServerId() != placeholder.Server.ID {
+		t.Fatalf("ServerId = %q, want the placeholder %q adopted in place", descriptor.GetServerId(), placeholder.Server.ID)
 	}
 	if descriptor.GetUrl() != "https://vendor.example/mcp" {
 		t.Fatalf("Url = %q, want the registered endpoint populated", descriptor.GetUrl())
@@ -476,7 +478,7 @@ func TestRegisterMcpServerThroughPublicRPCAdoptsLegacyPlaceholder(t *testing.T) 
 		t.Fatalf("liveness = %v, want unknown after adoption", descriptor.GetLiveness())
 	}
 
-	tools, err := app.Repository.ListMCPServerTools(context.Background(), placeholder.ID)
+	tools, err := app.Repository.ListMCPServerTools(context.Background(), placeholder.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -587,6 +589,96 @@ func TestPublicRegisterAndRotateAuditThroughRealAppWithoutLeakingTheToken(t *tes
 	}
 	if strings.Contains(logged.String(), sentinel) {
 		t.Fatalf("process log leaked the bearer token: %s", logged.String())
+	}
+}
+
+// A placeholder adoption is exactly the "backend commits the row but the
+// caller only cares about the descriptor" case findings #2/#3 are about:
+// this proves it through the real public RPC and the real audit service
+// together, not the repository return value alone (mcp_register_placeholder_adoption_test.go
+// already covers that in isolation). A bearer token is supplied on the
+// adopting call so this simultaneously proves the sealed token this
+// produces is actually persisted on the adopted row, while its sentinel —
+// and its sealed ciphertext — never reach the RPC response, the audit
+// payload, or the process log, exactly like
+// TestPublicRegisterAndRotateAuditThroughRealAppWithoutLeakingTheToken
+// proves for a fresh registration.
+func TestRegisterMcpServerPlaceholderAdoptionWithBearerTokenAuditsAdoptedWithoutLeakingSentinel(t *testing.T) {
+	const sentinel = "mcp-placeholder-adoption-audit-sentinel-3f8a91d0-do-not-leak"
+	app := newMCPWiringTestApp(t, t.TempDir())
+	client := publicMCPRegistryClient(t, app)
+	ctx := publicMCPRegistryContext()
+
+	placeholder, err := app.Repository.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
+		Name: "vendor", URL: "", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var logged bytes.Buffer
+	previousLogOutput := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(previousLogOutput) })
+
+	descriptor, err := client.RegisterMcpServer(ctx, &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp",
+		Tier: turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL, BearerToken: sentinel,
+	})
+	if err != nil {
+		t.Fatalf("RegisterMcpServer must adopt the placeholder rather than error: %v", err)
+	}
+	if descriptor.GetServerId() != placeholder.Server.ID {
+		t.Fatalf("ServerId = %q, want the placeholder %q adopted in place", descriptor.GetServerId(), placeholder.Server.ID)
+	}
+
+	var sealedToken []byte
+	if err := app.database.QueryRowContext(context.Background(),
+		`SELECT sealed_token FROM mcp_servers WHERE id = ?`, placeholder.Server.ID,
+	).Scan(&sealedToken); err != nil {
+		t.Fatal(err)
+	}
+	if len(sealedToken) == 0 {
+		t.Fatal("sealed_token was not persisted on the adopted row")
+	}
+	ciphertext := base64.StdEncoding.EncodeToString(sealedToken)
+
+	registerJSON, err := protojson.Marshal(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(registerJSON), sentinel) {
+		t.Fatalf("RegisterMcpServer response leaked the bearer token: %s", registerJSON)
+	}
+	if strings.Contains(string(registerJSON), ciphertext) {
+		t.Fatalf("RegisterMcpServer response leaked the sealed ciphertext: %s", registerJSON)
+	}
+
+	var payloadJSON string
+	if err := app.database.QueryRowContext(context.Background(),
+		`SELECT payload_json FROM audit_logs WHERE action = 'mcp.server.registered' AND target = ?`, placeholder.Server.ID,
+	).Scan(&payloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(payloadJSON, sentinel) {
+		t.Fatalf("audit payload leaked the bearer token: %s", payloadJSON)
+	}
+	if strings.Contains(payloadJSON, ciphertext) {
+		t.Fatalf("audit payload leaked the sealed ciphertext: %s", payloadJSON)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["adopted"] != true {
+		t.Fatalf("audit payload = %+v, want adopted=true: this call adopted an existing placeholder, not created a fresh row", payload)
+	}
+
+	if strings.Contains(logged.String(), sentinel) {
+		t.Fatalf("process log leaked the bearer token: %s", logged.String())
+	}
+	if strings.Contains(logged.String(), ciphertext) {
+		t.Fatalf("process log leaked the sealed ciphertext: %s", logged.String())
 	}
 }
 

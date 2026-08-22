@@ -59,7 +59,7 @@ func TestThirdPartyDiscoveryRejectsReservedBundledNamespaces(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = service.RecordDiscovery(context.Background(), server.ID, []DiscoveredTool{{
+			err = service.RecordDiscovery(context.Background(), server.Server.ID, []DiscoveredTool{{
 				Name: test.toolName, SchemaJSON: `{"type":"object"}`,
 			}})
 			if err == nil {

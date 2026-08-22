@@ -30,12 +30,12 @@ func TestImportJSONAdoptsLegacyPlaceholderInsteadOfSkippingForever(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(ctx, placeholder.ID, []repository.MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.Server.ID, []repository.MCPServerTool{
 		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPToolPolicy(ctx, placeholder.ID, "vendor.lookup", "safe"); err != nil {
+	if err := repo.SetMCPToolPolicy(ctx, placeholder.Server.ID, "vendor.lookup", "safe"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -63,8 +63,8 @@ func TestImportJSONAdoptsLegacyPlaceholderInsteadOfSkippingForever(t *testing.T)
 		t.Fatal(err)
 	}
 	vendor := findRepositoryServer(t, servers, "vendor")
-	if vendor.ID != placeholder.ID {
-		t.Fatalf("ID = %q, want the placeholder row %q adopted in place", vendor.ID, placeholder.ID)
+	if vendor.ID != placeholder.Server.ID {
+		t.Fatalf("ID = %q, want the placeholder row %q adopted in place", vendor.ID, placeholder.Server.ID)
 	}
 	if vendor.URL != "https://vendor.example/mcp" {
 		t.Fatalf("URL = %q, want the imported endpoint populated", vendor.URL)
@@ -111,7 +111,7 @@ func TestImportJSONAdoptsLegacyPlaceholderWithNoToolsKeyWithdrawsCarriedTools(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(ctx, placeholder.ID, []repository.MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.Server.ID, []repository.MCPServerTool{
 		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)
@@ -134,8 +134,8 @@ func TestImportJSONAdoptsLegacyPlaceholderWithNoToolsKeyWithdrawsCarriedTools(t 
 		t.Fatal(err)
 	}
 	vendorRecord := findRepositoryServer(t, servers, "vendor")
-	if vendorRecord.ID != placeholder.ID {
-		t.Fatalf("ID = %q, want the placeholder %q adopted in place", vendorRecord.ID, placeholder.ID)
+	if vendorRecord.ID != placeholder.Server.ID {
+		t.Fatalf("ID = %q, want the placeholder %q adopted in place", vendorRecord.ID, placeholder.Server.ID)
 	}
 
 	tools, err := repo.ListMCPServerTools(ctx, vendorRecord.ID)
@@ -170,7 +170,7 @@ func TestImportedPlaceholderEnableWithFailedDiscoveryDoesNotActivateWithdrawnToo
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(ctx, placeholder.ID, []repository.MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.Server.ID, []repository.MCPServerTool{
 		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)
@@ -185,10 +185,10 @@ func TestImportedPlaceholderEnableWithFailedDiscoveryDoesNotActivateWithdrawnToo
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Server.ID != placeholder.ID {
+	if result.Server.ID != placeholder.Server.ID {
 		t.Fatal("test setup failed: adoption must reuse the placeholder's id")
 	}
-	adoptedTools, err := repo.ListMCPServerTools(ctx, placeholder.ID)
+	adoptedTools, err := repo.ListMCPServerTools(ctx, placeholder.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestImportedPlaceholderEnableWithFailedDiscoveryDoesNotActivateWithdrawnToo
 	}
 
 	descriptor, err := service.SetMcpServerEnabled(ctx, &turingv1.SetMcpServerEnabledRequest{
-		ServerId: placeholder.ID, Enabled: true,
+		ServerId: placeholder.Server.ID, Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +206,7 @@ func TestImportedPlaceholderEnableWithFailedDiscoveryDoesNotActivateWithdrawnToo
 		t.Fatalf("liveness = %v, want down: the vendor's tools/list call fails", descriptor.GetLiveness())
 	}
 
-	stillWithdrawn, err := repo.ListMCPServerTools(ctx, placeholder.ID)
+	stillWithdrawn, err := repo.ListMCPServerTools(ctx, placeholder.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,8 +248,8 @@ func TestImportJSONAdoptsLegacyPlaceholderWithoutToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	vendor := findRepositoryServer(t, servers, "vendor")
-	if vendor.ID != placeholder.ID {
-		t.Fatalf("ID = %q, want the placeholder row %q adopted in place", vendor.ID, placeholder.ID)
+	if vendor.ID != placeholder.Server.ID {
+		t.Fatalf("ID = %q, want the placeholder row %q adopted in place", vendor.ID, placeholder.Server.ID)
 	}
 	if vendor.URL != "https://vendor.example/mcp" {
 		t.Fatalf("URL = %q, want the imported endpoint populated", vendor.URL)

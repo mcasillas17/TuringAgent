@@ -80,7 +80,7 @@ func TestImportMCPServerPlaceholderAdoptionWithdrawsCarriedToolsWhenNoSnapshotSu
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(ctx, placeholder.ID, []MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.Server.ID, []MCPServerTool{
 		{Name: "vendor.legacy", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)
@@ -92,10 +92,10 @@ func TestImportMCPServerPlaceholderAdoptionWithdrawsCarriedToolsWhenNoSnapshotSu
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Created || result.Server.ID != placeholder.ID {
+	if !result.Created || result.Server.ID != placeholder.Server.ID {
 		t.Fatalf("result = %+v, want the placeholder adopted in place", result)
 	}
-	tools, err := repo.ListMCPServerTools(ctx, placeholder.ID)
+	tools, err := repo.ListMCPServerTools(ctx, placeholder.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,13 +117,13 @@ func TestImportMCPServerPlaceholderAdoptionReconfirmsSuppliedToolsPreservingEdit
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(ctx, placeholder.ID, []MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.Server.ID, []MCPServerTool{
 		{Name: "vendor.kept", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 		{Name: "vendor.dropped", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPToolPolicy(ctx, placeholder.ID, "vendor.kept", "safe"); err != nil {
+	if err := repo.SetMCPToolPolicy(ctx, placeholder.Server.ID, "vendor.kept", "safe"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -136,10 +136,10 @@ func TestImportMCPServerPlaceholderAdoptionReconfirmsSuppliedToolsPreservingEdit
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Created || result.Server.ID != placeholder.ID {
+	if !result.Created || result.Server.ID != placeholder.Server.ID {
 		t.Fatalf("result = %+v, want the placeholder adopted in place", result)
 	}
-	tools, err := repo.ListMCPServerTools(ctx, placeholder.ID)
+	tools, err := repo.ListMCPServerTools(ctx, placeholder.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestImportMCPServerPlaceholderAdoptionEmptyToolsSnapshotWithdrawsEverything
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(ctx, placeholder.ID, []MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.Server.ID, []MCPServerTool{
 		{Name: "vendor.legacy", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func TestImportMCPServerPlaceholderAdoptionEmptyToolsSnapshotWithdrawsEverything
 	if !result.Created {
 		t.Fatal("Created = false, want true for the placeholder adoption")
 	}
-	tools, err := repo.ListMCPServerTools(ctx, placeholder.ID)
+	tools, err := repo.ListMCPServerTools(ctx, placeholder.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestImportMCPServerPlaceholderAdoptionToolCollisionRollsBackAdoptionEntirel
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(ctx, owner.ID, []MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(ctx, owner.Server.ID, []MCPServerTool{
 		{Name: "shared.tool", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)
@@ -230,7 +230,7 @@ func TestImportMCPServerPlaceholderAdoptionToolCollisionRollsBackAdoptionEntirel
 		t.Fatalf("err = %v, want ErrMCPToolNameCollision", err)
 	}
 
-	stillPlaceholder, err := repo.GetMCPServer(ctx, placeholder.ID)
+	stillPlaceholder, err := repo.GetMCPServer(ctx, placeholder.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestImportMCPServerPlaceholderAdoptionToolCollisionRollsBackAdoptionEntirel
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !corrected.Created || corrected.Server.ID != placeholder.ID {
+	if !corrected.Created || corrected.Server.ID != placeholder.Server.ID {
 		t.Fatalf("corrected = %+v, want the placeholder adopted on the corrected reimport", corrected)
 	}
 	if corrected.Server.URL != "https://vendor.example/mcp" {
@@ -267,7 +267,7 @@ func TestImportMCPServerNewRowToolCollisionCreatesNoRowAndCorrectedReimportWorks
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(ctx, owner.ID, []MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(ctx, owner.Server.ID, []MCPServerTool{
 		{Name: "shared.tool", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)

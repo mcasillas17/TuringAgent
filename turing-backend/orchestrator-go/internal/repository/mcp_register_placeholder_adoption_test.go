@@ -25,7 +25,10 @@ func TestRegisterMCPServerAdoptsLegacyPlaceholderInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(ctx, placeholder.ID, []MCPServerTool{
+	if placeholder.Adopted {
+		t.Fatal("Adopted = true for a freshly inserted row (no prior name existed), want false")
+	}
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.Server.ID, []MCPServerTool{
 		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)
@@ -33,18 +36,18 @@ func TestRegisterMCPServerAdoptsLegacyPlaceholderInPlace(t *testing.T) {
 	// An operator may have edited the carried tool's policy while it sat
 	// disabled; adoption must preserve that edit even though the tool
 	// itself is withdrawn.
-	if err := repo.SetMCPToolPolicy(ctx, placeholder.ID, "vendor.lookup", "safe"); err != nil {
+	if err := repo.SetMCPToolPolicy(ctx, placeholder.Server.ID, "vendor.lookup", "safe"); err != nil {
 		t.Fatal(err)
 	}
 	// Prove adoption forces disabled rather than merely leaving an
 	// already-disabled row alone: flip it enabled first.
-	if err := repo.SetMCPServerEnabled(ctx, placeholder.ID, true); err != nil {
+	if err := repo.SetMCPServerEnabled(ctx, placeholder.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	// A placeholder's liveness reading (if any) was never actually
 	// observed against a real endpoint; seed a non-unknown one so
 	// adoption's reset is provable.
-	if err := repo.SetMCPServerStatus(ctx, placeholder.ID, "down", "stale placeholder reading"); err != nil {
+	if err := repo.SetMCPServerStatus(ctx, placeholder.Server.ID, "down", "stale placeholder reading"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -54,26 +57,29 @@ func TestRegisterMCPServerAdoptsLegacyPlaceholderInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adopting a legacy placeholder must not return an error: %v", err)
 	}
-	if adopted.ID != placeholder.ID {
-		t.Fatalf("ID = %q, want the placeholder row %q adopted in place", adopted.ID, placeholder.ID)
+	if !adopted.Adopted {
+		t.Fatal("Adopted = false for a registration that reused a legacy placeholder's name, want true")
 	}
-	if adopted.URL != "https://vendor.example/mcp" {
-		t.Fatalf("URL = %q, want the registered endpoint populated", adopted.URL)
+	if adopted.Server.ID != placeholder.Server.ID {
+		t.Fatalf("ID = %q, want the placeholder row %q adopted in place", adopted.Server.ID, placeholder.Server.ID)
 	}
-	if adopted.Tier != MCPServerTierRemoteURL {
-		t.Fatalf("Tier = %q, want the registered tier populated", adopted.Tier)
+	if adopted.Server.URL != "https://vendor.example/mcp" {
+		t.Fatalf("URL = %q, want the registered endpoint populated", adopted.Server.URL)
 	}
-	if len(adopted.SealedToken) == 0 {
+	if adopted.Server.Tier != MCPServerTierRemoteURL {
+		t.Fatalf("Tier = %q, want the registered tier populated", adopted.Server.Tier)
+	}
+	if len(adopted.Server.SealedToken) == 0 {
 		t.Fatal("SealedToken is empty, want the registered token sealed and stored")
 	}
-	if adopted.Enabled {
+	if adopted.Server.Enabled {
 		t.Fatal("adopting a placeholder must force the server disabled")
 	}
-	if adopted.Status != "unknown" || adopted.StatusError != "" {
-		t.Fatalf("Status = %q, StatusError = %q, want liveness reset to unknown/empty", adopted.Status, adopted.StatusError)
+	if adopted.Server.Status != "unknown" || adopted.Server.StatusError != "" {
+		t.Fatalf("Status = %q, StatusError = %q, want liveness reset to unknown/empty", adopted.Server.Status, adopted.Server.StatusError)
 	}
 
-	tools, err := repo.ListMCPServerTools(ctx, adopted.ID)
+	tools, err := repo.ListMCPServerTools(ctx, adopted.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

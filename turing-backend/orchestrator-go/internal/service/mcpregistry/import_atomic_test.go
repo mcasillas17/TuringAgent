@@ -211,7 +211,7 @@ func TestImportJSONStaticSnapshotInterServerCollisionCreatesNoRowAndCorrectedRei
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(ctx, owner.ID, []repository.MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(ctx, owner.Server.ID, []repository.MCPServerTool{
 		{Name: "shared.tool", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 	}); err != nil {
 		t.Fatal(err)

@@ -16,16 +16,16 @@ func TestPolicyDisabledToolCanBeReenabledWhileStillPresent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPServerEnabled(context.Background(), server.ID, true); err != nil {
+	if err := repo.SetMCPServerEnabled(context.Background(), server.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.RecordDiscovery(context.Background(), server.ID, []DiscoveredTool{{
+	if err := service.RecordDiscovery(context.Background(), server.Server.ID, []DiscoveredTool{{
 		Name: "vendor.lookup", SchemaJSON: `{"type":"object"}`,
 	}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.UpdateMcpToolPolicy(context.Background(), &turingv1.UpdateMcpToolPolicyRequest{
-		ServerId: server.ID, ToolName: "vendor.lookup",
+		ServerId: server.Server.ID, ToolName: "vendor.lookup",
 		Policy: turingv1.ToolPolicy_TOOL_POLICY_DISABLED,
 	}); err != nil {
 		t.Fatal(err)
@@ -37,12 +37,12 @@ func TestPolicyDisabledToolCanBeReenabledWhileStillPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := service.UpdateMcpToolPolicy(context.Background(), &turingv1.UpdateMcpToolPolicyRequest{
-		ServerId: server.ID, ToolName: "vendor.lookup",
+		ServerId: server.Server.ID, ToolName: "vendor.lookup",
 		Policy: turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	tools, err := repo.ListMCPServerTools(context.Background(), server.ID)
+	tools, err := repo.ListMCPServerTools(context.Background(), server.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

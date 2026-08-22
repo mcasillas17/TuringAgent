@@ -77,7 +77,7 @@ func TestSetMcpServerEnabledCancellationDuringDiscoveryStillNotifiesAndAudits(t 
 	// read-back for the response runs, ctx is already cancelled. That is
 	// unrelated to what this test proves.
 	_, _ = service.SetMcpServerEnabled(ctx, &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: true,
+		ServerId: server.Server.ID, Enabled: true,
 	})
 	if ctx.Err() == nil {
 		t.Fatal("test setup failed: the transport never cancelled the request context")
@@ -86,7 +86,7 @@ func TestSetMcpServerEnabledCancellationDuringDiscoveryStillNotifiesAndAudits(t 
 		t.Fatal("test setup failed: discovery never made an HTTP request")
 	}
 
-	updated, err := repo.GetMCPServer(context.Background(), server.ID)
+	updated, err := repo.GetMCPServer(context.Background(), server.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,13 +138,13 @@ func TestSetMcpServerEnabledCancellationAfterDiscoveryRoundTripStillNotifiesAndA
 	service.SetRegistryChangeNotifier(notifier)
 
 	_, _ = service.SetMcpServerEnabled(ctx, &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: true,
+		ServerId: server.Server.ID, Enabled: true,
 	})
 	if ctx.Err() == nil {
 		t.Fatal("test setup failed: the transport never cancelled the request context")
 	}
 
-	updated, err := repo.GetMCPServer(context.Background(), server.ID)
+	updated, err := repo.GetMCPServer(context.Background(), server.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestSetMcpServerEnabledBoundsWholeDiscoveryByASingleContextTimeout(t *testi
 
 	start := time.Now()
 	_, _ = service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: true,
+		ServerId: server.Server.ID, Enabled: true,
 	})
 	elapsed := time.Since(start)
 
@@ -228,7 +228,7 @@ func TestSetMcpServerEnabledBoundsWholeDiscoveryByASingleContextTimeout(t *testi
 			"first blocked request rather than starting another page", transport.calls)
 	}
 
-	updated, err := repo.GetMCPServer(context.Background(), server.ID)
+	updated, err := repo.GetMCPServer(context.Background(), server.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestSetMcpServerEnabledBoundsWholeDiscoveryByASingleContextTimeout(t *testi
 	}
 	found := false
 	for _, candidate := range status {
-		if candidate.ID != server.ID {
+		if candidate.ID != server.Server.ID {
 			continue
 		}
 		found = true
@@ -335,7 +335,7 @@ func TestSetMcpServerEnabledWholeOperationTimeoutStopsAfterFewPagesNotAllPages(t
 
 	start := time.Now()
 	_, _ = service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: true,
+		ServerId: server.Server.ID, Enabled: true,
 	})
 	elapsed := time.Since(start)
 
@@ -349,7 +349,7 @@ func TestSetMcpServerEnabledWholeOperationTimeoutStopsAfterFewPagesNotAllPages(t
 			"the whole-operation timeout must stop discovery after a handful of pages", elapsed, perPage)
 	}
 
-	updated, err := repo.GetMCPServer(context.Background(), server.ID)
+	updated, err := repo.GetMCPServer(context.Background(), server.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

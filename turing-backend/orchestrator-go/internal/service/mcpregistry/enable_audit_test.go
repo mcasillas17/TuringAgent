@@ -95,7 +95,7 @@ func TestEnablingRemoteServerAuditsSuccessWithNameTierAndRemoteContact(t *testin
 	}
 
 	descriptor, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: true,
+		ServerId: server.Server.ID, Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -111,8 +111,8 @@ func TestEnablingRemoteServerAuditsSuccessWithNameTierAndRemoteContact(t *testin
 	if record.action != "mcp.server.enabled" {
 		t.Fatalf("action = %q, want mcp.server.enabled", record.action)
 	}
-	if record.target != server.ID {
-		t.Fatalf("target = %q, want the server id %q", record.target, server.ID)
+	if record.target != server.Server.ID {
+		t.Fatalf("target = %q, want the server id %q", record.target, server.Server.ID)
 	}
 	if record.payload["name"] != "remote" {
 		t.Fatalf("payload name = %v, want remote", record.payload["name"])
@@ -155,7 +155,7 @@ func TestEnablingRemoteServerAuditsFailureWithoutStatusOrToken(t *testing.T) {
 	}
 
 	descriptor, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: true,
+		ServerId: server.Server.ID, Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -174,8 +174,8 @@ func TestEnablingRemoteServerAuditsFailureWithoutStatusOrToken(t *testing.T) {
 	if record.action != "mcp.server.enabled" {
 		t.Fatalf("action = %q, want mcp.server.enabled even though discovery failed", record.action)
 	}
-	if record.target != server.ID {
-		t.Fatalf("target = %q, want the server id %q", record.target, server.ID)
+	if record.target != server.Server.ID {
+		t.Fatalf("target = %q, want the server id %q", record.target, server.Server.ID)
 	}
 	if record.payload["remoteDiscoveryAttempted"] != true {
 		t.Fatalf("payload remoteDiscoveryAttempted = %v, want true", record.payload["remoteDiscoveryAttempted"])
@@ -199,14 +199,14 @@ func TestDisablingServerAuditsWithoutRemoteContact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPServerEnabled(context.Background(), server.ID, true); err != nil {
+	if err := repo.SetMCPServerEnabled(context.Background(), server.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	recorder := &recordingAuditRecorder{}
 	service.SetAuditRecorder(recorder)
 
 	descriptor, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: false,
+		ServerId: server.Server.ID, Enabled: false,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -222,8 +222,8 @@ func TestDisablingServerAuditsWithoutRemoteContact(t *testing.T) {
 	if record.action != "mcp.server.disabled" {
 		t.Fatalf("action = %q, want mcp.server.disabled", record.action)
 	}
-	if record.target != server.ID {
-		t.Fatalf("target = %q, want the server id %q", record.target, server.ID)
+	if record.target != server.Server.ID {
+		t.Fatalf("target = %q, want the server id %q", record.target, server.Server.ID)
 	}
 	if record.payload["remoteDiscoveryAttempted"] != false {
 		t.Fatalf("payload remoteDiscoveryAttempted = %v, want false", record.payload["remoteDiscoveryAttempted"])
@@ -254,7 +254,7 @@ func TestEnablingLocalContainerAuditsDiscoverySucceededWithoutRemoteDiscoveryAtt
 	}
 
 	descriptor, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: true,
+		ServerId: server.Server.ID, Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -297,10 +297,10 @@ func TestSetMcpServerEnabledNotifiesAndAuditsBeforeADescriptorFailure(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPServerEnabled(context.Background(), server.ID, true); err != nil {
+	if err := repo.SetMCPServerEnabled(context.Background(), server.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(context.Background(), server.ID, []repository.MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(context.Background(), server.Server.ID, []repository.MCPServerTool{
 		{Name: "vendor.broken", Policy: "safe", SchemaJSON: "not valid json", Enabled: true, Present: true},
 	}); err != nil {
 		t.Fatal(err)
@@ -312,7 +312,7 @@ func TestSetMcpServerEnabledNotifiesAndAuditsBeforeADescriptorFailure(t *testing
 	service.SetRegistryChangeNotifier(notifier)
 
 	_, err = service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: false,
+		ServerId: server.Server.ID, Enabled: false,
 	})
 	if err == nil {
 		t.Fatal("want an error from the broken tool schema breaking descriptor construction")
@@ -327,7 +327,7 @@ func TestSetMcpServerEnabledNotifiesAndAuditsBeforeADescriptorFailure(t *testing
 	if recorder.records[0].action != "mcp.server.disabled" {
 		t.Fatalf("action = %q, want mcp.server.disabled", recorder.records[0].action)
 	}
-	updated, err := repo.GetMCPServer(context.Background(), server.ID)
+	updated, err := repo.GetMCPServer(context.Background(), server.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestEnablingRemoteServerSentinelBearerAbsentFromAuditLogEventAndResponse(t 
 	t.Cleanup(func() { log.SetOutput(previousLogOutput) })
 
 	descriptor, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: true,
+		ServerId: server.Server.ID, Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)

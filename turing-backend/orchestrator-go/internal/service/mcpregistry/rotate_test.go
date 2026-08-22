@@ -64,7 +64,7 @@ func TestRotateMcpServerTokenMissingKeyFailsPrecondition(t *testing.T) {
 	service.sealer = nil
 
 	_, err = service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-		ServerId:    server.ID,
+		ServerId:    server.Server.ID,
 		BearerToken: "vendor-secret",
 	})
 	if status.Code(err) != codes.FailedPrecondition {
@@ -89,20 +89,20 @@ func TestRotateMcpServerTokenEmptyClearsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-		ServerId:    server.ID,
+		ServerId:    server.Server.ID,
 		BearerToken: "vendor-secret",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-		ServerId:    server.ID,
+		ServerId:    server.Server.ID,
 		BearerToken: "",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	updated, err := repo.GetMCPServer(context.Background(), server.ID)
+	updated, err := repo.GetMCPServer(context.Background(), server.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,16 +126,16 @@ func TestRotateMcpServerTokenSealsWithServerNameAsAAD(t *testing.T) {
 	}
 	const token = "vendor-rotated-secret"
 	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-		ServerId:    server.ID,
+		ServerId:    server.Server.ID,
 		BearerToken: token,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	updated, err := repo.GetMCPServer(context.Background(), server.ID)
+	updated, err := repo.GetMCPServer(context.Background(), server.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened, err := sealer.Open(updated.SealedToken, []byte(server.Name))
+	opened, err := sealer.Open(updated.SealedToken, []byte(server.Server.Name))
 	if err != nil {
 		t.Fatalf("token was not sealed with the server name as AAD: %v", err)
 	}
@@ -159,16 +159,16 @@ func TestRotateMcpServerTokenRepeatedRotationsWork(t *testing.T) {
 	}
 	for _, token := range []string{"first-secret", "second-secret", "third-secret"} {
 		if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-			ServerId:    server.ID,
+			ServerId:    server.Server.ID,
 			BearerToken: token,
 		}); err != nil {
 			t.Fatalf("rotate to %q: %v", token, err)
 		}
-		updated, err := repo.GetMCPServer(context.Background(), server.ID)
+		updated, err := repo.GetMCPServer(context.Background(), server.Server.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		opened, err := sealer.Open(updated.SealedToken, []byte(server.Name))
+		opened, err := sealer.Open(updated.SealedToken, []byte(server.Server.Name))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -190,7 +190,7 @@ func TestRotateMcpServerTokenNotifiesRegistryChange(t *testing.T) {
 	service.SetRegistryChangeNotifier(notifier)
 
 	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-		ServerId: server.ID, BearerToken: "vendor-secret",
+		ServerId: server.Server.ID, BearerToken: "vendor-secret",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -212,12 +212,12 @@ func TestRotateMcpServerTokenResetsLivenessToUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPServerStatus(context.Background(), server.ID, "up", ""); err != nil {
+	if err := repo.SetMCPServerStatus(context.Background(), server.Server.ID, "up", ""); err != nil {
 		t.Fatal(err)
 	}
 
 	descriptor, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-		ServerId: server.ID, BearerToken: "vendor-secret",
+		ServerId: server.Server.ID, BearerToken: "vendor-secret",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -229,11 +229,11 @@ func TestRotateMcpServerTokenResetsLivenessToUnknown(t *testing.T) {
 		t.Fatalf("status message = %q, want empty after rotating the token", descriptor.GetStatusMessage())
 	}
 
-	if err := repo.SetMCPServerStatus(context.Background(), server.ID, "down", "connection refused"); err != nil {
+	if err := repo.SetMCPServerStatus(context.Background(), server.Server.ID, "down", "connection refused"); err != nil {
 		t.Fatal(err)
 	}
 	cleared, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-		ServerId: server.ID, BearerToken: "",
+		ServerId: server.Server.ID, BearerToken: "",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -247,11 +247,11 @@ func TestRotateMcpServerTokenResetsLivenessToUnknown(t *testing.T) {
 
 	// Repeated rotations/clears must each keep resetting liveness.
 	for i, token := range []string{"second-secret", "", "third-secret", ""} {
-		if err := repo.SetMCPServerStatus(context.Background(), server.ID, "up", ""); err != nil {
+		if err := repo.SetMCPServerStatus(context.Background(), server.Server.ID, "up", ""); err != nil {
 			t.Fatalf("round %d: seed status: %v", i, err)
 		}
 		again, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-			ServerId: server.ID, BearerToken: token,
+			ServerId: server.Server.ID, BearerToken: token,
 		})
 		if err != nil {
 			t.Fatalf("round %d: %v", i, err)
@@ -272,7 +272,7 @@ func TestRotateMcpServerTokenResponseNeverIncludesTokenOrCiphertext(t *testing.T
 	}
 	const token = "vendor-secret-should-never-be-returned"
 	descriptor, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-		ServerId:    server.ID,
+		ServerId:    server.Server.ID,
 		BearerToken: token,
 	})
 	if err != nil {
@@ -304,7 +304,7 @@ func TestRotateMcpServerTokenNotifiesAndAuditsBeforeADescriptorFailure(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(context.Background(), server.ID, []repository.MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(context.Background(), server.Server.ID, []repository.MCPServerTool{
 		{Name: "vendor.broken", Policy: "safe", SchemaJSON: "not valid json", Enabled: true, Present: true},
 	}); err != nil {
 		t.Fatal(err)
@@ -322,7 +322,7 @@ func TestRotateMcpServerTokenNotifiesAndAuditsBeforeADescriptorFailure(t *testin
 
 	const rotatedToken = "vendor-rotated-secret-should-never-leak"
 	_, err = service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
-		ServerId:    server.ID,
+		ServerId:    server.Server.ID,
 		BearerToken: rotatedToken,
 	})
 	if status.Code(err) != codes.Internal {
@@ -333,11 +333,11 @@ func TestRotateMcpServerTokenNotifiesAndAuditsBeforeADescriptorFailure(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, err := repo.GetMCPServer(context.Background(), server.ID)
+	updated, err := repo.GetMCPServer(context.Background(), server.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened, err := sealer.Open(updated.SealedToken, []byte(server.Name))
+	opened, err := sealer.Open(updated.SealedToken, []byte(server.Server.Name))
 	if err != nil {
 		t.Fatalf("stored token must have changed despite the later descriptor failure: %v", err)
 	}

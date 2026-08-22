@@ -638,6 +638,21 @@ void main() {
         );
         expect(popup.enabled, isFalse);
 
+        // The progress indicator must carry a descriptive semantic label
+        // (e.g. "Updating vendor") so assistive tech has something to
+        // announce while busy — it does not need to be a liveRegion for
+        // that, since the label is already present in the tree the moment
+        // the state changes to busy (see `_isAnnouncedAsLiveRegion`, which
+        // this deliberately does not use).
+        final semanticsAncestors = find
+            .ancestor(
+              of: find.byType(CircularProgressIndicator),
+              matching: find.byType(Semantics),
+            )
+            .evaluate()
+            .map((element) => (element.widget as Semantics).properties.label);
+        expect(semanticsAncestors, contains('Updating vendor'));
+
         gate.complete();
         await tester.pumpAndSettle();
 
@@ -880,7 +895,8 @@ void main() {
     );
 
     testWidgets(
-      'a failed policy change re-enables the picker and surfaces the error',
+      'a failed policy change re-enables the picker, surfaces the error, '
+      'and reloads the registry',
       (tester) async {
         final api = _McpApi()
           ..servers.add(
@@ -913,8 +929,68 @@ void main() {
           find.byType(DropdownButton<ToolPolicy>),
         );
         expect(picker.onChanged, isNotNull);
-        // A failed mutation must not trigger a reload.
-        expect(api.listCalls, listCallsBefore);
+        // The catch handler must reload the registry before showing the
+        // error: a policy update can commit on the backend and still return
+        // an error (e.g. a post-commit audit failure), so only a reload can
+        // tell whether the displayed policy is still authoritative.
+        expect(api.listCalls, greaterThan(listCallsBefore));
+      },
+    );
+
+    testWidgets(
+      'a failed policy change that actually committed on the backend still '
+      'shows the committed policy once reloaded',
+      (tester) async {
+        // Simulates a post-commit Internal error: the RPC's mutation lands
+        // (the tool's policy flips to safe) but the response itself still
+        // errors (e.g. an audit write failing after commit). Without
+        // reloading before showing the error, the UI would keep displaying
+        // the pre-mutation policy forever.
+        final api = _McpApi()
+          ..servers.add(
+            _localServer(
+              tools: const [
+                ToolDescriptor(
+                  serverName: 'vendor',
+                  toolName: 'search',
+                  policy: ToolPolicy.approvalRequired,
+                ),
+              ],
+            ),
+          )
+          ..policyError = StateError('mcp.tool.policy_changed audit failed')
+          ..policyCommitsBeforeThrowing = true;
+        await _pumpMcps(tester, api);
+
+        await tester.ensureVisible(find.byType(DropdownButton<ToolPolicy>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byType(DropdownButton<ToolPolicy>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Runs freely').last);
+        await tester.pumpAndSettle();
+
+        expect(api.policyCalls, hasLength(1));
+        expect(
+          find.textContaining('mcp.tool.policy_changed audit failed'),
+          findsOneWidget,
+        );
+        expect(
+          find.text('Runs freely'),
+          findsWidgets,
+          reason:
+              'the reload must surface the backend\'s authoritative '
+              '(already-committed) policy despite the RPC returning an '
+              'error',
+        );
+        // The busy flag must be cleared on failure too, or the picker would
+        // stay disabled forever after a transient error.
+        final picker = tester.widget<DropdownButton<ToolPolicy>>(
+          find.byType(DropdownButton<ToolPolicy>),
+        );
+        expect(picker.onChanged, isNotNull);
+        // No duplicate call: exactly one mutation attempt despite the
+        // catch handler's own reload.
+        expect(api.policyCalls, hasLength(1));
       },
     );
   });
@@ -1266,8 +1342,47 @@ void main() {
         ..servers.add(_localServer(url: 'https://vendor.example/mcp'));
       await _pumpMcps(tester, api);
 
-      expect(find.byType(SelectableText), findsOneWidget);
+      // A SelectionArea makes its descendant Text selectable without the
+      // clipping (no ellipsis support) that SelectableText imposes.
+      expect(find.byType(SelectionArea), findsOneWidget);
+      expect(find.text('https://vendor.example/mcp'), findsOneWidget);
     });
+
+    testWidgets(
+      'a long endpoint truncates with an ellipsis while the full value '
+      'stays available via tooltip and selection text',
+      (tester) async {
+        const longUrl =
+            'https://a-fairly-long-vendor-hostname.example.com/mcp/v1/'
+            'endpoint/that/keeps/going/and/going/until/it/would/overflow';
+        final api = _McpApi()..servers.add(_localServer(url: longUrl));
+        await _pumpMcps(tester, api, size: const Size(320, 700));
+
+        // The compact layout must not overflow: the Text is one line with
+        // an ellipsis, not clipped raw text extending past its bounds.
+        expect(tester.takeException(), isNull);
+        final text = tester.widget<Text>(
+          find.descendant(
+            of: find.byType(SelectionArea),
+            matching: find.byType(Text),
+          ),
+        );
+        expect(text.maxLines, 1);
+        expect(text.overflow, TextOverflow.ellipsis);
+        // The full value is still available: verbatim in the Text's own
+        // data (so it can be selected/copied in full even though only a
+        // truncated portion is drawn) and in the Tooltip's message (so it
+        // can be read on hover/long-press).
+        expect(text.data, longUrl);
+        final tooltip = tester.widget<Tooltip>(
+          find.ancestor(
+            of: find.byType(SelectionArea),
+            matching: find.byType(Tooltip),
+          ),
+        );
+        expect(tooltip.message, longUrl);
+      },
+    );
   });
 
   group('the empty state', () {
@@ -1596,6 +1711,11 @@ class _McpApi
   final List<Map<String, Object?>> policyCalls = [];
   Object? policyError;
   Completer<void>? policyGate;
+  // When true, the mutation is applied to `servers` before `policyError` is
+  // thrown — simulating a post-commit Internal error (the backend mutation
+  // committed, but the RPC response itself still failed). Mirrors
+  // `enabledCommitsBeforeThrowing`.
+  bool policyCommitsBeforeThrowing = false;
 
   @override
   Future<McpRegistrySnapshot> listMcpServers() async {
@@ -1619,6 +1739,17 @@ class _McpApi
     if (error != null) {
       if (enabledCommitsBeforeThrowing) {
         final index = servers.indexWhere((s) => s.serverId == serverId);
+        // A missing index here means the test misconfigured `servers` for
+        // this serverId — silently no-op-ing (or letting `servers[-1]`
+        // throw an opaque RangeError) would leave a real bug in the fake
+        // masquerading as a passing test. Fail loudly and specifically.
+        if (index == -1) {
+          throw StateError(
+            'enabledCommitsBeforeThrowing: no server with serverId '
+            '"$serverId" in servers; cannot simulate a post-commit failure '
+            'for a server the fake does not know about',
+          );
+        }
         servers[index] = _withEnabled(servers[index], enabled);
       }
       throw error;
@@ -1724,9 +1855,46 @@ class _McpApi
     final gate = policyGate;
     if (gate != null) await gate.future;
     final error = policyError;
-    if (error != null) throw error;
+    if (error != null) {
+      if (policyCommitsBeforeThrowing) {
+        _applyToolPolicy(serverId: serverId, toolName: toolName, policy: policy);
+      }
+      throw error;
+    }
+    return _applyToolPolicy(
+      serverId: serverId,
+      toolName: toolName,
+      policy: policy,
+    );
+  }
+
+  /// Applies a policy change to the in-memory `servers` list and returns the
+  /// updated [ToolDescriptor]. Shared by the success path and the
+  /// `policyCommitsBeforeThrowing` post-commit-failure simulation, so both
+  /// mutate `servers` identically.
+  ToolDescriptor _applyToolPolicy({
+    required String serverId,
+    required String toolName,
+    required ToolPolicy policy,
+  }) {
     final serverIndex = servers.indexWhere((s) => s.serverId == serverId);
+    // A missing index means the test misconfigured `servers` for this
+    // serverId — fail loudly and specifically rather than letting
+    // `servers[-1]` throw an opaque RangeError.
+    if (serverIndex == -1) {
+      throw StateError(
+        'updateMcpToolPolicy: no server with serverId "$serverId" in '
+        'servers; cannot apply a policy change to a server the fake does '
+        'not know about',
+      );
+    }
     final server = servers[serverIndex];
+    if (!server.tools.any((tool) => tool.toolName == toolName)) {
+      throw StateError(
+        'updateMcpToolPolicy: server "$serverId" has no tool named '
+        '"$toolName"; cannot apply a policy change to an unknown tool',
+      );
+    }
     final tools = [
       for (final tool in server.tools)
         if (tool.toolName == toolName)

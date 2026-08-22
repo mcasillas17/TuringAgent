@@ -48,7 +48,7 @@ func TestEnablingLocalContainerDiscoversToolsAndShowsLiveness(t *testing.T) {
 	}
 
 	enabled, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID,
+		ServerId: server.Server.ID,
 		Enabled:  true,
 	})
 	if err != nil {
@@ -108,7 +108,7 @@ func TestEnablingRemoteServerDiscoversToolsOnFirstEnable(t *testing.T) {
 	}
 
 	enabled, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID,
+		ServerId: server.Server.ID,
 		Enabled:  true,
 	})
 	if err != nil {
@@ -156,23 +156,23 @@ func TestReEnablingRemoteServerPreservesEditedToolPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: true,
+		ServerId: server.Server.ID, Enabled: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.UpdateMcpToolPolicy(context.Background(), &turingv1.UpdateMcpToolPolicyRequest{
-		ServerId: server.ID, ToolName: "remote-vendor.lookup",
+		ServerId: server.Server.ID, ToolName: "remote-vendor.lookup",
 		Policy: turingv1.ToolPolicy_TOOL_POLICY_SAFE,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: false,
+		ServerId: server.Server.ID, Enabled: false,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	reenabled, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID, Enabled: true,
+		ServerId: server.Server.ID, Enabled: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestEnablingRemoteServerDiscoveryFailureKeepsServerEnabledAndRedactsToken(t
 	t.Cleanup(func() { log.SetOutput(previousLogOutput) })
 
 	descriptor, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: registered.ID,
+		ServerId: registered.Server.ID,
 		Enabled:  true,
 	})
 	if err != nil {
@@ -251,7 +251,7 @@ func TestEnablingRemoteServerDiscoveryFailureKeepsServerEnabledAndRedactsToken(t
 	assertStringSentinelFree(t, "enable status message", descriptor.GetStatusMessage(), remoteFailureSentinel)
 	assertStringSentinelFree(t, "process log", logged.String(), remoteFailureSentinel)
 
-	server, err := repo.GetMCPServer(context.Background(), registered.ID)
+	server, err := repo.GetMCPServer(context.Background(), registered.Server.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func TestDiscoveryRejectsToolNameThatShadowsBundledTool(t *testing.T) {
 	}
 
 	descriptor, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID,
+		ServerId: server.Server.ID,
 		Enabled:  true,
 	})
 	if err != nil {
@@ -322,7 +322,7 @@ func TestMalformedToolsListRemainsVisibleAsDown(t *testing.T) {
 	}
 
 	descriptor, err := service.SetMcpServerEnabled(context.Background(), &turingv1.SetMcpServerEnabledRequest{
-		ServerId: server.ID,
+		ServerId: server.Server.ID,
 		Enabled:  true,
 	})
 	if err != nil {
