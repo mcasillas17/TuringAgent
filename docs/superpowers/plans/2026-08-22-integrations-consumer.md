@@ -88,10 +88,12 @@ into logs on a mere dial failure.
 **The provider client reuses the transport hardening that already exists —
 without inventing a third mechanism.** `turing-backend/internal/egress`
 already has `NoRedirectClient` and `RedactRedirectError`, used by both LLM
-provider clients; the GitHub client uses those. (`RedactRedirectError` protects the request *path* —
-owner/repo — in redirect errors; the credential itself cannot appear there
-with a header-only token, so the hygiene test's raw-URL leg is about
-dial/TLS `*url.Error`s, not this helper.) Guarded address resolution currently lives in
+provider clients; the GitHub client uses those. (Precisely what `RedactRedirectError` strips: the
+redirect *target's* path and query, which Go's `*url.Error` wrapping
+would otherwise embed — the blocked-redirect error itself already carries
+hosts only. The credential cannot appear there with a header-only token,
+so the hygiene test's raw-URL leg is about dial/TLS `*url.Error`s, not
+this helper.) Guarded address resolution currently lives in
 `mcpregistry/transport.go` (`resolvePublicMCPAddress` — refusing loopback,
 private, link-local, multicast and unspecified addresses, requiring global
 unicast, and screening the special-use networks list; the shared version
@@ -134,8 +136,16 @@ feature exists at all:
   union, which this very check gates: include `present = 1` in the
   predicate and disabling becomes a **permanently** one-way door — a
   restart replays the same zero-then-restore sequence, so not even that
-  reopens it. `IntegrationEndpointsForTools` likewise filters on
-  `tools.enabled`, as `RemoteMCPServersForTools` already does;
+  reopens it. `IntegrationEndpointsForTools` follows the same policy-only
+  rule, missing row ⇒ resolved — **not** `RemoteMCPServersForTools`'
+  `t.enabled = 1`, which is safe only for real-server rows. The failure an
+  `enabled`-filtering (or row-requiring) resolver produces is nastier than
+  a refusal: at worker registration the in-memory capabilities exist
+  before `UpsertTools` has persisted anything, so `SelectedTools` can
+  carry an integration tool while the resolver returns nothing — which
+  falls through `resolveEgressContext`'s early return and enqueues a
+  local run with **no egress decision at all**: the tool is offered, every
+  call is refused at leg 3, no dialog and no error ever surfaces;
 - the 0016 triggers — `0017` drops and recreates both (SQLite has no `ALTER
   TRIGGER`) widening the carve-out to `('skills','integrations')`;
 - `repository/tools.go` `UpsertTools`, which branches on the literal
@@ -181,9 +191,26 @@ every upsert. Filter on it and revoke-last-then-reconnect bricks the
 tools permanently, one hop upstream of where the availability check's
 policy-only predicate can save them: the zeroed row makes the lister
 skip, so the tool never re-enters a report and the zeroing never gets
-undone. **No pseudo-server predicate anywhere in this plan reads
-`present` or `enabled`.** The tool *descriptions* enumerate the current
-live connections as `(connection_id, display name)` pairs. That is the answer to "how does the model obtain a
+undone. The rule, scoped precisely: **none of this plan's new
+pseudo-server predicates — the lister, `filterRegisteredWorkerTools`'
+integrations case, `IntegrationDispatchActive`, and
+`IntegrationEndpointsForTools` — reads `present` or `enabled`.** Scoped,
+because `enabled` remains load-bearing for pseudo-server rows in code
+this plan does not touch: `GetToolPolicy` treats `enabled = 0` as
+not-found (the beacon gate that denies `unknown_tool`) and
+`ListEnabledTools` drives the capability prune — which is exactly why the
+by-name write's pseudo-server `enabled` derivation is mandatory rather
+than cosmetic: the write path keeps the bit true except under
+`disabled`, and `UpsertTools`' restore does the rest. Two other things
+the lister must get right, because its errors have the widest blast
+radius in the runtime: on an install with **no `TURING_INTEGRATION_KEY`**
+(the modal install — `sealer == nil`) it returns an **empty list, never
+an error** — the package's own `FailedPrecondition` convention for
+unconfigured state would propagate through `BuildToolRegistry` and brick
+discovery of *every* tool on every keyless install; a *transient* RPC
+failure fails discovery, matching how `RegisteredMCPServers` already
+behaves. The tool *descriptions* enumerate the current live connections
+as `(connection_id, display name)` pairs. That is the answer to "how does the model obtain a
 valid `connection_id`": it reads it from the tool description, which is
 refreshed — along with advertisement itself — by firing the existing
 registry-changed notification (`NotifyMCPRegistryChanged` → worker
@@ -584,7 +611,7 @@ The honest file-level list:
 ## The tests that gate the merge
 
 Adapt names to the implementation; every assertion must survive. For 1–8,
-16 and 17, break the production gate, watch the right test fail, restore.
+16, 17 and 18, break the production gate, watch the right test fail, restore.
 
 1. **Credential hygiene, including transport failure.** After a full call
    cycle — an HTTP-status failure *and* a dial/TLS-level failure (the
@@ -727,7 +754,10 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
     revoke the last connection → reconnect ⇒ the tools return** — the
     sibling of test 8's re-enable leg, and the one that catches an
     `enabled`-reading lister predicate, which bricks the tools at exactly
-    this step and which no shorter test reaches.
+    this step and which no shorter test reaches. And the leg the modal
+    install depends on: with **no `TURING_INTEGRATION_KEY` configured**,
+    discovery succeeds and every non-integration tool still registers —
+    the lister returned empty, not an error.
 16. **The credential used is the credential named.** Two live GitHub
     connections; an approved call naming connection B; the outbound
     `Authorization` header carries B's credential, not A's — the test that
@@ -739,6 +769,14 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
     collision — the two audited edits (`import.go` reserved names,
     `BundledServerForTool`) that no other test reaches, and whose failure
     mode is permanently broken discovery.
+18. **The facets refuse in both directions.** On the internal facet, the
+    management RPCs (`ConnectAccount`, `ListConnections`,
+    `DeleteConnection`, …) are `PermissionDenied` — the runtime token
+    must not enumerate or destroy credentials; on the public facet,
+    `CallIntegrationTool` and `ListIntegrationTools` are
+    `PermissionDenied` — the client API key must not dispatch. This is
+    the only privilege boundary in the plan, and an unsplit registration
+    passes every other test.
 
 ## Deferred, deliberately
 
