@@ -131,8 +131,9 @@ feature exists at all:
   `enabled` — because `UpsertTools` opens every upsert by zeroing both for
   pseudo-server rows and restores them only for tools in the reported
   union, which this very check gates: include `present = 1` in the
-  predicate and disabling becomes a one-way door that only a restart
-  reopens. `IntegrationEndpointsForTools` likewise filters on
+  predicate and disabling becomes a **permanently** one-way door — a
+  restart replays the same zero-then-restore sequence, so not even that
+  reopens it. `IntegrationEndpointsForTools` likewise filters on
   `tools.enabled`, as `RemoteMCPServersForTools` already does;
 - the 0016 triggers — `0017` drops and recreates both (SQLite has no `ALTER
   TRIGGER`) widening the carve-out to `('skills','integrations')`;
@@ -167,7 +168,13 @@ least one live connection for the provider exists, **filtered on policy
 and enabled state exactly as its precedent filters**
 (`RegistryClient.ListTools` skips `!enabled` and disabled-policy
 descriptors — that is how a disabled tool leaves the model's registry
-rather than lingering as an offer whose every call dies `unknown_tool`) —
+rather than lingering as an offer whose every call dies `unknown_tool`),
+**with the same missing-row rule as the availability check**: the
+precedent never faces a missing row because import seeds its `tools` rows
+before discovery, but integrations have no seeding step, so a literal
+"missing ⇒ not enabled" reading deadlocks the bootstrap (never listed ⇒
+never reported ⇒ never inserted ⇒ never listed) — a tool with no row yet
+is listed, and lands `approval_required` on first registration as always —
 and whose tool *descriptions* enumerate the current live connections as
 `(connection_id, display name)` pairs. That is the answer to "how does the model obtain a
 valid `connection_id`": it reads it from the tool description, which is
@@ -236,7 +243,10 @@ field, set by the orchestrator at **every** `ToolPolicyDecision`
 construction site on the before path — the `approval_required` return, the
 `safe` return, and the easy one to miss, `existingToolBeforeDecision`,
 which rebuilds a fresh decision for a re-delivered beacon and would
-otherwise re-arm side-effect handling on a read — from a static per-tool
+otherwise re-arm side-effect handling on a read (setting it there is a
+signature change, not a field assignment — the `ToolCallRecord` it takes
+carries no tool identity, so the beacon's server and tool name thread in
+from the callers, which all have it in scope) — from a static per-tool
 table that lives in `service/tools` beside `BundledServerForTool` — not inside
 `service/integrations`, because its two readers, the by-name policy RPC in
 `mcpregistry` (the un-`safe`-able guard) and the runtime service's beacon
@@ -353,14 +363,26 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   (`IntegrationDispatchActive`), along with an
   `IntegrationEndpointsForTools` resolver analogous to
   `RemoteMCPServersForTools`.
-- The "local provider needs no decision" rule is mirrored in Go in four
-  places, and every one widens from "has remote MCP servers" to "has remote
-  MCP servers or integration endpoints": `normalizePendingEgressDecision`
-  (`repository/egress.go`), the local-decision refusal in
-  `repository/jobs.go`, the early return in `resolveEgressContext`
-  (`service/chat/egress.go` — miss this one and a local-Ollama run never
-  gets a consent dialog and the feature silently does not exist for local
-  models), and the challenge-payload validation in the same file. **A fifth
+- The "local provider needs no decision" rule is mirrored in Go in **five**
+  places across **two modules**, and every one widens from "has remote MCP
+  servers" to "has remote MCP servers or integration endpoints":
+  `normalizePendingEgressDecision` (`repository/egress.go`), the
+  local-decision refusal in `repository/jobs.go`, the early return in
+  `resolveEgressContext` (`service/chat/egress.go` — miss this one and a
+  local-Ollama run never gets a consent dialog and the feature silently
+  does not exist for local models), the challenge-payload validation in
+  the same file — and the one in the *other module*, the runtime's
+  `validateEgressDecisionShape` (`agent-runtime-go/internal/agent/
+  egress.go`), which rejects an integration-only local decision **twice
+  independently**: "local run carries an inapplicable egress decision"
+  (no remote MCP servers), and the exact-set data-category check, whose
+  `required` list stays empty while the decision carries
+  `TOOL_ARGUMENTS`/`TOOL_RESULTS`. Fix only the orchestrator side and
+  every integration-only local run dies at `Execute` as
+  `egress_decision_invalid` before the first model call. Feeding that
+  check also means `toProtoEgressDecision` (`runtime/service.go`)
+  populates the new `integration_endpoints` field on the job-side
+  `RunEgressDecision`. **A fifth
   edit in `resolveEgressContext` is separate from the early return:** the
   data-category attachment currently adds `TOOL_ARGUMENTS`/`TOOL_RESULTS`
   only for provider egress with selected tools or for remote MCP servers —
@@ -521,7 +543,8 @@ The honest file-level list:
 - **Runtime (`agent-runtime-go`)** — the dynamic integrations lister over
   `ListIntegrationTools`; beacons stamped `integrations`; forwarding over
   `CallIntegrationTool`; `read_only`-aware error classification in
-  `tools/runner.go`.
+  `tools/runner.go`; the widened `validateEgressDecisionShape` in
+  `internal/agent/egress.go` (both rejections).
 - **Orchestrator runtime service** — `filterRegisteredWorkerTools`'s
   `integrations` case; `beaconServerName` mapping; the pre-approval
   render-size deny branch beside `denyToolBefore` with its own reason
@@ -544,9 +567,11 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    `*url.Error` path that embeds URLs in error strings) — the plaintext
    credential appears in no event payload, audit row, log line, tool
    result, or error string.
-2. **One stack frame.** Two consecutive calls unseal exactly twice
-   (counting fake behind the sealer interface) — the assertion that
-   mechanically catches a per-connection client caching the plaintext.
+2. **One stack frame.** Two consecutive calls **to the same connection**
+   unseal exactly twice (counting fake behind the sealer interface) — the
+   same-connection pin is the point: a per-connection cache produces two
+   cache-misses on two different connections and passes, but a repeat call
+   to one connection exposes the cache hit.
 3. **No decision, no dial — on all four legs.** Refused before any network
    I/O, asserted with a transport that fails the test if touched: a tool
    name absent from `selected_tools`; a decision missing `TOOL_ARGUMENTS`
@@ -563,8 +588,13 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    refusal can only come from the endpoint comparison in
    `payloadMatchesEgressContext`, and it must be the context-changed one.
    Revoking an *only* connection instead changes `SelectedTools` and the
-   pre-existing comparison catches it, proving nothing. And the enqueue
-   idempotency fingerprint is exercised the way `RemoteMCPServers` was
+   pre-existing comparison catches it, proving nothing. The per-entry byte
+   bound gets the boundary probe test 13 gives the approval render: an
+   entry rendering to exactly `maxIntegrationEndpointEntryBytes` prepares,
+   signs, and verifies; one byte over is refused at `resolveEgressContext`
+   with the legible `FailedPrecondition`, never at signing — the leg that
+   catches two check sites measuring with different arithmetic. And the
+   enqueue idempotency fingerprint is exercised the way `RemoteMCPServers` was
    when it joined — as a pure-function test (two decisions differing only
    in the connection set produce different fingerprints); the live
    observable is a refusal as an idempotency **conflict**
@@ -614,9 +644,11 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    disclosure whose entries carry display names; the advertised tool
    description enumerates the live `(connection_id, display name)` pairs;
    with consent granted, a mocked `github.list_issues` completes end to
-   end using an id taken from the description, not hardcoded — and the
-   transcript run notice and consent audit row name `api.github.com`,
-   never an empty destination.
+   end **through the agent's `Execute`** — the leg that fails if the
+   runtime's own decision-shape validation was not widened — using an id
+   taken from the description, not hardcoded; and the transcript run
+   notice and consent audit row name `api.github.com`, never an empty
+   destination.
 10. **A failed read is not a dead run — with each site asserting what is
     actually true.** A provider 500 on an approved read returns a bounded
     tool error to the model and the run continues; a *successful* read
