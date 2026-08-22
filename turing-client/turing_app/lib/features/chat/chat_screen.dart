@@ -1732,6 +1732,12 @@ class _ChatScreenState extends State<ChatScreen> {
       });
     } on Exception catch (error) {
       if (!mounted) return;
+      // Only actually inserting a warning/failure card below (or otherwise
+      // making a new visible change) warrants forcing the viewport back to
+      // the bottom. An adopted attempt's early `return` restores nothing
+      // and adds nothing, so scrolling it would only yank a user who is
+      // reading older history for no on-screen reason.
+      var shouldScroll = false;
       setState(() {
         // Whether the composer actually re-enables still depends on
         // [_composerDisabled]'s OTHER flags: if the stream ended or startup
@@ -1787,8 +1793,9 @@ class _ChatScreenState extends State<ChatScreen> {
               ? _MessageSendFailureEntry(_messageSendFailedNotice)
               : _MessageSendUnconfirmedEntry(_messageSendUnconfirmedNotice),
         );
+        shouldScroll = true;
       });
-      _scrollToBottom();
+      if (shouldScroll) _scrollToBottom();
     }
   }
 

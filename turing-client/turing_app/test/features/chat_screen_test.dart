@@ -3495,6 +3495,300 @@ void main() {
     },
   );
 
+  testWidgets(
+    'an adopted send\'s later ambiguous rejection must not force the '
+    'scroll position back to the bottom while the user is reading older '
+    'history',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final sendGate = Completer<Map<String, dynamic>>();
+      final history = List<Message>.generate(60, (index) {
+        return Message(
+          messageId: 'msg_history_$index',
+          role: index.isEven ? 'user' : 'assistant',
+          content:
+              'history message $index padding this conversation with enough '
+              'content that the list must scroll to reach the newest row',
+          sequence: index + 1,
+          createdAt: _fixedDate,
+        );
+      });
+      final apiClient = _FakeApiClient()
+        ..sendMessagePending = sendGate
+        ..initialMessages = List<Message>.of(history);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      // Let the initial-load scroll-to-bottom animation finish (see
+      // `_loadInitialMessages`) so the viewport starts at the bottom, the
+      // same as every other assertion below assumes.
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final scrollController =
+          tester.widget<ListView>(find.byType(ListView)).controller!;
+      expect(
+        scrollController.position.maxScrollExtent,
+        greaterThan(0),
+        reason:
+            'enough history must be loaded that the list is actually '
+            'scrollable, or scrolling away from the bottom below would '
+            'prove nothing',
+      );
+
+      // The send RPC below never resolves during this test — [sendGate] is
+      // only ever completed with an error, at the very end. Everything
+      // that happens before that must happen while it is still pending.
+      await tester.enterText(find.byType(TextField), 'possibly durable send');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      // Let this send's own scroll-to-bottom animation finish so the new
+      // bubble is actually laid out within `ListView.builder`'s lazily
+      // built range before asserting on it.
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('possibly durable send'), findsOneWidget);
+
+      // A resync/live page adopts this exact optimistic bubble onto a
+      // durable message/run identity WHILE the still-pending `sendMessage`
+      // RPC has not resolved yet — same race as the "durable-identity
+      // adoption" test above, but now with enough history behind it that
+      // the user can meaningfully scroll away afterwards.
+      apiClient.initialMessages = [
+        ...history,
+        Message(
+          messageId: 'msg_user_durable',
+          role: 'user',
+          content: 'possibly durable send',
+          sequence: history.length + 1,
+          createdAt: _fixedDate,
+        ),
+        Message(
+          messageId: 'msg_asst_durable',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: history.length + 2,
+          createdAt: _fixedDate,
+          runState: _runState(
+            userMessageId: 'msg_user_durable',
+            assistantMessageId: 'msg_asst_durable',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.queued',
+          sequence: 1,
+          runState: _runState(
+            userMessageId: 'msg_user_durable',
+            assistantMessageId: 'msg_asst_durable',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      // Let the resync's own (legitimate, out-of-scope) scroll-to-bottom
+      // animation finish before reading the scroll position below.
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        find.text('possibly durable send'),
+        findsOneWidget,
+        reason: 'the resync must have adopted the optimistic bubble already',
+      );
+      expect(find.text('Queued'), findsOneWidget);
+      expect(find.byType(MessageSendUnconfirmedCard), findsNothing);
+      expect(
+        scrollController.position.pixels,
+        scrollController.position.maxScrollExtent,
+        reason:
+            'the adoption resync itself legitimately scrolls to the bottom '
+            '(see _reloadNewestPage) — unrelated, existing behaviour this '
+            'test does not challenge',
+      );
+
+      // The user now scrolls AWAY from the bottom to read older history.
+      // This is the state the rejection below must not disturb.
+      scrollController.jumpTo(0);
+      await tester.pump();
+      expect(
+        scrollController.position.pixels,
+        0,
+        reason:
+            'sanity check that the manual scroll away from the bottom '
+            'actually took effect before the rejection below',
+      );
+
+      // Now the ORIGINAL, still-pending `sendMessage` RPC for this same
+      // attempt finally settles — with an ambiguous rejection of exactly
+      // the kind that (absent adoption) would render
+      // `MessageSendUnconfirmedCard` and restore the composer/retry draft.
+      // Durable identity already proved this send was accepted, so the
+      // catch's early return makes no other visible change here — it must
+      // not yank the user back to the bottom either.
+      sendGate.completeError(const GrpcError.unavailable('no backend'));
+      await tester.pump();
+      await tester.pump();
+      // If a scroll-to-bottom were (wrongly) triggered, give its animation
+      // every chance to run before asserting it did not move anything.
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        scrollController.position.pixels,
+        0,
+        reason:
+            'a rejection that changes nothing else on screen must not '
+            'scroll the user away from the older history they were '
+            'reading',
+      );
+
+      // With the no-forced-scroll invariant proven above, navigate back to
+      // the bottom manually (this is a virtualized `ListView.builder` — a
+      // row scrolled out of range is not built at all, so it cannot be
+      // asserted on from off-screen) to check the same content invariants
+      // the original adoption-race test covers: no duplicate bubble, no
+      // stale warning/failure card, and no restored composer draft.
+      scrollController.jumpTo(scrollController.position.maxScrollExtent);
+      await tester.pump();
+      expect(
+        find.text('possibly durable send'),
+        findsOneWidget,
+        reason:
+            'still exactly the one adopted, durable bubble — no duplicate '
+            'and no restored composer copy',
+      );
+      expect(
+        find.byType(MessageSendUnconfirmedCard),
+        findsNothing,
+        reason:
+            'durable identity already proved this send was accepted; a '
+            'later rejection of the same pending RPC must not warn',
+      );
+      expect(find.byType(MessageSendFailureCard), findsNothing);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        '',
+        reason:
+            'the composer must not be restored to the sent text — that '
+            'text was already durably accepted',
+      );
+      expect(
+        find.text('Queued'),
+        findsOneWidget,
+        reason: 'the durable run state card must still render correctly',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'an ambiguous send rejection that is NOT adopted still inserts its '
+    'warning card and scrolls to it, even if the user had scrolled away',
+    (tester) async {
+      // Complements the adopted-send test above: that one proves the catch
+      // block's early-return path must NOT force a scroll. This proves the
+      // opposite branch — the one that actually inserts a card — still
+      // does, so `shouldScroll` guarding `_scrollToBottom()` was not
+      // accidentally left false on every path.
+      final events = StreamController<TuringEvent>(sync: true);
+      final sendGate = Completer<Map<String, dynamic>>();
+      final history = List<Message>.generate(60, (index) {
+        return Message(
+          messageId: 'msg_history_$index',
+          role: index.isEven ? 'user' : 'assistant',
+          content:
+              'history message $index padding this conversation with enough '
+              'content that the list must scroll to reach the newest row',
+          sequence: index + 1,
+          createdAt: _fixedDate,
+        );
+      });
+      final apiClient = _FakeApiClient()
+        ..sendMessagePending = sendGate
+        ..initialMessages = List<Message>.of(history);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final scrollController =
+          tester.widget<ListView>(find.byType(ListView)).controller!;
+      expect(scrollController.position.maxScrollExtent, greaterThan(0));
+
+      await tester.enterText(find.byType(TextField), 'never adopted send');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('never adopted send'), findsOneWidget);
+
+      // The user scrolls away from the bottom — nothing ever adopts this
+      // attempt's identity, unlike the companion test above.
+      scrollController.jumpTo(0);
+      await tester.pump();
+      expect(scrollController.position.pixels, 0);
+
+      // An ambiguous rejection settles: `_isConfirmedPreEnqueueSendFailure`
+      // returns false for this error, so it renders
+      // `MessageSendUnconfirmedCard` and restores the composer draft — a
+      // real, visible change this time, which must scroll into view.
+      sendGate.completeError(const GrpcError.unavailable('no backend'));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      // One more settle: inserting the card and restoring the composer
+      // draft can itself change layout height slightly after the scroll
+      // animation's target was computed, so give it a final frame.
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        scrollController.position.pixels,
+        greaterThan(scrollController.position.maxScrollExtent - 50),
+        reason:
+            'inserting the unconfirmed-send warning card is a real visible '
+            'change and must still scroll it (back) into view, unlike the '
+            "adopted-send test's no-op early return which must leave "
+            'pixels at 0',
+      );
+      expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        'never adopted send',
+        reason: 'the composer draft is restored on this path',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
   testWidgets('coalesced resync never replaces partial live text with an empty '
       'persisted assistant row', (tester) async {
     final events = StreamController<TuringEvent>(sync: true);
