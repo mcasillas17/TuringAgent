@@ -512,10 +512,18 @@ func (s *Server) abandonRun(ctx context.Context, runID string) error {
 	for attempt := 0; attempt < maxCancelVersionAttempts; attempt++ {
 		state, err := s.repo.GetRunState(ctx, runID)
 		if err != nil {
-			// Deletion and a closed database both land here. Neither is a race
-			// this can win, and neither leaves a run to terminalize. Reported as
-			// success rather than as a contended loss: nothing was lost.
-			return nil
+			if errors.Is(err, sql.ErrNoRows) {
+				// Deletion: there is no race to win and no run left to
+				// terminalize. Reported as success rather than as a contended
+				// loss, because nothing was lost.
+				return nil
+			}
+			// Anything else — a closed database, a broken connection, a
+			// driver failure — is not an absence. The run is still exactly
+			// as active as it was, and telling the caller otherwise would
+			// let a genuine infrastructure failure pass for a completed
+			// abandonment.
+			return err
 		}
 		if s.afterRunStateReadForCancel != nil {
 			s.afterRunStateReadForCancel(runID)
@@ -529,11 +537,22 @@ func (s *Server) abandonRun(ctx context.Context, runID string) error {
 			continue
 		}
 		if err != nil {
-			// A refusal means the run is already terminal and there is nothing
-			// left to cancel. The error itself is not reported onward: it is a
-			// repository sentinel or a driver's sentence, and this value is
-			// logged.
-			return nil
+			if errors.Is(err, repository.ErrRunTransitionConflict) ||
+				errors.Is(err, repository.ErrRunNotCancellable) ||
+				errors.Is(err, sql.ErrNoRows) {
+				// A version race that ran out of budget, a refusal because
+				// the run is already terminal, or a run that was deleted out
+				// from under the transaction: none of these leave anything
+				// left to cancel, so they are reported as success rather
+				// than as a contended loss.
+				return nil
+			}
+			// Anything else is a genuine repository or infrastructure
+			// failure. The run is not terminal and it was not deleted —
+			// this call simply did not happen, and the caller must be told
+			// so a merely-advisory runtime cancellation is not mistaken for
+			// a durable one.
+			return err
 		}
 		// Only the committed transition publishes. A duplicate carries no
 		// events, so a replayed abandonment cannot announce a second
