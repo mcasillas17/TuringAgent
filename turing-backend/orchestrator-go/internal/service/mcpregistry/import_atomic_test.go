@@ -3,6 +3,7 @@ package mcpregistry
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -330,6 +331,273 @@ func TestImportJSONNewEntryWithInvalidSchemaIsRefusedOnlyAndCorrectedReimportWor
 	if len(corrected.Imported) != 1 || corrected.Imported[0] != "vendor" {
 		t.Fatalf("Imported = %v, want [vendor] once the schema is corrected", corrected.Imported)
 	}
+}
+
+// A static tools snapshot naming the same tool twice must be refused
+// before any mutation — the same way live discovery (service.go's
+// discover) already refuses a duplicate name within one tools/list
+// response — leaving no server row behind, with a fixed, generic reason
+// that never echoes the duplicated name (the same wording
+// mcpToolDefinitionRefusedMessage already uses for a token-leaking entry,
+// rather than one that would name which of this snapshot's several
+// validation rules tripped).
+func TestImportJSONStaticSnapshotDuplicateToolNameRefusesWholeEntryWithNoRow(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx := context.Background()
+
+	report, err := service.ImportJSON(ctx, []byte(`{
+		"mcpServers": {
+			"vendor": {
+				"url": "https://vendor.example/mcp",
+				"tools": [
+					{"name": "vendor.lookup", "inputSchema": {"type": "object"}},
+					{"name": "vendor.lookup", "inputSchema": {"type": "object"}}
+				]
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Imported) != 0 {
+		t.Fatalf("Imported = %v, want none: a duplicate tool name within one static snapshot must refuse the whole entry", report.Imported)
+	}
+	reason, refused := report.Unsupported["vendor"]
+	if !refused {
+		t.Fatalf("Unsupported = %+v, want vendor refused", report.Unsupported)
+	}
+	if reason != mcpToolDefinitionRefusedMessage {
+		t.Fatalf("reason = %q, want the fixed generic %q", reason, mcpToolDefinitionRefusedMessage)
+	}
+	if _, err := repo.GetMCPServerByName(ctx, "vendor"); err != repository.ErrMCPServerNotFound {
+		t.Fatalf("err = %v, want ErrMCPServerNotFound: no row may remain after the refusal", err)
+	}
+}
+
+// The same duplicate-name refusal must roll back a legacy migration-0016
+// placeholder adoption entirely, leaving the placeholder exactly as it was
+// (untouched — still url-empty, still carrying its original tool) rather
+// than a partially-adopted row, the same way the bundled-namespace and
+// inter-server collision tests above already prove for a placeholder-free
+// entry.
+func TestImportJSONStaticSnapshotDuplicateToolNameLeavesPlaceholderUntouched(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx := context.Background()
+
+	placeholder, err := repo.RegisterMCPServer(ctx, repository.ImportedMCPServer{
+		Name: "vendor", URL: "", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.Server.ID, []repository.MCPServerTool{
+		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.ImportJSON(ctx, []byte(`{
+		"mcpServers": {
+			"vendor": {
+				"url": "https://vendor.example/mcp",
+				"tools": [
+					{"name": "vendor.a", "inputSchema": {"type": "object"}},
+					{"name": "vendor.a", "inputSchema": {"type": "object"}}
+				]
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Imported) != 0 {
+		t.Fatalf("Imported = %v, want none", report.Imported)
+	}
+	if _, refused := report.Unsupported["vendor"]; !refused {
+		t.Fatalf("Unsupported = %+v, want vendor refused", report.Unsupported)
+	}
+
+	stillPlaceholder, err := repo.GetMCPServerByName(ctx, "vendor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stillPlaceholder.ID != placeholder.Server.ID || stillPlaceholder.URL != "" {
+		t.Fatalf("placeholder = %+v, want untouched (still url-empty)", stillPlaceholder)
+	}
+	tools, err := repo.ListMCPServerTools(ctx, placeholder.Server.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 || tools[0].Name != "vendor.lookup" || !tools[0].Present {
+		t.Fatalf("tools = %+v, want the placeholder's original tool untouched", tools)
+	}
+}
+
+// buildImportTools' token-leak scan must catch a configured bearer token
+// that appears verbatim inside a tool's metadata even when that token
+// contains a character (a quote or a backslash) JSON escaping would
+// re-encode: a post-marshal substring scan of the already-serialized
+// schema would search for the raw token in text where json.Marshal has
+// since turned every `"` into `\"` (or every `\` into `\\`), so it can
+// never find it there — the scan must instead walk the raw, decoded
+// schema value (map keys and nested string/list values) before anything
+// is marshaled. This is nested three levels deep (schema -> properties ->
+// an enum list) specifically so a fix that only checks the schema's
+// top-level values cannot pass by accident.
+func TestImportJSONTokenSentinelWithQuoteEscapedByMarshalStillRefusesEntryFailClosedAndSentinelFree(t *testing.T) {
+	const sentinel = `mcp-quote-sentinel-say-"hello"-do-not-leak`
+	database, service, repo := newSentinelSweepableRegistryService(t)
+
+	document, err := json.Marshal(map[string]any{
+		"mcpServers": map[string]any{
+			"vendor": map[string]any{
+				"url":     "https://vendor.example/mcp",
+				"headers": map[string]string{"Authorization": "Bearer " + sentinel},
+				"tools": []map[string]any{
+					{
+						"name": "vendor.lookup",
+						"inputSchema": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"note": map[string]any{
+									"enum": []any{"safe", sentinel},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.ImportJSON(context.Background(), document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Imported) != 0 {
+		t.Fatalf("Imported = %v, want none: a token containing a quote, hidden from a post-marshal scan by JSON escaping, must still refuse the whole entry", report.Imported)
+	}
+	reason, refused := report.Unsupported["vendor"]
+	if !refused {
+		t.Fatalf("Unsupported = %+v, want vendor refused", report.Unsupported)
+	}
+	if reason != mcpToolDefinitionRefusedMessage {
+		t.Fatalf("reason = %q, want the fixed generic %q", reason, mcpToolDefinitionRefusedMessage)
+	}
+	assertStringSentinelFree(t, "unsupported reason", reason, sentinel)
+	if _, err := repo.GetMCPServerByName(context.Background(), "vendor"); err != repository.ErrMCPServerNotFound {
+		t.Fatalf("err = %v, want ErrMCPServerNotFound: no row may remain after a fail-closed refusal", err)
+	}
+	assertDatabaseSentinelFreeExceptSealedToken(t, database, sentinel)
+}
+
+// The same class of bug, but for a token containing a backslash, and
+// appearing as a schema map KEY (a property name) rather than a value —
+// proving the recursive scan walks map keys too, not only string/list
+// values.
+func TestImportJSONTokenSentinelWithBackslashAsSchemaMapKeyStillRefusesEntryFailClosedAndSentinelFree(t *testing.T) {
+	const sentinel = `mcp-backslash-sentinel-back\slash-do-not-leak`
+	database, service, repo := newSentinelSweepableRegistryService(t)
+
+	document, err := json.Marshal(map[string]any{
+		"mcpServers": map[string]any{
+			"vendor": map[string]any{
+				"url":     "https://vendor.example/mcp",
+				"headers": map[string]string{"Authorization": "Bearer " + sentinel},
+				"tools": []map[string]any{
+					{
+						"name": "vendor.lookup",
+						"inputSchema": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								sentinel: map[string]any{"type": "string"},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.ImportJSON(context.Background(), document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Imported) != 0 {
+		t.Fatalf("Imported = %v, want none: a token containing a backslash, embedded as a schema map key, must still refuse the whole entry", report.Imported)
+	}
+	reason, refused := report.Unsupported["vendor"]
+	if !refused {
+		t.Fatalf("Unsupported = %+v, want vendor refused", report.Unsupported)
+	}
+	if reason != mcpToolDefinitionRefusedMessage {
+		t.Fatalf("reason = %q, want the fixed generic %q", reason, mcpToolDefinitionRefusedMessage)
+	}
+	assertStringSentinelFree(t, "unsupported reason", reason, sentinel)
+	if _, err := repo.GetMCPServerByName(context.Background(), "vendor"); err != repository.ErrMCPServerNotFound {
+		t.Fatalf("err = %v, want ErrMCPServerNotFound: no row may remain after a fail-closed refusal", err)
+	}
+	assertDatabaseSentinelFreeExceptSealedToken(t, database, sentinel)
+}
+
+// A tool's "description" is never stored or returned (repository.MCPServerTool
+// has no field for it), but a configured bearer token appearing verbatim in
+// one must still refuse the whole entry the same way a token in the name
+// or schema does: description is still tool metadata a UI could plausibly
+// surface, and the refusal signal must not depend on whether this package
+// happens to persist the field it was found in.
+func TestImportJSONTokenSentinelInToolDescriptionRefusesEntryEvenThoughDescriptionIsNeverStored(t *testing.T) {
+	const sentinel = "mcp-description-sentinel-9f3c7a1e6b2d-do-not-leak"
+	database, service, repo := newSentinelSweepableRegistryService(t)
+
+	document, err := json.Marshal(map[string]any{
+		"mcpServers": map[string]any{
+			"vendor": map[string]any{
+				"url":     "https://vendor.example/mcp",
+				"headers": map[string]string{"Authorization": "Bearer " + sentinel},
+				"tools": []map[string]any{
+					{
+						"name":        "vendor.lookup",
+						"description": sentinel,
+						"inputSchema": map[string]any{"type": "object"},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.ImportJSON(context.Background(), document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Imported) != 0 {
+		t.Fatalf("Imported = %v, want none: a token embedded in a tool's description must still refuse the whole entry", report.Imported)
+	}
+	reason, refused := report.Unsupported["vendor"]
+	if !refused {
+		t.Fatalf("Unsupported = %+v, want vendor refused", report.Unsupported)
+	}
+	if reason != mcpToolDefinitionRefusedMessage {
+		t.Fatalf("reason = %q, want the fixed generic %q", reason, mcpToolDefinitionRefusedMessage)
+	}
+	assertStringSentinelFree(t, "unsupported reason", reason, sentinel)
+	if _, err := repo.GetMCPServerByName(context.Background(), "vendor"); err != repository.ErrMCPServerNotFound {
+		t.Fatalf("err = %v, want ErrMCPServerNotFound: no row may remain after a fail-closed refusal", err)
+	}
+	// Sweeping the whole database (not just checking for an obvious
+	// "description" column) is the point here: it proves the description
+	// text never reached any table at all, not merely that it didn't land
+	// in a column literally named "description".
+	assertDatabaseSentinelFreeExceptSealedToken(t, database, sentinel)
 }
 
 // newSentinelSweepableRegistryService is newRegistryTestService's

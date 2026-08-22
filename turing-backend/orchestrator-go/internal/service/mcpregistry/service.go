@@ -278,6 +278,14 @@ func (s *Server) UpdateMcpToolPolicy(ctx context.Context, req *turingv1.UpdateMc
 		}
 		return nil, status.Error(codes.Internal, "update MCP tool policy failed")
 	}
+	// Notify immediately once the policy mutation above has committed —
+	// before the fallible list/descriptor mapping below — so a failure
+	// reading the tool list back or mapping it to a descriptor (e.g. a
+	// corrupted stored schema) can never leave an already-persisted
+	// policy change unannounced, the same reasoning
+	// SetMcpServerEnabled/RegisterMcpServer/RotateMcpServerToken already
+	// apply to their own post-commit notify calls.
+	s.notifyRegistryChanged()
 	tools, err := s.repo.ListMCPServerTools(ctx, req.GetServerId())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "read MCP tool failed")
@@ -285,10 +293,16 @@ func (s *Server) UpdateMcpToolPolicy(ctx context.Context, req *turingv1.UpdateMc
 	for _, tool := range tools {
 		if tool.Name == req.GetToolName() {
 			descriptor, err := toolDescriptor(tool)
-			if err == nil {
-				s.notifyRegistryChanged()
+			if err != nil {
+				// toolDescriptor's own error (e.g. a schema that fails
+				// to unmarshal) is never returned as-is: it is neither
+				// a gRPC status (so it would surface as the unhelpful
+				// default codes.Unknown) nor safe to assume is free of
+				// anything sensitive, so it is mapped to the same fixed,
+				// generic Internal status read failures above use.
+				return nil, status.Error(codes.Internal, "read MCP tool failed")
 			}
-			return descriptor, err
+			return descriptor, nil
 		}
 
 	}
@@ -712,14 +726,25 @@ func policyToProto(policy string) turingv1.ToolPolicy {
 	}
 }
 
-func boundedStatusMessage(message string) string {
+// boundedUTF8 truncates message to at most limit bytes, trimming back
+// further if needed so the result never ends mid-codepoint. It is the one
+// shared implementation boundedStatusMessage (bounding an unsupported
+// reason or a discovery/status error) and boundedMCPServerNameForDisplay
+// (bounding an unsupported entry's own untrusted name/key) both use, so
+// the same trim-to-valid-UTF-8 behavior applies regardless of which limit
+// is in effect.
+func boundedUTF8(message string, limit int) string {
 	message = strings.ToValidUTF8(message, "\uFFFD")
-	if len(message) <= maxMCPStatusMessageBytes {
+	if len(message) <= limit {
 		return message
 	}
-	message = message[:maxMCPStatusMessageBytes]
+	message = message[:limit]
 	for !utf8.ValidString(message) {
 		message = message[:len(message)-1]
 	}
 	return message
+}
+
+func boundedStatusMessage(message string) string {
+	return boundedUTF8(message, maxMCPStatusMessageBytes)
 }

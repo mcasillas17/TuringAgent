@@ -108,7 +108,16 @@ func TestRegisterMcpServerRefusesInvalidName(t *testing.T) {
 
 func TestRegisterMcpServerRefusesReservedBundledName(t *testing.T) {
 	service, _ := newRegistryTestService(t)
-	for _, name := range []string{"system", "files", "skills"} {
+	// Reserved names are refused case-insensitively: "Files"/"SYSTEM"/
+	// "sKiLlS" all name the same bundled namespaces as their lowercase
+	// forms, and mcpServerNamePattern itself accepts mixed case, so
+	// without a case-insensitive check these would otherwise register
+	// successfully and shadow a bundled server under a differently-cased
+	// name.
+	for _, name := range []string{
+		"system", "files", "skills",
+		"Files", "SYSTEM", "sKiLlS",
+	} {
 		_, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
 			Name: name,
 			Url:  "https://vendor.example/mcp",

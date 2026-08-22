@@ -69,6 +69,18 @@ non-empty endpoint and mcp.json's current url/token/policy for it was
 **not** applied — the MCPs page's reimport dialog states this explicitly per
 skipped name ("already registered; existing settings were kept") so an edit
 to an already-registered entry is never mistaken for having taken effect.
+The dialog also states how to actually repoint one: remove the existing
+server, then add it again at the new endpoint. That is not merely a UI
+convenience path — deleting first writes an import tombstone and removing
+the row is what lets a subsequent registration (in-app, or a later
+reimport naming that exact server) clear the tombstone and create a
+genuinely new, disabled row rather than colliding with a live one; there is
+no in-place "edit the endpoint of an existing server" operation, by design,
+because create-only reimport and explicit-consent registration are the only
+two paths that ever set url/sealed_token/tier, and both start every
+policy/tools snapshot over from a fail-closed (disabled, no tools) state
+rather than mutating a live row's endpoint out from under whatever the
+operator or a running session currently trusts it to be.
 
 Reimport is create-only: an existing row for a name that already has a real,
 non-empty endpoint is left completely untouched — its enabled state,

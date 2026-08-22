@@ -238,6 +238,79 @@ void main() {
       expect(find.textContaining('******'), findsNothing);
     });
 
+    testWidgets(
+      'a backend error still reloads the registry through the callback',
+      (tester) async {
+        final api = _McpApi()
+          ..registerError = const TuringApiException(
+            code: 'mcp_server_conflict',
+            message: 'a server with that name already exists',
+          );
+        await _pumpMcps(tester, api);
+        final listCallsBefore = api.listCalls;
+
+        await tester.enterText(find.byKey(const Key('mcpsAddName')), 'Vendor');
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddUrl')),
+          'https://vendor.example/mcp',
+        );
+        await tester.tap(find.byKey(const Key('mcpsAddSubmit')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('a server with that name already exists'),
+          findsOneWidget,
+        );
+        // A registration can commit on the backend and still have its RPC
+        // response fail, so the displayed state can no longer be trusted
+        // as-is: the catch handler must reload through the same callback
+        // the success path uses, the same way enable/disable and policy
+        // changes already reload before showing their own error.
+        expect(api.listCalls, greaterThan(listCallsBefore));
+      },
+    );
+
+    testWidgets(
+      'a backend error that actually committed on the backend still shows '
+      'the registered server once reloaded',
+      (tester) async {
+        // Simulates a post-commit Internal error: the registration's
+        // mutation lands (a server is actually created) but the response
+        // itself still errors. Without reloading through the callback,
+        // the UI would never display the server that was, in fact,
+        // registered.
+        final api = _McpApi()
+          ..registerError = StateError('mcp.server.registered audit failed')
+          ..registerCommitsBeforeThrowing = true;
+        await _pumpMcps(tester, api);
+
+        await tester.enterText(find.byKey(const Key('mcpsAddName')), 'Vendor');
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddUrl')),
+          'https://vendor.example/mcp',
+        );
+        await tester.tap(find.byKey(const Key('mcpsAddSubmit')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('mcp.server.registered audit failed'),
+          findsOneWidget,
+        );
+        // The form's own Name field also still displays "Vendor" (retained
+        // on failure), so asserting on the "Disabled" badge — which only
+        // ever renders on a server card, never inside the form — is what
+        // actually proves the reload surfaced a new card for it, rather
+        // than merely finding the retained form text.
+        expect(
+          find.text('Disabled'),
+          findsWidgets,
+          reason:
+              'the reload must surface the backend\'s authoritative '
+              '(already-committed) state despite the RPC returning an error',
+        );
+      },
+    );
+
     testWidgets('a backend error is announced as a semantic live region', (
       tester,
     ) async {
@@ -378,6 +451,49 @@ void main() {
       },
     );
 
+    testWidgets(
+      'explains how to repoint a skipped server to a new endpoint',
+      (tester) async {
+        final api = _McpApi()
+          ..importReport = McpImportReport(
+            imported: const [],
+            skipped: const ['vendor'],
+            refused: const [],
+          );
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.text('Re-import mcp.json'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('remove it, then add it again'),
+          findsOneWidget,
+          reason:
+              'an operator must be told how to point a skipped server at a '
+              'new endpoint, since a plain mcp.json edit is silently kept '
+              'as-is',
+        );
+      },
+    );
+
+    testWidgets(
+      'does not show the repoint explanation when nothing was skipped',
+      (tester) async {
+        final api = _McpApi()
+          ..importReport = McpImportReport(
+            imported: const ['vendor'],
+            skipped: const [],
+            refused: const [],
+          );
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.text('Re-import mcp.json'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('remove it, then add it again'), findsNothing);
+      },
+    );
+
     testWidgets('shows None for every empty section', (tester) async {
       final api = _McpApi()
         ..importReport = McpImportReport(
@@ -444,7 +560,7 @@ void main() {
     });
 
     testWidgets(
-      'a reimport failure shows the backend error and does not reload',
+      'a reimport failure shows the backend error and reloads the registry',
       (tester) async {
         final api = _McpApi()..importError = StateError('mcp.json is invalid');
         await _pumpMcps(tester, api);
@@ -456,7 +572,42 @@ void main() {
         // No report dialog on failure — the error surfaces instead.
         expect(find.text('mcp.json re-imported'), findsNothing);
         expect(find.textContaining('mcp.json is invalid'), findsOneWidget);
-        expect(api.listCalls, listCallsBefore);
+        // A reimport can commit some entries on the backend and still have
+        // the RPC response itself fail, so the displayed state can no
+        // longer be trusted as-is: the catch handler must reload before
+        // showing the error, the same way enable/disable and policy
+        // changes already do.
+        expect(api.listCalls, greaterThan(listCallsBefore));
+      },
+    );
+
+    testWidgets(
+      'a reimport failure that actually committed on the backend still '
+      'shows the imported server once reloaded',
+      (tester) async {
+        // Simulates a post-commit Internal error: the reimport's mutation
+        // lands (a server is actually imported) but the response itself
+        // still errors. Without reloading before showing the error, the UI
+        // would never display the server that was, in fact, imported.
+        final api = _McpApi()
+          ..importError = StateError('mcp.server.reimported audit failed')
+          ..importCommitsBeforeThrowing = true;
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byKey(const Key('mcpsReimportButton')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('mcp.server.reimported audit failed'),
+          findsOneWidget,
+        );
+        expect(
+          find.text('reimported-before-failure'),
+          findsOneWidget,
+          reason:
+              'the reload must surface the backend\'s authoritative '
+              '(already-committed) state despite the RPC returning an error',
+        );
       },
     );
   });
@@ -694,7 +845,8 @@ void main() {
     );
 
     testWidgets(
-      'a failed delete re-enables the popup menu and surfaces the error',
+      'a failed delete re-enables the popup menu and surfaces the error, '
+      'after reloading the registry',
       (tester) async {
         final api = _McpApi()
           ..servers.add(_localServer())
@@ -718,10 +870,45 @@ void main() {
           find.byType(PopupMenuButton<String>),
         );
         expect(popup.enabled, isTrue);
-        // A failed mutation must not trigger a reload, and the server must
-        // still be in the list.
-        expect(api.listCalls, listCallsBefore);
+        // A delete can commit on the backend and still have its RPC
+        // response fail, so the displayed state can no longer be trusted
+        // as-is: the catch handler must reload before showing the error,
+        // the same way enable/disable and policy changes already do.
+        expect(api.listCalls, greaterThan(listCallsBefore));
         expect(find.text('vendor'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a failed delete that actually committed on the backend no longer '
+      'shows the server once reloaded',
+      (tester) async {
+        // Simulates a post-commit Internal error: the delete's mutation
+        // lands (the row is actually removed) but the response itself
+        // still errors. Without reloading before showing the error, the UI
+        // would keep showing a server that no longer exists.
+        final api = _McpApi()
+          ..servers.add(_localServer())
+          ..deleteError = StateError('mcp.server.deleted audit failed')
+          ..deleteCommitsBeforeThrowing = true;
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('mcp.server.deleted audit failed'),
+          findsOneWidget,
+        );
+        expect(
+          find.text('vendor'),
+          findsNothing,
+          reason:
+              'the reload must surface the backend\'s authoritative '
+              '(already-committed) state despite the RPC returning an error',
+        );
       },
     );
 
@@ -1110,8 +1297,8 @@ void main() {
     });
 
     testWidgets(
-      'a rotate failure keeps the dialog open with the error and does not '
-      'reload',
+      'a rotate failure keeps the dialog open with the error and reloads '
+      'the registry',
       (tester) async {
         final api = _McpApi()
           ..servers.add(_localServer())
@@ -1139,7 +1326,13 @@ void main() {
           find.textContaining('server rejected the token'),
           findsOneWidget,
         );
-        expect(api.listCalls, listCallsBefore);
+        // A rotation can commit on the backend and still have its RPC
+        // response fail, so the displayed state can no longer be trusted
+        // as-is: the catch handler must ask the parent to reload — while
+        // this dialog stays open with the error — the same way
+        // enable/disable and policy changes already reload before showing
+        // their own error.
+        expect(api.listCalls, greaterThan(listCallsBefore));
         expect(
           _isAnnouncedAsLiveRegion(
             tester,
@@ -1147,6 +1340,61 @@ void main() {
           ),
           isTrue,
         );
+      },
+    );
+
+    testWidgets(
+      'a rotate failure that actually committed on the backend still shows '
+      'the reset liveness once reloaded, while the dialog stays open',
+      (tester) async {
+        // Simulates a post-commit Internal error: the rotation's mutation
+        // lands (liveness resets to unknown, mirroring the backend) but
+        // the response itself still errors. Without reloading before
+        // showing the error, the page behind the still-open dialog would
+        // keep displaying the pre-rotation liveness.
+        final api = _McpApi()
+          ..servers.add(
+            _localServer(enabled: true, liveness: McpServerLiveness.up),
+          )
+          ..rotateError = StateError('mcp.server.token_rotated audit failed')
+          ..rotateCommitsBeforeThrowing = true;
+        await _pumpMcps(tester, api);
+        expect(find.text('Up'), findsOneWidget);
+
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Rotate token'));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('mcpsRotateToken')),
+          'will-fail-post-commit',
+        );
+        await tester.tap(find.byKey(const Key('mcpsRotateSubmit')));
+        await tester.pumpAndSettle();
+
+        // The dialog stays open with the error.
+        expect(find.byKey(const Key('mcpsRotateToken')), findsOneWidget);
+        expect(
+          find.textContaining('mcp.server.token_rotated audit failed'),
+          findsOneWidget,
+        );
+        // The token field is cleared even on this post-commit failure,
+        // matching every other rotate-failure path.
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('mcpsRotateToken')))
+              .controller!
+              .text,
+          '',
+        );
+        // The page behind the still-open dialog must reflect the reload —
+        // liveness reset from "Up" to "Not checked" — not the stale
+        // pre-rotation snapshot. The underlying route's widgets remain in
+        // the tree (just visually behind the modal barrier), so both
+        // texts are still queryable here.
+        expect(find.text('Up'), findsNothing);
+        expect(find.text('Not checked'), findsOneWidget);
       },
     );
 
@@ -1683,6 +1931,11 @@ class _McpApi
   Object? registerError;
   Completer<void>? registerGate;
   int _nextId = 1;
+  // When true, a new server row is added to `servers` before registerError
+  // is thrown — simulating a post-commit Internal error (the backend
+  // mutation committed, but the RPC response itself still failed). Mirrors
+  // `enabledCommitsBeforeThrowing`.
+  bool registerCommitsBeforeThrowing = false;
 
   final List<Map<String, Object?>> enabledCalls = [];
   Object? enabledError;
@@ -1698,15 +1951,29 @@ class _McpApi
   final List<String> deleteCalls = [];
   Object? deleteError;
   final Map<String, Completer<void>> deleteGates = {};
+  // When true, the server is removed from `servers` before deleteError is
+  // thrown — simulating a post-commit Internal error. Mirrors
+  // `enabledCommitsBeforeThrowing`.
+  bool deleteCommitsBeforeThrowing = false;
 
   McpImportReport? importReport;
   Object? importError;
   Completer<McpImportReport>? reimportGate;
   int reimportCalls = 0;
+  // When true, a new server row is added to `servers` before importError is
+  // thrown — simulating a reimport whose mutation committed (a server was
+  // actually imported) but whose RPC response itself still failed. Mirrors
+  // `enabledCommitsBeforeThrowing`.
+  bool importCommitsBeforeThrowing = false;
 
   final List<Map<String, String>> rotateCalls = [];
   Object? rotateError;
   Completer<McpServer>? rotateGate;
+  // When true, the server's liveness is reset (mirroring the backend's own
+  // post-rotation liveness reset) before rotateError is thrown — simulating
+  // a rotation whose mutation committed but whose RPC response itself
+  // still failed. Mirrors `enabledCommitsBeforeThrowing`.
+  bool rotateCommitsBeforeThrowing = false;
 
   final List<Map<String, Object?>> policyCalls = [];
   Object? policyError;
@@ -1766,7 +2033,12 @@ class _McpApi
     final gate = deleteGates[serverId];
     if (gate != null) await gate.future;
     final error = deleteError;
-    if (error != null) throw error;
+    if (error != null) {
+      if (deleteCommitsBeforeThrowing) {
+        servers.removeWhere((s) => s.serverId == serverId);
+      }
+      throw error;
+    }
     servers.removeWhere((s) => s.serverId == serverId);
   }
 
@@ -1789,8 +2061,6 @@ class _McpApi
     });
     final gate = registerGate;
     if (gate != null) await gate.future;
-    final error = registerError;
-    if (error != null) throw error;
     final server = McpServer(
       serverId: 'mcp_new_${_nextId++}',
       name: name,
@@ -1803,6 +2073,13 @@ class _McpApi
       sandboxConfined: tier == McpServerTier.localContainer,
       tools: const [],
     );
+    final error = registerError;
+    if (error != null) {
+      if (registerCommitsBeforeThrowing) {
+        servers.add(server);
+      }
+      throw error;
+    }
     servers.add(server);
     return server;
   }
@@ -1813,7 +2090,25 @@ class _McpApi
     final gate = reimportGate;
     if (gate != null) return gate.future;
     final error = importError;
-    if (error != null) throw error;
+    if (error != null) {
+      if (importCommitsBeforeThrowing) {
+        servers.add(
+          McpServer(
+            serverId: 'mcp_new_${_nextId++}',
+            name: 'reimported-before-failure',
+            transport: 'http',
+            url: 'https://reimported-before-failure.example/mcp',
+            tier: McpServerTier.remoteUrl,
+            enabled: false,
+            liveness: McpServerLiveness.unknown,
+            statusMessage: '',
+            sandboxConfined: false,
+            tools: const [],
+          ),
+        );
+      }
+      throw error;
+    }
     return importReport ??
         McpImportReport(
           imported: const [],
@@ -1831,7 +2126,23 @@ class _McpApi
     final gate = rotateGate;
     if (gate != null) await gate.future;
     final error = rotateError;
-    if (error != null) throw error;
+    if (error != null) {
+      if (rotateCommitsBeforeThrowing) {
+        final index = servers.indexWhere((s) => s.serverId == serverId);
+        if (index == -1) {
+          throw StateError(
+            'rotateCommitsBeforeThrowing: no server with serverId '
+            '"$serverId" in servers; cannot simulate a post-commit failure '
+            'for a server the fake does not know about',
+          );
+        }
+        servers[index] = _withLiveness(
+          servers[index],
+          McpServerLiveness.unknown,
+        );
+      }
+      throw error;
+    }
     final index = servers.indexWhere((s) => s.serverId == serverId);
     // Mirrors the backend: rotating a token resets liveness to
     // unknown/empty in the same transaction, since a prior reading was made

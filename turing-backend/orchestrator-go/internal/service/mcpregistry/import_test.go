@@ -3,6 +3,7 @@ package mcpregistry
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -125,11 +126,60 @@ func TestImportJSONRefusesReservedAndInvalidNamesBeforeDecodingTheEntryBody(t *t
 	}
 }
 
+// A reserved name must be refused case-insensitively through the file
+// import path too — not just validateMCPServerName in isolation — so a
+// mixed-case reserved name in mcp.json cannot register over (and shadow) a
+// bundled server's namespace, and, since mcpServerNamePattern itself
+// accepts mixed case, this would otherwise silently succeed.
+func TestImportJSONRefusesReservedNamesCaseInsensitively(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	report, err := service.ImportJSON(context.Background(), []byte(`{
+		"mcpServers": {
+			"Files": {"url": "https://vendor.example/mcp"},
+			"SYSTEM": {"url": "https://vendor.example/mcp"},
+			"sKiLlS": {"url": "https://vendor.example/mcp"}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Files", "SYSTEM", "sKiLlS"} {
+		reason, refused := report.Unsupported[name]
+		if !refused {
+			t.Fatalf("Unsupported = %+v, want %q refused as reserved", report.Unsupported, name)
+		}
+		if !strings.Contains(reason, "reserved") {
+			t.Fatalf("%s reason = %q, want it refused for being reserved", name, reason)
+		}
+	}
+	if len(report.Imported) != 0 {
+		t.Fatalf("Imported = %v, want none: every entry names a reserved bundled namespace", report.Imported)
+	}
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, server := range servers {
+		if server.Name == "Files" || server.Name == "SYSTEM" || server.Name == "sKiLlS" {
+			t.Fatalf("a case-variant reserved name must never create a row: %+v", server)
+		}
+	}
+}
+
 // validateMCPServerName is the one shared reserved/pattern check. This
 // fails if that sharing is ever undone — e.g. if ImportJSON grows its own
 // separate name check that drifts from validateServerDefinition's.
 func TestValidateMCPServerNameIsSharedByImportAndValidateServerDefinition(t *testing.T) {
-	for _, name := range []string{"files", "system", "skills", "not a valid name!", ""} {
+	for _, name := range []string{
+		"files", "system", "skills",
+		// Reserved names must be refused case-insensitively: the
+		// pattern itself accepts mixed-case names, so without a
+		// case-insensitive reserved check, "Files"/"SYSTEM"/"sKiLlS"
+		// would silently register over a bundled server's namespace
+		// under a differently-cased name.
+		"Files", "SYSTEM", "sKiLlS",
+		"not a valid name!", "",
+	} {
 		nameErr := validateMCPServerName(name)
 		if nameErr == nil {
 			t.Fatalf("validateMCPServerName(%q) = nil, want an error", name)
@@ -230,6 +280,116 @@ func TestImportJSONBoundsLongAttackerControlledReasonsAndKeepsValidUTF8(t *testi
 	}
 	if !found["vendor-header"] || !found["vendor-tool"] {
 		t.Fatalf("issues = %+v, want both vendor-header and vendor-tool persisted", issues)
+	}
+}
+
+// The mcp.json entry KEY itself — not just the "reason" string
+// recordUnsupported bounds — is attacker-controlled: a JSON object's keys
+// carry no length limit of their own, and the name check that would
+// otherwise reject an overlong one (validateMCPServerName, capped at
+// mcpServerNamePattern's own 64-character maximum) has not run yet the
+// moment an invalid name is first recorded as unsupported. Without its own
+// bound, an arbitrarily long invalid key would flow — unbounded — into the
+// in-memory report, the persisted mcp_import_issues row, and eventually
+// the Flutter UI's unsupported-server list. maxMCPUnsupportedNameBytes (64,
+// matching the longest a *valid* name could ever be) is what
+// recordUnsupported bounds it to, not the much larger
+// maxMCPStatusMessageBytes (512) the reason text uses.
+func TestImportJSONBoundsLongInvalidServerNameKeyAndKeepsValidUTF8(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	longInvalidName := strings.Repeat("x-évil-name-", 20) + "!" // trailing "!" also makes it pattern-invalid
+	if len(longInvalidName) <= maxMCPUnsupportedNameBytes {
+		t.Fatalf("test setup is broken: name must exceed maxMCPUnsupportedNameBytes (%d) on its own", maxMCPUnsupportedNameBytes)
+	}
+
+	document, err := json.Marshal(map[string]any{
+		"mcpServers": map[string]any{
+			longInvalidName: map[string]any{"url": "https://vendor.example/mcp"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.ImportJSON(context.Background(), document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Unsupported) != 1 {
+		t.Fatalf("Unsupported = %+v, want exactly one entry", report.Unsupported)
+	}
+	for key, reason := range report.Unsupported {
+		if key == longInvalidName {
+			t.Fatalf("key = %q, want the long invalid name key bounded, not stored verbatim", key)
+		}
+		if len(key) > maxMCPUnsupportedNameBytes {
+			t.Fatalf("key length = %d, want <= maxMCPUnsupportedNameBytes (%d)", len(key), maxMCPUnsupportedNameBytes)
+		}
+		if !utf8.ValidString(key) {
+			t.Fatalf("key = %q is not valid UTF-8", key)
+		}
+		// A bounded but still recognizable prefix of the original name
+		// remains — bounding must not discard everything useful.
+		if !strings.HasPrefix(longInvalidName, key) {
+			t.Fatalf("key = %q, want a valid-UTF-8 prefix of the original name", key)
+		}
+		assertBoundedUTF8(t, "reason", reason)
+	}
+
+	issues, err := repo.ListMCPImportIssues(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues = %+v, want exactly one persisted", issues)
+	}
+	for _, issue := range issues {
+		if len(issue.Name) > maxMCPUnsupportedNameBytes {
+			t.Fatalf("persisted issue name length = %d, want <= maxMCPUnsupportedNameBytes (%d)", len(issue.Name), maxMCPUnsupportedNameBytes)
+		}
+		if !utf8.ValidString(issue.Name) {
+			t.Fatalf("persisted issue name = %q is not valid UTF-8", issue.Name)
+		}
+	}
+}
+
+// Bounding the entry name to build the map key (rather than merely
+// bounding the reason) has one accepted, documented consequence: two
+// distinct invalid names that share the same maxMCPUnsupportedNameBytes
+// prefix collapse to a single Unsupported entry, since they truncate to
+// the identical bounded key. This is diagnostic-only — neither of the two
+// colliding entries was ever going to register regardless of this
+// collision, and no secret or token is at stake — but it is a real,
+// intentional trade-off (see recordUnsupported's own doc comment), not an
+// oversight, so it is asserted here rather than left merely implied.
+func TestImportJSONTwoLongInvalidNamesSharingABoundedPrefixCollapseToOneEntry(t *testing.T) {
+	service, _ := newRegistryTestService(t)
+	prefix := strings.Repeat("x", maxMCPUnsupportedNameBytes)
+	nameA := prefix + "-first-suffix-makes-this-invalid!"
+	nameB := prefix + "-second-suffix-makes-this-invalid!"
+	if nameA == nameB {
+		t.Fatal("test setup is broken: the two names must differ only after the shared bounded prefix")
+	}
+
+	document, err := json.Marshal(map[string]any{
+		"mcpServers": map[string]any{
+			nameA: map[string]any{"url": "https://vendor-a.example/mcp"},
+			nameB: map[string]any{"url": "https://vendor-b.example/mcp"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.ImportJSON(context.Background(), document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Unsupported) != 1 {
+		t.Fatalf("Unsupported = %+v, want exactly one entry: both names bound to the identical %d-byte prefix", report.Unsupported, maxMCPUnsupportedNameBytes)
+	}
+	if len(report.Imported) != 0 {
+		t.Fatalf("Imported = %v, want none: both entries are independently invalid regardless of the collision", report.Imported)
 	}
 }
 

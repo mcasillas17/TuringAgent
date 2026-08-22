@@ -1,6 +1,12 @@
 # MCP Registry UX Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: historical.** This plan has already shipped, including the two
+> "Addendum" sections below — see `docs/mcp-security-and-integration.md` for
+> the current, authoritative description of shipped behavior. It is kept
+> here as a record of how the feature was built, not as a live instruction:
+> a reader (human or agent) encountering this file today does not need to,
+> and should not, invoke a sub-skill or otherwise act on the checkbox steps
+> below as if they were still pending work.
 
 **Goal:** Let users register, re-import, and rotate credentials for MCP servers from the Flutter app without restarting the backend, while preserving registry intent and never disclosing bearer tokens.
 
@@ -686,6 +692,49 @@ rotation semantics:
   the registry before surfacing an enable/disable or policy-change error so
   a post-commit failure never shows stale state, and labels a skipped
   reimport entry as "already registered; existing settings were kept."
+
+`docs/mcp-security-and-integration.md` remains the authoritative description
+of this final behavior.
+
+## Addendum: second review-closure pass
+
+A further round of accepted review findings ("fix: close MCP registry
+review gaps") closed a second set of gaps discovered by re-reviewing the
+complete diff, none of which change the shape of what shipped above:
+
+- **Placeholder adoption via file import.** `ImportMCPServer`'s own inline
+  migration-0016 adoption branch now forces `enabled = 0` explicitly in its
+  UPDATE, matching `adoptMCPServerPlaceholder`'s branch, instead of relying
+  on a placeholder always already being disabled.
+- **Policy-change notification ordering.** `UpdateMcpToolPolicy` now
+  notifies immediately once its policy mutation commits, before the
+  fallible tool-list read/descriptor mapping that follows; a failure there
+  maps to a fixed `Internal` status rather than leaking a raw error.
+- **Static-snapshot hardening.** A static `tools` snapshot now refuses a
+  duplicate tool name the same way live discovery does; the entry's own
+  configured bearer token is now matched via a recursive scan of the raw,
+  not-yet-marshaled tool metadata (name, description, and every schema map
+  key/nested value) so a token containing a quote or backslash can no
+  longer hide behind `json.Marshal`'s own escaping of a post-marshal scan;
+  and a tool's description now counts toward the per-snapshot byte limit
+  even though it is never stored.
+- **Duplicate-header parsing.** An mcp.json entry's `headers` object is now
+  parsed with a token-level walk that preserves every occurrence — an exact
+  spelling repeated, not just a differing case — before anything collapses
+  it into a map, so two identically-spelled `Authorization` keys can no
+  longer silently pick one value.
+- **Whole-document and URL bounds.** `ImportJSON` now bounds the entire
+  document's byte size before decoding it at all; `classifyImportedURL` now
+  refuses a bare trailing `?` (`ForceQuery`) and an explicit port outside
+  1-65535, identically for a remote or local-container URL.
+- **Bounded unsupported names.** An mcp.json entry's own untrusted name/key
+  is now bounded (not just its refusal reason) before it is ever persisted,
+  returned, or rendered.
+- **Authoritative UI state, completed.** Register, rotate, reimport, and
+  delete now all reload the registry from their own catch paths too (enable
+  and policy already did), and the reimport dialog now states how to
+  repoint a skipped server: remove it, then add it again at the new
+  endpoint.
 
 `docs/mcp-security-and-integration.md` remains the authoritative description
 of this final behavior.

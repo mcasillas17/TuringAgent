@@ -111,18 +111,20 @@ type MCPImportIssue struct {
 // non-bundled row with url == "", seeded disabled so a pre-registry
 // runtime's tool policy and schema survived until an operator imports a
 // real endpoint. That row is adopted in place (its id is preserved, and
-// url, sealed_token, and tier are updated) rather than skipped forever,
-// and Created is reported true so the caller classifies it as imported.
-// Because that endpoint was never verified, adopting it always withdraws
-// every tool it carried (present=0, enabled=0) before reconfirming
-// whichever tools this call's Tools snapshot supplies — which may be
-// none, if the reimported entry carried no "tools" key at all or an
-// explicit empty one. A tool that survives keeps whatever policy an
-// operator had already edited onto it; only its presence/enabled/schema
-// state is touched. Liveness is reset to unknown/empty in the same
-// transaction, for the same reason: whatever status a placeholder's
-// url=="" row happened to carry says nothing about the real endpoint now
-// replacing it.
+// url, sealed_token, and tier are updated, and enabled is forced to 0 in
+// that same UPDATE — the same way RegisterMCPServer's own
+// adoptMCPServerPlaceholder branch forces it — rather than assumed already
+// disabled by construction) rather than skipped forever, and Created is
+// reported true so the caller classifies it as imported. Because that
+// endpoint was never verified, adopting it always withdraws every tool it
+// carried (present=0, enabled=0) before reconfirming whichever tools this
+// call's Tools snapshot supplies — which may be none, if the reimported
+// entry carried no "tools" key at all or an explicit empty one. A tool
+// that survives keeps whatever policy an operator had already edited onto
+// it; only its presence/enabled/schema state is touched. Liveness is reset
+// to unknown/empty in the same transaction, for the same reason: whatever
+// status a placeholder's url=="" row happened to carry says nothing about
+// the real endpoint now replacing it.
 //
 // Reconciling Tools is folded into the same tx as the row mutation (via
 // replaceServerToolsTx, the same helper ReplaceMCPServerTools itself
@@ -164,22 +166,33 @@ func (r *Repository) ImportMCPServer(ctx context.Context, input ImportedMCPServe
 		return MCPImportResult{Server: record, Created: false}, nil
 	case err == nil:
 		// Legacy placeholder: adopt it in place. url, sealed_token, and
-		// tier change directly; enabled is left exactly as it was
-		// (still disabled). The placeholder's endpoint was never
-		// verified — its liveness reading was seeded a priori by
-		// migration 0016, not observed — so it says nothing about
-		// whether the endpoint this call adopts actually works: liveness
-		// is reset to unknown with an empty status message in the same
-		// transaction as the row update, the same way
-		// ReplaceMCPServerToken resets liveness alongside a rotated
-		// credential. A failure resetting it rolls back the whole
-		// adoption, rather than leaving an adopted endpoint paired with
-		// a stale liveness reading from before it existed. Tools are
-		// reconciled below, after the update, via the same
-		// withdraw-then-reconfirm helper live discovery uses.
+		// tier change directly; enabled is forced to 0 explicitly in
+		// this same UPDATE — not merely left alone on the assumption a
+		// migration-0016 placeholder is always still disabled — the
+		// same way adoptMCPServerPlaceholder (RegisterMCPServer's own
+		// adoption branch) already forces it, so neither adoption path
+		// can ever leave a row enabled if that assumption ever stops
+		// holding (e.g. a future path that flips a placeholder enabled
+		// before it is adopted). This also matters for the tools
+		// reconciled below: replaceServerToolsTx seeds a reconfirmed
+		// tool's enabled bit from this same record's Enabled field, so
+		// a stale, still-enabled read here would silently activate a
+		// static snapshot's tools before the adopted endpoint's first
+		// live contact. The placeholder's endpoint was never verified —
+		// its liveness reading was seeded a priori by migration 0016,
+		// not observed — so it says nothing about whether the endpoint
+		// this call adopts actually works: liveness is reset to unknown
+		// with an empty status message in the same transaction as the
+		// row update, the same way ReplaceMCPServerToken resets
+		// liveness alongside a rotated credential. A failure resetting
+		// it rolls back the whole adoption, rather than leaving an
+		// adopted endpoint paired with a stale liveness reading from
+		// before it existed. Tools are reconciled below, after the
+		// update, via the same withdraw-then-reconfirm helper live
+		// discovery uses.
 		if _, uerr := tx.ExecContext(ctx, `
 			UPDATE mcp_servers
-			SET url = ?, sealed_token = ?, tier = ?
+			SET url = ?, sealed_token = ?, tier = ?, enabled = 0
 			WHERE id = ?
 		`, input.URL, nullableBytes(input.SealedToken), string(input.Tier), existingID); uerr != nil {
 			return MCPImportResult{}, uerr

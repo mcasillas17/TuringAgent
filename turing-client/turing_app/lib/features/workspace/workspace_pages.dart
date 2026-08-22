@@ -83,6 +83,13 @@ class _McpsPageState extends State<McpsPage> {
   }
 
   void _reload() {
+    // Guards every caller uniformly — including the rotate dialog's own
+    // catch path, which can only check its own (the dialog's) `mounted`
+    // before invoking this callback, not this page's. Without this guard,
+    // a rotation erroring out after this page has already been disposed
+    // (e.g. navigation away while the modal rotation was in flight) would
+    // call setState on a disposed State.
+    if (!mounted) return;
     setState(() {
       _registry = widget.apiClient.listMcpServers();
     });
@@ -100,6 +107,12 @@ class _McpsPageState extends State<McpsPage> {
         builder: (_) => _ImportReportDialog(report: report),
       );
     } catch (error) {
+      // A reimport can commit some entries on the backend and still have
+      // the RPC response itself fail (e.g. a post-commit audit write
+      // erroring out), so the displayed state can no longer be trusted
+      // as-is: reload before showing the error, the same way
+      // _setServerEnabled's catch already does.
+      if (mounted) _reload();
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -115,8 +128,11 @@ class _McpsPageState extends State<McpsPage> {
       // The dialog manages its own dismissal via PopScope so it cannot be
       // dismissed by the barrier while a rotation is in flight.
       barrierDismissible: false,
-      builder: (_) =>
-          _RotateTokenDialog(apiClient: widget.apiClient, server: server),
+      builder: (_) => _RotateTokenDialog(
+        apiClient: widget.apiClient,
+        server: server,
+        onReloadRequested: _reload,
+      ),
     );
     if (rotated == true && mounted) _reload();
   }
@@ -189,6 +205,12 @@ class _McpsPageState extends State<McpsPage> {
       await widget.apiClient.deleteMcpServer(serverId: server.serverId);
       if (mounted) _reload();
     } catch (error) {
+      // A delete can commit on the backend and still have its RPC response
+      // fail (e.g. a post-commit audit write erroring out), so the
+      // displayed state can no longer be trusted as-is: reload before
+      // showing the error, the same way _setServerEnabled's catch already
+      // does.
+      if (mounted) _reload();
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -643,6 +665,13 @@ class _AddServerCardState extends State<_AddServerCard> {
         _submitting = false;
         _error = '$error';
       });
+      // A registration can commit on the backend and still have its RPC
+      // response fail (e.g. a post-commit audit write erroring out), so
+      // the displayed state can no longer be trusted as-is: reload through
+      // the same callback the success path uses, the same way
+      // _setServerEnabled's catch already reloads before showing its own
+      // error.
+      widget.onRegistered();
     }
   }
 
@@ -832,6 +861,7 @@ class _ImportReportDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppColors.of(context);
     return AlertDialog(
       title: const Text('mcp.json re-imported'),
       content: SizedBox(
@@ -857,6 +887,14 @@ class _ImportReportDialog extends StatelessWidget {
                       'were kept',
                 ),
               ),
+              if (report.skipped.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'To point a skipped server at a new endpoint: remove it, '
+                  'then add it again with the new URL.',
+                  style: TextStyle(fontSize: 12, color: palette.textMuted),
+                ),
+              ],
               const SizedBox(height: 12),
               _ReportSection(
                 title: 'Refused',
@@ -910,10 +948,21 @@ class _ReportSection extends StatelessWidget {
 /// Always opens with a fresh, empty, obscured token field — never
 /// pre-filled with the current token, which this app never reads back.
 class _RotateTokenDialog extends StatefulWidget {
-  const _RotateTokenDialog({required this.apiClient, required this.server});
+  const _RotateTokenDialog({
+    required this.apiClient,
+    required this.server,
+    required this.onReloadRequested,
+  });
 
   final TuringApi apiClient;
   final McpServer server;
+  // Invoked from the catch path only — a rotation can commit on the
+  // backend and still have its RPC response fail, so the parent's
+  // registry can no longer be trusted as-is even while this dialog stays
+  // open with the error. The success path pops with `true` instead, and
+  // the parent (_McpsPageState._rotateToken) reloads from that result, so
+  // the two paths never both trigger a reload for the same attempt.
+  final VoidCallback onReloadRequested;
 
   @override
   State<_RotateTokenDialog> createState() => _RotateTokenDialogState();
@@ -950,6 +999,13 @@ class _RotateTokenDialogState extends State<_RotateTokenDialog> {
       // token has been sent for an attempt, this app does not hold onto it
       // or offer it back — the user retypes it if they retry.
       _token.clear();
+      // A rotation can commit on the backend and still have its RPC
+      // response fail (e.g. a post-commit audit write erroring out), so
+      // the parent's displayed state can no longer be trusted as-is: ask
+      // it to reload while this dialog stays open with the error, the
+      // same way _setServerEnabled's catch already reloads before showing
+      // its own error.
+      widget.onReloadRequested();
       setState(() {
         _submitting = false;
         _error = '$error';

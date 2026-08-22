@@ -162,3 +162,91 @@ func TestRegisterMCPServerAdoptionRejectsToolsSnapshotLikeAnyOtherRegistration(t
 		t.Fatalf("err = %v, want ErrMCPServerToolsNotAllowed even when adopting a placeholder", err)
 	}
 }
+
+// ImportMCPServer's own inline placeholder-adoption branch must be exactly
+// as fail-closed as adoptMCPServerPlaceholder (RegisterMCPServer's branch,
+// exercised above): it must explicitly force enabled=0 in its own atomic
+// UPDATE rather than relying on the placeholder having already been
+// disabled by construction. Flipping the placeholder enabled first (the
+// same way TestRegisterMCPServerAdoptsLegacyPlaceholderInPlace proves
+// adoption forces disabled rather than merely leaving an already-disabled
+// row alone) is the discriminating setup: a fix that only special-cases
+// "leave enabled as it was" — true by construction for a fresh migration-
+// 0016 row, but not enforced — would still pass a test that never
+// disturbs enabled before adopting. Reconfirming a static tools snapshot
+// in the same call additionally proves the newly reconfirmed tool itself
+// is not activated: replaceServerToolsTx seeds a reconfirmed tool's
+// enabled bit from the server record's own Enabled field, so a stale,
+// still-true read of that field would silently activate a tool the
+// operator never had live-verified.
+func TestImportMCPServerAdoptsLegacyPlaceholderInPlaceForcedDisabled(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+
+	placeholder, err := repo.ImportMCPServer(ctx, ImportedMCPServer{
+		Name: "vendor", URL: "", Tier: MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.Server.ID, []MCPServerTool{
+		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// An operator may have edited the carried tool's policy while it sat
+	// disabled; adoption must preserve that edit even though the tool
+	// itself is withdrawn.
+	if err := repo.SetMCPToolPolicy(ctx, placeholder.Server.ID, "vendor.lookup", "safe"); err != nil {
+		t.Fatal(err)
+	}
+	// Prove adoption forces disabled rather than merely leaving an
+	// already-disabled row alone: flip it enabled first.
+	if err := repo.SetMCPServerEnabled(ctx, placeholder.Server.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetMCPServerStatus(ctx, placeholder.Server.ID, "down", "stale placeholder reading"); err != nil {
+		t.Fatal(err)
+	}
+
+	adopted, err := repo.ImportMCPServer(ctx, ImportedMCPServer{
+		Name: "vendor", URL: "https://vendor.example/mcp", SealedToken: []byte("sealed-token"), Tier: MCPServerTierRemoteURL,
+		// A static snapshot reconfirming the carried tool: if the fix
+		// reads a stale, still-enabled server record when reconciling
+		// this, the reconfirmed tool would come back enabled=1 despite
+		// its endpoint never having been live-verified.
+		Tools: []MCPServerTool{{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`}},
+	})
+	if err != nil {
+		t.Fatalf("adopting a legacy placeholder must not return an error: %v", err)
+	}
+	if !adopted.Created {
+		t.Fatal("Created = false for a placeholder adoption, want true")
+	}
+	if adopted.Server.ID != placeholder.Server.ID {
+		t.Fatalf("ID = %q, want the placeholder row %q adopted in place", adopted.Server.ID, placeholder.Server.ID)
+	}
+	if adopted.Server.Enabled {
+		t.Fatal("ImportMCPServer's placeholder adoption must force the server disabled, not merely leave it as it was found")
+	}
+	if adopted.Server.Status != "unknown" || adopted.Server.StatusError != "" {
+		t.Fatalf("Status = %q, StatusError = %q, want liveness reset to unknown/empty", adopted.Server.Status, adopted.Server.StatusError)
+	}
+
+	tools, err := repo.ListMCPServerTools(ctx, adopted.Server.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("tools = %+v, want the one reconfirmed tool", tools)
+	}
+	if !tools[0].Present {
+		t.Fatalf("tools[0] = %+v, want present=1: this call's own snapshot reconfirmed it", tools[0])
+	}
+	if tools[0].Enabled {
+		t.Fatalf("tools[0] = %+v, want enabled=0: a reconfirmed tool must never come back enabled before the adopted endpoint's first live enable, regardless of what the placeholder's own enabled bit happened to read at reconciliation time", tools[0])
+	}
+	if tools[0].Policy != "safe" {
+		t.Fatalf("tools[0].Policy = %q, want the operator's prior edit preserved", tools[0].Policy)
+	}
+}

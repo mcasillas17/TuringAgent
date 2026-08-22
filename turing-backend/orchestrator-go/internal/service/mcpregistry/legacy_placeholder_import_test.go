@@ -259,6 +259,83 @@ func TestImportJSONAdoptsLegacyPlaceholderWithoutToken(t *testing.T) {
 	}
 }
 
+// The service-level ImportJSON path must be exactly as fail-closed as the
+// repository test above: a placeholder that was somehow flipped enabled
+// before an operator's mcp.json reimport adopts it must come back disabled,
+// and the static snapshot's own reconfirmed tool must not come back
+// enabled either — an operator has never live-verified the newly imported
+// endpoint just because mcp.json happens to carry a "tools" entry for it,
+// so activating it before that first live contact (SetMcpServerEnabled)
+// would be a real privilege escalation, not merely a display glitch.
+func TestImportJSONAdoptsLegacyPlaceholderForcesDisabledAndLeavesReconfirmedToolsDisabled(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx := context.Background()
+
+	placeholder, err := repo.RegisterMCPServer(ctx, repository.ImportedMCPServer{
+		Name: "vendor", URL: "", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.Server.ID, []repository.MCPServerTool{
+		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetMCPToolPolicy(ctx, placeholder.Server.ID, "vendor.lookup", "safe"); err != nil {
+		t.Fatal(err)
+	}
+	// The discriminating setup: flip the placeholder enabled before the
+	// reimport, so a fix that only ever "leaves enabled as it was" (true
+	// by construction for an untouched migration-0016 row, but not
+	// enforced) would still pass a test that never disturbed it.
+	if err := repo.SetMCPServerEnabled(ctx, placeholder.Server.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.ImportJSON(ctx, []byte(`{
+		"mcpServers": {
+			"vendor": {
+				"url": "https://vendor.example/mcp",
+				"headers": {"Authorization": "Bearer legacy-placeholder-token-reconfirm"},
+				"tools": [{"name": "vendor.lookup", "inputSchema": {"type": "object"}}]
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Imported) != 1 || report.Imported[0] != "vendor" {
+		t.Fatalf("Imported = %v, want [vendor]", report.Imported)
+	}
+
+	servers, err := repo.ListMCPServers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vendor := findRepositoryServer(t, servers, "vendor")
+	if vendor.ID != placeholder.Server.ID {
+		t.Fatalf("ID = %q, want the placeholder row %q adopted in place", vendor.ID, placeholder.Server.ID)
+	}
+	if vendor.Enabled {
+		t.Fatal("adopting a placeholder via ImportJSON must force the server disabled, even if it was flipped enabled beforehand")
+	}
+
+	tools, err := repo.ListMCPServerTools(ctx, vendor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 || !tools[0].Present {
+		t.Fatalf("tools = %+v, want the static snapshot's one tool reconfirmed (present=1)", tools)
+	}
+	if tools[0].Enabled {
+		t.Fatal("a static snapshot's reconfirmed tool must not be enabled before the adopted endpoint's first live contact (SetMcpServerEnabled), regardless of the placeholder's enabled bit at reconciliation time")
+	}
+	if tools[0].Policy != "safe" {
+		t.Fatalf("tools[0].Policy = %q, want the operator's prior edit preserved", tools[0].Policy)
+	}
+}
+
 // A placeholder import still requires a sealer when the mcp.json entry
 // carries a bearer token: adopting an empty-URL row must not bypass token
 // sealing the way the ordinary already-registered skip path does (which

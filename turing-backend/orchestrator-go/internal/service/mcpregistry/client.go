@@ -17,6 +17,20 @@ const maxMCPTools = 10_000
 const maxMCPToolPages = 100
 const maxMCPToolBytes = 4 * 1024 * 1024
 
+// maxMCPImportDocumentBytes bounds an entire mcp.json document's raw size,
+// checked before it is ever handed to json.Decoder — the same reasoning
+// maxMCPResponseBytes already applies to a single live HTTP response, but
+// for the whole file a reimport reads instead. Without it, an
+// arbitrarily large document (most of it outside any single server's
+// "tools" snapshot, so maxMCPToolBytes alone never bounds it) could force
+// this process to buffer and decode an unbounded amount of memory. The
+// cap is tied to, not independent of, the existing per-snapshot limit:
+// mcp.json commonly registers only a handful of servers, and a document
+// giving eight of them a full maxMCPToolBytes-sized static snapshot would
+// still comfortably fit inside this bound, with slack left over for the
+// URL/header/JSON-syntax overhead none of that per-tool accounting counts.
+const maxMCPImportDocumentBytes = 8 * maxMCPToolBytes
+
 type mcpClient struct {
 	endpoint   string
 	token      string
