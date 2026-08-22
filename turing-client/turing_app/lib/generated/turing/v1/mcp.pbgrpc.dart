@@ -53,6 +53,21 @@ class McpRegistryServiceClient extends $grpc.Client {
     return $createUnaryCall(_$updateMcpToolPolicy, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.McpToolDescriptor> updateToolPolicyByName(
+    $0.UpdateToolPolicyByNameRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$updateToolPolicyByName, request,
+        options: options);
+  }
+
+  $grpc.ResponseFuture<$0.ListPseudoServerToolsResponse> listPseudoServerTools(
+    $0.ListPseudoServerToolsRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$listPseudoServerTools, request, options: options);
+  }
+
   $grpc.ResponseFuture<$0.DeleteMcpServerResponse> deleteMcpServer(
     $0.DeleteMcpServerRequest request, {
     $grpc.CallOptions? options,
@@ -84,6 +99,16 @@ class McpRegistryServiceClient extends $grpc.Client {
           '/turing.v1.McpRegistryService/UpdateMcpToolPolicy',
           ($0.UpdateMcpToolPolicyRequest value) => value.writeToBuffer(),
           $0.McpToolDescriptor.fromBuffer);
+  static final _$updateToolPolicyByName = $grpc.ClientMethod<
+          $0.UpdateToolPolicyByNameRequest, $0.McpToolDescriptor>(
+      '/turing.v1.McpRegistryService/UpdateToolPolicyByName',
+      ($0.UpdateToolPolicyByNameRequest value) => value.writeToBuffer(),
+      $0.McpToolDescriptor.fromBuffer);
+  static final _$listPseudoServerTools = $grpc.ClientMethod<
+          $0.ListPseudoServerToolsRequest, $0.ListPseudoServerToolsResponse>(
+      '/turing.v1.McpRegistryService/ListPseudoServerTools',
+      ($0.ListPseudoServerToolsRequest value) => value.writeToBuffer(),
+      $0.ListPseudoServerToolsResponse.fromBuffer);
   static final _$deleteMcpServer =
       $grpc.ClientMethod<$0.DeleteMcpServerRequest, $0.DeleteMcpServerResponse>(
           '/turing.v1.McpRegistryService/DeleteMcpServer',
@@ -128,6 +153,24 @@ abstract class McpRegistryServiceBase extends $grpc.Service {
         ($core.List<$core.int> value) =>
             $0.UpdateMcpToolPolicyRequest.fromBuffer(value),
         ($0.McpToolDescriptor value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.UpdateToolPolicyByNameRequest,
+            $0.McpToolDescriptor>(
+        'UpdateToolPolicyByName',
+        updateToolPolicyByName_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.UpdateToolPolicyByNameRequest.fromBuffer(value),
+        ($0.McpToolDescriptor value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.ListPseudoServerToolsRequest,
+            $0.ListPseudoServerToolsResponse>(
+        'ListPseudoServerTools',
+        listPseudoServerTools_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.ListPseudoServerToolsRequest.fromBuffer(value),
+        ($0.ListPseudoServerToolsResponse value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.DeleteMcpServerRequest,
             $0.DeleteMcpServerResponse>(
         'DeleteMcpServer',
@@ -174,6 +217,24 @@ abstract class McpRegistryServiceBase extends $grpc.Service {
 
   $async.Future<$0.McpToolDescriptor> updateMcpToolPolicy(
       $grpc.ServiceCall call, $0.UpdateMcpToolPolicyRequest request);
+
+  $async.Future<$0.McpToolDescriptor> updateToolPolicyByName_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.UpdateToolPolicyByNameRequest> $request) async {
+    return updateToolPolicyByName($call, await $request);
+  }
+
+  $async.Future<$0.McpToolDescriptor> updateToolPolicyByName(
+      $grpc.ServiceCall call, $0.UpdateToolPolicyByNameRequest request);
+
+  $async.Future<$0.ListPseudoServerToolsResponse> listPseudoServerTools_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.ListPseudoServerToolsRequest> $request) async {
+    return listPseudoServerTools($call, await $request);
+  }
+
+  $async.Future<$0.ListPseudoServerToolsResponse> listPseudoServerTools(
+      $grpc.ServiceCall call, $0.ListPseudoServerToolsRequest request);
 
   $async.Future<$0.DeleteMcpServerResponse> deleteMcpServer_Pre(
       $grpc.ServiceCall $call,

@@ -81,6 +81,9 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 			}
 			return servers, nil
 		},
+		IntegrationTools: func(context.Context) (agent.ToolLister, error) {
+			return mcp.NewIntegrationClient(client), nil
+		},
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
 	runtimeWorker := worker.New(worker.Options{

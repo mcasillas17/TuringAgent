@@ -9,6 +9,7 @@ package turingv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	structpb "google.golang.org/protobuf/types/known/structpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
@@ -886,11 +887,279 @@ func (*DeleteConnectionResponse) Descriptor() ([]byte, []int) {
 	return file_turing_v1_integrations_proto_rawDescGZIP(), []int{10}
 }
 
+type IntegrationToolDescriptor struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ToolName      string                 `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	Description   string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
+	Schema        *structpb.Struct       `protobuf:"bytes,3,opt,name=schema,proto3" json:"schema,omitempty"`
+	ReadOnly      bool                   `protobuf:"varint,4,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	Policy        ToolPolicy             `protobuf:"varint,5,opt,name=policy,proto3,enum=turing.v1.ToolPolicy" json:"policy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IntegrationToolDescriptor) Reset() {
+	*x = IntegrationToolDescriptor{}
+	mi := &file_turing_v1_integrations_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IntegrationToolDescriptor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IntegrationToolDescriptor) ProtoMessage() {}
+
+func (x *IntegrationToolDescriptor) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_integrations_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IntegrationToolDescriptor.ProtoReflect.Descriptor instead.
+func (*IntegrationToolDescriptor) Descriptor() ([]byte, []int) {
+	return file_turing_v1_integrations_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *IntegrationToolDescriptor) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *IntegrationToolDescriptor) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *IntegrationToolDescriptor) GetSchema() *structpb.Struct {
+	if x != nil {
+		return x.Schema
+	}
+	return nil
+}
+
+func (x *IntegrationToolDescriptor) GetReadOnly() bool {
+	if x != nil {
+		return x.ReadOnly
+	}
+	return false
+}
+
+func (x *IntegrationToolDescriptor) GetPolicy() ToolPolicy {
+	if x != nil {
+		return x.Policy
+	}
+	return ToolPolicy_TOOL_POLICY_UNSPECIFIED
+}
+
+type ListIntegrationToolsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListIntegrationToolsRequest) Reset() {
+	*x = ListIntegrationToolsRequest{}
+	mi := &file_turing_v1_integrations_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListIntegrationToolsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListIntegrationToolsRequest) ProtoMessage() {}
+
+func (x *ListIntegrationToolsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_integrations_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListIntegrationToolsRequest.ProtoReflect.Descriptor instead.
+func (*ListIntegrationToolsRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_integrations_proto_rawDescGZIP(), []int{12}
+}
+
+type ListIntegrationToolsResponse struct {
+	state         protoimpl.MessageState       `protogen:"open.v1"`
+	Tools         []*IntegrationToolDescriptor `protobuf:"bytes,1,rep,name=tools,proto3" json:"tools,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListIntegrationToolsResponse) Reset() {
+	*x = ListIntegrationToolsResponse{}
+	mi := &file_turing_v1_integrations_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListIntegrationToolsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListIntegrationToolsResponse) ProtoMessage() {}
+
+func (x *ListIntegrationToolsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_integrations_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListIntegrationToolsResponse.ProtoReflect.Descriptor instead.
+func (*ListIntegrationToolsResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_integrations_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ListIntegrationToolsResponse) GetTools() []*IntegrationToolDescriptor {
+	if x != nil {
+		return x.Tools
+	}
+	return nil
+}
+
+type CallIntegrationToolRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	ApprovalId    string                 `protobuf:"bytes,2,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	ToolName      string                 `protobuf:"bytes,3,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	Args          *structpb.Struct       `protobuf:"bytes,4,opt,name=args,proto3" json:"args,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CallIntegrationToolRequest) Reset() {
+	*x = CallIntegrationToolRequest{}
+	mi := &file_turing_v1_integrations_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CallIntegrationToolRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CallIntegrationToolRequest) ProtoMessage() {}
+
+func (x *CallIntegrationToolRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_integrations_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CallIntegrationToolRequest.ProtoReflect.Descriptor instead.
+func (*CallIntegrationToolRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_integrations_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *CallIntegrationToolRequest) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *CallIntegrationToolRequest) GetApprovalId() string {
+	if x != nil {
+		return x.ApprovalId
+	}
+	return ""
+}
+
+func (x *CallIntegrationToolRequest) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *CallIntegrationToolRequest) GetArgs() *structpb.Struct {
+	if x != nil {
+		return x.Args
+	}
+	return nil
+}
+
+type CallIntegrationToolResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Result        *structpb.Struct       `protobuf:"bytes,1,opt,name=result,proto3" json:"result,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CallIntegrationToolResponse) Reset() {
+	*x = CallIntegrationToolResponse{}
+	mi := &file_turing_v1_integrations_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CallIntegrationToolResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CallIntegrationToolResponse) ProtoMessage() {}
+
+func (x *CallIntegrationToolResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_integrations_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CallIntegrationToolResponse.ProtoReflect.Descriptor instead.
+func (*CallIntegrationToolResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_integrations_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *CallIntegrationToolResponse) GetResult() *structpb.Struct {
+	if x != nil {
+		return x.Result
+	}
+	return nil
+}
+
 var File_turing_v1_integrations_proto protoreflect.FileDescriptor
 
 const file_turing_v1_integrations_proto_rawDesc = "" +
 	"\n" +
-	"\x1cturing/v1/integrations.proto\x12\tturing.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb1\x03\n" +
+	"\x1cturing/v1/integrations.proto\x12\tturing.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\"\xb1\x03\n" +
 	"\x12ProviderDescriptor\x12:\n" +
 	"\bprovider\x18\x01 \x01(\x0e2\x1e.turing.v1.IntegrationProviderR\bprovider\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x1a\n" +
@@ -946,7 +1215,24 @@ const file_turing_v1_integrations_proto_rawDesc = "" +
 	"\rconnection_id\x18\x01 \x01(\tR\fconnectionId\">\n" +
 	"\x17DeleteConnectionRequest\x12#\n" +
 	"\rconnection_id\x18\x01 \x01(\tR\fconnectionId\"\x1a\n" +
-	"\x18DeleteConnectionResponse*\xb0\x02\n" +
+	"\x18DeleteConnectionResponse\"\xd7\x01\n" +
+	"\x19IntegrationToolDescriptor\x12\x1b\n" +
+	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12 \n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\x12/\n" +
+	"\x06schema\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06schema\x12\x1b\n" +
+	"\tread_only\x18\x04 \x01(\bR\breadOnly\x12-\n" +
+	"\x06policy\x18\x05 \x01(\x0e2\x15.turing.v1.ToolPolicyR\x06policy\"\x1d\n" +
+	"\x1bListIntegrationToolsRequest\"Z\n" +
+	"\x1cListIntegrationToolsResponse\x12:\n" +
+	"\x05tools\x18\x01 \x03(\v2$.turing.v1.IntegrationToolDescriptorR\x05tools\"\x9e\x01\n" +
+	"\x1aCallIntegrationToolRequest\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1f\n" +
+	"\vapproval_id\x18\x02 \x01(\tR\n" +
+	"approvalId\x12\x1b\n" +
+	"\ttool_name\x18\x03 \x01(\tR\btoolName\x12+\n" +
+	"\x04args\x18\x04 \x01(\v2\x17.google.protobuf.StructR\x04args\"N\n" +
+	"\x1bCallIntegrationToolResponse\x12/\n" +
+	"\x06result\x18\x01 \x01(\v2\x17.google.protobuf.StructR\x06result*\xb0\x02\n" +
 	"\x13IntegrationProvider\x12$\n" +
 	" INTEGRATION_PROVIDER_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19INTEGRATION_PROVIDER_IMAP\x10\x01\x12\x1f\n" +
@@ -959,14 +1245,16 @@ const file_turing_v1_integrations_proto_rawDesc = "" +
 	"\x10ConnectionStatus\x12!\n" +
 	"\x1dCONNECTION_STATUS_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bCONNECTION_STATUS_CONNECTED\x10\x01\x12\x1d\n" +
-	"\x19CONNECTION_STATUS_REVOKED\x10\x022\x82\x04\n" +
+	"\x19CONNECTION_STATUS_REVOKED\x10\x022\xd1\x05\n" +
 	"\x12IntegrationService\x12R\n" +
 	"\rListProviders\x12\x1f.turing.v1.ListProvidersRequest\x1a .turing.v1.ListProvidersResponse\x12I\n" +
 	"\x0eConnectAccount\x12 .turing.v1.ConnectAccountRequest\x1a\x15.turing.v1.Connection\x12X\n" +
 	"\x0fListConnections\x12!.turing.v1.ListConnectionsRequest\x1a\".turing.v1.ListConnectionsResponse\x12G\n" +
 	"\rGetConnection\x12\x1f.turing.v1.GetConnectionRequest\x1a\x15.turing.v1.Connection\x12M\n" +
 	"\x10RevokeConnection\x12\".turing.v1.RevokeConnectionRequest\x1a\x15.turing.v1.Connection\x12[\n" +
-	"\x10DeleteConnection\x12\".turing.v1.DeleteConnectionRequest\x1a#.turing.v1.DeleteConnectionResponseB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
+	"\x10DeleteConnection\x12\".turing.v1.DeleteConnectionRequest\x1a#.turing.v1.DeleteConnectionResponse\x12g\n" +
+	"\x14ListIntegrationTools\x12&.turing.v1.ListIntegrationToolsRequest\x1a'.turing.v1.ListIntegrationToolsResponse\x12d\n" +
+	"\x13CallIntegrationTool\x12%.turing.v1.CallIntegrationToolRequest\x1a&.turing.v1.CallIntegrationToolResponseB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
 var (
 	file_turing_v1_integrations_proto_rawDescOnce sync.Once
@@ -981,51 +1269,67 @@ func file_turing_v1_integrations_proto_rawDescGZIP() []byte {
 }
 
 var file_turing_v1_integrations_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_turing_v1_integrations_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_turing_v1_integrations_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_turing_v1_integrations_proto_goTypes = []any{
-	(IntegrationProvider)(0),         // 0: turing.v1.IntegrationProvider
-	(ConnectionStatus)(0),            // 1: turing.v1.ConnectionStatus
-	(*ProviderDescriptor)(nil),       // 2: turing.v1.ProviderDescriptor
-	(*Connection)(nil),               // 3: turing.v1.Connection
-	(*ListProvidersRequest)(nil),     // 4: turing.v1.ListProvidersRequest
-	(*ListProvidersResponse)(nil),    // 5: turing.v1.ListProvidersResponse
-	(*ConnectAccountRequest)(nil),    // 6: turing.v1.ConnectAccountRequest
-	(*ListConnectionsRequest)(nil),   // 7: turing.v1.ListConnectionsRequest
-	(*ListConnectionsResponse)(nil),  // 8: turing.v1.ListConnectionsResponse
-	(*GetConnectionRequest)(nil),     // 9: turing.v1.GetConnectionRequest
-	(*RevokeConnectionRequest)(nil),  // 10: turing.v1.RevokeConnectionRequest
-	(*DeleteConnectionRequest)(nil),  // 11: turing.v1.DeleteConnectionRequest
-	(*DeleteConnectionResponse)(nil), // 12: turing.v1.DeleteConnectionResponse
-	(*timestamppb.Timestamp)(nil),    // 13: google.protobuf.Timestamp
+	(IntegrationProvider)(0),             // 0: turing.v1.IntegrationProvider
+	(ConnectionStatus)(0),                // 1: turing.v1.ConnectionStatus
+	(*ProviderDescriptor)(nil),           // 2: turing.v1.ProviderDescriptor
+	(*Connection)(nil),                   // 3: turing.v1.Connection
+	(*ListProvidersRequest)(nil),         // 4: turing.v1.ListProvidersRequest
+	(*ListProvidersResponse)(nil),        // 5: turing.v1.ListProvidersResponse
+	(*ConnectAccountRequest)(nil),        // 6: turing.v1.ConnectAccountRequest
+	(*ListConnectionsRequest)(nil),       // 7: turing.v1.ListConnectionsRequest
+	(*ListConnectionsResponse)(nil),      // 8: turing.v1.ListConnectionsResponse
+	(*GetConnectionRequest)(nil),         // 9: turing.v1.GetConnectionRequest
+	(*RevokeConnectionRequest)(nil),      // 10: turing.v1.RevokeConnectionRequest
+	(*DeleteConnectionRequest)(nil),      // 11: turing.v1.DeleteConnectionRequest
+	(*DeleteConnectionResponse)(nil),     // 12: turing.v1.DeleteConnectionResponse
+	(*IntegrationToolDescriptor)(nil),    // 13: turing.v1.IntegrationToolDescriptor
+	(*ListIntegrationToolsRequest)(nil),  // 14: turing.v1.ListIntegrationToolsRequest
+	(*ListIntegrationToolsResponse)(nil), // 15: turing.v1.ListIntegrationToolsResponse
+	(*CallIntegrationToolRequest)(nil),   // 16: turing.v1.CallIntegrationToolRequest
+	(*CallIntegrationToolResponse)(nil),  // 17: turing.v1.CallIntegrationToolResponse
+	(*timestamppb.Timestamp)(nil),        // 18: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),              // 19: google.protobuf.Struct
+	(ToolPolicy)(0),                      // 20: turing.v1.ToolPolicy
 }
 var file_turing_v1_integrations_proto_depIdxs = []int32{
 	0,  // 0: turing.v1.ProviderDescriptor.provider:type_name -> turing.v1.IntegrationProvider
 	0,  // 1: turing.v1.Connection.provider:type_name -> turing.v1.IntegrationProvider
 	1,  // 2: turing.v1.Connection.status:type_name -> turing.v1.ConnectionStatus
-	13, // 3: turing.v1.Connection.consent_granted_at:type_name -> google.protobuf.Timestamp
-	13, // 4: turing.v1.Connection.connected_at:type_name -> google.protobuf.Timestamp
-	13, // 5: turing.v1.Connection.revoked_at:type_name -> google.protobuf.Timestamp
-	13, // 6: turing.v1.Connection.updated_at:type_name -> google.protobuf.Timestamp
+	18, // 3: turing.v1.Connection.consent_granted_at:type_name -> google.protobuf.Timestamp
+	18, // 4: turing.v1.Connection.connected_at:type_name -> google.protobuf.Timestamp
+	18, // 5: turing.v1.Connection.revoked_at:type_name -> google.protobuf.Timestamp
+	18, // 6: turing.v1.Connection.updated_at:type_name -> google.protobuf.Timestamp
 	2,  // 7: turing.v1.ListProvidersResponse.providers:type_name -> turing.v1.ProviderDescriptor
 	0,  // 8: turing.v1.ConnectAccountRequest.provider:type_name -> turing.v1.IntegrationProvider
 	3,  // 9: turing.v1.ListConnectionsResponse.connections:type_name -> turing.v1.Connection
-	4,  // 10: turing.v1.IntegrationService.ListProviders:input_type -> turing.v1.ListProvidersRequest
-	6,  // 11: turing.v1.IntegrationService.ConnectAccount:input_type -> turing.v1.ConnectAccountRequest
-	7,  // 12: turing.v1.IntegrationService.ListConnections:input_type -> turing.v1.ListConnectionsRequest
-	9,  // 13: turing.v1.IntegrationService.GetConnection:input_type -> turing.v1.GetConnectionRequest
-	10, // 14: turing.v1.IntegrationService.RevokeConnection:input_type -> turing.v1.RevokeConnectionRequest
-	11, // 15: turing.v1.IntegrationService.DeleteConnection:input_type -> turing.v1.DeleteConnectionRequest
-	5,  // 16: turing.v1.IntegrationService.ListProviders:output_type -> turing.v1.ListProvidersResponse
-	3,  // 17: turing.v1.IntegrationService.ConnectAccount:output_type -> turing.v1.Connection
-	8,  // 18: turing.v1.IntegrationService.ListConnections:output_type -> turing.v1.ListConnectionsResponse
-	3,  // 19: turing.v1.IntegrationService.GetConnection:output_type -> turing.v1.Connection
-	3,  // 20: turing.v1.IntegrationService.RevokeConnection:output_type -> turing.v1.Connection
-	12, // 21: turing.v1.IntegrationService.DeleteConnection:output_type -> turing.v1.DeleteConnectionResponse
-	16, // [16:22] is the sub-list for method output_type
-	10, // [10:16] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	19, // 10: turing.v1.IntegrationToolDescriptor.schema:type_name -> google.protobuf.Struct
+	20, // 11: turing.v1.IntegrationToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
+	13, // 12: turing.v1.ListIntegrationToolsResponse.tools:type_name -> turing.v1.IntegrationToolDescriptor
+	19, // 13: turing.v1.CallIntegrationToolRequest.args:type_name -> google.protobuf.Struct
+	19, // 14: turing.v1.CallIntegrationToolResponse.result:type_name -> google.protobuf.Struct
+	4,  // 15: turing.v1.IntegrationService.ListProviders:input_type -> turing.v1.ListProvidersRequest
+	6,  // 16: turing.v1.IntegrationService.ConnectAccount:input_type -> turing.v1.ConnectAccountRequest
+	7,  // 17: turing.v1.IntegrationService.ListConnections:input_type -> turing.v1.ListConnectionsRequest
+	9,  // 18: turing.v1.IntegrationService.GetConnection:input_type -> turing.v1.GetConnectionRequest
+	10, // 19: turing.v1.IntegrationService.RevokeConnection:input_type -> turing.v1.RevokeConnectionRequest
+	11, // 20: turing.v1.IntegrationService.DeleteConnection:input_type -> turing.v1.DeleteConnectionRequest
+	14, // 21: turing.v1.IntegrationService.ListIntegrationTools:input_type -> turing.v1.ListIntegrationToolsRequest
+	16, // 22: turing.v1.IntegrationService.CallIntegrationTool:input_type -> turing.v1.CallIntegrationToolRequest
+	5,  // 23: turing.v1.IntegrationService.ListProviders:output_type -> turing.v1.ListProvidersResponse
+	3,  // 24: turing.v1.IntegrationService.ConnectAccount:output_type -> turing.v1.Connection
+	8,  // 25: turing.v1.IntegrationService.ListConnections:output_type -> turing.v1.ListConnectionsResponse
+	3,  // 26: turing.v1.IntegrationService.GetConnection:output_type -> turing.v1.Connection
+	3,  // 27: turing.v1.IntegrationService.RevokeConnection:output_type -> turing.v1.Connection
+	12, // 28: turing.v1.IntegrationService.DeleteConnection:output_type -> turing.v1.DeleteConnectionResponse
+	15, // 29: turing.v1.IntegrationService.ListIntegrationTools:output_type -> turing.v1.ListIntegrationToolsResponse
+	17, // 30: turing.v1.IntegrationService.CallIntegrationTool:output_type -> turing.v1.CallIntegrationToolResponse
+	23, // [23:31] is the sub-list for method output_type
+	15, // [15:23] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_integrations_proto_init() }
@@ -1033,13 +1337,14 @@ func file_turing_v1_integrations_proto_init() {
 	if File_turing_v1_integrations_proto != nil {
 		return
 	}
+	file_turing_v1_common_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_integrations_proto_rawDesc), len(file_turing_v1_integrations_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   11,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -343,3 +343,112 @@ const DeleteConnectionResponse$json = {
 /// Descriptor for `DeleteConnectionResponse`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List deleteConnectionResponseDescriptor =
     $convert.base64Decode('ChhEZWxldGVDb25uZWN0aW9uUmVzcG9uc2U=');
+
+@$core.Deprecated('Use integrationToolDescriptorDescriptor instead')
+const IntegrationToolDescriptor$json = {
+  '1': 'IntegrationToolDescriptor',
+  '2': [
+    {'1': 'tool_name', '3': 1, '4': 1, '5': 9, '10': 'toolName'},
+    {'1': 'description', '3': 2, '4': 1, '5': 9, '10': 'description'},
+    {
+      '1': 'schema',
+      '3': 3,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Struct',
+      '10': 'schema'
+    },
+    {'1': 'read_only', '3': 4, '4': 1, '5': 8, '10': 'readOnly'},
+    {
+      '1': 'policy',
+      '3': 5,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.ToolPolicy',
+      '10': 'policy'
+    },
+  ],
+};
+
+/// Descriptor for `IntegrationToolDescriptor`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List integrationToolDescriptorDescriptor = $convert.base64Decode(
+    'ChlJbnRlZ3JhdGlvblRvb2xEZXNjcmlwdG9yEhsKCXRvb2xfbmFtZRgBIAEoCVIIdG9vbE5hbW'
+    'USIAoLZGVzY3JpcHRpb24YAiABKAlSC2Rlc2NyaXB0aW9uEi8KBnNjaGVtYRgDIAEoCzIXLmdv'
+    'b2dsZS5wcm90b2J1Zi5TdHJ1Y3RSBnNjaGVtYRIbCglyZWFkX29ubHkYBCABKAhSCHJlYWRPbm'
+    'x5Ei0KBnBvbGljeRgFIAEoDjIVLnR1cmluZy52MS5Ub29sUG9saWN5UgZwb2xpY3k=');
+
+@$core.Deprecated('Use listIntegrationToolsRequestDescriptor instead')
+const ListIntegrationToolsRequest$json = {
+  '1': 'ListIntegrationToolsRequest',
+};
+
+/// Descriptor for `ListIntegrationToolsRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List listIntegrationToolsRequestDescriptor =
+    $convert.base64Decode('ChtMaXN0SW50ZWdyYXRpb25Ub29sc1JlcXVlc3Q=');
+
+@$core.Deprecated('Use listIntegrationToolsResponseDescriptor instead')
+const ListIntegrationToolsResponse$json = {
+  '1': 'ListIntegrationToolsResponse',
+  '2': [
+    {
+      '1': 'tools',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.IntegrationToolDescriptor',
+      '10': 'tools'
+    },
+  ],
+};
+
+/// Descriptor for `ListIntegrationToolsResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List listIntegrationToolsResponseDescriptor =
+    $convert.base64Decode(
+        'ChxMaXN0SW50ZWdyYXRpb25Ub29sc1Jlc3BvbnNlEjoKBXRvb2xzGAEgAygLMiQudHVyaW5nLn'
+        'YxLkludGVncmF0aW9uVG9vbERlc2NyaXB0b3JSBXRvb2xz');
+
+@$core.Deprecated('Use callIntegrationToolRequestDescriptor instead')
+const CallIntegrationToolRequest$json = {
+  '1': 'CallIntegrationToolRequest',
+  '2': [
+    {'1': 'run_id', '3': 1, '4': 1, '5': 9, '10': 'runId'},
+    {'1': 'approval_id', '3': 2, '4': 1, '5': 9, '10': 'approvalId'},
+    {'1': 'tool_name', '3': 3, '4': 1, '5': 9, '10': 'toolName'},
+    {
+      '1': 'args',
+      '3': 4,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Struct',
+      '10': 'args'
+    },
+  ],
+};
+
+/// Descriptor for `CallIntegrationToolRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List callIntegrationToolRequestDescriptor =
+    $convert.base64Decode(
+        'ChpDYWxsSW50ZWdyYXRpb25Ub29sUmVxdWVzdBIVCgZydW5faWQYASABKAlSBXJ1bklkEh8KC2'
+        'FwcHJvdmFsX2lkGAIgASgJUgphcHByb3ZhbElkEhsKCXRvb2xfbmFtZRgDIAEoCVIIdG9vbE5h'
+        'bWUSKwoEYXJncxgEIAEoCzIXLmdvb2dsZS5wcm90b2J1Zi5TdHJ1Y3RSBGFyZ3M=');
+
+@$core.Deprecated('Use callIntegrationToolResponseDescriptor instead')
+const CallIntegrationToolResponse$json = {
+  '1': 'CallIntegrationToolResponse',
+  '2': [
+    {
+      '1': 'result',
+      '3': 1,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Struct',
+      '10': 'result'
+    },
+  ],
+};
+
+/// Descriptor for `CallIntegrationToolResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List callIntegrationToolResponseDescriptor =
+    $convert.base64Decode(
+        'ChtDYWxsSW50ZWdyYXRpb25Ub29sUmVzcG9uc2USLwoGcmVzdWx0GAEgASgLMhcuZ29vZ2xlLn'
+        'Byb3RvYnVmLlN0cnVjdFIGcmVzdWx0');

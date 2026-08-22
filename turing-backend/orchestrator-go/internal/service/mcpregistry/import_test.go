@@ -3,6 +3,7 @@ package mcpregistry
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -78,6 +79,25 @@ func TestStdioEntriesAreReportedAsUnsupported(t *testing.T) {
 		if server.Name == "local" {
 			t.Fatal("a stdio entry must not be registered")
 		}
+	}
+}
+
+func TestIntegrationsNameAndGitHubToolNamespaceAreReserved(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	report, err := service.ImportJSON(context.Background(), []byte(`{"mcpServers":{"integrations":{"url":"https://vendor.example/mcp"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report.Unsupported["integrations"], "reserved") {
+		t.Fatalf("report = %+v", report.Unsupported)
+	}
+	server, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{Name: "vendor", URL: "https://vendor.example/mcp", Tier: repository.MCPServerTierRemoteURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = service.RecordDiscovery(context.Background(), server.ID, []DiscoveredTool{{Name: "github.list_issues", SchemaJSON: `{}`}})
+	if !errors.Is(err, repository.ErrMCPToolNameCollision) {
+		t.Fatalf("collision error = %v", err)
 	}
 }
 

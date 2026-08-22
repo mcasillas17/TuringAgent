@@ -173,20 +173,21 @@ func (record sendMessageIdempotencyRecord) result() EnqueueUserMessageResult {
 
 func enqueueRequestFingerprint(input EnqueueUserMessageInput) (string, error) {
 	type egressFingerprint struct {
-		Version                   int                     `json:"version"`
-		Provider                  string                  `json:"provider"`
-		Model                     string                  `json:"model"`
-		RequestDigest             string                  `json:"request_digest"`
-		ExternalAgentID           string                  `json:"external_agent_id"`
-		ExternalCredentialRefHash string                  `json:"external_credential_ref_hash"`
-		Endpoint                  string                  `json:"endpoint"`
-		EndpointHost              string                  `json:"endpoint_host"`
-		DataCategories            []string                `json:"data_categories"`
-		SelectedTools             []string                `json:"selected_tools"`
-		SkillSnapshotFingerprint  string                  `json:"skill_snapshot_fingerprint"`
-		RecallApplicable          bool                    `json:"recall_applicable"`
-		MemoryProfileApplicable   bool                    `json:"memory_profile_applicable"`
-		RemoteMCPServers          []RemoteMCPServerEgress `json:"remote_mcp_servers"`
+		Version                   int                         `json:"version"`
+		Provider                  string                      `json:"provider"`
+		Model                     string                      `json:"model"`
+		RequestDigest             string                      `json:"request_digest"`
+		ExternalAgentID           string                      `json:"external_agent_id"`
+		ExternalCredentialRefHash string                      `json:"external_credential_ref_hash"`
+		Endpoint                  string                      `json:"endpoint"`
+		EndpointHost              string                      `json:"endpoint_host"`
+		DataCategories            []string                    `json:"data_categories"`
+		SelectedTools             []string                    `json:"selected_tools"`
+		SkillSnapshotFingerprint  string                      `json:"skill_snapshot_fingerprint"`
+		RecallApplicable          bool                        `json:"recall_applicable"`
+		MemoryProfileApplicable   bool                        `json:"memory_profile_applicable"`
+		RemoteMCPServers          []RemoteMCPServerEgress     `json:"remote_mcp_servers"`
+		IntegrationEndpoints      []IntegrationEndpointEgress `json:"integration_endpoints"`
 	}
 	var egressDecision *egressFingerprint
 	if input.EgressDecision != nil {
@@ -205,9 +206,10 @@ func enqueueRequestFingerprint(input EnqueueUserMessageInput) (string, error) {
 			RecallApplicable:          input.EgressDecision.RecallApplicable,
 			MemoryProfileApplicable:   input.EgressDecision.MemoryProfileApplicable,
 			RemoteMCPServers:          append([]RemoteMCPServerEgress(nil), input.EgressDecision.RemoteMCPServers...),
+			IntegrationEndpoints:      cloneIntegrationEndpoints(input.EgressDecision.IntegrationEndpoints),
 		}
 	}
-	version := 4
+	version := 5
 	requestedModel := input.RequestedModel
 	if egressDecision == nil {
 		version = 2
@@ -570,7 +572,7 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 		return EnqueueUserMessageResult{}, ErrRemoteEgressConsentRequired
 	}
 	if modelProvider != "openai_compatible" && egressDecision != nil &&
-		len(egressDecision.RemoteMCPServers) == 0 {
+		len(egressDecision.RemoteMCPServers) == 0 && len(egressDecision.IntegrationEndpoints) == 0 {
 		return EnqueueUserMessageResult{}, ErrLocalEgressDecisionForbidden
 	}
 	if egressDecision != nil &&
@@ -762,13 +764,18 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	// below stays conditional on the run actually reaching the provider.
 	var routingEvents []Event
 	if storedEgressDecision != nil {
-		destinations := make([]string, 0, 1+len(storedEgressDecision.RemoteMCPServers))
+		destinations := make([]string, 0, 1+len(storedEgressDecision.RemoteMCPServers)+len(storedEgressDecision.IntegrationEndpoints))
 		if storedEgressDecision.EndpointHost != "" {
 			destinations = append(destinations, storedEgressDecision.EndpointHost)
 		}
 		for _, remoteMCP := range storedEgressDecision.RemoteMCPServers {
 			if !slices.Contains(destinations, remoteMCP.EndpointHost) {
 				destinations = append(destinations, remoteMCP.EndpointHost)
+			}
+		}
+		for _, integration := range storedEgressDecision.IntegrationEndpoints {
+			if !slices.Contains(destinations, integration.EndpointHost) {
+				destinations = append(destinations, integration.EndpointHost)
 			}
 		}
 		destination := strings.Join(destinations, ", ")

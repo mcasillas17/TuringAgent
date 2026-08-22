@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
@@ -45,7 +46,7 @@ func (r *Repository) UpsertTools(ctx context.Context, tools []DiscoveredTool) er
 		return err
 	}
 	for _, tool := range tools {
-		if tool.ServerName == "skills" {
+		if tool.ServerName == "skills" || tool.ServerName == "integrations" {
 			_, err := tx.ExecContext(ctx, `
 				INSERT INTO tools (
 					id, server_name, tool_name, policy, schema_json, enabled, discovered_at, mcp_server_id, present
@@ -104,6 +105,95 @@ func (r *Repository) UpsertTools(ctx context.Context, tools []DiscoveredTool) er
 		return err
 	}
 	return tx.Commit()
+}
+
+// PseudoServerToolAvailable is policy-only. A missing row is available so a
+// newly discovered pseudo-server tool can bootstrap into the registry.
+// Deliberately do not add present/enabled checks: UpsertTools derives those
+// bits from the report this predicate gates.
+func (r *Repository) PseudoServerToolAvailable(ctx context.Context, serverName, toolName string) (bool, error) {
+	var policy string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT policy FROM tools
+		WHERE server_name = ? AND tool_name = ? AND mcp_server_id IS NULL
+	`, serverName, toolName).Scan(&policy)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return policy != "disabled", nil
+}
+
+func (r *Repository) PseudoServerToolPolicy(ctx context.Context, serverName, toolName string) (string, bool, error) {
+	var policy string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT policy FROM tools
+		WHERE server_name = ? AND tool_name = ? AND mcp_server_id IS NULL
+	`, serverName, toolName).Scan(&policy)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return policy, err == nil, err
+}
+
+func (r *Repository) SetToolPolicyByName(ctx context.Context, serverName, toolName, policy string) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE tools
+		SET policy = ?,
+			enabled = CASE
+				WHEN ? = 'disabled' THEN 0
+				WHEN mcp_server_id IS NULL THEN 1
+				WHEN EXISTS (SELECT 1 FROM mcp_servers WHERE id = tools.mcp_server_id AND enabled = 1) THEN 1
+				ELSE 0
+			END
+		WHERE server_name = ? AND tool_name = ?
+	`, policy, policy, serverName, toolName)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ErrMCPToolNotFound
+	}
+	return nil
+}
+
+func (r *Repository) ListPseudoServerTools(ctx context.Context, serverName string) ([]MCPServerTool, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT tool_name, policy, schema_json, enabled, present
+		FROM tools WHERE server_name = ? AND mcp_server_id IS NULL
+		ORDER BY tool_name
+	`, serverName)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	tools := make([]MCPServerTool, 0)
+	for rows.Next() {
+		var tool MCPServerTool
+		if err := rows.Scan(&tool.Name, &tool.Policy, &tool.SchemaJSON, &tool.Enabled, &tool.Present); err != nil {
+			return nil, err
+		}
+		tools = append(tools, tool)
+	}
+	return tools, rows.Err()
+}
+
+func (r *Repository) GetToolByName(ctx context.Context, serverName, toolName string) (MCPServerTool, error) {
+	var tool MCPServerTool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT tool_name, policy, schema_json, enabled, present
+		FROM tools WHERE server_name = ? AND tool_name = ?
+	`, serverName, toolName).Scan(&tool.Name, &tool.Policy, &tool.SchemaJSON, &tool.Enabled, &tool.Present)
+	if errors.Is(err, sql.ErrNoRows) {
+		return MCPServerTool{}, ErrMCPToolNotFound
+	}
+	return tool, err
 }
 
 func (r *Repository) ListEnabledTools(ctx context.Context) ([]DiscoveredTool, error) {

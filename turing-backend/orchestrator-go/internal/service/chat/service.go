@@ -21,14 +21,15 @@ import (
 
 type Server struct {
 	turingv1.UnimplementedChatServiceServer
-	repo        *repository.Repository
-	bus         *events.Bus
-	runtime     runtimeDispatcher
-	ollamaModel string
-	openAIModel string
-	egress      EgressConfig
-	now         func() time.Time
-	nonce       func() (string, error)
+	repo                        *repository.Repository
+	bus                         *events.Bus
+	runtime                     runtimeDispatcher
+	ollamaModel                 string
+	openAIModel                 string
+	egress                      EgressConfig
+	now                         func() time.Time
+	nonce                       func() (string, error)
+	integrationEndpointResolver func(context.Context, []string) ([]repository.IntegrationEndpointEgress, error)
 }
 
 type runtimeDispatcher interface {
@@ -48,6 +49,7 @@ func NewWithEgressConfig(repo *repository.Repository, bus *events.Bus, runtimeSe
 		repo: repo, bus: bus, runtime: runtimeServer,
 		ollamaModel: ollamaModel, openAIModel: openAIModel,
 		egress: egressConfig, now: time.Now, nonce: newEgressNonce,
+		integrationEndpointResolver: repo.IntegrationEndpointsForTools,
 	}
 }
 

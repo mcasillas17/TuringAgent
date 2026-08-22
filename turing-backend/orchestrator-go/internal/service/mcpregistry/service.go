@@ -57,6 +57,14 @@ func (s *PublicServer) UpdateMcpToolPolicy(ctx context.Context, req *turingv1.Up
 	return s.service.UpdateMcpToolPolicy(ctx, req)
 }
 
+func (s *PublicServer) UpdateToolPolicyByName(ctx context.Context, req *turingv1.UpdateToolPolicyByNameRequest) (*turingv1.McpToolDescriptor, error) {
+	return s.service.UpdateToolPolicyByName(ctx, req)
+}
+
+func (s *PublicServer) ListPseudoServerTools(ctx context.Context, req *turingv1.ListPseudoServerToolsRequest) (*turingv1.ListPseudoServerToolsResponse, error) {
+	return s.service.ListPseudoServerTools(ctx, req)
+}
+
 func (s *PublicServer) DeleteMcpServer(ctx context.Context, req *turingv1.DeleteMcpServerRequest) (*turingv1.DeleteMcpServerResponse, error) {
 	return s.service.DeleteMcpServer(ctx, req)
 }
@@ -74,6 +82,14 @@ func (*InternalServer) SetMcpServerEnabled(context.Context, *turingv1.SetMcpServ
 }
 
 func (*InternalServer) UpdateMcpToolPolicy(context.Context, *turingv1.UpdateMcpToolPolicyRequest) (*turingv1.McpToolDescriptor, error) {
+	return nil, status.Error(codes.PermissionDenied, "MCP tool policy management is public")
+}
+
+func (*InternalServer) UpdateToolPolicyByName(context.Context, *turingv1.UpdateToolPolicyByNameRequest) (*turingv1.McpToolDescriptor, error) {
+	return nil, status.Error(codes.PermissionDenied, "MCP tool policy management is public")
+}
+
+func (*InternalServer) ListPseudoServerTools(context.Context, *turingv1.ListPseudoServerToolsRequest) (*turingv1.ListPseudoServerToolsResponse, error) {
 	return nil, status.Error(codes.PermissionDenied, "MCP tool policy management is public")
 }
 
@@ -192,6 +208,60 @@ func (s *Server) UpdateMcpToolPolicy(ctx context.Context, req *turingv1.UpdateMc
 
 	}
 	return nil, status.Error(codes.NotFound, "MCP tool not found")
+}
+
+func (s *Server) UpdateToolPolicyByName(ctx context.Context, req *turingv1.UpdateToolPolicyByNameRequest) (*turingv1.McpToolDescriptor, error) {
+	if req == nil || req.GetServerName() == "" || req.GetToolName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "server_name and tool_name are required")
+	}
+	policy, err := policyFromProto(req.GetPolicy())
+	if err != nil {
+		return nil, err
+	}
+	if policy == "safe" && toolpolicy.BundledToolRequiresApproval(req.GetServerName(), req.GetToolName()) {
+		return nil, status.Error(codes.FailedPrecondition, "bundled mutating tools require approval at their server")
+	}
+	if req.GetServerName() == "integrations" && policy == "safe" &&
+		!toolpolicy.ToolReadOnly(req.GetServerName(), req.GetToolName()) {
+		return nil, status.Error(codes.FailedPrecondition, "integration mutating tools require approval")
+	}
+	if err := s.repo.SetToolPolicyByName(ctx, req.GetServerName(), req.GetToolName(), policy); err != nil {
+		if errors.Is(err, repository.ErrMCPToolNotFound) {
+			return nil, status.Error(codes.NotFound, "MCP tool not found")
+		}
+		return nil, status.Error(codes.Internal, "update MCP tool policy failed")
+	}
+	tool, err := s.repo.GetToolByName(ctx, req.GetServerName(), req.GetToolName())
+	if err != nil {
+		if errors.Is(err, repository.ErrMCPToolNotFound) {
+			return nil, status.Error(codes.NotFound, "MCP tool not found")
+		}
+		return nil, status.Error(codes.Internal, "read MCP tool failed")
+	}
+	descriptor, err := toolDescriptor(tool)
+	if err == nil {
+		s.notifyRegistryChanged()
+	}
+	return descriptor, err
+}
+
+func (s *Server) ListPseudoServerTools(ctx context.Context, req *turingv1.ListPseudoServerToolsRequest) (*turingv1.ListPseudoServerToolsResponse, error) {
+	if req == nil || (req.GetServerName() != "skills" && req.GetServerName() != "integrations") {
+		return nil, status.Error(codes.InvalidArgument, "server_name must be skills or integrations")
+	}
+	tools, err := s.repo.ListPseudoServerTools(ctx, req.GetServerName())
+	if err != nil {
+		return nil, status.Error(codes.Internal, "list pseudo-server tools failed")
+	}
+	response := &turingv1.ListPseudoServerToolsResponse{Tools: make([]*turingv1.McpToolDescriptor, 0, len(tools))}
+	for _, tool := range tools {
+		descriptor, err := toolDescriptor(tool)
+		if err != nil {
+			return nil, err
+		}
+		response.Tools = append(response.Tools, descriptor)
+	}
+	return response, nil
 }
 
 func (s *Server) DeleteMcpServer(ctx context.Context, req *turingv1.DeleteMcpServerRequest) (*turingv1.DeleteMcpServerResponse, error) {

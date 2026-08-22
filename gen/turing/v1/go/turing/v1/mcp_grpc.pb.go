@@ -19,11 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	McpRegistryService_ListMcpServers_FullMethodName        = "/turing.v1.McpRegistryService/ListMcpServers"
-	McpRegistryService_SetMcpServerEnabled_FullMethodName   = "/turing.v1.McpRegistryService/SetMcpServerEnabled"
-	McpRegistryService_UpdateMcpToolPolicy_FullMethodName   = "/turing.v1.McpRegistryService/UpdateMcpToolPolicy"
-	McpRegistryService_DeleteMcpServer_FullMethodName       = "/turing.v1.McpRegistryService/DeleteMcpServer"
-	McpRegistryService_CallRegisteredMcpTool_FullMethodName = "/turing.v1.McpRegistryService/CallRegisteredMcpTool"
+	McpRegistryService_ListMcpServers_FullMethodName         = "/turing.v1.McpRegistryService/ListMcpServers"
+	McpRegistryService_SetMcpServerEnabled_FullMethodName    = "/turing.v1.McpRegistryService/SetMcpServerEnabled"
+	McpRegistryService_UpdateMcpToolPolicy_FullMethodName    = "/turing.v1.McpRegistryService/UpdateMcpToolPolicy"
+	McpRegistryService_UpdateToolPolicyByName_FullMethodName = "/turing.v1.McpRegistryService/UpdateToolPolicyByName"
+	McpRegistryService_ListPseudoServerTools_FullMethodName  = "/turing.v1.McpRegistryService/ListPseudoServerTools"
+	McpRegistryService_DeleteMcpServer_FullMethodName        = "/turing.v1.McpRegistryService/DeleteMcpServer"
+	McpRegistryService_CallRegisteredMcpTool_FullMethodName  = "/turing.v1.McpRegistryService/CallRegisteredMcpTool"
 )
 
 // McpRegistryServiceClient is the client API for McpRegistryService service.
@@ -33,6 +35,8 @@ type McpRegistryServiceClient interface {
 	ListMcpServers(ctx context.Context, in *ListMcpServersRequest, opts ...grpc.CallOption) (*ListMcpServersResponse, error)
 	SetMcpServerEnabled(ctx context.Context, in *SetMcpServerEnabledRequest, opts ...grpc.CallOption) (*McpServerDescriptor, error)
 	UpdateMcpToolPolicy(ctx context.Context, in *UpdateMcpToolPolicyRequest, opts ...grpc.CallOption) (*McpToolDescriptor, error)
+	UpdateToolPolicyByName(ctx context.Context, in *UpdateToolPolicyByNameRequest, opts ...grpc.CallOption) (*McpToolDescriptor, error)
+	ListPseudoServerTools(ctx context.Context, in *ListPseudoServerToolsRequest, opts ...grpc.CallOption) (*ListPseudoServerToolsResponse, error)
 	DeleteMcpServer(ctx context.Context, in *DeleteMcpServerRequest, opts ...grpc.CallOption) (*DeleteMcpServerResponse, error)
 	CallRegisteredMcpTool(ctx context.Context, in *CallRegisteredMcpToolRequest, opts ...grpc.CallOption) (*CallRegisteredMcpToolResponse, error)
 }
@@ -75,6 +79,26 @@ func (c *mcpRegistryServiceClient) UpdateMcpToolPolicy(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *mcpRegistryServiceClient) UpdateToolPolicyByName(ctx context.Context, in *UpdateToolPolicyByNameRequest, opts ...grpc.CallOption) (*McpToolDescriptor, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(McpToolDescriptor)
+	err := c.cc.Invoke(ctx, McpRegistryService_UpdateToolPolicyByName_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *mcpRegistryServiceClient) ListPseudoServerTools(ctx context.Context, in *ListPseudoServerToolsRequest, opts ...grpc.CallOption) (*ListPseudoServerToolsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPseudoServerToolsResponse)
+	err := c.cc.Invoke(ctx, McpRegistryService_ListPseudoServerTools_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *mcpRegistryServiceClient) DeleteMcpServer(ctx context.Context, in *DeleteMcpServerRequest, opts ...grpc.CallOption) (*DeleteMcpServerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteMcpServerResponse)
@@ -102,6 +126,8 @@ type McpRegistryServiceServer interface {
 	ListMcpServers(context.Context, *ListMcpServersRequest) (*ListMcpServersResponse, error)
 	SetMcpServerEnabled(context.Context, *SetMcpServerEnabledRequest) (*McpServerDescriptor, error)
 	UpdateMcpToolPolicy(context.Context, *UpdateMcpToolPolicyRequest) (*McpToolDescriptor, error)
+	UpdateToolPolicyByName(context.Context, *UpdateToolPolicyByNameRequest) (*McpToolDescriptor, error)
+	ListPseudoServerTools(context.Context, *ListPseudoServerToolsRequest) (*ListPseudoServerToolsResponse, error)
 	DeleteMcpServer(context.Context, *DeleteMcpServerRequest) (*DeleteMcpServerResponse, error)
 	CallRegisteredMcpTool(context.Context, *CallRegisteredMcpToolRequest) (*CallRegisteredMcpToolResponse, error)
 	mustEmbedUnimplementedMcpRegistryServiceServer()
@@ -122,6 +148,12 @@ func (UnimplementedMcpRegistryServiceServer) SetMcpServerEnabled(context.Context
 }
 func (UnimplementedMcpRegistryServiceServer) UpdateMcpToolPolicy(context.Context, *UpdateMcpToolPolicyRequest) (*McpToolDescriptor, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateMcpToolPolicy not implemented")
+}
+func (UnimplementedMcpRegistryServiceServer) UpdateToolPolicyByName(context.Context, *UpdateToolPolicyByNameRequest) (*McpToolDescriptor, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateToolPolicyByName not implemented")
+}
+func (UnimplementedMcpRegistryServiceServer) ListPseudoServerTools(context.Context, *ListPseudoServerToolsRequest) (*ListPseudoServerToolsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPseudoServerTools not implemented")
 }
 func (UnimplementedMcpRegistryServiceServer) DeleteMcpServer(context.Context, *DeleteMcpServerRequest) (*DeleteMcpServerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteMcpServer not implemented")
@@ -204,6 +236,42 @@ func _McpRegistryService_UpdateMcpToolPolicy_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _McpRegistryService_UpdateToolPolicyByName_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateToolPolicyByNameRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(McpRegistryServiceServer).UpdateToolPolicyByName(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: McpRegistryService_UpdateToolPolicyByName_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(McpRegistryServiceServer).UpdateToolPolicyByName(ctx, req.(*UpdateToolPolicyByNameRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _McpRegistryService_ListPseudoServerTools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPseudoServerToolsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(McpRegistryServiceServer).ListPseudoServerTools(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: McpRegistryService_ListPseudoServerTools_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(McpRegistryServiceServer).ListPseudoServerTools(ctx, req.(*ListPseudoServerToolsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _McpRegistryService_DeleteMcpServer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteMcpServerRequest)
 	if err := dec(in); err != nil {
@@ -258,6 +326,14 @@ var McpRegistryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateMcpToolPolicy",
 			Handler:    _McpRegistryService_UpdateMcpToolPolicy_Handler,
+		},
+		{
+			MethodName: "UpdateToolPolicyByName",
+			Handler:    _McpRegistryService_UpdateToolPolicyByName_Handler,
+		},
+		{
+			MethodName: "ListPseudoServerTools",
+			Handler:    _McpRegistryService_ListPseudoServerTools_Handler,
 		},
 		{
 			MethodName: "DeleteMcpServer",

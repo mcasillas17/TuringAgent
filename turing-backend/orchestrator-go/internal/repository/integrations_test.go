@@ -74,6 +74,126 @@ func TestCreateConnectionStoresWhatItWasGivenAndTrimsIt(t *testing.T) {
 	}
 }
 
+func TestGetSealedConnectionCredentialReturnsTheNamedLiveCredentialAndFailsClosedAfterRevoke(t *testing.T) {
+	repo, ctx := newConnectionTestRepo(t)
+	input := validConnection()
+	input.CredentialCiphertext = []byte("sealed-for-exact-connection")
+	created := mustCreateConnection(t, ctx, repo, input)
+
+	credential, err := repo.GetSealedConnectionCredential(ctx, created.ConnectionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(credential.Ciphertext) != string(input.CredentialCiphertext) || credential.Status != ConnectionStatusConnected {
+		t.Fatalf("credential = %+v", credential)
+	}
+	if _, err := repo.RevokeConnection(ctx, created.ConnectionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.GetSealedConnectionCredential(ctx, created.ConnectionID); !errors.Is(err, ErrConnectionNotUsable) {
+		t.Fatalf("revoked credential error = %v, want ErrConnectionNotUsable", err)
+	}
+}
+
+func TestIntegrationApprovalRenderBoundaryUsesOneCompleteBuilder(t *testing.T) {
+	repo, ctx := newConnectionTestRepo(t)
+	input := validConnection()
+	input.Provider = "github"
+	input.DisplayName = "Work GitHub"
+	input.Endpoint = ""
+	connection := mustCreateConnection(t, ctx, repo, input)
+	args := map[string]any{"connection_id": connection.ConnectionID, "owner": "octo", "repo": "project", "issue_number": float64(7), "body": ""}
+	base, err := repo.IntegrationApprovalRender(ctx, "github.create_comment", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bodyBytes := MaxIntegrationApprovalRenderBytes - len([]byte(base))
+	args["body"] = strings.Repeat("x", bodyBytes)
+	exact, err := repo.IntegrationApprovalRender(ctx, "github.create_comment", args)
+	if err != nil || len([]byte(exact)) != MaxIntegrationApprovalRenderBytes {
+		t.Fatalf("exact bytes=%d err=%v", len([]byte(exact)), err)
+	}
+	args["body"] = strings.Repeat("x", bodyBytes+1)
+	over, err := repo.IntegrationApprovalRender(ctx, "github.create_comment", args)
+	if err != nil || len([]byte(over)) != MaxIntegrationApprovalRenderBytes+1 {
+		t.Fatalf("over bytes=%d err=%v", len([]byte(over)), err)
+	}
+	if !strings.HasSuffix(exact, strings.Repeat("x", bodyBytes)) {
+		t.Fatal("approval render truncated the body")
+	}
+}
+
+func TestIntegrationApprovalRenderRejectsDestinationWhitespace(t *testing.T) {
+	repo, ctx := newConnectionTestRepo(t)
+	input := validConnection()
+	input.Provider = "github"
+	input.Endpoint = ""
+	connection := mustCreateConnection(t, ctx, repo, input)
+	args := map[string]any{
+		"connection_id": connection.ConnectionID, "owner": " octo", "repo": "project",
+		"issue_number": float64(7), "body": "complete body",
+	}
+	if _, err := repo.IntegrationApprovalRender(ctx, "github.create_comment", args); err == nil {
+		t.Fatal("approval render normalized a destination that provider dispatch rejects")
+	}
+}
+
+func TestIntegrationEndpointsResolveDuringRegistrationWindowAndReEnable(t *testing.T) {
+	repo, ctx := newConnectionTestRepo(t)
+	input := validConnection()
+	input.Provider = "github"
+	input.Endpoint = ""
+	input.DisplayName = "GitHub"
+	mustCreateConnection(t, ctx, repo, input)
+	selected := []string{"integrations/github.list_issues"}
+	endpoints, err := repo.IntegrationEndpointsForTools(ctx, selected)
+	if err != nil || len(endpoints) != 1 {
+		t.Fatalf("bootstrap endpoints=%+v err=%v", endpoints, err)
+	}
+	if err := repo.UpsertTools(ctx, []DiscoveredTool{{ServerName: "integrations", ToolName: "github.list_issues", SchemaJSON: `{}`, Policy: "approval_required"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetToolPolicyByName(ctx, "integrations", "github.list_issues", "disabled"); err != nil {
+		t.Fatal(err)
+	}
+	endpoints, err = repo.IntegrationEndpointsForTools(ctx, selected)
+	if err != nil || len(endpoints) != 0 {
+		t.Fatalf("disabled endpoints=%+v err=%v", endpoints, err)
+	}
+	if err := repo.SetToolPolicyByName(ctx, "integrations", "github.list_issues", "approval_required"); err != nil {
+		t.Fatal(err)
+	}
+	endpoints, err = repo.IntegrationEndpointsForTools(ctx, selected)
+	if err != nil || len(endpoints) != 1 {
+		t.Fatalf("re-enabled endpoints=%+v err=%v", endpoints, err)
+	}
+}
+
+func TestIntegrationDisclosureNamesRemainDistinctAfterRuneCap(t *testing.T) {
+	repo, ctx := newConnectionTestRepo(t)
+	prefix := strings.Repeat("同", 64)
+	for index, id := range []string{"conn_distinct_aaaaaaaa", "conn_distinct_bbbbbbbb"} {
+		input := validConnection()
+		input.ConnectionID = id
+		input.Provider = "github"
+		input.Endpoint = ""
+		input.DisplayName = prefix + string(rune('A'+index))
+		mustCreateConnection(t, ctx, repo, input)
+	}
+	endpoints, err := repo.IntegrationEndpointsForTools(ctx, []string{"integrations/github.list_issues"})
+	if err != nil || len(endpoints) != 2 {
+		t.Fatalf("endpoints=%+v err=%v", endpoints, err)
+	}
+	if endpoints[0].DisplayName == endpoints[1].DisplayName {
+		t.Fatalf("capped names collided: %q", endpoints[0].DisplayName)
+	}
+	for _, endpoint := range endpoints {
+		if got := len([]rune(endpoint.DisplayName)); got > maxIntegrationDisplayNameRunes {
+			t.Fatalf("display name runes=%d, want <=%d", got, maxIntegrationDisplayNameRunes)
+		}
+	}
+}
+
 // The consent snapshot is what makes "you agreed to this" checkable later. A
 // connection stored with no recorded grants would be a consent record that
 // says nothing.

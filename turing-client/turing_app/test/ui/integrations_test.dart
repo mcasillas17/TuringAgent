@@ -29,18 +29,20 @@ const _phone = Size(390, 780);
 
 void main() {
   group('what the page says before anything is connected', () {
-    testWidgets('an empty list says so, and says nothing uses these yet', (
+    testWidgets('an empty list says so and explains the new egress gate', (
       tester,
     ) async {
       await _pumpPage(tester, _IntegrationsApi());
 
       expect(find.text('No accounts connected'), findsOneWidget);
-      // The honest bit: a stored connection is not a capability.
-      expect(find.text('Nothing uses these yet'), findsOneWidget);
       expect(
-        find.textContaining('stop to ask you first'),
+        find.text('Connected-account tools ask before every call'),
         findsOneWidget,
-        reason: 'acting on your behalf stays inside the approval flow',
+      );
+      expect(
+        find.textContaining('per-run consent'),
+        findsOneWidget,
+        reason: 'the page names the egress consent consequence up front',
       );
     });
 
@@ -77,6 +79,23 @@ void main() {
   });
 
   group('connecting an account', () {
+    testWidgets(
+      'GitHub connect explains tool approval and egress before consent',
+      (tester) async {
+        await _pumpPage(tester, _IntegrationsApi());
+        await tester.tap(find.text('Connect an account'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(ChoiceChip, 'GitHub'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('GitHub tools become available'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('local chat sends'), findsOneWidget);
+      },
+    );
+
     testWidgets('the grants are shown before the button can be pressed', (
       tester,
     ) async {
@@ -276,6 +295,31 @@ void main() {
   });
 
   group('a connected account', () {
+    testWidgets('GitHub tools expose a live policy editor', (tester) async {
+      final api = _IntegrationsApi()
+        ..connections.add(_connectedGitHub())
+        ..tools.add(
+          const ToolDescriptor(
+            serverName: 'integrations',
+            toolName: 'github.list_issues',
+            policy: ToolPolicy.approvalRequired,
+          ),
+        );
+      await _pumpPage(tester, api);
+
+      expect(find.text('Agent tools'), findsOneWidget);
+      expect(find.text('github.list_issues'), findsOneWidget);
+      expect(find.text('Asks first'), findsOneWidget);
+
+      await tester.tap(find.byType(DropdownButton<ToolPolicy>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Disabled').last);
+      await tester.pumpAndSettle();
+
+      expect(api.policyUpdates, ['integrations/github.list_issues:disabled']);
+      expect(find.text('Disabled'), findsOneWidget);
+    });
+
     testWidgets('shows what it allows and how it is identified', (
       tester,
     ) async {
@@ -496,6 +540,24 @@ void main() {
       });
     }
 
+    testWidgets('the GitHub policy editor wraps without overflow', (
+      tester,
+    ) async {
+      final api = _IntegrationsApi()
+        ..connections.add(_connectedGitHub())
+        ..tools.add(
+          const ToolDescriptor(
+            serverName: 'integrations',
+            toolName: 'github.create_comment',
+            policy: ToolPolicy.approvalRequired,
+          ),
+        );
+      await _pumpPage(tester, api, size: const Size(320, 640));
+
+      expect(tester.takeException(), isNull);
+      expect(find.text('github.create_comment'), findsOneWidget);
+    });
+
     testWidgets('the connect dialog opens on a phone without overflowing', (
       tester,
     ) async {
@@ -581,6 +643,17 @@ IntegrationConnection _revoked() => IntegrationConnection(
   revokedAt: DateTime.utc(2026, 5, 11, 12),
 );
 
+IntegrationConnection _connectedGitHub() => IntegrationConnection(
+  connectionId: 'conn_github',
+  provider: IntegrationProviderKind.github,
+  displayName: 'Personal GitHub',
+  state: IntegrationConnectionState.connected,
+  accountLabel: 'octocat',
+  credentialHint: '••••••••c2f1',
+  grantedScopes: const ['Read repository data.', 'Create issue comments.'],
+  connectedAt: DateTime.utc(2026, 5, 10, 12),
+);
+
 class _ConnectCall {
   const _ConnectCall({
     required this.provider,
@@ -611,11 +684,13 @@ class _IntegrationsApi
         NoRemoteEgressApi,
         NoSessionLifecycleApi,
         NoTelemetryApi
-    implements TuringApi {
+    implements TuringApi, PseudoServerPolicyApi {
   final List<IntegrationConnection> connections = [];
+  final List<ToolDescriptor> tools = [];
   final List<_ConnectCall> connectCalls = [];
   final List<String> revoked = [];
   final List<String> deleted = [];
+  final List<String> policyUpdates = [];
   Object? listError;
   Object? connectError;
   Object? revokeError;
@@ -659,6 +734,15 @@ class _IntegrationsApi
           secretLabel: 'Internal integration token',
           accountLabel: 'Workspace name',
           grants: ['Read every page shared with this integration.'],
+        ),
+        IntegrationProviderInfo(
+          kind: IntegrationProviderKind.github,
+          displayName: 'GitHub',
+          category: 'Code',
+          supported: true,
+          secretLabel: 'Personal access token',
+          accountLabel: 'GitHub account',
+          grants: ['Read repository data.', 'Create issue comments.'],
         ),
         IntegrationProviderInfo(
           kind: IntegrationProviderKind.googleWorkspace,
@@ -757,6 +841,32 @@ class _IntegrationsApi
     connections.removeWhere(
       (connection) => connection.connectionId == connectionId,
     );
+  }
+
+  @override
+  Future<List<ToolDescriptor>> listPseudoServerTools({
+    required String serverName,
+  }) async {
+    expect(serverName, 'integrations');
+    return List.unmodifiable(tools);
+  }
+
+  @override
+  Future<ToolDescriptor> updateToolPolicyByName({
+    required String serverName,
+    required String toolName,
+    required ToolPolicy policy,
+  }) async {
+    final index = tools.indexWhere((tool) => tool.toolName == toolName);
+    final updated = ToolDescriptor(
+      serverName: serverName,
+      toolName: toolName,
+      policy: policy,
+      enabled: policy != ToolPolicy.disabled,
+    );
+    tools[index] = updated;
+    policyUpdates.add('$serverName/$toolName:${policy.name}');
+    return updated;
   }
 
   // Nothing below is exercised by these tests.

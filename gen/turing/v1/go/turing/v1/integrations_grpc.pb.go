@@ -19,12 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	IntegrationService_ListProviders_FullMethodName    = "/turing.v1.IntegrationService/ListProviders"
-	IntegrationService_ConnectAccount_FullMethodName   = "/turing.v1.IntegrationService/ConnectAccount"
-	IntegrationService_ListConnections_FullMethodName  = "/turing.v1.IntegrationService/ListConnections"
-	IntegrationService_GetConnection_FullMethodName    = "/turing.v1.IntegrationService/GetConnection"
-	IntegrationService_RevokeConnection_FullMethodName = "/turing.v1.IntegrationService/RevokeConnection"
-	IntegrationService_DeleteConnection_FullMethodName = "/turing.v1.IntegrationService/DeleteConnection"
+	IntegrationService_ListProviders_FullMethodName        = "/turing.v1.IntegrationService/ListProviders"
+	IntegrationService_ConnectAccount_FullMethodName       = "/turing.v1.IntegrationService/ConnectAccount"
+	IntegrationService_ListConnections_FullMethodName      = "/turing.v1.IntegrationService/ListConnections"
+	IntegrationService_GetConnection_FullMethodName        = "/turing.v1.IntegrationService/GetConnection"
+	IntegrationService_RevokeConnection_FullMethodName     = "/turing.v1.IntegrationService/RevokeConnection"
+	IntegrationService_DeleteConnection_FullMethodName     = "/turing.v1.IntegrationService/DeleteConnection"
+	IntegrationService_ListIntegrationTools_FullMethodName = "/turing.v1.IntegrationService/ListIntegrationTools"
+	IntegrationService_CallIntegrationTool_FullMethodName  = "/turing.v1.IntegrationService/CallIntegrationTool"
 )
 
 // IntegrationServiceClient is the client API for IntegrationService service.
@@ -47,6 +49,8 @@ type IntegrationServiceClient interface {
 	// Removes the connection entirely, including its history. Revoking first is
 	// not required: deleting a connected account destroys the credential too.
 	DeleteConnection(ctx context.Context, in *DeleteConnectionRequest, opts ...grpc.CallOption) (*DeleteConnectionResponse, error)
+	ListIntegrationTools(ctx context.Context, in *ListIntegrationToolsRequest, opts ...grpc.CallOption) (*ListIntegrationToolsResponse, error)
+	CallIntegrationTool(ctx context.Context, in *CallIntegrationToolRequest, opts ...grpc.CallOption) (*CallIntegrationToolResponse, error)
 }
 
 type integrationServiceClient struct {
@@ -117,6 +121,26 @@ func (c *integrationServiceClient) DeleteConnection(ctx context.Context, in *Del
 	return out, nil
 }
 
+func (c *integrationServiceClient) ListIntegrationTools(ctx context.Context, in *ListIntegrationToolsRequest, opts ...grpc.CallOption) (*ListIntegrationToolsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListIntegrationToolsResponse)
+	err := c.cc.Invoke(ctx, IntegrationService_ListIntegrationTools_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *integrationServiceClient) CallIntegrationTool(ctx context.Context, in *CallIntegrationToolRequest, opts ...grpc.CallOption) (*CallIntegrationToolResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CallIntegrationToolResponse)
+	err := c.cc.Invoke(ctx, IntegrationService_CallIntegrationTool_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IntegrationServiceServer is the server API for IntegrationService service.
 // All implementations must embed UnimplementedIntegrationServiceServer
 // for forward compatibility.
@@ -137,6 +161,8 @@ type IntegrationServiceServer interface {
 	// Removes the connection entirely, including its history. Revoking first is
 	// not required: deleting a connected account destroys the credential too.
 	DeleteConnection(context.Context, *DeleteConnectionRequest) (*DeleteConnectionResponse, error)
+	ListIntegrationTools(context.Context, *ListIntegrationToolsRequest) (*ListIntegrationToolsResponse, error)
+	CallIntegrationTool(context.Context, *CallIntegrationToolRequest) (*CallIntegrationToolResponse, error)
 	mustEmbedUnimplementedIntegrationServiceServer()
 }
 
@@ -164,6 +190,12 @@ func (UnimplementedIntegrationServiceServer) RevokeConnection(context.Context, *
 }
 func (UnimplementedIntegrationServiceServer) DeleteConnection(context.Context, *DeleteConnectionRequest) (*DeleteConnectionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteConnection not implemented")
+}
+func (UnimplementedIntegrationServiceServer) ListIntegrationTools(context.Context, *ListIntegrationToolsRequest) (*ListIntegrationToolsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListIntegrationTools not implemented")
+}
+func (UnimplementedIntegrationServiceServer) CallIntegrationTool(context.Context, *CallIntegrationToolRequest) (*CallIntegrationToolResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CallIntegrationTool not implemented")
 }
 func (UnimplementedIntegrationServiceServer) mustEmbedUnimplementedIntegrationServiceServer() {}
 func (UnimplementedIntegrationServiceServer) testEmbeddedByValue()                            {}
@@ -294,6 +326,42 @@ func _IntegrationService_DeleteConnection_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IntegrationService_ListIntegrationTools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListIntegrationToolsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IntegrationServiceServer).ListIntegrationTools(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IntegrationService_ListIntegrationTools_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IntegrationServiceServer).ListIntegrationTools(ctx, req.(*ListIntegrationToolsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IntegrationService_CallIntegrationTool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CallIntegrationToolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IntegrationServiceServer).CallIntegrationTool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IntegrationService_CallIntegrationTool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IntegrationServiceServer).CallIntegrationTool(ctx, req.(*CallIntegrationToolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IntegrationService_ServiceDesc is the grpc.ServiceDesc for IntegrationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -324,6 +392,14 @@ var IntegrationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteConnection",
 			Handler:    _IntegrationService_DeleteConnection_Handler,
+		},
+		{
+			MethodName: "ListIntegrationTools",
+			Handler:    _IntegrationService_ListIntegrationTools_Handler,
+		},
+		{
+			MethodName: "CallIntegrationTool",
+			Handler:    _IntegrationService_CallIntegrationTool_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

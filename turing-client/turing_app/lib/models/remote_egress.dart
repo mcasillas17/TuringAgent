@@ -26,9 +26,11 @@ class RemoteEgressDisclosure {
     this.externalAgentId = '',
     List<RemoteMcpDestination> remoteMcpServers = const [],
     List<String> selectedTools = const [],
+    List<IntegrationEgressDestination> integrationEndpoints = const [],
   }) : dataCategories = List.unmodifiable(dataCategories),
        remoteMcpServers = List.unmodifiable(remoteMcpServers),
-       selectedTools = List.unmodifiable(selectedTools);
+       selectedTools = List.unmodifiable(selectedTools),
+       integrationEndpoints = List.unmodifiable(integrationEndpoints);
 
   final String challenge;
   final String provider;
@@ -39,7 +41,24 @@ class RemoteEgressDisclosure {
   final List<EgressDataCategory> dataCategories;
   final List<RemoteMcpDestination> remoteMcpServers;
   final List<String> selectedTools;
+  final List<IntegrationEgressDestination> integrationEndpoints;
   final DateTime expiresAt;
+}
+
+class IntegrationEgressDestination {
+  const IntegrationEgressDestination({
+    required this.endpoint,
+    required this.endpointHost,
+    required this.connectionId,
+    required this.displayName,
+    this.tools = const [],
+  });
+
+  final String endpoint;
+  final String endpointHost;
+  final String connectionId;
+  final String displayName;
+  final List<String> tools;
 }
 
 class RemoteMcpDestination {

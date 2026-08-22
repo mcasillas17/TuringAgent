@@ -46,12 +46,11 @@ var (
 	ErrConnectionSecretRequired   = errors.New("a sealed credential is required")
 	ErrConnectionAlreadyRevoked   = errors.New("connection is already revoked")
 	ErrConnectionConsentRequired  = errors.New("what the connection grants must be recorded")
+	ErrConnectionNotUsable        = errors.New("connection credential is unavailable")
 )
 
-// Connection is what a read of the table yields. There is deliberately no
-// credential field on it: the sealed secret is written by CreateConnection and
-// read by nothing in this file, so no list, get or mapping can leak it by
-// accident. The read path never even needs the key.
+// Connection is the metadata-only read model. The only full-ciphertext read is
+// GetSealedConnectionCredential, whose result is reserved for one dispatch.
 type Connection struct {
 	ConnectionID   string
 	Provider       string
@@ -71,6 +70,36 @@ type Connection struct {
 	RevokedAt        string
 	CreatedAt        string
 	UpdatedAt        string
+}
+
+type SealedConnectionCredential struct {
+	ConnectionID string
+	Provider     string
+	DisplayName  string
+	Status       string
+	Ciphertext   []byte
+}
+
+// GetSealedConnectionCredential reads the full sealed value and status in one
+// statement so revocation can never be observed separately from the secret.
+func (r *Repository) GetSealedConnectionCredential(ctx context.Context, connectionID string) (SealedConnectionCredential, error) {
+	var result SealedConnectionCredential
+	var ciphertext []byte
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, provider, display_name, status, credential_ciphertext
+		FROM integration_connections WHERE id = ?
+	`, connectionID).Scan(&result.ConnectionID, &result.Provider, &result.DisplayName, &result.Status, &ciphertext)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SealedConnectionCredential{}, ErrConnectionNotFound
+	}
+	if err != nil {
+		return SealedConnectionCredential{}, err
+	}
+	if result.Status != ConnectionStatusConnected || len(ciphertext) == 0 {
+		return SealedConnectionCredential{}, ErrConnectionNotUsable
+	}
+	result.Ciphertext = append([]byte(nil), ciphertext...)
+	return result, nil
 }
 
 // NewConnection is the write side. The credential arrives already sealed —

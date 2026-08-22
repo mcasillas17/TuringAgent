@@ -25,14 +25,15 @@ const (
 )
 
 var (
-	ErrAutomationNotFound     = errors.New("automation not found")
-	ErrAutomationNameTaken    = errors.New("an automation with that name already exists")
-	ErrAutomationNameEmpty    = errors.New("automation name is required")
-	ErrAutomationNameTooLong  = errors.New("automation name is too long")
-	ErrAutomationNoPrompt     = errors.New("automation prompt is required")
-	ErrAutomationPromptLong   = errors.New("automation prompt is too long")
-	ErrAutomationToolInvalid  = errors.New("an allowed tool needs both a server and a tool name")
-	ErrAutomationTooManyTools = errors.New("too many allowed tools")
+	ErrAutomationNotFound                   = errors.New("automation not found")
+	ErrAutomationNameTaken                  = errors.New("an automation with that name already exists")
+	ErrAutomationNameEmpty                  = errors.New("automation name is required")
+	ErrAutomationNameTooLong                = errors.New("automation name is too long")
+	ErrAutomationNoPrompt                   = errors.New("automation prompt is required")
+	ErrAutomationPromptLong                 = errors.New("automation prompt is too long")
+	ErrAutomationToolInvalid                = errors.New("an allowed tool needs both a server and a tool name")
+	ErrAutomationTooManyTools               = errors.New("too many allowed tools")
+	ErrAutomationIntegrationToolUnsupported = errors.New("integration tools are not available to automations")
 )
 
 // AutomationTool names a tool by the same (server, tool) pair the
@@ -178,6 +179,9 @@ func normalizeAllowedTools(tools []AutomationTool) ([]AutomationTool, error) {
 		tool.ToolName = strings.TrimSpace(tool.ToolName)
 		if tool.ServerName == "" || tool.ToolName == "" {
 			return nil, ErrAutomationToolInvalid
+		}
+		if tool.ServerName == "integrations" {
+			return nil, ErrAutomationIntegrationToolUnsupported
 		}
 		if _, duplicate := seen[tool]; duplicate {
 			continue

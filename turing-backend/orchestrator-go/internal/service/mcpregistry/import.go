@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -93,7 +92,7 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			report.Unsupported[name] = "server name is invalid"
 			continue
 		}
-		if name == "system" || name == "files" || name == "skills" {
+		if name == "system" || name == "files" || name == "skills" || name == "integrations" {
 			report.Unsupported[name] = "server name is reserved by TuringAgent"
 			continue
 		}
@@ -284,10 +283,7 @@ func canonicalHostPort(host, port string) string {
 }
 
 func isNonPublicIP(ip net.IP) bool {
-	address, ok := netip.AddrFromSlice(ip)
-	return !ok || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() ||
-		isSpecialUseMCPAddress(address.Unmap())
+	return !backendegress.IsPublicIP(ip)
 }
 
 func requireImportEOF(decoder *json.Decoder) error {

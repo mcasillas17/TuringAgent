@@ -11,7 +11,7 @@ MCP server is the second egress path and uses the same decision.
 
 `ChatService.PrepareRemoteEgress` is read-only. It resolves the effective
 provider, model, external-agent identity, canonical model endpoint, every
-remote MCP server and endpoint, selected tool
+remote MCP server and endpoint, integration endpoint and connection, selected tool
 names, eligible skill snapshot, recall/memory flags, and conservative maximum
 data categories for the request. It returns a short-lived challenge signed by
 the orchestrator-only `TURING_EGRESS_SIGNING_SECRET`.
@@ -72,6 +72,14 @@ addresses. Local third-party URLs require an explicit port and a single Docker
 service name; redirects, reserved names, host aliases and IP literals are
 refused. At dispatch the name must resolve entirely inside the fixed
 `172.31.254.0/24` subnet of the internal-only `net-mcp-registry` network.
+
+Connected-account integrations are the third egress path beside remote model
+providers and remote MCP servers. Their signed entries bind the canonical
+endpoint, connection id, display name, and frozen tools. The consent is
+endpoint-granular, not repository-granular: consent to `api.github.com` for a
+GitHub connection covers any repository that credential can reach. Because
+enabled integration tools may be called by a local run, connecting an account
+makes every local send ask until those tools are disabled.
 
 Ollama is the local provider identity, so its endpoint is restricted to
 `localhost`, `host.docker.internal`, or a loopback IP literal. Pointing the

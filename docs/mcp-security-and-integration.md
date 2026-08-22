@@ -296,6 +296,22 @@ because its registered endpoint and sealed bearer are usable only through the
 orchestrator proxy. A process that can reach or authenticate to that server by
 some other route is outside this guarantee.
 
+The same caller-side rule covers the orchestrator-owned `integrations`
+pseudo-server. `github.create_comment` cannot be made safe, and every
+`approval_required` integration call—including reads—consumes the
+argument-bound approval at the orchestrator before dispatch. The runtime can
+discover and dispatch integration tools through the internal service facet but
+cannot enumerate, create, revoke, or delete connections; the public client can
+manage connections but cannot reach dispatch.
+
+Integration credentials are AES-256-GCM-sealed at rest and opened once per
+call in the orchestrator. Plaintext exists only in the provider-call stack
+frame, travels only in GitHub's `Authorization` header, and is never placed in
+a URL, event, audit row, log, error, or tool result. Provider HTTP uses the
+shared public-address resolver and no-redirect client, so a private DNS answer
+or redirect cannot move the header away from the pinned `api.github.com`
+destination.
+
 Immediately before HTTP dispatch, the proxy rechecks that the run is still
 execution-active, the session is not being withdrawn, the server and tool are
 still present/enabled, and (for remote tiers) the endpoint and tool remain in

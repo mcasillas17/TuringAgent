@@ -118,6 +118,8 @@ func automationError(err error, fallback string) error {
 		return status.Error(codes.InvalidArgument, "an allowed tool needs both a server and a tool name")
 	case errors.Is(err, repository.ErrAutomationTooManyTools):
 		return status.Error(codes.InvalidArgument, "too many allowed tools")
+	case errors.Is(err, repository.ErrAutomationIntegrationToolUnsupported):
+		return status.Error(codes.FailedPrecondition, "integration tools are not available to automations")
 	case errors.Is(err, repository.ErrScheduleKindUnknown):
 		return status.Error(codes.InvalidArgument, "schedule must be an interval or a daily time")
 	case errors.Is(err, repository.ErrScheduleIntervalRange):
