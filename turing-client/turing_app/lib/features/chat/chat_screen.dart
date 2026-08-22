@@ -890,6 +890,7 @@ class _ChatScreenState extends State<ChatScreen> {
       candidate.messageId = message.messageId;
       candidate.runId = runId;
       candidate.canAdoptPersistedIdentity = false;
+      candidate.hasAdoptedPersistedIdentity = true;
       // Adopting a durable row disproves this attempt's unconfirmed-send
       // warning even if the user has since edited the retry draft (which
       // independently clears `_retryableSend`).
@@ -1739,6 +1740,18 @@ class _ChatScreenState extends State<ChatScreen> {
         // this send's own outcome must never override a startup/stream
         // state that arrived independently of it.
         _sending = false;
+        if (attempt.hasAdoptedPersistedIdentity) {
+          // A resync/live page already replaced this attempt's local
+          // identity with a durable message/run id WHILE this same RPC was
+          // still pending (see `_adoptPersistedUserMessageIdentities`).
+          // Durable identity is authoritative proof the send was accepted
+          // server-side; this rejection is just this client never seeing
+          // its own acknowledgement. Re-arming retry/warning state for an
+          // attempt already proven durable would contradict what is
+          // already correctly on screen, so this stale outcome changes
+          // nothing else.
+          return;
+        }
         final confirmedPreEnqueue = _isConfirmedPreEnqueueSendFailure(error);
         // An unconfirmed rejection may have persisted successfully. Keep its
         // optimistic row eligible to adopt the durable identity if a resync
@@ -2416,6 +2429,18 @@ class _MessageEntry extends _ChatEntry {
   /// one adjacent [_RunStateCardEntry] a run's reconciled state wants.
   String? runId;
   bool canAdoptPersistedIdentity;
+
+  /// True once [_ChatScreenState._adoptPersistedUserMessageIdentities] has
+  /// replaced this row's local identity with a durable message/run id —
+  /// distinct from [canAdoptPersistedIdentity] going `false`, which ALSO
+  /// happens for an attempt that never becomes eligible to adopt at all
+  /// (a confirmed pre-enqueue failure in [_ChatScreenState._sendMessage]'s
+  /// `catch`). That other `false` means "not eligible"; this one means
+  /// "already durably proven" — [_ChatScreenState._sendMessage]'s `catch`
+  /// needs the latter specifically to recognise its own pending RPC as
+  /// stale once a resync has adopted this row out from under it, without
+  /// being fooled by the former.
+  bool hasAdoptedPersistedIdentity = false;
   final ValueNotifier<String> content;
 
   @override

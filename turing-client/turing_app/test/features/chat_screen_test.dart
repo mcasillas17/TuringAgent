@@ -3353,6 +3353,148 @@ void main() {
     },
   );
 
+  testWidgets(
+    'a durable-identity adoption while the send RPC is still pending must '
+    'not let that RPC\'s later ambiguous rejection re-arm retry/warning '
+    'state',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final sendGate = Completer<Map<String, dynamic>>();
+      final apiClient = _FakeApiClient()..sendMessagePending = sendGate;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // The send RPC below never resolves during this test — [sendGate] is
+      // only ever completed with an error, at the very end. Everything
+      // that happens before that must happen while it is still pending.
+      await tester.enterText(find.byType(TextField), 'possibly durable send');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(find.text('possibly durable send'), findsOneWidget);
+
+      // A resync/live page adopts this exact optimistic bubble onto a
+      // durable message/run identity (by content + the run's
+      // `userMessageId`) BEFORE the still-pending `sendMessage` RPC ever
+      // resolves — the race this test exists to pin.
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_user_durable',
+          role: 'user',
+          content: 'possibly durable send',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+        Message(
+          messageId: 'msg_asst_durable',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: 2,
+          createdAt: _fixedDate,
+          runState: _runState(
+            userMessageId: 'msg_user_durable',
+            assistantMessageId: 'msg_asst_durable',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.queued',
+          sequence: 1,
+          runState: _runState(
+            userMessageId: 'msg_user_durable',
+            assistantMessageId: 'msg_asst_durable',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.text('possibly durable send'),
+        findsOneWidget,
+        reason: 'the resync must have adopted the optimistic bubble already',
+      );
+      expect(find.text('Queued'), findsOneWidget);
+      expect(find.byType(MessageSendUnconfirmedCard), findsNothing);
+
+      // Now the ORIGINAL, still-pending `sendMessage` RPC for this same
+      // attempt finally settles — with an ambiguous rejection of exactly
+      // the kind that (absent adoption) would render
+      // `MessageSendUnconfirmedCard` and restore the composer/retry draft.
+      // Durable identity already proved this send was accepted; this
+      // stale rejection must change nothing observable.
+      sendGate.completeError(
+        const GrpcError.unavailable('no backend'),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.text('possibly durable send'),
+        findsOneWidget,
+        reason:
+            'still exactly the one adopted, durable bubble — no duplicate '
+            'and no restored composer copy',
+      );
+      expect(
+        find.byType(MessageSendUnconfirmedCard),
+        findsNothing,
+        reason:
+            'durable identity already proved this send was accepted; a '
+            'later rejection of the same pending RPC must not warn',
+      );
+      expect(find.byType(MessageSendFailureCard), findsNothing);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        '',
+        reason:
+            'the composer must not be restored to the sent text — that '
+            'text was already durably accepted',
+      );
+      expect(
+        find.text('Queued'),
+        findsOneWidget,
+        reason: 'the durable run state card must still render correctly',
+      );
+
+      // And the composer must be usable again for a NEW attempt, not stuck
+      // re-armed against the adopted one. The old completer is already
+      // settled, so it must be cleared first, or the fake would replay its
+      // stale rejection for this new, unrelated send too.
+      apiClient.sendMessagePending = null;
+      await tester.enterText(find.byType(TextField), 'a fresh message');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(
+        apiClient.lastSentContent,
+        'a fresh message',
+        reason:
+            'a stale retry draft for the adopted attempt must not have '
+            'blocked or hijacked this new send',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
   testWidgets('coalesced resync never replaces partial live text with an empty '
       'persisted assistant row', (tester) async {
     final events = StreamController<TuringEvent>(sync: true);
