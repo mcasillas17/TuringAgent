@@ -185,7 +185,7 @@ void main() {
       await tester.tap(find.text('MCPs'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Remote · per-run consent'), findsOneWidget);
+      expect(find.text('Remote · enable + per-run egress'), findsOneWidget);
       expect(find.text('Not sandbox-confined'), findsOneWidget);
       expect(find.text('Down'), findsOneWidget);
       expect(find.text('stdio-vendor was not imported'), findsOneWidget);

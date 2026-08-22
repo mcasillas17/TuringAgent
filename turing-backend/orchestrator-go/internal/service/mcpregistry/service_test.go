@@ -210,7 +210,7 @@ func TestEnablingRemoteServerDiscoveryFailureKeepsServerEnabledAndRedactsToken(t
 	t.Cleanup(vendor.Close)
 	service.httpClient = vendor.Client()
 	// Registered through the repository directly (like
-	// TestEnablingRemoteServerDoesNotReachItBeforePerRunConsent above),
+	// TestEnablingRemoteServerDiscoversToolsOnFirstEnable above),
 	// because the httptest server's plain-HTTP loopback URL would fail
 	// the RPC-level remote/HTTPS URL classification that
 	// service.RegisterMcpServer enforces; that classification is

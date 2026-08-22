@@ -151,6 +151,13 @@ func (s *Server) SetMcpServerEnabled(ctx context.Context, req *turingv1.SetMcpSe
 	if err := s.repo.SetMCPServerEnabled(ctx, server.ID, req.GetEnabled()); err != nil {
 		return nil, status.Error(codes.Internal, "update MCP server failed")
 	}
+	// remoteContact records whether this call actually reached the
+	// server: true only when enabling a remote-url server, since that is
+	// the one case where the user's explicit action is a real network
+	// contact rather than a purely local state flip (disabling never
+	// contacts anything, and a local-container server is already
+	// reached over the sandboxed internal network rather than egress).
+	remoteContact := req.GetEnabled() && server.Tier == repository.MCPServerTierRemoteURL
 	if !req.GetEnabled() {
 		if err := s.repo.SetMCPServerStatus(ctx, server.ID, "unknown", ""); err != nil {
 			return nil, status.Error(codes.Internal, "update MCP server status failed")
@@ -167,6 +174,25 @@ func (s *Server) SetMcpServerEnabled(ctx context.Context, req *turingv1.SetMcpSe
 			}
 		}
 	}
+	// Notify and audit immediately once every repository mutation above
+	// has committed — before building the response descriptor — so an
+	// unexpected descriptor/schema failure below can never leave a real,
+	// already-persisted enable/disable unannounced or unaudited. This
+	// also means a discovery failure (handled above, not returned) still
+	// produces an audit record: the enable itself succeeded and
+	// committed even though the server came back down. The payload never
+	// carries a token, URL, or status/error text — only the name, tier,
+	// and whether this call made real remote contact.
+	s.notifyRegistryChanged()
+	action := "mcp.server.disabled"
+	if req.GetEnabled() {
+		action = "mcp.server.enabled"
+	}
+	s.auditMCPEvent(ctx, action, server.ID, map[string]any{
+		"name":          server.Name,
+		"tier":          string(server.Tier),
+		"remoteContact": remoteContact,
+	})
 	updated, err := s.repo.GetMCPServer(ctx, server.ID)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "read MCP server failed")
@@ -175,7 +201,6 @@ func (s *Server) SetMcpServerEnabled(ctx context.Context, req *turingv1.SetMcpSe
 	if err != nil {
 		return nil, err
 	}
-	s.notifyRegistryChanged()
 	return descriptor, nil
 }
 

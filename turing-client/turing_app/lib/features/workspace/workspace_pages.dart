@@ -1005,7 +1005,7 @@ Color _policyColor(ToolPolicy policy) => switch (policy) {
 String _tierLabel(McpServerTier tier) => switch (tier) {
   McpServerTier.bundled => 'Bundled',
   McpServerTier.localContainer => 'Local third-party',
-  McpServerTier.remoteUrl => 'Remote · per-run consent',
+  McpServerTier.remoteUrl => 'Remote · enable + per-run egress',
   McpServerTier.unspecified => 'Unknown tier',
 };
 

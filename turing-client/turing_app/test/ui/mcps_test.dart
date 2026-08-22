@@ -1134,6 +1134,20 @@ void main() {
       });
 
       testWidgets(
+        'a remote server tier badge fits at ${size.width}x${size.height}',
+        (tester) async {
+          final api = _McpApi()..servers = [_remoteServer()];
+          await _pumpMcps(tester, api, size: size);
+
+          expect(
+            find.text('Remote · enable + per-run egress'),
+            findsOneWidget,
+          );
+          expect(tester.takeException(), isNull);
+        },
+      );
+
+      testWidgets(
         'the reimport report dialog fits at ${size.width}x${size.height}',
         (tester) async {
           final api = _McpApi()
@@ -1257,6 +1271,23 @@ McpServer _localServer({
   liveness: McpServerLiveness.unknown,
   statusMessage: '',
   sandboxConfined: true,
+  tools: tools,
+);
+
+McpServer _remoteServer({
+  String serverId = 'mcp_remote_vendor',
+  String name = 'remote-vendor',
+  List<ToolDescriptor> tools = const [],
+}) => McpServer(
+  serverId: serverId,
+  name: name,
+  transport: 'http',
+  url: 'https://remote-vendor.example/mcp',
+  tier: McpServerTier.remoteUrl,
+  enabled: false,
+  liveness: McpServerLiveness.unknown,
+  statusMessage: '',
+  sandboxConfined: false,
   tools: tools,
 );
 
