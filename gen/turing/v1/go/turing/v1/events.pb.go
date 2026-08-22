@@ -145,9 +145,15 @@ type TuringEvent struct {
 	Type      TuringEventType        `protobuf:"varint,6,opt,name=type,proto3,enum=turing.v1.TuringEventType" json:"type,omitempty"`
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	Payload   *structpb.Struct       `protobuf:"bytes,8,opt,name=payload,proto3" json:"payload,omitempty"`
-	// The resulting run state for lifecycle events, so replayed history carries
-	// the same authoritative outcome the live stream did. Absent for events that
-	// are not run lifecycle transitions.
+	// The resulting run state, so replayed history carries the same
+	// authoritative outcome the live stream did. Set only for the repository's
+	// own closed carrier set — agent.run.queued/started/state_changed/
+	// completed/failed/cancelled and the approval.requested/approval.approved
+	// carriers (approval.approved never itself moves a run's lifecycle; it
+	// still carries the run state as it stands). Absent for every other event
+	// type, including every other approval event (approval.denied/expired/
+	// consumed), even when that row's own payload contains a well-formed value
+	// under a runState key.
 	RunState      *RunState `protobuf:"bytes,9,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

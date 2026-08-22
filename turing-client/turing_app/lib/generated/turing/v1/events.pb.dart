@@ -175,9 +175,15 @@ class TuringEvent extends $pb.GeneratedMessage {
   @$pb.TagNumber(8)
   $2.Struct ensurePayload() => $_ensure(7);
 
-  /// The resulting run state for lifecycle events, so replayed history carries
-  /// the same authoritative outcome the live stream did. Absent for events that
-  /// are not run lifecycle transitions.
+  /// The resulting run state, so replayed history carries the same
+  /// authoritative outcome the live stream did. Set only for the repository's
+  /// own closed carrier set — agent.run.queued/started/state_changed/
+  /// completed/failed/cancelled and the approval.requested/approval.approved
+  /// carriers (approval.approved never itself moves a run's lifecycle; it
+  /// still carries the run state as it stands). Absent for every other event
+  /// type, including every other approval event (approval.denied/expired/
+  /// consumed), even when that row's own payload contains a well-formed value
+  /// under a runState key.
   @$pb.TagNumber(9)
   $3.RunState get runState => $_getN(8);
   @$pb.TagNumber(9)
