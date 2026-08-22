@@ -238,13 +238,32 @@ var ErrMCPServerToolsNotAllowed = errors.New("direct MCP server registration doe
 
 // RegisterMCPServer explicitly (re)registers a server: it atomically clears
 // any matching import tombstone and inserts a new disabled row. Any existing
-// name is refused (bundled names return ErrMCPServerBundled; anything else
-// returns ErrMCPServerNameTaken), and a refusal never clears the tombstone —
-// the existing-name check runs, and fails, before the tombstone delete. A
-// Tools snapshot on input is refused with ErrMCPServerToolsNotAllowed before
-// any of that, so a caller cannot bypass the service layer's own tool
-// validation (name/schema shape, bundled-namespace and inter-server
-// collision checks) by handing tools straight to the repository.
+// name is refused (bundled names return ErrMCPServerBundled; a real,
+// already-configured row — non-empty url — returns ErrMCPServerNameTaken),
+// and a refusal never clears the tombstone — the existing-name check runs,
+// and fails, before the tombstone delete. A Tools snapshot on input is
+// refused with ErrMCPServerToolsNotAllowed before any of that, so a caller
+// cannot bypass the service layer's own tool validation (name/schema shape,
+// bundled-namespace and inter-server collision checks) by handing tools
+// straight to the repository.
+//
+// The one exception to "any existing name is refused" is a migration-0016
+// (or otherwise legacy) placeholder: a disabled, non-bundled row with
+// url=="". A mobile operator has no way to edit backend files the way file
+// reimport is edited, so without this exception that placeholder can only
+// ever be adopted by a file reimport, stranding them. Naming that exact
+// server and supplying a real endpoint through this explicit RPC is treated
+// as the operator's consent to adopt it: the row is updated in place (same
+// id), forced disabled regardless of what it carried, and its liveness
+// reset to unknown/empty — the placeholder's endpoint was never verified,
+// so any liveness reading it carried says nothing about the one this call
+// adopts, the same reasoning ReplaceMCPServerToken and ImportMCPServer's own
+// placeholder adoption already apply. Every tool the placeholder carried is
+// withdrawn (present=0, enabled=0) via the same replaceServerToolsTx helper
+// live discovery and ImportMCPServer both use, called here with a nil
+// snapshot (this RPC never accepts Tools) so nothing is reconfirmed —
+// preserving whatever policy an operator had already edited onto a carried
+// tool, since only its presence/enabled state is touched.
 func (r *Repository) RegisterMCPServer(ctx context.Context, input ImportedMCPServer) (MCPServerRecord, error) {
 	if input.Tools != nil {
 		return MCPServerRecord{}, ErrMCPServerToolsNotAllowed
@@ -255,13 +274,16 @@ func (r *Repository) RegisterMCPServer(ctx context.Context, input ImportedMCPSer
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var existingTier string
-	err = tx.QueryRowContext(ctx, `SELECT tier FROM mcp_servers WHERE name = ?`, input.Name).Scan(&existingTier)
+	var existingID, existingTier, existingURL string
+	err = tx.QueryRowContext(ctx, `SELECT id, tier, url FROM mcp_servers WHERE name = ?`, input.Name).
+		Scan(&existingID, &existingTier, &existingURL)
 	switch {
 	case err == nil && MCPServerTier(existingTier) == MCPServerTierBundled:
 		return MCPServerRecord{}, ErrMCPServerBundled
-	case err == nil:
+	case err == nil && existingURL != "":
 		return MCPServerRecord{}, ErrMCPServerNameTaken
+	case err == nil:
+		return r.adoptMCPServerPlaceholder(ctx, tx, existingID, input)
 	case !errors.Is(err, sql.ErrNoRows):
 		return MCPServerRecord{}, err
 	}
@@ -287,6 +309,46 @@ func (r *Repository) RegisterMCPServer(ctx context.Context, input ImportedMCPSer
 	}
 	record, err := mcpServerByName(ctx, tx, input.Name)
 	if err != nil {
+		return MCPServerRecord{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MCPServerRecord{}, err
+	}
+	return record, nil
+}
+
+// adoptMCPServerPlaceholder is RegisterMCPServer's placeholder-adoption
+// branch: it updates the existing url-empty row's url/sealed_token/tier in
+// place, forces it disabled (regardless of what it carried — an explicit
+// registration always starts disabled, the same as a brand-new row),
+// resets its liveness to unknown/empty (that reading predates the endpoint
+// this call adopts, so it says nothing about it), withdraws every tool the
+// placeholder carried without reconfirming any (RegisterMCPServer never
+// accepts a Tools snapshot, so there is nothing to reconfirm), and returns
+// the adopted record. tx is committed on success; the caller's deferred
+// rollback is a harmless no-op afterward.
+func (r *Repository) adoptMCPServerPlaceholder(ctx context.Context, tx *sql.Tx, existingID string, input ImportedMCPServer) (MCPServerRecord, error) {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE mcp_servers
+		SET url = ?, sealed_token = ?, tier = ?, enabled = 0
+		WHERE id = ?
+	`, input.URL, nullableBytes(input.SealedToken), string(input.Tier), existingID); err != nil {
+		return MCPServerRecord{}, err
+	}
+	statusResult, err := tx.ExecContext(ctx, `
+		UPDATE mcp_server_status SET status = 'unknown', error = '', checked_at = NULL WHERE mcp_server_id = ?
+	`, existingID)
+	if err != nil {
+		return MCPServerRecord{}, err
+	}
+	if err := expectOneRow(statusResult, "MCP server status not found"); err != nil {
+		return MCPServerRecord{}, err
+	}
+	record, err := mcpServerByID(ctx, tx, existingID)
+	if err != nil {
+		return MCPServerRecord{}, err
+	}
+	if err := replaceServerToolsTx(ctx, tx, record, nil); err != nil {
 		return MCPServerRecord{}, err
 	}
 	if err := tx.Commit(); err != nil {

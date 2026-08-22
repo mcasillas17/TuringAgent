@@ -434,6 +434,65 @@ func TestRegisterMcpServerClearsTombstoneAndRefusesBundledCollision(t *testing.T
 	}
 }
 
+// A mobile operator cannot edit backend files, so a migration-0016
+// placeholder (a disabled, non-bundled row with url="") left behind for a
+// pre-registry runtime's tools is otherwise reachable only through file
+// reimport. This exercises the real public gRPC RegisterMcpServer RPC
+// (the actual production wiring, not the service directly) adopting that
+// exact placeholder in place instead of returning AlreadyExists.
+func TestRegisterMcpServerThroughPublicRPCAdoptsLegacyPlaceholder(t *testing.T) {
+	app := newMCPWiringTestApp(t, t.TempDir())
+	client := publicMCPRegistryClient(t, app)
+	ctx := publicMCPRegistryContext()
+
+	placeholder, err := app.Repository.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
+		Name: "vendor", URL: "", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Repository.ReplaceMCPServerTools(context.Background(), placeholder.ID, []repository.MCPServerTool{
+		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	descriptor, err := client.RegisterMcpServer(ctx, &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp", Tier: turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL,
+	})
+	if err != nil {
+		t.Fatalf("RegisterMcpServer must adopt the placeholder rather than error: %v", err)
+	}
+	if descriptor.GetServerId() != placeholder.ID {
+		t.Fatalf("ServerId = %q, want the placeholder %q adopted in place", descriptor.GetServerId(), placeholder.ID)
+	}
+	if descriptor.GetUrl() != "https://vendor.example/mcp" {
+		t.Fatalf("Url = %q, want the registered endpoint populated", descriptor.GetUrl())
+	}
+	if descriptor.GetEnabled() {
+		t.Fatal("adopting a placeholder through the public RPC must still force the server disabled")
+	}
+	if descriptor.GetLiveness() != turingv1.McpServerLiveness_MCP_SERVER_LIVENESS_UNKNOWN {
+		t.Fatalf("liveness = %v, want unknown after adoption", descriptor.GetLiveness())
+	}
+
+	tools, err := app.Repository.ListMCPServerTools(context.Background(), placeholder.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 || tools[0].Present || tools[0].Enabled {
+		t.Fatalf("tools = %+v, want the carried tool withdrawn (present=0, enabled=0)", tools)
+	}
+
+	// A real, already-registered name (non-empty URL) must still be
+	// refused as AlreadyExists through this same real wiring.
+	if _, err := client.RegisterMcpServer(ctx, &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor-two.example/mcp", Tier: turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL,
+	}); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("RegisterMcpServer of a real existing row code = %v, want AlreadyExists", status.Code(err))
+	}
+}
+
 // This is the one test in this file to keep if every other one were
 // deleted: it exercises the real production wiring app.New assembles — the
 // actual public gRPC server, the actual mcpregistrysvc.Server, and the

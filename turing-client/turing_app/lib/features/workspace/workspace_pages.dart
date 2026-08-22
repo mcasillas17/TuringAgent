@@ -131,6 +131,12 @@ class _McpsPageState extends State<McpsPage> {
       );
       if (mounted) _reload();
     } catch (error) {
+      // A mutation can commit on the backend and still have its RPC
+      // response fail (e.g. a post-commit audit write erroring out), so
+      // the displayed state can no longer be trusted as-is: reload before
+      // showing the error, so the registry — and this server's Switch —
+      // reflect whatever actually happened, not the pre-mutation snapshot.
+      if (mounted) _reload();
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -350,6 +356,50 @@ class _ServerCard extends StatelessWidget {
                     ),
                   ],
                 ),
+                const SizedBox(height: 4),
+                // The canonical, already-registered endpoint — never the
+                // token, which this model never carries — so an operator
+                // can verify the exact destination they registered. A
+                // migration-0016 (or otherwise legacy) placeholder never
+                // had a real url, so an empty one is rendered as an honest
+                // warning rather than silently as blank space.
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      server.url.isEmpty ? Icons.link_off : Icons.link,
+                      size: 13,
+                      color: server.url.isEmpty
+                          ? AppColors.warning
+                          : palette.textMuted,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: server.url.isEmpty
+                          ? Text(
+                              'Endpoint not configured',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: AppColors.warning,
+                              ),
+                            )
+                          : Tooltip(
+                              message: server.url,
+                              child: SelectableText(
+                                server.url,
+                                maxLines: 1,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontFamily: 'monospace',
+                                  color: palette.textMuted,
+                                ),
+                              ),
+                            ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 6),
                 Wrap(
                   alignment: WrapAlignment.spaceBetween,
@@ -369,6 +419,26 @@ class _ServerCard extends StatelessWidget {
                       runSpacing: 4,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
+                        if (busy)
+                          // A remote enable/disable can involve a
+                          // tools/list round trip; without this, the
+                          // disabled Switch alone can look like the tap
+                          // was simply ignored.
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 2,
+                            ),
+                            child: Semantics(
+                              label: 'Updating ${server.name}',
+                              child: const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            ),
+                          ),
                         Switch(
                           value: server.enabled,
                           onChanged: busy ? null : onEnabledChanged,
@@ -754,7 +824,21 @@ class _ImportReportDialog extends StatelessWidget {
             children: [
               _ReportSection(title: 'Imported', entries: report.imported),
               const SizedBox(height: 12),
-              _ReportSection(title: 'Skipped', entries: report.skipped),
+              _ReportSection(
+                title: 'Skipped',
+                // A bare name here could be mistaken for "nothing changed,
+                // safe to ignore" — but this server was already registered
+                // under that exact name, and whatever mcp.json currently
+                // says about its url/token/policy was NOT applied: the
+                // previously registered settings were kept as-is. Naming
+                // that explicitly guards against an operator assuming an
+                // mcp.json edit took effect just because the name shows up
+                // here.
+                entries: report.skipped.map(
+                  (name) => '$name — already registered; existing settings '
+                      'were kept',
+                ),
+              ),
               const SizedBox(height: 12),
               _ReportSection(
                 title: 'Refused',

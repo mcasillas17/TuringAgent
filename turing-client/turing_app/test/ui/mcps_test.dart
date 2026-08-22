@@ -351,6 +351,33 @@ void main() {
       expect(api.reimportCalls, 1);
     });
 
+    testWidgets(
+      'explains a skipped entry as already registered with settings kept, '
+      'by its exact name',
+      (tester) async {
+        final api = _McpApi()
+          ..importReport = McpImportReport(
+            imported: const [],
+            skipped: const ['vendor'],
+            refused: const [],
+          );
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.text('Re-import mcp.json'));
+        await tester.pumpAndSettle();
+
+        // A bare name is not enough context to know settings were kept, not
+        // overwritten by whatever mcp.json now says — the reason must
+        // accompany the exact name.
+        expect(
+          find.text(
+            'vendor — already registered; existing settings were kept',
+          ),
+          findsOneWidget,
+        );
+      },
+    );
+
     testWidgets('shows None for every empty section', (tester) async {
       final api = _McpApi()
         ..importReport = McpImportReport(
@@ -523,7 +550,7 @@ void main() {
 
     testWidgets(
       'a failed enable/disable toggle re-enables the switch and surfaces '
-      'the error',
+      'the error, after reloading the registry',
       (tester) async {
         final api = _McpApi()
           ..servers.add(_localServer())
@@ -540,13 +567,81 @@ void main() {
         // stay disabled forever after a transient error.
         final toggle = tester.widget<Switch>(find.byType(Switch));
         expect(toggle.onChanged, isNotNull);
-        // A failed mutation must not trigger a reload.
-        expect(api.listCalls, listCallsBefore);
+        // The catch handler must reload the registry before showing the
+        // error: a mutation can commit on the backend and still return an
+        // error (e.g. a post-commit audit failure), so only a reload can
+        // tell whether the displayed state is still authoritative.
+        expect(api.listCalls, greaterThan(listCallsBefore));
 
         // The switch works again on the next attempt.
         await tester.tap(find.byType(Switch));
         await tester.pump();
         expect(api.enabledCalls, hasLength(2));
+      },
+    );
+
+    testWidgets(
+      'a failed enable/disable toggle that actually committed on the '
+      'backend still shows the committed value once reloaded',
+      (tester) async {
+        // Simulates a post-commit Internal error: the RPC's mutation lands
+        // (enabled flips to true) but the response itself still errors
+        // (e.g. an audit write failing after commit). Without reloading
+        // before showing the error, the UI would keep displaying the
+        // pre-mutation value forever.
+        final api = _McpApi()
+          ..servers.add(_localServer())
+          ..enabledError = StateError('mcp.server.enabled audit failed')
+          ..enabledCommitsBeforeThrowing = true;
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byType(Switch));
+        await tester.pumpAndSettle();
+
+        expect(api.enabledCalls, hasLength(1));
+        expect(
+          find.textContaining('mcp.server.enabled audit failed'),
+          findsOneWidget,
+        );
+        final toggle = tester.widget<Switch>(find.byType(Switch));
+        expect(
+          toggle.value,
+          isTrue,
+          reason:
+              'the reload must surface the backend\'s authoritative '
+              '(already-committed) state despite the RPC returning an error',
+        );
+      },
+    );
+
+    testWidgets(
+      'a busy enable/disable renders a small progress indicator and keeps '
+      'the popup disabled',
+      (tester) async {
+        final gate = Completer<void>();
+        final api = _McpApi()
+          ..servers.add(_localServer())
+          ..enabledGates['mcp_vendor'] = gate;
+        await _pumpMcps(tester, api);
+
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+
+        await tester.tap(find.byType(Switch));
+        await tester.pump();
+
+        // A remote enable can involve a tools/list round trip; a small
+        // progress indicator proves the tap wasn't ignored while it's in
+        // flight.
+        expect(find.byType(CircularProgressIndicator), findsOneWidget);
+        final popup = tester.widget<PopupMenuButton<String>>(
+          find.byType(PopupMenuButton<String>),
+        );
+        expect(popup.enabled, isFalse);
+
+        gate.complete();
+        await tester.pumpAndSettle();
+
+        expect(find.byType(CircularProgressIndicator), findsNothing);
       },
     );
 
@@ -708,6 +803,8 @@ void main() {
         await _pumpMcps(tester, api);
         final listCallsBefore = api.listCalls;
 
+        await tester.ensureVisible(find.byType(DropdownButton<ToolPolicy>));
+        await tester.pumpAndSettle();
         await tester.tap(find.byType(DropdownButton<ToolPolicy>));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Disabled').last);
@@ -760,6 +857,10 @@ void main() {
           ..policyGate = gate;
         await _pumpMcps(tester, api);
 
+        await tester.ensureVisible(
+          find.byType(DropdownButton<ToolPolicy>).first,
+        );
+        await tester.pumpAndSettle();
         await tester.tap(find.byType(DropdownButton<ToolPolicy>).first);
         await tester.pumpAndSettle();
         await tester.tap(find.text('Disabled').last);
@@ -797,6 +898,8 @@ void main() {
         await _pumpMcps(tester, api);
         final listCallsBefore = api.listCalls;
 
+        await tester.ensureVisible(find.byType(DropdownButton<ToolPolicy>));
+        await tester.pumpAndSettle();
         await tester.tap(find.byType(DropdownButton<ToolPolicy>));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Disabled').last);
@@ -866,6 +969,39 @@ void main() {
       expect(api.rotateCalls, hasLength(2));
       expect(api.rotateCalls.last['token'], '');
     });
+
+    testWidgets(
+      'rotating a token reloads with liveness reset to Not checked, '
+      'matching the backend resetting it to unknown',
+      (tester) async {
+        // The backend resets liveness to unknown/empty in the same
+        // transaction as a token rotation (a prior reading was made using
+        // the credential being replaced, so it says nothing about the new
+        // one). No token is ever stored client-side; this only asserts the
+        // liveness the fake's updated state reports once reloaded.
+        final api = _McpApi()
+          ..servers.add(
+            _localServer(enabled: true, liveness: McpServerLiveness.up),
+          );
+        await _pumpMcps(tester, api);
+        expect(find.text('Up'), findsOneWidget);
+
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Rotate token'));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('mcpsRotateToken')),
+          'new-rotated-token',
+        );
+        await tester.tap(find.byKey(const Key('mcpsRotateSubmit')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Up'), findsNothing);
+        expect(find.text('Not checked'), findsOneWidget);
+      },
+    );
 
     testWidgets('the token field is obscured and never prefilled', (
       tester,
@@ -1101,6 +1237,39 @@ void main() {
     );
   });
 
+  group('showing the server endpoint', () {
+    testWidgets('renders the canonical registered URL on the card', (
+      tester,
+    ) async {
+      final api = _McpApi()
+        ..servers.add(_localServer(url: 'https://vendor.example/mcp'));
+      await _pumpMcps(tester, api);
+
+      expect(find.text('https://vendor.example/mcp'), findsOneWidget);
+    });
+
+    testWidgets(
+      'renders an honest "Endpoint not configured" warning for a legacy '
+      'placeholder with no url',
+      (tester) async {
+        final api = _McpApi()..servers.add(_localServer(url: ''));
+        await _pumpMcps(tester, api);
+
+        expect(find.text('Endpoint not configured'), findsOneWidget);
+      },
+    );
+
+    testWidgets('the endpoint text is selectable so it can be copied/verified', (
+      tester,
+    ) async {
+      final api = _McpApi()
+        ..servers.add(_localServer(url: 'https://vendor.example/mcp'));
+      await _pumpMcps(tester, api);
+
+      expect(find.byType(SelectableText), findsOneWidget);
+    });
+  });
+
   group('the empty state', () {
     testWidgets(
       'says a server can be added here, mcp.json is bulk, no restart',
@@ -1144,6 +1313,58 @@ void main() {
             findsOneWidget,
           );
           expect(tester.takeException(), isNull);
+        },
+      );
+
+      testWidgets(
+        'a long registered endpoint fits at ${size.width}x${size.height} '
+        'without overflowing',
+        (tester) async {
+          final api = _McpApi()
+            ..servers.add(
+              _localServer(
+                url:
+                    'https://a-fairly-long-vendor-hostname.example.com/mcp/v1/endpoint',
+              ),
+            );
+          await _pumpMcps(tester, api, size: size);
+
+          expect(tester.takeException(), isNull);
+        },
+      );
+
+      testWidgets(
+        'an empty legacy placeholder endpoint warning fits at '
+        '${size.width}x${size.height}',
+        (tester) async {
+          final api = _McpApi()..servers.add(_localServer(url: ''));
+          await _pumpMcps(tester, api, size: size);
+
+          expect(find.text('Endpoint not configured'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+        },
+      );
+
+      testWidgets(
+        'a busy enable/disable progress indicator fits at '
+        '${size.width}x${size.height}',
+        (tester) async {
+          final gate = Completer<void>();
+          final api = _McpApi()
+            ..servers.add(_localServer())
+            ..enabledGates['mcp_vendor'] = gate;
+          await _pumpMcps(tester, api, size: size);
+
+          await tester.ensureVisible(find.byType(Switch));
+          await tester.pumpAndSettle();
+          await tester.tap(find.byType(Switch));
+          await tester.pump();
+
+          expect(find.byType(CircularProgressIndicator), findsOneWidget);
+          expect(tester.takeException(), isNull);
+
+          gate.complete();
+          await tester.pumpAndSettle();
         },
       );
 
@@ -1260,15 +1481,18 @@ bool _isAnnouncedAsLiveRegion(WidgetTester tester, Finder finder) {
 McpServer _localServer({
   String serverId = 'mcp_vendor',
   String name = 'vendor',
+  String url = 'https://vendor.example/mcp',
+  bool enabled = false,
+  McpServerLiveness liveness = McpServerLiveness.unknown,
   List<ToolDescriptor> tools = const [],
 }) => McpServer(
   serverId: serverId,
   name: name,
   transport: 'http',
-  url: 'https://vendor.example/mcp',
+  url: url,
   tier: McpServerTier.localContainer,
-  enabled: false,
-  liveness: McpServerLiveness.unknown,
+  enabled: enabled,
+  liveness: liveness,
   statusMessage: '',
   sandboxConfined: true,
   tools: tools,
@@ -1347,6 +1571,10 @@ class _McpApi
 
   final List<Map<String, Object?>> enabledCalls = [];
   Object? enabledError;
+  // When true, the mutation is applied to `servers` before `enabledError` is
+  // thrown — simulating a post-commit Internal error (the backend mutation
+  // committed, but the RPC response itself still failed).
+  bool enabledCommitsBeforeThrowing = false;
   // Keyed by serverId so tests can gate one server's mutation without
   // blocking another's — mirrors the production dedupe, which must not be
   // global across servers.
@@ -1388,7 +1616,13 @@ class _McpApi
     final gate = enabledGates[serverId];
     if (gate != null) await gate.future;
     final error = enabledError;
-    if (error != null) throw error;
+    if (error != null) {
+      if (enabledCommitsBeforeThrowing) {
+        final index = servers.indexWhere((s) => s.serverId == serverId);
+        servers[index] = _withEnabled(servers[index], enabled);
+      }
+      throw error;
+    }
     final index = servers.indexWhere((s) => s.serverId == serverId);
     final updated = _withEnabled(servers[index], enabled);
     servers[index] = updated;
@@ -1468,7 +1702,12 @@ class _McpApi
     final error = rotateError;
     if (error != null) throw error;
     final index = servers.indexWhere((s) => s.serverId == serverId);
-    return servers[index];
+    // Mirrors the backend: rotating a token resets liveness to
+    // unknown/empty in the same transaction, since a prior reading was made
+    // using the credential being replaced.
+    final updated = _withLiveness(servers[index], McpServerLiveness.unknown);
+    servers[index] = updated;
+    return updated;
   }
 
   @override
@@ -1517,6 +1756,20 @@ class _McpApi
     sandboxConfined: server.sandboxConfined,
     tools: server.tools,
   );
+
+  McpServer _withLiveness(McpServer server, McpServerLiveness liveness) =>
+      McpServer(
+        serverId: server.serverId,
+        name: server.name,
+        transport: server.transport,
+        url: server.url,
+        tier: server.tier,
+        enabled: server.enabled,
+        liveness: liveness,
+        statusMessage: '',
+        sandboxConfined: server.sandboxConfined,
+        tools: server.tools,
+      );
 
   McpServer _withTools(McpServer server, List<ToolDescriptor> tools) =>
       McpServer(

@@ -225,6 +225,74 @@ func TestRegisterMcpServerExistingNameIsAlreadyExists(t *testing.T) {
 	}
 }
 
+// A mobile operator cannot edit backend files, so file reimport's own
+// placeholder-adoption escape hatch (legacy_placeholder_import_test.go) is
+// unreachable to them. Explicitly registering a migration-0016 placeholder
+// name through this public RPC, with a valid endpoint, must adopt it in
+// place instead of returning AlreadyExists and stranding them.
+func TestRegisterMcpServerAdoptsLegacyPlaceholderInsteadOfAlreadyExists(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx := context.Background()
+
+	placeholder, err := repo.RegisterMCPServer(ctx, repository.ImportedMCPServer{
+		Name: "vendor", URL: "", Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceMCPServerTools(ctx, placeholder.ID, []repository.MCPServerTool{
+		{Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	descriptor, err := service.RegisterMcpServer(ctx, &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp", Tier: turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL,
+	})
+	if err != nil {
+		t.Fatalf("RegisterMcpServer must adopt the placeholder rather than error: %v", err)
+	}
+	if descriptor.GetServerId() != placeholder.ID {
+		t.Fatalf("ServerId = %q, want the placeholder %q adopted in place", descriptor.GetServerId(), placeholder.ID)
+	}
+	if descriptor.GetUrl() != "https://vendor.example/mcp" {
+		t.Fatalf("Url = %q, want the registered endpoint populated", descriptor.GetUrl())
+	}
+	if descriptor.GetEnabled() {
+		t.Fatal("adopting a placeholder must force the server disabled")
+	}
+	if descriptor.GetLiveness() != turingv1.McpServerLiveness_MCP_SERVER_LIVENESS_UNKNOWN {
+		t.Fatalf("liveness = %v, want unknown after adoption", descriptor.GetLiveness())
+	}
+
+	tools, err := repo.ListMCPServerTools(ctx, placeholder.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 || tools[0].Present || tools[0].Enabled {
+		t.Fatalf("tools = %+v, want the carried tool withdrawn (present=0, enabled=0)", tools)
+	}
+}
+
+// A real, already-registered server (non-empty URL) must still be refused
+// as AlreadyExists through the public RPC — adoption applies only to a
+// url-empty placeholder.
+func TestRegisterMcpServerRealExistingRowStillAlreadyExistsThroughRPC(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	if _, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
+		Name: "vendor", URL: "https://vendor.example/mcp", Tier: repository.MCPServerTierRemoteURL,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor-two.example/mcp", Tier: turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL,
+	})
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("code = %v, want AlreadyExists for a real existing row", status.Code(err))
+	}
+}
+
 func TestRegisterMcpServerResponseNeverIncludesTokenOrCiphertext(t *testing.T) {
 	service, _ := newRegistryTestService(t)
 	const token = "vendor-secret-should-never-be-returned"
