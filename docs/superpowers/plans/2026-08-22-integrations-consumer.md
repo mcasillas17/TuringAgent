@@ -127,7 +127,12 @@ feature exists at all:
   new tool could never bootstrap into registration) — and since
   `UpdateToolPolicyByName` makes skills policies editable for the first
   time, the `skills` pass-through gets the same treatment in the same
-  commit. `IntegrationEndpointsForTools` likewise filters on
+  commit. The predicate is **policy-only** — explicitly *not* `present` or
+  `enabled` — because `UpsertTools` opens every upsert by zeroing both for
+  pseudo-server rows and restores them only for tools in the reported
+  union, which this very check gates: include `present = 1` in the
+  predicate and disabling becomes a one-way door that only a restart
+  reopens. `IntegrationEndpointsForTools` likewise filters on
   `tools.enabled`, as `RemoteMCPServersForTools` already does;
 - the 0016 triggers — `0017` drops and recreates both (SQLite has no `ALTER
   TRIGGER`) widening the carve-out to `('skills','integrations')`;
@@ -158,9 +163,13 @@ the model learns its connections.** Not a static lister like
 connections and can never carry connection identity. The runtime calls a new
 `ListIntegrationTools` RPC at discovery (the same pattern as
 `mcp.NewRegistryClients`), which returns tool definitions only while at
-least one live connection for the provider exists — and whose tool
-*descriptions* enumerate the current live connections as `(connection_id,
-display name)` pairs. That is the answer to "how does the model obtain a
+least one live connection for the provider exists, **filtered on policy
+and enabled state exactly as its precedent filters**
+(`RegistryClient.ListTools` skips `!enabled` and disabled-policy
+descriptors — that is how a disabled tool leaves the model's registry
+rather than lingering as an offer whose every call dies `unknown_tool`) —
+and whose tool *descriptions* enumerate the current live connections as
+`(connection_id, display name)` pairs. That is the answer to "how does the model obtain a
 valid `connection_id`": it reads it from the tool description, which is
 refreshed — along with advertisement itself — by firing the existing
 registry-changed notification (`NotifyMCPRegistryChanged` → worker
@@ -190,8 +199,14 @@ properties the RPC must carry, each a trap if dropped:
   `ArgsHash` connection binding, and — because a `safe` decision is not
   side-effecting to the runner — leave a failed POST retryable, exactly the
   double-comment hazard the side-effect machinery exists to prevent. The
-  per-tool `read_only` table in `service/tools` is the source of truth:
-  `!read_only ⇒ refuse safe`, and the refusal is tested;
+  per-tool `read_only` table in `service/tools` is the source of truth,
+  and the rule is **scoped to `server_name == "integrations"`**: an
+  integration tool not marked `read_only` refuses `safe`; tools of other
+  servers are untouched by this rule — stated because the unscoped reading
+  ("anything not in the table refuses safe") would refuse `safe` for
+  `skills_list` and kill the very editability this RPC exists to provide.
+  Both directions are tested: the integration write's refusal, and a
+  skills tool successfully set `safe`;
 - **the same `notifyRegistryChanged()` call** on success — dispatch reads
   the `tools` table so tests of dispatch alone cannot catch its absence,
   but without it a tool the user just disabled stays in the worker's
@@ -218,12 +233,13 @@ mutation.
 drives approval-waiting *and* every downstream side-effect consequence.
 Those meanings are decoupled: `ToolPolicyDecision` gains a `read_only`
 field, set by the orchestrator from a static per-tool table that lives in
-`service/tools` beside `BundledServerForTool` — deliberately not inside
+`service/tools` beside `BundledServerForTool` — not inside
 `service/integrations`, because its two readers, the by-name policy RPC in
 `mcpregistry` (the un-`safe`-able guard) and the runtime service's beacon
-path (this decision bit), both already import `service/tools` and neither
-imports `service/integrations`; placing it there hands the implementer an
-import cycle. When `read_only` is true the runner changes the
+path (this decision bit), both already import `service/tools`, which is a
+stdlib-only leaf; importing `service/integrations` from both would be
+possible (no cycle exists) but adds two cross-service edges for one static
+map. When `read_only` is true the runner changes the
 side-effect handling at its three sites while approval-waiting is
 unchanged — with the three sites claimed honestly, because they do not all
 deliver the same thing: a failed **call** is a recoverable tool error, not
@@ -281,9 +297,15 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   `Internal` that would then appear on **every send on every provider**.
   (`resolveEgressContext` cannot enforce the 32 KiB *total* — it has no
   nonce, digest, or timestamps yet — which is exactly why the sub-budgets
-  must sum under it with slack.) These caps are reachable, unlike
-  `maxEgressTools`: sixteen connections is plausible once the deferred
-  providers land.
+  must sum under it with slack.) The per-entry bound is measured by **one
+  shared helper** at both check sites (`resolveEgressContext` and
+  `validChallengePayload`) — a slightly more permissive early check
+  recreates the exact opaque signing failure the sub-budgets exist to
+  prevent. And `clonePendingEgressDecision`, which sits on the fingerprint
+  path, clones and sorts `RemoteMCPServers` explicitly today — the
+  integration slice gets the same clone-and-sort or it rides through
+  aliased and unsorted. These caps are reachable, unlike `maxEgressTools`:
+  sixteen connections is plausible once the deferred providers land.
 - Those entries ride inside the HMAC-signed `egressChallengePayload`, are
   covered by the structural validation and by
   `payloadMatchesEgressContext`, and are frozen at enqueue — so the list the
@@ -555,19 +577,26 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    last connection un-advertises the tools, fires the registry-changed
    notification, and a run frozen with the tool in `selected_tools` fails
    at the run level via the snapshot-unavailable path.
-8. **Policy round-trip, with both guards and the notification.** Tools
-   registered through `UpsertTools` land `approval_required`;
-   `UpdateToolPolicyByName` set `safe` ⇒ a read dispatches with no
-   approval; set `disabled` ⇒ refused — and the same RPC **refuses** to set
-   a bundled mutating tool (`files.create`) to `safe`, **refuses** to set
-   an integration write (`github.create_comment`) to `safe`, does not
-   disable the pseudo-server tool it edits, and fires the registry-changed
-   notification — a disabled tool leaves `EgressToolNames` and the next
-   disclosure without a restart, **and stays out after the worker's
-   capabilities re-report**: the same notification triggers re-discovery
-   whose report flows back through `filterRegisteredWorkerTools`, which is
-   exactly where a blind pass-through re-admits the tool seconds after the
-   prune.
+8. **Policy round-trip, with both guards and the notification — a real
+   round trip, for both pseudo-servers.** Tools registered through
+   `UpsertTools` land `approval_required`; `UpdateToolPolicyByName` set
+   `safe` ⇒ a read dispatches with no approval; set `disabled` ⇒ refused
+   **and absent from the runtime's tool registry**, not merely from
+   `EgressToolNames`; then **re-enabled ⇒ works again** — the leg that
+   catches a `present = 1` predicate making disable a one-way door. The
+   same RPC **refuses** to set a bundled mutating tool (`files.create`) to
+   `safe`, **refuses** to set an integration write (`github.create_comment`)
+   to `safe`, **allows** a skills tool to be set `safe` (the unscoped
+   guard's failure mode), does not disable the pseudo-server tool it
+   edits, and fires the registry-changed notification — a disabled tool
+   leaves `EgressToolNames` and the next disclosure without a restart,
+   **and stays out after the worker's capabilities re-report**, asserted
+   for an integration tool **and for a skills tool** (`skills_list`),
+   since the skills pass-through's self-revert is newly reachable the
+   moment skills policies become editable: the notification triggers
+   re-discovery whose report flows back through
+   `filterRegisteredWorkerTools`, which is exactly where a blind
+   pass-through re-admits the tool seconds after the prune.
 9. **The happy path exists, connection id included, disclosure legible.**
    A local-Ollama run offered GitHub tools gets a non-empty egress
    disclosure whose entries carry display names; the advertised tool
