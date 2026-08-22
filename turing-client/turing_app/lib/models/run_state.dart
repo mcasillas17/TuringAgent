@@ -19,41 +19,6 @@ enum RunOutcomeReason {
   legacyUnknown,
 }
 
-/// Whether a [RunOutcomeReason] is one this client cannot name — either a
-/// genuinely unrecognized value from a future backend (`unknown`) or a
-/// value reserved for pre-outcome-reason legacy wire data (`legacyUnknown`).
-/// Both must fall back to the same generic "outcome unavailable" copy
-/// instead of being reinterpreted as any specific, nameable outcome.
-///
-/// This is intentionally implemented with an exhaustive switch (no
-/// `default`) rather than an `==` chain: adding a new [RunOutcomeReason]
-/// member forces a deliberate `true`/`false` decision here, so future
-/// additions cannot silently drift into or out of the "unavailable" bucket.
-extension RunOutcomeReasonCopyAvailability on RunOutcomeReason {
-  bool get hasUnavailableCopy {
-    switch (this) {
-      case RunOutcomeReason.unknown:
-      case RunOutcomeReason.legacyUnknown:
-        return true;
-      case RunOutcomeReason.none:
-      case RunOutcomeReason.completedNoContent:
-      case RunOutcomeReason.userCancelled:
-      case RunOutcomeReason.abandoned:
-      case RunOutcomeReason.expired:
-      case RunOutcomeReason.contextLimit:
-      case RunOutcomeReason.providerFailure:
-      case RunOutcomeReason.toolFailure:
-      case RunOutcomeReason.policyDenied:
-      case RunOutcomeReason.retriesExhausted:
-      case RunOutcomeReason.recoveryInterrupted:
-      case RunOutcomeReason.sideEffectUncertain:
-      case RunOutcomeReason.approvalDeliveryFailed:
-      case RunOutcomeReason.internalFailure:
-        return false;
-    }
-  }
-}
-
 enum RunStepNoticeCategory { dispatchRetry, recoveryRetry, recoveryExhausted }
 
 /// Mirrors the backend's public retry-notice counter bound.

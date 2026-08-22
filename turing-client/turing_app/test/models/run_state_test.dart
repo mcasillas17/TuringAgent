@@ -611,6 +611,28 @@ void main() {
     }
   });
 
+  // Exact-set assertion, not a spot check: this must fail if any other
+  // RunOutcomeReason member starts (or stops) using the generic
+  // unavailable copy. A mutation flipping, say, internalFailure's branch
+  // to `true` in usesOutcomeUnavailableCopy changes the actual set to
+  // {unknown, legacyUnknown, internalFailure} and this test catches it,
+  // where a test that only checked unknown/legacyUnknown individually
+  // would not.
+  test(
+    'exactly unknown and legacyUnknown use the generic outcome-unavailable '
+    'copy',
+    () {
+      final reasonsUsingUnavailableCopy = RunOutcomeReason.values
+          .where((reason) => reason.usesOutcomeUnavailableCopy)
+          .toSet();
+
+      expect(reasonsUsingUnavailableCopy, {
+        RunOutcomeReason.unknown,
+        RunOutcomeReason.legacyUnknown,
+      });
+    },
+  );
+
   test('absent legacy state has neutral no-response copy', () async {
     final l10n = await AppLocalizations.delegate.load(const Locale('en'));
 

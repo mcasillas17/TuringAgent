@@ -9,6 +9,64 @@ class LocalizedRunCopy {
   final String detail;
 }
 
+/// Whether a [RunOutcomeReason] must render as the generic "outcome
+/// unavailable" copy instead of a specific, nameable explanation.
+///
+/// This is presentation policy, not a model-level fact, so it lives beside
+/// the localized copy it drives rather than on the model itself:
+///
+/// - [RunOutcomeReason.unknown] is a *live* forward-compatibility path: a
+///   future backend can introduce outcome reason values this client's
+///   generated proto does not yet know about, and those decode to
+///   `unknown` on the wire today. This client must still render something
+///   truthful for them right now, without waiting for a client update.
+/// - [RunOutcomeReason.legacyUnknown] is *defensive*, not currently
+///   reachable in practice: the backend's normative lifecycle/outcome
+///   matrix only legally pairs `legacyUnknown` with the `unknown`
+///   lifecycle, never with `completed`, `failed`, or `cancelled`. This
+///   client still guards every lifecycle against it so a future relaxation
+///   of that constraint, or an upstream bug, cannot silently fabricate a
+///   specific-sounding outcome.
+///
+/// This is intentionally implemented with an exhaustive switch (no
+/// `default`) rather than an `==` chain: adding a new [RunOutcomeReason]
+/// member forces a deliberate `true`/`false` decision here, so future
+/// additions cannot silently drift into or out of the "unavailable" bucket.
+extension RunOutcomeReasonCopyAvailability on RunOutcomeReason {
+  bool get usesOutcomeUnavailableCopy {
+    switch (this) {
+      case RunOutcomeReason.unknown:
+      case RunOutcomeReason.legacyUnknown:
+        return true;
+      case RunOutcomeReason.none:
+      case RunOutcomeReason.completedNoContent:
+      case RunOutcomeReason.userCancelled:
+      case RunOutcomeReason.abandoned:
+      case RunOutcomeReason.expired:
+      case RunOutcomeReason.contextLimit:
+      case RunOutcomeReason.providerFailure:
+      case RunOutcomeReason.toolFailure:
+      case RunOutcomeReason.policyDenied:
+      case RunOutcomeReason.retriesExhausted:
+      case RunOutcomeReason.recoveryInterrupted:
+      case RunOutcomeReason.sideEffectUncertain:
+      case RunOutcomeReason.approvalDeliveryFailed:
+      case RunOutcomeReason.internalFailure:
+        return false;
+    }
+  }
+}
+
+/// The single construction site for the generic "outcome unavailable"
+/// copy, shared by every caller that needs it so the localized strings are
+/// built in exactly one place instead of duplicated at each call site.
+LocalizedRunCopy _outcomeUnavailableCopy(AppLocalizations l10n) {
+  return LocalizedRunCopy(
+    title: l10n.runOutcomeUnavailableTitle,
+    detail: l10n.runOutcomeUnavailableDetail,
+  );
+}
+
 LocalizedRunCopy localizedNoResponseCopy(AppLocalizations l10n) {
   return LocalizedRunCopy(
     title: l10n.runNoResponseTitle,
@@ -38,11 +96,11 @@ LocalizedRunCopy localizedRunStateCopy(AppLocalizations l10n, RunState state) {
       // specific completedNoContent outcome just because there is no
       // displayable content — that would fabricate a truthful-sounding
       // explanation this client does not actually have. Consult
-      // outcomeReason.hasUnavailableCopy for that case before inferring
-      // completedNoContent.
+      // outcomeReason.usesOutcomeUnavailableCopy for that case before
+      // inferring completedNoContent.
       if (!state.hasDisplayableContent &&
-          state.outcomeReason.hasUnavailableCopy) {
-        return localizedRunOutcomeCopy(l10n, state.outcomeReason);
+          state.outcomeReason.usesOutcomeUnavailableCopy) {
+        return _outcomeUnavailableCopy(l10n);
       }
       if (!state.hasDisplayableContent ||
           state.outcomeReason == RunOutcomeReason.completedNoContent) {
@@ -118,14 +176,11 @@ LocalizedRunCopy localizedRunOutcomeCopy(
   RunOutcomeReason outcome,
 ) {
   // Route every outcome this client cannot name to the same generic
-  // "unavailable" copy up front, keyed off the shared hasUnavailableCopy
-  // predicate so this grouping and the completed-outcome guard in
-  // localizedRunStateCopy can never drift apart.
-  if (outcome.hasUnavailableCopy) {
-    return LocalizedRunCopy(
-      title: l10n.runOutcomeUnavailableTitle,
-      detail: l10n.runOutcomeUnavailableDetail,
-    );
+  // "unavailable" copy up front, keyed off the shared
+  // usesOutcomeUnavailableCopy predicate so this grouping and the
+  // completed-outcome guard in localizedRunStateCopy can never drift apart.
+  if (outcome.usesOutcomeUnavailableCopy) {
+    return _outcomeUnavailableCopy(l10n);
   }
   switch (outcome) {
     case RunOutcomeReason.none:
@@ -200,15 +255,13 @@ LocalizedRunCopy localizedRunOutcomeCopy(
       );
     case RunOutcomeReason.unknown:
     case RunOutcomeReason.legacyUnknown:
-      // Unreachable: hasUnavailableCopy routes these above. Kept as an
-      // explicit case (not a `default`) so the switch stays exhaustive —
-      // a future RunOutcomeReason member still forces a deliberate case
-      // here, and in RunOutcomeReasonCopyAvailability.hasUnavailableCopy,
+      // Unreachable: usesOutcomeUnavailableCopy routes these above. Kept
+      // as an explicit case (not a `default`) so the switch stays
+      // exhaustive — a future RunOutcomeReason member still forces a
+      // deliberate case here, and in
+      // RunOutcomeReasonCopyAvailability.usesOutcomeUnavailableCopy,
       // instead of silently falling through.
-      return LocalizedRunCopy(
-        title: l10n.runOutcomeUnavailableTitle,
-        detail: l10n.runOutcomeUnavailableDetail,
-      );
+      return _outcomeUnavailableCopy(l10n);
   }
 }
 

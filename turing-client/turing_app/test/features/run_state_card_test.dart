@@ -104,6 +104,14 @@ void main() {
     },
   );
 
+  // This is the sole widget-layer check for the outcome-unavailable
+  // routing: it proves RunStateCard actually wires the unit-tested
+  // localization logic through to rendered text for the live `unknown`
+  // path. `legacyUnknown` shares the exact same routing code (see
+  // usesOutcomeUnavailableCopy) and is covered at the localization-unit
+  // layer instead, since it is a defensive branch the backend does not
+  // currently emit for a completed run — duplicating it here would add a
+  // widget test without adding coverage.
   testWidgets(
     'completed unknown outcome without content shows generic '
     'outcome-unavailable copy, not the completed-no-content copy',
@@ -114,32 +122,6 @@ void main() {
             state: state(
               lifecycle: RunLifecycle.completed,
               outcomeReason: RunOutcomeReason.unknown,
-              hasDisplayableContent: false,
-            ),
-          ),
-        ),
-      );
-
-      expect(find.text('Outcome unavailable'), findsOneWidget);
-      expect(
-        find.text('This app cannot identify why the run ended.'),
-        findsOneWidget,
-      );
-      expect(find.text('Completed'), findsNothing);
-      expect(find.text('No assistant response was recorded.'), findsNothing);
-    },
-  );
-
-  testWidgets(
-    'completed legacyUnknown outcome without content shows generic '
-    'outcome-unavailable copy, not the completed-no-content copy',
-    (tester) async {
-      await tester.pumpWidget(
-        host(
-          RunStateCard(
-            state: state(
-              lifecycle: RunLifecycle.completed,
-              outcomeReason: RunOutcomeReason.legacyUnknown,
               hasDisplayableContent: false,
             ),
           ),
