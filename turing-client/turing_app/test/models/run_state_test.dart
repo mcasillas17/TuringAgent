@@ -235,6 +235,83 @@ void main() {
     },
   );
 
+  test('accepts a run state with no finished_at as an unfinished run', () {
+    final state = protoState()..clearFinishedAt();
+
+    final mapped = GrpcMappers.runStateToModel(state);
+
+    expect(mapped, isNotNull);
+    expect(mapped?.finishedAt, isNull);
+  });
+
+  test(
+    'rejects a run state whose finished_at nanos escape the valid range',
+    () {
+      final state = protoState();
+      state.finishedAt.nanos = 1000000000;
+
+      expect(GrpcMappers.runStateToModel(state), isNull);
+    },
+  );
+
+  test('rejects a run state whose finished_at nanos are negative', () {
+    final state = protoState();
+    state.finishedAt.nanos = -1;
+
+    expect(GrpcMappers.runStateToModel(state), isNull);
+  });
+
+  test(
+    'rejects a run state whose finished_at seconds exceed 9999-12-31T23:59:59Z',
+    () {
+      final state = protoState();
+      // One second past the documented maximum (253402300799).
+      state.finishedAt.seconds = Int64(253402300800);
+
+      expect(GrpcMappers.runStateToModel(state), isNull);
+    },
+  );
+
+  test(
+    'rejects a run state whose finished_at seconds precede 0001-01-01T00:00:00Z',
+    () {
+      final state = protoState();
+      // One second before the documented minimum (-62135596800).
+      state.finishedAt.seconds = Int64(-62135596801);
+
+      expect(GrpcMappers.runStateToModel(state), isNull);
+    },
+  );
+
+  // Seconds this large sit far outside the documented Timestamp range but are
+  // still small enough that seconds * 1_000_000 (microsecond conversion)
+  // does not itself wrap the signed 64-bit product; DateTime's own supported
+  // range (roughly +/-273,790 years) is narrower still, so an unvalidated
+  // conversion throws a RangeError instead of merely returning a wrong date.
+  // The mapper must reject this before ever calling toDateTime(), not let the
+  // conversion throw out of runStateToModel.
+  test('rejects a run state whose finished_at seconds are so large that '
+      'conversion would throw, without throwing itself', () {
+    final state = protoState();
+    state.finishedAt.seconds = Int64(9000000000000);
+
+    expect(() => GrpcMappers.runStateToModel(state), returnsNormally);
+    expect(GrpcMappers.runStateToModel(state), isNull);
+  });
+
+  test(
+    'accepts a run state whose finished_at seconds sit exactly at the documented bounds',
+    () {
+      final min = protoState();
+      min.finishedAt.seconds = Int64(-62135596800);
+      final max = protoState();
+      max.finishedAt.seconds = Int64(253402300799);
+
+      expect(GrpcMappers.runStateToModel(min), isNotNull);
+      expect(GrpcMappers.runStateToModel(max), isNotNull);
+    },
+  );
+
   test('accepts the maximum signed 64-bit state version', () {
     final state = GrpcMappers.runStateToModel(
       protoState(stateVersion: Int64.MAX_VALUE),

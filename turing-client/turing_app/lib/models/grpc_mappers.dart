@@ -446,6 +446,20 @@ class GrpcMappers {
     if (stateUpdatedAt == null) {
       return null;
     }
+    // finished_at is optional (a still-running run has none), so absence
+    // stays null. But a *present* value that fails the same range check as
+    // state_updated_at is corrupt data, not "not yet finished" — silently
+    // dropping just this field would let a terminal run render as if it
+    // were still in flight. Reject the whole snapshot instead, matching the
+    // fail-closed handling already applied to run id, state version, and
+    // state_updated_at above.
+    DateTime? finishedAt;
+    if (runState.hasFinishedAt()) {
+      if (!_isValidTimestamp(runState.finishedAt)) {
+        return null;
+      }
+      finishedAt = _timestampToDateTime(runState.finishedAt);
+    }
     return model_run_state.RunState(
       runId: runState.runId,
       userMessageId: runState.userMessageId,
@@ -468,40 +482,46 @@ class GrpcMappers {
       ),
       stateVersion: version,
       stateUpdatedAt: stateUpdatedAt,
-      finishedAt: runState.hasFinishedAt()
-          ? _timestampToDateTime(runState.finishedAt)
-          : null,
+      finishedAt: finishedAt,
       hasDisplayableContent: runState.hasDisplayableContent,
     );
   }
 
-  // state_updated_at is the model's only ordering signal, so an absent field
-  // must not silently become epoch — which is exactly the instant
-  // _timestampToDateTime returns for a genuinely-set all-zero Timestamp.
-  // hasStateUpdatedAt() tells a submessage this build never populated apart
-  // from one that was populated with all-default values, and a populated one
-  // whose seconds or nanos escape the documented ranges (see
-  // google.protobuf.Timestamp: seconds must be from 0001-01-01T00:00:00Z to
-  // 9999-12-31T23:59:59Z inclusive, i.e. -62135596800..253402300799, and
-  // nanos from 0 to 999999999) is rejected before conversion, the same bounds
-  // the well-known type's own JSON codec enforces. Either failure omits the
-  // whole snapshot instead of fabricating a fallback field value: the same
-  // fail-closed pattern used above for a missing run id or a nonpositive
-  // version.
+  // state_version is the sole reconciliation ordering authority — the guard
+  // at the top of this method already rejects a stale write by comparing
+  // versions, and callers order snapshots by state_version, never by wall
+  // clock. state_updated_at instead carries the required durable, public
+  // evidence of *when* that version was recorded: it is exposed to clients
+  // and persisted, so an absent field must not silently become epoch —
+  // which is exactly the instant _timestampToDateTime returns for a
+  // genuinely-set all-zero Timestamp. hasStateUpdatedAt() distinguishes a
+  // submessage this build never populated from one that was populated with
+  // all-default values, and a populated one whose seconds or nanos escape
+  // the documented ranges (see google.protobuf.Timestamp: seconds must be
+  // from 0001-01-01T00:00:00Z to 9999-12-31T23:59:59Z inclusive, i.e.
+  // -62135596800..253402300799, and nanos from 0 to 999999999) is rejected
+  // before conversion, the same bounds the well-known type's own JSON codec
+  // enforces. Either failure omits the whole snapshot instead of
+  // fabricating a fallback field value: the same fail-closed pattern used
+  // above for a missing run id or a nonpositive version.
   static const int _timestampMinSeconds = -62135596800;
   static const int _timestampMaxSeconds = 253402300799;
+
+  static bool _isValidTimestamp(timestamppb.Timestamp timestamp) {
+    final seconds = timestamp.seconds;
+    if (seconds < Int64(_timestampMinSeconds) ||
+        seconds > Int64(_timestampMaxSeconds)) {
+      return false;
+    }
+    final nanos = timestamp.nanos;
+    return nanos >= 0 && nanos <= 999999999;
+  }
 
   static DateTime? _validStateUpdatedAt(commonpb.RunState runState) {
     if (!runState.hasStateUpdatedAt()) {
       return null;
     }
-    final seconds = runState.stateUpdatedAt.seconds;
-    if (seconds < Int64(_timestampMinSeconds) ||
-        seconds > Int64(_timestampMaxSeconds)) {
-      return null;
-    }
-    final nanos = runState.stateUpdatedAt.nanos;
-    if (nanos < 0 || nanos > 999999999) {
+    if (!_isValidTimestamp(runState.stateUpdatedAt)) {
       return null;
     }
     return _timestampToDateTime(runState.stateUpdatedAt);
