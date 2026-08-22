@@ -2245,7 +2245,7 @@ void main() {
       expect(find.text('Could not reach the backend'), findsOneWidget);
     });
 
-    testWidgets('no discovered tools says so rather than showing nothing', (
+    testWidgets('no registered servers says so rather than showing nothing', (
       tester,
     ) async {
       await _pumpShell(tester, api: _FakeApi(), size: _desktop);
@@ -2253,7 +2253,7 @@ void main() {
       await tester.tap(find.text('MCPs'));
       await tester.pumpAndSettle();
 
-      expect(find.text('No tools discovered'), findsOneWidget);
+      expect(find.text('No MCP servers registered'), findsOneWidget);
     });
   });
 
