@@ -186,6 +186,36 @@ void main() {
   });
 
   test(
+    'accepts a run state whose state_updated_at nanos sit exactly at the '
+    'documented upper bound',
+    () {
+      final state = protoState();
+      state.stateUpdatedAt.nanos = 999999999;
+
+      final mapped = GrpcMappers.runStateToModel(state);
+
+      expect(mapped, isNotNull);
+      // protobuf's Timestamp.toDateTime() (and DateTime itself) only resolve
+      // to microseconds, so the maximum valid nanos value truncates rather
+      // than rounds: ...999999999ns becomes ...999999us, one microsecond
+      // short of the next second, not the next second itself.
+      expect(
+        mapped?.stateUpdatedAt,
+        DateTime.utc(2026, 8, 21, 1, 2, 3, 999, 999),
+      );
+      // The nanos edit changes nothing else about the snapshot.
+      expect(mapped?.runId, 'run_1');
+      expect(mapped?.userMessageId, 'msg_user');
+      expect(mapped?.assistantMessageId, 'msg_assistant');
+      expect(mapped?.lifecycle, RunLifecycle.failed);
+      expect(mapped?.outcomeReason, RunOutcomeReason.providerFailure);
+      expect(mapped?.stateVersion, 7);
+      expect(mapped?.finishedAt, finishedAt);
+      expect(mapped?.hasDisplayableContent, isTrue);
+    },
+  );
+
+  test(
     'rejects a run state whose state_updated_at seconds exceed 9999-12-31T23:59:59Z',
     () {
       final state = protoState();
@@ -260,6 +290,35 @@ void main() {
 
     expect(GrpcMappers.runStateToModel(state), isNull);
   });
+
+  test(
+    'accepts a run state whose present finished_at nanos sit exactly at the '
+    'documented upper bound',
+    () {
+      final state = protoState();
+      state.finishedAt.nanos = 999999999;
+
+      final mapped = GrpcMappers.runStateToModel(state);
+
+      expect(mapped, isNotNull);
+      // Same truncation as state_updated_at above: ...999999999ns becomes
+      // ...999999us, not the next second, because DateTime has no
+      // nanosecond field to round into.
+      expect(
+        mapped?.finishedAt,
+        DateTime.utc(2026, 8, 21, 1, 2, 4, 999, 999),
+      );
+      // The nanos edit changes nothing else about the snapshot.
+      expect(mapped?.runId, 'run_1');
+      expect(mapped?.userMessageId, 'msg_user');
+      expect(mapped?.assistantMessageId, 'msg_assistant');
+      expect(mapped?.lifecycle, RunLifecycle.failed);
+      expect(mapped?.outcomeReason, RunOutcomeReason.providerFailure);
+      expect(mapped?.stateVersion, 7);
+      expect(mapped?.stateUpdatedAt, updatedAt);
+      expect(mapped?.hasDisplayableContent, isTrue);
+    },
+  );
 
   test(
     'rejects a run state whose finished_at seconds exceed 9999-12-31T23:59:59Z',

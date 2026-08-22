@@ -260,6 +260,20 @@ func TestRunStateProjectionOmitsContentHashAndInternalExecution(t *testing.T) {
 	}
 }
 
+// TestRunStateProjectionOmitsStateWithAbsentStateUpdatedAt guards the other
+// half of the required-field contract exercised above: an empty column is a
+// distinct failure from unparseable text — a row that never recorded the
+// value at all, rather than one that recorded something unreadable — and
+// load-bears on its own rather than through the malformed-text case.
+func TestRunStateProjectionOmitsStateWithAbsentStateUpdatedAt(t *testing.T) {
+	state := canonicalState("completed", "none")
+	state.StateUpdatedAt = ""
+
+	if projected := Project(state); projected != nil {
+		t.Fatalf("absent state_updated_at projected %+v, want no state", projected)
+	}
+}
+
 // TestRunStateProjectionPublishesFinishedAtOnlyForTerminalLifecycles is the
 // guard against a stray column becoming a fact. finished_at is written by the
 // terminal writers, but a restored, downgraded, or hand-edited row can carry
