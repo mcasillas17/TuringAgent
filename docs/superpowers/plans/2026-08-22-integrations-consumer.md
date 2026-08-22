@@ -232,8 +232,12 @@ mutation.
 `sideEffecting` solely from `DECISION_APPROVAL_REQUIRED`, and that one bit
 drives approval-waiting *and* every downstream side-effect consequence.
 Those meanings are decoupled: `ToolPolicyDecision` gains a `read_only`
-field, set by the orchestrator from a static per-tool table that lives in
-`service/tools` beside `BundledServerForTool` — not inside
+field, set by the orchestrator at **every** `ToolPolicyDecision`
+construction site on the before path — the `approval_required` return, the
+`safe` return, and the easy one to miss, `existingToolBeforeDecision`,
+which rebuilds a fresh decision for a re-delivered beacon and would
+otherwise re-arm side-effect handling on a read — from a static per-tool
+table that lives in `service/tools` beside `BundledServerForTool` — not inside
 `service/integrations`, because its two readers, the by-name policy RPC in
 `mcpregistry` (the un-`safe`-able guard) and the runtime service's beacon
 path (this decision bit), both already import `service/tools`, which is a
@@ -279,9 +283,12 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   under the pre-existing `maxEgressChallengeBytes = 32 KiB` total, in the
   `maxEgressSelectedToolBytes` mold, and they must sum comfortably below
   it — 16 KiB of selected tools + 12 KiB of endpoint entries leaves ~4 KiB
-  for the nonce, digest, fingerprints and JSON structure, where 16 × 1 KiB
-  would have filled the total exactly and made the opaque signing failure
-  the *guaranteed* outcome at both caps. To fit 768 bytes with worst-case
+  for the nonce, digest, fingerprints, JSON structure **and the
+  `remote_mcp_servers` list, the third variable-length term in the same
+  payload** (bounded in name length but not URL length — worth remembering
+  when spending the slack), where 16 × 1 KiB would have filled the total
+  exactly and made the opaque signing failure the *guaranteed* outcome at
+  both caps. To fit 768 bytes with worst-case
   JSON escaping, the entry's `display_name` is capped at 64 runes
   (ellipsis-truncated for the disclosure; the Integrations page still
   shows the full name). Two mechanical
@@ -581,9 +588,14 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    round trip, for both pseudo-servers.** Tools registered through
    `UpsertTools` land `approval_required`; `UpdateToolPolicyByName` set
    `safe` ⇒ a read dispatches with no approval; set `disabled` ⇒ refused
-   **and absent from the runtime's tool registry**, not merely from
-   `EgressToolNames`; then **re-enabled ⇒ works again** — the leg that
-   catches a `present = 1` predicate making disable a one-way door. The
+   and gone from the model's offer — asserted per pseudo-server by the
+   observable each can actually deliver: the **integration** tool leaves
+   the runtime's tool registry (`ListIntegrationTools` filters), while the
+   **skills** tool — whose static lister has no policy source, and this
+   plan does not re-architect it — leaves the *offered definitions*
+   (`selected_tools` / `DefinitionsFor`) via the capabilities prune; then
+   **re-enabled ⇒ works again** — the leg that catches a `present = 1`
+   predicate making disable a one-way door. The
    same RPC **refuses** to set a bundled mutating tool (`files.create`) to
    `safe`, **refuses** to set an integration write (`github.create_comment`)
    to `safe`, **allows** a skills tool to be set `safe` (the unscoped
@@ -616,8 +628,11 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
     answer mapping the provider host to a private address is refused.
 12. **No ambient egress, automations included.** A run offered no
     integration tools has no integration endpoints in its decision; an
-    automation run's integration call is refused (no decision exists); an
-    integration tool on an automation allowlist is rejected at save.
+    automation run's integration call is refused **by the missing egress
+    decision** — pinned by using a `read_only` tool set to `safe`, so the
+    allowlist/approval gate cannot fire first and the refusal can only
+    come from the mechanism this leg exists to test; an integration tool
+    on an automation allowlist is rejected at save.
 13. **The approval is legible, or the write is refused — through one
     builder.** An integration write approval event carries the full render
     — connection display name, destination, complete body; a write whose
