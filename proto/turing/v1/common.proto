@@ -136,6 +136,11 @@ message RunState {
   // and drops anything older, so out-of-order or duplicate delivery cannot
   // resurrect a stale phase. Zero means absent, never "version zero".
   int64 state_version = 6;
+  // Required on every published snapshot: the durable, public record of when
+  // this version was recorded. A publisher that cannot vouch for this value —
+  // because it is absent or fails to parse — omits the whole snapshot rather
+  // than send a RunState without it, so a client that receives this message
+  // can always rely on this field being set.
   google.protobuf.Timestamp state_updated_at = 7;
   // Set only for terminal lifecycles.
   google.protobuf.Timestamp finished_at = 8;

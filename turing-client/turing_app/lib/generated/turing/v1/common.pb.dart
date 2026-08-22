@@ -167,6 +167,11 @@ class RunState extends $pb.GeneratedMessage {
   @$pb.TagNumber(6)
   void clearStateVersion() => $_clearField(6);
 
+  /// Required on every published snapshot: the durable, public record of when
+  /// this version was recorded. A publisher that cannot vouch for this value —
+  /// because it is absent or fails to parse — omits the whole snapshot rather
+  /// than send a RunState without it, so a client that receives this message
+  /// can always rely on this field being set.
   @$pb.TagNumber(7)
   $0.Timestamp get stateUpdatedAt => $_getN(6);
   @$pb.TagNumber(7)

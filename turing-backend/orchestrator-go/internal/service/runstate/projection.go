@@ -105,8 +105,8 @@ var allowedOutcomeReasons = map[string][]runoutcome.Reason{
 // "no assistant response was recorded"; a projected state is what it is meant
 // to show as fact. So anything this function cannot vouch for — a pair the
 // matrix forbids, a run with no identity, a version no client could reconcile
-// against — is returned as absence rather than as a plausible outcome nobody
-// can justify.
+// against, or a state_updated_at that is absent or unparseable — is returned
+// as absence rather than as a plausible outcome nobody can justify.
 //
 // Flutter consumes this projection from both message history and live events,
 // then reconciles the two sources by run ID and state version.
@@ -134,6 +134,14 @@ func Project(state repository.RunState) *turingv1.RunState {
 	if !namedReason {
 		reason = turingv1.RunOutcomeReason_RUN_OUTCOME_REASON_UNKNOWN
 	}
+	// state_updated_at is required on every published snapshot, matching the
+	// fail-closed contract the public client enforces on the same field: an
+	// absent or unparseable value is not a partial fact worth publishing, so
+	// the whole snapshot is omitted rather than sent without it.
+	stateUpdatedAt := instant(state.StateUpdatedAt)
+	if stateUpdatedAt == nil {
+		return nil
+	}
 	projected := &turingv1.RunState{
 		RunId:              state.RunID,
 		UserMessageId:      state.UserMessageID,
@@ -141,7 +149,7 @@ func Project(state repository.RunState) *turingv1.RunState {
 		Lifecycle:          lifecycle,
 		OutcomeReason:      reason,
 		StateVersion:       state.StateVersion,
-		StateUpdatedAt:     instant(state.StateUpdatedAt),
+		StateUpdatedAt:     stateUpdatedAt,
 		// Nothing below this line is public: the content digest is internal
 		// duplicate-report identity, and the worker, assignment attempt,
 		// execution columns, token counts, tool arguments, and every diagnostic

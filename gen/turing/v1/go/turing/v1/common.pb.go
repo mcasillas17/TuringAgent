@@ -615,7 +615,12 @@ type RunState struct {
 	// ordering authority for reconciliation: a client keeps the higher version
 	// and drops anything older, so out-of-order or duplicate delivery cannot
 	// resurrect a stale phase. Zero means absent, never "version zero".
-	StateVersion   int64                  `protobuf:"varint,6,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
+	StateVersion int64 `protobuf:"varint,6,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
+	// Required on every published snapshot: the durable, public record of when
+	// this version was recorded. A publisher that cannot vouch for this value —
+	// because it is absent or fails to parse — omits the whole snapshot rather
+	// than send a RunState without it, so a client that receives this message
+	// can always rely on this field being set.
 	StateUpdatedAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=state_updated_at,json=stateUpdatedAt,proto3" json:"state_updated_at,omitempty"`
 	// Set only for terminal lifecycles.
 	FinishedAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`

@@ -246,17 +246,17 @@ func TestRunStateProjectionOmitsContentHashAndInternalExecution(t *testing.T) {
 		t.Fatalf("finished at = %q, want %q", got, state.FinishedAt.String)
 	}
 
-	// An unreadable timestamp is not a time, and must not become an instant a
-	// client would render.
+	// state_updated_at is required on every published snapshot: it is the
+	// durable, public evidence of when the state's version was recorded, not
+	// an optional field like finished_at. An unreadable or absent value is
+	// not a partial fact a client can render; it is grounds to omit the whole
+	// snapshot, the same fail-closed contract the public client already
+	// enforces for this field.
 	corrupt := canonicalState("completed", "none")
 	corrupt.StateUpdatedAt = "not a timestamp"
 	corrupt.FinishedAt = sql.NullString{String: "also not a timestamp", Valid: true}
-	projectedCorrupt := Project(corrupt)
-	if projectedCorrupt == nil {
-		t.Fatal("an unreadable timestamp dropped the whole state, want the outcome without it")
-	}
-	if projectedCorrupt.GetStateUpdatedAt() != nil || projectedCorrupt.GetFinishedAt() != nil {
-		t.Fatalf("unreadable timestamps became instants: %+v", projectedCorrupt)
+	if projectedCorrupt := Project(corrupt); projectedCorrupt != nil {
+		t.Fatalf("unreadable state_updated_at projected %+v, want no state", projectedCorrupt)
 	}
 }
 

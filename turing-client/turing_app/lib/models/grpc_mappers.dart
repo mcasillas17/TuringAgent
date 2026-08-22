@@ -496,20 +496,21 @@ class GrpcMappers {
   // order snapshots by state_version, never by wall clock, and
   // RunStateReconciler is what rejects a snapshot that is not newer.
   // runStateToModel and _validatedTimestamp only validate that
-  // state_updated_at is present and losslessly representable as a positive
-  // DateTime — they do not decide ordering. state_updated_at instead
-  // carries the required durable, public evidence of *when* that version
-  // was recorded: it is exposed to clients and persisted, so an absent
-  // field must not silently become epoch — which is exactly the instant
-  // _timestampToDateTime returns for a genuinely-set all-zero Timestamp.
-  // hasStateUpdatedAt() distinguishes a submessage this build never
-  // populated from one that was populated with all-default values, and a
-  // populated one whose seconds or nanos escape the documented ranges (see
-  // google.protobuf.Timestamp: seconds must be from 0001-01-01T00:00:00Z to
-  // 9999-12-31T23:59:59Z inclusive, i.e. -62135596800..253402300799, and
-  // nanos from 0 to 999999999) is rejected before conversion, the same
-  // bounds the well-known type's own JSON codec enforces. Either failure
-  // omits the whole snapshot instead of fabricating a fallback field value.
+  // state_updated_at is present and within the protobuf Timestamp range, then
+  // convert it to DateTime at microsecond precision (Dart's DateTime
+  // resolution, coarser than the nanosecond a Timestamp can hold) — they do
+  // not decide ordering. state_updated_at instead carries the required
+  // durable, public evidence of *when* that version was recorded: it is
+  // exposed to clients and persisted, so an absent field must not silently
+  // become epoch — which is exactly the instant _timestampToDateTime returns
+  // for a genuinely-set all-zero Timestamp. hasStateUpdatedAt() distinguishes
+  // a submessage this build never populated from one that was populated with
+  // all-default values, and a populated one whose seconds or nanos escape the
+  // documented protobuf Timestamp range (seconds must be from
+  // 0001-01-01T00:00:00Z to 9999-12-31T23:59:59Z inclusive, i.e.
+  // -62135596800..253402300799, and nanos from 0 to 999999999) is rejected
+  // before conversion. Either failure omits the whole snapshot instead of
+  // fabricating a fallback field value.
   static const int _timestampMinSeconds = -62135596800;
   static const int _timestampMaxSeconds = 253402300799;
   static const int _timestampMaxNanos = 999999999;
