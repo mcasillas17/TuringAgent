@@ -4,13 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
@@ -74,18 +69,6 @@ type App struct {
 	deletionReconcileCancel context.CancelFunc
 	deletionReconcileDone   chan struct{}
 	authFailures            *auth.AsyncFailureRecorder
-}
-
-func boundedAppDiagnostic(message string, limit int) string {
-	message = strings.ToValidUTF8(message, "\uFFFD")
-	if len(message) <= limit {
-		return message
-	}
-	message = message[:limit]
-	for !utf8.ValidString(message) {
-		message = message[:len(message)-1]
-	}
-	return message
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -198,31 +181,21 @@ func New(cfg config.Config) (*App, error) {
 	}
 	integrationService := integrationsvc.New(repo, integrationSealer, auditService)
 	mcpRegistryService := mcpregistrysvc.New(repo, integrationSealer, nil)
+	mcpRegistryService.SetAuditRecorder(auditService)
+	mcpRegistryService.SetMCPConfigRoot(cfg.MCPConfigRoot)
 	mcpRegistryService.SetApprovalEnforcer(approvalService)
 	mcpRegistryService.SetRegistryChangeNotifier(runtimeService)
 	if cfg.MCPConfigRoot != "" {
-		mcpJSON, readErr := os.ReadFile(filepath.Join(cfg.MCPConfigRoot, "mcp.json"))
-		if readErr == nil {
-			if _, err := mcpRegistryService.ImportJSON(context.Background(), mcpJSON); err != nil {
-				message := boundedAppDiagnostic(err.Error(), 512)
-				if recordErr := repo.ReplaceMCPImportIssues(
-					context.Background(),
-					map[string]string{"_document": message},
-				); recordErr != nil {
-					_ = database.Close()
-					return nil, fmt.Errorf("record mcp.json import failure: %w", recordErr)
-				}
-
-				log.Printf("mcp.json import failed: %v", err)
-			}
-		} else if errors.Is(readErr, os.ErrNotExist) {
-			if err := repo.ReplaceMCPImportIssues(context.Background(), map[string]string{}); err != nil {
-				_ = database.Close()
-				return nil, fmt.Errorf("clear mcp.json import issues: %w", err)
-			}
-		} else if !errors.Is(readErr, os.ErrNotExist) {
+		// ReimportConfiguredJSON is the same path the public ReimportMcpJson
+		// RPC uses on demand: an absent mcp.json clears any stale issues and
+		// starts clean, a malformed document is recorded as a bounded
+		// "_document" issue and startup still proceeds, and any other
+		// unreadable-file or repository failure aborts startup with a fixed,
+		// safe error (ReimportConfiguredJSON has already logged its own
+		// diagnostic, which never includes the file's contents or path).
+		if _, err := mcpRegistryService.ReimportConfiguredJSON(context.Background()); err != nil {
 			_ = database.Close()
-			return nil, fmt.Errorf("read mcp.json: %w", readErr)
+			return nil, fmt.Errorf("import mcp.json: %w", err)
 		}
 	}
 	healthService := &HealthServer{schemaVersion: schemaVersion}
