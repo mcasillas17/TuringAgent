@@ -172,6 +172,43 @@ abstract class TuringApi implements RemoteEgressApi {
     );
   }
 
+  /// Registers a new MCP server. [bearerToken] is sent to the backend as
+  /// plaintext for this one call only: it is never echoed back, stored on
+  /// [McpServer], or otherwise retained by the client.
+  Future<McpServer> registerMcpServer({
+    required String name,
+    required String url,
+    required McpServerTier tier,
+    String bearerToken = '',
+  }) {
+    throw const TuringApiException(
+      code: 'mcp_registry_unsupported',
+      message: 'This client cannot register MCP servers',
+    );
+  }
+
+  /// Reimports the backend's mcp.json configuration, registering any server
+  /// not already known to it.
+  Future<McpImportReport> reimportMcpJson() {
+    throw const TuringApiException(
+      code: 'mcp_registry_unsupported',
+      message: 'This client cannot reimport MCP JSON configuration',
+    );
+  }
+
+  /// Replaces the bearer token stored for an existing MCP server.
+  /// [bearerToken] is sent as plaintext for this one call only and is never
+  /// retained by the client.
+  Future<McpServer> rotateMcpServerToken({
+    required String serverId,
+    required String bearerToken,
+  }) {
+    throw const TuringApiException(
+      code: 'mcp_registry_unsupported',
+      message: 'This client cannot rotate MCP server tokens',
+    );
+  }
+
   /// The agents the backend can route a run to.
   Future<List<AgentDescriptor>> listAgents();
 

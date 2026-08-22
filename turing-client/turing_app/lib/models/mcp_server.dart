@@ -47,3 +47,20 @@ class McpRegistrySnapshot {
   final List<McpServer> servers;
   final List<UnsupportedMcpServer> unsupported;
 }
+
+/// The outcome of reimporting the backend's mcp.json configuration: which
+/// servers were newly registered, which were already present and left alone,
+/// and which were refused, with the reason each was refused.
+class McpImportReport {
+  McpImportReport({
+    required List<String> imported,
+    required List<String> skipped,
+    required List<UnsupportedMcpServer> refused,
+  }) : imported = List.unmodifiable(imported),
+       skipped = List.unmodifiable(skipped),
+       refused = List.unmodifiable(refused);
+
+  final List<String> imported;
+  final List<String> skipped;
+  final List<UnsupportedMcpServer> refused;
+}

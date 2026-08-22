@@ -13,13 +13,18 @@ import 'package:turing_flutter_app/generated/turing/v1/events.pb.dart'
     as eventpb;
 import 'package:turing_flutter_app/generated/turing/v1/events.pbgrpc.dart'
     as eventgrpc;
+import 'package:turing_flutter_app/generated/turing/v1/mcp.pb.dart' as mcppb;
+import 'package:turing_flutter_app/generated/turing/v1/mcp.pbgrpc.dart'
+    as mcpgrpc;
 import 'package:turing_flutter_app/generated/turing/v1/sessions.pb.dart'
     as sessionpb;
 import 'package:turing_flutter_app/generated/turing/v1/sessions.pbgrpc.dart'
     as sessiongrpc;
 import 'package:turing_flutter_app/models/audit.dart';
+import 'package:turing_flutter_app/models/mcp_server.dart';
 import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/session_page.dart';
+import 'package:turing_flutter_app/networking/api_client.dart';
 import 'package:turing_flutter_app/networking/grpc_client.dart';
 
 void main() {
@@ -1071,6 +1076,209 @@ void main() {
       );
     },
   );
+
+  test('registerMcpServer sends the exact name, url, tier, and bearer token, '
+      'and the returned model never carries the token', () async {
+    const sentinelToken = 'shh-do-not-leak-me';
+    final service = _CapturingMcpRegistryService()
+      ..registerMcpServerResponse = mcppb.McpServerDescriptor(
+        serverId: 'server-remote-1',
+        name: 'remote-tool',
+        transport: 'http',
+        url: 'https://tools.example.com/mcp',
+        tier: mcppb.McpServerTier.MCP_SERVER_TIER_REMOTE_URL,
+        enabled: true,
+        liveness: mcppb.McpServerLiveness.MCP_SERVER_LIVENESS_UNKNOWN,
+        statusMessage: '',
+        sandboxConfined: false,
+      );
+    final api = await _startMcpRegistryApi(service);
+
+    final registered = await api.registerMcpServer(
+      name: 'remote-tool',
+      url: 'https://tools.example.com/mcp',
+      tier: McpServerTier.remoteUrl,
+      bearerToken: sentinelToken,
+    );
+
+    final sent = service.registerMcpServerRequest;
+    expect(sent, isNotNull);
+    expect(sent!.name, 'remote-tool');
+    expect(sent.url, 'https://tools.example.com/mcp');
+    expect(sent.tier, mcppb.McpServerTier.MCP_SERVER_TIER_REMOTE_URL);
+    expect(sent.bearerToken, sentinelToken);
+
+    expect(registered.serverId, 'server-remote-1');
+    expect(registered.name, 'remote-tool');
+    expect(registered.url, 'https://tools.example.com/mcp');
+    expect(registered.tier, McpServerTier.remoteUrl);
+    expect(registered.toString(), isNot(contains(sentinelToken)));
+  });
+
+  test('registerMcpServer maps the local-container tier onto the matching '
+      'protobuf enum', () async {
+    final service = _CapturingMcpRegistryService()
+      ..registerMcpServerResponse = mcppb.McpServerDescriptor(
+        serverId: 'server-local-1',
+        name: 'local-tool',
+        transport: 'stdio',
+        url: '',
+        tier: mcppb.McpServerTier.MCP_SERVER_TIER_LOCAL_CONTAINER,
+        enabled: true,
+        liveness: mcppb.McpServerLiveness.MCP_SERVER_LIVENESS_UNKNOWN,
+        statusMessage: '',
+        sandboxConfined: true,
+      );
+    final api = await _startMcpRegistryApi(service);
+
+    await api.registerMcpServer(
+      name: 'local-tool',
+      url: '',
+      tier: McpServerTier.localContainer,
+    );
+
+    expect(
+      service.registerMcpServerRequest?.tier,
+      mcppb.McpServerTier.MCP_SERVER_TIER_LOCAL_CONTAINER,
+    );
+    // Defaulted bearer token must still be forwarded as an explicitly-set
+    // empty string, not silently dropped from the request.
+    expect(service.registerMcpServerRequest?.hasBearerToken(), isTrue);
+    expect(service.registerMcpServerRequest?.bearerToken, '');
+  });
+
+  test('registerMcpServer refuses bundled and unspecified tiers locally, '
+      'without ever contacting the server', () async {
+    final service = _CapturingMcpRegistryService();
+    final api = await _startMcpRegistryApi(service);
+
+    await expectLater(
+      () => api.registerMcpServer(
+        name: 'x',
+        url: 'http://example.com',
+        tier: McpServerTier.bundled,
+      ),
+      throwsA(isA<TuringApiException>()),
+    );
+    await expectLater(
+      () => api.registerMcpServer(
+        name: 'x',
+        url: 'http://example.com',
+        tier: McpServerTier.unspecified,
+      ),
+      throwsA(isA<TuringApiException>()),
+    );
+
+    expect(service.registerMcpServerCallCount, 0);
+  });
+
+  test('reimportMcpJson maps imported, skipped, and refused entries, '
+      'including the refusal reason', () async {
+    final service = _CapturingMcpRegistryService()
+      ..reimportMcpJsonResponse = mcppb.ReimportMcpJsonResponse(
+        imported: ['server-a'],
+        skipped: ['server-b'],
+        refused: [
+          mcppb.UnsupportedMcpServer(
+            name: 'server-c',
+            reason: 'unsupported transport: stdio',
+          ),
+        ],
+      );
+    final api = await _startMcpRegistryApi(service);
+
+    final report = await api.reimportMcpJson();
+
+    expect(service.reimportMcpJsonCallCount, 1);
+    expect(report.imported, ['server-a']);
+    expect(report.skipped, ['server-b']);
+    expect(report.refused, hasLength(1));
+    expect(report.refused.single.name, 'server-c');
+    expect(report.refused.single.reason, 'unsupported transport: stdio');
+    expect(() => report.imported.add('server-x'), throwsUnsupportedError);
+  });
+
+  test('rotateMcpServerToken sends the exact server id and bearer token, and '
+      'the returned model never carries the token', () async {
+    const sentinelToken = 'shh-rotated-token';
+    final service = _CapturingMcpRegistryService()
+      ..rotateMcpServerTokenResponse = mcppb.McpServerDescriptor(
+        serverId: 'server-remote-1',
+        name: 'remote-tool',
+        transport: 'http',
+        url: 'https://tools.example.com/mcp',
+        tier: mcppb.McpServerTier.MCP_SERVER_TIER_REMOTE_URL,
+        enabled: true,
+        liveness: mcppb.McpServerLiveness.MCP_SERVER_LIVENESS_UP,
+        statusMessage: '',
+        sandboxConfined: false,
+      );
+    final api = await _startMcpRegistryApi(service);
+
+    final rotated = await api.rotateMcpServerToken(
+      serverId: 'server-remote-1',
+      bearerToken: sentinelToken,
+    );
+
+    final sent = service.rotateMcpServerTokenRequest;
+    expect(sent, isNotNull);
+    expect(sent!.serverId, 'server-remote-1');
+    expect(sent.bearerToken, sentinelToken);
+    expect(rotated.serverId, 'server-remote-1');
+    expect(rotated.toString(), isNot(contains(sentinelToken)));
+  });
+
+  test('rotateMcpServerToken sends an explicit empty token to clear it, rather '
+      'than omitting the field', () async {
+    final service = _CapturingMcpRegistryService()
+      ..rotateMcpServerTokenResponse = mcppb.McpServerDescriptor(
+        serverId: 'server-remote-1',
+        name: 'remote-tool',
+        transport: 'http',
+        url: 'https://tools.example.com/mcp',
+        tier: mcppb.McpServerTier.MCP_SERVER_TIER_REMOTE_URL,
+        enabled: true,
+        liveness: mcppb.McpServerLiveness.MCP_SERVER_LIVENESS_UP,
+        statusMessage: '',
+        sandboxConfined: false,
+      );
+    final api = await _startMcpRegistryApi(service);
+
+    await api.rotateMcpServerToken(
+      serverId: 'server-remote-1',
+      bearerToken: '',
+    );
+
+    final sent = service.rotateMcpServerTokenRequest;
+    expect(sent, isNotNull);
+    expect(sent!.hasBearerToken(), isTrue);
+    expect(sent.bearerToken, '');
+  });
+}
+
+/// Starts an in-process MCP registry server bound to a client for one test
+/// and tears both down afterwards.
+Future<TuringGrpcApi> _startMcpRegistryApi(
+  _CapturingMcpRegistryService service,
+) async {
+  final server = grpc.Server.create(services: [service]);
+  await server.serve(address: '127.0.0.1', port: 0);
+  final channel = grpc.ClientChannel(
+    '127.0.0.1',
+    port: server.port!,
+    options: const grpc.ChannelOptions(
+      credentials: grpc.ChannelCredentials.insecure(),
+    ),
+  );
+  addTearDown(() async {
+    await channel.shutdown();
+    await server.shutdown();
+  });
+  return TuringGrpcApi(
+    baseUrl: 'http://127.0.0.1:${server.port}',
+    apiKey: 'client-key',
+    channel: channel,
+  );
 }
 
 /// Starts an in-process session server bound to a client for one test and
@@ -1267,6 +1475,56 @@ class _CapturingAuditService extends auditgrpc.AuditServiceBase {
     this.request = request;
     deadline = call.deadline;
     return response;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _CapturingMcpRegistryService extends mcpgrpc.McpRegistryServiceBase {
+  mcppb.RegisterMcpServerRequest? registerMcpServerRequest;
+  int registerMcpServerCallCount = 0;
+  mcppb.McpServerDescriptor registerMcpServerResponse =
+      mcppb.McpServerDescriptor();
+
+  mcppb.ReimportMcpJsonRequest? reimportMcpJsonRequest;
+  int reimportMcpJsonCallCount = 0;
+  mcppb.ReimportMcpJsonResponse reimportMcpJsonResponse =
+      mcppb.ReimportMcpJsonResponse();
+
+  mcppb.RotateMcpServerTokenRequest? rotateMcpServerTokenRequest;
+  int rotateMcpServerTokenCallCount = 0;
+  mcppb.McpServerDescriptor rotateMcpServerTokenResponse =
+      mcppb.McpServerDescriptor();
+
+  @override
+  Future<mcppb.McpServerDescriptor> registerMcpServer(
+    grpc.ServiceCall call,
+    mcppb.RegisterMcpServerRequest request,
+  ) async {
+    registerMcpServerRequest = request;
+    registerMcpServerCallCount++;
+    return registerMcpServerResponse;
+  }
+
+  @override
+  Future<mcppb.ReimportMcpJsonResponse> reimportMcpJson(
+    grpc.ServiceCall call,
+    mcppb.ReimportMcpJsonRequest request,
+  ) async {
+    reimportMcpJsonRequest = request;
+    reimportMcpJsonCallCount++;
+    return reimportMcpJsonResponse;
+  }
+
+  @override
+  Future<mcppb.McpServerDescriptor> rotateMcpServerToken(
+    grpc.ServiceCall call,
+    mcppb.RotateMcpServerTokenRequest request,
+  ) async {
+    rotateMcpServerTokenRequest = request;
+    rotateMcpServerTokenCallCount++;
+    return rotateMcpServerTokenResponse;
   }
 
   @override
