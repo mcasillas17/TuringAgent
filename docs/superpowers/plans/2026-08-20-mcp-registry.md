@@ -256,3 +256,20 @@ The full matrix in `CLAUDE.md`. Beyond it: a registered server that is
 unreachable, one that returns malformed `tools/list`, one that returns a tool
 whose name collides with a bundled tool, and one that disappears between
 discovery and dispatch.
+
+## 2026-08-21 addendum: enablement does contact the server
+
+Item 5 above said enabling a server is not itself "the consent for reaching
+it," and left that as "the per-run egress decision, not a switch on this
+page." That is no longer the whole story: the MCP Registry UX work
+(`docs/superpowers/plans/2026-08-21-mcp-registry-ux.md`) added a bounded
+`tools/list` liveness discovery to `SetMcpServerEnabled` for both
+local-container and remote-url tiers, so enabling a remote-URL server is now
+a real, explicit network request to its endpoint at that moment.
+
+The distinction this plan cared about still holds: *dispatching a tool
+during a run* is still gated on the per-run egress decision described above,
+unchanged. What changed is narrower — enabling a server is also, separately,
+a one-time liveness/discovery contact, audited as such (`discoverySucceeded`
+in the enable/disable audit payload), not a substitute for the per-run
+acknowledgement a later call still requires.

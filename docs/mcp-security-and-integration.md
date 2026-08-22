@@ -10,7 +10,7 @@ orchestrator.
 |---|---|---|---|---|
 | Bundled | `mcp-system`, `mcp-files` | No | Yes | Cooperating MCP server |
 | Local container, third-party | `http://vendor-mcp:9000/mcp` | No | No | Orchestrator caller |
-| Remote URL | `https://vendor.example/mcp` | Yes, per run | No | Orchestrator caller |
+| Remote URL | `https://vendor.example/mcp` | Yes, at enable (discovery) and per run (calls) | No | Orchestrator caller |
 | stdio / `command` / `npx` | `command: "npx"` | Refused | Refused | Not registered |
 
 The two bundled servers remain on private Docker networks; Compose does not
@@ -21,28 +21,68 @@ subnet. An empty
 configured bundled bearer token denies every request rather than opening the
 service.
 
-The orchestrator imports `mcp/mcp.json` into SQLite. Import preserves a
-previous user enablement decision only while the endpoint and tier are
-unchanged; repointing a server disables it and withdraws the old tool snapshot.
-An explicit empty `tools` snapshot withdraws prior tools, and policy edits
-cannot reactivate a tool the current snapshot no longer contains. New servers
-never arrive enabled. Bearers are
-sealed with `internal/secretbox` under `TURING_INTEGRATION_KEY`; no public or
-internal response contains a token or ciphertext. A `command` entry is retained
-as an import issue explaining that stdio is unsupported, and no server row is
-created for it. Malformed documents and entries whose token cannot be sealed
-are reported on the MCPs page without preventing the rest of the backend from
-starting. Imported servers can also be removed through the registry API.
-Removal writes a local import tombstone, so an unchanged `mcp.json` cannot
-silently recreate the server at the next restart; importing it again requires a
-new name.
+Servers can be registered directly from the Flutter MCPs page — a name, an
+explicit local-container or remote-URL tier, a hardened URL, and an optional
+write-only bearer — with no file edit and no backend restart. In-app
+registration runs the same validation an `mcp.json` import runs: name-pattern
+and bundled-name refusal, stdio refusal, URL canonicalization/hardening, and
+bearer-token normalization, then seals the token with the same
+`internal/secretbox` sealer (the server name as AAD) under
+`TURING_INTEGRATION_KEY`; no public or internal response contains a token or
+ciphertext. A newly registered server always arrives disabled, and
+registration itself never contacts the server's endpoint.
 
-Local-container enablement performs bounded `tools/list` discovery. Remote
-enablement performs no network request: remote entries can carry an optional
-`tools` snapshot in `mcp.json`, and otherwise remain visible with no callable
-tools. This is deliberate;
-contacting a remote server merely to discover it would make enablement an
-undeclared egress consent.
+`mcp.json` remains the bulk/config-file path. The orchestrator imports it at
+startup and, without a restart, whenever an operator chooses Re-import
+mcp.json on the MCPs page; both runs report imported, skipped, and refused
+names with reasons. A `command` entry is refused as an import issue
+explaining that stdio is unsupported, and no server row is created for it.
+Malformed documents and entries whose token cannot be sealed are reported the
+same way, without preventing the rest of the backend from starting.
+
+Reimport is create-only: an existing row for a name that already has a real,
+non-empty endpoint is left completely untouched — its enabled state,
+endpoint, tier, liveness, rotated token, tool snapshot, and policies never
+change. The one exception is a legacy migration-0016 placeholder (a
+non-bundled row seeded with `url == ""` solely to carry a pre-registry tool
+policy forward): that row is narrowly adopted in place, updating only its
+URL, sealed token, and tier. Every genuinely new entry, whether from a file
+import or in-app registration, still arrives disabled.
+
+Deleting a server writes a local import tombstone, so an unchanged
+`mcp.json` cannot silently recreate it on the next reimport; the file path
+keeps refusing a tombstoned name. An explicit in-app Register of that same
+name is the user's own consent: it atomically clears the tombstone in the
+same transaction and does not require a new name. Registering over a name
+that still has a live row, or over a bundled name, is refused either way.
+
+Token rotation is write-only for non-bundled servers: a new bearer replaces
+the sealed value, an empty bearer clears it, and a bundled server refuses
+rotation outright. A nonempty token still requires `TURING_INTEGRATION_KEY`
+to seal. No response, log line, registry-change event, or audit row ever
+carries the plaintext token or its ciphertext; audit rows record only the
+server name and whether a token is now configured.
+
+Enabling any non-bundled server — local-container or remote-URL — performs a
+bounded `tools/list` liveness discovery as part of that call. For a
+remote-URL server this is a real, explicit enable-time network request to
+the configured endpoint, sending the configured bearer if one is set. That
+is separate from per-run consent: invoking a remote tool during a run still
+requires the caller to prepare, and the run to acknowledge, a signed
+per-run egress decision naming the endpoint and the tool-argument and
+tool-result categories, before any call is dispatched. Registration and
+`mcp.json` import never contact an endpoint on their own while a server
+stays disabled — only an explicit enable does, and only at that moment.
+
+A successful discovery reconciles the server's live tools and schemas: tools
+no longer reported are marked absent, newly reported tools are seeded through
+`DefaultPolicyFor` (`approval_required` unless already known safe), and an
+operator's edited policy on a tool that is still present is left untouched. A
+failed discovery leaves the enabled state exactly as the operator set it,
+marks the server down with a bounded, bearer-redacted status message, and
+preserves whatever tool snapshot the last successful discovery produced.
+Enable/disable, discovery outcome, and token rotation are all audited; the
+audit payload and any status text never carry a token.
 
 Peer-controlled MCP errors and results are scrubbed of the registered bearer
 before they can cross the internal RPC boundary or reach liveness state, tool
