@@ -57,12 +57,14 @@ const runStateVersionPayloadPath = "$.runState.stateVersion"
 
 // ownershipWorkerIdentityPayloadKey and ownershipAssignmentAttemptIdentityPayloadKey
 // name the worker and assignment attempt that triggered a clearsOwnership
-// transition, committed into that transition's own event on the same terms the
-// live claim already uses on agent.run.started. They exist because clearing
-// ownership erases the only place the row itself could have recorded who did
-// it: worker_id and execution_attempt_id both go to NULL in the same write, so
-// a replay reaching this version later has nothing left on the row to compare
-// against. The event is where the trigger survives.
+// transition, committed into that transition's own event. assignmentAttemptId
+// follows the same terms the live claim already uses on agent.run.started;
+// workerId is new on this repository-authored event, but both are already
+// part of the shared execution-only key vocabulary below. They exist because
+// clearing ownership erases the only place the row itself could have
+// recorded who did it: worker_id and execution_attempt_id both go to NULL in
+// the same write, so a replay reaching this version later has nothing left
+// on the row to compare against. The event is where the trigger survives.
 //
 // Both are already execution-only keys the public payload boundary
 // (service/events.executionOnlyKeys) strips on every event type, so persisting
