@@ -267,7 +267,11 @@ RPC must carry, each a trap if dropped:
   existing `SetMCPToolPolicy` SQL derives `enabled` from an `EXISTS` against
   `mcp_servers`, which is false for `mcp_server_id IS NULL` and would
   disable the very tool being edited; NULL-server rows are enabled the way
-  the skills insert already enables them.
+  the skills insert already enables them, and **server-backed rows keep
+  the existing derivation unchanged** — the RPC accepts any server name
+  (that is why the bundled guard on it is live code, exercised by test
+  8's `files.create` leg), so the non-NULL branch simply is today's
+  behavior.
 
 **Everything defaults to `approval_required`, reads included, and the policy
 comes from the `tools` table.** `DefaultPolicyFor` seeds nothing for
@@ -362,10 +366,13 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   shared helper** at both check sites (`resolveEgressContext` and
   `validChallengePayload`) — a slightly more permissive early check
   recreates the exact opaque signing failure the sub-budgets exist to
-  prevent. And both `clonePendingEgressDecision` (the fingerprint path)
-  and `normalizePendingEgressDecision` (the persisted decision) clone,
-  sort, and per-entry-validate `RemoteMCPServers` explicitly today — the
-  integration slice gets the same treatment in **both**, or it rides
+  prevent. And the two decision-shaping functions each give
+  `RemoteMCPServers` explicit treatment today that the integration slice
+  must match *per function*: `normalizePendingEgressDecision` (the
+  persisted decision) clones, sorts, and per-entry-validates;
+  `clonePendingEgressDecision` (the fingerprint path) clones and sorts
+  only — its input already passed normalize, so it validates nothing and
+  has no error return. Skip the integration slice in either and it rides
   through aliased and unsorted. These caps are reachable, unlike `maxEgressTools`:
   sixteen connections is plausible once the deferred providers land.
 - Those entries ride inside the HMAC-signed `egressChallengePayload`, are
