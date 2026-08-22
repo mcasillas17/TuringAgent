@@ -2597,16 +2597,13 @@ func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRu
 
 // normalizeRuntimeFailure closes the ingestion boundary for one worker report.
 //
-// The legacy retryable bool is translated into a retry request rather than
-// obeyed: the normalizer honours it only for an origin/code pair it recognizes,
-// so an older worker keeps its retries and an unrecognized pair cannot buy
-// itself one. Nothing here reads failed.Message.
+// The legacy retryable bool is untrusted and is ignored outright, never
+// translated into a retry request: only the typed automatic_retry_class field
+// can ask for one, and NormalizeRuntimeFailure still fails closed on an
+// unrecognized origin or an unspecified class. Nothing here reads
+// failed.Message.
 func normalizeRuntimeFailure(failed *turingv1.RuntimeRunFailed) runoutcome.Failure {
-	retry := failed.GetAutomaticRetryClass()
-	if retry == turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_UNSPECIFIED && failed.GetRetryable() {
-		retry = turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT
-	}
-	return runoutcome.NormalizeRuntimeFailure(failed.GetFailureOrigin(), failed.GetCode(), retry)
+	return runoutcome.NormalizeRuntimeFailure(failed.GetFailureOrigin(), failed.GetCode(), failed.GetAutomaticRetryClass())
 }
 
 func encodePayload(payload map[string]any) (string, error) {

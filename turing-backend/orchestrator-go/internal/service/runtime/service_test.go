@@ -4381,6 +4381,123 @@ func TestUnknownOriginAndRetryClassFailClosed(t *testing.T) {
 	}
 }
 
+// TestLegacyRetryableBoolNeverBuysARequeueForAbsentOrigin pins the true legacy
+// worker shape: retryable=true with no typed failure_origin and no typed
+// automatic_retry_class at all, reporting a code that looks transient
+// (worker_busy, the one dispatch code that is genuinely requeued when typed
+// correctly, and tool_discovery_failed, a terminal tool code). Both must fail
+// closed to unknown/internal_failure and terminalize the run rather than
+// requeue it: the legacy bool is untrusted and the proto/design contract says
+// it is ignored outright, never translated into a retry request.
+func TestLegacyRetryableBoolNeverBuysARequeueForAbsentOrigin(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+	}{
+		{name: "worker_busy_looks_transient_but_has_no_typed_origin", code: "worker_busy"},
+		{name: "tool_discovery_failed_looks_transient_but_has_no_typed_origin", code: "tool_discovery_failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness(t)
+			enqueued := h.createRunningRunResult(t, test.name)
+			state, err := h.repo.GetRunState(context.Background(), enqueued.RunID)
+			if err != nil {
+				t.Fatalf("GetRunState: %v", err)
+			}
+
+			// FailureOrigin and AutomaticRetryClass are deliberately left at
+			// their zero values: that is the shape a worker built before
+			// either field existed actually sends.
+			skipDispatch, err := h.service.handleRunFailed(context.Background(), &turingv1.RuntimeRunFailed{
+				RunId:                enqueued.RunID,
+				Code:                 test.code,
+				Message:              "legacy worker report",
+				Retryable:            true,
+				ExpectedStateVersion: state.StateVersion,
+			}, runReleaseOwner{})
+			if err != nil {
+				t.Fatalf("handleRunFailed: %v", err)
+			}
+			if skipDispatch {
+				t.Fatalf("handleRunFailed asked to skip dispatch, want no special handling for a terminal failure")
+			}
+
+			after := h.runState(t, enqueued.RunID)
+			if !isTerminalRunStatus(after.Lifecycle) {
+				t.Fatalf("lifecycle = %q, want terminal rather than a requeue", after.Lifecycle)
+			}
+			if after.OutcomeReason != "internal_failure" {
+				t.Fatalf("outcome reason = %q, want internal_failure", after.OutcomeReason)
+			}
+			code, message := h.runDiagnostics(t, enqueued.RunID)
+			if code != "unknown" {
+				t.Fatalf("error_code = %q, want unknown", code)
+			}
+			if message.Valid {
+				t.Fatalf("error_message persisted %q, want NULL", message.String)
+			}
+
+			payload := h.terminalPayload(t, enqueued.RunID, "agent.run.failed")
+			if payload["retryable"] != false {
+				t.Fatalf("failure payload retryable = %#v, want false", payload["retryable"])
+			}
+			if _, exists := payload["message"]; exists {
+				t.Fatalf("failure payload carries a message: %#v", payload)
+			}
+		})
+	}
+}
+
+// TestTypedOriginWithMissingRetryClassIgnoresLegacyRetryableBool pins the one
+// shape the dead fallback in normalizeRuntimeFailure actually reached: a typed,
+// recognized origin paired with an allowlisted code, but no typed
+// automatic_retry_class, alongside a legacy retryable=true. Classification must
+// follow the existing NormalizeRuntimeFailure contract exactly (an unspecified
+// class normalizes to never) rather than synthesize a trusted transient class
+// from the untrusted bool. Before removing that fallback this run gets
+// requeued instead of terminalized, which is the regression this test pins.
+func TestTypedOriginWithMissingRetryClassIgnoresLegacyRetryableBool(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.createRunningRunResult(t, "typed origin missing retry class")
+	state, err := h.repo.GetRunState(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+
+	if _, err := h.service.handleRunFailed(context.Background(), &turingv1.RuntimeRunFailed{
+		RunId:         enqueued.RunID,
+		Code:          "runtime_error",
+		Message:       "legacy worker report with a typed origin",
+		FailureOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_WORKER_RUNTIME,
+		Retryable:     true,
+		// AutomaticRetryClass is deliberately left unspecified.
+		ExpectedStateVersion: state.StateVersion,
+	}, runReleaseOwner{}); err != nil {
+		t.Fatalf("handleRunFailed: %v", err)
+	}
+
+	after := h.runState(t, enqueued.RunID)
+	if !isTerminalRunStatus(after.Lifecycle) {
+		t.Fatalf("lifecycle = %q, want terminal; the legacy retryable bool must not buy a requeue", after.Lifecycle)
+	}
+	if after.OutcomeReason != "internal_failure" {
+		t.Fatalf("outcome reason = %q, want internal_failure", after.OutcomeReason)
+	}
+	code, message := h.runDiagnostics(t, enqueued.RunID)
+	if code != "runtime_error" {
+		t.Fatalf("error_code = %q, want runtime_error", code)
+	}
+	if message.Valid {
+		t.Fatalf("error_message persisted %q, want NULL", message.String)
+	}
+
+	payload := h.terminalPayload(t, enqueued.RunID, "agent.run.failed")
+	if payload["retryable"] != false {
+		t.Fatalf("failure payload retryable = %#v, want false", payload["retryable"])
+	}
+}
+
 func TestApprovalAndToolCallersSupplyTypedOriginBeforePersistence(t *testing.T) {
 	t.Run("automation_policy_block_is_policy_denied", func(t *testing.T) {
 		h := newHarness(t)

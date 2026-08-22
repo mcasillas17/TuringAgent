@@ -1370,8 +1370,9 @@ Runtime producers set only:
 
 Legacy message is empty or a fixed generic compatibility value. The
 orchestrator calls `NormalizeRuntimeFailure` before any run, job, tool-call,
-approval, or event writer. Ignore legacy `retryable` for unknown origin/code
-pairs and serialize public `RunFailed.retryable` as false.
+approval, or event writer. Ignore legacy `retryable` unconditionally, for every
+origin/code pair typed or unrecognized, and serialize public
+`RunFailed.retryable` as false.
 
 After every Step 3 test has been observed RED, convert every production and test
 caller of all seven temporary raw terminal adapters: ChatService disconnect,
