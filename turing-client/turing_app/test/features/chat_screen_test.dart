@@ -685,6 +685,18 @@ void main() {
   // `_runStateCardInsertionIndex`, so this must pass regardless of path — it
   // is the parity target the page/resync, duplicate-row, and
   // startup-buffer-drain paths below are held to.
+  //
+  // Correction: unlike those other paths, this one was already GREEN
+  // against pre-fix production (HEAD 2fb25907) — for a plain live event
+  // with no watermark/history reason to classify it historical,
+  // `_isHistoricalRunEvent(event)` was already false, so the removed
+  // `insertAdjacent: _isHistoricalRunEvent(event)` argument the live path
+  // fed `_handleIncomingRunState` was already `false` (walk past
+  // artifacts) both before and after the fix. It is a GREEN-before parity
+  // control the other paths are held to, not one more RED-before case —
+  // the commit that added it (8fcd0507) inaccurately generalized "All 5
+  // were confirmed RED against production HEAD 2fb25907 ... before the
+  // fix" to include this one.
   testWidgets(
     'a live terminal state with no post-tool delta still renders below the '
     'tool card',
@@ -2625,8 +2637,20 @@ void main() {
   // walking forward past the already-live tool artifact — lands ABOVE the
   // artifact, breaking parity with the live path (see the baseline test
   // above, "a live terminal state with no post-tool delta still renders
-  // below the tool card"). This also exercises the DUPLICATE-ROW path:
-  // `msg_asst` is already loaded before the resync returns it again.
+  // below the tool card").
+  //
+  // Correction: `msg_asst` IS already loaded before the resync returns it
+  // again (`pageResult.isDuplicateMessage` is true), but the resync's own
+  // row here advances the run from v1/running to v2/failed — a genuinely
+  // `accepted` state update — so this row's card is positioned by the
+  // unconditional `pageResults` loop at the end of `_ingestMessagePage`,
+  // never by the duplicate-row branch's own, separate
+  // `_syncRunStateCardPresenceForContent` call (that call only runs when
+  // `pageResult.stateResult?.isAccepted != true`, which does not hold
+  // here). "Exercises the DUPLICATE-ROW path" was accurate only about
+  // message-id dedup, not about which of the two card-positioning call
+  // sites this test reaches — see the "duplicate, not-accepted resync"
+  // test below for one that actually takes the other branch.
   testWidgets(
     'coalesced resync keeps the terminal card after a tool artifact with no '
     'post-tool delta',
@@ -2952,6 +2976,418 @@ void main() {
         lessThan(tester.getTopLeft(find.text('other.tool')).dy),
         reason:
             "the card must not leap past run_2's later, unrelated tool "
+            'artifact merely because run_1 finally advanced its own state',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Boundary (F10 contract, LIVE `_applyEvent` path): the reconciliation at
+  // the top of `_applyEvent` runs unconditionally for ANY event carrying a
+  // `RunState` — before the type-specific switch, and before
+  // `_isHistoricalRunEvent` is even consulted for that same event (see
+  // `_applyRunFailed`'s own early return the instant `event.runState` is
+  // non-null). A run can be marked completed/historical by an EARLIER
+  // resync's duplicate-row branch the moment its content becomes
+  // displayable — independent of whether that resync's OWN state update
+  // was accepted — and STILL later receive a genuine, higher-version
+  // terminal `RunState` on a LIVE event. `_isHistoricalRunEvent` classifies
+  // that later event as historical too, purely because its runId is now in
+  // `_completedHistoryRunIds` — even though the event is arriving live and
+  // carries the one state update that actually advances this run.
+  //
+  // Before the fix, this combination fed `insertAdjacent:
+  // _isHistoricalRunEvent(event)` into `_handleIncomingRunState`, so a run
+  // that happened to already be historical for this unrelated reason would
+  // have its live terminal card placed immediately beside the assistant
+  // row — ABOVE the tool artifact — instead of walking past it. Restoring
+  // that flag must fail this test.
+  testWidgets(
+    'a live terminal event for a run already marked historical by an '
+    'earlier resync still lands after a tool artifact',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+
+      // A coalesced resync whose own row carries NO `RunState` at all —
+      // `pageResult.stateResult` is null, so the reconciler's held
+      // v1/running state for run_1 never advances. The row's now-
+      // displayable content alone is enough to mark run_1 into
+      // `_completedHistoryRunIds` via `_ingestMessagePage`'s duplicate-row
+      // branch — the one thing this test needs from it.
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before tool.',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 3,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      // The LATER live terminal event for run_1 itself. By now run_1 is in
+      // `_completedHistoryRunIds` (see above), so `_isHistoricalRunEvent`
+      // classifies THIS very event as historical too — even though it
+      // carries a genuine, higher-version `RunState` arriving live, never
+      // through `_ingestMessagePage` at all.
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 4,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Before tool.'), findsOneWidget);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason:
+            'a live event this screen itself classifies as historical must '
+            'still position its card via the same unconditional artifact '
+            'walk as any other caller — reviving insertAdjacent: '
+            '_isHistoricalRunEvent(event) here would place the card above '
+            'the tool artifact the instant a run happens to already be '
+            'historical for an unrelated reason',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Coverage (F10): unlike every `_ingestMessagePage`-sourced test above —
+  // whose resync always ADVANCES the run's state (v1 -> v2, genuinely
+  // `accepted`) and so is positioned via the unconditional `pageResults`
+  // loop at the end of `_ingestMessagePage`, never via the duplicate-row
+  // branch's own `_syncRunStateCardPresenceForContent` call — this resync's
+  // own row offers back the SAME version, byte-for-byte identical state
+  // already held (a `duplicate` outcome, `isAccepted == false`). That is
+  // the one condition under which `pageResult.stateResult?.isAccepted !=
+  // true` is true with a NON-null `stateResult`, taking the
+  // `_syncRunStateCardPresenceForContent` branch instead of the accepted
+  // loop. The card was already correctly positioned by an earlier LIVE
+  // acceptance; this duplicate, not-accepted resync round must leave it
+  // exactly where it was — after run_1's own tool artifact — rather than
+  // disturbing it.
+  testWidgets(
+    'a duplicate, not-accepted resync leaves an already-correct card after '
+    "its run's own tool artifact",
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+
+      // The one, genuine acceptance: a LIVE terminal event advances run_1
+      // from v1/running to v2/failed, correctly positioning its card after
+      // the tool artifact already on screen — exactly like the live-path
+      // baseline test above.
+      final terminalState = _runState(
+        stateVersion: 2,
+        lifecycle: RunLifecycle.failed,
+        outcomeReason: RunOutcomeReason.toolFailure,
+        hasDisplayableContent: true,
+      );
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 3,
+          runState: terminalState,
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason: 'sanity: the live acceptance above must already be correct',
+      );
+
+      // A coalesced resync whose own row offers back the IDENTICAL v2/
+      // failed state (same object) alongside the same already-displayed
+      // content — a `duplicate` outcome, not accepted, exercising
+      // `_ingestMessagePage`'s duplicate-row `_syncRunStateCardPresenceForContent`
+      // call with a non-null `stateResult` for the first time in this
+      // suite.
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before tool.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: terminalState,
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 4,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Before tool.'), findsOneWidget);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason:
+            'a duplicate, not-accepted resync round must not disturb the '
+            "run's already-correctly-positioned card",
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Boundary (F10 contract): the SAME turn-scoped stop `_runStateCardInsertionIndex`
+  // already proves for a later, other-run TOOL artifact (the sibling test
+  // above) must also hold for a later, other-run NOTICE artifact — the walk
+  // checks `entry is _RunNoticeEntry && entry.runId == runId` as its own,
+  // independent disjunct. Dropping the `runId` half of that check (treating
+  // any `_RunNoticeEntry` as this run's own regardless of owner) would let
+  // run_1's card leap over run_2's later notice — this test must fail if
+  // that check is ever dropped.
+  testWidgets(
+    'coalesced resync does not leap a card past a later, other-run notice '
+    'artifact',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          runId: 'run_1',
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+      // A different run's notice, interleaved right after run_1's own tool
+      // artifact — the boundary this insertion must never cross.
+      events.add(
+        _event(
+          type: 'agent.run.step',
+          sequence: 3,
+          runId: 'run_2',
+          payload: const {'note': "run_2's own notice"},
+        ),
+      );
+      await tester.pump();
+
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before tool.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 4,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('system.time'), findsOneWidget);
+      expect(find.text("run_2's own notice"), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.text('system.time')).dy),
+        reason: "the card belongs after run_1's own tool artifact",
+      );
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        lessThan(tester.getTopLeft(find.text("run_2's own notice")).dy),
+        reason:
+            "the card must not leap past run_2's later, unrelated notice "
             'artifact merely because run_1 finally advanced its own state',
       );
 
