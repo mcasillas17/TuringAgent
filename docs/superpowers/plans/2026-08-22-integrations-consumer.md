@@ -114,8 +114,21 @@ feature exists at all:
   `"skills"` through and asks `MCPToolAvailable` (an `mcp_servers` join)
   about everything else — without an `integrations` case, reported
   integration tools are dropped before registration *and* pruned from the
-  worker's capabilities, so they never reach the `tools` table, never appear
-  in `EgressToolNames`, and every beacon dies as `unknown_tool`;
+  worker's capabilities, so they never reach the `tools` table, never
+  appear in `EgressToolNames`, and every beacon dies as `unknown_tool`.
+  **And the `skills`-style blind pass-through is the wrong model for the
+  new case**: the policy-change notification prunes capabilities and then
+  triggers a worker re-report that flows back through this very filter, so
+  a pass-through re-admits a just-disabled tool seconds later — silently
+  breaking the one escape hatch from every-send-asks, and re-feeding the
+  disabled tool's endpoint into future decisions. The `integrations` case
+  consults a pseudo-server-aware availability check (live `tools` row,
+  `policy != 'disabled'`, with **no row yet counting as available** or a
+  new tool could never bootstrap into registration) — and since
+  `UpdateToolPolicyByName` makes skills policies editable for the first
+  time, the `skills` pass-through gets the same treatment in the same
+  commit. `IntegrationEndpointsForTools` likewise filters on
+  `tools.enabled`, as `RemoteMCPServersForTools` already does;
 - the 0016 triggers — `0017` drops and recreates both (SQLite has no `ALTER
   TRIGGER`) widening the carve-out to `('skills','integrations')`;
 - `repository/tools.go` `UpsertTools`, which branches on the literal
@@ -177,7 +190,7 @@ properties the RPC must carry, each a trap if dropped:
   `ArgsHash` connection binding, and — because a `safe` decision is not
   side-effecting to the runner — leave a failed POST retryable, exactly the
   double-comment hazard the side-effect machinery exists to prevent. The
-  integrations service's per-tool `read_only` table is the source of truth:
+  per-tool `read_only` table in `service/tools` is the source of truth:
   `!read_only ⇒ refuse safe`, and the refusal is tested;
 - **the same `notifyRegistryChanged()` call** on success — dispatch reads
   the `tools` table so tests of dispatch alone cannot catch its absence,
@@ -204,8 +217,13 @@ mutation.
 `sideEffecting` solely from `DECISION_APPROVAL_REQUIRED`, and that one bit
 drives approval-waiting *and* every downstream side-effect consequence.
 Those meanings are decoupled: `ToolPolicyDecision` gains a `read_only`
-field, set by the orchestrator from the integrations service's own per-tool
-table (the three GET tools), and when it is true the runner changes the
+field, set by the orchestrator from a static per-tool table that lives in
+`service/tools` beside `BundledServerForTool` — deliberately not inside
+`service/integrations`, because its two readers, the by-name policy RPC in
+`mcpregistry` (the un-`safe`-able guard) and the runtime service's beacon
+path (this decision bit), both already import `service/tools` and neither
+imports `service/integrations`; placing it there hands the implementer an
+import cycle. When `read_only` is true the runner changes the
 side-effect handling at its three sites while approval-waiting is
 unchanged — with the three sites claimed honestly, because they do not all
 deliver the same thing: a failed **call** is a recoverable tool error, not
@@ -216,7 +234,10 @@ stays false, so run-level retryability is unaffected by reads; and a
 `SideEffectCommittedError` — the run still ends there, deliberately,
 because continuing when the orchestrator has lost track of a tool call's
 state is wrong for reads and writes alike; what changes is that the failure
-is not recorded as a committed side effect. Two named consequences,
+is not recorded as a committed side effect — and the reporting-failure
+branch's hardcoded "safe tool call completed" message becomes policy-aware
+in the same commit, or the transcript states a falsehood about an
+`approval_required` call. Two named consequences,
 intended: a run whose last tool call was a `read_only` GET stays retryable
 and may re-issue the GET; and on the crash/lease-expiry path the stale-
 assignment sweep still marks any open tool call `side_effect_uncertain`
@@ -235,23 +256,34 @@ signed challenge, not just the database row.** PR #73's pattern, all of it:
   (`parseEgressChallenge` re-marshals and `bytes.Equal`-compares): entries
   sorted by `(endpoint, connection_id)`, deduplicated, at most
   `maxIntegrationEndpoints = 16` entries, each entry's serialized form at
-  most `maxIntegrationEndpointEntryBytes = 1 KiB` — mirroring the
+  most `maxIntegrationEndpointEntryBytes = 768` bytes — mirroring the
   sortedness and strict-ordering rules `validChallengePayload` already
-  enforces for `SelectedTools` and `RemoteMCPServers`. Two mechanical
+  enforces for `SelectedTools` and `RemoteMCPServers`. The arithmetic is
+  stated because the first draft got it wrong: these are **sub-budgets**
+  under the pre-existing `maxEgressChallengeBytes = 32 KiB` total, in the
+  `maxEgressSelectedToolBytes` mold, and they must sum comfortably below
+  it — 16 KiB of selected tools + 12 KiB of endpoint entries leaves ~4 KiB
+  for the nonce, digest, fingerprints and JSON structure, where 16 × 1 KiB
+  would have filled the total exactly and made the opaque signing failure
+  the *guaranteed* outcome at both caps. To fit 768 bytes with worst-case
+  JSON escaping, the entry's `display_name` is capped at 64 runes
+  (ellipsis-truncated for the disclosure; the Integrations page still
+  shows the full name). Two mechanical
   consequences are named so nobody discovers them in a debugger: the inner
   `tools` slice is always marshalled non-nil and sorted (nil vs. `[]` is a
   byte difference that silently voids valid challenges), and the entry
   struct is not `comparable` (it holds a slice), so
   `payloadMatchesEgressContext` compares these with `slices.EqualFunc`,
-  not `slices.Equal`. Exceeding **any** of the caps — entry count,
-  per-entry bytes, or the pre-existing total challenge bytes — is refused
-  at `resolveEgressContext` with a legible `FailedPrecondition` naming the
-  remedy (revoke connections or disable tools), not left to surface from
-  `signEgressChallenge` as the opaque `Internal` that would then appear on
-  **every send on every provider**. These caps are reachable, unlike
+  not `slices.Equal`. Exceeding either sub-budget — entry count or
+  per-entry bytes — is refused at `resolveEgressContext` with a legible
+  `FailedPrecondition` naming the remedy (revoke connections or disable
+  tools), not left to surface from `signEgressChallenge` as the opaque
+  `Internal` that would then appear on **every send on every provider**.
+  (`resolveEgressContext` cannot enforce the 32 KiB *total* — it has no
+  nonce, digest, or timestamps yet — which is exactly why the sub-budgets
+  must sum under it with slack.) These caps are reachable, unlike
   `maxEgressTools`: sixteen connections is plausible once the deferred
-  providers land, and a 120-rune display name JSON-escapes toward the
-  1 KiB entry bound on its own.
+  providers land.
 - Those entries ride inside the HMAC-signed `egressChallengePayload`, are
   covered by the structural validation and by
   `payloadMatchesEgressContext`, and are frozen at enqueue — so the list the
@@ -504,8 +536,11 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    Revoking an *only* connection instead changes `SelectedTools` and the
    pre-existing comparison catches it, proving nothing. And the enqueue
    idempotency fingerprint is exercised the way `RemoteMCPServers` was
-   when it joined: a resend under the same idempotency key whose only
-   difference is the connection set is a new consent, not a replay.
+   when it joined — as a pure-function test (two decisions differing only
+   in the connection set produce different fingerprints); the live
+   observable is a refusal as an idempotency **conflict**
+   (`AlreadyExists`), not a fresh enqueue, so do not write a test that
+   waits for a second run.
 5. **Approval-required calls consume exactly once, reads included, bound to
    the connection.** A write without a valid unconsumed approval is
    refused; with one, consumed exactly once; an args mismatch — including
@@ -528,7 +563,11 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
    an integration write (`github.create_comment`) to `safe`, does not
    disable the pseudo-server tool it edits, and fires the registry-changed
    notification — a disabled tool leaves `EgressToolNames` and the next
-   disclosure without a restart.
+   disclosure without a restart, **and stays out after the worker's
+   capabilities re-report**: the same notification triggers re-discovery
+   whose report flows back through `filterRegisteredWorkerTools`, which is
+   exactly where a blind pass-through re-admits the tool seconds after the
+   prune.
 9. **The happy path exists, connection id included, disclosure legible.**
    A local-Ollama run offered GitHub tools gets a non-empty egress
    disclosure whose entries carry display names; the advertised tool
@@ -550,15 +589,22 @@ Adapt names to the implementation; every assertion must survive. For 1–8,
     integration tools has no integration endpoints in its decision; an
     automation run's integration call is refused (no decision exists); an
     integration tool on an automation allowlist is rejected at save.
-13. **The approval is legible, or the write is refused.** An integration
-    write approval event carries the full render — connection display name,
-    destination, complete body; a write whose render exceeds
-    `maxIntegrationApprovalRenderBytes` is refused before any approval is
-    created, with no truncated approval ever emitted.
+13. **The approval is legible, or the write is refused — through one
+    builder.** An integration write approval event carries the full render
+    — connection display name, destination, complete body; a write whose
+    render exceeds `maxIntegrationApprovalRenderBytes` is refused before
+    any approval is created, with no truncated approval ever emitted. The
+    boundary is probed to catch two drifting render functions: a write
+    rendering to exactly the bound is approved with its payload render
+    byte-identical to what the size check measured; one byte over is
+    denied.
 14. **Bounded, framed, spoof-resistant results.** An oversized response is
     truncated to `maxIntegrationResultBytes` on a rune boundary with the
     truncation announced; a body containing the framing delimiters cannot
-    close the frame.
+    close the frame — and two calls carry **different** delimiters, the
+    assertion that kills a process-wide constant nonce (which the model,
+    and therefore anything the model writes to a provider, eventually
+    reveals).
 15. **Zero connections, zero surface.** With no live connections the tools
     are absent from the registry and from `EgressToolNames`, prepare
     returns no integration endpoints, and connecting one fires the
