@@ -9,11 +9,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
@@ -280,9 +282,23 @@ func TestIntegrationDispatchRequiresAllFourDecisionLegsBeforeNetwork(t *testing.
 		mutate func(*repository.RunEgressDecision, string)
 	}{
 		{"selected tool", func(d *repository.RunEgressDecision, _ string) { d.SelectedTools = []string{} }},
-		{"argument and result categories", func(d *repository.RunEgressDecision, _ string) { d.DataCategories = []string{} }},
-		{"endpoint and connection pair", func(d *repository.RunEgressDecision, _ string) {
+		// One category removed at a time: wiping both lets either conjunct of
+		// the category check be deleted from validation unnoticed.
+		{"argument category alone", func(d *repository.RunEgressDecision, _ string) {
+			d.DataCategories = slices.DeleteFunc(slices.Clone(d.DataCategories), func(c string) bool {
+				return c == "EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS"
+			})
+		}},
+		{"result category alone", func(d *repository.RunEgressDecision, _ string) {
+			d.DataCategories = slices.DeleteFunc(slices.Clone(d.DataCategories), func(c string) bool {
+				return c == "EGRESS_DATA_CATEGORY_TOOL_RESULTS"
+			})
+		}},
+		{"connection half of the pair", func(d *repository.RunEgressDecision, _ string) {
 			d.IntegrationEndpoints[0].ConnectionID = "conn_other_on_same_host"
+		}},
+		{"endpoint half of the pair", func(d *repository.RunEgressDecision, _ string) {
+			d.IntegrationEndpoints[0].Endpoint = "https://ghe.example.com"
 		}},
 		{"tool in endpoint entry", func(d *repository.RunEgressDecision, _ string) {
 			d.IntegrationEndpoints[0].Tools = []string{"github.get_issue"}
@@ -845,6 +861,9 @@ func TestIntegrationResultFramesUsePerCallNonceAndBoundedUTF8(t *testing.T) {
 	if len(first) > maxIntegrationResultBytes {
 		t.Fatalf("framed result has %d bytes, want at most %d", len(first), maxIntegrationResultBytes)
 	}
+	if !utf8.ValidString(first) {
+		t.Fatal("truncation split a multibyte rune: framed result is not valid UTF-8")
+	}
 }
 
 func TestGitHubRequestRejectsMalformedOptionalArguments(t *testing.T) {
@@ -868,5 +887,79 @@ func TestGitHubRequestRejectsMalformedOptionalArguments(t *testing.T) {
 				t.Fatal("malformed optional argument was treated as absent")
 			}
 		})
+	}
+}
+
+// The tool descriptions are how the model learns valid connection ids; an
+// implementation that enumerated a fake or nothing at all previously passed
+// every test because the Execute-path test wrote its own description.
+func TestListIntegrationToolsNamesConnectionsAndOmitsDisabled(t *testing.T) {
+	server, database, ctx := newIntegrationServer(t)
+	repo := repository.New(database)
+	connected, err := server.ConnectAccount(ctx, &turingv1.ConnectAccountRequest{
+		Provider:    turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB,
+		DisplayName: "Work GitHub", Credential: "work-token", ConsentAcknowledged: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	personal, err := server.ConnectAccount(ctx, &turingv1.ConnectAccountRequest{
+		Provider:    turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB,
+		DisplayName: "Personal GitHub", Credential: "personal-token", ConsentAcknowledged: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := server.ListIntegrationTools(ctx, &turingv1.ListIntegrationToolsRequest{})
+	if err != nil || len(listed.GetTools()) != 4 {
+		t.Fatalf("tools=%+v err=%v", listed, err)
+	}
+	// Two connections, so a lister that emits only pairs[0] fails.
+	for _, want := range []string{
+		"(" + connected.GetConnectionId() + ", Work GitHub)",
+		"(" + personal.GetConnectionId() + ", Personal GitHub)",
+	} {
+		for _, tool := range listed.GetTools() {
+			if !strings.Contains(tool.GetDescription(), "Available connections: ") ||
+				!strings.Contains(tool.GetDescription(), want) {
+				t.Fatalf("tool %s description %q does not enumerate %q",
+					tool.GetToolName(), tool.GetDescription(), want)
+			}
+		}
+	}
+	if err := repo.UpsertTools(ctx, []repository.DiscoveredTool{{
+		ServerName: "integrations", ToolName: "github.get_file", SchemaJSON: `{}`, Policy: "approval_required",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetToolPolicyByName(ctx, "integrations", "github.get_file", "disabled"); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = server.ListIntegrationTools(ctx, &turingv1.ListIntegrationToolsRequest{})
+	if err != nil || len(listed.GetTools()) != 3 {
+		t.Fatalf("tools after disable=%+v err=%v, want the disabled tool filtered", listed, err)
+	}
+	for _, tool := range listed.GetTools() {
+		if tool.GetToolName() == "github.get_file" {
+			t.Fatal("disabled tool still offered by ListIntegrationTools")
+		}
+	}
+}
+
+// A missing TURING_INTEGRATION_KEY and a rotated key are different failures
+// with different remedies; telling a keyless operator to "reconnect" loops
+// them through a flow that cannot succeed.
+func TestIntegrationDispatchWithoutKeyNamesTheMissingKeyNotReconnect(t *testing.T) {
+	server, _, _, runID, connectionID := integrationCallHarness(t, "keyless-token")
+	server.sealer = nil
+	args, _ := structpb.NewStruct(map[string]any{"connection_id": connectionID, "owner": "owner", "repo": "repo"})
+	_, err := server.CallIntegrationTool(context.Background(), &turingv1.CallIntegrationToolRequest{
+		RunId: runID, ToolName: "github.list_issues", Args: args,
+	})
+	if err == nil || !strings.Contains(err.Error(), "TURING_INTEGRATION_KEY") {
+		t.Fatalf("error=%v, want the unconfigured-key message", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "reconnect") {
+		t.Fatalf("error=%v, told a keyless operator to reconnect", err)
 	}
 }

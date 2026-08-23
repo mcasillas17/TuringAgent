@@ -139,12 +139,26 @@ func (r *Repository) PseudoServerToolPolicy(ctx context.Context, serverName, too
 }
 
 func (r *Repository) SetToolPolicyByName(ctx context.Context, serverName, toolName, policy string) error {
+	// The server-backed branches mirror SetMCPToolPolicy exactly. Dropping the
+	// present clauses would let this public RPC resurrect a tool the server no
+	// longer exports (present = 0 after its last discovery prune).
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE tools
 		SET policy = ?,
+			present = CASE
+				WHEN mcp_server_id IS NOT NULL AND EXISTS (
+					SELECT 1 FROM mcp_servers
+					WHERE id = tools.mcp_server_id AND tier = 'bundled'
+				) THEN 1
+				ELSE present
+			END,
 			enabled = CASE
 				WHEN ? = 'disabled' THEN 0
 				WHEN mcp_server_id IS NULL THEN 1
+				WHEN present = 0 AND NOT EXISTS (
+					SELECT 1 FROM mcp_servers
+					WHERE id = tools.mcp_server_id AND tier = 'bundled'
+				) THEN 0
 				WHEN EXISTS (SELECT 1 FROM mcp_servers WHERE id = tools.mcp_server_id AND enabled = 1) THEN 1
 				ELSE 0
 			END

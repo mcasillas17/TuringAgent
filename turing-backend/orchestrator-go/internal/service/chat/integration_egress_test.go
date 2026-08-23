@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -200,6 +201,14 @@ func TestIntegrationChallengeRefusesWhenOneOfTwoConnectionsIsRevoked(t *testing.
 	disclosure := prepared.GetDisclosure()
 	if len(disclosure.GetIntegrationEndpoints()) != 2 || len(disclosure.GetSelectedTools()) == 0 {
 		t.Fatalf("initial disclosure=%+v", disclosure)
+	}
+	names := make([]string, 0, 2)
+	for _, endpoint := range disclosure.GetIntegrationEndpoints() {
+		names = append(names, endpoint.GetDisplayName())
+	}
+	sort.Strings(names)
+	if names[0] != "GitHub 001" || names[1] != "GitHub 002" {
+		t.Fatalf("disclosure display names = %v, want the connections' names", names)
 	}
 	if _, err := h.repo.RevokeConnection(context.Background(), first.ConnectionID); err != nil {
 		t.Fatal(err)
