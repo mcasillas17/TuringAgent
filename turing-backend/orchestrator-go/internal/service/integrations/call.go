@@ -40,7 +40,21 @@ func (s *Server) CallIntegrationTool(ctx context.Context, req *turingv1.CallInte
 		if s.approvals == nil {
 			return nil, status.Error(codes.FailedPrecondition, "caller-side approval enforcement is not configured")
 		}
-		if err := s.approvals.ConsumeApprovalForThirdParty(ctx, req.GetApprovalId(), req.GetRunId(), "integrations", req.GetToolName(), args); err != nil {
+		if err := s.approvals.ConsumeApprovalForThirdParty(
+			ctx,
+			req.GetApprovalId(),
+			req.GetRunId(),
+			"integrations",
+			// "integrations" is a pseudo-server: it never has an
+			// mcp_servers row (see schema/0017_integrations_consumer.sql),
+			// so tool_calls records its own mcp_server_id as NULL for
+			// this server_name (repository.lookupMCPServerIDByNameTx),
+			// and this empty string is the one caller-supplied serverID
+			// that can ever legitimately match it.
+			"",
+			req.GetToolName(),
+			args,
+		); err != nil {
 			return nil, err
 		}
 	default:

@@ -322,7 +322,7 @@ type blockingApprovalEnforcer struct {
 }
 
 func (b *blockingApprovalEnforcer) ConsumeApprovalForThirdParty(
-	context.Context, string, string, string, string, map[string]any,
+	context.Context, string, string, string, string, string, map[string]any,
 ) error {
 	close(b.entered)
 	<-b.proceed

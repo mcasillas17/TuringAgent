@@ -36,6 +36,30 @@ const (
 // so it never needs — and is never refused by — this cap.
 const MaxNonBundledMCPServers = 256
 
+// MaxMCPRegistryServers bounds the total number of mcp_servers rows —
+// bundled and non-bundled combined — MCPRegistrySnapshot ever treats as a
+// normal, healthy registry size. MaxNonBundledMCPServers already bounds
+// every row a live write path (ImportMCPServer/RegisterMCPServer) can
+// actually create; the fixed headroom above it covers TuringAgent's own
+// bundled rows, which are seeded by migration rather than caller action
+// (two today: "system", "files" — see schema/0016_mcp_registry.sql) with
+// room for a few more before this number would ever need to move again.
+// A database that somehow already holds more than this — predating one
+// of those write-path guards, or a future regression reintroducing an
+// unguarded one — is read in a bounded, degraded way instead of an
+// unbounded one; see MCPRegistrySnapshot's own ServersOverCap field.
+const MaxMCPRegistryServers = MaxNonBundledMCPServers + 16
+
+// MaxMCPImportIssues bounds how many mcp_import_issues rows
+// MCPRegistrySnapshot ever treats as a normal, healthy read. It equals
+// MaxNonBundledMCPServers, the same bound a single ImportJSON call can
+// itself ever persist in one write (see the mcpregistry package's own
+// maxMCPImportEntries and recordUnsupported's defensive count bound), so
+// a healthy database populated only through ReplaceMCPImportIssues can
+// never actually exceed it; see MCPRegistrySnapshot's own IssuesOverCap
+// field for what happens if some other write somehow already has.
+const MaxMCPImportIssues = MaxNonBundledMCPServers
+
 var (
 	ErrMCPServerNotFound         = errors.New("MCP server not found")
 	ErrMCPServerBundled          = errors.New("bundled MCP server cannot be imported")
@@ -554,6 +578,42 @@ func listMCPServersRows(ctx context.Context, q mcpRowsQuerier) ([]MCPServerRecor
 	return servers, nil
 }
 
+// listMCPServersRowsBounded is listMCPServersRows' bounded sibling, used
+// only by MCPRegistrySnapshot (see listMCPImportIssuesRowsBounded's own
+// doc comment for the identical detect-and-truncate-in-one-query
+// reasoning). overCap is true whenever mcp_servers holds more than limit
+// rows; servers is then truncated to exactly limit, in the query's own
+// `ORDER BY s.name` order.
+func listMCPServersRowsBounded(ctx context.Context, q mcpRowsQuerier, limit int) (servers []MCPServerRecord, overCap bool, err error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT s.id, s.name, s.transport, s.url, s.sealed_token, s.tier, s.enabled,
+			COALESCE(st.status, 'unknown'), COALESCE(st.error, ''), s.created_at
+		FROM mcp_servers s
+		LEFT JOIN mcp_server_status st ON st.mcp_server_id = s.id
+		ORDER BY s.name
+		LIMIT ?
+	`, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = rows.Close() }()
+	servers = make([]MCPServerRecord, 0, limit+1)
+	for rows.Next() {
+		record, err := scanMCPServer(rows)
+		if err != nil {
+			return nil, false, err
+		}
+		servers = append(servers, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(servers) > limit {
+		return servers[:limit], true, nil
+	}
+	return servers, false, nil
+}
+
 func (r *Repository) ListMCPServers(ctx context.Context) ([]MCPServerRecord, error) {
 	return listMCPServersRows(ctx, r.db)
 }
@@ -802,6 +862,43 @@ func listMCPImportIssuesRows(ctx context.Context, q mcpRowsQuerier) ([]MCPImport
 	return issues, nil
 }
 
+// listMCPImportIssuesRowsBounded is listMCPImportIssuesRows' bounded
+// sibling, used only by MCPRegistrySnapshot: it reads at most limit+1 rows
+// (never the table's full, potentially unbounded count) so it can both
+// detect an over-cap condition and still return a usable, bounded result
+// in the same query, rather than counting separately first. overCap is
+// true whenever the table holds more than limit rows, in which case
+// issues is truncated to exactly limit (in the query's own `ORDER BY
+// name` order, so which rows survive is deterministic) rather than the
+// (limit+1)-th and beyond simply being read and discarded.
+func listMCPImportIssuesRowsBounded(ctx context.Context, q mcpRowsQuerier, limit int) (issues []MCPImportIssue, overCap bool, err error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT name, reason
+		FROM mcp_import_issues
+		ORDER BY name
+		LIMIT ?
+	`, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = rows.Close() }()
+	issues = make([]MCPImportIssue, 0, limit+1)
+	for rows.Next() {
+		var issue MCPImportIssue
+		if err := rows.Scan(&issue.Name, &issue.Reason); err != nil {
+			return nil, false, err
+		}
+		issues = append(issues, issue)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(issues) > limit {
+		return issues[:limit], true, nil
+	}
+	return issues, false, nil
+}
+
 func (r *Repository) ListMCPImportIssues(ctx context.Context) ([]MCPImportIssue, error) {
 	return listMCPImportIssuesRows(ctx, r.db)
 }
@@ -809,8 +906,9 @@ func (r *Repository) ListMCPImportIssues(ctx context.Context) ([]MCPImportIssue,
 // MCPServerWithTools pairs a server row with every tool row
 // ListMCPServerTools would return for it (present and withdrawn alike),
 // captured together by MCPRegistrySnapshot. Tools is empty whenever the
-// snapshot's own OverBudget is true (see MCPRegistrySnapshot's own doc
-// comment) — never partially populated for some servers and not others.
+// snapshot is degraded (see MCPRegistrySnapshot's own OverBudget/
+// ServersOverCap/IssuesOverCap fields) — never partially populated for
+// some servers and not others.
 type MCPServerWithTools struct {
 	Server MCPServerRecord
 	Tools  []MCPServerTool
@@ -818,8 +916,9 @@ type MCPServerWithTools struct {
 
 // MCPRegistrySnapshot is the complete, point-in-time registry state
 // ListMcpServers needs to build its response: every server (bundled and
-// non-bundled), each paired with its own tools (unless OverBudget — see
-// below), and every recorded import issue.
+// non-bundled, bounded — see ServersOverCap), each paired with its own
+// tools (unless degraded — see below), and every recorded import issue
+// (also bounded — see IssuesOverCap).
 type MCPRegistrySnapshot struct {
 	Servers []MCPServerWithTools
 	Issues  []MCPImportIssue
@@ -837,6 +936,29 @@ type MCPRegistrySnapshot struct {
 	// marshal and send, a schema-heavy result sized against an unbounded
 	// aggregate.
 	OverBudget bool
+	// ServersOverCap is true when mcp_servers already holds more than
+	// MaxMCPRegistryServers rows at read time. Every live write path
+	// already refuses to create such a state (see
+	// nonBundledMCPServerRegistryFullTx), so — like OverBudget — this
+	// should be unreachable in practice, but a database that somehow
+	// already exceeds it is still read in a bounded, degraded way:
+	// Servers is truncated to exactly MaxMCPRegistryServers entries
+	// (deterministically, in name order) rather than growing this
+	// response without limit, and every one of those entries' own Tools
+	// is left empty, the same as OverBudget.
+	ServersOverCap bool
+	// IssuesOverCap is true when mcp_import_issues already holds more
+	// than MaxMCPImportIssues rows at read time. A single ImportJSON call
+	// can never itself write more than that many (see the mcpregistry
+	// package's own recordUnsupported), so this should likewise be
+	// unreachable in practice, but a database that somehow already
+	// exceeds it is read the same bounded, degraded way: Issues is
+	// truncated to exactly MaxMCPImportIssues entries (in name order),
+	// and — for the same one-shared-rule reason ServersOverCap already
+	// empties every server's Tools rather than only the servers over its
+	// own specific cap — this too empties every server's Tools, not only
+	// when the servers table itself is what is oversized.
+	IssuesOverCap bool
 }
 
 // MCPRegistrySnapshot reads the complete server+tools+issues registry
@@ -865,11 +987,15 @@ type MCPRegistrySnapshot struct {
 // carries one is degraded rather than refused outright — see
 // MCPRegistrySnapshot's own OverBudget field for exactly what that means
 // and why: the registry must stay usable enough to recover from, not
-// merely safe. Every server row and every import issue is still read
-// (and the whole read still commits as one coherent snapshot); only the
-// per-server tool read is skipped while OverBudget, so this never
-// attempts to read, let alone build a response sized against, an
-// over-budget aggregate of tool schemas specifically.
+// merely safe. The server and import-issue reads immediately below are
+// themselves bounded the same way (listMCPServersRowsBounded/
+// listMCPImportIssuesRowsBounded, against MaxMCPRegistryServers/
+// MaxMCPImportIssues) for the identical reason, applied to row *count*
+// rather than aggregate byte size — see ServersOverCap/IssuesOverCap.
+// Whenever any of the three is true, every server's own tool read is
+// skipped, so this never attempts to read, let alone build a response
+// sized against, an unbounded number of tool schemas, server rows, or
+// issue rows.
 func (r *Repository) MCPRegistrySnapshot(ctx context.Context) (MCPRegistrySnapshot, error) {
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -887,14 +1013,26 @@ func (r *Repository) MCPRegistrySnapshot(ctx context.Context) (MCPRegistrySnapsh
 		r.mcpRegistrySnapshotBarrier()
 	}
 
-	servers, err := listMCPServersRows(ctx, tx)
+	servers, serversOverCap, err := listMCPServersRowsBounded(ctx, tx, MaxMCPRegistryServers)
 	if err != nil {
 		return MCPRegistrySnapshot{}, err
 	}
-	snapshot := MCPRegistrySnapshot{Servers: make([]MCPServerWithTools, 0, len(servers)), OverBudget: overBudget}
+	issues, issuesOverCap, err := listMCPImportIssuesRowsBounded(ctx, tx, MaxMCPImportIssues)
+	if err != nil {
+		return MCPRegistrySnapshot{}, err
+	}
+	degraded := overBudget || serversOverCap || issuesOverCap
+
+	snapshot := MCPRegistrySnapshot{
+		Servers:        make([]MCPServerWithTools, 0, len(servers)),
+		Issues:         issues,
+		OverBudget:     overBudget,
+		ServersOverCap: serversOverCap,
+		IssuesOverCap:  issuesOverCap,
+	}
 	for _, server := range servers {
 		var tools []MCPServerTool
-		if !overBudget {
+		if !degraded {
 			tools, err = listMCPServerToolsRows(ctx, tx, server.ID)
 			if err != nil {
 				return MCPRegistrySnapshot{}, err
@@ -902,11 +1040,6 @@ func (r *Repository) MCPRegistrySnapshot(ctx context.Context) (MCPRegistrySnapsh
 		}
 		snapshot.Servers = append(snapshot.Servers, MCPServerWithTools{Server: server, Tools: tools})
 	}
-	issues, err := listMCPImportIssuesRows(ctx, tx)
-	if err != nil {
-		return MCPRegistrySnapshot{}, err
-	}
-	snapshot.Issues = issues
 
 	if err := tx.Commit(); err != nil {
 		return MCPRegistrySnapshot{}, err

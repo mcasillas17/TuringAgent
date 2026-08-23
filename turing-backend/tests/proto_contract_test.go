@@ -734,6 +734,17 @@ func TestMCPRegistryProtoContract(t *testing.T) {
 	tool := file.Messages().ByName("McpToolDescriptor")
 	assertProtoField(t, tool, "present", 5, protoreflect.BoolKind, false, "")
 
+	listResp := file.Messages().ByName("ListMcpServersResponse")
+	assertProtoField(t, listResp, "servers", 1, protoreflect.MessageKind, true, "turing.v1.McpServerDescriptor")
+	assertProtoField(t, listResp, "unsupported", 2, protoreflect.MessageKind, true, "turing.v1.UnsupportedMcpServer")
+	// registry_degraded/registry_degradation_reason are additive fields 3
+	// and 4: an explicit, structured signal for a bounded/degraded
+	// registry read (see repository.MCPRegistrySnapshot), replacing a
+	// synthetic "_registry"-named Unsupported entry rather than
+	// overloading that list with a non-per-entry systemic status.
+	assertProtoField(t, listResp, "registry_degraded", 3, protoreflect.BoolKind, false, "")
+	assertProtoField(t, listResp, "registry_degradation_reason", 4, protoreflect.StringKind, false, "")
+
 	service := file.Services().ByName("McpRegistryService")
 	for _, name := range []protoreflect.Name{
 		"ListMcpServers",

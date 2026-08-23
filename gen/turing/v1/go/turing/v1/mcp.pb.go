@@ -407,11 +407,26 @@ func (*ListMcpServersRequest) Descriptor() ([]byte, []int) {
 }
 
 type ListMcpServersResponse struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
-	Servers       []*McpServerDescriptor  `protobuf:"bytes,1,rep,name=servers,proto3" json:"servers,omitempty"`
-	Unsupported   []*UnsupportedMcpServer `protobuf:"bytes,2,rep,name=unsupported,proto3" json:"unsupported,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState  `protogen:"open.v1"`
+	Servers     []*McpServerDescriptor  `protobuf:"bytes,1,rep,name=servers,proto3" json:"servers,omitempty"`
+	Unsupported []*UnsupportedMcpServer `protobuf:"bytes,2,rep,name=unsupported,proto3" json:"unsupported,omitempty"`
+	// True when the registry could not safely return complete, healthy
+	// state — more servers, more import issues, or a larger aggregate
+	// tool-byte total than the registry's own operating bounds allow (see
+	// repository.MaxMCPRegistryServers/MaxMCPRegistryToolBytes) — and
+	// returned a safe, bounded, degraded view instead: every server
+	// descriptor is still listed (an operator retains enough identity —
+	// id, name, endpoint — to find and delete whichever one is
+	// responsible), but with its own `tools` left empty. This is an
+	// explicit, structured signal, never a synthetic entry appended to
+	// `unsupported` (which continues to describe only ordinary per-entry
+	// import refusals).
+	RegistryDegraded bool `protobuf:"varint,3,opt,name=registry_degraded,json=registryDegraded,proto3" json:"registry_degraded,omitempty"`
+	// Set only when registry_degraded is true: a fixed, non-sensitive
+	// explanation of which bound was exceeded.
+	RegistryDegradationReason string `protobuf:"bytes,4,opt,name=registry_degradation_reason,json=registryDegradationReason,proto3" json:"registry_degradation_reason,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *ListMcpServersResponse) Reset() {
@@ -456,6 +471,20 @@ func (x *ListMcpServersResponse) GetUnsupported() []*UnsupportedMcpServer {
 		return x.Unsupported
 	}
 	return nil
+}
+
+func (x *ListMcpServersResponse) GetRegistryDegraded() bool {
+	if x != nil {
+		return x.RegistryDegraded
+	}
+	return false
+}
+
+func (x *ListMcpServersResponse) GetRegistryDegradationReason() string {
+	if x != nil {
+		return x.RegistryDegradationReason
+	}
+	return ""
 }
 
 type SetMcpServerEnabledRequest struct {
@@ -1276,10 +1305,12 @@ const file_turing_v1_mcp_proto_rawDesc = "" +
 	"\x14UnsupportedMcpServer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x17\n" +
-	"\x15ListMcpServersRequest\"\x95\x01\n" +
+	"\x15ListMcpServersRequest\"\x82\x02\n" +
 	"\x16ListMcpServersResponse\x128\n" +
 	"\aservers\x18\x01 \x03(\v2\x1e.turing.v1.McpServerDescriptorR\aservers\x12A\n" +
-	"\vunsupported\x18\x02 \x03(\v2\x1f.turing.v1.UnsupportedMcpServerR\vunsupported\"S\n" +
+	"\vunsupported\x18\x02 \x03(\v2\x1f.turing.v1.UnsupportedMcpServerR\vunsupported\x12+\n" +
+	"\x11registry_degraded\x18\x03 \x01(\bR\x10registryDegraded\x12>\n" +
+	"\x1bregistry_degradation_reason\x18\x04 \x01(\tR\x19registryDegradationReason\"S\n" +
 	"\x1aSetMcpServerEnabledRequest\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x18\n" +
 	"\aenabled\x18\x02 \x01(\bR\aenabled\"\x85\x01\n" +

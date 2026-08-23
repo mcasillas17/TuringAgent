@@ -31,12 +31,13 @@ import (
 //
 // This proves, in one continuous scenario: the response stays under the
 // 4MiB gRPC message cap; every server (the healthy one and the offending
-// one alike) is still listed with its own Tools completely empty; a
-// bounded "_registry" notice explains why; DeleteMcpServer still works
-// on the offending server even while the aggregate remains over budget
-// (its oversized tool row cascade-deletes with it); and a subsequent
-// ListMcpServers call — now back under budget — recovers full tool
-// listing automatically, with no lingering "_registry" notice.
+// one alike) is still listed with its own Tools completely empty; the
+// explicit RegistryDegraded/RegistryDegradationReason fields explain why;
+// DeleteMcpServer still works on the offending server even while the
+// aggregate remains over budget (its oversized tool row cascade-deletes
+// with it); and a subsequent ListMcpServers call — now back under budget
+// — recovers full tool listing automatically, with RegistryDegraded
+// cleared.
 func TestListMcpServersDegradesGracefullyWhenAggregateToolBudgetIsPreexistingOversized(t *testing.T) {
 	database, err := db.Open(":memory:")
 	if err != nil {
@@ -110,12 +111,17 @@ func TestListMcpServersDegradesGracefullyWhenAggregateToolBudgetIsPreexistingOve
 	if !foundOffending {
 		t.Fatalf("Servers = %+v, want vendor-oversized still listed so an operator can find and delete it", response.GetServers())
 	}
-	reason, present := findUnsupportedReason(response.GetUnsupported(), "_registry")
-	if !present {
-		t.Fatalf("Unsupported = %+v, want a bounded _registry notice", response.GetUnsupported())
+	if !response.GetRegistryDegraded() {
+		t.Fatal("RegistryDegraded = false, want true while the aggregate tool budget is over its cap")
 	}
-	if reason != mcpRegistryOverBudgetNoticeMessage {
-		t.Fatalf("_registry reason = %q, want the fixed notice %q", reason, mcpRegistryOverBudgetNoticeMessage)
+	if response.GetRegistryDegradationReason() != mcpRegistryOverBudgetNoticeMessage {
+		t.Fatalf("RegistryDegradationReason = %q, want the fixed notice %q", response.GetRegistryDegradationReason(), mcpRegistryOverBudgetNoticeMessage)
+	}
+	// Never a synthetic "_registry"-named Unsupported entry: the
+	// systemic over-budget condition is reported only through the
+	// explicit RegistryDegraded/RegistryDegradationReason fields above.
+	if _, present := findUnsupportedReason(response.GetUnsupported(), "_registry"); present {
+		t.Fatalf("Unsupported = %+v, want no synthetic _registry entry", response.GetUnsupported())
 	}
 
 	// Delete works even while over budget: it targets one server
@@ -126,13 +132,16 @@ func TestListMcpServersDegradesGracefullyWhenAggregateToolBudgetIsPreexistingOve
 
 	// Recovery: the oversized tool row cascade-deleted with its server,
 	// so the aggregate is back under budget and a fresh list recovers
-	// completely — tools restored, no more "_registry" notice.
+	// completely — tools restored, RegistryDegraded cleared.
 	recovered, err := service.ListMcpServers(ctx, &turingv1.ListMcpServersRequest{})
 	if err != nil {
 		t.Fatalf("ListMcpServers after the offending server was deleted: %v", err)
 	}
-	if _, present := findUnsupportedReason(recovered.GetUnsupported(), "_registry"); present {
-		t.Fatalf("Unsupported = %+v, want no _registry notice once the aggregate is back under budget", recovered.GetUnsupported())
+	if recovered.GetRegistryDegraded() {
+		t.Fatalf("RegistryDegraded = true, want false once the aggregate is back under budget (reason: %q)", recovered.GetRegistryDegradationReason())
+	}
+	if recovered.GetRegistryDegradationReason() != "" {
+		t.Fatalf("RegistryDegradationReason = %q, want empty once recovered", recovered.GetRegistryDegradationReason())
 	}
 	var recoveredHealthy *turingv1.McpServerDescriptor
 	for _, server := range recovered.GetServers() {
@@ -155,7 +164,7 @@ func TestListMcpServersDegradesGracefullyWhenAggregateToolBudgetIsPreexistingOve
 // guard is not off-by-one: the registry's own enforced boundary
 // (repository.MaxMCPRegistryToolBytes exactly, the largest total every
 // write path already allows) must still list successfully, with tools
-// intact and no "_registry" notice.
+// intact and RegistryDegraded left false.
 func TestListMcpServersSucceedsAtExactAggregateBudgetBoundary(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	ctx := context.Background()
@@ -168,6 +177,9 @@ func TestListMcpServersSucceedsAtExactAggregateBudgetBoundary(t *testing.T) {
 	response, err := service.ListMcpServers(ctx, &turingv1.ListMcpServersRequest{})
 	if err != nil {
 		t.Fatalf("ListMcpServers at exactly the aggregate budget boundary must succeed: %v", err)
+	}
+	if response.GetRegistryDegraded() {
+		t.Fatalf("RegistryDegraded = true, want false at the exact (in-budget) boundary (reason: %q)", response.GetRegistryDegradationReason())
 	}
 	if _, present := findUnsupportedReason(response.GetUnsupported(), "_registry"); present {
 		t.Fatalf("Unsupported = %+v, want no _registry notice at the exact (in-budget) boundary", response.GetUnsupported())

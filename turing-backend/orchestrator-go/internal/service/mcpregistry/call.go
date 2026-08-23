@@ -15,6 +15,7 @@ type ApprovalEnforcer interface {
 		approvalID string,
 		runID string,
 		serverName string,
+		serverID string,
 		toolName string,
 		args map[string]any,
 	) error
@@ -79,6 +80,15 @@ func (s *Server) CallTool(ctx context.Context, input CallInput) (map[string]any,
 			input.ApprovalID,
 			input.RunID,
 			server.Name,
+			// server.ID (not merely re-derived from input.ServerID,
+			// though they are the same value here — GetMCPServer looked
+			// this row up by exactly that id): this is the immutable
+			// binding compared against the approval's own
+			// ApprovalRecord.MCPServerID, so a server deleted and
+			// re-registered under server.Name cannot let an approval
+			// meant for the original row be consumed against this new
+			// one — see ConsumeApprovalForThirdParty's own doc comment.
+			server.ID,
 			input.ToolName,
 			input.Args,
 		); err != nil {

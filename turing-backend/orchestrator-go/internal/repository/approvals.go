@@ -21,11 +21,24 @@ var (
 )
 
 type ApprovalRecord struct {
-	ApprovalID      string
-	RunID           string
-	ToolCallID      string
-	AgentID         string
-	ServerName      string
+	ApprovalID string
+	RunID      string
+	ToolCallID string
+	AgentID    string
+	ServerName string
+	// MCPServerID is the mcp_servers.id its tool_calls row was bound to
+	// at insert time (see repository.recordToolCallBeforeTx/
+	// lookupMCPServerIDByNameTx) — empty for a tool call with no
+	// tool_call_id at all (an approval created ahead of any tool call),
+	// for one whose server_name is a pseudo-server ("skills",
+	// "integrations", neither of which ever has an mcp_servers row), or
+	// for one whose original server has since been deleted
+	// (ON DELETE SET NULL clears this without deleting the tool_calls
+	// row itself). This is the immutable identity
+	// ApprovalEnforcer.ConsumeApprovalForThirdParty binds a third-party
+	// dispatch to — never re-derived from ServerName, which a server
+	// name reused after deletion would make ambiguous.
+	MCPServerID     string
 	ToolName        string
 	ArgsJSON        string
 	ArgsHash        string
@@ -710,9 +723,10 @@ func approvalByID(ctx context.Context, q approvalQuerier, approvalID string) (Ap
 	var approvalComment sql.NullString
 	var denialReason sql.NullString
 	var modelToolCallID sql.NullString
+	var mcpServerID sql.NullString
 	err := q.QueryRowContext(ctx, `
 		SELECT a.id, a.run_id, a.tool_call_id, a.agent_id, COALESCE(tc.server_name, ''), a.tool_name, a.args_json, a.args_hash,
-			a.status, a.approval_token, a.approval_comment, a.denial_reason, a.expires_at, tc.model_tool_call_id
+			a.status, a.approval_token, a.approval_comment, a.denial_reason, a.expires_at, tc.model_tool_call_id, tc.mcp_server_id
 		FROM approvals a
 		LEFT JOIN tool_calls tc ON tc.id = a.tool_call_id
 		WHERE a.id = ?
@@ -731,6 +745,7 @@ func approvalByID(ctx context.Context, q approvalQuerier, approvalID string) (Ap
 		&denialReason,
 		&record.ExpiresAt,
 		&modelToolCallID,
+		&mcpServerID,
 	)
 	if err != nil {
 		return ApprovalRecord{}, err
@@ -745,6 +760,9 @@ func approvalByID(ctx context.Context, q approvalQuerier, approvalID string) (Ap
 	record.DenialReason = denialReason
 	if modelToolCallID.Valid {
 		record.ModelToolCallID = modelToolCallID.String
+	}
+	if mcpServerID.Valid {
+		record.MCPServerID = mcpServerID.String
 	}
 	return record, nil
 }

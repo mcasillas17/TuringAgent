@@ -203,6 +203,7 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0016_mcp_registry",
 		"0017_integrations_consumer",
 		"0017_run_outcomes",
+		"0018_mcp_approval_identity",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
@@ -256,6 +257,179 @@ func TestMCPRegistryMigrationRegistersServersAndLinksTools(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("registry rows = %v, want %v", got, want)
+	}
+}
+
+// TestMCPApprovalIdentityMigrationAddsNullableForeignKeyColumn proves the
+// schema shape 0018_mcp_approval_identity.sql adds: tool_calls gains a
+// nullable mcp_server_id column with a foreign key to mcp_servers(id)
+// whose ON DELETE action is SET NULL (never CASCADE — deleting a server
+// must never delete the tool_calls history of a run that already called
+// it, only sever this specific binding — see
+// ApprovalEnforcer.ConsumeApprovalForThirdParty, which fails closed on a
+// NULL binding), plus a supporting index.
+func TestMCPApprovalIdentityMigrationAddsNullableForeignKeyColumn(t *testing.T) {
+	ctx := context.Background()
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := database.QueryContext(ctx, `PRAGMA table_info(tool_calls)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	foundColumn := false
+	for rows.Next() {
+		var columnID, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&columnID, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		if name == "mcp_server_id" {
+			foundColumn = true
+			if notNull != 0 {
+				t.Fatalf("mcp_server_id notnull = %d, want 0 (nullable)", notNull)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !foundColumn {
+		t.Fatal("tool_calls.mcp_server_id column is missing")
+	}
+
+	fkRows, err := database.QueryContext(ctx, `PRAGMA foreign_key_list(tool_calls)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = fkRows.Close() }()
+	foundFK := false
+	for fkRows.Next() {
+		var id, seq int
+		var refTable, fromColumn, onUpdate, onDelete, match string
+		var toColumn sql.NullString
+		if err := fkRows.Scan(&id, &seq, &refTable, &fromColumn, &toColumn, &onUpdate, &onDelete, &match); err != nil {
+			t.Fatal(err)
+		}
+		if fromColumn != "mcp_server_id" {
+			continue
+		}
+		foundFK = true
+		if refTable != "mcp_servers" {
+			t.Fatalf("mcp_server_id references %q, want mcp_servers", refTable)
+		}
+		if onDelete != "SET NULL" {
+			t.Fatalf("mcp_server_id ON DELETE = %q, want SET NULL", onDelete)
+		}
+	}
+	if err := fkRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !foundFK {
+		t.Fatal("tool_calls.mcp_server_id has no foreign key to mcp_servers")
+	}
+
+	var indexCount int
+	if err := database.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = 'tool_calls' AND name = 'idx_tool_calls_mcp_server_id'
+	`).Scan(&indexCount); err != nil {
+		t.Fatal(err)
+	}
+	if indexCount != 1 {
+		t.Fatal("idx_tool_calls_mcp_server_id index is missing")
+	}
+}
+
+// TestMCPApprovalIdentityMigrationBackfillsFromCurrentServerNameAndFailsClosedOtherwise
+// proves the migration's one-time backfill: an existing tool_calls row
+// whose server_name currently resolves to a real mcp_servers row is bound
+// to that row's id; a pseudo-server row ("skills", which never has an
+// mcp_servers row at all) and a row whose server_name no longer resolves
+// to any current row (the server was since renamed or deleted — there is
+// no way to recover a historical binding a from-scratch column never
+// recorded) are both left NULL, the identical fail-closed state
+// ON DELETE SET NULL leaves a genuinely-deleted server's own rows in
+// going forward. The run_id these tool_calls rows reference is left
+// dangling (foreign_keys is toggled off only for that one setup
+// statement): this test is about the mcp_server_id column specifically,
+// not a real agent_runs/messages/sessions chain, which the repository
+// package's own TestRecordToolCallBeforePopulatesMCPServerIDFromCurrentRegistry
+// already exercises end to end with one.
+func TestMCPApprovalIdentityMigrationBackfillsFromCurrentServerNameAndFailsClosedOtherwise(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0018_mcp_approval_identity.sql")
+
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO mcp_servers (id, name, transport, url, tier, enabled, created_at)
+		VALUES ('mcp_vendor', 'vendor', 'http', 'http://vendor:9000/mcp', 'local_container', 0, datetime('now'))
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := database.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO tool_calls (id, run_id, agent_id, server_name, tool_name, args_json, args_hash, status, created_at)
+		VALUES
+			('call_vendor', 'run_missing', 'general_assistant', 'vendor', 'vendor.write', '{}', 'sha256:x', 'completed', datetime('now')),
+			('call_skills', 'run_missing', 'general_assistant', 'skills', 'skills.search', '{}', 'sha256:x', 'completed', datetime('now')),
+			('call_gone', 'run_missing', 'general_assistant', 'deleted-vendor', 'deleted-vendor.write', '{}', 'sha256:x', 'completed', datetime('now'))
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, testCase := range []struct {
+		id   string
+		want sql.NullString
+	}{
+		{id: "call_vendor", want: sql.NullString{String: "mcp_vendor", Valid: true}},
+		{id: "call_skills", want: sql.NullString{}},
+		{id: "call_gone", want: sql.NullString{}},
+	} {
+		var got sql.NullString
+		if err := database.QueryRowContext(ctx, `SELECT mcp_server_id FROM tool_calls WHERE id = ?`, testCase.id).Scan(&got); err != nil {
+			t.Fatalf("%s: %v", testCase.id, err)
+		}
+		if got != testCase.want {
+			t.Fatalf("%s mcp_server_id = %+v, want %+v", testCase.id, got, testCase.want)
+		}
+	}
+
+	// ON DELETE SET NULL: deleting vendor clears the binding on its
+	// already-backfilled tool_calls row, rather than either deleting or
+	// refusing to delete the row itself.
+	if _, err := database.ExecContext(ctx, `DELETE FROM mcp_servers WHERE id = 'mcp_vendor'`); err != nil {
+		t.Fatal(err)
+	}
+	var afterDelete sql.NullString
+	if err := database.QueryRowContext(ctx, `SELECT mcp_server_id FROM tool_calls WHERE id = 'call_vendor'`).Scan(&afterDelete); err != nil {
+		t.Fatal(err)
+	}
+	if afterDelete.Valid {
+		t.Fatalf("mcp_server_id after deleting its server = %+v, want NULL (ON DELETE SET NULL)", afterDelete)
+	}
+	var stillPresent int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM tool_calls WHERE id = 'call_vendor'`).Scan(&stillPresent); err != nil {
+		t.Fatal(err)
+	}
+	if stillPresent != 1 {
+		t.Fatal("tool_calls row was deleted along with its server; want it preserved with mcp_server_id cleared")
 	}
 }
 
@@ -523,8 +697,8 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0017" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0017", got)
+	if got != "0018" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0018", got)
 	}
 }
 
@@ -1226,11 +1400,28 @@ func applyMigration(t *testing.T, ctx context.Context, database *DB, name string
 	if err != nil {
 		t.Fatal(err)
 	}
+	version := name[:len(name)-len(".sql")]
+	// 0017_run_outcomes is not an ordinary single-statement-batch
+	// migration (see migrationHooks/applyHookedMigration): it needs its
+	// own Go Before/After hooks and pinned, foreign-key-toggled
+	// connection, or its SQL text's own LEFT JOIN run_outcomes_backfill
+	// fails outright ("no such table"). Every helper here that walks
+	// migrations one at a time (this one, and databaseBeforeMigration's
+	// own loop) delegates to the exact same applyHookedMigration
+	// ApplyMigrationsWithSkillsRoot itself uses, so a test target that
+	// lands anywhere after 0017_run_outcomes in migration order (not
+	// just before it, as every prior caller of these helpers needed)
+	// still gets a correctly-applied predecessor state.
+	if hook, hooked := migrationHooks[version]; hooked {
+		if err := applyHookedMigration(ctx, database, version, string(sqlText), hook); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
 
 	if _, err := database.ExecContext(ctx, string(sqlText)); err != nil {
 		t.Fatal(err)
 	}
-	version := name[:len(name)-len(".sql")]
 	if _, err := database.ExecContext(ctx,
 		`INSERT INTO schema_migrations (version, applied_at) VALUES (?, datetime('now'))`, version); err != nil {
 		t.Fatal(err)

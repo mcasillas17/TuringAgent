@@ -22,8 +22,8 @@ import (
 
 const maxMCPStatusMessageBytes = 512
 
-// mcpRegistryOverBudgetNoticeMessage is the fixed, generic reason
-// ListMcpServers records under the reserved "_registry" key when
+// mcpRegistryOverBudgetNoticeMessage is the fixed, generic
+// RegistryDegradationReason ListMcpServers sets when
 // repository.MCPRegistrySnapshot reports OverBudget: the registry-wide
 // tool-byte total (repository.MaxMCPRegistryToolBytes) already exceeds
 // budget — a state every tool-reconciliation write path (
@@ -41,7 +41,44 @@ const maxMCPStatusMessageBytes = 512
 // the offending server (its tool rows cascade-delete with it), and a
 // later ListMcpServers call — once the aggregate is back under budget —
 // recovers full tool listing automatically.
+//
+// This is surfaced through ListMcpServersResponse's own explicit
+// registry_degraded/registry_degradation_reason fields, never as a
+// synthetic "_registry"-named entry in Unsupported: Unsupported names
+// only ordinary, per-entry mcp.json import refusals, and a systemic,
+// registry-wide condition like this one is not one of those. A real
+// mcp.json entry literally named "_registry" cannot collide with this:
+// its leading "_" already fails mcpServerNamePattern, so it is refused
+// through the ordinary synthetic-invalid-entry path (see
+// mcpregistry.invalidMCPEntryLabel) under an "_invalid_server_N" label,
+// never under "_registry" itself.
 const mcpRegistryOverBudgetNoticeMessage = "MCP registry aggregate tool budget is exhausted; tool schemas are hidden until an oversized or excess server is deleted"
+
+// mcpRegistryServerCountOverCapMessage is
+// mcpRegistryOverBudgetNoticeMessage's counterpart for
+// repository.MCPRegistrySnapshot's ServersOverCap: the registry already
+// holds more mcp_servers rows than repository.MaxMCPRegistryServers.
+// Every live write path (RegisterMcpServer, ImportJSON) already refuses
+// to create such a state, so — like OverBudget — this should be
+// unreachable in practice, but a database that somehow already exceeds
+// it degrades the same bounded, recoverable way: a truncated (never
+// unbounded) set of server descriptors, each with its own Tools empty,
+// rather than either failing outright or growing this response without
+// limit.
+const mcpRegistryServerCountOverCapMessage = "MCP registry server count exceeds its operating limit; only a bounded subset is listed until excess servers are deleted"
+
+// mcpRegistryIssueCountOverCapMessage is
+// mcpRegistryOverBudgetNoticeMessage's counterpart for
+// repository.MCPRegistrySnapshot's IssuesOverCap: mcp_import_issues
+// already holds more rows than repository.MaxMCPImportIssues. A single
+// ImportJSON call can never itself persist more than that many (see
+// recordUnsupported's own defensive bound), so this should likewise be
+// unreachable in practice, but a database that somehow already exceeds
+// it degrades the same bounded way: a truncated set of Unsupported
+// entries, and — for the same shared-rule reason every degraded
+// condition empties Tools regardless of which specific bound tripped —
+// every server's own Tools is left empty here too.
+const mcpRegistryIssueCountOverCapMessage = "MCP registry import issue count exceeds its operating limit; only a bounded subset is listed"
 
 // enableDiscoveryTimeout bounds the entire enable-time discovery operation
 // (every tools/list page, not just a single HTTP request) so a vendor that
@@ -160,25 +197,29 @@ func (s *InternalServer) CallRegisteredMcpTool(ctx context.Context, req *turingv
 
 func (s *Server) ListMcpServers(ctx context.Context, _ *turingv1.ListMcpServersRequest) (*turingv1.ListMcpServersResponse, error) {
 	// MCPRegistrySnapshot reads every server, its own tools (unless
-	// OverBudget), and every import issue from a single SQLite read
+	// degraded), and every import issue from a single SQLite read
 	// transaction, so this can never observe a mix of before-and-after
 	// state for a concurrent tool reconciliation (replaceServerToolsTx,
 	// UpsertTools) or server insert/delete — unlike three-plus
-	// separately-acquired queries (an aggregate-budget read, then the
-	// server list, then each server's own tools, then the issue list),
-	// where a write landing between any two of them could make an
+	// separately-acquired queries (an aggregate-budget/count read, then
+	// the server list, then each server's own tools, then the issue
+	// list), where a write landing between any two of them could make an
 	// earlier guard's decision disagree with the rows a later query in
 	// the same call actually returns. The same aggregate present-and-
 	// absent tool-byte budget guard (see repository.MaxMCPRegistryToolBytes)
-	// still runs first, inside that same transaction, before any tool
-	// row is read: every tool-reconciliation write path already refuses
-	// to push the registry-wide aggregate over that budget, so this
-	// should never actually trip — but if it somehow did, OverBudget
-	// (rather than an error) is what lets this still build a response:
-	// every server descriptor below, with its own Tools always empty
-	// while OverBudget, plus a bounded "_registry" notice, rather than
-	// refusing the whole call and leaving an operator with no way to see
-	// (and delete) whichever server is responsible.
+	// and the server/issue row-count guards (repository.
+	// MaxMCPRegistryServers/MaxMCPImportIssues) still run first, inside
+	// that same transaction, before any tool row is read: every write
+	// path already refuses to push any of the three over its own bound,
+	// so none of this should ever actually trip — but if it somehow did,
+	// a degraded (rather than failed) snapshot is what lets this still
+	// build a response: every server descriptor below, with its own
+	// Tools always empty while degraded, plus the explicit
+	// RegistryDegraded/RegistryDegradationReason fields below, rather
+	// than either refusing the whole call (leaving an operator with no
+	// way to see and delete whichever server is responsible) or
+	// overloading the per-entry Unsupported list with a systemic,
+	// non-per-entry notice.
 	snapshot, err := s.repo.MCPRegistrySnapshot(ctx)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "list MCP servers failed")
@@ -196,22 +237,25 @@ func (s *Server) ListMcpServers(ctx context.Context, _ *turingv1.ListMcpServersR
 			Name: issue.Name, Reason: issue.Reason,
 		})
 	}
-	if snapshot.OverBudget {
-		// A persisted mcp_import_issues row can, in principle, already be
-		// keyed "_registry" too: an mcp.json entry literally named
-		// "_registry" is refused by validateMCPServerName (the leading
-		// "_" fails mcpServerNamePattern) but recordUnsupported still
-		// records it under that exact raw key before this ever runs.
-		// This is the same rare, accepted collision import.go's own
-		// recordUnsupported already documents for "_document" — neither
-		// entry ever registers either way, no secret is at stake, and the
-		// response simply carries two Unsupported entries both named
-		// "_registry" in that pathological case, rather than the backend
-		// growing a disambiguating-suffix scheme this reserved key would
-		// otherwise need its own bound for.
-		response.Unsupported = append(response.Unsupported, &turingv1.UnsupportedMcpServer{
-			Name: "_registry", Reason: mcpRegistryOverBudgetNoticeMessage,
-		})
+	// Priority order when more than one condition trips at once (an
+	// extreme, likely-unreachable case, since each is independently
+	// unreachable through any live write path on its own): OverBudget
+	// first, since it was the first of the three this registry ever
+	// guarded against, then ServersOverCap, then IssuesOverCap. Only one
+	// reason is ever reported — never concatenated — since every one of
+	// these already implies the exact same visible behavior (every
+	// server's Tools empty), so there is nothing a caller would do
+	// differently for knowing about a second, simultaneous cause.
+	switch {
+	case snapshot.OverBudget:
+		response.RegistryDegraded = true
+		response.RegistryDegradationReason = mcpRegistryOverBudgetNoticeMessage
+	case snapshot.ServersOverCap:
+		response.RegistryDegraded = true
+		response.RegistryDegradationReason = mcpRegistryServerCountOverCapMessage
+	case snapshot.IssuesOverCap:
+		response.RegistryDegraded = true
+		response.RegistryDegradationReason = mcpRegistryIssueCountOverCapMessage
 	}
 	return response, nil
 }
@@ -804,41 +848,38 @@ func (s *Server) rotateServerTokenLocked(ctx context.Context, serverID, token st
 	return updated, nil
 }
 
-// ReimportMcpJson re-reads mcp.json from the configured config root the
-// same way app startup does. Both run immediately once
-// ReimportConfiguredJSON's mutation has already committed — before
-// anything below that could still fail. notify is conditional: it only
-// fires when this reimport actually imported something, since nothing
-// else about the registry changed for a reimport that only skipped or
-// refused entries. audit always runs, unconditionally, recording only
-// counts; unlike notify it is never skipped by a later failure, and two
-// overlapping ReimportMcpJson calls can never suppress or delay each
-// other's audit record. The response's Unsupported
-// list is built directly from this call's own report.Unsupported, sorted
-// by name, rather than by re-reading the shared mcp_import_issues table
-// (which ListMcpServers still uses for its own Unsupported list): a
-// concurrent reimport can freely overwrite that table with its own,
-// different refusals without ever being able to leak into — or borrow
-// from — this call's response.
-// ReimportMcpJson re-reads and imports mcp.json on demand, the same way
-// app startup does via ReimportConfiguredJSON, and — regardless of
-// whether that call also returns a fatal error — notifies and audits
-// exactly once from whatever ImportReport it returned.
+// ReimportMcpJson re-reads and imports mcp.json from the configured config
+// root on demand, the same way app startup does via ReimportConfiguredJSON.
+// notify and audit both run immediately once that mutation has already
+// committed — before anything below could still fail — and exactly once
+// per call, so a later Internal mapping (see below) is never a second,
+// separate audit of the same run. notify is conditional: it only fires
+// when this reimport actually imported something, since nothing else about
+// the registry changed for a run that only skipped or refused entries.
+// audit always runs, unconditionally, recording only counts; unlike notify
+// it is never skipped by a later failure, and two overlapping
+// ReimportMcpJson calls can never suppress or delay each other's audit
+// record. The one exception is errMCPConfigRootNotConfigured: that
+// precondition failure means no work was even attempted (the report is
+// always empty), so neither notify nor audit fires for it.
 //
 // ReimportConfiguredJSON's own named-report contract (see ImportJSON and
 // recordDocumentRefusal) means report.Imported/Skipped/Unsupported are
-// accurate even when err != nil: every name in Imported has already
-// committed through its own per-entry transaction by the time any later,
-// whole-document failure (a canceled context, or a repository failure
-// between entries) is discovered. Notify and audit therefore run before
-// this ever maps a non-nil err to a final Internal status below — not
-// only on the success path — so a partially-completed run's real,
-// already-committed effect is never silently unreported. The one
-// exception is errMCPConfigRootNotConfigured: that precondition failure
-// means no work was even attempted (report is always empty), so neither
-// notify nor audit fires for it, matching this method's prior behavior.
-// This runs exactly once per call either way, so a later Internal mapping
-// is never a second, separate audit of the same run.
+// accurate even when it also returns a non-nil err: every name in Imported
+// has already committed through its own per-entry transaction by the time
+// any later, whole-document failure (a canceled context, or a repository
+// failure between entries) is discovered. notify and audit therefore run
+// from whatever ImportReport was returned before this ever maps that err
+// to a final Internal status below — not only on the success path — so a
+// partially-completed run's real, already-committed effect is never
+// silently unreported.
+//
+// The response's Unsupported list is built directly from this call's own
+// report.Unsupported, sorted by name, rather than by re-reading the shared
+// mcp_import_issues table (which ListMcpServers still uses for its own
+// Unsupported list): a concurrent reimport can freely overwrite that table
+// with its own, different refusals without ever being able to leak into —
+// or borrow from — this call's response.
 func (s *Server) ReimportMcpJson(ctx context.Context, _ *turingv1.ReimportMcpJsonRequest) (*turingv1.ReimportMcpJsonResponse, error) {
 	report, err := s.ReimportConfiguredJSON(ctx)
 	if err != nil && errors.Is(err, errMCPConfigRootNotConfigured) {

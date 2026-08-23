@@ -41,11 +41,24 @@ class McpRegistrySnapshot {
   McpRegistrySnapshot({
     required List<McpServer> servers,
     required List<UnsupportedMcpServer> unsupported,
+    this.registryDegraded = false,
+    this.registryDegradationReason = '',
   }) : servers = List.unmodifiable(servers),
        unsupported = List.unmodifiable(unsupported);
 
   final List<McpServer> servers;
   final List<UnsupportedMcpServer> unsupported;
+  // True when the backend could not safely return complete, healthy
+  // registry state (more servers, more import issues, or a larger
+  // aggregate tool-byte total than its own operating bounds allow) and
+  // returned a safe, bounded, degraded view instead: every server is
+  // still listed, but with its own tools omitted. This is a distinct,
+  // structured signal from `unsupported`, which only ever describes
+  // ordinary per-entry mcp.json import refusals.
+  final bool registryDegraded;
+  // Set only when [registryDegraded] is true: a fixed, non-sensitive
+  // explanation of which bound was exceeded.
+  final String registryDegradationReason;
 }
 
 /// The outcome of reimporting the backend's mcp.json configuration: which

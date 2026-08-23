@@ -60,14 +60,45 @@ whitespace is refused rather than silently treated as "clear it". The token
 is write-only end to end, and no response, event, or audit row ever carries
 it back.
 
-Import preserves a previous user enablement decision only while the endpoint
-and tier are unchanged; repointing a server disables it and withdraws the old
-tool snapshot. An explicit empty `tools` snapshot withdraws prior tools, and
-policy edits cannot reactivate a tool the current snapshot no longer
-contains. New servers never arrive enabled. Removal writes a local import
+Import is create-only: an existing row for a name that already has a real,
+non-empty endpoint is skipped, not repointed. Its enabled state, endpoint,
+tier, liveness, rotated token, tool snapshot, and policies are all left
+completely untouched, and the reimport response names that entry explicitly
+("already registered; existing settings were kept") rather than silently
+treating a changed endpoint/token/tools in the file as having taken effect.
+There is no in-place "change this server's endpoint" operation: repointing
+one requires removing it first, then registering it again at the new
+endpoint (see below) — which starts every policy/tools snapshot over from a
+fail-closed (disabled, no tools) state, rather than mutating a live row's
+endpoint out from under whatever the operator or a running session
+currently trusts it to be. An explicit empty `tools` snapshot withdraws
+whatever tools a *new* registration or a *legacy placeholder being adopted
+in place* previously carried; it never applies to an already-registered,
+skipped row, whose tools — like every other field of it — reimport leaves
+alone. New servers never arrive enabled. Removal writes a local import
 tombstone, so an unchanged `mcp.json` cannot silently recreate the server at
-the next restart or re-import; bringing it back requires either a new name in
-the file or an explicit in-app registration of the old one.
+the next restart or re-import; bringing it back requires either a new name
+in the file or an explicit in-app registration of the old one.
+
+**Design note: reimport never overwrites an existing row's endpoint, even
+when `mcp.json`'s own entry for that name has changed.** An earlier,
+parallel implementation of this same MCP registry feature (developed on
+`main` while this branch's own hardened version was in progress, and
+reconciled into this one implementation once both landed) instead let a
+reimport detect a changed `url`/`bearer_token` for an already-registered
+name and repoint the live row in place. That behavior is deliberately *not*
+carried forward here. The original brief for this feature is that editing
+the mounted `mcp.json` file must be idempotent from the user's own point of
+view: an operator can safely re-run Re-import mcp.json at any time, and it
+either creates rows for genuinely new entries or leaves every already-
+registered one exactly as it was — never silently reinterpreting an edited
+file as explicit consent to change a live server's endpoint, sealed token,
+enablement, or tool policies out from under whatever the operator (or a
+running session) currently trusts them to be. Repointing a server is only
+ever the explicit, in-app Remove-then-Register sequence described above,
+which is unambiguously a deliberate user action rather than an inference
+from a file edit. This is a considered product decision, not an oversight
+left over from reconciling the two implementations.
 
 `mcp.json` remains the bulk/config-file path. The orchestrator imports it at
 startup and, without a restart, whenever an operator chooses Re-import
@@ -347,36 +378,66 @@ be open at a time, so a concurrent tool reconciliation cannot commit
 partway through that one read the way it could between two independently
 acquired queries, which could otherwise let an earlier guard's decision
 (computed against an earlier state) disagree with rows a later query in
-the same call actually returns. That same snapshot re-checks the current
-full aggregate (the same all-rows query) before reading any tool row, and
-sets a returned `OverBudget` flag — rather than refusing outright — if it
-is somehow already over budget. This should be unreachable in ordinary
-operation now that every write path enforces the same limits, but is not
-asserted to be *impossible* forever: it protects against a future
-regression that reintroduces an unguarded write path, and against
-upgrading a database that predates one of these budgets being universally
-enforced. Rather than refuse the whole call, `ListMcpServers` keeps the
-registry *manageable*: every server row (bundled and non-bundled alike)
-and every import issue is still returned in full — an operator retains
-enough to identify and delete whichever server is responsible — but every
-server's own `Tools` list is left completely empty, and a bounded
-`"_registry"` `Unsupported` entry explains why, rather than ever
-attempting to read, let alone marshal and send, a schema-heavy result
-sized against an unbounded aggregate. `DeleteMcpServer` itself never reads
-`MCPRegistrySnapshot` at all, so it keeps working normally even while
-`OverBudget` is set; deleting the offending server cascade-deletes its
-tool rows (`tools.mcp_server_id` is declared `ON DELETE CASCADE`), which
-is normally enough to bring the aggregate back under budget, at which
-point the very next `ListMcpServers` call recovers full tool listing
-automatically — no separate "clear the flag" operation, migration, or
-restart is needed. Because the MCP registry feature this whole document
-describes has not shipped in a release yet, no real deployment's database
-can already carry rows written by the since-fixed, unbounded `UpsertTools`
-path, so no destructive migration to truncate or reconcile a pre-existing
-oversized aggregate was required here — an operator upgrading a database
-that somehow does carry one instead sees the degraded-but-usable listing
-above and can recover from it entirely through the ordinary
+the same call actually returns. That same snapshot re-checks three
+independent bounds before reading any tool row: the current full tool-byte
+aggregate (the same all-rows query, `OverBudget`), the total `mcp_servers`
+row count against `MaxMCPRegistryServers` (`ServersOverCap`), and the total
+`mcp_import_issues` row count against `MaxMCPImportIssues`
+(`IssuesOverCap`) — bounding the *server* and *issue* reads themselves to
+one row past each cap (`LIMIT cap+1`) so detecting an over-cap condition
+never itself requires reading an unbounded number of rows. All three
+should be unreachable in ordinary operation now that every write path
+enforces the matching limit, but none is asserted to be *impossible*
+forever: they protect against a future regression that reintroduces an
+unguarded write path, and against upgrading a database that predates one
+of these limits being universally enforced. Rather than refuse the whole
+call, `ListMcpServers` keeps the registry *manageable* whenever any one of
+the three trips: every server row (bundled and non-bundled alike) is still
+returned — bounded to `MaxMCPRegistryServers` entries when the row count
+itself is what is over cap, in full otherwise — an operator retains
+enough to identify and delete whichever server is responsible, but every
+server's own `Tools` list is left completely empty, and the response's
+explicit `registry_degraded`/`registry_degradation_reason` fields explain
+why, rather than either attempting to read, let alone marshal and send, a
+schema-heavy result sized against an unbounded aggregate, or overloading
+the per-entry `Unsupported` list with a systemic, non-per-entry notice
+(there is deliberately no reserved `"_registry"` (or similarly special)
+name in `Unsupported` for this: a real mcp.json entry named `"_registry"`
+is refused through the ordinary synthetic-invalid-entry-name path — see
+"Invalid or reserved mcp.json entry names" below — so it can never collide
+with this systemic signal). `DeleteMcpServer` itself never reads
+`MCPRegistrySnapshot` at all, so it keeps working normally even while any
+of the three is set; deleting the offending server cascade-deletes its
+tool rows (`tools.mcp_server_id` is declared `ON DELETE CASCADE`) or its
+own row (for `ServersOverCap`), which is normally enough to bring the
+aggregate/count back under budget, at which point the very next
+`ListMcpServers` call recovers full, non-degraded listing automatically —
+no separate "clear the flag" operation, migration, or restart is needed.
+Because the MCP registry feature this whole document describes has not
+shipped in a release yet, no real deployment's database can already carry
+rows written by the since-fixed, unbounded `UpsertTools` path or by a
+write path that predates the server-count/issue-count caps, so no
+destructive migration to truncate or reconcile a pre-existing oversized
+aggregate or row count was required here — an operator upgrading a
+database that somehow does carry one instead sees the degraded-but-usable
+listing above and can recover from it entirely through the ordinary
 list/delete/reimport UI, rather than needing direct database access.
+
+Invalid or reserved mcp.json entry names: an entry whose own key fails
+`validateMCPServerName` — either because it does not match the name
+pattern, or because it names one of TuringAgent's reserved bundled/pseudo
+servers — is never recorded, persisted, or returned under that raw
+key/name at all. The key an mcp.json entry is filed under is exactly as
+untrusted as any other value in the document — it might not even have
+been intended as a name (a bearer token or other secret pasted into the
+wrong JSON slot, for instance) — so `ImportJSON` records the refusal under
+a bounded, synthetic, per-document-deterministic label instead
+(`"_invalid_server_1"`, `"_invalid_server_2"`, ... in the same sorted-by-
+name order entries are already processed in) with one fixed, generic
+reason that never distinguishes "invalid" from "reserved" and never
+echoes the entry's own name. This is the one place a raw rejected key
+could otherwise have reached the in-memory report, `mcp_import_issues`,
+the `ReimportMcpJson`/`ListMcpServers` RPC responses, and the Flutter UI.
 
 Deleting a server writes a local import tombstone, so an unchanged
 `mcp.json` cannot silently recreate it on the next reimport; the file path
@@ -761,6 +822,27 @@ direct request itself. A third-party server would not; the guarantee holds
 because its registered endpoint and sealed bearer are usable only through the
 orchestrator proxy. A process that can reach or authenticate to that server by
 some other route is outside this guarantee.
+
+The orchestrator's own "server" check above compares more than the server's
+name. `tool_calls.mcp_server_id` (`schema/0018_mcp_approval_identity.sql`)
+records, at the moment a tool call is first recorded, the *id* of whichever
+`mcp_servers` row currently owns that call's server name — never the name
+alone — and `ConsumeApprovalForThirdParty` requires the caller's live-resolved
+server id (`CallTool` passes the id it just re-read the server row by) to
+equal that stored binding exactly, in addition to run/name/tool/args. This
+closes a gap a name-only check would leave open: a server name can be freely
+reused after its original row is deleted (`DeleteMcpServer`) and a different
+server explicitly registered under that same name, and an approval created
+and approved against the original server must not stay consumable against
+the new one merely because the two happen to share a name. The foreign key
+is `ON DELETE SET NULL`, not `ON DELETE CASCADE` — deleting a server severs
+this binding without deleting the tool-call history of a run that already
+called it — and a `NULL` binding (whether from that deletion, or from a
+legacy `tool_calls` row the 0018 migration's one-time backfill could not
+resolve to any then-current server) fails closed: it can only ever match a
+caller-supplied id that is itself empty, the permanent state of the two
+orchestrator-owned pseudo-servers ("skills", "integrations", neither of
+which is ever backed by a real `mcp_servers` row).
 
 The same caller-side rule covers the orchestrator-owned `integrations`
 pseudo-server. `github.create_comment` cannot be made safe, and every

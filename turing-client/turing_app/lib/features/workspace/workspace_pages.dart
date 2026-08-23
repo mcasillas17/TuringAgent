@@ -58,16 +58,6 @@ class WorkspacePage extends StatelessWidget {
   }
 }
 
-/// The reserved name the backend records a degraded, registry-wide
-/// aggregate-tool-budget notice under (see
-/// internal/service/mcpregistry.mcpRegistryOverBudgetNoticeMessage) —
-/// distinct from every ordinary UnsupportedMcpServer entry, which names an
-/// mcp.json entry that failed to import. This is a systemic status, not a
-/// per-entry import failure, so McpsPage gives it its own title and a
-/// calmer, compact presentation rather than the generic "`<name>` was not
-/// imported" framing.
-const _mcpRegistryOverBudgetName = '_registry';
-
 /// Every tool the backend discovered, grouped by the MCP server offering it.
 class McpsPage extends StatefulWidget {
   const McpsPage({super.key, required this.apiClient});
@@ -145,6 +135,26 @@ class _McpsPageState extends State<McpsPage> {
       ),
     );
     if (rotated == true && mounted) _reload();
+  }
+
+  // Confirms before turning ON a remote-url server specifically: unlike
+  // every other enable/disable transition (disabling any server, or
+  // enabling a local-container/bundled one), flipping a remote server on
+  // makes this app contact an endpoint outside this machine immediately
+  // — to discover its tools — and sends that server's own stored bearer
+  // token along, if one is configured. Dismissing the dialog any way
+  // other than the explicit "Enable and discover" confirm — Cancel, the
+  // barrier, or the platform back gesture — is equally safe: none of
+  // them call _setServerEnabled, since only `confirmed == true` does.
+  Future<void> _handleEnabledChanged(McpServer server, bool enabled) async {
+    if (enabled && server.tier == McpServerTier.remoteUrl) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (_) => _EnableRemoteServerConfirmationDialog(server: server),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    await _setServerEnabled(server, enabled);
   }
 
   Future<void> _setServerEnabled(McpServer server, bool enabled) async {
@@ -292,7 +302,9 @@ class _McpsPageState extends State<McpsPage> {
               final registry =
                   snapshot.data ??
                   McpRegistrySnapshot(servers: const [], unsupported: const []);
-              if (registry.servers.isEmpty && registry.unsupported.isEmpty) {
+              if (registry.servers.isEmpty &&
+                  registry.unsupported.isEmpty &&
+                  !registry.registryDegraded) {
                 return WorkspaceNotice(
                   icon: Icons.hub_outlined,
                   title: 'No MCP servers registered',
@@ -309,24 +321,34 @@ class _McpsPageState extends State<McpsPage> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  // A systemic, registry-wide degraded condition (see
+                  // ListMcpServersResponse.registry_degraded/
+                  // registry_degradation_reason) is an explicit, structured
+                  // signal — never a synthetic entry mixed into
+                  // `unsupported` below, which describes only ordinary
+                  // per-entry mcp.json import refusals. Rendered once,
+                  // outside that loop, with its own key so it can never
+                  // collide with (or be confused for) any entry's own
+                  // per-name key.
+                  if (registry.registryDegraded) ...[
+                    WorkspaceNotice(
+                      key: const Key('mcpRegistryDegradedNotice'),
+                      icon: Icons.warning_amber_outlined,
+                      title: 'MCP registry is running in a degraded state',
+                      body: registry.registryDegradationReason,
+                      tone: AppColors.warning,
+                      compact: true,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   for (final unsupported in registry.unsupported) ...[
-                    if (unsupported.name == _mcpRegistryOverBudgetName)
-                      WorkspaceNotice(
-                        key: const Key('mcpRegistryOverBudgetNotice'),
-                        icon: Icons.info_outline,
-                        title: 'MCP registry is over its tool budget',
-                        body: unsupported.reason,
-                        tone: AppColors.success,
-                        compact: true,
-                      )
-                    else
-                      WorkspaceNotice(
-                        key: Key('mcpUnsupportedNotice-${unsupported.name}'),
-                        icon: Icons.block_outlined,
-                        title: '${unsupported.name} was not imported',
-                        body: unsupported.reason,
-                        tone: AppColors.warning,
-                      ),
+                    WorkspaceNotice(
+                      key: Key('mcpUnsupportedNotice-${unsupported.name}'),
+                      icon: Icons.block_outlined,
+                      title: '${unsupported.name} was not imported',
+                      body: unsupported.reason,
+                      tone: AppColors.warning,
+                    ),
                     const SizedBox(height: 12),
                   ],
                   for (final server in servers) ...[
@@ -335,7 +357,7 @@ class _McpsPageState extends State<McpsPage> {
                       palette: palette,
                       onEnabledChanged: server.tier == McpServerTier.bundled
                           ? null
-                          : (enabled) => _setServerEnabled(server, enabled),
+                          : (enabled) => _handleEnabledChanged(server, enabled),
                       onDelete: server.tier == McpServerTier.bundled
                           ? null
                           : () => _confirmAndDeleteServer(server),
@@ -398,9 +420,8 @@ class _ServerCard extends StatelessWidget {
     // gets its own semantics rather than this placeholder-specific one.
     final bool isUnconfiguredPlaceholder =
         server.tier != McpServerTier.bundled && server.url.isEmpty;
-    final ValueChanged<bool>? effectiveOnEnabledChanged = isUnconfiguredPlaceholder
-        ? null
-        : onEnabledChanged;
+    final ValueChanged<bool>? effectiveOnEnabledChanged =
+        isUnconfiguredPlaceholder ? null : onEnabledChanged;
     Widget enableSwitch = Switch(
       value: server.enabled,
       onChanged: busy ? null : effectiveOnEnabledChanged,
@@ -530,9 +551,7 @@ class _ServerCard extends StatelessWidget {
                           // disabled Switch alone can look like the tap
                           // was simply ignored.
                           Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 2,
-                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: 2),
                             child: Semantics(
                               label: 'Updating ${server.name}',
                               child: const SizedBox(
@@ -667,16 +686,55 @@ class _AddServerCardState extends State<_AddServerCard> {
   final _url = TextEditingController();
   final _token = TextEditingController();
   McpServerTier _tier = McpServerTier.localContainer;
+  // True once the user has explicitly picked a tier from the dropdown
+  // themselves. Until then, typing in the URL field auto-selects the
+  // tier its own scheme implies (see _autoSelectTierFromUrl) — but never
+  // overrides an explicit choice the user already made, and the backend
+  // still independently validates whatever tier is finally submitted
+  // against the URL regardless of how it got selected (see
+  // classifyImportedURL/validateServerDefinition), so this is purely a
+  // convenience default, never a trust boundary.
+  bool _tierManuallySet = false;
   bool _submitting = false;
   String? _error;
   String? _status;
 
   @override
+  void initState() {
+    super.initState();
+    _url.addListener(_autoSelectTierFromUrl);
+  }
+
+  @override
   void dispose() {
+    _url.removeListener(_autoSelectTierFromUrl);
     _name.dispose();
     _url.dispose();
     _token.dispose();
     super.dispose();
+  }
+
+  // Mirrors the backend's own URL-scheme tier derivation (see
+  // classifyImportedURL) closely enough that a first-time `https://`
+  // paste selects "Remote URL" and a first-time `http://` paste selects
+  // "Local container" without the user needing to also open the tier
+  // dropdown themselves — so a first submission of either shape succeeds
+  // without a manual correction. This only ever runs before the user has
+  // manually chosen a tier (_tierManuallySet); once they have, typing in
+  // the URL field never silently changes their choice back.
+  void _autoSelectTierFromUrl() {
+    if (_tierManuallySet) return;
+    final McpServerTier? detected;
+    if (_url.text.startsWith('https://')) {
+      detected = McpServerTier.remoteUrl;
+    } else if (_url.text.startsWith('http://')) {
+      detected = McpServerTier.localContainer;
+    } else {
+      detected = null;
+    }
+    if (detected != null && detected != _tier) {
+      setState(() => _tier = detected!);
+    }
   }
 
   Future<void> _submit() async {
@@ -713,6 +771,8 @@ class _AddServerCardState extends State<_AddServerCard> {
       _token.clear();
       setState(() {
         _submitting = false;
+        _tier = McpServerTier.localContainer;
+        _tierManuallySet = false;
         _status = '"$name" added. It stays disabled until you turn it on.';
       });
       widget.onRegistered();
@@ -815,7 +875,12 @@ class _AddServerCardState extends State<_AddServerCard> {
             onChanged: _submitting
                 ? null
                 : (value) {
-                    if (value != null) setState(() => _tier = value);
+                    if (value != null) {
+                      setState(() {
+                        _tier = value;
+                        _tierManuallySet = true;
+                      });
+                    }
                   },
           ),
           const SizedBox(height: 10),
@@ -823,6 +888,8 @@ class _AddServerCardState extends State<_AddServerCard> {
             fieldKey: const Key('mcpsAddToken'),
             controller: _token,
             labelText: 'Bearer token (optional)',
+            helperText:
+                'Stored sealed. Never shown again \u2014 rotate to replace.',
           ),
           const SizedBox(height: 12),
           Align(
@@ -893,11 +960,16 @@ class _ObscuredTokenField extends StatelessWidget {
     required this.fieldKey,
     required this.controller,
     required this.labelText,
+    this.helperText,
   });
 
   final Key fieldKey;
   final TextEditingController controller;
   final String labelText;
+  // Optional explanatory text shown under the field — used by the
+  // add-server form to make explicit what "sealed" means for a token
+  // that, once sent, this app never reads back or displays again.
+  final String? helperText;
 
   @override
   Widget build(BuildContext context) {
@@ -909,6 +981,8 @@ class _ObscuredTokenField extends StatelessWidget {
       enableSuggestions: false,
       decoration: InputDecoration(
         labelText: labelText,
+        helperText: helperText,
+        helperMaxLines: 2,
         isDense: true,
         border: const OutlineInputBorder(),
       ),
@@ -945,7 +1019,8 @@ class _ImportReportDialog extends StatelessWidget {
                 // mcp.json edit took effect just because the name shows up
                 // here.
                 entries: report.skipped.map(
-                  (name) => '$name — already registered; existing settings '
+                  (name) =>
+                      '$name — already registered; existing settings '
                       'were kept',
                 ),
               ),
@@ -1045,6 +1120,77 @@ class _RemoveServerConfirmationDialog extends StatelessWidget {
           key: const Key('mcpsConfirmRemove'),
           onPressed: () => Navigator.of(context).pop(true),
           child: const Text('Remove server'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Confirms before a remote server's Switch flips from off to on: unlike
+/// a local-container or bundled server (never confirmed) or turning any
+/// server off (never confirmed either), this is the one transition that
+/// makes the app contact a destination outside this machine immediately
+/// — to discover its tools — and, if a bearer token is stored for it,
+/// send that token along with the request. Naming the exact endpoint and
+/// host lets an operator double check they mean to enable *this*
+/// server, specifically, before that happens. Every run still asks
+/// separately, afterward, before sending any one tool call's own
+/// arguments or results — this dialog is only about the immediate
+/// discovery contact enabling itself makes.
+class _EnableRemoteServerConfirmationDialog extends StatelessWidget {
+  const _EnableRemoteServerConfirmationDialog({required this.server});
+
+  final McpServer server;
+
+  @override
+  Widget build(BuildContext context) {
+    final host = Uri.tryParse(server.url)?.host ?? '';
+    return AlertDialog(
+      title: Text('Enable ${server.name}?'),
+      content: SizedBox(
+        // Compact: this dialog's own content is short (endpoint, host,
+        // and one explanatory paragraph), so it does not need as wide a
+        // dialog as the longer prose the remove/rotate dialogs show.
+        width: _dialogWidth(context, 300),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Enabling "${server.name}" contacts its endpoint '
+                'immediately to discover its tools:',
+              ),
+              const SizedBox(height: 8),
+              SelectionArea(
+                child: Text(
+                  server.url,
+                  style: const TextStyle(fontFamily: 'monospace'),
+                ),
+              ),
+              if (host.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text('Host: $host'),
+              ],
+              const SizedBox(height: 12),
+              Text(
+                'If a token is stored for this server, it is sent with '
+                'that request. Each run still asks separately before '
+                'sending any tool call\'s own arguments or results.',
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const Key('mcpsConfirmEnableRemote'),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Enable and discover'),
         ),
       ],
     );

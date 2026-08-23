@@ -81,6 +81,34 @@ func validateMCPServerName(name string) error {
 // unsupported) or a direct RegisterMcpServer call (returned as a status).
 var errMCPServerNameReserved = errors.New("server name is reserved by TuringAgent")
 
+// invalidMCPEntryNameMessage is the one fixed, generic reason ImportJSON
+// records for an mcp.json entry whose own key/name fails
+// validateMCPServerName — never validateMCPServerName's own, more specific
+// error (pattern-invalid vs. reserved), and never anything derived from
+// the entry's own name. Both of those would still be safe to return on
+// their own, but the entry is recorded under a synthetic label instead of
+// its own name (see invalidMCPEntryLabel) precisely because that name
+// might not be safe to keep at all, and a reason that varied with which
+// specific check failed would be one more surface for a future change to
+// accidentally start interpolating it back in.
+const invalidMCPEntryNameMessage = "server name is invalid or reserved"
+
+// invalidMCPEntryLabel returns a bounded, deterministic, synthetic label
+// for the n-th (1-indexed) mcp.json entry ImportJSON refuses for an
+// invalid or reserved name, in the same sorted-by-name order ImportJSON
+// already processes entries in (see invalidEntryOrdinal in ImportJSON):
+// "_invalid_server_1", "_invalid_server_2", and so on. A leading "_"
+// mirrors recordUnsupported's own reserved "_document" overflow key, and
+// (like it) can never collide with a name that actually passed
+// validateMCPServerName: mcpServerNamePattern requires a leading
+// alphanumeric character, which "_" is not. This is the one label
+// recordUnsupported records an invalid/reserved entry's refusal under
+// instead of that entry's own untrusted raw name — see the doc comment at
+// ImportJSON's own call site for why.
+func invalidMCPEntryLabel(ordinal int) string {
+	return fmt.Sprintf("_invalid_server_%d", ordinal)
+}
+
 // bundledServerRegistrationMessage is the wording used whenever the
 // repository itself refuses a bundled-tier name collision, so an import and
 // a direct registration say the same thing about the same refusal.
@@ -404,23 +432,27 @@ type ImportReport struct {
 	Unsupported map[string]string
 }
 
-// maxMCPUnsupportedNameBytes bounds the untrusted "name" an mcp.json entry
-// is filed under before recordUnsupported ever writes it into the
-// in-memory report, mcp_import_issues, or (via ListMcpServers/
-// ReimportMcpJson) a client/UI response. A JSON object's keys carry no
-// length limit of their own — unlike a name that actually passed
-// validateMCPServerName, which mcpServerNamePattern already caps at 64
-// characters — so an invalid, arbitrarily long key must be bounded here
-// rather than assumed short just because a *valid* one always would be.
-// 64, not maxMCPStatusMessageBytes's 512, matches that same valid-name
-// ceiling: nothing longer could ever have been a real, accepted name
-// anyway, so preserving more of an invalid one adds no useful signal.
+// maxMCPUnsupportedNameBytes bounds the "name" an mcp.json entry is filed
+// under before recordUnsupported ever writes it into the in-memory report,
+// mcp_import_issues, or (via ListMcpServers/ReimportMcpJson) a client/UI
+// response. Every name recordUnsupported ever actually receives is already
+// bounded well under this by construction — either it already passed
+// validateMCPServerName (which mcpServerNamePattern itself caps at 64
+// characters), or it is one of the handful of short, fixed synthetic
+// labels this package assigns instead of an untrusted raw name (see
+// invalidMCPEntryLabel and the "_document"/"_registry" reserved keys) —
+// but a JSON object's keys carry no length limit of their own, so this
+// stays as a defensive bound for any future caller rather than assuming
+// "already validated or synthetic" can never be gotten wrong.
 const maxMCPUnsupportedNameBytes = 64
 
-// boundedMCPServerNameForDisplay bounds an mcp.json entry's own untrusted
-// name/key the same way boundedStatusMessage bounds its reason: trimmed to
-// valid UTF-8, so a truncated but still-recognizable prefix survives
-// rather than a raw byte cut that could split a multi-byte character.
+// boundedMCPServerNameForDisplay bounds an mcp.json entry's name the same
+// way boundedStatusMessage bounds its reason: trimmed to valid UTF-8, so a
+// truncated but still-recognizable prefix survives rather than a raw byte
+// cut that could split a multi-byte character. In practice every caller
+// already passes a name well under this bound (see
+// maxMCPUnsupportedNameBytes); this only ever matters for some future
+// caller that stops being one.
 func boundedMCPServerNameForDisplay(name string) string {
 	return boundedUTF8(name, maxMCPUnsupportedNameBytes)
 }
@@ -430,24 +462,17 @@ func boundedMCPServerNameForDisplay(name string) string {
 // from attacker-controlled input such as a header name or a tool name — is
 // bounded and valid UTF-8 the same way boundedStatusMessage already bounds
 // a discovery/status error, rather than some call sites bounding it and
-// others writing raw, unbounded strings. The entry's own name/key is
-// bounded too (see maxMCPUnsupportedNameBytes): it is exactly as
-// untrusted and unbounded-by-anything-upstream as the reason text is, and
-// this is the one place both ever get persisted or returned from.
-//
-// Using the bounded name as the map key means two distinct invalid names
-// that happen to share the same maxMCPUnsupportedNameBytes-byte prefix
-// collapse to one entry — the later one's reason silently wins the map
-// write, and one refused-entry diagnostic (and, transitively, one count
-// toward ListMcpServers/ReimportMcpJson's "refused" total) is lost. That
-// is an accepted, diagnostic-only trade-off: neither colliding entry ever
-// registers either way (both are already refused before this call), no
-// secret or token is at stake, and preventing it would mean either
-// growing the bound back toward the unbounded case this function exists
-// to close, or introducing a disambiguating suffix that would itself need
-// its own bound. It is not a correctness bug in whether an entry is
-// accepted or refused — only in how precisely a pathological pair of
-// refusals is reported back.
+// others writing raw, unbounded strings. The name this is recorded under
+// is bounded the same way (see maxMCPUnsupportedNameBytes), but by the
+// time this is ever called it is never itself an untrusted, attacker-
+// controlled value: it is either an mcp.json entry's own name that has
+// already passed validateMCPServerName (so already well within the bound,
+// verbatim), or, for an entry refused for an invalid or reserved name
+// (ImportJSON's own call site, before this one is ever reached for that
+// entry), the bounded, synthetic, per-document-deterministic label
+// invalidMCPEntryLabel assigns instead of that entry's own raw name/key —
+// see ImportJSON's doc comment at that call site for why an invalid key is
+// never used here at all, not even bounded.
 //
 // This is also the one place that defensively bounds how many distinct
 // names ever accumulate in the map at all — independent of, and in
@@ -457,10 +482,14 @@ func boundedMCPServerNameForDisplay(name string) string {
 // allows for, the (maxMCPImportEntries+1)-th distinct name collapses into
 // one additional, fixed "_document" summary entry — mirroring how an
 // oversized or malformed whole document already collapses into that same
-// key — rather than growing the map without bound. A name that happens to
-// be exactly "_document" is the one rare, accepted collision with that
-// reserved key, the same class of trade-off the bounded-name-prefix
-// collision above already accepts.
+// key — rather than growing the map without bound. Neither "_document" nor
+// "_registry" (ListMcpServers' own reserved degraded-notice key, before
+// this package's own explicit registry_degraded/registry_degradation_reason
+// fields replaced it — see mcpRegistryOverBudgetNoticeMessage) can ever
+// collide with a name recorded here: every name reaching this function
+// either already passed validateMCPServerName (which requires a leading
+// alphanumeric character neither reserved key has) or is itself one of
+// invalidMCPEntryLabel's own "_invalid_server_N" labels.
 func recordUnsupported(unsupported map[string]string, name, reason string) {
 	bounded := boundedMCPServerNameForDisplay(name)
 	if _, exists := unsupported[bounded]; !exists && len(unsupported) >= maxMCPImportEntries {
@@ -950,6 +979,12 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (report ImportRepo
 	// rather than one that could differ depending on the order the two
 	// entries happened to be written in.
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	// invalidEntryOrdinal counts entries refused below for an invalid or
+	// reserved name, in this same sorted-by-name order, so
+	// invalidMCPEntryLabel's synthetic labels are assigned deterministically
+	// — the same document always produces the same labels, regardless of
+	// how many other, differently-named entries it also contains.
+	invalidEntryOrdinal := 0
 	for _, entry := range entries {
 		name := entry.Name
 		raw := entry.Body
@@ -958,8 +993,28 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (report ImportRepo
 		// regardless of whether its body would otherwise fail strict
 		// decoding, sharing the exact validateServerDefinition also
 		// uses so the two paths can never independently drift apart.
+		//
+		// The entry's own raw name/key is never used to record this
+		// refusal — unlike every other recordUnsupported call below,
+		// which only ever runs for a name that has already passed this
+		// same check. A key an operator's mcp.json names an entry under
+		// is exactly as untrusted as any other value in the document,
+		// and unlike a name that already passed validateMCPServerName
+		// (bounded to mcpServerNamePattern's 64-byte, ASCII-only shape),
+		// an invalid one might not even have been intended as a name at
+		// all — a bearer token or other secret pasted into the wrong
+		// JSON slot, for instance. Recording it under a bounded,
+		// synthetic, deterministic label instead (invalidMCPEntryLabel)
+		// with a fixed reason (invalidMCPEntryNameMessage, which never
+		// distinguishes "invalid" from "reserved") keeps that value out
+		// of the in-memory report, mcp_import_issues, every RPC response
+		// that surfaces either, and the Flutter UI, exactly the same way
+		// every other attacker-controlled reason below is already kept
+		// out via boundedStatusMessage/errMCP*-fixed-message constants —
+		// see TestImportInvalidEntryKeyEqualToBearerSentinelNeverLeaks.
 		if err := validateMCPServerName(name); err != nil {
-			recordUnsupported(report.Unsupported, name, err.Error())
+			invalidEntryOrdinal++
+			recordUnsupported(report.Unsupported, invalidMCPEntryLabel(invalidEntryOrdinal), invalidMCPEntryNameMessage)
 			continue
 		}
 		// The entry's own top-level field names are validated against a

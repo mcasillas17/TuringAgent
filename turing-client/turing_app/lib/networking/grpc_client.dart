@@ -649,6 +649,8 @@ class TuringGrpcApi
                 UnsupportedMcpServer(name: entry.name, reason: entry.reason),
           )
           .toList(),
+      registryDegraded: response.registryDegraded,
+      registryDegradationReason: response.registryDegradationReason,
     );
   }
 

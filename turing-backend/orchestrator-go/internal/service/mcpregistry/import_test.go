@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -91,7 +92,13 @@ func TestStdioEntriesAreReportedAsUnsupported(t *testing.T) {
 // decoded, sharing the one validateMCPServerName implementation import and
 // RegisterMcpServer both use — not a second, decode-order-dependent check
 // that a future edit could silently diverge from mapMCPValidationError's
-// reserved-name handling.
+// reserved-name handling. Neither entry's own raw name appears anywhere in
+// the report: both are recorded under a bounded, synthetic
+// "_invalid_server_N" label with the one fixed
+// invalidMCPEntryNameMessage reason (see TestImportInvalidEntryKeyEqualToBearerSentinelNeverLeaks
+// for the full leak sweep), assigned in sorted-name order — "files" before
+// "not a valid name!" — so this is deterministic regardless of which
+// specific check ("reserved" vs. pattern-invalid) refused which entry.
 func TestImportJSONRefusesReservedAndInvalidNamesBeforeDecodingTheEntryBody(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	report, err := service.ImportJSON(context.Background(), []byte(`{
@@ -103,17 +110,23 @@ func TestImportJSONRefusesReservedAndInvalidNamesBeforeDecodingTheEntryBody(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reason := report.Unsupported["files"]; !strings.Contains(reason, "reserved") {
-		t.Fatalf("files reason = %q, want it refused for being reserved, not a decode failure", reason)
+	if len(report.Unsupported) != 2 {
+		t.Fatalf("Unsupported = %+v, want exactly two entries", report.Unsupported)
 	}
-	if reason := report.Unsupported["not a valid name!"]; !strings.Contains(reason, "invalid") {
-		t.Fatalf("not a valid name! reason = %q, want it refused for being an invalid name, not a decode failure", reason)
+	for _, label := range []string{"_invalid_server_1", "_invalid_server_2"} {
+		reason, refused := report.Unsupported[label]
+		if !refused {
+			t.Fatalf("Unsupported = %+v, want %q present", report.Unsupported, label)
+		}
+		if reason != invalidMCPEntryNameMessage {
+			t.Fatalf("%s reason = %q, want the fixed reason %q", label, reason, invalidMCPEntryNameMessage)
+		}
 	}
-	if strings.Contains(report.Unsupported["files"], "entry is invalid") {
-		t.Fatalf("files reason = %q, must not be the decode-failure message", report.Unsupported["files"])
+	if _, present := report.Unsupported["files"]; present {
+		t.Fatal("the entry's own raw name \"files\" must never be used as the Unsupported key")
 	}
-	if strings.Contains(report.Unsupported["not a valid name!"], "entry is invalid") {
-		t.Fatalf("not a valid name! reason = %q, must not be the decode-failure message", report.Unsupported["not a valid name!"])
+	if _, present := report.Unsupported["not a valid name!"]; present {
+		t.Fatal("the entry's own raw name \"not a valid name!\" must never be used as the Unsupported key")
 	}
 
 	servers, err := repo.ListMCPServers(context.Background())
@@ -121,6 +134,10 @@ func TestImportJSONRefusesReservedAndInvalidNamesBeforeDecodingTheEntryBody(t *t
 		t.Fatal(err)
 	}
 	for _, server := range servers {
+		// "files" itself is a pre-existing bundled row (seeded by
+		// migration 0016, not by this import attempt) and is expected
+		// to still be present — only a *new* row for either raw name
+		// would indicate this refusal did not actually hold.
 		if server.Name == "not a valid name!" {
 			t.Fatal("an invalid name must never create a row")
 		}
@@ -144,13 +161,25 @@ func TestImportJSONRefusesReservedNamesCaseInsensitively(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"Files", "SYSTEM", "sKiLlS"} {
-		reason, refused := report.Unsupported[name]
+	// Every entry is refused under its own bounded, synthetic
+	// "_invalid_server_N" label (never its own raw, case-variant name —
+	// see TestImportJSONRefusesReservedAndInvalidNamesBeforeDecodingTheEntryBody),
+	// one per entry, all sharing the one fixed invalidMCPEntryNameMessage.
+	if len(report.Unsupported) != 3 {
+		t.Fatalf("Unsupported = %+v, want exactly three entries", report.Unsupported)
+	}
+	for _, label := range []string{"_invalid_server_1", "_invalid_server_2", "_invalid_server_3"} {
+		reason, refused := report.Unsupported[label]
 		if !refused {
-			t.Fatalf("Unsupported = %+v, want %q refused as reserved", report.Unsupported, name)
+			t.Fatalf("Unsupported = %+v, want %q present", report.Unsupported, label)
 		}
-		if !strings.Contains(reason, "reserved") {
-			t.Fatalf("%s reason = %q, want it refused for being reserved", name, reason)
+		if reason != invalidMCPEntryNameMessage {
+			t.Fatalf("%s reason = %q, want the fixed reason %q", label, reason, invalidMCPEntryNameMessage)
+		}
+	}
+	for _, name := range []string{"Files", "SYSTEM", "sKiLlS"} {
+		if _, present := report.Unsupported[name]; present {
+			t.Fatalf("the entry's own raw name %q must never be used as the Unsupported key", name)
 		}
 	}
 	if len(report.Imported) != 0 {
@@ -206,8 +235,11 @@ func TestIntegrationsNameAndGitHubToolNamespaceAreReserved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(report.Unsupported["integrations"], "reserved") {
-		t.Fatalf("report = %+v", report.Unsupported)
+	if reason := report.Unsupported["_invalid_server_1"]; reason != invalidMCPEntryNameMessage {
+		t.Fatalf("report = %+v, want _invalid_server_1 refused with the fixed reason %q", report.Unsupported, invalidMCPEntryNameMessage)
+	}
+	if _, present := report.Unsupported["integrations"]; present {
+		t.Fatal("the entry's own raw name \"integrations\" must never be used as the Unsupported key")
 	}
 	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{Name: "vendor", URL: "https://vendor.example/mcp", Tier: repository.MCPServerTierRemoteURL})
 	if err != nil {
@@ -307,18 +339,17 @@ func TestImportJSONBoundsLongAttackerControlledReasonsAndKeepsValidUTF8(t *testi
 	}
 }
 
-// The mcp.json entry KEY itself — not just the "reason" string
-// recordUnsupported bounds — is attacker-controlled: a JSON object's keys
-// carry no length limit of their own, and the name check that would
-// otherwise reject an overlong one (validateMCPServerName, capped at
-// mcpServerNamePattern's own 64-character maximum) has not run yet the
-// moment an invalid name is first recorded as unsupported. Without its own
-// bound, an arbitrarily long invalid key would flow — unbounded — into the
-// in-memory report, the persisted mcp_import_issues row, and eventually
-// the Flutter UI's unsupported-server list. maxMCPUnsupportedNameBytes (64,
-// matching the longest a *valid* name could ever be) is what
-// recordUnsupported bounds it to, not the much larger
-// maxMCPStatusMessageBytes (512) the reason text uses.
+// The mcp.json entry KEY itself is attacker-controlled — a JSON object's
+// keys carry no length limit of their own — and, unlike the "reason"
+// string recordUnsupported bounds for every other refusal, an invalid
+// entry's own key is never used to record its refusal at all: it is
+// recorded under a bounded, synthetic "_invalid_server_N" label instead
+// (see invalidMCPEntryLabel), regardless of how long or malformed the
+// original key was. This proves an arbitrarily long invalid key never
+// reaches the in-memory report, the persisted mcp_import_issues row, or
+// (transitively) the Flutter UI's unsupported-server list — not even
+// truncated, since it is never used as source material for the label at
+// all.
 func TestImportJSONBoundsLongInvalidServerNameKeyAndKeepsValidUTF8(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	longInvalidName := strings.Repeat("x-évil-name-", 20) + "!" // trailing "!" also makes it pattern-invalid
@@ -342,22 +373,17 @@ func TestImportJSONBoundsLongInvalidServerNameKeyAndKeepsValidUTF8(t *testing.T)
 	if len(report.Unsupported) != 1 {
 		t.Fatalf("Unsupported = %+v, want exactly one entry", report.Unsupported)
 	}
-	for key, reason := range report.Unsupported {
-		if key == longInvalidName {
-			t.Fatalf("key = %q, want the long invalid name key bounded, not stored verbatim", key)
+	reason, refused := report.Unsupported["_invalid_server_1"]
+	if !refused {
+		t.Fatalf("Unsupported = %+v, want _invalid_server_1 present", report.Unsupported)
+	}
+	if reason != invalidMCPEntryNameMessage {
+		t.Fatalf("reason = %q, want the fixed reason %q", reason, invalidMCPEntryNameMessage)
+	}
+	for key := range report.Unsupported {
+		if strings.Contains(key, longInvalidName) || strings.HasPrefix(longInvalidName, key) {
+			t.Fatalf("key = %q, must not be derived from the entry's own long invalid name at all", key)
 		}
-		if len(key) > maxMCPUnsupportedNameBytes {
-			t.Fatalf("key length = %d, want <= maxMCPUnsupportedNameBytes (%d)", len(key), maxMCPUnsupportedNameBytes)
-		}
-		if !utf8.ValidString(key) {
-			t.Fatalf("key = %q is not valid UTF-8", key)
-		}
-		// A bounded but still recognizable prefix of the original name
-		// remains — bounding must not discard everything useful.
-		if !strings.HasPrefix(longInvalidName, key) {
-			t.Fatalf("key = %q, want a valid-UTF-8 prefix of the original name", key)
-		}
-		assertBoundedUTF8(t, "reason", reason)
 	}
 
 	issues, err := repo.ListMCPImportIssues(context.Background())
@@ -368,6 +394,9 @@ func TestImportJSONBoundsLongInvalidServerNameKeyAndKeepsValidUTF8(t *testing.T)
 		t.Fatalf("issues = %+v, want exactly one persisted", issues)
 	}
 	for _, issue := range issues {
+		if issue.Name != "_invalid_server_1" {
+			t.Fatalf("persisted issue name = %q, want the synthetic label _invalid_server_1", issue.Name)
+		}
 		if len(issue.Name) > maxMCPUnsupportedNameBytes {
 			t.Fatalf("persisted issue name length = %d, want <= maxMCPUnsupportedNameBytes (%d)", len(issue.Name), maxMCPUnsupportedNameBytes)
 		}
@@ -377,16 +406,15 @@ func TestImportJSONBoundsLongInvalidServerNameKeyAndKeepsValidUTF8(t *testing.T)
 	}
 }
 
-// Bounding the entry name to build the map key (rather than merely
-// bounding the reason) has one accepted, documented consequence: two
-// distinct invalid names that share the same maxMCPUnsupportedNameBytes
-// prefix collapse to a single Unsupported entry, since they truncate to
-// the identical bounded key. This is diagnostic-only — neither of the two
-// colliding entries was ever going to register regardless of this
-// collision, and no secret or token is at stake — but it is a real,
-// intentional trade-off (see recordUnsupported's own doc comment), not an
-// oversight, so it is asserted here rather than left merely implied.
-func TestImportJSONTwoLongInvalidNamesSharingABoundedPrefixCollapseToOneEntry(t *testing.T) {
+// Recording an invalid or reserved entry's refusal under a synthetic,
+// per-document-ordinal label (rather than anything derived from its own
+// name) means two distinct invalid names never collapse into a single
+// Unsupported entry, unlike a scheme that bounded and reused the name
+// itself: each gets its own "_invalid_server_N" label, assigned in the
+// same sorted-by-name order ImportJSON already processes entries in, so
+// this is deterministic across repeated imports of the same document —
+// not merely uncollided by chance.
+func TestImportJSONTwoInvalidNamesGetDistinctDeterministicSyntheticLabels(t *testing.T) {
 	service, _ := newRegistryTestService(t)
 	prefix := strings.Repeat("x", maxMCPUnsupportedNameBytes)
 	nameA := prefix + "-first-suffix-makes-this-invalid!"
@@ -409,11 +437,32 @@ func TestImportJSONTwoLongInvalidNamesSharingABoundedPrefixCollapseToOneEntry(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Unsupported) != 1 {
-		t.Fatalf("Unsupported = %+v, want exactly one entry: both names bound to the identical %d-byte prefix", report.Unsupported, maxMCPUnsupportedNameBytes)
+	if len(report.Unsupported) != 2 {
+		t.Fatalf("Unsupported = %+v, want exactly two entries: distinct synthetic labels, no collision", report.Unsupported)
+	}
+	for _, label := range []string{"_invalid_server_1", "_invalid_server_2"} {
+		reason, refused := report.Unsupported[label]
+		if !refused {
+			t.Fatalf("Unsupported = %+v, want %q present", report.Unsupported, label)
+		}
+		if reason != invalidMCPEntryNameMessage {
+			t.Fatalf("%s reason = %q, want the fixed reason %q", label, reason, invalidMCPEntryNameMessage)
+		}
 	}
 	if len(report.Imported) != 0 {
-		t.Fatalf("Imported = %v, want none: both entries are independently invalid regardless of the collision", report.Imported)
+		t.Fatalf("Imported = %v, want none: both entries are independently invalid", report.Imported)
+	}
+
+	// Determinism: repeating the exact same import produces the exact
+	// same labels — nameA (sorted first) is always _invalid_server_1,
+	// nameB is always _invalid_server_2 — not an artifact of map
+	// iteration order or any other incidental nondeterminism.
+	again, err := service.ImportJSON(context.Background(), document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(report.Unsupported, again.Unsupported) {
+		t.Fatalf("Unsupported changed across repeated imports of the same document: first=%+v, second=%+v", report.Unsupported, again.Unsupported)
 	}
 }
 

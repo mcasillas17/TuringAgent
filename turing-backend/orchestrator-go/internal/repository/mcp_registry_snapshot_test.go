@@ -2,10 +2,13 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 )
 
 // TestMCPRegistrySnapshotReturnsEveryServerWithItsOwnTools proves the
@@ -277,4 +280,305 @@ func toolNameOrEmpty(tools []MCPServerTool) string {
 		return ""
 	}
 	return tools[0].Name
+}
+
+// insertRawMCPServerRows inserts count synthetic, minimal mcp_servers rows
+// directly via SQL, bypassing RegisterMCPServer/ImportMCPServer (and
+// therefore nonBundledMCPServerRegistryFullTx's own MaxNonBundledMCPServers
+// enforcement) entirely — the same "somehow already exists" simulation
+// TestMCPRegistrySnapshotSetsOverBudgetAndOmitsToolsForPreexistingOverBudgetAggregate
+// already uses for an oversized tools row, here for a preexisting
+// oversized *row count* instead. No mcp_server_status row is inserted for
+// any of them: listMCPServersRowsBounded's LEFT JOIN already defaults a
+// missing one to 'unknown', so this stays minimal.
+func insertRawMCPServerRows(t *testing.T, database *db.DB, ctx context.Context, prefix string, count int) {
+	t.Helper()
+	for i := 0; i < count; i++ {
+		id := fmt.Sprintf("mcp_raw_%s_%d", prefix, i)
+		name := fmt.Sprintf("%s-%d", prefix, i)
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO mcp_servers (id, name, transport, url, tier, enabled, created_at)
+			VALUES (?, ?, 'http', ?, 'local_container', 0, datetime('now'))
+		`, id, name, "http://"+name+":9000/mcp"); err != nil {
+			t.Fatalf("insert raw mcp_servers row %d: %v", i, err)
+		}
+	}
+}
+
+// TestMCPRegistrySnapshotSetsServersOverCapAndBoundsServersForPreexistingOversizedRowCount
+// proves the row-count counterpart to the tool-byte-budget guard above: a
+// database that already holds more than MaxMCPRegistryServers rows (every
+// live write path — RegisterMCPServer, ImportMCPServer — already refuses
+// to create such a state via nonBundledMCPServerRegistryFullTx, so this
+// should be unreachable in practice, simulated here the same
+// bypass-every-write-path way) must not make MCPRegistrySnapshot read an
+// unbounded number of rows: it returns exactly MaxMCPRegistryServers of
+// them (never zero, never the full oversized count), with ServersOverCap
+// set and every one of those returned servers' own Tools left empty —
+// the same "still usable, never both unbounded and silently truncated
+// without saying so" guarantee OverBudget already gives the tool-byte
+// case.
+func TestMCPRegistrySnapshotSetsServersOverCapAndBoundsServersForPreexistingOversizedRowCount(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+
+	insertRawMCPServerRows(t, database, ctx, "over-cap", MaxMCPRegistryServers+5)
+	if err := repo.ReplaceMCPImportIssues(ctx, map[string]string{"bad-entry": "refused for testing"}); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := repo.MCPRegistrySnapshot(ctx)
+	if err != nil {
+		t.Fatalf("MCPRegistrySnapshot must remain usable for a preexisting oversized row count, not fail outright: %v", err)
+	}
+	if !snapshot.ServersOverCap {
+		t.Fatal("ServersOverCap = false, want true for a preexisting server count over MaxMCPRegistryServers")
+	}
+	if snapshot.OverBudget {
+		t.Fatal("OverBudget = true, want false: only the row count, not the tool-byte aggregate, is oversized here")
+	}
+	if len(snapshot.Servers) != MaxMCPRegistryServers {
+		t.Fatalf("len(Servers) = %d, want exactly MaxMCPRegistryServers (%d)", len(snapshot.Servers), MaxMCPRegistryServers)
+	}
+	for _, entry := range snapshot.Servers {
+		if len(entry.Tools) != 0 {
+			t.Fatalf("server %q Tools = %+v, want empty while ServersOverCap", entry.Server.Name, entry.Tools)
+		}
+	}
+	if len(snapshot.Issues) != 1 || snapshot.Issues[0].Name != "bad-entry" {
+		t.Fatalf("snapshot issues = %+v, want the one recorded issue, unaffected by ServersOverCap", snapshot.Issues)
+	}
+}
+
+// TestMCPRegistrySnapshotServersAtExactCapIsNotDegraded proves the
+// ServersOverCap guard is not off-by-one on its in-budget side: a
+// database holding *exactly* MaxMCPRegistryServers rows (bundled rows
+// included, whatever their current count happens to be) must list
+// successfully, with ServersOverCap false, every row returned (none
+// truncated), and a healthy server's own tools intact — mirroring
+// TestListMcpServersSucceedsAtExactAggregateBudgetBoundary's identical
+// proof for the byte-budget guard.
+func TestMCPRegistrySnapshotServersAtExactCapIsNotDegraded(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+
+	var existing int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM mcp_servers`).Scan(&existing); err != nil {
+		t.Fatal(err)
+	}
+	healthy, err := repo.RegisterMCPServer(ctx, ImportedMCPServer{
+		Name: "vendor-healthy", URL: "http://vendor-healthy:9000/mcp", Tier: MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceMCPServerTools(ctx, healthy.Server.ID, []MCPServerTool{
+		{Name: "vendor-healthy.tool", Policy: "safe", SchemaJSON: `{"type":"object"}`, Enabled: true, Present: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// One more raw row is already registered (vendor-healthy) than
+	// `existing`, so top up to exactly MaxMCPRegistryServers total.
+	insertRawMCPServerRows(t, database, ctx, "at-cap", MaxMCPRegistryServers-existing-1)
+
+	var total int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM mcp_servers`).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != MaxMCPRegistryServers {
+		t.Fatalf("test setup is broken: mcp_servers has %d rows, want exactly MaxMCPRegistryServers (%d)", total, MaxMCPRegistryServers)
+	}
+
+	snapshot, err := repo.MCPRegistrySnapshot(ctx)
+	if err != nil {
+		t.Fatalf("MCPRegistrySnapshot at exactly the server-count boundary must succeed: %v", err)
+	}
+	if snapshot.ServersOverCap {
+		t.Fatal("ServersOverCap = true, want false at the exact (in-cap) boundary")
+	}
+	if len(snapshot.Servers) != MaxMCPRegistryServers {
+		t.Fatalf("len(Servers) = %d, want exactly MaxMCPRegistryServers (%d), none truncated at the boundary", len(snapshot.Servers), MaxMCPRegistryServers)
+	}
+	found := false
+	for _, entry := range snapshot.Servers {
+		if entry.Server.Name != "vendor-healthy" {
+			continue
+		}
+		found = true
+		if len(entry.Tools) != 1 || entry.Tools[0].Name != "vendor-healthy.tool" {
+			t.Fatalf("vendor-healthy Tools = %+v, want its one tool intact at the exact (in-cap) boundary", entry.Tools)
+		}
+	}
+	if !found {
+		t.Fatal("vendor-healthy is missing from the snapshot at the exact boundary")
+	}
+}
+
+// TestMCPRegistrySnapshotServersOneOverCapIsDegradedAndBoundedToExactlyCap
+// is the complementary off-by-one proof on the over-cap side: exactly
+// MaxMCPRegistryServers+1 rows (one past the boundary
+// TestMCPRegistrySnapshotServersAtExactCapIsNotDegraded proves is still
+// healthy) must already trip ServersOverCap and bound the returned list
+// to exactly MaxMCPRegistryServers — neither MaxMCPRegistryServers+1 nor
+// some other off-by-one count.
+func TestMCPRegistrySnapshotServersOneOverCapIsDegradedAndBoundedToExactlyCap(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+
+	var existing int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM mcp_servers`).Scan(&existing); err != nil {
+		t.Fatal(err)
+	}
+	insertRawMCPServerRows(t, database, ctx, "one-over-cap", MaxMCPRegistryServers-existing+1)
+
+	var total int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM mcp_servers`).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != MaxMCPRegistryServers+1 {
+		t.Fatalf("test setup is broken: mcp_servers has %d rows, want exactly MaxMCPRegistryServers+1 (%d)", total, MaxMCPRegistryServers+1)
+	}
+
+	snapshot, err := repo.MCPRegistrySnapshot(ctx)
+	if err != nil {
+		t.Fatalf("MCPRegistrySnapshot one row over the server-count boundary must still succeed: %v", err)
+	}
+	if !snapshot.ServersOverCap {
+		t.Fatal("ServersOverCap = false, want true exactly one row past the boundary")
+	}
+	if len(snapshot.Servers) != MaxMCPRegistryServers {
+		t.Fatalf("len(Servers) = %d, want exactly MaxMCPRegistryServers (%d), not MaxMCPRegistryServers+1 or any other count", len(snapshot.Servers), MaxMCPRegistryServers)
+	}
+}
+
+// TestMCPRegistrySnapshotSetsIssuesOverCapAndBoundsIssuesForPreexistingOversizedIssueCount
+// is the mcp_import_issues counterpart: a database that already holds
+// more than MaxMCPImportIssues rows (a single ImportJSON call can never
+// itself write more than that — see mcpregistry.recordUnsupported's own
+// defensive bound — so, again, only reachable through a direct write that
+// bypasses ReplaceMCPImportIssues entirely) must not make
+// MCPRegistrySnapshot read an unbounded number of issue rows either: it
+// returns exactly MaxMCPImportIssues of them, with IssuesOverCap set.
+// Every server's own Tools is left empty here too, the same as the other
+// two degraded conditions — a caller (ListMcpServers) has one shared,
+// simple rule ("degraded means no Tools anywhere") rather than a
+// per-cause exception to remember. The server list itself is unaffected
+// in count: only the issues table is oversized in this scenario.
+func TestMCPRegistrySnapshotSetsIssuesOverCapAndBoundsIssuesForPreexistingOversizedIssueCount(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+
+	server, err := repo.RegisterMCPServer(ctx, ImportedMCPServer{
+		Name: "vendor-healthy", URL: "http://vendor-healthy:9000/mcp", Tier: MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceMCPServerTools(ctx, server.Server.ID, []MCPServerTool{
+		{Name: "vendor-healthy.tool", Policy: "safe", SchemaJSON: `{"type":"object"}`, Enabled: true, Present: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < MaxMCPImportIssues+5; i++ {
+		name := fmt.Sprintf("bad-entry-%d", i)
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO mcp_import_issues (name, reason, reported_at) VALUES (?, 'refused for testing', datetime('now'))
+		`, name); err != nil {
+			t.Fatalf("insert raw mcp_import_issues row %d: %v", i, err)
+		}
+	}
+
+	snapshot, err := repo.MCPRegistrySnapshot(ctx)
+	if err != nil {
+		t.Fatalf("MCPRegistrySnapshot must remain usable for a preexisting oversized issue count, not fail outright: %v", err)
+	}
+	if !snapshot.IssuesOverCap {
+		t.Fatal("IssuesOverCap = false, want true for a preexisting issue count over MaxMCPImportIssues")
+	}
+	if snapshot.OverBudget || snapshot.ServersOverCap {
+		t.Fatalf("OverBudget = %v, ServersOverCap = %v, want both false: only the issue count is oversized here", snapshot.OverBudget, snapshot.ServersOverCap)
+	}
+	if len(snapshot.Issues) != MaxMCPImportIssues {
+		t.Fatalf("len(Issues) = %d, want exactly MaxMCPImportIssues (%d)", len(snapshot.Issues), MaxMCPImportIssues)
+	}
+	found := false
+	for _, entry := range snapshot.Servers {
+		if entry.Server.Name != "vendor-healthy" {
+			continue
+		}
+		found = true
+		if len(entry.Tools) != 0 {
+			t.Fatalf("vendor-healthy Tools = %+v, want empty while IssuesOverCap", entry.Tools)
+		}
+	}
+	if !found {
+		t.Fatal("vendor-healthy is missing from the snapshot; server count must be unaffected by IssuesOverCap")
+	}
+}
+
+// insertRawMCPImportIssueRows inserts count synthetic mcp_import_issues
+// rows directly via SQL, bypassing ReplaceMCPImportIssues, to simulate a
+// preexisting issue count at or around the MaxMCPImportIssues boundary.
+func insertRawMCPImportIssueRows(t *testing.T, database *db.DB, ctx context.Context, prefix string, count int) {
+	t.Helper()
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("%s-%d", prefix, i)
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO mcp_import_issues (name, reason, reported_at) VALUES (?, 'refused for testing', datetime('now'))
+		`, name); err != nil {
+			t.Fatalf("insert raw mcp_import_issues row %d: %v", i, err)
+		}
+	}
+}
+
+// TestMCPRegistrySnapshotIssuesAtExactCapIsNotDegraded is the
+// issue-count counterpart to TestMCPRegistrySnapshotServersAtExactCapIsNotDegraded:
+// exactly MaxMCPImportIssues rows must list successfully with
+// IssuesOverCap false and every row returned, none truncated.
+func TestMCPRegistrySnapshotIssuesAtExactCapIsNotDegraded(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+
+	insertRawMCPImportIssueRows(t, database, ctx, "at-cap", MaxMCPImportIssues)
+
+	snapshot, err := repo.MCPRegistrySnapshot(ctx)
+	if err != nil {
+		t.Fatalf("MCPRegistrySnapshot at exactly the issue-count boundary must succeed: %v", err)
+	}
+	if snapshot.IssuesOverCap {
+		t.Fatal("IssuesOverCap = true, want false at the exact (in-cap) boundary")
+	}
+	if len(snapshot.Issues) != MaxMCPImportIssues {
+		t.Fatalf("len(Issues) = %d, want exactly MaxMCPImportIssues (%d), none truncated at the boundary", len(snapshot.Issues), MaxMCPImportIssues)
+	}
+}
+
+// TestMCPRegistrySnapshotIssuesOneOverCapIsDegradedAndBoundedToExactlyCap
+// is the issue-count counterpart to
+// TestMCPRegistrySnapshotServersOneOverCapIsDegradedAndBoundedToExactlyCap:
+// exactly MaxMCPImportIssues+1 rows must already trip IssuesOverCap and
+// bound the returned list to exactly MaxMCPImportIssues.
+func TestMCPRegistrySnapshotIssuesOneOverCapIsDegradedAndBoundedToExactlyCap(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+
+	insertRawMCPImportIssueRows(t, database, ctx, "one-over-cap", MaxMCPImportIssues+1)
+
+	snapshot, err := repo.MCPRegistrySnapshot(ctx)
+	if err != nil {
+		t.Fatalf("MCPRegistrySnapshot one row over the issue-count boundary must still succeed: %v", err)
+	}
+	if !snapshot.IssuesOverCap {
+		t.Fatal("IssuesOverCap = false, want true exactly one row past the boundary")
+	}
+	if len(snapshot.Issues) != MaxMCPImportIssues {
+		t.Fatalf("len(Issues) = %d, want exactly MaxMCPImportIssues (%d), not MaxMCPImportIssues+1 or any other count", len(snapshot.Issues), MaxMCPImportIssues)
+	}
 }

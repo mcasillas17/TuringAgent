@@ -414,10 +414,15 @@ class ListMcpServersResponse extends $pb.GeneratedMessage {
   factory ListMcpServersResponse({
     $core.Iterable<McpServerDescriptor>? servers,
     $core.Iterable<UnsupportedMcpServer>? unsupported,
+    $core.bool? registryDegraded,
+    $core.String? registryDegradationReason,
   }) {
     final result = create();
     if (servers != null) result.servers.addAll(servers);
     if (unsupported != null) result.unsupported.addAll(unsupported);
+    if (registryDegraded != null) result.registryDegraded = registryDegraded;
+    if (registryDegradationReason != null)
+      result.registryDegradationReason = registryDegradationReason;
     return result;
   }
 
@@ -440,6 +445,8 @@ class ListMcpServersResponse extends $pb.GeneratedMessage {
     ..pc<UnsupportedMcpServer>(
         2, _omitFieldNames ? '' : 'unsupported', $pb.PbFieldType.PM,
         subBuilder: UnsupportedMcpServer.create)
+    ..aOB(3, _omitFieldNames ? '' : 'registryDegraded')
+    ..aOS(4, _omitFieldNames ? '' : 'registryDegradationReason')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -470,6 +477,37 @@ class ListMcpServersResponse extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(2)
   $pb.PbList<UnsupportedMcpServer> get unsupported => $_getList(1);
+
+  /// True when the registry could not safely return complete, healthy
+  /// state — more servers, more import issues, or a larger aggregate
+  /// tool-byte total than the registry's own operating bounds allow (see
+  /// repository.MaxMCPRegistryServers/MaxMCPRegistryToolBytes) — and
+  /// returned a safe, bounded, degraded view instead: every server
+  /// descriptor is still listed (an operator retains enough identity —
+  /// id, name, endpoint — to find and delete whichever one is
+  /// responsible), but with its own `tools` left empty. This is an
+  /// explicit, structured signal, never a synthetic entry appended to
+  /// `unsupported` (which continues to describe only ordinary per-entry
+  /// import refusals).
+  @$pb.TagNumber(3)
+  $core.bool get registryDegraded => $_getBF(2);
+  @$pb.TagNumber(3)
+  set registryDegraded($core.bool value) => $_setBool(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasRegistryDegraded() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearRegistryDegraded() => $_clearField(3);
+
+  /// Set only when registry_degraded is true: a fixed, non-sensitive
+  /// explanation of which bound was exceeded.
+  @$pb.TagNumber(4)
+  $core.String get registryDegradationReason => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set registryDegradationReason($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasRegistryDegradationReason() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearRegistryDegradationReason() => $_clearField(4);
 }
 
 class SetMcpServerEnabledRequest extends $pb.GeneratedMessage {

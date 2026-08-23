@@ -155,6 +155,157 @@ void main() {
       await tester.pumpAndSettle();
     });
 
+    testWidgets(
+      'typing an https:// URL auto-selects Remote URL, so a first '
+      'submission succeeds without a manual tier correction',
+      (tester) async {
+        final api = _McpApi();
+        await _pumpMcps(tester, api);
+
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddName')),
+          'Vendor',
+        );
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddUrl')),
+          'https://vendor.example/mcp',
+        );
+        await tester.pumpAndSettle();
+
+        // The closed dropdown already shows the auto-selected tier —
+        // no tap on it was needed.
+        expect(find.text('Remote URL'), findsOneWidget);
+        expect(find.text('Local container'), findsNothing);
+
+        await tester.tap(find.byKey(const Key('mcpsAddSubmit')));
+        await tester.pumpAndSettle();
+
+        expect(api.registerCalls, hasLength(1));
+        expect(api.registerCalls.single['tier'], McpServerTier.remoteUrl);
+      },
+    );
+
+    testWidgets(
+      'typing an http:// URL auto-selects Local container',
+      (tester) async {
+        final api = _McpApi();
+        await _pumpMcps(tester, api);
+
+        // Start from an auto-selected Remote URL (via typing, not a
+        // manual dropdown pick, which would instead disable further
+        // auto-detection — see the "manually choosing a tier" test
+        // below), so this proves the field actively re-selects Local
+        // container when the scheme changes, not merely that it
+        // already defaulted there.
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddUrl')),
+          'https://vendor.example/mcp',
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Remote URL'), findsOneWidget);
+
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddUrl')),
+          'http://vendor.internal:9000/mcp',
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Local container'), findsOneWidget);
+        expect(find.text('Remote URL'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'manually choosing a tier stops the URL field from overriding it',
+      (tester) async {
+        final api = _McpApi();
+        await _pumpMcps(tester, api);
+
+        // The user explicitly picks Remote URL themselves...
+        await _selectTier(tester, 'Remote URL');
+        // ...then types an http:// URL, which would otherwise
+        // auto-select Local container.
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddName')),
+          'Vendor',
+        );
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddUrl')),
+          'http://vendor.internal:9000/mcp',
+        );
+        await tester.pumpAndSettle();
+
+        // The user's explicit choice survives.
+        expect(find.text('Remote URL'), findsOneWidget);
+        expect(find.text('Local container'), findsNothing);
+
+        await tester.tap(find.byKey(const Key('mcpsAddSubmit')));
+        await tester.pumpAndSettle();
+
+        // The backend still independently validates the pair — this
+        // proves only that the UI itself respects the user's override,
+        // not that a mismatch would be accepted.
+        expect(api.registerCalls, hasLength(1));
+        expect(api.registerCalls.single['tier'], McpServerTier.remoteUrl);
+      },
+    );
+
+    testWidgets(
+      'the tier auto-selects again for the next server after a successful '
+      'submission resets the form',
+      (tester) async {
+        final api = _McpApi();
+        await _pumpMcps(tester, api);
+
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddName')),
+          'Vendor',
+        );
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddUrl')),
+          'https://vendor.example/mcp',
+        );
+        await tester.tap(find.byKey(const Key('mcpsAddSubmit')));
+        await tester.pumpAndSettle();
+        expect(api.registerCalls, hasLength(1));
+
+        // The form reset to its own default tier...
+        expect(find.text('Local container'), findsOneWidget);
+
+        // ...and auto-detection still runs for the next entry.
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddUrl')),
+          'https://vendor-two.example/mcp',
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Remote URL'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'the add-form token field explains the token is sealed and never '
+      'shown again',
+      (tester) async {
+        await _pumpMcps(tester, _McpApi());
+
+        expect(
+          find.textContaining(
+            'Stored sealed. Never shown again \u2014 rotate to replace.',
+          ),
+          findsOneWidget,
+        );
+
+        // Still obscured, no autocorrect/suggestions — the new helper
+        // text does not relax any of that.
+        final field = tester.widget<TextField>(
+          find.byKey(const Key('mcpsAddToken')),
+        );
+        expect(field.obscureText, isTrue);
+        expect(field.autocorrect, isFalse);
+        expect(field.enableSuggestions, isFalse);
+      },
+    );
+
     testWidgets('a missing name or url is refused before any call is made', (
       tester,
     ) async {
@@ -444,38 +595,35 @@ void main() {
         // overwritten by whatever mcp.json now says — the reason must
         // accompany the exact name.
         expect(
-          find.text(
-            'vendor — already registered; existing settings were kept',
-          ),
+          find.text('vendor — already registered; existing settings were kept'),
           findsOneWidget,
         );
       },
     );
 
-    testWidgets(
-      'explains how to repoint a skipped server to a new endpoint',
-      (tester) async {
-        final api = _McpApi()
-          ..importReport = McpImportReport(
-            imported: const [],
-            skipped: const ['vendor'],
-            refused: const [],
-          );
-        await _pumpMcps(tester, api);
-
-        await tester.tap(find.text('Re-import mcp.json'));
-        await tester.pumpAndSettle();
-
-        expect(
-          find.textContaining('remove it, then add it again'),
-          findsOneWidget,
-          reason:
-              'an operator must be told how to point a skipped server at a '
-              'new endpoint, since a plain mcp.json edit is silently kept '
-              'as-is',
+    testWidgets('explains how to repoint a skipped server to a new endpoint', (
+      tester,
+    ) async {
+      final api = _McpApi()
+        ..importReport = McpImportReport(
+          imported: const [],
+          skipped: const ['vendor'],
+          refused: const [],
         );
-      },
-    );
+      await _pumpMcps(tester, api);
+
+      await tester.tap(find.text('Re-import mcp.json'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('remove it, then add it again'),
+        findsOneWidget,
+        reason:
+            'an operator must be told how to point a skipped server at a '
+            'new endpoint, since a plain mcp.json edit is silently kept '
+            'as-is',
+      );
+    });
 
     testWidgets(
       'does not show the repoint explanation when nothing was skipped',
@@ -491,7 +639,10 @@ void main() {
         await tester.tap(find.text('Re-import mcp.json'));
         await tester.pumpAndSettle();
 
-        expect(find.textContaining('remove it, then add it again'), findsNothing);
+        expect(
+          find.textContaining('remove it, then add it again'),
+          findsNothing,
+        );
       },
     );
 
@@ -645,8 +796,7 @@ void main() {
         expect(
           toggle.onChanged,
           isNull,
-          reason:
-              'a placeholder with no endpoint must never be enable-able',
+          reason: 'a placeholder with no endpoint must never be enable-able',
         );
 
         await tester.tap(find.byType(Switch), warnIfMissed: false);
@@ -683,7 +833,10 @@ void main() {
         final toggle = tester.widget<Switch>(find.byType(Switch));
         expect(toggle.onChanged, isNull);
         expect(
-          find.ancestor(of: find.byType(Switch), matching: find.byType(Tooltip)),
+          find.ancestor(
+            of: find.byType(Switch),
+            matching: find.byType(Tooltip),
+          ),
           findsNothing,
           reason:
               'the placeholder-specific tooltip must be scoped to '
@@ -802,39 +955,38 @@ void main() {
       },
     );
 
-    testWidgets(
-      'a failed enable/disable toggle that actually committed on the '
-      'backend still shows the committed value once reloaded',
-      (tester) async {
-        // Simulates a post-commit Internal error: the RPC's mutation lands
-        // (enabled flips to true) but the response itself still errors
-        // (e.g. an audit write failing after commit). Without reloading
-        // before showing the error, the UI would keep displaying the
-        // pre-mutation value forever.
-        final api = _McpApi()
-          ..servers.add(_localServer())
-          ..enabledError = StateError('mcp.server.enabled audit failed')
-          ..enabledCommitsBeforeThrowing = true;
-        await _pumpMcps(tester, api);
+    testWidgets('a failed enable/disable toggle that actually committed on the '
+        'backend still shows the committed value once reloaded', (
+      tester,
+    ) async {
+      // Simulates a post-commit Internal error: the RPC's mutation lands
+      // (enabled flips to true) but the response itself still errors
+      // (e.g. an audit write failing after commit). Without reloading
+      // before showing the error, the UI would keep displaying the
+      // pre-mutation value forever.
+      final api = _McpApi()
+        ..servers.add(_localServer())
+        ..enabledError = StateError('mcp.server.enabled audit failed')
+        ..enabledCommitsBeforeThrowing = true;
+      await _pumpMcps(tester, api);
 
-        await tester.tap(find.byType(Switch));
-        await tester.pumpAndSettle();
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
 
-        expect(api.enabledCalls, hasLength(1));
-        expect(
-          find.textContaining('mcp.server.enabled audit failed'),
-          findsOneWidget,
-        );
-        final toggle = tester.widget<Switch>(find.byType(Switch));
-        expect(
-          toggle.value,
-          isTrue,
-          reason:
-              'the reload must surface the backend\'s authoritative '
-              '(already-committed) state despite the RPC returning an error',
-        );
-      },
-    );
+      expect(api.enabledCalls, hasLength(1));
+      expect(
+        find.textContaining('mcp.server.enabled audit failed'),
+        findsOneWidget,
+      );
+      final toggle = tester.widget<Switch>(find.byType(Switch));
+      expect(
+        toggle.value,
+        isTrue,
+        reason:
+            'the reload must surface the backend\'s authoritative '
+            '(already-committed) state despite the RPC returning an error',
+      );
+    });
 
     testWidgets(
       'a busy enable/disable renders a small progress indicator and keeps '
@@ -1087,25 +1239,22 @@ void main() {
       },
     );
 
-    testWidgets(
-      'canceling the removal confirmation dialog does not call '
-      'deleteMcpServer and leaves the server in place',
-      (tester) async {
-        final api = _McpApi()..servers.add(_localServer());
-        await _pumpMcps(tester, api);
+    testWidgets('canceling the removal confirmation dialog does not call '
+        'deleteMcpServer and leaves the server in place', (tester) async {
+      final api = _McpApi()..servers.add(_localServer());
+      await _pumpMcps(tester, api);
 
-        await tester.tap(find.byTooltip('Actions for vendor'));
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Remove'));
-        await tester.pumpAndSettle();
-        await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
-        await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Actions for vendor'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
 
-        expect(api.deleteCalls, isEmpty);
-        expect(find.text('vendor'), findsOneWidget);
-        expect(find.byKey(const Key('mcpsConfirmRemove')), findsNothing);
-      },
-    );
+      expect(api.deleteCalls, isEmpty);
+      expect(find.text('vendor'), findsOneWidget);
+      expect(find.byKey(const Key('mcpsConfirmRemove')), findsNothing);
+    });
 
     testWidgets(
       'tapping the barrier on the removal confirmation dialog does not '
@@ -1224,6 +1373,189 @@ void main() {
 
       expect(api.rotateCalls, hasLength(1));
       expect(api.deleteCalls, isEmpty);
+    });
+  });
+
+  group('confirming before enabling a remote server', () {
+    testWidgets('flipping a local-container server on needs no confirmation', (
+      tester,
+    ) async {
+      final api = _McpApi()..servers.add(_localServer(enabled: false));
+      await _pumpMcps(tester, api);
+
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(api.enabledCalls, hasLength(1));
+      expect(api.enabledCalls.single, {
+        'serverId': 'mcp_vendor',
+        'enabled': true,
+      });
+    });
+
+    testWidgets('flipping any server off needs no confirmation', (
+      tester,
+    ) async {
+      final api = _McpApi()
+        ..servers.add(_remoteServer(serverId: 'mcp_remote', enabled: true));
+      await _pumpMcps(tester, api);
+
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(api.enabledCalls, hasLength(1));
+      expect(api.enabledCalls.single, {
+        'serverId': 'mcp_remote',
+        'enabled': false,
+      });
+    });
+
+    testWidgets('flipping a remote server on shows a confirmation naming its '
+        'endpoint and host before making any call', (tester) async {
+      final api = _McpApi()
+        ..servers.add(
+          _remoteServer(
+            serverId: 'mcp_remote',
+            name: 'remote-vendor',
+            url: 'https://mcp.remote-vendor.example/api',
+            enabled: false,
+          ),
+        );
+      await _pumpMcps(tester, api);
+
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Enable remote-vendor?'), findsOneWidget);
+      final withinDialog = find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.textContaining('https://mcp.remote-vendor.example/api'),
+      );
+      expect(withinDialog, findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.textContaining('mcp.remote-vendor.example'),
+        ),
+        findsWidgets,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.textContaining('sent with that request'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.textContaining('Each run still asks separately'),
+        ),
+        findsOneWidget,
+      );
+      // No call at all until the confirmation is answered.
+      expect(api.enabledCalls, isEmpty);
+    });
+
+    testWidgets(
+      'cancelling the confirmation makes no call and leaves the switch off',
+      (tester) async {
+        final api = _McpApi()..servers.add(_remoteServer(enabled: false));
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byType(Switch));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(api.enabledCalls, isEmpty);
+        final toggle = tester.widget<Switch>(find.byType(Switch));
+        expect(toggle.value, isFalse);
+      },
+    );
+
+    testWidgets(
+      'dismissing the confirmation via the barrier makes no call, the '
+      'same as Cancel',
+      (tester) async {
+        final api = _McpApi()..servers.add(_remoteServer(enabled: false));
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byType(Switch));
+        await tester.pumpAndSettle();
+        // Tap the modal barrier, well away from the dialog's own content.
+        await tester.tapAt(const Offset(5, 5));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(api.enabledCalls, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'the platform back gesture dismisses the confirmation safely, the '
+      'same as Cancel',
+      (tester) async {
+        final api = _McpApi()..servers.add(_remoteServer(enabled: false));
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byType(Switch));
+        await tester.pumpAndSettle();
+        final dynamic backResult = await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+
+        expect(backResult, isTrue);
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(api.enabledCalls, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'confirming with "Enable and discover" calls setMcpServerEnabled '
+      'and reloads',
+      (tester) async {
+        final api = _McpApi()
+          ..servers.add(_remoteServer(serverId: 'mcp_remote', enabled: false));
+        await _pumpMcps(tester, api);
+        final listCallsBefore = api.listCalls;
+
+        await tester.tap(find.byType(Switch));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('mcpsConfirmEnableRemote')));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(api.enabledCalls, hasLength(1));
+        expect(api.enabledCalls.single, {
+          'serverId': 'mcp_remote',
+          'enabled': true,
+        });
+        expect(api.listCalls, greaterThan(listCallsBefore));
+      },
+    );
+
+    testWidgets('the confirmation never shows a token: no text field, and no '
+        'sentinel token value present in its rendered text', (tester) async {
+      final api = _McpApi()..servers.add(_remoteServer(enabled: false));
+      await _pumpMcps(tester, api);
+
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        ),
+        findsNothing,
+        reason:
+            'this confirmation is informational only; it must never '
+            'offer to enter or display a token',
+      );
+      expect(find.textContaining('super-secret-value'), findsNothing);
     });
   });
 
@@ -1478,38 +1810,35 @@ void main() {
       expect(api.rotateCalls.last['token'], '');
     });
 
-    testWidgets(
-      'rotating a token reloads with liveness reset to Not checked, '
-      'matching the backend resetting it to unknown',
-      (tester) async {
-        // The backend resets liveness to unknown/empty in the same
-        // transaction as a token rotation (a prior reading was made using
-        // the credential being replaced, so it says nothing about the new
-        // one). No token is ever stored client-side; this only asserts the
-        // liveness the fake's updated state reports once reloaded.
-        final api = _McpApi()
-          ..servers.add(
-            _localServer(enabled: true, liveness: McpServerLiveness.up),
-          );
-        await _pumpMcps(tester, api);
-        expect(find.text('Up'), findsOneWidget);
-
-        await tester.tap(find.byTooltip('Actions for vendor'));
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Rotate token'));
-        await tester.pumpAndSettle();
-
-        await tester.enterText(
-          find.byKey(const Key('mcpsRotateToken')),
-          'new-rotated-token',
+    testWidgets('rotating a token reloads with liveness reset to Not checked, '
+        'matching the backend resetting it to unknown', (tester) async {
+      // The backend resets liveness to unknown/empty in the same
+      // transaction as a token rotation (a prior reading was made using
+      // the credential being replaced, so it says nothing about the new
+      // one). No token is ever stored client-side; this only asserts the
+      // liveness the fake's updated state reports once reloaded.
+      final api = _McpApi()
+        ..servers.add(
+          _localServer(enabled: true, liveness: McpServerLiveness.up),
         );
-        await tester.tap(find.byKey(const Key('mcpsRotateSubmit')));
-        await tester.pumpAndSettle();
+      await _pumpMcps(tester, api);
+      expect(find.text('Up'), findsOneWidget);
 
-        expect(find.text('Up'), findsNothing);
-        expect(find.text('Not checked'), findsOneWidget);
-      },
-    );
+      await tester.tap(find.byTooltip('Actions for vendor'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Rotate token'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('mcpsRotateToken')),
+        'new-rotated-token',
+      );
+      await tester.tap(find.byKey(const Key('mcpsRotateSubmit')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Up'), findsNothing);
+      expect(find.text('Not checked'), findsOneWidget);
+    });
 
     testWidgets('the token field is obscured and never prefilled', (
       tester,
@@ -1781,29 +2110,28 @@ void main() {
   });
 
   group('the page subtitle', () {
-    testWidgets(
-      'says enabling a remote server contacts it to discover tools, '
-      'separately from the per-run consent for tool arguments/results',
-      (tester) async {
-        await _pumpMcps(tester, _McpApi());
+    testWidgets('says enabling a remote server contacts it to discover tools, '
+        'separately from the per-run consent for tool arguments/results', (
+      tester,
+    ) async {
+      await _pumpMcps(tester, _McpApi());
 
-        expect(
-          find.textContaining('contacts its endpoint to discover its tools'),
-          findsOneWidget,
-          reason:
-              'enabling a remote server is a real network contact for '
-              'discovery, not a no-op — the copy must say so honestly',
-        );
-        expect(
-          find.textContaining('every run still asks before sending'),
-          findsOneWidget,
-          reason:
-              'discovery happening on enable must not be confused with '
-              'the separate, still-required per-run consent before a '
-              'tool call actually sends arguments/results',
-        );
-      },
-    );
+      expect(
+        find.textContaining('contacts its endpoint to discover its tools'),
+        findsOneWidget,
+        reason:
+            'enabling a remote server is a real network contact for '
+            'discovery, not a no-op — the copy must say so honestly',
+      );
+      expect(
+        find.textContaining('every run still asks before sending'),
+        findsOneWidget,
+        reason:
+            'discovery happening on enable must not be confused with '
+            'the separate, still-required per-run consent before a '
+            'tool call actually sends arguments/results',
+      );
+    });
   });
 
   group('showing the server endpoint', () {
@@ -1828,18 +2156,19 @@ void main() {
       },
     );
 
-    testWidgets('the endpoint text is selectable so it can be copied/verified', (
-      tester,
-    ) async {
-      final api = _McpApi()
-        ..servers.add(_localServer(url: 'https://vendor.example/mcp'));
-      await _pumpMcps(tester, api);
+    testWidgets(
+      'the endpoint text is selectable so it can be copied/verified',
+      (tester) async {
+        final api = _McpApi()
+          ..servers.add(_localServer(url: 'https://vendor.example/mcp'));
+        await _pumpMcps(tester, api);
 
-      // A SelectionArea makes its descendant Text selectable without the
-      // clipping (no ellipsis support) that SelectableText imposes.
-      expect(find.byType(SelectionArea), findsOneWidget);
-      expect(find.text('https://vendor.example/mcp'), findsOneWidget);
-    });
+        // A SelectionArea makes its descendant Text selectable without the
+        // clipping (no ellipsis support) that SelectableText imposes.
+        expect(find.byType(SelectionArea), findsOneWidget);
+        expect(find.text('https://vendor.example/mcp'), findsOneWidget);
+      },
+    );
 
     testWidgets(
       'a long endpoint truncates with an ellipsis while the full value '
@@ -1901,52 +2230,140 @@ void main() {
     );
   });
 
-  group('the degraded registry-over-budget notice', () {
-    // The backend records the registry-wide aggregate-tool-budget notice
-    // under the reserved "_registry" name (see
-    // internal/service/mcpregistry.mcpRegistryOverBudgetNoticeMessage) —
-    // this is not an ordinary per-server import refusal, so the UI must
-    // not describe it as one.
+  group('the degraded registry state notice', () {
+    // The backend reports a systemic, registry-wide degraded condition
+    // through ListMcpServersResponse's own explicit registry_degraded/
+    // registry_degradation_reason fields (see
+    // internal/service/mcpregistry.ListMcpServers) — never a synthetic
+    // "_registry"-named entry mixed into `unsupported`, which describes
+    // only ordinary per-entry mcp.json import refusals. This is a
+    // systemic status, not a per-entry import failure, so McpsPage gives
+    // it its own separate notice and title rather than the generic
+    // "`<name>` was not imported" framing any `unsupported` entry gets.
+    testWidgets('renders a separate notice from the explicit fields', (
+      tester,
+    ) async {
+      final api = _McpApi()
+        ..servers = [_bundledServer()]
+        ..registryDegraded = true
+        ..registryDegradationReason =
+            'MCP registry aggregate tool budget is exhausted; tool '
+            'schemas are hidden until an oversized or excess server '
+            'is deleted';
+      await _pumpMcps(tester, api);
+
+      expect(
+        find.text('MCP registry is running in a degraded state'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('MCP registry aggregate tool budget is exhausted'),
+        findsOneWidget,
+      );
+      // Never the generic "<name> was not imported" framing an ordinary
+      // refused entry gets: a systemic degraded notice was never an
+      // import attempt at all.
+      expect(find.textContaining('was not imported'), findsNothing);
+
+      final notice = tester.widget<WorkspaceNotice>(
+        find.byKey(const Key('mcpRegistryDegradedNotice')),
+      );
+      expect(notice.tone, AppColors.warning);
+      expect(notice.compact, isTrue);
+    });
+
     testWidgets(
-      'special-cases the reserved "_registry" name to a budget-specific title',
+      'a real invalid mcp.json entry literally named "_registry" is an '
+      'ordinary refusal, never a collision with the degraded notice',
       (tester) async {
+        // Finding #1 means an mcp.json entry whose key is literally
+        // "_registry" is refused through the ordinary synthetic
+        // invalid-entry path (its leading "_" fails the server-name
+        // pattern) — never recorded under that literal name — but this
+        // proves the UI itself no longer special-cases that literal
+        // string either, should it ever appear in `unsupported` for any
+        // other reason.
         final api = _McpApi()
-          ..servers = [_bundledServer()]
           ..unsupported = const [
             UnsupportedMcpServer(
               name: '_registry',
-              reason:
-                  'MCP registry aggregate tool budget is exhausted; tool '
-                  'schemas are hidden until an oversized or excess server '
-                  'is deleted',
+              reason: 'server name is invalid or reserved',
             ),
           ];
         await _pumpMcps(tester, api);
 
+        expect(find.text('_registry was not imported'), findsOneWidget);
         expect(
-          find.text('MCP registry is over its tool budget'),
-          findsOneWidget,
+          find.text('MCP registry is running in a degraded state'),
+          findsNothing,
         );
-        expect(
-          find.textContaining('MCP registry aggregate tool budget is exhausted'),
-          findsOneWidget,
-        );
-        // Never the generic "<name> was not imported" framing an ordinary
-        // refused entry gets: "_registry" was never an import attempt.
-        expect(find.textContaining('_registry was not imported'), findsNothing);
-
         final notice = tester.widget<WorkspaceNotice>(
-          find.byKey(const Key('mcpRegistryOverBudgetNotice')),
+          find.byKey(const Key('mcpUnsupportedNotice-_registry')),
         );
-        expect(
-          notice.tone,
-          AppColors.success,
-          reason: 'the degraded notice reads as a compact, calm status, not '
-              'a warning about one bad entry',
-        );
-        expect(notice.compact, isTrue);
+        expect(notice.tone, AppColors.warning);
+        expect(notice.compact, isFalse);
       },
     );
+
+    testWidgets('the degraded notice and an ordinary refusal coexist with no '
+        'duplicate keys', (tester) async {
+      final api = _McpApi()
+        ..servers = [_bundledServer()]
+        ..registryDegraded = true
+        ..registryDegradationReason =
+            'MCP registry server count exceeds its operating limit; '
+            'only a bounded subset is listed until excess servers are '
+            'deleted'
+        ..unsupported = const [
+          UnsupportedMcpServer(
+            name: 'stdio-vendor',
+            reason: 'stdio/command MCP servers are unsupported',
+          ),
+        ];
+      await _pumpMcps(tester, api);
+
+      expect(
+        find.byKey(const Key('mcpRegistryDegradedNotice')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('mcpUnsupportedNotice-stdio-vendor')),
+        findsOneWidget,
+      );
+      expect(find.text('stdio-vendor was not imported'), findsOneWidget);
+    });
+
+    testWidgets('clears once the backend reports the registry back to normal '
+        '(delete/recover)', (tester) async {
+      final api = _McpApi()
+        ..servers = [_bundledServer()]
+        ..registryDegraded = true
+        ..registryDegradationReason =
+            'MCP registry aggregate tool '
+            'budget is exhausted';
+      await _pumpMcps(tester, api);
+      expect(
+        find.byKey(const Key('mcpRegistryDegradedNotice')),
+        findsOneWidget,
+      );
+
+      // Recovery: the backend now reports a healthy snapshot (e.g.
+      // after the offending server was deleted) — reloaded here via
+      // the same Re-import mcp.json action _reimport()'s own success
+      // path already reloads through (see the "reimporting mcp.json"
+      // group above), rather than only asserting against the fake
+      // api's own field directly.
+      api
+        ..registryDegraded = false
+        ..registryDegradationReason = '';
+      await tester.tap(find.byKey(const Key('mcpsReimportButton')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('mcpRegistryDegradedNotice')), findsNothing);
+      expect(
+        find.text('MCP registry is running in a degraded state'),
+        findsNothing,
+      );
+    });
 
     testWidgets('an ordinary refused name keeps the unchanged framing', (
       tester,
@@ -1966,7 +2383,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.text('MCP registry is over its tool budget'),
+        find.text('MCP registry is running in a degraded state'),
         findsNothing,
       );
 
@@ -1993,10 +2410,7 @@ void main() {
           final api = _McpApi()..servers = [_remoteServer()];
           await _pumpMcps(tester, api, size: size);
 
-          expect(
-            find.text('Remote · enable + per-run egress'),
-            findsOneWidget,
-          );
+          expect(find.text('Remote · enable + per-run egress'), findsOneWidget);
           expect(tester.takeException(), isNull);
         },
       );
@@ -2018,40 +2432,34 @@ void main() {
         },
       );
 
-      testWidgets(
-        'an empty legacy placeholder endpoint warning fits at '
-        '${size.width}x${size.height}',
-        (tester) async {
-          final api = _McpApi()..servers.add(_localServer(url: ''));
-          await _pumpMcps(tester, api, size: size);
+      testWidgets('an empty legacy placeholder endpoint warning fits at '
+          '${size.width}x${size.height}', (tester) async {
+        final api = _McpApi()..servers.add(_localServer(url: ''));
+        await _pumpMcps(tester, api, size: size);
 
-          expect(find.text('Endpoint not configured'), findsOneWidget);
-          expect(tester.takeException(), isNull);
-        },
-      );
+        expect(find.text('Endpoint not configured'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
 
-      testWidgets(
-        'a busy enable/disable progress indicator fits at '
-        '${size.width}x${size.height}',
-        (tester) async {
-          final gate = Completer<void>();
-          final api = _McpApi()
-            ..servers.add(_localServer())
-            ..enabledGates['mcp_vendor'] = gate;
-          await _pumpMcps(tester, api, size: size);
+      testWidgets('a busy enable/disable progress indicator fits at '
+          '${size.width}x${size.height}', (tester) async {
+        final gate = Completer<void>();
+        final api = _McpApi()
+          ..servers.add(_localServer())
+          ..enabledGates['mcp_vendor'] = gate;
+        await _pumpMcps(tester, api, size: size);
 
-          await tester.ensureVisible(find.byType(Switch));
-          await tester.pumpAndSettle();
-          await tester.tap(find.byType(Switch));
-          await tester.pump();
+        await tester.ensureVisible(find.byType(Switch));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byType(Switch));
+        await tester.pump();
 
-          expect(find.byType(CircularProgressIndicator), findsOneWidget);
-          expect(tester.takeException(), isNull);
+        expect(find.byType(CircularProgressIndicator), findsOneWidget);
+        expect(tester.takeException(), isNull);
 
-          gate.complete();
-          await tester.pumpAndSettle();
-        },
-      );
+        gate.complete();
+        await tester.pumpAndSettle();
+      });
 
       testWidgets(
         'the reimport report dialog fits at ${size.width}x${size.height}',
@@ -2098,25 +2506,47 @@ void main() {
         },
       );
 
-      testWidgets(
-        'the remove-server confirmation dialog fits at '
-        '${size.width}x${size.height}',
-        (tester) async {
-          final api = _McpApi()..servers.add(_localServer());
-          await _pumpMcps(tester, api, size: size);
-          await tester.pumpAndSettle();
+      testWidgets('the remove-server confirmation dialog fits at '
+          '${size.width}x${size.height}', (tester) async {
+        final api = _McpApi()..servers.add(_localServer());
+        await _pumpMcps(tester, api, size: size);
+        await tester.pumpAndSettle();
 
-          await tester.ensureVisible(find.byTooltip('Actions for vendor'));
-          await tester.pumpAndSettle();
-          await tester.tap(find.byTooltip('Actions for vendor'));
-          await tester.pumpAndSettle();
-          await tester.tap(find.text('Remove'));
-          await tester.pumpAndSettle();
+        await tester.ensureVisible(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
 
-          expect(find.byKey(const Key('mcpsConfirmRemove')), findsOneWidget);
-          expect(tester.takeException(), isNull);
-        },
-      );
+        expect(find.byKey(const Key('mcpsConfirmRemove')), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('the enable-remote-server confirmation dialog fits at '
+          '${size.width}x${size.height}', (tester) async {
+        final api = _McpApi()
+          ..servers.add(
+            _remoteServer(
+              url:
+                  'https://mcp.a-fairly-long-remote-vendor-hostname.example/api/mcp',
+              enabled: false,
+            ),
+          );
+        await _pumpMcps(tester, api, size: size);
+        await tester.pumpAndSettle();
+
+        await tester.ensureVisible(find.byType(Switch));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byType(Switch));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('mcpsConfirmEnableRemote')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      });
 
       testWidgets(
         'a server card with short and long tool names/policies fits at '
@@ -2206,14 +2636,16 @@ McpServer _localServer({
 McpServer _remoteServer({
   String serverId = 'mcp_remote_vendor',
   String name = 'remote-vendor',
+  String url = 'https://remote-vendor.example/mcp',
+  bool enabled = false,
   List<ToolDescriptor> tools = const [],
 }) => McpServer(
   serverId: serverId,
   name: name,
   transport: 'http',
-  url: 'https://remote-vendor.example/mcp',
+  url: url,
   tier: McpServerTier.remoteUrl,
-  enabled: false,
+  enabled: enabled,
   liveness: McpServerLiveness.unknown,
   statusMessage: '',
   sandboxConfined: false,
@@ -2264,6 +2696,8 @@ class _McpApi
     implements TuringApi {
   List<McpServer> servers = [];
   List<UnsupportedMcpServer> unsupported = [];
+  bool registryDegraded = false;
+  String registryDegradationReason = '';
   Object? listError;
   Completer<McpRegistrySnapshot>? listGate;
   int listCalls = 0;
@@ -2333,7 +2767,12 @@ class _McpApi
     if (gate != null) return gate.future;
     final error = listError;
     if (error != null) throw error;
-    return McpRegistrySnapshot(servers: servers, unsupported: unsupported);
+    return McpRegistrySnapshot(
+      servers: servers,
+      unsupported: unsupported,
+      registryDegraded: registryDegraded,
+      registryDegradationReason: registryDegradationReason,
+    );
   }
 
   @override
@@ -2510,7 +2949,11 @@ class _McpApi
     final error = policyError;
     if (error != null) {
       if (policyCommitsBeforeThrowing) {
-        _applyToolPolicy(serverId: serverId, toolName: toolName, policy: policy);
+        _applyToolPolicy(
+          serverId: serverId,
+          toolName: toolName,
+          policy: policy,
+        );
       }
       throw error;
     }

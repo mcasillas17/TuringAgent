@@ -172,6 +172,20 @@ const ListMcpServersResponse$json = {
       '6': '.turing.v1.UnsupportedMcpServer',
       '10': 'unsupported'
     },
+    {
+      '1': 'registry_degraded',
+      '3': 3,
+      '4': 1,
+      '5': 8,
+      '10': 'registryDegraded'
+    },
+    {
+      '1': 'registry_degradation_reason',
+      '3': 4,
+      '4': 1,
+      '5': 9,
+      '10': 'registryDegradationReason'
+    },
   ],
 };
 
@@ -179,7 +193,9 @@ const ListMcpServersResponse$json = {
 final $typed_data.Uint8List listMcpServersResponseDescriptor = $convert.base64Decode(
     'ChZMaXN0TWNwU2VydmVyc1Jlc3BvbnNlEjgKB3NlcnZlcnMYASADKAsyHi50dXJpbmcudjEuTW'
     'NwU2VydmVyRGVzY3JpcHRvclIHc2VydmVycxJBCgt1bnN1cHBvcnRlZBgCIAMoCzIfLnR1cmlu'
-    'Zy52MS5VbnN1cHBvcnRlZE1jcFNlcnZlclILdW5zdXBwb3J0ZWQ=');
+    'Zy52MS5VbnN1cHBvcnRlZE1jcFNlcnZlclILdW5zdXBwb3J0ZWQSKwoRcmVnaXN0cnlfZGVncm'
+    'FkZWQYAyABKAhSEHJlZ2lzdHJ5RGVncmFkZWQSPgobcmVnaXN0cnlfZGVncmFkYXRpb25fcmVh'
+    'c29uGAQgASgJUhlyZWdpc3RyeURlZ3JhZGF0aW9uUmVhc29u');
 
 @$core.Deprecated('Use setMcpServerEnabledRequestDescriptor instead')
 const SetMcpServerEnabledRequest$json = {
