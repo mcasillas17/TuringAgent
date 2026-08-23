@@ -1262,9 +1262,24 @@ func TestSendMessageCancelsRunWhenDispatchFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = chatStream.Recv()
-	if status.Code(err) != codes.Internal {
-		t.Fatalf("Recv after dispatch failure = %v, want Internal", err)
+	receivedCancelled := false
+	for {
+		event, recvErr := chatStream.Recv()
+		if recvErr != nil {
+			if !receivedCancelled && status.Code(recvErr) != codes.Internal {
+				t.Fatalf("Recv after dispatch failure = %v, want Internal or run_cancelled event", recvErr)
+			}
+			if receivedCancelled && !errors.Is(recvErr, io.EOF) {
+				t.Fatalf("Recv after run_cancelled = %v, want EOF", recvErr)
+			}
+			break
+		}
+		if event.GetRunStarted() != nil {
+			t.Fatalf("run_started event = %+v, want dispatch failure", event.GetRunStarted())
+		}
+		if event.GetRunCancelled() != nil {
+			receivedCancelled = true
+		}
 	}
 	run, err := h.repo.GetRun(context.Background(), queued.GetRunQueued().RunId)
 	if err != nil {
