@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
 const maxMCPResponseBytes int64 = 1024 * 1024
@@ -30,6 +32,33 @@ const maxMCPToolBytes = 4 * 1024 * 1024
 // still comfortably fit inside this bound, with slack left over for the
 // URL/header/JSON-syntax overhead none of that per-tool accounting counts.
 const maxMCPImportDocumentBytes = 8 * maxMCPToolBytes
+
+// errMCPImportDocumentTooLarge is the one fixed, generic reason both
+// ImportJSON's in-memory size check and ReimportConfiguredJSON's own
+// bounded file-read check use when a document exceeds
+// maxMCPImportDocumentBytes, so a caller sees the identical message either
+// way: a byte count and the fixed cap, never any of the document's own
+// content or its on-disk path.
+var errMCPImportDocumentTooLarge = fmt.Errorf("mcp.json exceeds the maximum supported document size of %d bytes", maxMCPImportDocumentBytes)
+
+// maxMCPImportEntries bounds how many "mcpServers" entries a single
+// mcp.json document may declare, checked before any entry is looked up or
+// processed. It deliberately reuses repository.MaxNonBundledMCPServers —
+// the same limit the registry itself enforces per non-bundled row — rather
+// than an independent number: a document naming more entries than could
+// ever actually fit in the registry would otherwise still cost one
+// repository lookup per name before eventually being refused one entry at
+// a time anyway, once the registry's own count cap was reached.
+const maxMCPImportEntries = repository.MaxNonBundledMCPServers
+
+// errMCPImportTooManyEntries is the one fixed, generic reason ImportJSON
+// returns when a document's entry count exceeds maxMCPImportEntries.
+// ReimportConfiguredJSON collapses it (like any other ImportJSON error)
+// into a single bounded "_document" entry — never one row per named
+// server — so mcp_import_issues and the ReimportMcpJson RPC's own Refused
+// list stay bounded regardless of how many names an oversized document
+// claims.
+var errMCPImportTooManyEntries = fmt.Errorf("mcp.json declares more servers than the maximum supported entry count of %d", maxMCPImportEntries)
 
 type mcpClient struct {
 	endpoint   string

@@ -198,6 +198,24 @@ class _McpsPageState extends State<McpsPage> {
     }
   }
 
+  // Shows a confirmation dialog naming the server and what removing it
+  // does before ever dispatching the destructive call: a stray or
+  // mis-tapped popup-menu selection must not be enough on its own to
+  // delete a server's stored token, its per-tool policies, and (if
+  // mcp.json still declares it) suppress it against reimport until it is
+  // explicitly added again. Dismissing this dialog any way other than the
+  // explicit "Remove server" confirm — Cancel, the barrier, or the
+  // platform back gesture — is equally safe: none of them call
+  // _deleteServer, since only `confirmed == true` does.
+  Future<void> _confirmAndDeleteServer(McpServer server) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => _RemoveServerConfirmationDialog(server: server),
+    );
+    if (confirmed != true || !mounted) return;
+    await _deleteServer(server);
+  }
+
   Future<void> _deleteServer(McpServer server) async {
     if (_pendingServerMutations.contains(server.serverId)) return;
     setState(() => _pendingServerMutations.add(server.serverId));
@@ -299,7 +317,7 @@ class _McpsPageState extends State<McpsPage> {
                           : (enabled) => _setServerEnabled(server, enabled),
                       onDelete: server.tier == McpServerTier.bundled
                           ? null
-                          : () => _deleteServer(server),
+                          : () => _confirmAndDeleteServer(server),
                       onRotateToken: server.tier == McpServerTier.bundled
                           ? null
                           : () => _rotateToken(server),
@@ -940,6 +958,50 @@ class _ReportSection extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 2),
               child: Text(entry, style: TextStyle(color: palette.text)),
             ),
+      ],
+    );
+  }
+}
+
+/// Confirms a destructive Remove before _McpsPageState._confirmAndDeleteServer
+/// ever calls _deleteServer: names the server and states exactly what
+/// removing it does, so a single popup-menu tap is never enough on its own
+/// to delete a server's stored token and per-tool policies. Stateless: the
+/// only work here is choosing which boolean to pop with, so — unlike
+/// _RotateTokenDialog, which has an in-flight network call to guard against
+/// early dismissal — there is no in-flight state to protect, and the
+/// barrier/platform-back gesture are left free to dismiss it (equivalent to
+/// Cancel: only an explicit "Remove server" tap ever pops `true`).
+class _RemoveServerConfirmationDialog extends StatelessWidget {
+  const _RemoveServerConfirmationDialog({required this.server});
+
+  final McpServer server;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Remove ${server.name}?'),
+      content: SizedBox(
+        width: _dialogWidth(context, 420),
+        child: SingleChildScrollView(
+          child: Text(
+            'Removing "${server.name}" deletes its stored token and '
+            'per-tool policies. If mcp.json still declares it, that entry '
+            'stays suppressed on reimport — add it again from this page to '
+            'restore it.',
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const Key('mcpsConfirmRemove'),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Remove server'),
+        ),
       ],
     );
   }

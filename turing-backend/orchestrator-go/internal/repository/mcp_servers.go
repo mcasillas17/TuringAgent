@@ -20,6 +20,22 @@ const (
 	MCPServerTierRemoteURL      MCPServerTier = "remote_url"
 )
 
+// MaxNonBundledMCPServers bounds how many non-bundled (third-party) MCP
+// server rows the registry may hold at once. TuringAgent's own bundled
+// servers ("system", "files", "skills") never count toward it: they are
+// fixed in number, seeded by migrations rather than an operator's own
+// import/registration action, and are exactly the rows an ImportMCPServer/
+// RegisterMCPServer call already refuses to create or collide with
+// regardless of this cap. Without a bound, an mcp.json import or repeated
+// direct registrations could grow the registry — and therefore
+// ListMcpServers' response — without limit; 256 comfortably covers any
+// realistic third-party deployment while keeping that response bounded.
+// Enforced only against a genuinely new row (see ImportMCPServer and
+// RegisterMCPServer's own fresh-insert branches): adopting an existing
+// legacy migration-0016 placeholder in place is an UPDATE, not an INSERT,
+// so it never needs — and is never refused by — this cap.
+const MaxNonBundledMCPServers = 256
+
 var (
 	ErrMCPServerNotFound         = errors.New("MCP server not found")
 	ErrMCPServerBundled          = errors.New("bundled MCP server cannot be imported")
@@ -27,6 +43,17 @@ var (
 	ErrMCPServerNameTaken        = errors.New("MCP server name is already registered")
 	ErrMCPToolNameCollision      = errors.New("MCP tool name collides with another server")
 	ErrMCPToolNotFound           = errors.New("MCP tool not found")
+	// ErrMCPServerRegistryFull is returned by ImportMCPServer and
+	// RegisterMCPServer when creating the requested row would grow the
+	// registry's non-bundled server count beyond MaxNonBundledMCPServers.
+	// It is checked, and the row inserted, inside the same transaction as
+	// every other disposition decision those two methods make, so two
+	// concurrent callers racing to fill the last slot can never both
+	// succeed: database.SetMaxOpenConns(1) (see internal/db) serializes
+	// every transaction against this single-connection database, so the
+	// count this check reads can never go stale before the INSERT that
+	// follows it commits.
+	ErrMCPServerRegistryFull = errors.New("MCP server registry is full")
 )
 
 type MCPServerRecord struct {
@@ -221,6 +248,12 @@ func (r *Repository) ImportMCPServer(ctx context.Context, input ImportedMCPServe
 		return MCPImportResult{}, err
 	}
 
+	if full, cerr := nonBundledMCPServerRegistryFullTx(ctx, tx); cerr != nil {
+		return MCPImportResult{}, cerr
+	} else if full {
+		return MCPImportResult{}, ErrMCPServerRegistryFull
+	}
+
 	serverID := ids.New("mcp")
 	createdAt := now()
 	if _, err := tx.ExecContext(ctx, `
@@ -325,6 +358,12 @@ func (r *Repository) RegisterMCPServer(ctx context.Context, input ImportedMCPSer
 		return r.adoptMCPServerPlaceholder(ctx, tx, existingID, input)
 	case !errors.Is(err, sql.ErrNoRows):
 		return MCPRegisterResult{}, err
+	}
+
+	if full, cerr := nonBundledMCPServerRegistryFullTx(ctx, tx); cerr != nil {
+		return MCPRegisterResult{}, cerr
+	} else if full {
+		return MCPRegisterResult{}, ErrMCPServerRegistryFull
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM mcp_import_tombstones WHERE name = ?`, input.Name); err != nil {
@@ -877,6 +916,25 @@ type mcpServerScanner interface {
 
 type mcpServerQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+// nonBundledMCPServerRegistryFullTx reports whether the registry already
+// holds MaxNonBundledMCPServers non-bundled rows, run inside tx so the
+// count it reads and the row insert its caller makes immediately
+// afterward (ImportMCPServer/RegisterMCPServer's own fresh-insert
+// branches only — never their placeholder-adoption branches, which never
+// call this) can never be interleaved by a concurrent transaction: this
+// database's single connection (see internal/db, SetMaxOpenConns(1))
+// means only one BeginTx can hold the connection at a time, so no other
+// transaction's INSERT can land between this SELECT and that INSERT.
+func nonBundledMCPServerRegistryFullTx(ctx context.Context, tx *sql.Tx) (bool, error) {
+	var count int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM mcp_servers WHERE tier != ?
+	`, string(MCPServerTierBundled)).Scan(&count); err != nil {
+		return false, err
+	}
+	return count >= MaxNonBundledMCPServers, nil
 }
 
 func mcpServerByID(ctx context.Context, q mcpServerQuerier, serverID string) (MCPServerRecord, error) {

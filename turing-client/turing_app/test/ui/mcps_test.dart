@@ -825,6 +825,8 @@ void main() {
         await tester.tap(find.byTooltip('Actions for vendor'));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('mcpsConfirmRemove')));
         await tester.pump();
 
         expect(api.deleteCalls, hasLength(1));
@@ -845,6 +847,44 @@ void main() {
     );
 
     testWidgets(
+      'rapidly tapping "Remove server" twice in the confirmation dialog '
+      'only calls deleteMcpServer once',
+      (tester) async {
+        // The dialog itself has no async work of its own — Navigator.pop
+        // happens synchronously on the very first tap, so this proves a
+        // regression (e.g. a future change adding awaited work before the
+        // pop) could never let a second tap on the same still-visible
+        // button dispatch a second delete: the gate here holds the
+        // *downstream* _deleteServer call open, standing in for whatever
+        // that future awaited work might be.
+        final gate = Completer<void>();
+        final api = _McpApi()
+          ..servers.add(_localServer())
+          ..deleteGates['mcp_vendor'] = gate;
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('mcpsConfirmRemove')));
+        await tester.pump();
+        await tester.tap(
+          find.byKey(const Key('mcpsConfirmRemove')),
+          warnIfMissed: false,
+        );
+        await tester.pump();
+
+        expect(api.deleteCalls, hasLength(1));
+
+        gate.complete();
+        await tester.pumpAndSettle();
+        expect(api.deleteCalls, hasLength(1));
+      },
+    );
+
+    testWidgets(
       'a failed delete re-enables the popup menu and surfaces the error, '
       'after reloading the registry',
       (tester) async {
@@ -857,6 +897,8 @@ void main() {
         await tester.tap(find.byTooltip('Actions for vendor'));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('mcpsConfirmRemove')));
         await tester.pumpAndSettle();
 
         expect(api.deleteCalls, hasLength(1));
@@ -897,6 +939,8 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.text('Remove'));
         await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('mcpsConfirmRemove')));
+        await tester.pumpAndSettle();
 
         expect(
           find.textContaining('mcp.server.deleted audit failed'),
@@ -912,21 +956,149 @@ void main() {
       },
     );
 
-    testWidgets('choosing Remove from the popup calls deleteMcpServer with the '
-        'exact id, then reloads', (tester) async {
-      final api = _McpApi()..servers.add(_localServer());
-      await _pumpMcps(tester, api);
-      final listCallsBefore = api.listCalls;
+    testWidgets(
+      'choosing Remove opens a confirmation dialog naming the server and '
+      'stating what removing it deletes',
+      (tester) async {
+        final api = _McpApi()..servers.add(_localServer());
+        await _pumpMcps(tester, api);
 
-      await tester.tap(find.byTooltip('Actions for vendor'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Remove'));
-      await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
 
-      expect(api.deleteCalls, ['mcp_vendor']);
-      expect(api.listCalls, greaterThan(listCallsBefore));
-      expect(find.text('vendor'), findsNothing);
-    });
+        // Nothing is dispatched merely by opening the confirmation —
+        // only an explicit confirm below may call deleteMcpServer.
+        expect(api.deleteCalls, isEmpty);
+        expect(find.textContaining('vendor'), findsWidgets);
+        expect(find.textContaining('token'), findsWidgets);
+        expect(find.textContaining('per-tool polic'), findsWidgets);
+        expect(find.textContaining('suppressed'), findsWidgets);
+        expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('mcpsConfirmRemove')),
+            matching: find.text('Remove server'),
+          ),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'the confirmation dialog names the exact server chosen — never a '
+      'different one — when multiple servers are registered',
+      (tester) async {
+        final api = _McpApi()
+          ..servers.add(_localServer(serverId: 'mcp_alpha', name: 'alpha'))
+          ..servers.add(_localServer(serverId: 'mcp_beta', name: 'beta'));
+        await _pumpMcps(tester, api);
+
+        await tester.ensureVisible(find.byTooltip('Actions for beta'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Actions for beta'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Remove beta?'), findsOneWidget);
+        expect(find.text('Remove alpha?'), findsNothing);
+        expect(find.textContaining('"beta"'), findsWidgets);
+        expect(find.textContaining('"alpha"'), findsNothing);
+
+        await tester.tap(find.byKey(const Key('mcpsConfirmRemove')));
+        await tester.pumpAndSettle();
+
+        expect(api.deleteCalls, ['mcp_beta']);
+        expect(find.text('alpha'), findsOneWidget);
+        expect(find.text('beta'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'canceling the removal confirmation dialog does not call '
+      'deleteMcpServer and leaves the server in place',
+      (tester) async {
+        final api = _McpApi()..servers.add(_localServer());
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+        await tester.pumpAndSettle();
+
+        expect(api.deleteCalls, isEmpty);
+        expect(find.text('vendor'), findsOneWidget);
+        expect(find.byKey(const Key('mcpsConfirmRemove')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'tapping the barrier on the removal confirmation dialog does not '
+      'call deleteMcpServer',
+      (tester) async {
+        final api = _McpApi()..servers.add(_localServer());
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
+
+        await tester.tapAt(const Offset(5, 5));
+        await tester.pumpAndSettle();
+
+        expect(api.deleteCalls, isEmpty);
+        expect(find.text('vendor'), findsOneWidget);
+        expect(find.byKey(const Key('mcpsConfirmRemove')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'the platform back gesture on the removal confirmation dialog does '
+      'not call deleteMcpServer',
+      (tester) async {
+        final api = _McpApi()..servers.add(_localServer());
+        await _pumpMcps(tester, api);
+
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
+
+        final dynamic backResult = await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+
+        expect(backResult, isTrue);
+        expect(api.deleteCalls, isEmpty);
+        expect(find.text('vendor'), findsOneWidget);
+        expect(find.byKey(const Key('mcpsConfirmRemove')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'confirming Remove calls deleteMcpServer with the exact id, then '
+      'reloads',
+      (tester) async {
+        final api = _McpApi()..servers.add(_localServer());
+        await _pumpMcps(tester, api);
+        final listCallsBefore = api.listCalls;
+
+        await tester.tap(find.byTooltip('Actions for vendor'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('mcpsConfirmRemove')));
+        await tester.pumpAndSettle();
+
+        expect(api.deleteCalls, ['mcp_vendor']);
+        expect(api.listCalls, greaterThan(listCallsBefore));
+        expect(find.text('vendor'), findsNothing);
+      },
+    );
 
     testWidgets(
       'a bundled server has no actions popup, no rotate, no delete, and '
@@ -954,6 +1126,8 @@ void main() {
       await tester.tap(find.byTooltip('Actions for vendor'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Remove'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('mcpsConfirmRemove')));
       await tester.pumpAndSettle();
 
       expect(api.deleteCalls, hasLength(1));
@@ -1772,6 +1946,26 @@ void main() {
           await tester.tap(find.text('Rotate token'));
           await tester.pumpAndSettle();
 
+          expect(tester.takeException(), isNull);
+        },
+      );
+
+      testWidgets(
+        'the remove-server confirmation dialog fits at '
+        '${size.width}x${size.height}',
+        (tester) async {
+          final api = _McpApi()..servers.add(_localServer());
+          await _pumpMcps(tester, api, size: size);
+          await tester.pumpAndSettle();
+
+          await tester.ensureVisible(find.byTooltip('Actions for vendor'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.byTooltip('Actions for vendor'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Remove'));
+          await tester.pumpAndSettle();
+
+          expect(find.byKey(const Key('mcpsConfirmRemove')), findsOneWidget);
           expect(tester.takeException(), isNull);
         },
       );

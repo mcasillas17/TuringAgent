@@ -71,16 +71,20 @@ skipped name ("already registered; existing settings were kept") so an edit
 to an already-registered entry is never mistaken for having taken effect.
 The dialog also states how to actually repoint one: remove the existing
 server, then add it again at the new endpoint. That is not merely a UI
-convenience path — deleting first writes an import tombstone and removing
-the row is what lets a subsequent registration (in-app, or a later
-reimport naming that exact server) clear the tombstone and create a
-genuinely new, disabled row rather than colliding with a live one; there is
-no in-place "edit the endpoint of an existing server" operation, by design,
-because create-only reimport and explicit-consent registration are the only
-two paths that ever set url/sealed_token/tier, and both start every
-policy/tools snapshot over from a fail-closed (disabled, no tools) state
-rather than mutating a live row's endpoint out from under whatever the
-operator or a running session currently trusts it to be.
+convenience path — deleting first writes an import tombstone, and only an
+explicit in-app registration naming that exact server clears the tombstone
+and creates a genuinely new, disabled row rather than colliding with a live
+one. A later `mcp.json` reimport naming that same server does **not** clear
+it: `ImportMCPServer` checks the tombstone table first and refuses with the
+same fixed "server was removed locally and remains suppressed" reason for as
+long as it stands (see below), regardless of how many times mcp.json is
+reimported in the meantime — repointing a deleted server by file alone is
+not possible. There is no in-place "edit the endpoint of an existing server"
+operation, by design, because create-only reimport and explicit-consent
+registration are the only two paths that ever set url/sealed_token/tier, and
+both start every policy/tools snapshot over from a fail-closed (disabled, no
+tools) state rather than mutating a live row's endpoint out from under
+whatever the operator or a running session currently trusts it to be.
 
 Reimport is create-only: an existing row for a name that already has a real,
 non-empty endpoint is left completely untouched — its enabled state,
@@ -107,9 +111,15 @@ file import or in-app registration, still arrives disabled.
 An mcp.json entry's optional static `tools` snapshot is fully validated
 before the repository is ever touched — well-formed name/schema shape, no
 bundled-namespace collision, and the entry's own configured bearer token
-never appearing verbatim in a tool's name or serialized schema — and bounded
-by the exact same tool-count and encoded-byte limits live `tools/list`
-discovery enforces, counted the same way. It is then handed to the same
+never appearing verbatim in a tool's name, its description, or its
+serialized schema — and bounded by the exact same tool-count and
+encoded-byte limits live `tools/list` discovery enforces, counted the same
+way. A tool's optional `description` is scanned for the token and its bytes
+count toward that same per-snapshot encoded-byte limit exactly like the
+name and schema do, so it cannot hide a token or inflate the entry's real
+footprint past the limit unnoticed — but the description itself is never
+persisted or returned: only the tool's name and schema reach the repository
+and every subsequent descriptor response. It is then handed to the same
 repository helper (`replaceServerToolsTx`) live discovery's `RecordDiscovery`
 also uses, inside the very same transaction as the server row insert or
 placeholder adoption: an inter-server tool-name collision there rolls back

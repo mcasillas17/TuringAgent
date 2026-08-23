@@ -82,6 +82,15 @@ var errMCPServerNameReserved = errors.New("server name is reserved by TuringAgen
 // a direct registration say the same thing about the same refusal.
 const bundledServerRegistrationMessage = "bundled server registration is managed by TuringAgent"
 
+// mcpServerRegistryFullMessage is the wording used whenever the repository
+// refuses to create a new non-bundled server row because
+// repository.MaxNonBundledMCPServers has already been reached — the same
+// message whether that happens through an mcp.json import (recorded as an
+// Unsupported reason) or a direct RegisterMcpServer call (returned as a
+// ResourceExhausted status), so neither path can drift from the other on
+// what this specific refusal says.
+const mcpServerRegistryFullMessage = "MCP server registry is full"
+
 // mcpMissingIntegrationKeyMessage is the wording used whenever a bearer
 // token is given but no integration key is configured to seal it with,
 // whether that happens during an mcp.json import or a direct registration
@@ -117,6 +126,32 @@ type Server struct {
 	// whatever the other call did to the shared mcp_import_issues table
 	// in the meantime.
 	reimportBarrier func()
+	// credentialMu is the server-level (not per-MCP-server) fence between
+	// reading/using a server's bearer token and RotateMcpServerToken
+	// replacing it. CallTool and SetMcpServerEnabled's discovery branch
+	// (see discover) hold this for reading from immediately before they
+	// (re-)read the server's current sealed token through their own
+	// network call and liveness/tool-status recording — deliberately
+	// never across an unbounded wait such as caller-side approval
+	// enforcement, which runs before this lock is taken. Rotate holds it
+	// for writing across its own repo read, sealing, atomic sealed-token
+	// replace, and liveness-status reset (see rotateServerTokenLocked).
+	// Go's sync.RWMutex already blocks new readers once a writer is
+	// waiting, so a rotation can never be starved by a steady stream of
+	// calls/discoveries, and every reader started after a rotation
+	// commits is guaranteed to observe the new token rather than one
+	// captured before the rotation began.
+	credentialMu sync.RWMutex
+	// rotateBarrier, when set (test-only, nil/unused in production), is
+	// invoked by rotateServerTokenLocked while credentialMu's write lock
+	// is held, immediately before the rotation reads/reseals/replaces
+	// the server's token. It lets a test prove the reverse direction of
+	// the fence — that a rotation genuinely mid-flight blocks a
+	// concurrent CallTool/discover from proceeding — the same way
+	// reimportBarrier proves ReimportMcpJson's own interleaving, since
+	// RotateMcpServerToken's real repository work is otherwise too fast
+	// to reliably race against.
+	rotateBarrier func()
 }
 
 // AuditRecorder is the audit service, narrowed to the one method this
@@ -246,9 +281,33 @@ func boundedMCPServerNameForDisplay(name string) string {
 // its own bound. It is not a correctness bug in whether an entry is
 // accepted or refused — only in how precisely a pathological pair of
 // refusals is reported back.
+//
+// This is also the one place that defensively bounds how many distinct
+// names ever accumulate in the map at all — independent of, and in
+// addition to, ImportJSON's own upfront maxMCPImportEntries document-level
+// gate (see the len(document.Servers) check in ImportJSON): should some
+// future caller or refactor ever invoke this more times than that gate
+// allows for, the (maxMCPImportEntries+1)-th distinct name collapses into
+// one additional, fixed "_document" summary entry — mirroring how an
+// oversized or malformed whole document already collapses into that same
+// key — rather than growing the map without bound. A name that happens to
+// be exactly "_document" is the one rare, accepted collision with that
+// reserved key, the same class of trade-off the bounded-name-prefix
+// collision above already accepts.
 func recordUnsupported(unsupported map[string]string, name, reason string) {
-	unsupported[boundedMCPServerNameForDisplay(name)] = boundedStatusMessage(reason)
+	bounded := boundedMCPServerNameForDisplay(name)
+	if _, exists := unsupported[bounded]; !exists && len(unsupported) >= maxMCPImportEntries {
+		unsupported["_document"] = mcpUnsupportedOverflowMessage
+		return
+	}
+	unsupported[bounded] = boundedStatusMessage(reason)
 }
+
+// mcpUnsupportedOverflowMessage is the fixed, generic reason recordUnsupported
+// writes under the "_document" key once its defensive count bound is
+// reached: it never echoes the overflowing entry's own name or reason,
+// only that some refusals were collapsed rather than individually listed.
+const mcpUnsupportedOverflowMessage = "additional entries were refused but are not individually listed; the entry count exceeds the maximum supported limit"
 
 type DiscoveredTool struct {
 	Name       string
@@ -458,7 +517,7 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 	// any of the document's own content — and nothing below it, including
 	// the repository, is ever touched for an oversized document.
 	if len(data) > maxMCPImportDocumentBytes {
-		return ImportReport{}, fmt.Errorf("mcp.json exceeds the maximum supported document size of %d bytes", maxMCPImportDocumentBytes)
+		return ImportReport{}, errMCPImportDocumentTooLarge
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	var document mcpJSON
@@ -470,6 +529,20 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 	}
 	if document.Servers == nil {
 		return ImportReport{}, errors.New("decode mcp.json: mcpServers object is required")
+	}
+	// The entry count itself is bounded before any entry is processed —
+	// the same repository.MaxNonBundledMCPServers limit the registry
+	// itself enforces per non-bundled row (see nonBundledMCPServerRegistryFullTx).
+	// A document naming more entries than could ever actually register
+	// would otherwise still cost one repository lookup per name for no
+	// possible benefit, and (absent this) would eventually be refused one
+	// entry at a time only once the registry's own count cap is reached —
+	// scattering what is really a single, document-level problem across
+	// many per-entry Unsupported rows instead of the one bounded refusal
+	// every other whole-document problem (size, malformed JSON) already
+	// gets.
+	if len(document.Servers) > maxMCPImportEntries {
+		return ImportReport{}, errMCPImportTooManyEntries
 	}
 
 	report := ImportReport{Unsupported: make(map[string]string)}
@@ -499,6 +572,35 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			recordUnsupported(report.Unsupported, name, err.Error())
 			continue
 		}
+		// The entry's own top-level field names are validated against a
+		// raw, token-level parse before anything decodes it into
+		// mcpJSONServer: this is what refuses a case variant (e.g.
+		// "TOOLS") or a duplicate key (e.g. two "url" members)
+		// deterministically, rather than letting encoding/json's own
+		// case-insensitive struct-tag fallback (or its silent
+		// last-one-wins handling of a duplicate key) decide instead. See
+		// decodeMCPEntryFields/validateMCPEntryFields.
+		fields, err := decodeMCPEntryFields(raw)
+		if err != nil {
+			recordUnsupported(report.Unsupported, name, err.Error())
+			continue
+		}
+		if err := validateMCPEntryFields(fields); err != nil {
+			recordUnsupported(report.Unsupported, name, err.Error())
+			continue
+		}
+		// toolsPresent is computed from the same validated field list,
+		// looking for the exact lowercase "tools" spelling — guaranteed
+		// unique at this point — rather than a second, independent
+		// lookup that could disagree with what the struct decode below
+		// actually populates.
+		var toolsPresent bool
+		for _, field := range fields {
+			if field.Name == "tools" {
+				toolsPresent = true
+				break
+			}
+		}
 		var entry mcpJSONServer
 		entryDecoder := json.NewDecoder(bytes.NewReader(raw))
 		entryDecoder.DisallowUnknownFields()
@@ -506,12 +608,6 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			recordUnsupported(report.Unsupported, name, "entry is invalid: "+err.Error())
 			continue
 		}
-		var entryFields map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &entryFields); err != nil {
-			recordUnsupported(report.Unsupported, name, "entry is invalid")
-			continue
-		}
-		_, toolsPresent := entryFields["tools"]
 		if entry.Command != "" {
 			recordUnsupported(report.Unsupported, name, "stdio/command MCP servers are unsupported; run the server in a container or use an HTTPS URL")
 			continue
@@ -606,6 +702,15 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 				recordUnsupported(report.Unsupported, name, bundledServerRegistrationMessage)
 			case errors.Is(err, repository.ErrMCPServerImportSuppressed):
 				recordUnsupported(report.Unsupported, name, "server was removed locally and remains suppressed; use a new name to import it again")
+			case errors.Is(err, repository.ErrMCPServerRegistryFull):
+				// Recorded as an ordinary per-entry refusal — like every
+				// other repository disposition here — rather than a hard
+				// error that would abort the rest of the document: a
+				// document naming several new servers once the registry
+				// is already at repository.MaxNonBundledMCPServers must
+				// still report every one of them refused, deterministically,
+				// not just the first.
+				recordUnsupported(report.Unsupported, name, mcpServerRegistryFullMessage)
 			case errors.Is(err, repository.ErrMCPToolNameCollision):
 				// The repository's own transaction already rolled back
 				// the row insert/adoption entirely (see
@@ -654,6 +759,26 @@ func (s *Server) RecordDiscovery(ctx context.Context, serverID string, discovere
 	return s.repo.ReplaceMCPServerTools(ctx, serverID, tools)
 }
 
+// maxMCPServerURLBytes bounds a server's canonical URL — checked after
+// classifyImportedURL has already canonicalized it (lower-cased host,
+// normalized port, defaulted/trimmed path), so this is the exact string
+// that would otherwise be stored and returned in every descriptor/list
+// response, not the caller's raw, pre-canonicalization input. Without a
+// bound, an mcp.json entry or a direct RegisterMcpServer/RotateMcpServerToken
+// call could store (and every later ListMcpServers response would then
+// repeat) an arbitrarily long URL — most plausibly via an unbounded path,
+// since host/port are already narrowly constrained by the tier-specific
+// checks above. 2048 bytes comfortably covers any realistic MCP endpoint
+// while keeping stored rows and list responses bounded.
+const maxMCPServerURLBytes = 2048
+
+// errMCPServerURLTooLong is the fixed, generic reason classifyImportedURL
+// returns for a canonical URL exceeding maxMCPServerURLBytes, named once so
+// both tiers, and both the file-import and direct-registration paths that
+// eventually call classifyImportedURL (via validateServerDefinition), say
+// the same thing about the same refusal.
+var errMCPServerURLTooLong = fmt.Errorf("url exceeds the maximum supported length of %d bytes", maxMCPServerURLBytes)
+
 func classifyImportedURL(raw string) (repository.MCPServerTier, string, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed == nil || parsed.Host == "" {
@@ -696,6 +821,9 @@ func classifyImportedURL(raw string) (repository.MCPServerTier, string, error) {
 		if err != nil {
 			return "", "", errors.New("remote URL must be a canonical HTTPS endpoint")
 		}
+		if len(endpoint.Canonical) > maxMCPServerURLBytes {
+			return "", "", errMCPServerURLTooLong
+		}
 		return repository.MCPServerTierRemoteURL, endpoint.Canonical, nil
 	case "http":
 		if parsed.Port() == "" || !localContainerHostPattern.MatchString(host) ||
@@ -705,10 +833,134 @@ func classifyImportedURL(raw string) (repository.MCPServerTier, string, error) {
 		}
 		parsed.Scheme = "http"
 		parsed.Host = canonicalHostPort(host, parsed.Port())
-		return repository.MCPServerTierLocalContainer, parsed.String(), nil
+		canonical := parsed.String()
+		if len(canonical) > maxMCPServerURLBytes {
+			return "", "", errMCPServerURLTooLong
+		}
+		return repository.MCPServerTierLocalContainer, canonical, nil
 	default:
 		return "", "", errors.New("url must use HTTPS remotely or HTTP for an isolated local container")
 	}
+}
+
+// mcpEntryField is a single top-level key/value member of an mcp.json
+// server entry's raw JSON object, preserved exactly as
+// decodeMCPEntryFields found it on the wire — including a name that
+// repeats another member's, whether by an exact spelling match or only a
+// case-insensitive one. A map[string]json.RawMessage (or letting
+// mcpJSONServer's own struct tags decode the object directly) cannot
+// represent or detect that: encoding/json resolves a struct tag
+// case-insensitively whenever no exact-case match exists, and unmarshaling
+// into either a map or a struct silently keeps only the last of two
+// members that share the same key — exactly the failure mode this type
+// and decodeMCPEntryFields exist to make detectable instead.
+type mcpEntryField struct {
+	Name  string
+	Value json.RawMessage
+}
+
+// canonicalMCPEntryFieldNames are the only top-level key spellings an
+// mcp.json server entry may use. Every one is lowercase; validateMCPEntryFields
+// refuses the same field spelled with any other case (e.g. "Tools", "URL")
+// rather than silently accepting it through encoding/json's own
+// case-insensitive fallback matching.
+var canonicalMCPEntryFieldNames = map[string]struct{}{
+	"url":     {},
+	"headers": {},
+	"command": {},
+	"args":    {},
+	"env":     {},
+	"tools":   {},
+}
+
+// errMCPEntryFieldInvalid is the one fixed, generic reason
+// decodeMCPEntryFields/validateMCPEntryFields return for every way an
+// entry's own top-level field names can be malformed: not an object at
+// all, a name that does not match one of canonicalMCPEntryFieldNames at
+// all (case-insensitively), a canonical name spelled with the wrong case
+// (e.g. "Tools" instead of "tools"), or the same canonical name repeated
+// more than once (an exact-spelling repeat, which JSON itself permits
+// inside one object, or a case-insensitive one such as "tools" and
+// "Tools" both present). It deliberately never says which of those
+// tripped, the same reasoning mcpToolDefinitionRefusedMessage documents.
+var errMCPEntryFieldInvalid = errors.New("entry is invalid")
+
+// decodeMCPEntryFields parses an mcp.json server entry's raw JSON object
+// with the same token-level walk (json.Decoder.Token/More)
+// decodeMCPHeaderEntries already uses for the "headers" value, and for the
+// same reason: two JSON object members that share the exact same key, or
+// differ only in case, must be preserved as separate entries rather than
+// silently collapsed — by json.Unmarshal into a map, or by
+// mcpJSONServer's own struct tags via encoding/json's built-in
+// case-insensitive fallback matching — before validateMCPEntryFields below
+// ever sees the conflict it exists to refuse. Called before entry's body
+// is decoded into mcpJSONServer at all, so a case-variant or duplicate key
+// is refused deterministically instead of quietly feeding a struct field
+// that an independent exact-lowercase-key check (such as ImportJSON's own
+// toolsPresent flag) would then disagree with.
+func decodeMCPEntryFields(raw json.RawMessage) ([]mcpEntryField, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	open, err := decoder.Token()
+	if err != nil {
+		return nil, errMCPEntryFieldInvalid
+	}
+	if delim, ok := open.(json.Delim); !ok || delim != '{' {
+		return nil, errMCPEntryFieldInvalid
+	}
+	var fields []mcpEntryField
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil, errMCPEntryFieldInvalid
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, errMCPEntryFieldInvalid
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, errMCPEntryFieldInvalid
+		}
+		fields = append(fields, mcpEntryField{Name: key, Value: value})
+	}
+	if _, err := decoder.Token(); err != nil { // the closing '}'
+		return nil, errMCPEntryFieldInvalid
+	}
+	return fields, nil
+}
+
+// validateMCPEntryFields requires every one of an entry's top-level field
+// names to exactly match one of canonicalMCPEntryFieldNames — never
+// merely case-insensitively, the way mcpJSONServer's own struct decoding
+// would otherwise accept via encoding/json's built-in case-insensitive
+// fallback whenever no exact-case match exists. Without this, an entry
+// naming "TOOLS" instead of "tools" would decode into mcpJSONServer.Tools
+// exactly as if spelled correctly, yet ImportJSON's own independent
+// exact-lowercase-key presence check (deliberately strict, so it can never
+// be fooled into treating a same-cased "tools" the same as a wrong-cased
+// near-miss) would then treat that populated field as absent — silently
+// discarding a "tools" snapshot rather than refusing the entry the way
+// every other malformed shape is. An exact-duplicate or case-insensitive
+// duplicate of any canonical name (e.g. two "url" members) is refused the
+// same way: JSON itself permits a duplicate key in one object, and plain
+// encoding/json decoding (struct or map) would otherwise silently keep
+// only the last one.
+func validateMCPEntryFields(fields []mcpEntryField) error {
+	seenCanonical := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		lower := strings.ToLower(field.Name)
+		if _, isCanonical := canonicalMCPEntryFieldNames[lower]; !isCanonical {
+			return errMCPEntryFieldInvalid
+		}
+		if field.Name != lower {
+			return errMCPEntryFieldInvalid
+		}
+		if _, duplicate := seenCanonical[lower]; duplicate {
+			return errMCPEntryFieldInvalid
+		}
+		seenCanonical[lower] = struct{}{}
+	}
+	return nil
 }
 
 // errMultipleAuthorizationHeaders is the fixed reason bearerFromHeaders
@@ -953,17 +1205,28 @@ var errMCPConfigRootNotConfigured = errors.New("MCP config root is not configure
 // and imports it, the same way app startup does. An absent file is not a
 // failure: it clears any previously recorded import issues and reports an
 // empty ImportReport, so a client that reimports after deleting mcp.json
-// sees a clean slate rather than a stale error. A malformed document is
-// recorded as a bounded "_document" entry in mcp_import_issues and returned
-// inside the ImportReport rather than as an error, so a client can display
-// why nothing imported the same way it displays any other refused entry.
-// Any other failure to read the file is returned as a fixed error that
-// never repeats the file's contents or path.
+// sees a clean slate rather than a stale error. A malformed or oversized
+// document is recorded as a bounded "_document" entry in mcp_import_issues
+// and returned inside the ImportReport rather than as an error, so a
+// client can display why nothing imported the same way it displays any
+// other refused entry. Any other failure to read the file is returned as
+// a fixed error that never repeats the file's contents or path.
+//
+// The file is opened and read through io.LimitReader(maxMCPImportDocumentBytes+1),
+// the same bounded-read shape mcpClient.request already applies to a live
+// HTTP response body: os.ReadFile has no size bound of its own and would
+// buffer the entire file — however large, and regardless of whether it
+// is a huge file, a sparse one, or a slow/unbounded source such as a
+// FIFO — before ImportJSON's own in-memory size check ever got a chance
+// to run. Reading through a bounded LimitReader instead means at most
+// maxMCPImportDocumentBytes+1 bytes are ever allocated, and the read
+// completes (with its own synthesized io.EOF) without waiting for the
+// underlying source to actually end.
 func (s *Server) ReimportConfiguredJSON(ctx context.Context) (ImportReport, error) {
 	if s.configRoot == "" {
 		return ImportReport{}, errMCPConfigRootNotConfigured
 	}
-	data, err := os.ReadFile(filepath.Join(s.configRoot, "mcp.json"))
+	file, err := os.Open(filepath.Join(s.configRoot, "mcp.json"))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		if clearErr := s.repo.ReplaceMCPImportIssues(ctx, map[string]string{}); clearErr != nil {
@@ -971,8 +1234,25 @@ func (s *Server) ReimportConfiguredJSON(ctx context.Context) (ImportReport, erro
 		}
 		return ImportReport{}, nil
 	case err != nil:
+		log.Printf("open mcp.json: %v", err)
+		return ImportReport{}, errors.New("read mcp.json failed")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxMCPImportDocumentBytes+1))
+	closeErr := file.Close()
+	if err != nil {
 		log.Printf("read mcp.json: %v", err)
 		return ImportReport{}, errors.New("read mcp.json failed")
+	}
+	if closeErr != nil {
+		log.Printf("close mcp.json: %v", closeErr)
+		return ImportReport{}, errors.New("read mcp.json failed")
+	}
+	if len(data) > maxMCPImportDocumentBytes {
+		message := boundedStatusMessage(errMCPImportDocumentTooLarge.Error())
+		if recordErr := s.repo.ReplaceMCPImportIssues(ctx, map[string]string{"_document": message}); recordErr != nil {
+			return ImportReport{}, fmt.Errorf("record mcp.json import failure: %w", recordErr)
+		}
+		return ImportReport{Unsupported: map[string]string{"_document": message}}, nil
 	}
 	report, err := s.ImportJSON(ctx, data)
 	if err != nil {
