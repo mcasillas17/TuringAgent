@@ -692,6 +692,35 @@ func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMc
 	if err != nil {
 		return nil, mapMCPValidationError(err)
 	}
+	// Before this call's token is ever sealed or anything mutated: look
+	// up this name's current disposition. A genuinely new name (the
+	// common case) is unaffected — GetMCPServerByName returns
+	// ErrMCPServerNotFound and this falls straight through to sealing
+	// below, exactly as it always has. A real, already-configured row
+	// (non-empty url) is also unaffected here: the repository's own
+	// RegisterMCPServer call below still refuses it as
+	// ErrMCPServerNameTaken, the same way it always has. The one new
+	// case is a url-empty, non-bundled row — a migration-0016 (or
+	// otherwise legacy) placeholder this call is about to adopt in
+	// place — where placeholderAdoptionTokenCollision must refuse a new
+	// token that appears verbatim in any tool that placeholder retained
+	// (see its own doc comment, and rotateServerTokenLocked's
+	// structurally identical check for an already-registered server).
+	// Bundled existing rows are left to the repository's own
+	// ErrMCPServerBundled handling below rather than duplicated here.
+	if existing, lookupErr := s.repo.GetMCPServerByName(ctx, validated.Name); lookupErr == nil {
+		if existing.Tier != repository.MCPServerTierBundled && existing.URL == "" {
+			collides, cerr := placeholderAdoptionTokenCollision(ctx, s.repo, existing.ID, validated.Token)
+			if cerr != nil {
+				return nil, status.Error(codes.Internal, "read MCP server failed")
+			}
+			if collides {
+				return nil, status.Error(codes.InvalidArgument, errMCPTokenMatchesRetainedToolMetadata.Error())
+			}
+		}
+	} else if !errors.Is(lookupErr, repository.ErrMCPServerNotFound) {
+		return nil, status.Error(codes.Internal, "read MCP server failed")
+	}
 	sealed, err := s.sealServerToken(validated.Name, validated.Token)
 	if err != nil {
 		return nil, err

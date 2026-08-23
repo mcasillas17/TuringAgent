@@ -1324,6 +1324,42 @@ void main() {
     expect(sent!.hasBearerToken(), isTrue);
     expect(sent.bearerToken, '');
   });
+  test('listMcpServers maps registry_degraded true and its reason onto '
+      'McpRegistrySnapshot', () async {
+    final service = _CapturingMcpRegistryService()
+      ..listMcpServersResponse = mcppb.ListMcpServersResponse(
+        servers: const [],
+        unsupported: const [],
+        registryDegraded: true,
+        registryDegradationReason: 'too many servers registered',
+      );
+    final api = await _startMcpRegistryApi(service);
+
+    final snapshot = await api.listMcpServers();
+
+    expect(service.listMcpServersCallCount, 1);
+    expect(snapshot.registryDegraded, isTrue);
+    expect(
+      snapshot.registryDegradationReason,
+      'too many servers registered',
+    );
+  });
+
+  test('listMcpServers maps an unset registry_degraded onto false and an '
+      'empty reason', () async {
+    final service = _CapturingMcpRegistryService()
+      ..listMcpServersResponse = mcppb.ListMcpServersResponse(
+        servers: const [],
+        unsupported: const [],
+      );
+    final api = await _startMcpRegistryApi(service);
+
+    final snapshot = await api.listMcpServers();
+
+    expect(service.listMcpServersCallCount, 1);
+    expect(snapshot.registryDegraded, isFalse);
+    expect(snapshot.registryDegradationReason, '');
+  });
 }
 
 /// Starts an in-process MCP registry server bound to a client for one test
@@ -1566,6 +1602,21 @@ class _CapturingMcpRegistryService extends mcpgrpc.McpRegistryServiceBase {
   int rotateMcpServerTokenCallCount = 0;
   mcppb.McpServerDescriptor rotateMcpServerTokenResponse =
       mcppb.McpServerDescriptor();
+
+  mcppb.ListMcpServersRequest? listMcpServersRequest;
+  int listMcpServersCallCount = 0;
+  mcppb.ListMcpServersResponse listMcpServersResponse =
+      mcppb.ListMcpServersResponse();
+
+  @override
+  Future<mcppb.ListMcpServersResponse> listMcpServers(
+    grpc.ServiceCall call,
+    mcppb.ListMcpServersRequest request,
+  ) async {
+    listMcpServersRequest = request;
+    listMcpServersCallCount++;
+    return listMcpServersResponse;
+  }
 
   @override
   Future<mcppb.McpServerDescriptor> registerMcpServer(

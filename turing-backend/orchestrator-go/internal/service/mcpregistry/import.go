@@ -1166,6 +1166,23 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (report ImportRepo
 				skipped = append(skipped, name)
 				continue
 			}
+			// existing.URL == "": this is a legacy placeholder adoption
+			// candidate. Before this entry's token is ever sealed or the
+			// placeholder's row touched, refuse it if it appears
+			// verbatim in any tool this placeholder retained (present or
+			// withdrawn) — see placeholderAdoptionTokenCollision's own
+			// doc comment. No row mutation, no sealed token, and the
+			// refusal is recorded exactly like any other Unsupported
+			// entry: a corrected reimport with an unrelated token still
+			// adopts/withdraws/reconciles as before.
+			collides, cerr := placeholderAdoptionTokenCollision(ctx, s.repo, existing.ID, token)
+			if cerr != nil {
+				return report, fmt.Errorf("list MCP server %q tools: %w", name, cerr)
+			}
+			if collides {
+				recordUnsupported(report.Unsupported, name, errMCPTokenMatchesRetainedToolMetadata.Error())
+				continue
+			}
 		case errors.Is(err, repository.ErrMCPServerNotFound):
 			tombstoned, terr := s.repo.MCPServerTombstoned(ctx, name)
 			if terr != nil {
@@ -2120,6 +2137,41 @@ func tokenAppearsInRetainedToolMetadata(token string, tools []repository.MCPServ
 		}
 	}
 	return false
+}
+
+// placeholderAdoptionTokenCollision is rotateServerTokenLocked's retained-
+// tool check (see tokenAppearsInRetainedToolMetadata's own doc comment),
+// applied to the one other place a bearer token gets paired with a
+// server's pre-existing retained tools instead of a fresh, toolless row:
+// adopting a migration-0016 (or otherwise legacy) placeholder — a
+// disabled, non-bundled row with url == "" — via direct RegisterMcpServer
+// or a file ImportJSON reimport. Both callers already look the candidate
+// row up by name (GetMCPServerByName) before sealing or mutating anything;
+// once one identifies a url-empty, non-bundled row as its adoption
+// candidate, it calls this with that row's id and the new (already
+// normalized) token, before ever calling sealServerToken or the
+// repository's own Register/ImportMCPServer. A true result must refuse the
+// whole call the same generic, sentinel-free way rotation does — via the
+// package's one shared errMCPTokenMatchesRetainedToolMetadata reason —
+// leaving the placeholder's row, and its retained tools, completely
+// untouched: without this, a chosen token could round-trip straight back
+// out through the very register/import response (or a later List) whose
+// descriptor still carries the adopted placeholder's own retained tool.
+//
+// Skipped entirely for an empty token, mirroring
+// rotateServerTokenLocked's own optimization for the identical reason:
+// tokenAppearsInRetainedToolMetadata already returns false for one, so the
+// repository read below would be pure overhead for a call that can never
+// collide with anything.
+func placeholderAdoptionTokenCollision(ctx context.Context, repo *repository.Repository, placeholderID, token string) (bool, error) {
+	if token == "" {
+		return false, nil
+	}
+	retainedTools, err := repo.ListMCPServerTools(ctx, placeholderID)
+	if err != nil {
+		return false, err
+	}
+	return tokenAppearsInRetainedToolMetadata(token, retainedTools), nil
 }
 
 // validateServerDefinition applies the one set of rules a server definition

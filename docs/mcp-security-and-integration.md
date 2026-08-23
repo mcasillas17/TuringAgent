@@ -946,8 +946,8 @@ point. A cancellation committed after it observes an already in-flight call;
 as with a bundled write after approval consumption, it does not retroactively
 restore the consumed approval.
 
-`CallRegisteredMcpTool` — the gRPC-facing wrapper `CallTool`'s own internal
-`map[string]any` result feeds — checks the fully-built response against
+`CallRegisteredMcpTool` — the gRPC-facing wrapper around `CallTool`'s own
+internal `map[string]any` result — checks the fully-built response against
 `maxMCPToolResultWireBytes` (4 MiB, mirroring `internal/app`'s own
 `maxGRPCMessageSize`) using `proto.Size`, before ever returning it. A
 vendor's raw `tools/call` JSON-RPC result is already bounded at the HTTP
@@ -962,11 +962,17 @@ bound, can still convert to a protobuf message well past the 4 MiB gRPC
 send cap by itself. A result whose converted size exceeds the cap is
 refused with a fixed, generic `ResourceExhausted` status that never
 echoes the result's own content or the server's bearer token, before
-gRPC's own send path would otherwise refuse it. This check lives only in
-`CallRegisteredMcpTool`'s own response path; `CallTool` itself — whose
-`map[string]any` result the runtime persists directly into
-tool-call/message history, never through a marshaled
-`CallRegisteredMcpToolResponse` — is untouched by it.
+gRPC's own send path would otherwise refuse it. `CallRegisteredMcpTool` is
+`CallTool`'s only direct, in-process caller — the agent runtime never
+calls `CallTool` itself for a registered (third-party) server; it always
+dispatches through `CallRegisteredMcpTool` over gRPC
+(`RegistryClient.CallToolWithCallerApproval` in `agent-runtime-go`, whose
+own unguarded `CallTool` method unconditionally refuses with "registered
+MCP server requires orchestrator caller-side enforcement" instead of ever
+reaching a registered server directly). So this guard covers the actual
+runtime path end to end; there is no separate, unguarded route through
+which a registered server's result reaches tool-call/message history
+without first passing through this check.
 
 Human approval comments and denial reasons are durable decision evidence. The
 orchestrator stores them in separate nullable columns in the same transaction as
