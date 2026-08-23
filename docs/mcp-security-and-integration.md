@@ -602,6 +602,45 @@ tool-result categories, before any call is dispatched. Registration and
 `mcp.json` import never contact an endpoint on their own while a server
 stays disabled — only an explicit enable does, and only at that moment.
 
+Live discovery's own `tools/list` call goes through `requestRaw`, not the
+`request` an ordinary generic caller (`callTool`) uses: `requestRaw` hands
+back each tool exactly as the peer sent it, before `request`'s own
+marker-substitution redaction could otherwise replace an echoed bearer
+with the fixed `[redacted]` text and let discovery persist that still
+attacker-shaped metadata anyway. Before any tool's own name is ever
+extracted or interpolated into an "invalid name"/"duplicated" error, and
+before `RecordDiscovery` ever runs, `discover` scans each tool's whole
+raw, decoded map — not merely the fields `DiscoveredTool` stores, so an
+unstored field such as `description` cannot smuggle a token past the
+check — for the configured bearer token (`mcpRawMetadataContainsToken`);
+a second scan then checks the tool's own canonical, serialized
+`inputSchema` JSON text, which catches what the recursive, strings-only
+raw scan structurally cannot: a token equal to a JSON number/boolean/
+null's literal wire text, or a token that only ever exists across a
+structural boundary (for example the quote-colon-quote `json.Marshal`
+introduces around a key and its value). Either scan matching refuses the
+whole discovery attempt outright with the one fixed, generic,
+sentinel-free `mcpToolDefinitionRefusedMessage` — never a message built
+from the tool's own name or schema — and leaves the prior tool snapshot
+and any operator-edited policy exactly as they were, the same way any
+other failed discovery does (see below). This fail-closed treatment
+applies identically to both non-bundled tiers a live endpoint can have —
+`remote_url` and `local_container` — since both reach `discover` through
+the identical code path. Pagination is guarded the same way: a `nextCursor`
+value is never interpolated into a repeated-cursor or invalid-cursor
+error, only a fixed, generic, cursor-free message is — a peer chooses its
+own cursor freely, including a value equal to (or containing) the
+configured bearer, and formatting that value with Go's `%q` would escape
+any quote or backslash it contains into a still fully reconstructible,
+merely non-contiguous form that plain substring redaction can no longer
+find and remove. `callTool`, unlike `discover`'s `listTools` call, still
+goes through `request` and its ordinary redact-or-refuse handling: a tool
+call's arbitrary result must still be returned to the caller in some
+form, so a matched bearer echo there is redacted in place, or — when
+redaction alone cannot remove it (the JSON-syntax case above) — the whole
+result is refused, rather than ever persisting discovery's outright,
+pre-`RecordDiscovery` refusal.
+
 A successful discovery reconciles the server's live tools and schemas: tools
 no longer reported are marked absent, newly reported tools are seeded through
 `DefaultPolicyFor` (`approval_required` unless already known safe), and an

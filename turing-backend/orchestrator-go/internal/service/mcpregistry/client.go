@@ -71,6 +71,27 @@ var errMCPImportTooManyEntries = fmt.Errorf("mcp.json declares more servers than
 // it is refused with, never any part of the vendor's own response.
 var errMCPResultCannotBeRedacted = errors.New("MCP response result could not be safely redacted")
 
+// errMCPCursorRepeated is the one fixed, generic reason listTools refuses
+// a peer's tools/list response whose nextCursor repeats one already seen
+// earlier in the same pagination loop. The cursor's own value — whatever
+// it is — must never be interpolated into this error: a peer chooses
+// nextCursor freely, including a value equal to (or containing) this
+// client's own configured bearer token, and %q-formatting that value
+// escapes any quote or backslash it contains. That escaping breaks the
+// token into a non-contiguous run of bytes, so redactMCPErrorValue's
+// later plain strings.Contains/ReplaceAll redaction can no longer find
+// (and so cannot remove) it — the escaped, still fully reconstructible
+// remnants of the token would leak through instead, including into the
+// liveness status message discoverLocked persists from this error
+// verbatim. Kept fixed and cursor-free, this error can never carry that
+// risk regardless of what any peer's cursor contains.
+var errMCPCursorRepeated = errors.New("MCP tools/list returned a repeated nextCursor")
+
+// errMCPCursorInvalid is errMCPCursorRepeated's sibling for a nextCursor
+// whose JSON type is not a string, null, or absent: for the identical
+// reason, the peer's actual value is never interpolated into this error.
+var errMCPCursorInvalid = errors.New("MCP tools/list nextCursor must be a string, null, or absent")
+
 type mcpClient struct {
 	endpoint   string
 	token      string
@@ -156,10 +177,10 @@ func (c *mcpClient) listTools(ctx context.Context) (tools []map[string]any, err 
 		}
 		cursor, ok := cursorValue.(string)
 		if !ok {
-			return nil, errors.New("MCP tools/list nextCursor must be a string, null, or absent")
+			return nil, errMCPCursorInvalid
 		}
 		if _, repeated := seenCursors[cursor]; repeated {
-			return nil, fmt.Errorf("MCP tools/list repeated nextCursor %q", cursor)
+			return nil, errMCPCursorRepeated
 		}
 		seenCursors[cursor] = struct{}{}
 		params = map[string]any{"cursor": cursor}

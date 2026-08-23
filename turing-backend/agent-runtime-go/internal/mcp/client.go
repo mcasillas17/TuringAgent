@@ -21,6 +21,17 @@ const (
 	maxListToolsEncodedBytes       = 4 * 1024 * 1024
 )
 
+// errListToolsCursorRepeated is the one fixed, generic reason ListTools
+// refuses a peer's tools/list response whose nextCursor repeats one
+// already seen earlier in the same pagination loop. The cursor's own
+// value must never be interpolated into this error: a peer chooses
+// nextCursor freely, including a value equal to (or containing) this
+// client's own configured bearer token, and %q-formatting that value
+// would escape any quote or backslash it contains into a still fully
+// reconstructible — merely non-contiguous — form. Kept fixed and
+// cursor-free, this error can never carry that risk.
+var errListToolsCursorRepeated = errors.New("MCP tools/list returned a repeated nextCursor")
+
 type Client struct {
 	endpoint         string
 	token            string
@@ -146,7 +157,7 @@ func (c *Client) ListTools(ctx context.Context) (tools []map[string]any, err err
 			return nil, fmt.Errorf("MCP tools/list nextCursor must be a string, null, or absent")
 		}
 		if _, repeated := seenCursors[cursor]; repeated {
-			return nil, fmt.Errorf("MCP tools/list returned repeated nextCursor %q", cursor)
+			return nil, errListToolsCursorRepeated
 		}
 		seenCursors[cursor] = struct{}{}
 		params = map[string]any{"cursor": cursor}

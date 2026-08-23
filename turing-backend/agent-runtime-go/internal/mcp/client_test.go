@@ -215,6 +215,49 @@ func TestListToolsRejectsRepeatedCursor(t *testing.T) {
 	assertListToolsRequests(t, requests, []map[string]any{{}, {"cursor": "same"}})
 }
 
+// TestListToolsRepeatedCursorErrorNeverLeaksBearerContainingQuoteOrBackslash
+// proves the repeated-cursor error never interpolates the peer-controlled
+// nextCursor value: a peer picks nextCursor freely, including a value
+// equal to (or containing) this client's own configured bearer token, and
+// %q-formatting that value into the error text escapes any quote or
+// backslash it contains — reproducing the token in an escaped,
+// non-contiguous, but still fully reconstructible form. This bearer is
+// deliberately shaped with both a quote and a backslash within its first
+// 16 bytes so even a truncated-prefix leak check would catch a
+// regression.
+func TestListToolsRepeatedCursorErrorNeverLeaksBearerContainingQuoteOrBackslash(t *testing.T) {
+	const token = `mcp-"tok\en-9f3c71a-do-not-leak`
+	server := newListToolsServer(t, func(request listToolsRequest) (int, string, error) {
+		return http.StatusOK, fmt.Sprintf(
+			`{"jsonrpc":"2.0","id":%d,"result":{"tools":[],"nextCursor":%s}}`,
+			request.ID, mustMarshalJSON(t, token),
+		), nil
+	})
+	client := NewClient(server.URL, token, server.Client())
+
+	_, err := client.ListTools(context.Background())
+	server.assertNoHandlerErrors(t)
+	if err == nil || !strings.Contains(err.Error(), "repeated") {
+		t.Fatalf("ListTools error = %v, want repeated cursor error", err)
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("ListTools error leaks the raw bearer token: %v", err)
+	}
+	goEscaped := fmt.Sprintf("%q", token)
+	if strings.Contains(err.Error(), goEscaped[1:len(goEscaped)-1]) {
+		t.Fatalf("ListTools error leaks the Go (%%q) escaped reconstructible form of the bearer token: %v", err)
+	}
+}
+
+func mustMarshalJSON(t *testing.T, value any) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal %#v: %v", value, err)
+	}
+	return string(encoded)
+}
+
 func TestListToolsEnforcesPageLimit(t *testing.T) {
 	const wantRequests = 100
 	requests := 0
