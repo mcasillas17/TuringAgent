@@ -1175,6 +1175,21 @@ func (s *Server) discoverLocked(ctx context.Context, serverID string) (discovery
 // the caller still needs to do with the outcome, without a second, nested
 // RLock acquisition by the same goroutine ever risking a self-deadlock
 // against a pending RotateMcpServerToken writer for the same server.
+//
+// discover is also the one place in this package that ever holds the
+// server's plaintext token alongside a live peer's own, untrusted
+// tools/list response: RecordDiscovery (called below, once this loop has
+// fully validated every tool) is a public helper other callers
+// legitimately invoke without a token at all (see ImportJSON's own
+// static-snapshot path, which validates and scans before ever calling
+// it) — so the token-metadata guard belongs here, not there. A malicious
+// or merely compromised endpoint that echoes the server's own bearer
+// token back in a tool's name, description, or schema must never reach
+// RecordDiscovery carrying it: mcpClient.listTools now returns each tool
+// exactly as the peer sent it (see requestRaw), specifically so the scan
+// below runs before mcpClient's own marker-substitution redaction could
+// otherwise hide that echo behind the fixed "[redacted]" text and let
+// discovery proceed anyway with still-attacker-shaped metadata.
 func (s *Server) discover(ctx context.Context, serverID string) (err error) {
 	server, err := s.repo.GetMCPServer(ctx, serverID)
 	if err != nil {
@@ -1198,6 +1213,24 @@ func (s *Server) discover(ctx context.Context, serverID string) (err error) {
 	discovered := make([]DiscoveredTool, 0, len(rawTools))
 	seen := make(map[string]struct{}, len(rawTools))
 	for index, raw := range rawTools {
+		// This raw-metadata scan runs first — before this tool's own
+		// name is ever extracted for the "invalid name"/"duplicated"
+		// checks just below (both of which embed it via %q), and before
+		// RecordDiscovery ever runs — and over the tool's whole raw,
+		// decoded map, not just whichever fields DiscoveredTool
+		// actually stores: that is what sweeps in "description" (never
+		// stored, but still tool metadata a compromised endpoint could
+		// use to signal or exfiltrate the token) for free, the same way
+		// buildImportTools' own doc comment on mcpJSONTool.Description
+		// explains for the static mcp.json snapshot path. Reusing
+		// mcpRawMetadataContainsToken and the one fixed, generic,
+		// sentinel-free mcpToolDefinitionRefusedMessage gives a live
+		// endpoint the identical fail-closed treatment that path already
+		// gives a static snapshot: refused outright, never persisted
+		// with the token merely redacted to a marker and otherwise kept.
+		if token != "" && mcpRawMetadataContainsToken(raw, token) {
+			return errors.New(mcpToolDefinitionRefusedMessage)
+		}
 		name, ok := raw["name"].(string)
 		if !ok || strings.TrimSpace(name) == "" {
 			return fmt.Errorf("tool %d has an invalid name", index)
@@ -1222,7 +1255,29 @@ func (s *Server) discover(ctx context.Context, serverID string) (err error) {
 		if err != nil {
 			return fmt.Errorf("tool %q inputSchema is invalid", name)
 		}
-		discovered = append(discovered, DiscoveredTool{Name: name, SchemaJSON: string(encoded)})
+		schemaJSON := string(encoded)
+		// A second, post-marshal scan of the exact schemaJSON text this
+		// tool is about to be recorded with — never a replacement for
+		// the raw-metadata scan above, which remains the only way to
+		// catch a token containing a quote or backslash (see
+		// mcpRawMetadataContainsToken's own doc comment). This one
+		// catches what that recursive, strings-only walk structurally
+		// cannot: a token equal to the literal serialized text of a
+		// JSON number, boolean, or null schema value (none of those
+		// decode to a Go string, so the scan above never inspects
+		// them), and a token that only ever exists across a structural
+		// boundary json.Marshal introduces — such as the quote-colon-
+		// quote between a key and its value, which the schema["type"] =
+		// "object" assignment above guarantees is present in every
+		// discovered tool's own serialized schema, even one with no
+		// explicit properties at all — that no single decoded string,
+		// number, bool, or null value ever contains on its own. Name
+		// and schema only ever reach discovered (and, past this loop,
+		// RecordDiscovery) once both scans have passed clean.
+		if token != "" && strings.Contains(schemaJSON, token) {
+			return errors.New(mcpToolDefinitionRefusedMessage)
+		}
+		discovered = append(discovered, DiscoveredTool{Name: name, SchemaJSON: schemaJSON})
 	}
 	if err := s.RecordDiscovery(ctx, server.ID, discovered); err != nil {
 		return err

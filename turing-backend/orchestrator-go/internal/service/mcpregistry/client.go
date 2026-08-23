@@ -119,7 +119,15 @@ func (c *mcpClient) listTools(ctx context.Context) (tools []map[string]any, err 
 	seenCursors := make(map[string]struct{})
 	encodedBytes := 0
 	for page := 0; page < maxMCPToolPages; page++ {
-		result, err := c.request(ctx, "tools/list", params)
+		// requestRaw, not request: discover() (this call's sole caller)
+		// must see each tool exactly as the peer sent it, before
+		// request's own marker-substitution redaction could replace a
+		// bearer echo with the fixed "[redacted]" text and let the rest
+		// of this loop — and, past it, RecordDiscovery — treat that
+		// still-attacker-shaped tool as if it were clean. See
+		// requestRaw's own doc comment for why callTool, unlike this
+		// method, still goes through request instead.
+		result, err := c.requestRaw(ctx, "tools/list", params)
 		if err != nil {
 			return nil, err
 		}
@@ -159,7 +167,78 @@ func (c *mcpClient) listTools(ctx context.Context) (tools []map[string]any, err 
 	return nil, fmt.Errorf("MCP tools/list exceeded page limit of %d", maxMCPToolPages)
 }
 
+// request performs the JSON-RPC round trip via requestRaw and then
+// applies this package's ordinary redact-or-refuse handling to a
+// *successful* result: redactMCPSecret's per-scalar, per-key
+// substitution first, then the whole-result structural safety net below.
+// This is what every generic caller — currently only callTool, and
+// through it CallRegisteredMcpTool — needs: a vendor's tool-call result
+// can be arbitrary, untrusted data that still has to be returned to the
+// caller in some form, so a matched bearer echo is redacted in place
+// rather than refusing the whole call outright. listTools deliberately
+// does not use this: see requestRaw's own doc comment.
 func (c *mcpClient) request(ctx context.Context, method string, params map[string]any) (result map[string]any, err error) {
+	defer func() {
+		err = redactMCPErrorValue(err, c.token)
+	}()
+	result, err = c.requestRaw(ctx, method, params)
+	if err != nil {
+		return nil, err
+	}
+	redacted, ok := redactMCPSecret(result, c.token).(map[string]any)
+	if !ok {
+		return nil, errors.New("MCP response result must be an object")
+	}
+	// A final, whole-result safety net: redactMCPSecret's per-scalar
+	// substitution above surgically replaces each string/number/bool/null
+	// value that itself matched, but it cannot remove a token that is a
+	// piece of JSON syntax rather than any single value's own content —
+	// the quote-colon-quote between a key and its value exists
+	// regardless of what that value is redacted to. Re-encoding the
+	// already-redacted result and checking it one more time catches
+	// exactly that residue; if the token is still there, the whole
+	// result is refused with the one fixed, generic reason rather than
+	// ever returned still carrying it. This never fires for an ordinary
+	// string echo (already fully substituted above) or for the numeric/
+	// bool/null cases (whose one matching scalar is now the fixed marker
+	// string, not the original token). This scans the same
+	// encoding/json text CallRegisteredMcpTool's eventual
+	// structpb.NewStruct conversion is built from field-by-field — not
+	// the wire bytes of any later protobuf or protojson re-encoding of
+	// that Struct — so it is a check against the shape this function
+	// itself is about to hand back, not a guarantee about every possible
+	// downstream re-serialization.
+	if c.token != "" {
+		if encoded, err := json.Marshal(redacted); err == nil && strings.Contains(string(encoded), c.token) {
+			return nil, errMCPResultCannotBeRedacted
+		}
+	}
+	return redacted, nil
+}
+
+// requestRaw performs the JSON-RPC round trip — transport, envelope
+// decoding, response-size limits, and the peer's own JSON-RPC error
+// object — and returns the result exactly as the peer sent it, without
+// request's own redact-or-refuse handling of a *successful* result.
+// request's generic callers (callTool) must never see an unredacted
+// bearer echo, so they call request instead; listTools calls this
+// directly so discover's own raw-metadata scan
+// (mcpRawMetadataContainsToken, run before a tool's name is ever
+// interpolated into an error or persisted via RecordDiscovery — see
+// discover's own doc comment) can inspect each tool exactly as received.
+// A marker already substituted in place of the token would hide a
+// bearer echo from that scan just as effectively as never returning the
+// tool at all: discover needs to *refuse* a token-bearing tool outright,
+// the same way buildImportTools already refuses one in a static mcp.json
+// snapshot, not merely have it redacted and still persisted.
+//
+// The peer's own JSON-RPC error object (envelope.Error.Message) is still
+// redacted inline below, and the deferred wrapper still redacts whatever
+// error this function itself returns: neither of those ever carries tool
+// metadata this package would persist, so there is no raw-scan tradeoff
+// for either — only a *successful* result's own redact-or-refuse
+// handling moves to request, above.
+func (c *mcpClient) requestRaw(ctx context.Context, method string, params map[string]any) (result map[string]any, err error) {
 	defer func() {
 		err = redactMCPErrorValue(err, c.token)
 	}()
@@ -232,35 +311,7 @@ func (c *mcpClient) request(ctx context.Context, method string, params map[strin
 	if result == nil {
 		return nil, errors.New("MCP response result must be an object")
 	}
-	redacted, ok := redactMCPSecret(result, c.token).(map[string]any)
-	if !ok {
-		return nil, errors.New("MCP response result must be an object")
-	}
-	// A final, whole-result safety net: redactMCPSecret's per-scalar
-	// substitution above surgically replaces each string/number/bool/null
-	// value that itself matched, but it cannot remove a token that is a
-	// piece of JSON syntax rather than any single value's own content —
-	// the quote-colon-quote between a key and its value exists
-	// regardless of what that value is redacted to. Re-encoding the
-	// already-redacted result and checking it one more time catches
-	// exactly that residue; if the token is still there, the whole
-	// result is refused with the one fixed, generic reason rather than
-	// ever returned still carrying it. This never fires for an ordinary
-	// string echo (already fully substituted above) or for the numeric/
-	// bool/null cases (whose one matching scalar is now the fixed marker
-	// string, not the original token). This scans the same
-	// encoding/json text CallRegisteredMcpTool's eventual
-	// structpb.NewStruct conversion is built from field-by-field — not
-	// the wire bytes of any later protobuf or protojson re-encoding of
-	// that Struct — so it is a check against the shape this function
-	// itself is about to hand back, not a guarantee about every possible
-	// downstream re-serialization.
-	if c.token != "" {
-		if encoded, err := json.Marshal(redacted); err == nil && strings.Contains(string(encoded), c.token) {
-			return nil, errMCPResultCannotBeRedacted
-		}
-	}
-	return redacted, nil
+	return result, nil
 }
 
 func redactMCPErrorValue(err error, secret string) error {
