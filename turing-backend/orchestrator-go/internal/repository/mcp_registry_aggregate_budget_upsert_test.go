@@ -29,10 +29,6 @@ func discoveredToolOfExactRawSize(t *testing.T, serverName, name string, n int) 
 	}
 }
 
-func rawDiscoveredToolBytes(tool DiscoveredTool) int {
-	return len(tool.ToolName) + len(tool.SchemaJSON)
-}
-
 // A UpsertTools snapshot at exactly the aggregate cap (as the only tenant
 // of the budget) must succeed: the boundary must not be off-by-one
 // against a legitimate, in-bounds aggregate total. UpsertTools is the
@@ -77,25 +73,34 @@ func TestUpsertToolsAggregateBudgetOneByteOverCapAloneIsRefused(t *testing.T) {
 // halves: a third-party server's own tools (populated via ImportMCPServer,
 // which funnels through replaceServerToolsTx) must count against how much
 // room UpsertTools's own bundled/skills snapshot has left, and vice
-// versa. This fills almost the whole budget with a third-party server's
-// static snapshot, then proves a "skills" tool that would push the
-// aggregate over budget is refused — and that the third-party server's
-// own tool is left completely untouched by the refusal.
+// versa. The third-party contribution here (100000 bytes) stays
+// comfortably under its own, narrower MaxThirdPartyMCPRegistryToolBytes
+// sub-cap (128KiB) on its own — this test is specifically about the
+// full, shared aggregate the two paths still have in common, not about
+// the third-party sub-cap (see mcp_registry_third_party_budget_test.go
+// for that). This fills most of the remaining full-aggregate room with
+// that third-party server's static snapshot, then proves a "skills"
+// tool that would push the aggregate one byte over is refused — and
+// that the third-party server's own tool is left completely untouched
+// by the refusal.
 func TestUpsertToolsAggregateBudgetCountsExistingThirdPartyServerTools(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
 
-	thirdPartyTool := toolOfExactRawSize(t, "a", MaxMCPRegistryToolBytes-64)
+	const thirdPartyBytes = 100_000
+	thirdPartyTool := toolOfExactRawSize(t, "a", thirdPartyBytes)
 	result, err := repo.ImportMCPServer(ctx, ImportedMCPServer{
 		Name: "vendor-a", URL: "http://vendor-a:9000/mcp", Tier: MCPServerTierLocalContainer,
 		Tools: []MCPServerTool{thirdPartyTool},
 	})
 	if err != nil {
-		t.Fatalf("third-party server (comfortably under budget alone): %v", err)
+		t.Fatalf("third-party server (comfortably under both its own sub-budget and the full aggregate alone): %v", err)
 	}
 
-	// Exactly 64 bytes remain; ask UpsertTools for 65.
-	skillsTool := discoveredToolOfExactRawSize(t, "skills", "skills.a", 65)
+	// Exactly MaxMCPRegistryToolBytes-thirdPartyBytes remain; ask
+	// UpsertTools for one byte more than that.
+	remaining := MaxMCPRegistryToolBytes - thirdPartyBytes
+	skillsTool := discoveredToolOfExactRawSize(t, "skills", "skills.a", remaining+1)
 	err = repo.UpsertTools(ctx, []DiscoveredTool{skillsTool})
 	if !errors.Is(err, ErrMCPRegistryToolBudgetExceeded) {
 		t.Fatalf("err = %v, want ErrMCPRegistryToolBudgetExceeded: the third-party server's own tool must count against UpsertTools' own budget", err)
@@ -119,33 +124,39 @@ func TestUpsertToolsAggregateBudgetCountsExistingThirdPartyServerTools(t *testin
 // refusal does for ImportMCPServer/ReplaceMCPServerTools: UpsertTools's
 // own withdrawal UPDATE (present=0 for every bundled/skills/legacy tool)
 // must not survive a refused replacement snapshot. This first commits a
-// small, legitimate "skills" tool, then forces the aggregate budget to be
-// essentially exhausted by a third-party server, then attempts a second,
-// larger UpsertTools snapshot that must be refused — and proves the
-// original small tool is still present, unchanged, rather than left
-// withdrawn (present=0) with nothing to replace it.
+// small, legitimate "skills" tool, then adds a third-party server's own
+// tool — comfortably under its own MaxThirdPartyMCPRegistryToolBytes
+// sub-cap — leaving only a small amount of full-aggregate room, then
+// attempts a second, larger UpsertTools snapshot (replacing the same
+// "skills.original" name with an oversized schema) that must be refused
+// — and proves the original tool is still present with its exact
+// original schema, rather than left withdrawn (present=0) or replaced
+// with the oversized one.
 func TestUpsertToolsBudgetRefusalRollsBackWithdrawalLeavingPriorToolsUnchanged(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
 
-	original := DiscoveredTool{ServerName: "skills", ToolName: "skills.original", SchemaJSON: `{"type":"object"}`, Policy: "safe"}
+	original := discoveredToolOfExactRawSize(t, "skills", "skills.original", 50_000)
 	if err := repo.UpsertTools(ctx, []DiscoveredTool{original}); err != nil {
 		t.Fatalf("initial UpsertTools snapshot: %v", err)
 	}
 
-	// Fill the rest of the budget with a third-party server's static
-	// snapshot, leaving only a few bytes of room.
-	thirdPartyTool := toolOfExactRawSize(t, "a", MaxMCPRegistryToolBytes-rawDiscoveredToolBytes(original)-10)
+	// A third-party server's own tool, comfortably under its own
+	// sub-cap, leaves only a small amount of full-aggregate room:
+	// original's own prior 50000 bytes are irrelevant to that room, since
+	// the replacement below fully supersedes (not adds to) the same key.
+	const thirdPartyBytes = 100_000
 	if _, err := repo.ImportMCPServer(ctx, ImportedMCPServer{
 		Name: "vendor-a", URL: "http://vendor-a:9000/mcp", Tier: MCPServerTierLocalContainer,
-		Tools: []MCPServerTool{thirdPartyTool},
+		Tools: []MCPServerTool{toolOfExactRawSize(t, "a", thirdPartyBytes)},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// A replacement "skills" snapshot larger than the remaining ~10-byte
-	// margin must be refused.
-	oversized := discoveredToolOfExactRawSize(t, "skills", "skills.original", 4096)
+	// A replacement "skills.original" one byte larger than the room
+	// remaining after the third-party contribution must be refused.
+	remaining := MaxMCPRegistryToolBytes - thirdPartyBytes
+	oversized := discoveredToolOfExactRawSize(t, "skills", "skills.original", remaining+1)
 	err := repo.UpsertTools(ctx, []DiscoveredTool{oversized})
 	if !errors.Is(err, ErrMCPRegistryToolBudgetExceeded) {
 		t.Fatalf("err = %v, want ErrMCPRegistryToolBudgetExceeded", err)
@@ -166,7 +177,7 @@ func TestUpsertToolsBudgetRefusalRollsBackWithdrawalLeavingPriorToolsUnchanged(t
 		t.Fatal(err)
 	}
 	if !present || schemaJSON != original.SchemaJSON {
-		t.Fatalf("skills.original present=%v schemaJSON=%q, want present=true and the original schema unchanged", present, schemaJSON)
+		t.Fatalf("skills.original present=%v schemaJSON has length %d, want present=true and the original schema unchanged", present, len(schemaJSON))
 	}
 	if schemaJSON == oversized.SchemaJSON {
 		t.Fatal("skills.original carries the refused replacement's oversized schema: the withdrawal+replace was not rolled back")

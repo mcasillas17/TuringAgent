@@ -11,21 +11,25 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
-// mcpBudgetTestDocument builds an mcp.json document with one comfortably
-// in-budget entry ("aaa-vendor") and one entry ("zzz-over-budget") whose
-// own tool, combined with aaa-vendor's already-committed contribution,
-// pushes the registry-wide aggregate over
-// repository.MaxMCPRegistryToolBytes (256 KiB = 262144 bytes).
-// ImportJSON processes entries in sorted-name order, so "aaa-vendor"
-// (which sorts first) always commits before "zzz-over-budget" is even
-// attempted. Deliberately not an exact-boundary test (the repository
-// package's own TestReplaceServerToolsTxAggregateBudget* tests already
-// cover that): 200000+100000 raw padding bytes, plus each tool's small
-// fixed JSON overhead, comfortably exceeds the 262144-byte cap without
-// needing fragile exact arithmetic.
-func mcpBudgetTestDocument() []byte {
-	firstPadding := strings.Repeat("x", 200_000)
-	secondPadding := strings.Repeat("y", 100_000)
+// mcpThirdPartyBudgetTestDocument builds an mcp.json document with one
+// comfortably in-budget entry ("aaa-vendor") and one entry
+// ("zzz-over-budget") whose own tool, combined with aaa-vendor's
+// already-committed contribution, pushes the *third-party-only* share of
+// the registry-wide aggregate over repository.MaxThirdPartyMCPRegistryToolBytes
+// (128 KiB = 131072 bytes) — well before either entry, alone or combined,
+// comes anywhere near the much larger full aggregate
+// (repository.MaxMCPRegistryToolBytes). ImportJSON processes entries in
+// sorted-name order, so "aaa-vendor" (which sorts first) always commits
+// before "zzz-over-budget" is even attempted. Deliberately not an
+// exact-boundary test (the repository package's own
+// TestReplaceServerToolsTxThirdPartyBudget* tests already cover that):
+// 80000+60000 raw padding bytes, plus each tool's small fixed JSON
+// overhead, comfortably exceeds the 131072-byte cap without needing
+// fragile exact arithmetic, while each individually (and even
+// zzz-over-budget alone) stays comfortably under it too.
+func mcpThirdPartyBudgetTestDocument() []byte {
+	firstPadding := strings.Repeat("x", 80_000)
+	secondPadding := strings.Repeat("y", 60_000)
 	return []byte(`{
 		"mcpServers": {
 			"aaa-vendor": {
@@ -40,23 +44,24 @@ func mcpBudgetTestDocument() []byte {
 	}`)
 }
 
-// TestImportJSONRefusesOverBudgetEntryWithoutLosingEarlierImports proves
-// ImportJSON treats repository.ErrMCPRegistryToolBudgetExceeded exactly
-// like every other per-entry repository disposition
-// (ErrMCPServerRegistryFull, ErrMCPToolNameCollision): recorded as an
-// ordinary Unsupported refusal for the offending entry, never an error
-// that aborts the rest of the document. Before this fix, ImportJSON's
-// switch had no case for this error, so it fell to the default branch and
-// returned an error from ImportJSON itself — discarding the in-memory
-// report entirely (including "aaa-vendor" below, which had *already*
-// committed to the repository via its own independent transaction one
-// loop iteration earlier) and collapsing mcp_import_issues down to a
-// single opaque "_document" entry instead of the real, per-entry refusal.
-func TestImportJSONRefusesOverBudgetEntryWithoutLosingEarlierImports(t *testing.T) {
+// TestImportJSONRefusesOverThirdPartyBudgetEntryWithoutLosingEarlierImports
+// proves ImportJSON treats repository.ErrMCPThirdPartyToolBudgetExceeded
+// exactly like every other per-entry repository disposition
+// (ErrMCPServerRegistryFull, ErrMCPToolNameCollision,
+// ErrMCPRegistryToolBudgetExceeded): recorded as an ordinary Unsupported
+// refusal for the offending entry, never an error that aborts the rest of
+// the document. Before ImportJSON's switch had a case for this error, it
+// fell to the default branch and returned an error from ImportJSON
+// itself — discarding the in-memory report entirely (including
+// "aaa-vendor" below, which had *already* committed to the repository
+// via its own independent transaction one loop iteration earlier) and
+// collapsing mcp_import_issues down to a single opaque "_document" entry
+// instead of the real, per-entry refusal.
+func TestImportJSONRefusesOverThirdPartyBudgetEntryWithoutLosingEarlierImports(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	ctx := context.Background()
 
-	report, err := service.ImportJSON(ctx, mcpBudgetTestDocument())
+	report, err := service.ImportJSON(ctx, mcpThirdPartyBudgetTestDocument())
 	if err != nil {
 		t.Fatalf("ImportJSON returned an error instead of a per-entry refusal: %v", err)
 	}
@@ -68,10 +73,10 @@ func TestImportJSONRefusesOverBudgetEntryWithoutLosingEarlierImports(t *testing.
 	}
 	reason, refused := report.Unsupported["zzz-over-budget"]
 	if !refused {
-		t.Fatalf("Unsupported = %+v, want zzz-over-budget refused for exceeding the aggregate tool budget", report.Unsupported)
+		t.Fatalf("Unsupported = %+v, want zzz-over-budget refused for exceeding the third-party tool budget", report.Unsupported)
 	}
-	if reason != mcpRegistryToolBudgetExceededMessage {
-		t.Fatalf("reason = %q, want the fixed budget-exceeded reason %q", reason, mcpRegistryToolBudgetExceededMessage)
+	if reason != mcpThirdPartyToolBudgetExceededMessage {
+		t.Fatalf("reason = %q, want the fixed third-party budget-exceeded reason %q", reason, mcpThirdPartyToolBudgetExceededMessage)
 	}
 	// Never collapsed into a document-level summary.
 	if _, collapsed := report.Unsupported["_document"]; collapsed {
@@ -94,8 +99,9 @@ func TestImportJSONRefusesOverBudgetEntryWithoutLosingEarlierImports(t *testing.
 
 	// zzz-over-budget must create no row at all — the repository's own
 	// transaction already rolled back entirely (see
-	// TestImportMCPServerBudgetRefusalCreatesNoRowAtAll in the repository
-	// package for the boundary/rollback proof at that layer).
+	// TestReplaceServerToolsTxThirdPartyBudgetOneByteOverCapAloneIsRefused
+	// in the repository package for the boundary/rollback proof at that
+	// layer).
 	if _, err := repo.GetMCPServerByName(ctx, "zzz-over-budget"); err != repository.ErrMCPServerNotFound {
 		t.Fatalf("err = %v, want ErrMCPServerNotFound: a budget-refused entry must create no row", err)
 	}
@@ -106,12 +112,12 @@ func TestImportJSONRefusesOverBudgetEntryWithoutLosingEarlierImports(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(issues) != 1 || issues[0].Name != "zzz-over-budget" || issues[0].Reason != mcpRegistryToolBudgetExceededMessage {
+	if len(issues) != 1 || issues[0].Name != "zzz-over-budget" || issues[0].Reason != mcpThirdPartyToolBudgetExceededMessage {
 		t.Fatalf("issues = %+v, want exactly one zzz-over-budget issue with the fixed reason", issues)
 	}
 }
 
-// TestReimportMcpJsonNotifiesAndAuditsCorrectlyWhenALaterEntryExceedsBudget
+// TestReimportMcpJsonNotifiesAndAuditsCorrectlyWhenALaterEntryExceedsThirdPartyBudget
 // exercises the same scenario through the file-based ReimportMcpJson RPC,
 // the caller ImportJSON's own per-entry report feeds: notify must still
 // fire because aaa-vendor really was imported (a document-level abort
@@ -120,7 +126,7 @@ func TestImportJSONRefusesOverBudgetEntryWithoutLosingEarlierImports(t *testing.
 // "_document" summary, and the audit record must carry the real counts
 // (one imported, one refused) rather than whatever an aborted-document
 // error path would have produced.
-func TestReimportMcpJsonNotifiesAndAuditsCorrectlyWhenALaterEntryExceedsBudget(t *testing.T) {
+func TestReimportMcpJsonNotifiesAndAuditsCorrectlyWhenALaterEntryExceedsThirdPartyBudget(t *testing.T) {
 	service, _ := newRegistryTestService(t)
 	notifier := &countingRegistryChangeNotifier{}
 	service.SetRegistryChangeNotifier(notifier)
@@ -129,7 +135,7 @@ func TestReimportMcpJsonNotifiesAndAuditsCorrectlyWhenALaterEntryExceedsBudget(t
 	ctx := context.Background()
 
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "mcp.json"), mcpBudgetTestDocument(), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "mcp.json"), mcpThirdPartyBudgetTestDocument(), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	service.SetMCPConfigRoot(root)
@@ -142,7 +148,7 @@ func TestReimportMcpJsonNotifiesAndAuditsCorrectlyWhenALaterEntryExceedsBudget(t
 		t.Fatalf("Imported = %v, want [aaa-vendor]", response.GetImported())
 	}
 	if len(response.GetRefused()) != 1 || response.GetRefused()[0].GetName() != "zzz-over-budget" ||
-		response.GetRefused()[0].GetReason() != mcpRegistryToolBudgetExceededMessage {
+		response.GetRefused()[0].GetReason() != mcpThirdPartyToolBudgetExceededMessage {
 		t.Fatalf("Refused = %+v, want exactly one zzz-over-budget refusal with the fixed reason", response.GetRefused())
 	}
 	if notifier.calls != 1 {
@@ -158,5 +164,65 @@ func TestReimportMcpJsonNotifiesAndAuditsCorrectlyWhenALaterEntryExceedsBudget(t
 	}
 	if last.payload["imported"] != 1 || last.payload["skipped"] != 0 || last.payload["refused"] != 1 {
 		t.Fatalf("audit payload = %+v, want imported=1 skipped=0 refused=1", last.payload)
+	}
+}
+
+// TestImportJSONRefusesOverFullAggregateBudgetEntryWithoutLosingEarlierImports
+// is the full-aggregate counterpart: it anchors most of
+// repository.MaxMCPRegistryToolBytes with a bundled/skills snapshot (via
+// UpsertTools) *before* ImportJSON ever runs, so two small non-bundled
+// entries — each, and even combined, comfortably within their own,
+// separate MaxThirdPartyMCPRegistryToolBytes sub-budget — still trip the
+// full, shared aggregate. This proves ImportJSON's own
+// ErrMCPRegistryToolBudgetExceeded handling (distinct from the
+// third-party-specific case just above) is exercised the same
+// per-entry, non-aborting way even when the third-party sub-budget was
+// never the real constraint.
+func TestImportJSONRefusesOverFullAggregateBudgetEntryWithoutLosingEarlierImports(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx := context.Background()
+
+	const anchorName = "skills.anchor"
+	const anchorPrefix = `{"type":"object","d":"`
+	const anchorSuffix = `"}`
+	anchorPad := repository.MaxMCPRegistryToolBytes - 1000 - len(anchorName) - len(anchorPrefix) - len(anchorSuffix)
+	if err := repo.UpsertTools(ctx, []repository.DiscoveredTool{{
+		ServerName: "skills", ToolName: anchorName, Policy: "safe",
+		SchemaJSON: anchorPrefix + strings.Repeat("x", anchorPad) + anchorSuffix,
+	}}); err != nil {
+		t.Fatalf("bundled/skills anchor snapshot: %v", err)
+	}
+
+	firstPadding := strings.Repeat("x", 900)
+	secondPadding := strings.Repeat("y", 101)
+	document := []byte(`{
+		"mcpServers": {
+			"aaa-vendor": {
+				"url": "https://aaa-vendor.example/mcp",
+				"tools": [{"name": "a", "inputSchema": {"type": "object", "d": "` + firstPadding + `"}}]
+			},
+			"zzz-over-budget": {
+				"url": "https://zzz-over-budget.example/mcp",
+				"tools": [{"name": "b", "inputSchema": {"type": "object", "d": "` + secondPadding + `"}}]
+			}
+		}
+	}`)
+
+	report, err := service.ImportJSON(ctx, document)
+	if err != nil {
+		t.Fatalf("ImportJSON returned an error instead of a per-entry refusal: %v", err)
+	}
+	if len(report.Imported) != 1 || report.Imported[0] != "aaa-vendor" {
+		t.Fatalf("Imported = %v, want [aaa-vendor]: the earlier, in-budget entry must not be lost", report.Imported)
+	}
+	reason, refused := report.Unsupported["zzz-over-budget"]
+	if !refused {
+		t.Fatalf("Unsupported = %+v, want zzz-over-budget refused for exceeding the full aggregate tool budget", report.Unsupported)
+	}
+	if reason != mcpRegistryToolBudgetExceededMessage {
+		t.Fatalf("reason = %q, want the fixed full-aggregate budget-exceeded reason %q (not the third-party-specific one: both non-bundled entries stay nowhere near that narrower cap)", reason, mcpRegistryToolBudgetExceededMessage)
+	}
+	if _, err := repo.GetMCPServerByName(ctx, "zzz-over-budget"); err != repository.ErrMCPServerNotFound {
+		t.Fatalf("err = %v, want ErrMCPServerNotFound: a budget-refused entry must create no row", err)
 	}
 }

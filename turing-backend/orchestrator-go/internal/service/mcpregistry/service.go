@@ -16,28 +16,32 @@ import (
 	toolpolicy "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/tools"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const maxMCPStatusMessageBytes = 512
 
-// mcpRegistryAggregateBudgetExceededMessage is the fixed, generic reason
-// ListMcpServers refuses to build its response at all when
-// repository.MCPRegistrySnapshot's own aggregate-budget guard finds the
-// registry-wide tool-byte total already exceeds
-// repository.MaxMCPRegistryToolBytes — a state every tool-reconciliation
-// write path (replaceServerToolsTx, and, since this fix, UpsertTools too)
-// now refuses to create. This is a defense-in-depth guard, not a state
-// any normal operation should ever reach: it exists so a database
-// somehow already over budget (this branch has not shipped, so no real
-// deployment can carry one written before every path enforced this
-// budget, but a future regression reintroducing an unguarded write path
-// could) is refused with a fixed status before any attempt to marshal
-// and send a response sized against an unbounded aggregate, rather than
-// silently trusting every write path forever. See
-// docs/mcp-security-and-integration.md for the fuller accounting of this
-// upgrade assumption.
-const mcpRegistryAggregateBudgetExceededMessage = "MCP registry aggregate tool budget is exhausted"
+// mcpRegistryOverBudgetNoticeMessage is the fixed, generic reason
+// ListMcpServers records under the reserved "_registry" key when
+// repository.MCPRegistrySnapshot reports OverBudget: the registry-wide
+// tool-byte total (repository.MaxMCPRegistryToolBytes) already exceeds
+// budget — a state every tool-reconciliation write path (
+// replaceServerToolsTx, and UpsertTools) already refuses to create, so
+// this should be unreachable in practice, but a database that somehow
+// already carries one (e.g. a state predating one of those guards, or a
+// future regression reintroducing an unguarded write path) must not make
+// the registry unmanageable. Every server row is still listed — an
+// operator retains enough to identify and delete an offending one — but
+// every one of them is returned with its own Tools list empty rather
+// than attempting to read, let alone marshal and send, a schema-heavy
+// result sized against an unbounded aggregate. See
+// repository.MCPRegistrySnapshot's own OverBudget doc comment and
+// docs/mcp-security-and-integration.md for the recovery story: delete
+// the offending server (its tool rows cascade-delete with it), and a
+// later ListMcpServers call — once the aggregate is back under budget —
+// recovers full tool listing automatically.
+const mcpRegistryOverBudgetNoticeMessage = "MCP registry aggregate tool budget is exhausted; tool schemas are hidden until an oversized or excess server is deleted"
 
 // enableDiscoveryTimeout bounds the entire enable-time discovery operation
 // (every tools/list page, not just a single HTTP request) so a vendor that
@@ -139,30 +143,28 @@ func (s *InternalServer) CallRegisteredMcpTool(ctx context.Context, req *turingv
 }
 
 func (s *Server) ListMcpServers(ctx context.Context, _ *turingv1.ListMcpServersRequest) (*turingv1.ListMcpServersResponse, error) {
-	// MCPRegistrySnapshot reads every server, its own tools, and every
-	// import issue from a single SQLite read transaction, so this can
-	// never observe a mix of before-and-after state for a concurrent tool
-	// reconciliation (replaceServerToolsTx, UpsertTools) or server
-	// insert/delete — unlike three-plus separately-acquired queries
-	// (an aggregate-budget read, then the server list, then each server's
-	// own tools, then the issue list), where a write landing between any
-	// two of them could make an earlier guard's decision disagree with
-	// the rows a later query in the same call actually returns. The same
-	// aggregate present-and-absent tool-byte budget guard (see
-	// repository.MaxMCPRegistryToolBytes) still runs first, inside that
-	// same transaction, before any server or tool row is read: every
-	// tool-reconciliation write path already refuses to push the
-	// registry-wide aggregate over that budget, so this should never
-	// actually trip — but if it somehow did, this refuses with a fixed,
-	// generic ResourceExhausted status before ever attempting to build
-	// (let alone marshal and send) a response sized against an unbounded
-	// aggregate, rather than silently trusting that invariant
-	// unconditionally.
+	// MCPRegistrySnapshot reads every server, its own tools (unless
+	// OverBudget), and every import issue from a single SQLite read
+	// transaction, so this can never observe a mix of before-and-after
+	// state for a concurrent tool reconciliation (replaceServerToolsTx,
+	// UpsertTools) or server insert/delete — unlike three-plus
+	// separately-acquired queries (an aggregate-budget read, then the
+	// server list, then each server's own tools, then the issue list),
+	// where a write landing between any two of them could make an
+	// earlier guard's decision disagree with the rows a later query in
+	// the same call actually returns. The same aggregate present-and-
+	// absent tool-byte budget guard (see repository.MaxMCPRegistryToolBytes)
+	// still runs first, inside that same transaction, before any tool
+	// row is read: every tool-reconciliation write path already refuses
+	// to push the registry-wide aggregate over that budget, so this
+	// should never actually trip — but if it somehow did, OverBudget
+	// (rather than an error) is what lets this still build a response:
+	// every server descriptor below, with its own Tools always empty
+	// while OverBudget, plus a bounded "_registry" notice, rather than
+	// refusing the whole call and leaving an operator with no way to see
+	// (and delete) whichever server is responsible.
 	snapshot, err := s.repo.MCPRegistrySnapshot(ctx)
 	if err != nil {
-		if errors.Is(err, repository.ErrMCPRegistryToolBudgetExceeded) {
-			return nil, status.Error(codes.ResourceExhausted, mcpRegistryAggregateBudgetExceededMessage)
-		}
 		return nil, status.Error(codes.Internal, "list MCP servers failed")
 	}
 	response := &turingv1.ListMcpServersResponse{Servers: make([]*turingv1.McpServerDescriptor, 0, len(snapshot.Servers))}
@@ -176,6 +178,23 @@ func (s *Server) ListMcpServers(ctx context.Context, _ *turingv1.ListMcpServersR
 	for _, issue := range snapshot.Issues {
 		response.Unsupported = append(response.Unsupported, &turingv1.UnsupportedMcpServer{
 			Name: issue.Name, Reason: issue.Reason,
+		})
+	}
+	if snapshot.OverBudget {
+		// A persisted mcp_import_issues row can, in principle, already be
+		// keyed "_registry" too: an mcp.json entry literally named
+		// "_registry" is refused by validateMCPServerName (the leading
+		// "_" fails mcpServerNamePattern) but recordUnsupported still
+		// records it under that exact raw key before this ever runs.
+		// This is the same rare, accepted collision import.go's own
+		// recordUnsupported already documents for "_document" — neither
+		// entry ever registers either way, no secret is at stake, and the
+		// response simply carries two Unsupported entries both named
+		// "_registry" in that pathological case, rather than the backend
+		// growing a disambiguating-suffix scheme this reserved key would
+		// otherwise need its own bound for.
+		response.Unsupported = append(response.Unsupported, &turingv1.UnsupportedMcpServer{
+			Name: "_registry", Reason: mcpRegistryOverBudgetNoticeMessage,
 		})
 	}
 	return response, nil
@@ -682,13 +701,29 @@ func (s *Server) rotateServerTokenLocked(ctx context.Context, serverID, token st
 // concurrent reimport can freely overwrite that table with its own,
 // different refusals without ever being able to leak into — or borrow
 // from — this call's response.
+// ReimportMcpJson re-reads and imports mcp.json on demand, the same way
+// app startup does via ReimportConfiguredJSON, and — regardless of
+// whether that call also returns a fatal error — notifies and audits
+// exactly once from whatever ImportReport it returned.
+//
+// ReimportConfiguredJSON's own named-report contract (see ImportJSON and
+// recordDocumentRefusal) means report.Imported/Skipped/Unsupported are
+// accurate even when err != nil: every name in Imported has already
+// committed through its own per-entry transaction by the time any later,
+// whole-document failure (a canceled context, or a repository failure
+// between entries) is discovered. Notify and audit therefore run before
+// this ever maps a non-nil err to a final Internal status below — not
+// only on the success path — so a partially-completed run's real,
+// already-committed effect is never silently unreported. The one
+// exception is errMCPConfigRootNotConfigured: that precondition failure
+// means no work was even attempted (report is always empty), so neither
+// notify nor audit fires for it, matching this method's prior behavior.
+// This runs exactly once per call either way, so a later Internal mapping
+// is never a second, separate audit of the same run.
 func (s *Server) ReimportMcpJson(ctx context.Context, _ *turingv1.ReimportMcpJsonRequest) (*turingv1.ReimportMcpJsonResponse, error) {
 	report, err := s.ReimportConfiguredJSON(ctx)
-	if err != nil {
-		if errors.Is(err, errMCPConfigRootNotConfigured) {
-			return nil, status.Error(codes.FailedPrecondition, "MCP config root is not configured")
-		}
-		return nil, status.Error(codes.Internal, "reimport mcp.json failed")
+	if err != nil && errors.Is(err, errMCPConfigRootNotConfigured) {
+		return nil, status.Error(codes.FailedPrecondition, "MCP config root is not configured")
 	}
 	if len(report.Imported) > 0 {
 		s.notifyRegistryChanged()
@@ -699,6 +734,9 @@ func (s *Server) ReimportMcpJson(ctx context.Context, _ *turingv1.ReimportMcpJso
 		"skipped":  len(report.Skipped),
 		"refused":  len(report.Unsupported),
 	})
+	if err != nil {
+		return nil, status.Error(codes.Internal, "reimport mcp.json failed")
+	}
 	if s.reimportBarrier != nil {
 		s.reimportBarrier()
 	}
@@ -719,6 +757,43 @@ func (s *Server) ReimportMcpJson(ctx context.Context, _ *turingv1.ReimportMcpJso
 		Refused:  refused,
 	}, nil
 }
+
+// maxMCPToolResultWireBytes mirrors internal/app's own unexported
+// maxGRPCMessageSize (4 * 1024 * 1024, the value grpc.MaxSendMsgSize
+// configures both gRPC servers with): mcpregistry cannot import
+// internal/app (app depends on mcpregistry, not the reverse — the same
+// constraint aggregate_response_budget_test.go's own
+// maxGRPCMessageSizeForTest documents for the same reason), so this is
+// the one place that value is duplicated for CallRegisteredMcpTool's own
+// pre-send guard, rather than the gRPC server configuration itself
+// living here.
+//
+// A vendor's raw tools/call JSON-RPC result is already bounded at the
+// HTTP layer (mcpClient.request's own maxMCPResponseBytes, 1MiB) before
+// this package ever sees it — but that bound is on the *raw JSON* text,
+// not on what structpb.NewStruct converts it into. A JSON number array
+// converts to a repeated google.protobuf.Value, each carrying a fixed
+// 8-byte double plus its own field/wire-type framing: measured (see
+// numberArraySchemaJSON and TestListMcpServersResponseWorstCaseStaysUnderGRPCMessageSize's
+// own doc comment) at roughly a 5.5x expansion over the raw JSON for
+// that adversarial shape — enough that a maxMCPResponseBytes-sized
+// result already comfortably within the 1MiB HTTP bound can still
+// convert to a protobuf message well past this 4MiB cap by itself,
+// before gRPC's own send path ever sees it. CallRegisteredMcpTool checks
+// the fully-built response against this value with proto.Size — the
+// same size grpc-go's own uncompressed send path measures a message
+// against (this app configures no compressor) — before ever returning
+// it, so an oversized result is refused with a fixed, generic
+// ResourceExhausted status here rather than only ever surfacing once
+// gRPC's own maxSendMessageSize check rejects the send.
+const maxMCPToolResultWireBytes = 4 * 1024 * 1024
+
+// mcpToolResultTooLargeMessage is the fixed, generic reason
+// CallRegisteredMcpTool returns when a result's converted wire size
+// exceeds maxMCPToolResultWireBytes — never the result's own content
+// (which could be arbitrarily large or carry vendor-controlled data) and
+// never the tool's arguments or the server's bearer token.
+const mcpToolResultTooLargeMessage = "MCP tool result exceeds the maximum supported size"
 
 func (s *Server) CallRegisteredMcpTool(ctx context.Context, req *turingv1.CallRegisteredMcpToolRequest) (*turingv1.CallRegisteredMcpToolResponse, error) {
 	if req == nil {
@@ -742,7 +817,18 @@ func (s *Server) CallRegisteredMcpTool(ctx context.Context, req *turingv1.CallRe
 	if err != nil {
 		return nil, status.Error(codes.Internal, "MCP result is invalid")
 	}
-	return &turingv1.CallRegisteredMcpToolResponse{Result: value}, nil
+	response := &turingv1.CallRegisteredMcpToolResponse{Result: value}
+	// Checked after the full response is built (so this measures exactly
+	// what would be marshaled and sent, not an estimate from the raw
+	// result alone) but before it is ever returned to the gRPC layer:
+	// CallTool's own direct result — the map[string]any this method
+	// received above — is completely unaffected by this check and is
+	// returned to its own internal callers (e.g. persisted tool-call
+	// history) exactly as before.
+	if proto.Size(response) > maxMCPToolResultWireBytes {
+		return nil, status.Error(codes.ResourceExhausted, mcpToolResultTooLargeMessage)
+	}
+	return response, nil
 }
 
 // discoverLocked runs discover for serverID while holding that server's

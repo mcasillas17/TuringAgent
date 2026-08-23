@@ -8,20 +8,21 @@ import (
 )
 
 // TestReplaceServerToolsTxRepeatedDisjointRediscoveryEventuallyExceedsBudget
-// is the exact-rows proof for the aggregate budget: ListMCPServerTools (and
-// therefore ListMcpServers/toolDescriptor) returns every row attributed to
+// is the exact-rows proof for the third-party sub-budget: ListMCPServerTools
+// (and therefore ListMcpServers/toolDescriptor) returns every row attributed to
 // a server regardless of its `present` flag — a withdrawn tool's policy is
 // deliberately preserved, never deleted, so a client can see it was once
 // configured — so the byte budget that bounds that same response must
 // count every one of those rows too, not just the currently-present ones.
-// This repeatedly rediscovers a single server's tools, each round naming a
-// tool disjoint from every previous round's (so no row is ever reused via
-// upsert; every round leaves its predecessor behind, withdrawn but never
-// deleted), and requires the budget to eventually refuse a round once the
-// accumulated total (all rows, present and withdrawn combined) would
-// exceed MaxMCPRegistryToolBytes — even though any *one* round's own
-// present tool, alone, is comfortably within budget. Before this fix, the
-// budget was computed only over present=1 rows, so a withdrawn
+// This repeatedly rediscovers a single (non-bundled) server's tools, each
+// round naming a tool disjoint from every previous round's (so no row is
+// ever reused via upsert; every round leaves its predecessor behind,
+// withdrawn but never deleted), and requires the budget to eventually
+// refuse a round once the accumulated total (all rows, present and
+// withdrawn combined) would exceed MaxThirdPartyMCPRegistryToolBytes —
+// even though any *one* round's own present tool, alone, is comfortably
+// within budget. Before the aggregate-budget fix this regression guards,
+// the budget was computed only over present=1 rows, so a withdrawn
 // predecessor's bytes were excluded the instant it was superseded: this
 // loop would never fail at all, no matter how many rounds ran, because
 // each round's own withdrawal always reset the "existing" total back
@@ -38,11 +39,11 @@ func TestReplaceServerToolsTxRepeatedDisjointRediscoveryEventuallyExceedsBudget(
 		t.Fatal(err)
 	}
 
-	// MaxMCPRegistryToolBytes is 262144; five rounds of 50000 raw bytes
-	// each accumulate to 250000 (still within budget), and a sixth round
-	// would bring the withdrawn-plus-current total to 300000 — over
-	// budget — even though the sixth round's own tool, alone, is nowhere
-	// near the cap.
+	// MaxThirdPartyMCPRegistryToolBytes is 131072; two rounds of 50000
+	// raw bytes each accumulate to 100000 (still within budget), and a
+	// third round would bring the withdrawn-plus-current total to
+	// 150000 — over budget — even though the third round's own tool,
+	// alone, is nowhere near the cap.
 	const roundSize = 50_000
 	const maxRounds = 10
 	round := 0
@@ -54,8 +55,8 @@ func TestReplaceServerToolsTxRepeatedDisjointRediscoveryEventuallyExceedsBudget(
 			break
 		}
 	}
-	if !errors.Is(lastErr, ErrMCPRegistryToolBudgetExceeded) {
-		t.Fatalf("after %d rounds of disjoint-name rediscovery (err=%v), want ErrMCPRegistryToolBudgetExceeded eventually rather than unlimited growth", round, lastErr)
+	if !errors.Is(lastErr, ErrMCPThirdPartyToolBudgetExceeded) {
+		t.Fatalf("after %d rounds of disjoint-name rediscovery (err=%v), want ErrMCPThirdPartyToolBudgetExceeded eventually rather than unlimited growth", round, lastErr)
 	}
 	if round == 0 {
 		t.Fatal("test setup is broken: the very first round must not itself exceed the budget")

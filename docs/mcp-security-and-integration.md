@@ -79,6 +79,29 @@ size-bounded reader (`io.LimitReader`, capped one byte past the maximum
 supported document size) rather than `os.ReadFile`, so a huge or sparse file
 cannot force an unbounded read either.
 
+`ImportJSON` processes each `mcpServers` entry through its own,
+independent repository transaction, in sorted-name order, so an earlier
+entry's server row is already durably committed by the time a later one
+is even attempted. A fatal error `ImportJSON` cannot attribute to a
+single entry — a canceled request context, or some other repository
+failure between two entries — no longer discards that already-committed
+work: the returned report still carries every name already imported or
+skipped, and every reason already recorded, exactly as if the run had
+kept going. `ReimportConfiguredJSON` folds that failure into the same
+report as one more bounded `"_document"` entry (mirroring the malformed/
+oversized-document case above) and persists the merged issues through a
+context detached from the caller's own cancellation — the same pattern
+`auditMCPEvent` already uses for post-commit bookkeeping — so a client
+that cancels mid-run does not also erase the record of what already
+happened. That persistence itself failing too (a genuine, independent
+repository problem, not merely the caller's own cancellation) is the one
+case this still surfaces as `Internal` — but only after `ReimportMcpJson`
+has already notified the runtime (if anything was imported) and recorded
+exactly one audit row with the real, already-committed counts; a later
+`Internal` mapping is never a second, separate audit of the same run, and
+audit/notify are never skipped merely because the run did not fully
+complete.
+
 The root JSON object must declare the key `mcpServers` exactly once, spelled
 exactly that way: a case variant (`McpServers`, `MCPSERVERS`, ...) is refused,
 and so is an exact or case-insensitive duplicate of it (two roots both
@@ -261,9 +284,39 @@ was about to replace withdrawn with nothing reconfirmed. Before this,
 its own at all, even though its own writes count toward the same total
 every other path already bounded.
 
-As defense in depth on top of every write path now sharing one enforced
-budget, `ListMcpServers` reads the complete server+tools+issues registry
-state from a single SQLite read transaction (`repository.MCPRegistrySnapshot`)
+On top of that shared full aggregate, `replaceServerToolsTx` enforces one
+further, narrower budget of its own whenever the server being reconciled
+is non-bundled ("third-party"):
+`repository.MaxThirdPartyMCPRegistryToolBytes` (128 KiB, exactly half of
+`MaxMCPRegistryToolBytes`) caps how much of the full aggregate every
+third-party server *combined* may ever occupy, checked (and, if both would
+otherwise apply, preferred over the full-aggregate reason) before the
+unchanged full-aggregate check. `UpsertTools` enforces no such sub-cap —
+only the same full aggregate as always. Without this, a sequence of
+third-party imports or live rediscoveries could grow their own share of
+the aggregate arbitrarily close to the full 256 KiB cap, leaving little or
+no headroom for a worker's own, entirely separate, next `ConnectWorker`
+call to publish (or grow) `system`/`files`/`skills`' own tool schemas via
+`UpsertTools`: a worker connecting after third-party servers had already
+filled the aggregate would have its own registration — and therefore
+every bundled tool the runtime depends on — refused by the same aggregate
+guard, through no fault of its own. Reserving half the aggregate
+exclusively for third-party servers guarantees the other half is always
+available for `UpsertTools`, regardless of how many third-party servers
+exist or how large their own snapshots are. 128 KiB is not merely assumed:
+`internal/service/runtime`'s own
+`TestFirstPartyBundledToolSchemasFitWithinReservedHeadroom` measures the
+real, combined byte total of every tool `system`/`files`/`skills`
+register today (about 3.2 KiB) against this reservation and asserts at
+least 90% of it stays free, and
+`TestConnectWorkerSucceedsWhenThirdPartyToolsFillExactlyTheReservedSubBudget`
+proves a worker still connects successfully — through the real
+`ConnectWorker` path, not merely at the repository layer — even when
+third-party servers already occupy their sub-budget's own exact cap.
+
+As defense in depth on top of every write path now sharing these budgets,
+`ListMcpServers` reads the complete server+tools+issues registry state
+from a single SQLite read transaction (`repository.MCPRegistrySnapshot`)
 rather than as several separately-acquired queries: the database's single
 connection (`db.Open`'s `SetMaxOpenConns(1)`) means only one `*sql.Tx` can
 be open at a time, so a concurrent tool reconciliation cannot commit
@@ -271,26 +324,35 @@ partway through that one read the way it could between two independently
 acquired queries, which could otherwise let an earlier guard's decision
 (computed against an earlier state) disagree with rows a later query in
 the same call actually returns. That same snapshot re-checks the current
-aggregate (the same all-rows query) before reading any server or tool row,
-and refuses with a fixed, generic `ResourceExhausted` status if it is
-somehow already over budget, or `Internal` if the check itself fails to
-run — never attempting to marshal and send a response sized against an
-unbounded aggregate. This should be
-unreachable in ordinary operation now that every write path enforces the
-same limit, but is not asserted to be *impossible* forever: it protects
-against a future regression that reintroduces an unguarded write path,
-and against upgrading a database that predates this budget being
-universally enforced. That second case is a documented assumption rather
-than a migration this change ships: because the MCP registry feature this
-whole document describes has not shipped in a release yet, no real
-deployment's database can already carry rows written by the
-since-fixed, unbounded `UpsertTools` path, so no destructive migration to
-truncate or reconcile a pre-existing oversized aggregate was required
-here — an operator upgrading a database that somehow does carry one is
-expected to see the fixed `ResourceExhausted` refusal above and correct
-the underlying data (e.g. by re-running whatever discovery produced it)
-rather than the backend silently discarding or truncating tool rows on
-their behalf.
+full aggregate (the same all-rows query) before reading any tool row, and
+sets a returned `OverBudget` flag — rather than refusing outright — if it
+is somehow already over budget. This should be unreachable in ordinary
+operation now that every write path enforces the same limits, but is not
+asserted to be *impossible* forever: it protects against a future
+regression that reintroduces an unguarded write path, and against
+upgrading a database that predates one of these budgets being universally
+enforced. Rather than refuse the whole call, `ListMcpServers` keeps the
+registry *manageable*: every server row (bundled and non-bundled alike)
+and every import issue is still returned in full — an operator retains
+enough to identify and delete whichever server is responsible — but every
+server's own `Tools` list is left completely empty, and a bounded
+`"_registry"` `Unsupported` entry explains why, rather than ever
+attempting to read, let alone marshal and send, a schema-heavy result
+sized against an unbounded aggregate. `DeleteMcpServer` itself never reads
+`MCPRegistrySnapshot` at all, so it keeps working normally even while
+`OverBudget` is set; deleting the offending server cascade-deletes its
+tool rows (`tools.mcp_server_id` is declared `ON DELETE CASCADE`), which
+is normally enough to bring the aggregate back under budget, at which
+point the very next `ListMcpServers` call recovers full tool listing
+automatically — no separate "clear the flag" operation, migration, or
+restart is needed. Because the MCP registry feature this whole document
+describes has not shipped in a release yet, no real deployment's database
+can already carry rows written by the since-fixed, unbounded `UpsertTools`
+path, so no destructive migration to truncate or reconcile a pre-existing
+oversized aggregate was required here — an operator upgrading a database
+that somehow does carry one instead sees the degraded-but-usable listing
+above and can recover from it entirely through the ordinary
+list/delete/reimport UI, rather than needing direct database access.
 
 Deleting a server writes a local import tombstone, so an unchanged
 `mcp.json` cannot silently recreate it on the next reimport; the file path
@@ -683,6 +745,28 @@ the run-owned egress decision. That final check is the dispatch linearization
 point. A cancellation committed after it observes an already in-flight call;
 as with a bundled write after approval consumption, it does not retroactively
 restore the consumed approval.
+
+`CallRegisteredMcpTool` — the gRPC-facing wrapper `CallTool`'s own internal
+`map[string]any` result feeds — checks the fully-built response against
+`maxMCPToolResultWireBytes` (4 MiB, mirroring `internal/app`'s own
+`maxGRPCMessageSize`) using `proto.Size`, before ever returning it. A
+vendor's raw `tools/call` JSON-RPC result is already bounded at the HTTP
+layer (`maxMCPResponseBytes`, 1 MiB) before this package ever sees it, but
+that bound is on the raw JSON text, not on what `structpb.NewStruct`
+converts it into: a JSON number array converts to a repeated
+`google.protobuf.Value`, each carrying a fixed 8-byte double plus its own
+framing, the same ~5.5x adversarial expansion already measured for a tool
+*schema* (see the aggregate-budget accounting above) — enough that a
+`maxMCPResponseBytes`-sized result, comfortably within the 1 MiB HTTP
+bound, can still convert to a protobuf message well past the 4 MiB gRPC
+send cap by itself. A result whose converted size exceeds the cap is
+refused with a fixed, generic `ResourceExhausted` status that never
+echoes the result's own content or the server's bearer token, before
+gRPC's own send path would otherwise refuse it. This check lives only in
+`CallRegisteredMcpTool`'s own response path; `CallTool` itself — whose
+`map[string]any` result the runtime persists directly into
+tool-call/message history, never through a marshaled
+`CallRegisteredMcpToolResponse` — is untouched by it.
 
 Human approval comments and denial reasons are durable decision evidence. The
 orchestrator stores them in separate nullable columns in the same transaction as

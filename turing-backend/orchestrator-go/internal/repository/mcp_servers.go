@@ -809,7 +809,9 @@ func (r *Repository) ListMCPImportIssues(ctx context.Context) ([]MCPImportIssue,
 
 // MCPServerWithTools pairs a server row with every tool row
 // ListMCPServerTools would return for it (present and withdrawn alike),
-// captured together by MCPRegistrySnapshot.
+// captured together by MCPRegistrySnapshot. Tools is empty whenever the
+// snapshot's own OverBudget is true (see MCPRegistrySnapshot's own doc
+// comment) — never partially populated for some servers and not others.
 type MCPServerWithTools struct {
 	Server MCPServerRecord
 	Tools  []MCPServerTool
@@ -817,10 +819,25 @@ type MCPServerWithTools struct {
 
 // MCPRegistrySnapshot is the complete, point-in-time registry state
 // ListMcpServers needs to build its response: every server (bundled and
-// non-bundled) paired with its own tools, and every recorded import issue.
+// non-bundled), each paired with its own tools (unless OverBudget — see
+// below), and every recorded import issue.
 type MCPRegistrySnapshot struct {
 	Servers []MCPServerWithTools
 	Issues  []MCPImportIssue
+	// OverBudget is true when the registry-wide aggregate tool-byte total
+	// (see aggregateAllToolBytes/MaxMCPRegistryToolBytes) already exceeds
+	// budget at read time. Every tool-reconciliation write path already
+	// refuses to create such a state, so this should be unreachable in
+	// practice — but a database that somehow already carries one (e.g. a
+	// legacy state predating one of those guards, or a future regression
+	// that reintroduces an unguarded write path) must not make the
+	// registry unmanageable: Servers and Issues are still fully
+	// populated (an operator retains enough to identify and delete an
+	// offending server), only every server's own Tools is left empty,
+	// so a caller (ListMcpServers) never attempts to read, let alone
+	// marshal and send, a schema-heavy result sized against an unbounded
+	// aggregate.
+	OverBudget bool
 }
 
 // MCPRegistrySnapshot reads the complete server+tools+issues registry
@@ -843,15 +860,17 @@ type MCPRegistrySnapshot struct {
 // The registry-wide aggregate tool-byte total (see
 // aggregateAllToolBytes/MaxMCPRegistryToolBytes, which counts every row,
 // present and withdrawn) is checked first, inside this same transaction,
-// before any server or tool row is read: every tool-reconciliation write
-// path already refuses to create an aggregate over that budget, so this
+// before any tool row is read: every tool-reconciliation write path
+// already refuses to create an aggregate over that budget, so this
 // should be unreachable in practice, but a database that somehow already
-// carries one (e.g. written by a future regression that reintroduces an
-// unguarded write path) is refused with the named
-// ErrMCPRegistryToolBudgetExceeded here — before attempting to read, let
-// alone build a response sized against, an over-budget aggregate — rather
-// than only ever checked separately from, and therefore possibly stale
-// relative to, the rows actually returned.
+// carries one is degraded rather than refused outright — see
+// MCPRegistrySnapshot's own OverBudget field for exactly what that means
+// and why: the registry must stay usable enough to recover from, not
+// merely safe. Every server row and every import issue is still read
+// (and the whole read still commits as one coherent snapshot); only the
+// per-server tool read is skipped while OverBudget, so this never
+// attempts to read, let alone build a response sized against, an
+// over-budget aggregate of tool schemas specifically.
 func (r *Repository) MCPRegistrySnapshot(ctx context.Context) (MCPRegistrySnapshot, error) {
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -863,9 +882,7 @@ func (r *Repository) MCPRegistrySnapshot(ctx context.Context) (MCPRegistrySnapsh
 	if err != nil {
 		return MCPRegistrySnapshot{}, err
 	}
-	if totalBytes > MaxMCPRegistryToolBytes {
-		return MCPRegistrySnapshot{}, ErrMCPRegistryToolBudgetExceeded
-	}
+	overBudget := totalBytes > MaxMCPRegistryToolBytes
 
 	if r.mcpRegistrySnapshotBarrier != nil {
 		r.mcpRegistrySnapshotBarrier()
@@ -875,11 +892,14 @@ func (r *Repository) MCPRegistrySnapshot(ctx context.Context) (MCPRegistrySnapsh
 	if err != nil {
 		return MCPRegistrySnapshot{}, err
 	}
-	snapshot := MCPRegistrySnapshot{Servers: make([]MCPServerWithTools, 0, len(servers))}
+	snapshot := MCPRegistrySnapshot{Servers: make([]MCPServerWithTools, 0, len(servers)), OverBudget: overBudget}
 	for _, server := range servers {
-		tools, err := listMCPServerToolsRows(ctx, tx, server.ID)
-		if err != nil {
-			return MCPRegistrySnapshot{}, err
+		var tools []MCPServerTool
+		if !overBudget {
+			tools, err = listMCPServerToolsRows(ctx, tx, server.ID)
+			if err != nil {
+				return MCPRegistrySnapshot{}, err
+			}
 		}
 		snapshot.Servers = append(snapshot.Servers, MCPServerWithTools{Server: server, Tools: tools})
 	}
@@ -1004,13 +1024,16 @@ const MaxMCPRegistryToolBytes = 256 * 1024
 // and therefore by ReplaceMCPServerTools, ImportMCPServer, and
 // RegisterMCPServer's placeholder-adoption branch — when accepting a
 // server's replacement tool snapshot would push the registry's aggregate
-// all-rows tool byte total (see MaxMCPRegistryToolBytes) over budget. It is
-// also returned by MCPRegistrySnapshot when that same total is already
-// over budget at read time. The caller's transaction rolls back entirely
-// — including the withdrawal update replaceServerToolsTx already issued
-// for this server — so a refused reconciliation never leaves a server
-// with no tools where it used to have some, nor (for ImportMCPServer) a
-// bare row with no tools at all.
+// all-rows tool byte total (see MaxMCPRegistryToolBytes) over budget. It
+// is also returned by UpsertTools for the same reason. MCPRegistrySnapshot
+// never returns it: an aggregate already over budget at read time is
+// instead reported via its own OverBudget field (see MCPRegistrySnapshot's
+// doc comment), degraded rather than refused outright, so the registry
+// stays usable enough to recover from. The caller's transaction rolls
+// back entirely — including the withdrawal update replaceServerToolsTx
+// already issued for this server — so a refused reconciliation never
+// leaves a server with no tools where it used to have some, nor (for
+// ImportMCPServer) a bare row with no tools at all.
 var ErrMCPRegistryToolBudgetExceeded = errors.New("MCP registry aggregate tool budget exceeded")
 
 // toolBudgetQueryRow is satisfied by *sql.Tx: aggregateAllToolBytes always
@@ -1038,6 +1061,84 @@ func aggregateAllToolBytes(ctx context.Context, q toolBudgetQueryRow) (int64, er
 	err := q.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(LENGTH(CAST(tool_name AS BLOB)) + LENGTH(CAST(schema_json AS BLOB))), 0)
 		FROM tools
+	`).Scan(&total)
+	return total, err
+}
+
+// MaxThirdPartyMCPRegistryToolBytes reserves half of the registry-wide
+// aggregate (MaxMCPRegistryToolBytes) exclusively for non-bundled
+// ("third-party": local-container and remote-url tier) servers,
+// enforced — in addition to, and checked before, the unchanged full
+// aggregate check — inside replaceServerToolsTx whenever the server
+// being reconciled is not bundled. UpsertTools — the bundled/skills/
+// legacy path the runtime uses to publish "system", "files", "skills",
+// and any other bundled server's own tool capabilities during
+// ConnectWorker — is unaffected by this narrower cap and continues to
+// enforce only the full aggregate, exactly as before.
+//
+// Without this, a third-party import or live rediscovery could grow its
+// own share of the aggregate arbitrarily close to the full
+// MaxMCPRegistryToolBytes cap — replaceServerToolsTx's own prior budget
+// check never distinguished a third-party server's bytes from a bundled
+// one's — leaving little or no headroom for UpsertTools' own, entirely
+// separate, next call to publish (or grow) TuringAgent's own bundled
+// tool schemas: a worker connecting after third-party servers had
+// already filled the aggregate to (or near) its cap would have its own
+// ConnectWorker registration — and therefore every bundled tool the
+// runtime depends on ("system", "files", "skills") — refused by the very
+// same aggregate guard, through no fault of its own. Reserving half the
+// aggregate exclusively for third-party servers guarantees the other
+// half is always available for UpsertTools regardless of how many
+// third-party servers exist or how large their own tool snapshots are.
+//
+// 128KiB was not merely assumed: it is measured against the actual
+// combined byte total of every tool TuringAgent's own bundled servers
+// register today ("system"'s 4 tools, "files"'s 5, and "skills"'s 2 —
+// see internal/service/runtime's own
+// TestConnectWorkerSucceedsWhenThirdPartyToolsFillExactlyTheReservedSubBudget,
+// which mirrors those real schemas and asserts their combined raw
+// (tool_name + schema_json) byte total stays comfortably under this
+// reservation, with generous margin for those schemas to grow). See also
+// MaxMCPRegistryToolBytes's own comment and
+// docs/mcp-security-and-integration.md for the full aggregate's own
+// worst-case wire-size accounting, which this narrower cap does not
+// change: a third-party server's own tools were always counted in, and
+// bounded by, that same full aggregate, and still are — this is a cap
+// *within* it, not a replacement for it.
+const MaxThirdPartyMCPRegistryToolBytes = MaxMCPRegistryToolBytes / 2
+
+// ErrMCPThirdPartyToolBudgetExceeded is returned by replaceServerToolsTx
+// when accepting a non-bundled ("third-party") server's replacement tool
+// snapshot would push the *third-party-only* share of the registry's
+// aggregate tool byte total (see MaxThirdPartyMCPRegistryToolBytes) over
+// its own, narrower budget — distinct from ErrMCPRegistryToolBudgetExceeded,
+// which reports the full aggregate (every server, bundled and
+// non-bundled combined) exceeding MaxMCPRegistryToolBytes. Checked first
+// (see replaceServerToolsTx): a third-party overage is always also,
+// trivially, within the still-wider full-aggregate budget, never the
+// reverse, so a third-party caller always sees the more specific,
+// narrower reason when both would otherwise apply. Like
+// ErrMCPRegistryToolBudgetExceeded, the caller's transaction rolls back
+// entirely.
+var ErrMCPThirdPartyToolBudgetExceeded = errors.New("MCP third-party tool budget exceeded")
+
+// aggregateThirdPartyToolBytes returns the registry-wide total of every
+// tool row's raw (tool_name + schema_json) byte length attributed to a
+// non-bundled ("third-party") server — present and withdrawn rows
+// alike, the same inclusion rule aggregateAllToolBytes applies to the
+// full aggregate (see MaxMCPRegistryToolBytes's own comment for why). A
+// tool row with mcp_server_id NULL (the "skills" rows UpsertTools
+// writes, which are not attributed to any mcp_servers row at all) is
+// never a third-party row and is excluded the same way a bundled
+// server's own rows are, via the join this subquery requires.
+func aggregateThirdPartyToolBytes(ctx context.Context, q toolBudgetQueryRow) (int64, error) {
+	var total int64
+	err := q.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(LENGTH(CAST(tool_name AS BLOB)) + LENGTH(CAST(schema_json AS BLOB))), 0)
+		FROM tools
+		WHERE mcp_server_id IN (
+			SELECT id FROM mcp_servers WHERE tier != 'bundled'
+		)
 	`).Scan(&total)
 	return total, err
 }
@@ -1100,6 +1201,30 @@ func replaceServerToolsTx(ctx context.Context, tx *sql.Tx, server MCPServerRecor
 				present = 1
 		`, ids.New("tool"), server.Name, tool.Name, tool.Policy, tool.SchemaJSON, enabled, discoveredAt, server.ID); err != nil {
 			return err
+		}
+	}
+	// Checked before the full aggregate below, not after: when a
+	// non-bundled server's own contribution pushes both the third-party
+	// share and the full aggregate over budget at once, the more
+	// specific, narrower reason wins — a third-party caller is never
+	// told the generic full-aggregate reason when the real, more
+	// actionable cause is its own tier's own share of it. server is
+	// always non-bundled here in practice — every current caller
+	// (ImportMCPServer, RegisterMCPServer's placeholder adoption,
+	// ReplaceMCPServerTools) only ever reconciles a non-bundled row's
+	// tools this way (see this function's own doc comment); UpsertTools
+	// is the bundled/skills path and never calls this function. The
+	// explicit tier check is kept anyway, rather than assuming that
+	// invariant unconditionally, so a future caller that ever did pass a
+	// bundled server through here would not be narrowed by a cap that
+	// must only ever apply to third-party ones.
+	if server.Tier != MCPServerTierBundled {
+		thirdPartyBytes, err := aggregateThirdPartyToolBytes(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if thirdPartyBytes > MaxThirdPartyMCPRegistryToolBytes {
+			return ErrMCPThirdPartyToolBudgetExceeded
 		}
 	}
 	totalBytes, err := aggregateAllToolBytes(ctx, tx)

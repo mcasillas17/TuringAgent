@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -86,28 +85,59 @@ func TestMCPRegistrySnapshotReturnsEveryServerWithItsOwnTools(t *testing.T) {
 	}
 }
 
-// TestMCPRegistrySnapshotRefusesPreexistingOverBudgetAggregate proves the
-// named-error guard: a database that already carries an aggregate over
-// MaxMCPRegistryToolBytes (simulated here via a direct row insert,
-// bypassing every repository write path that would itself refuse such a
-// state) must be refused with ErrMCPRegistryToolBudgetExceeded rather than
-// silently returning an oversized snapshot.
-func TestMCPRegistrySnapshotRefusesPreexistingOverBudgetAggregate(t *testing.T) {
+// TestMCPRegistrySnapshotSetsOverBudgetAndOmitsToolsForPreexistingOverBudgetAggregate
+// proves the degraded-but-usable guard: a database that already carries
+// an aggregate over MaxMCPRegistryToolBytes (simulated here via a direct
+// row insert, bypassing every repository write path that would itself
+// refuse such a state) must still return every server row — so a caller
+// like ListMcpServers can keep the registry manageable (an operator can
+// still see server IDs/endpoints and delete one) — but with OverBudget
+// set and every server's own Tools completely omitted, never attempting
+// to read (let alone marshal and send) a schema-heavy result sized
+// against an unbounded aggregate. Import issues are still returned
+// normally: they carry no tool schemas and are already independently
+// bounded (maxMCPImportEntries, maxMCPStatusMessageBytes), so nothing
+// about the over-budget tools table affects them.
+func TestMCPRegistrySnapshotSetsOverBudgetAndOmitsToolsForPreexistingOverBudgetAggregate(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)
 	ctx := context.Background()
 
-	oversizedSchema := `{"type":"object","d":"` + strings.Repeat("x", MaxMCPRegistryToolBytes) + `"}`
-	if _, err := database.ExecContext(ctx, `
-		INSERT INTO tools (id, server_name, tool_name, policy, schema_json, enabled, discovered_at, mcp_server_id, present)
-		VALUES ('tool_test_oversized', 'skills', 'skills.oversized', 'safe', ?, 1, datetime('now'), NULL, 1)
-	`, oversizedSchema); err != nil {
+	server, err := repo.RegisterMCPServer(ctx, ImportedMCPServer{
+		Name: "vendor-oversized", URL: "http://vendor-oversized:9000/mcp", Tier: MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplaceMCPImportIssues(ctx, map[string]string{"bad-entry": "refused for testing"}); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := repo.MCPRegistrySnapshot(ctx)
-	if !errors.Is(err, ErrMCPRegistryToolBudgetExceeded) {
-		t.Fatalf("err = %v, want ErrMCPRegistryToolBudgetExceeded for a preexisting oversized aggregate", err)
+	oversizedSchema := `{"type":"object","d":"` + strings.Repeat("x", MaxMCPRegistryToolBytes) + `"}`
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO tools (id, server_name, tool_name, policy, schema_json, enabled, discovered_at, mcp_server_id, present)
+		VALUES ('tool_test_oversized', ?, 'vendor.oversized', 'safe', ?, 1, datetime('now'), ?, 1)
+	`, server.Server.Name, oversizedSchema, server.Server.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := repo.MCPRegistrySnapshot(ctx)
+	if err != nil {
+		t.Fatalf("MCPRegistrySnapshot must remain usable for a preexisting oversized aggregate, not fail outright: %v", err)
+	}
+	if !snapshot.OverBudget {
+		t.Fatal("OverBudget = false, want true for a preexisting oversized aggregate")
+	}
+	if len(snapshot.Servers) == 0 {
+		t.Fatal("Servers is empty, want every server row still returned (bundled and non-bundled alike) so the registry stays manageable")
+	}
+	for _, entry := range snapshot.Servers {
+		if len(entry.Tools) != 0 {
+			t.Fatalf("server %q Tools = %+v, want empty: tool schemas must never be read while OverBudget", entry.Server.Name, entry.Tools)
+		}
+	}
+	if len(snapshot.Issues) != 1 || snapshot.Issues[0].Name != "bad-entry" {
+		t.Fatalf("snapshot issues = %+v, want the one recorded issue, unaffected by OverBudget", snapshot.Issues)
 	}
 }
 
@@ -136,7 +166,7 @@ func TestMCPRegistrySnapshotSerializesAgainstConcurrentWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := repo.ReplaceMCPServerTools(ctx, server.Server.ID, []MCPServerTool{
-		toolOfExactRawSize(t, "a", MaxMCPRegistryToolBytes-100),
+		toolOfExactRawSize(t, "a", MaxThirdPartyMCPRegistryToolBytes-100),
 	}); err != nil {
 		t.Fatal(err)
 	}

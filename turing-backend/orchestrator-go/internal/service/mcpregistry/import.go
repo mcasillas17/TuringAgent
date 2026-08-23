@@ -115,6 +115,16 @@ const mcpMissingIntegrationKeyMessage = "server token requires the TURING_INTEGR
 // partial row left behind for a corrected reimport to get stuck skipping).
 const mcpRegistryToolBudgetExceededMessage = "MCP registry tool budget is exhausted"
 
+// mcpThirdPartyToolBudgetExceededMessage is
+// mcpRegistryToolBudgetExceededMessage's counterpart for
+// repository.ErrMCPThirdPartyToolBudgetExceeded: an entry's static tools
+// snapshot refused because accepting it would push the narrower
+// third-party-only share of the aggregate (repository.
+// MaxThirdPartyMCPRegistryToolBytes) over its own budget, distinct from
+// the full aggregate being exhausted. Recorded the same ordinary,
+// per-entry, never-document-aborting way for the same reason.
+const mcpThirdPartyToolBudgetExceededMessage = "MCP registry third-party tool budget is exhausted"
+
 type Server struct {
 	turingv1.UnimplementedMcpRegistryServiceServer
 	repo       *repository.Repository
@@ -152,6 +162,20 @@ type Server struct {
 	// whatever the other call did to the shared mcp_import_issues table
 	// in the meantime.
 	reimportBarrier func()
+	// importEntryBarrier, when set (test-only, nil/unused in
+	// production), is invoked by ImportJSON immediately after an entry's
+	// own repository transaction (ImportMCPServer) has committed a
+	// freshly-created server — after it is appended to the in-memory
+	// imported slice, so a test firing this can already see that name
+	// reflected in whatever report a concurrent read observes. It lets a
+	// test force a genuine interleaving exactly between two entries: a
+	// context cancellation, or some other fatal interruption, landing
+	// after the first entry has already durably committed but before the
+	// next one is even attempted — rather than hoping a real cancellation
+	// race happens to land there. Passed the committed entry's own name,
+	// purely for a test's own bookkeeping/assertions; ImportJSON itself
+	// does nothing with the return value (there is none).
+	importEntryBarrier func(name string)
 	// credentialLocksMu guards credentialLocks, the lazily-populated map
 	// of per-server credential fences (see credentialLock). It is held
 	// only for the map lookup/insert itself, never across any I/O or the
@@ -809,7 +833,27 @@ func New(repo *repository.Repository, sealer *secretbox.Sealer, httpClient *http
 	return &Server{repo: repo, sealer: sealer, httpClient: httpClient}
 }
 
-func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, error) {
+// ImportJSON's own named return values (report, err) exist so that a
+// fatal error discovered partway through the per-entry loop below — or
+// after it, persisting the final Unsupported map — never has to discard
+// whatever this call has already accumulated: see the deferred func
+// immediately below, which is what actually populates report.Imported
+// and report.Skipped (sorted) from the loop's own local slices,
+// regardless of which return statement in this function ultimately
+// fires. Before this, every one of those fatal paths returned a bare
+// ImportReport{} — discarding every entry already recorded into
+// report.Unsupported (via recordUnsupported) and, more importantly,
+// every name already appended to imported/skipped for an entry whose own
+// repository transaction (ImportMCPServer) had already committed one
+// loop iteration earlier: a canceled context, or any other repository
+// failure this function cannot attribute to a single entry (see the
+// switch's own default case below), could make ImportJSON forget it had
+// just durably registered N servers, even though those rows still exist
+// and even though a concurrent ListMcpServers would already show them.
+// ReimportConfiguredJSON's own recordDocumentRefusal is what turns a
+// non-nil err here into a caller-visible outcome without ever pretending
+// those already-committed entries did not happen.
+func (s *Server) ImportJSON(ctx context.Context, data []byte) (report ImportReport, err error) {
 	if s == nil || s.repo == nil {
 		return ImportReport{}, errors.New("MCP registry repository is required")
 	}
@@ -849,9 +893,15 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 		return ImportReport{}, err
 	}
 
-	report := ImportReport{Unsupported: make(map[string]string)}
+	report = ImportReport{Unsupported: make(map[string]string)}
 	imported := make([]string, 0)
 	skipped := make([]string, 0)
+	defer func() {
+		sort.Strings(imported)
+		sort.Strings(skipped)
+		report.Imported = imported
+		report.Skipped = skipped
+	}()
 	// Entries are processed in sorted name order, never the order they
 	// happened to appear in the document (already deterministic here,
 	// since decodeMCPServerEntries preserves wire order rather than a
@@ -1003,14 +1053,14 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 		case errors.Is(err, repository.ErrMCPServerNotFound):
 			tombstoned, terr := s.repo.MCPServerTombstoned(ctx, name)
 			if terr != nil {
-				return ImportReport{}, fmt.Errorf("check MCP server %q tombstone: %w", name, terr)
+				return report, fmt.Errorf("check MCP server %q tombstone: %w", name, terr)
 			}
 			if tombstoned {
 				recordUnsupported(report.Unsupported, name, "server was removed locally and remains suppressed; use a new name to import it again")
 				continue
 			}
 		default:
-			return ImportReport{}, fmt.Errorf("look up MCP server %q: %w", name, err)
+			return report, fmt.Errorf("look up MCP server %q: %w", name, err)
 		}
 
 		// Every static tool this entry declares is fully validated —
@@ -1036,7 +1086,7 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 				recordUnsupported(report.Unsupported, name, mcpMissingIntegrationKeyMessage)
 				continue
 			}
-			return ImportReport{}, errors.New("seal MCP server token")
+			return report, errors.New("seal MCP server token")
 		}
 		result, err := s.repo.ImportMCPServer(ctx, repository.ImportedMCPServer{
 			Name:        name,
@@ -1068,6 +1118,19 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 				// colliding tool) starts clean rather than skipping a
 				// poisoned partial row.
 				recordUnsupported(report.Unsupported, name, err.Error())
+			case errors.Is(err, repository.ErrMCPThirdPartyToolBudgetExceeded):
+				// Checked before ErrMCPRegistryToolBudgetExceeded below,
+				// mirroring replaceServerToolsTx's own check order: the
+				// two are distinct sentinel errors (a given err matches
+				// at most one of these two cases), so this ordering only
+				// ever changes which case *would* have matched if both
+				// were somehow satisfiable by the same err — it does not
+				// change behavior today, but keeps the more specific
+				// third-party reason preferred if that ever became
+				// possible. Recorded as an ordinary per-entry refusal for
+				// the same reason every other repository disposition
+				// here is.
+				recordUnsupported(report.Unsupported, name, mcpThirdPartyToolBudgetExceededMessage)
 			case errors.Is(err, repository.ErrMCPRegistryToolBudgetExceeded):
 				// Recorded as an ordinary per-entry refusal for the same
 				// reason ErrMCPServerRegistryFull is immediately above:
@@ -1082,7 +1145,7 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 				// ImportJSON itself.
 				recordUnsupported(report.Unsupported, name, mcpRegistryToolBudgetExceededMessage)
 			default:
-				return ImportReport{}, fmt.Errorf("import MCP server %q: %w", name, err)
+				return report, fmt.Errorf("import MCP server %q: %w", name, err)
 			}
 			continue
 		}
@@ -1094,13 +1157,12 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			continue
 		}
 		imported = append(imported, name)
+		if s.importEntryBarrier != nil {
+			s.importEntryBarrier(name)
+		}
 	}
-	sort.Strings(imported)
-	sort.Strings(skipped)
-	report.Imported = imported
-	report.Skipped = skipped
 	if err := s.repo.ReplaceMCPImportIssues(ctx, report.Unsupported); err != nil {
-		return ImportReport{}, fmt.Errorf("record mcp.json import issues: %w", err)
+		return report, fmt.Errorf("record mcp.json import issues: %w", err)
 	}
 	return report, nil
 }
@@ -1898,12 +1960,17 @@ func openRegularMCPConfigFile(path string) (*os.File, error) {
 // and imports it, the same way app startup does. An absent file is not a
 // failure: it clears any previously recorded import issues and reports an
 // empty ImportReport, so a client that reimports after deleting mcp.json
-// sees a clean slate rather than a stale error. A malformed or oversized
-// document is recorded as a bounded "_document" entry in mcp_import_issues
-// and returned inside the ImportReport rather than as an error, so a
-// client can display why nothing imported the same way it displays any
-// other refused entry. Any other failure to read the file is returned as
-// a fixed error that never repeats the file's contents or path.
+// sees a clean slate rather than a stale error. A malformed document, or a
+// fatal error ImportJSON itself cannot attribute to a single entry (a
+// canceled context, or some other repository failure between entries — see
+// ImportJSON's own switch default case), is recorded as a bounded
+// "_document" entry in mcp_import_issues via recordDocumentRefusal and
+// returned inside the ImportReport rather than as an error, so a client
+// can display why the run did not fully complete the same way it displays
+// any other refused entry — alongside, not instead of, every entry that
+// really did commit earlier in the same run (see recordDocumentRefusal's
+// own doc comment). Any other failure to read the file itself is returned
+// as a fixed error that never repeats the file's contents or path.
 //
 // mcp.json is opened through openRegularMCPConfigFile, whose own doc
 // comment covers exactly what makes that safe against a FIFO, a symlink,
@@ -1916,14 +1983,14 @@ func openRegularMCPConfigFile(path string) (*os.File, error) {
 // Only once the descriptor is confirmed to be a regular file is it read,
 // through io.LimitReader(maxMCPImportDocumentBytes+1) — the same
 // bounded-read shape mcpClient.request already applies to a live HTTP
-// response body: os.ReadFile has no size bound of its own and would
-// buffer the entire file — however large, or however slow a legitimate
-// regular file might be to fully materialize — before ImportJSON's own
-// in-memory size check ever got a chance to run. Reading through a
-// bounded LimitReader instead means at most maxMCPImportDocumentBytes+1
-// bytes are ever allocated, and the read completes (with its own
-// synthesized io.EOF) without waiting for the underlying source to
-// actually end.
+// response body: a plain, unbounded read (e.g. os.ReadFile) has no size
+// bound of its own and would buffer the entire file — however large, or
+// however slow a legitimate regular file might be to fully materialize —
+// before ImportJSON's own in-memory size check ever got a chance to run.
+// Reading through a bounded LimitReader instead means at most
+// maxMCPImportDocumentBytes+1 bytes are ever allocated, and the read
+// completes (with its own synthesized io.EOF) without waiting for the
+// underlying source to actually end.
 func (s *Server) ReimportConfiguredJSON(ctx context.Context) (ImportReport, error) {
 	if s.configRoot == "" {
 		return ImportReport{}, errMCPConfigRootNotConfigured
@@ -1954,19 +2021,55 @@ func (s *Server) ReimportConfiguredJSON(ctx context.Context) (ImportReport, erro
 		return ImportReport{}, errors.New("read mcp.json failed")
 	}
 	if len(data) > maxMCPImportDocumentBytes {
-		message := boundedStatusMessage(errMCPImportDocumentTooLarge.Error())
-		if recordErr := s.repo.ReplaceMCPImportIssues(ctx, map[string]string{"_document": message}); recordErr != nil {
-			return ImportReport{}, fmt.Errorf("record mcp.json import failure: %w", recordErr)
-		}
-		return ImportReport{Unsupported: map[string]string{"_document": message}}, nil
+		return s.recordDocumentRefusal(ctx, ImportReport{}, errMCPImportDocumentTooLarge)
 	}
 	report, err := s.ImportJSON(ctx, data)
 	if err != nil {
-		message := boundedStatusMessage(err.Error())
-		if recordErr := s.repo.ReplaceMCPImportIssues(ctx, map[string]string{"_document": message}); recordErr != nil {
-			return ImportReport{}, fmt.Errorf("record mcp.json import failure: %w", recordErr)
-		}
-		return ImportReport{Unsupported: map[string]string{"_document": message}}, nil
+		return s.recordDocumentRefusal(ctx, report, err)
+	}
+	return report, nil
+}
+
+// recordDocumentRefusal folds a whole-document-level failure — a
+// document too large to import, or a fatal error ImportJSON itself could
+// not attribute to a single entry — into report's own Unsupported map as
+// a bounded "_document" entry, and persists the merged issues list.
+//
+// report may already carry real Imported/Skipped/Unsupported entries from
+// ImportJSON's own per-entry transactions, each of which has already
+// durably committed by the time this runs (see ImportJSON's own doc
+// comment on why its named returns preserve exactly that). This never
+// discards them the way returning a fresh
+// ImportReport{Unsupported: {"_document": ...}} in their place used to:
+// the persisted issues list is the merged map (every already-collected
+// reason plus "_document"), not the "_document" entry alone, for the same
+// reason.
+//
+// The merged issues are persisted through a context detached from ctx
+// (see detachedBoundedContext), the same way auditMCPEvent already
+// detaches its own post-commit write: by the time this runs, every
+// Imported entry has already committed, so recording that state is
+// exactly the kind of post-commit bookkeeping that must not be skippable
+// merely because the caller's own context is canceled — which, for a
+// canceled-context cause, is definitionally already true of ctx itself.
+// A client that cancels a reimport must not also erase the record of what
+// already happened.
+//
+// Persisting can itself still fail (a genuine repository error,
+// independent of anything already committed): that failure is returned
+// as-is, but report — with "_document" already folded in — is still
+// returned alongside it rather than discarded, so a caller that must
+// ultimately surface Internal (see ReimportMcpJson) still has
+// report.Imported/Skipped/Unsupported to notify/audit before it does.
+func (s *Server) recordDocumentRefusal(ctx context.Context, report ImportReport, cause error) (ImportReport, error) {
+	if report.Unsupported == nil {
+		report.Unsupported = make(map[string]string)
+	}
+	report.Unsupported["_document"] = boundedStatusMessage(cause.Error())
+	recordCtx, cancel := detachedBoundedContext(ctx, auditRecordTimeout)
+	defer cancel()
+	if err := s.repo.ReplaceMCPImportIssues(recordCtx, report.Unsupported); err != nil {
+		return report, fmt.Errorf("record mcp.json import failure: %w", err)
 	}
 	return report, nil
 }

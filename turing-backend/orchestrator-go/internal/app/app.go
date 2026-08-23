@@ -189,15 +189,23 @@ func New(cfg config.Config) (*App, error) {
 	if cfg.MCPConfigRoot != "" {
 		// ReimportConfiguredJSON is the same path the public ReimportMcpJson
 		// RPC uses on demand: an absent mcp.json clears any stale issues and
-		// starts clean, a malformed document is recorded as a bounded
-		// "_document" issue and startup still proceeds, and any other
-		// unreadable-file or repository failure aborts startup with a fixed,
-		// safe error — the error returned here never includes the file's
-		// contents or path, but ReimportConfiguredJSON's own local log line
-		// for that failure may still name the path (os.ReadFile's error
-		// includes it), which is acceptable for an operator reading their
-		// own install's log but must never leave this process as a
-		// returned error, an RPC response, or an audit record.
+		// starts clean; a malformed document, or a fatal error ImportJSON
+		// itself cannot attribute to a single entry (see ImportJSON's own
+		// doc comment), is recorded as a bounded "_document" issue —
+		// alongside, not instead of, every entry that already committed
+		// earlier in the same run — and startup still proceeds. Startup
+		// only aborts when the file itself cannot be read, or when even
+		// that "_document" bookkeeping write also fails (see
+		// recordDocumentRefusal) — both genuine, unrecoverable problems
+		// with the config file or the database itself, not a merely
+		// interrupted reimport. The error returned here never includes the
+		// file's contents or path, but ReimportConfiguredJSON's own local
+		// log line for that failure may still name the path
+		// (openRegularMCPConfigFile's unix.Open, and the subsequent
+		// read/close, can each return an error naming it), which is
+		// acceptable for an operator reading their own install's log but
+		// must never leave this process as a returned error, an RPC
+		// response, or an audit record.
 		report, err := mcpRegistryService.ReimportConfiguredJSON(context.Background())
 		if err != nil {
 			_ = database.Close()
@@ -207,7 +215,11 @@ func New(cfg config.Config) (*App, error) {
 			// A count is the one diagnostic an operator needs at startup —
 			// something in mcp.json was refused — without this line
 			// becoming a second, unaudited channel for the names, reasons,
-			// headers, or tokens that a refusal's details can carry.
+			// headers, or tokens that a refusal's details can carry. This
+			// count is honest even for a partial run: report.Unsupported
+			// (and therefore this count) already reflects any "_document"
+			// entry recordDocumentRefusal folded in, on top of every
+			// per-entry refusal ImportJSON itself recorded.
 			log.Printf("mcp.json import refused %d entries", len(report.Unsupported))
 		}
 	}
