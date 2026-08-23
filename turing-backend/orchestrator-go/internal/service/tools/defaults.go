@@ -49,6 +49,8 @@ func BundledServerForTool(toolName string) (string, bool) {
 		return "files", true
 	case toolName == "skills_list" || toolName == "skill_view":
 		return "skills", true
+	case strings.HasPrefix(toolName, "github."):
+		return "integrations", true
 	}
 
 	for key := range seedPolicies {
@@ -57,6 +59,16 @@ func BundledServerForTool(toolName string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+var readOnlyTools = map[policyKey]bool{
+	{serverName: "integrations", toolName: "github.list_issues"}: true,
+	{serverName: "integrations", toolName: "github.get_issue"}:   true,
+	{serverName: "integrations", toolName: "github.get_file"}:    true,
+}
+
+func ToolReadOnly(serverName, toolName string) bool {
+	return readOnlyTools[policyKey{serverName: serverName, toolName: toolName}]
 }
 
 func BundledToolRequiresApproval(serverName string, toolName string) bool {

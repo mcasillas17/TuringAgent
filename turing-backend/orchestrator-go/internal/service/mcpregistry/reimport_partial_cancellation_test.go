@@ -89,9 +89,9 @@ func TestReimportMcpJsonCancellationAfterFirstEntryStillSucceedsWithPartialRepor
 	if len(response.GetSkipped()) != 0 {
 		t.Fatalf("Skipped = %v, want none", response.GetSkipped())
 	}
-	reason, present := findUnsupportedReason(response.GetRefused(), "_document")
+	reason, present := findUnsupportedReason(response.GetUnsupported(), "_document")
 	if !present {
-		t.Fatalf("Refused = %+v, want a bounded _document entry describing the interrupted run", response.GetRefused())
+		t.Fatalf("Refused = %+v, want a bounded _document entry describing the interrupted run", response.GetUnsupported())
 	}
 	if reason == "" || len(reason) > 512 {
 		t.Fatalf("_document reason = %q, want a short, bounded, non-empty message", reason)
@@ -245,19 +245,19 @@ func TestReimportMcpJsonCancellationPreservesEarlierPerEntryRefusalTooNotJustImp
 	if len(response.GetImported()) != 1 || response.GetImported()[0] != "bbb-vendor" {
 		t.Fatalf("Imported = %v, want [bbb-vendor]", response.GetImported())
 	}
-	refusedReason, refusedPresent := findUnsupportedReason(response.GetRefused(), "aaa-refused")
+	refusedReason, refusedPresent := findUnsupportedReason(response.GetUnsupported(), "aaa-refused")
 	if !refusedPresent {
-		t.Fatalf("Refused = %+v, want aaa-refused still present: its own refusal was recorded well before the later cancellation, not lost by it", response.GetRefused())
+		t.Fatalf("Refused = %+v, want aaa-refused still present: its own refusal was recorded well before the later cancellation, not lost by it", response.GetUnsupported())
 	}
 	const wantRefusedReason = "stdio/command MCP servers are unsupported; run the server in a container or use an HTTPS URL"
 	if refusedReason != wantRefusedReason {
 		t.Fatalf("aaa-refused reason = %q, want %q: its own real reason, not collapsed into the later _document note", refusedReason, wantRefusedReason)
 	}
-	if _, documentPresent := findUnsupportedReason(response.GetRefused(), "_document"); !documentPresent {
-		t.Fatalf("Refused = %+v, want a _document entry describing the interrupted run too", response.GetRefused())
+	if _, documentPresent := findUnsupportedReason(response.GetUnsupported(), "_document"); !documentPresent {
+		t.Fatalf("Refused = %+v, want a _document entry describing the interrupted run too", response.GetUnsupported())
 	}
-	if len(response.GetRefused()) != 2 {
-		t.Fatalf("Refused = %+v, want exactly two entries (aaa-refused and _document)", response.GetRefused())
+	if len(response.GetUnsupported()) != 2 {
+		t.Fatalf("Refused = %+v, want exactly two entries (aaa-refused and _document)", response.GetUnsupported())
 	}
 }
 

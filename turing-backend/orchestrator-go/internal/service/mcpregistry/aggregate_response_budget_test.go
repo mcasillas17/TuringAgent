@@ -293,7 +293,7 @@ func TestReimportMcpJsonResponseWorstCaseStaysUnderGRPCMessageSize(t *testing.T)
 	for i := 0; i < maxMCPImportEntries; i++ {
 		response.Imported = append(response.Imported, longName)
 		response.Skipped = append(response.Skipped, longName)
-		response.Refused = append(response.Refused, &turingv1.UnsupportedMcpServer{
+		response.Unsupported = append(response.Unsupported, &turingv1.UnsupportedMcpServer{
 			Name:   longName,
 			Reason: strings.Repeat("b", maxMCPStatusMessageBytes),
 		})

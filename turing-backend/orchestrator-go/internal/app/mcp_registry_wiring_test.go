@@ -193,7 +193,7 @@ func TestReimportMcpJsonThroughPublicRPCReportsDeterministicOrderAndReasons(t *t
 	if got := response.GetImported(); len(got) != 2 || got[0] != "aa-new" || got[1] != "zz-new" {
 		t.Fatalf("Imported = %v, want sorted [aa-new zz-new]", got)
 	}
-	refused := response.GetRefused()
+	refused := response.GetUnsupported()
 	if len(refused) != 2 || refused[0].GetName() != "aa-bad" || refused[1].GetName() != "zz-bad" {
 		t.Fatalf("Refused names = %v, want sorted [aa-bad zz-bad]", refused)
 	}
@@ -357,8 +357,8 @@ func TestDeletedImportedMCPServerStaysRefusedAndTombstonedAcrossReimport(t *test
 	if len(response.GetImported()) != 0 {
 		t.Fatalf("Imported = %v, want none: a deleted server must not be re-created", response.GetImported())
 	}
-	refusedNames := make([]string, 0, len(response.GetRefused()))
-	for _, entry := range response.GetRefused() {
+	refusedNames := make([]string, 0, len(response.GetUnsupported()))
+	for _, entry := range response.GetUnsupported() {
 		refusedNames = append(refusedNames, entry.GetName())
 	}
 	if len(refusedNames) != 1 || refusedNames[0] != "vendor" {

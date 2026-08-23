@@ -142,6 +142,52 @@ func TestUpsertToolsDropsAnUnregisteredServerFromTheSnapshot(t *testing.T) {
 	}
 }
 
+func TestPseudoServerPolicyAvailabilityBootstrapsAndReEnables(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+
+	for _, serverName := range []string{"skills", "integrations"} {
+		t.Run(serverName, func(t *testing.T) {
+			toolName := serverName + ".probe"
+			available, err := repo.PseudoServerToolAvailable(ctx, serverName, toolName)
+			if err != nil || !available {
+				t.Fatalf("missing tool availability = %v, err=%v; want bootstrap availability", available, err)
+			}
+			if err := repo.UpsertTools(ctx, []DiscoveredTool{{ServerName: serverName, ToolName: toolName, SchemaJSON: `{}`, Policy: "approval_required"}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.SetToolPolicyByName(ctx, serverName, toolName, "disabled"); err != nil {
+				t.Fatal(err)
+			}
+			available, err = repo.PseudoServerToolAvailable(ctx, serverName, toolName)
+			if err != nil || available {
+				t.Fatalf("disabled tool availability = %v, err=%v; want false", available, err)
+			}
+			if err := repo.SetToolPolicyByName(ctx, serverName, toolName, "approval_required"); err != nil {
+				t.Fatal(err)
+			}
+			available, err = repo.PseudoServerToolAvailable(ctx, serverName, toolName)
+			if err != nil || !available {
+				t.Fatalf("re-enabled tool availability = %v, err=%v; want true", available, err)
+			}
+		})
+	}
+}
+
+func TestUpsertToolsRegistersIntegrationsWithoutAnMCPServerRow(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	if err := repo.UpsertTools(ctx, []DiscoveredTool{{
+		ServerName: "integrations", ToolName: "github.list_issues", SchemaJSON: `{}`, Policy: "approval_required",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	policy, enabled, found, err := repo.GetToolPolicy(ctx, "integrations", "github.list_issues")
+	if err != nil || !found || !enabled || policy != "approval_required" {
+		t.Fatalf("integration tool = policy %q enabled %v found %v err %v", policy, enabled, found, err)
+	}
+}
+
 func registerRepositoryTestServer(t *testing.T, ctx context.Context, database *db.DB, name string) {
 	t.Helper()
 	if _, err := database.ExecContext(ctx, `
@@ -155,5 +201,73 @@ func registerRepositoryTestServer(t *testing.T, ctx context.Context, database *d
 		VALUES (?, 'unknown')
 	`, "mcp_"+name); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The by-name policy write must mirror SetMCPToolPolicy's derivation for
+// server-backed rows: a third-party tool the server no longer exports
+// (present = 0 after its last discovery prune) must not be resurrected into
+// ListEnabledTools by a policy edit.
+func TestSetToolPolicyByNameDoesNotResurrectAbsentThirdPartyTool(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	registerRepositoryTestServer(t, ctx, database, "vendor")
+	if err := repo.UpsertTools(ctx, []DiscoveredTool{{
+		ServerName: "vendor", ToolName: "vendor.write", SchemaJSON: `{}`, Policy: "approval_required",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		UPDATE tools SET present = 0, enabled = 0
+		WHERE server_name = 'vendor' AND tool_name = 'vendor.write'
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetToolPolicyByName(ctx, "vendor", "vendor.write", "safe"); err != nil {
+		t.Fatal(err)
+	}
+	var enabled, present int
+	if err := database.QueryRowContext(ctx, `
+		SELECT enabled, present FROM tools
+		WHERE server_name = 'vendor' AND tool_name = 'vendor.write'
+	`).Scan(&enabled, &present); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 0 || present != 0 {
+		t.Fatalf("enabled=%d present=%d after by-name policy write, want the absent tool to stay dark", enabled, present)
+	}
+	var policy string
+	if err := database.QueryRowContext(ctx, `
+		SELECT policy FROM tools WHERE server_name = 'vendor' AND tool_name = 'vendor.write'
+	`).Scan(&policy); err != nil || policy != "safe" {
+		t.Fatalf("policy=%q err=%v, want the policy write itself to land", policy, err)
+	}
+
+	// The bundled half of the derivation: a bundled tool pruned to present = 0
+	// (its server was down during a discovery cycle) is restored by the policy
+	// write, exactly as SetMCPToolPolicy does — without the write-back it would
+	// be advertised (enabled = 1) and then refused at dispatch by
+	// MCPDispatchActive's present = 1 requirement.
+	if err := repo.UpsertTools(ctx, []DiscoveredTool{{
+		ServerName: "system", ToolName: "system.time", SchemaJSON: `{}`, Policy: "safe",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		UPDATE tools SET present = 0 WHERE server_name = 'system' AND tool_name = 'system.time'
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetToolPolicyByName(ctx, "system", "system.time", "safe"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `
+		SELECT enabled, present FROM tools WHERE server_name = 'system' AND tool_name = 'system.time'
+	`).Scan(&enabled, &present); err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 1 || present != 1 {
+		t.Fatalf("bundled enabled=%d present=%d, want the write-back to restore both", enabled, present)
 	}
 }

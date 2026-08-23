@@ -15,13 +15,198 @@ import 'dart:core' as $core;
 import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
 
-import '../../google/protobuf/struct.pb.dart' as $0;
-import '../../google/protobuf/timestamp.pb.dart' as $1;
+import '../../google/protobuf/struct.pb.dart' as $1;
+import '../../google/protobuf/timestamp.pb.dart' as $0;
 import 'common.pbenum.dart';
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
 
 export 'common.pbenum.dart';
+
+/// The durable, self-contained answer to "what happened to this run", carried on
+/// history and on every lifecycle event so a reopened session and a live stream
+/// agree without replaying the timeline.
+///
+/// There is deliberately no retryable field: whether the system retries is an
+/// internal dispatch decision, not a promise that repeating the request is safe.
+class RunState extends $pb.GeneratedMessage {
+  factory RunState({
+    $core.String? runId,
+    $core.String? userMessageId,
+    $core.String? assistantMessageId,
+    RunLifecycle? lifecycle,
+    RunOutcomeReason? outcomeReason,
+    $fixnum.Int64? stateVersion,
+    $0.Timestamp? stateUpdatedAt,
+    $0.Timestamp? finishedAt,
+    $core.bool? hasDisplayableContent,
+  }) {
+    final result = create();
+    if (runId != null) result.runId = runId;
+    if (userMessageId != null) result.userMessageId = userMessageId;
+    if (assistantMessageId != null)
+      result.assistantMessageId = assistantMessageId;
+    if (lifecycle != null) result.lifecycle = lifecycle;
+    if (outcomeReason != null) result.outcomeReason = outcomeReason;
+    if (stateVersion != null) result.stateVersion = stateVersion;
+    if (stateUpdatedAt != null) result.stateUpdatedAt = stateUpdatedAt;
+    if (finishedAt != null) result.finishedAt = finishedAt;
+    if (hasDisplayableContent != null)
+      result.hasDisplayableContent = hasDisplayableContent;
+    return result;
+  }
+
+  RunState._();
+
+  factory RunState.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RunState.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RunState',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'runId')
+    ..aOS(2, _omitFieldNames ? '' : 'userMessageId')
+    ..aOS(3, _omitFieldNames ? '' : 'assistantMessageId')
+    ..e<RunLifecycle>(4, _omitFieldNames ? '' : 'lifecycle', $pb.PbFieldType.OE,
+        defaultOrMaker: RunLifecycle.RUN_LIFECYCLE_UNSPECIFIED,
+        valueOf: RunLifecycle.valueOf,
+        enumValues: RunLifecycle.values)
+    ..e<RunOutcomeReason>(
+        5, _omitFieldNames ? '' : 'outcomeReason', $pb.PbFieldType.OE,
+        defaultOrMaker: RunOutcomeReason.RUN_OUTCOME_REASON_UNSPECIFIED,
+        valueOf: RunOutcomeReason.valueOf,
+        enumValues: RunOutcomeReason.values)
+    ..aInt64(6, _omitFieldNames ? '' : 'stateVersion')
+    ..aOM<$0.Timestamp>(7, _omitFieldNames ? '' : 'stateUpdatedAt',
+        subBuilder: $0.Timestamp.create)
+    ..aOM<$0.Timestamp>(8, _omitFieldNames ? '' : 'finishedAt',
+        subBuilder: $0.Timestamp.create)
+    ..aOB(9, _omitFieldNames ? '' : 'hasDisplayableContent')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RunState clone() => RunState()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RunState copyWith(void Function(RunState) updates) =>
+      super.copyWith((message) => updates(message as RunState)) as RunState;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RunState create() => RunState._();
+  @$core.override
+  RunState createEmptyInstance() => create();
+  static $pb.PbList<RunState> createRepeated() => $pb.PbList<RunState>();
+  @$core.pragma('dart2js:noInline')
+  static RunState getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RunState>(create);
+  static RunState? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get runId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set runId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasRunId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearRunId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get userMessageId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set userMessageId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasUserMessageId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearUserMessageId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get assistantMessageId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set assistantMessageId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasAssistantMessageId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearAssistantMessageId() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  RunLifecycle get lifecycle => $_getN(3);
+  @$pb.TagNumber(4)
+  set lifecycle(RunLifecycle value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasLifecycle() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearLifecycle() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  RunOutcomeReason get outcomeReason => $_getN(4);
+  @$pb.TagNumber(5)
+  set outcomeReason(RunOutcomeReason value) => $_setField(5, value);
+  @$pb.TagNumber(5)
+  $core.bool hasOutcomeReason() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearOutcomeReason() => $_clearField(5);
+
+  /// Per-run monotonic version, starting at 1, incremented exactly once per real
+  /// public transition. Semantic no-ops do not increment it. It is the only
+  /// ordering authority for reconciliation: a client keeps the higher version
+  /// and drops anything older, so out-of-order or duplicate delivery cannot
+  /// resurrect a stale phase. Zero means absent, never "version zero".
+  @$pb.TagNumber(6)
+  $fixnum.Int64 get stateVersion => $_getI64(5);
+  @$pb.TagNumber(6)
+  set stateVersion($fixnum.Int64 value) => $_setInt64(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasStateVersion() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearStateVersion() => $_clearField(6);
+
+  /// Required on every published snapshot: the durable, public record of when
+  /// this version was recorded. A publisher that cannot vouch for this value —
+  /// because it is absent or fails to parse — omits the whole snapshot rather
+  /// than send a RunState without it, so a client that receives this message
+  /// can always rely on this field being set.
+  @$pb.TagNumber(7)
+  $0.Timestamp get stateUpdatedAt => $_getN(6);
+  @$pb.TagNumber(7)
+  set stateUpdatedAt($0.Timestamp value) => $_setField(7, value);
+  @$pb.TagNumber(7)
+  $core.bool hasStateUpdatedAt() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearStateUpdatedAt() => $_clearField(7);
+  @$pb.TagNumber(7)
+  $0.Timestamp ensureStateUpdatedAt() => $_ensure(6);
+
+  /// Set only for terminal lifecycles.
+  @$pb.TagNumber(8)
+  $0.Timestamp get finishedAt => $_getN(7);
+  @$pb.TagNumber(8)
+  set finishedAt($0.Timestamp value) => $_setField(8, value);
+  @$pb.TagNumber(8)
+  $core.bool hasFinishedAt() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearFinishedAt() => $_clearField(8);
+  @$pb.TagNumber(8)
+  $0.Timestamp ensureFinishedAt() => $_ensure(7);
+
+  /// Whether the canonical assistant message has content worth rendering, so a
+  /// client can distinguish a silent success from a lost one without inspecting
+  /// message bodies.
+  @$pb.TagNumber(9)
+  $core.bool get hasDisplayableContent => $_getBF(8);
+  @$pb.TagNumber(9)
+  set hasDisplayableContent($core.bool value) => $_setBool(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasHasDisplayableContent() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearHasDisplayableContent() => $_clearField(9);
+}
 
 class RequestMetadata extends $pb.GeneratedMessage {
   factory RequestMetadata({
@@ -207,7 +392,7 @@ class ErrorDetail extends $pb.GeneratedMessage {
     $core.String? code,
     $core.String? message,
     $core.String? requestId,
-    $0.Struct? details,
+    $1.Struct? details,
   }) {
     final result = create();
     if (code != null) result.code = code;
@@ -233,8 +418,8 @@ class ErrorDetail extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'code')
     ..aOS(2, _omitFieldNames ? '' : 'message')
     ..aOS(3, _omitFieldNames ? '' : 'requestId')
-    ..aOM<$0.Struct>(4, _omitFieldNames ? '' : 'details',
-        subBuilder: $0.Struct.create)
+    ..aOM<$1.Struct>(4, _omitFieldNames ? '' : 'details',
+        subBuilder: $1.Struct.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -285,15 +470,15 @@ class ErrorDetail extends $pb.GeneratedMessage {
   void clearRequestId() => $_clearField(3);
 
   @$pb.TagNumber(4)
-  $0.Struct get details => $_getN(3);
+  $1.Struct get details => $_getN(3);
   @$pb.TagNumber(4)
-  set details($0.Struct value) => $_setField(4, value);
+  set details($1.Struct value) => $_setField(4, value);
   @$pb.TagNumber(4)
   $core.bool hasDetails() => $_has(3);
   @$pb.TagNumber(4)
   void clearDetails() => $_clearField(4);
   @$pb.TagNumber(4)
-  $0.Struct ensureDetails() => $_ensure(3);
+  $1.Struct ensureDetails() => $_ensure(3);
 }
 
 class RoutingUnavailableDetail extends $pb.GeneratedMessage {
@@ -589,9 +774,11 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     $core.String? endpointHost,
     $core.String? externalAgentId,
     $core.Iterable<EgressDataCategory>? dataCategories,
-    $1.Timestamp? expiresAt,
+    $0.Timestamp? expiresAt,
     $core.Iterable<RemoteMcpEgressDestination>? remoteMcpServers,
     $core.Iterable<$core.String>? selectedTools,
+    $core.Iterable<IntegrationEgressDestination>? integrationEndpoints,
+    $core.Iterable<SkillEgressDisclosure>? skills,
   }) {
     final result = create();
     if (challenge != null) result.challenge = challenge;
@@ -605,6 +792,9 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     if (remoteMcpServers != null)
       result.remoteMcpServers.addAll(remoteMcpServers);
     if (selectedTools != null) result.selectedTools.addAll(selectedTools);
+    if (integrationEndpoints != null)
+      result.integrationEndpoints.addAll(integrationEndpoints);
+    if (skills != null) result.skills.addAll(skills);
     return result;
   }
 
@@ -635,12 +825,18 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
         valueOf: EgressDataCategory.valueOf,
         enumValues: EgressDataCategory.values,
         defaultEnumValue: EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED)
-    ..aOM<$1.Timestamp>(8, _omitFieldNames ? '' : 'expiresAt',
-        subBuilder: $1.Timestamp.create)
+    ..aOM<$0.Timestamp>(8, _omitFieldNames ? '' : 'expiresAt',
+        subBuilder: $0.Timestamp.create)
     ..pc<RemoteMcpEgressDestination>(
         9, _omitFieldNames ? '' : 'remoteMcpServers', $pb.PbFieldType.PM,
         subBuilder: RemoteMcpEgressDestination.create)
     ..pPS(10, _omitFieldNames ? '' : 'selectedTools')
+    ..pc<IntegrationEgressDestination>(
+        11, _omitFieldNames ? '' : 'integrationEndpoints', $pb.PbFieldType.PM,
+        subBuilder: IntegrationEgressDestination.create)
+    ..pc<SkillEgressDisclosure>(
+        12, _omitFieldNames ? '' : 'skills', $pb.PbFieldType.PM,
+        subBuilder: SkillEgressDisclosure.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -724,21 +920,110 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
   $pb.PbList<EgressDataCategory> get dataCategories => $_getList(6);
 
   @$pb.TagNumber(8)
-  $1.Timestamp get expiresAt => $_getN(7);
+  $0.Timestamp get expiresAt => $_getN(7);
   @$pb.TagNumber(8)
-  set expiresAt($1.Timestamp value) => $_setField(8, value);
+  set expiresAt($0.Timestamp value) => $_setField(8, value);
   @$pb.TagNumber(8)
   $core.bool hasExpiresAt() => $_has(7);
   @$pb.TagNumber(8)
   void clearExpiresAt() => $_clearField(8);
   @$pb.TagNumber(8)
-  $1.Timestamp ensureExpiresAt() => $_ensure(7);
+  $0.Timestamp ensureExpiresAt() => $_ensure(7);
 
   @$pb.TagNumber(9)
   $pb.PbList<RemoteMcpEgressDestination> get remoteMcpServers => $_getList(8);
 
   @$pb.TagNumber(10)
   $pb.PbList<$core.String> get selectedTools => $_getList(9);
+
+  @$pb.TagNumber(11)
+  $pb.PbList<IntegrationEgressDestination> get integrationEndpoints =>
+      $_getList(10);
+
+  @$pb.TagNumber(12)
+  $pb.PbList<SkillEgressDisclosure> get skills => $_getList(11);
+}
+
+class SkillEgressDisclosure extends $pb.GeneratedMessage {
+  factory SkillEgressDisclosure({
+    $core.String? skillId,
+    $core.String? displayName,
+    $core.bool? bodyMayBeSent,
+  }) {
+    final result = create();
+    if (skillId != null) result.skillId = skillId;
+    if (displayName != null) result.displayName = displayName;
+    if (bodyMayBeSent != null) result.bodyMayBeSent = bodyMayBeSent;
+    return result;
+  }
+
+  SkillEgressDisclosure._();
+
+  factory SkillEgressDisclosure.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory SkillEgressDisclosure.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SkillEgressDisclosure',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'skillId')
+    ..aOS(2, _omitFieldNames ? '' : 'displayName')
+    ..aOB(3, _omitFieldNames ? '' : 'bodyMayBeSent')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SkillEgressDisclosure clone() =>
+      SkillEgressDisclosure()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SkillEgressDisclosure copyWith(
+          void Function(SkillEgressDisclosure) updates) =>
+      super.copyWith((message) => updates(message as SkillEgressDisclosure))
+          as SkillEgressDisclosure;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SkillEgressDisclosure create() => SkillEgressDisclosure._();
+  @$core.override
+  SkillEgressDisclosure createEmptyInstance() => create();
+  static $pb.PbList<SkillEgressDisclosure> createRepeated() =>
+      $pb.PbList<SkillEgressDisclosure>();
+  @$core.pragma('dart2js:noInline')
+  static SkillEgressDisclosure getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SkillEgressDisclosure>(create);
+  static SkillEgressDisclosure? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get skillId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set skillId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSkillId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSkillId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get displayName => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set displayName($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasDisplayName() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearDisplayName() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.bool get bodyMayBeSent => $_getBF(2);
+  @$pb.TagNumber(3)
+  set bodyMayBeSent($core.bool value) => $_setBool(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasBodyMayBeSent() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearBodyMayBeSent() => $_clearField(3);
 }
 
 class RemoteMcpEgressDestination extends $pb.GeneratedMessage {
@@ -822,6 +1107,108 @@ class RemoteMcpEgressDestination extends $pb.GeneratedMessage {
   $core.bool hasEndpointHost() => $_has(2);
   @$pb.TagNumber(3)
   void clearEndpointHost() => $_clearField(3);
+}
+
+class IntegrationEgressDestination extends $pb.GeneratedMessage {
+  factory IntegrationEgressDestination({
+    $core.String? endpoint,
+    $core.String? endpointHost,
+    $core.String? connectionId,
+    $core.String? displayName,
+    $core.Iterable<$core.String>? tools,
+  }) {
+    final result = create();
+    if (endpoint != null) result.endpoint = endpoint;
+    if (endpointHost != null) result.endpointHost = endpointHost;
+    if (connectionId != null) result.connectionId = connectionId;
+    if (displayName != null) result.displayName = displayName;
+    if (tools != null) result.tools.addAll(tools);
+    return result;
+  }
+
+  IntegrationEgressDestination._();
+
+  factory IntegrationEgressDestination.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory IntegrationEgressDestination.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'IntegrationEgressDestination',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'endpoint')
+    ..aOS(2, _omitFieldNames ? '' : 'endpointHost')
+    ..aOS(3, _omitFieldNames ? '' : 'connectionId')
+    ..aOS(4, _omitFieldNames ? '' : 'displayName')
+    ..pPS(5, _omitFieldNames ? '' : 'tools')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  IntegrationEgressDestination clone() =>
+      IntegrationEgressDestination()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  IntegrationEgressDestination copyWith(
+          void Function(IntegrationEgressDestination) updates) =>
+      super.copyWith(
+              (message) => updates(message as IntegrationEgressDestination))
+          as IntegrationEgressDestination;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static IntegrationEgressDestination create() =>
+      IntegrationEgressDestination._();
+  @$core.override
+  IntegrationEgressDestination createEmptyInstance() => create();
+  static $pb.PbList<IntegrationEgressDestination> createRepeated() =>
+      $pb.PbList<IntegrationEgressDestination>();
+  @$core.pragma('dart2js:noInline')
+  static IntegrationEgressDestination getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<IntegrationEgressDestination>(create);
+  static IntegrationEgressDestination? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get endpoint => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set endpoint($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasEndpoint() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearEndpoint() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get endpointHost => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set endpointHost($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasEndpointHost() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearEndpointHost() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get connectionId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set connectionId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasConnectionId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearConnectionId() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get displayName => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set displayName($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasDisplayName() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearDisplayName() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $pb.PbList<$core.String> get tools => $_getList(4);
 }
 
 class RemoteEgressConsent extends $pb.GeneratedMessage {
@@ -916,7 +1303,7 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     $core.String? endpointHost,
     $core.String? externalAgentId,
     $core.Iterable<EgressDataCategory>? dataCategories,
-    $1.Timestamp? consentGrantedAt,
+    $0.Timestamp? consentGrantedAt,
     $core.String? challengeFingerprint,
     $core.Iterable<$core.String>? selectedTools,
     $core.String? skillSnapshotFingerprint,
@@ -925,6 +1312,7 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     $core.String? externalCredentialRefHash,
     $core.String? requestDigest,
     $core.Iterable<RemoteMcpEgressDestination>? remoteMcpServers,
+    $core.Iterable<IntegrationEgressDestination>? integrationEndpoints,
   }) {
     final result = create();
     if (decisionId != null) result.decisionId = decisionId;
@@ -949,6 +1337,8 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     if (requestDigest != null) result.requestDigest = requestDigest;
     if (remoteMcpServers != null)
       result.remoteMcpServers.addAll(remoteMcpServers);
+    if (integrationEndpoints != null)
+      result.integrationEndpoints.addAll(integrationEndpoints);
     return result;
   }
 
@@ -980,8 +1370,8 @@ class RunEgressDecision extends $pb.GeneratedMessage {
         valueOf: EgressDataCategory.valueOf,
         enumValues: EgressDataCategory.values,
         defaultEnumValue: EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED)
-    ..aOM<$1.Timestamp>(9, _omitFieldNames ? '' : 'consentGrantedAt',
-        subBuilder: $1.Timestamp.create)
+    ..aOM<$0.Timestamp>(9, _omitFieldNames ? '' : 'consentGrantedAt',
+        subBuilder: $0.Timestamp.create)
     ..aOS(10, _omitFieldNames ? '' : 'challengeFingerprint')
     ..pPS(11, _omitFieldNames ? '' : 'selectedTools')
     ..aOS(12, _omitFieldNames ? '' : 'skillSnapshotFingerprint')
@@ -992,6 +1382,9 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     ..pc<RemoteMcpEgressDestination>(
         17, _omitFieldNames ? '' : 'remoteMcpServers', $pb.PbFieldType.PM,
         subBuilder: RemoteMcpEgressDestination.create)
+    ..pc<IntegrationEgressDestination>(
+        18, _omitFieldNames ? '' : 'integrationEndpoints', $pb.PbFieldType.PM,
+        subBuilder: IntegrationEgressDestination.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1082,15 +1475,15 @@ class RunEgressDecision extends $pb.GeneratedMessage {
   $pb.PbList<EgressDataCategory> get dataCategories => $_getList(7);
 
   @$pb.TagNumber(9)
-  $1.Timestamp get consentGrantedAt => $_getN(8);
+  $0.Timestamp get consentGrantedAt => $_getN(8);
   @$pb.TagNumber(9)
-  set consentGrantedAt($1.Timestamp value) => $_setField(9, value);
+  set consentGrantedAt($0.Timestamp value) => $_setField(9, value);
   @$pb.TagNumber(9)
   $core.bool hasConsentGrantedAt() => $_has(8);
   @$pb.TagNumber(9)
   void clearConsentGrantedAt() => $_clearField(9);
   @$pb.TagNumber(9)
-  $1.Timestamp ensureConsentGrantedAt() => $_ensure(8);
+  $0.Timestamp ensureConsentGrantedAt() => $_ensure(8);
 
   @$pb.TagNumber(10)
   $core.String get challengeFingerprint => $_getSZ(9);
@@ -1151,6 +1544,10 @@ class RunEgressDecision extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(17)
   $pb.PbList<RemoteMcpEgressDestination> get remoteMcpServers => $_getList(16);
+
+  @$pb.TagNumber(18)
+  $pb.PbList<IntegrationEgressDestination> get integrationEndpoints =>
+      $_getList(17);
 }
 
 class AgentDescriptor extends $pb.GeneratedMessage {
@@ -1245,7 +1642,8 @@ class Message extends $pb.GeneratedMessage {
     $core.String? content,
     $core.String? contentType,
     $fixnum.Int64? sequence,
-    $1.Timestamp? createdAt,
+    $0.Timestamp? createdAt,
+    RunState? runState,
   }) {
     final result = create();
     if (messageId != null) result.messageId = messageId;
@@ -1256,6 +1654,7 @@ class Message extends $pb.GeneratedMessage {
     if (contentType != null) result.contentType = contentType;
     if (sequence != null) result.sequence = sequence;
     if (createdAt != null) result.createdAt = createdAt;
+    if (runState != null) result.runState = runState;
     return result;
   }
 
@@ -1282,8 +1681,10 @@ class Message extends $pb.GeneratedMessage {
     ..aOS(5, _omitFieldNames ? '' : 'content')
     ..aOS(6, _omitFieldNames ? '' : 'contentType')
     ..aInt64(7, _omitFieldNames ? '' : 'sequence')
-    ..aOM<$1.Timestamp>(8, _omitFieldNames ? '' : 'createdAt',
-        subBuilder: $1.Timestamp.create)
+    ..aOM<$0.Timestamp>(8, _omitFieldNames ? '' : 'createdAt',
+        subBuilder: $0.Timestamp.create)
+    ..aOM<RunState>(9, _omitFieldNames ? '' : 'runState',
+        subBuilder: RunState.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1369,15 +1770,29 @@ class Message extends $pb.GeneratedMessage {
   void clearSequence() => $_clearField(7);
 
   @$pb.TagNumber(8)
-  $1.Timestamp get createdAt => $_getN(7);
+  $0.Timestamp get createdAt => $_getN(7);
   @$pb.TagNumber(8)
-  set createdAt($1.Timestamp value) => $_setField(8, value);
+  set createdAt($0.Timestamp value) => $_setField(8, value);
   @$pb.TagNumber(8)
   $core.bool hasCreatedAt() => $_has(7);
   @$pb.TagNumber(8)
   void clearCreatedAt() => $_clearField(8);
   @$pb.TagNumber(8)
-  $1.Timestamp ensureCreatedAt() => $_ensure(7);
+  $0.Timestamp ensureCreatedAt() => $_ensure(7);
+
+  /// The authoritative state of the run that produced this message, so reopened
+  /// history needs no separate query to know the outcome. Absent when the
+  /// message has no run correlation, or when legacy correlation is inconsistent.
+  @$pb.TagNumber(9)
+  RunState get runState => $_getN(8);
+  @$pb.TagNumber(9)
+  set runState(RunState value) => $_setField(9, value);
+  @$pb.TagNumber(9)
+  $core.bool hasRunState() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearRunState() => $_clearField(9);
+  @$pb.TagNumber(9)
+  RunState ensureRunState() => $_ensure(8);
 }
 
 const $core.bool _omitFieldNames =

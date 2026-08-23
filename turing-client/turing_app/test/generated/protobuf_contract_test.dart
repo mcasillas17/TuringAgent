@@ -51,16 +51,16 @@ void main() {
     final response = ReimportMcpJsonResponse(
       imported: ['vendor-a'],
       skipped: ['vendor-b'],
-      refused: [UnsupportedMcpServer(name: 'vendor-c', reason: 'unsupported transport')],
+      unsupported: [UnsupportedMcpServer(name: 'vendor-c', reason: 'unsupported transport')],
     );
 
     final decoded = ReimportMcpJsonResponse.fromBuffer(response.writeToBuffer());
 
     expect(decoded.imported, ['vendor-a']);
     expect(decoded.skipped, ['vendor-b']);
-    expect(decoded.refused, hasLength(1));
-    expect(decoded.refused.single.name, 'vendor-c');
-    expect(decoded.refused.single.reason, 'unsupported transport');
+    expect(decoded.unsupported, hasLength(1));
+    expect(decoded.unsupported.single.name, 'vendor-c');
+    expect(decoded.unsupported.single.reason, 'unsupported transport');
   });
 
   test('ReimportMcpJsonRequest is empty', () {

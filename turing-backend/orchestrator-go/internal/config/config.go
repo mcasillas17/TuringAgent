@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 )
 
@@ -250,6 +251,15 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	maxAttempts, err := intValue("TURING_JOB_MAX_ATTEMPTS", 3)
 	if err != nil {
 		return Config{}, err
+	}
+	// Retry notices persist the attempt count in a public payload, and
+	// runoutcome.MaxNoticeAttempts is the hard ceiling that construction
+	// enforces inside repository transactions. Rejecting an out-of-range
+	// value here — instead of letting it fail deep inside a requeue,
+	// exhaustion, or recovery transaction — keeps a bad config from
+	// wedging every retry transition behind a permanent rollback.
+	if maxAttempts < 1 || maxAttempts > runoutcome.MaxNoticeAttempts {
+		return Config{}, fmt.Errorf("TURING_JOB_MAX_ATTEMPTS must be between 1 and %d", runoutcome.MaxNoticeAttempts)
 	}
 	maxRuns, err := intValue("TURING_MAX_CONCURRENT_RUNS_GENERAL", 1)
 	if err != nil {

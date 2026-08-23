@@ -302,6 +302,316 @@ func TestWorkerCapabilityRoutingProtoContract(t *testing.T) {
 	assertProtoField(t, agent, "available", 3, protoreflect.BoolKind, false, "")
 }
 
+func TestRunOutcomeProtoContractUsesApprovedAllocations(t *testing.T) {
+	common := turingv1.File_turing_v1_common_proto
+	assertProtoEnumValues(t, common.Enums().ByName("RunLifecycle"), map[protoreflect.Name]protoreflect.EnumNumber{
+		"RUN_LIFECYCLE_UNSPECIFIED":      0,
+		"RUN_LIFECYCLE_UNKNOWN":          1,
+		"RUN_LIFECYCLE_QUEUED":           2,
+		"RUN_LIFECYCLE_RUNNING":          3,
+		"RUN_LIFECYCLE_WAITING_APPROVAL": 4,
+		"RUN_LIFECYCLE_RECOVERING":       5,
+		"RUN_LIFECYCLE_COMPLETED":        6,
+		"RUN_LIFECYCLE_FAILED":           7,
+		"RUN_LIFECYCLE_CANCELLED":        8,
+	})
+	assertProtoEnumValues(t, common.Enums().ByName("RunOutcomeReason"), map[protoreflect.Name]protoreflect.EnumNumber{
+		"RUN_OUTCOME_REASON_UNSPECIFIED":              0,
+		"RUN_OUTCOME_REASON_UNKNOWN":                  1,
+		"RUN_OUTCOME_REASON_NONE":                     2,
+		"RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT":     3,
+		"RUN_OUTCOME_REASON_USER_CANCELLED":           4,
+		"RUN_OUTCOME_REASON_ABANDONED":                5,
+		"RUN_OUTCOME_REASON_EXPIRED":                  6,
+		"RUN_OUTCOME_REASON_CONTEXT_LIMIT":            7,
+		"RUN_OUTCOME_REASON_PROVIDER_FAILURE":         8,
+		"RUN_OUTCOME_REASON_TOOL_FAILURE":             9,
+		"RUN_OUTCOME_REASON_POLICY_DENIED":            10,
+		"RUN_OUTCOME_REASON_RETRIES_EXHAUSTED":        11,
+		"RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED":     12,
+		"RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN":    13,
+		"RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED": 14,
+		"RUN_OUTCOME_REASON_INTERNAL_FAILURE":         15,
+		"RUN_OUTCOME_REASON_LEGACY_UNKNOWN":           16,
+	})
+
+	runState := common.Messages().ByName("RunState")
+	assertProtoField(t, runState, "run_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, runState, "user_message_id", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, runState, "assistant_message_id", 3, protoreflect.StringKind, false, "")
+	assertProtoField(t, runState, "lifecycle", 4, protoreflect.EnumKind, false, "")
+	assertProtoField(t, runState, "outcome_reason", 5, protoreflect.EnumKind, false, "")
+	assertProtoField(t, runState, "state_version", 6, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, runState, "state_updated_at", 7, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
+	assertProtoField(t, runState, "finished_at", 8, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
+	assertProtoField(t, runState, "has_displayable_content", 9, protoreflect.BoolKind, false, "")
+	assertProtoFieldMembers(t, runState, map[protoreflect.Name]protoreflect.FieldNumber{
+		"run_id": 1, "user_message_id": 2, "assistant_message_id": 3, "lifecycle": 4, "outcome_reason": 5,
+		"state_version": 6, "state_updated_at": 7, "finished_at": 8, "has_displayable_content": 9,
+	})
+	assertProtoField(t, common.Messages().ByName("Message"), "run_state", 9, protoreflect.MessageKind, false, "turing.v1.RunState")
+	assertProtoFieldMembers(t, common.Messages().ByName("Message"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"message_id": 1, "session_id": 2, "run_id": 3, "role": 4, "content": 5, "content_type": 6,
+		"sequence": 7, "created_at": 8, "run_state": 9,
+	})
+
+	chat := turingv1.File_turing_v1_chat_proto
+	for _, messageName := range []protoreflect.Name{"RunQueued", "RunStarted", "ApprovalEvent"} {
+		assertProtoField(t, chat.Messages().ByName(messageName), "run_state", 4, protoreflect.MessageKind, false, "turing.v1.RunState")
+	}
+	assertProtoField(t, chat.Messages().ByName("RunCompleted"), "run_state", 3, protoreflect.MessageKind, false, "turing.v1.RunState")
+	assertProtoField(t, chat.Messages().ByName("RunFailed"), "run_state", 5, protoreflect.MessageKind, false, "turing.v1.RunState")
+	assertProtoField(t, chat.Messages().ByName("RunCancelled"), "run_state", 3, protoreflect.MessageKind, false, "turing.v1.RunState")
+	assertProtoField(t, chat.Messages().ByName("RunStateChanged"), "run_state", 1, protoreflect.MessageKind, false, "turing.v1.RunState")
+	assertProtoField(t, chat.Messages().ByName("ChatStreamEvent"), "run_state_changed", 27, protoreflect.MessageKind, false, "turing.v1.RunStateChanged")
+	assertProtoOneofMember(t, chat.Messages().ByName("ChatStreamEvent"), "run_state_changed", "event")
+	for messageName, fields := range map[protoreflect.Name]map[protoreflect.Name]protoreflect.FieldNumber{
+		"RunQueued":       {"run_id": 1, "job_id": 2, "trace_id": 3, "run_state": 4},
+		"RunStarted":      {"run_id": 1, "job_id": 2, "attempt": 3, "run_state": 4},
+		"ApprovalEvent":   {"approval_id": 1, "tool_name": 2, "args_summary": 3, "run_state": 4},
+		"RunCompleted":    {"run_id": 1, "assistant_message_id": 2, "run_state": 3},
+		"RunFailed":       {"run_id": 1, "code": 2, "message": 3, "retryable": 4, "run_state": 5},
+		"RunCancelled":    {"run_id": 1, "reason": 2, "run_state": 3},
+		"RunStateChanged": {"run_state": 1},
+		"ChatStreamEvent": {
+			"session_id": 1, "run_id": 2, "trace_id": 3, "sequence": 4, "run_queued": 10, "run_started": 11,
+			"message_started": 12, "token_delta": 13, "tool_call_started": 14, "tool_call_completed": 15,
+			"tool_call_failed": 16, "approval_requested": 17, "approval_approved": 18, "approval_denied": 19,
+			"approval_expired": 20, "approval_consumed": 21, "message_completed": 22, "run_completed": 23,
+			"run_failed": 24, "run_cancelled": 25, "persisted_event": 26, "run_state_changed": 27,
+		},
+	} {
+		assertProtoFieldMembers(t, chat.Messages().ByName(messageName), fields)
+	}
+
+	events := turingv1.File_turing_v1_events_proto
+	assertProtoField(t, events.Messages().ByName("TuringEvent"), "run_state", 9, protoreflect.MessageKind, false, "turing.v1.RunState")
+	assertProtoFieldMembers(t, events.Messages().ByName("TuringEvent"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"event_id": 1, "session_id": 2, "run_id": 3, "trace_id": 4, "sequence": 5, "type": 6,
+		"created_at": 7, "payload": 8, "run_state": 9,
+	})
+	assertProtoField(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), "read_only", 8, protoreflect.BoolKind, false, "")
+	assertProtoField(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), "run_state_version", 9, protoreflect.Int64Kind, false, "")
+	assertProtoFieldMembers(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"decision": 1, "tool_call_id": 2, "approval_id": 3, "reason": 4, "terminal_run": 5, "phase": 6,
+		"provenance_token": 7, "read_only": 8, "run_state_version": 9,
+	})
+}
+
+func TestRunOutcomeEnumsHaveUnspecifiedAndUnknownValues(t *testing.T) {
+	common := turingv1.File_turing_v1_common_proto
+	for enumName, values := range map[protoreflect.Name]map[protoreflect.Name]protoreflect.EnumNumber{
+		"RunLifecycle": {
+			"RUN_LIFECYCLE_UNSPECIFIED": 0,
+			"RUN_LIFECYCLE_UNKNOWN":     1,
+		},
+		"RunOutcomeReason": {
+			"RUN_OUTCOME_REASON_UNSPECIFIED": 0,
+			"RUN_OUTCOME_REASON_UNKNOWN":     1,
+		},
+	} {
+		enum := common.Enums().ByName(enumName)
+		if enum == nil {
+			t.Fatalf("%s descriptor is missing", enumName)
+		}
+		for name, number := range values {
+			value := enum.Values().ByName(name)
+			if value == nil || value.Number() != number {
+				t.Fatalf("%s.%s = %v, want %d", enumName, name, value, number)
+			}
+		}
+	}
+
+	runtime := turingv1.File_turing_v1_runtime_proto
+	for enumName, values := range map[protoreflect.Name]map[protoreflect.Name]protoreflect.EnumNumber{
+		"FailureOrigin": {
+			"FAILURE_ORIGIN_UNSPECIFIED": 0,
+			"FAILURE_ORIGIN_UNKNOWN":     1,
+		},
+		"AutomaticRetryClass": {
+			"AUTOMATIC_RETRY_CLASS_UNSPECIFIED": 0,
+			"AUTOMATIC_RETRY_CLASS_UNKNOWN":     1,
+		},
+	} {
+		enum := runtime.Enums().ByName(enumName)
+		if enum == nil {
+			t.Fatalf("%s descriptor is missing", enumName)
+		}
+		for name, number := range values {
+			value := enum.Values().ByName(name)
+			if value == nil || value.Number() != number {
+				t.Fatalf("%s.%s = %v, want %d", enumName, name, value, number)
+			}
+		}
+	}
+}
+
+func TestRuntimeApprovalResumeProtoContractUsesApprovedAllocations(t *testing.T) {
+	runtime := turingv1.File_turing_v1_runtime_proto
+	assertProtoEnumValues(t, runtime.Enums().ByName("FailureOrigin"), map[protoreflect.Name]protoreflect.EnumNumber{
+		"FAILURE_ORIGIN_UNSPECIFIED":            0,
+		"FAILURE_ORIGIN_UNKNOWN":                1,
+		"FAILURE_ORIGIN_CONTEXT_ASSEMBLY":       2,
+		"FAILURE_ORIGIN_EXTERNAL_PROVIDER":      3,
+		"FAILURE_ORIGIN_PROVIDER_CONFIGURATION": 4,
+		"FAILURE_ORIGIN_PROVIDER_PROTOCOL":      5,
+		"FAILURE_ORIGIN_PROVIDER_TRANSPORT":     6,
+		"FAILURE_ORIGIN_PROVIDER_OUTPUT_GUARD":  7,
+		"FAILURE_ORIGIN_TOOL_INFRASTRUCTURE":    8,
+		"FAILURE_ORIGIN_TOOL_EXECUTION":         9,
+		"FAILURE_ORIGIN_TOOL_GUARD":             10,
+		"FAILURE_ORIGIN_TOOL_POLICY":            11,
+		"FAILURE_ORIGIN_APPROVAL_TRANSPORT":     12,
+		"FAILURE_ORIGIN_APPROVAL_EXPIRY":        13,
+		"FAILURE_ORIGIN_AUTOMATION_POLICY":      14,
+		"FAILURE_ORIGIN_WORKER_RUNTIME":         15,
+		"FAILURE_ORIGIN_DISPATCH":               16,
+		"FAILURE_ORIGIN_RECOVERY":               17,
+		"FAILURE_ORIGIN_ORCHESTRATOR_INTERNAL":  18,
+		"FAILURE_ORIGIN_CLIENT_LIFECYCLE":       19,
+	})
+	assertProtoEnumValues(t, runtime.Enums().ByName("AutomaticRetryClass"), map[protoreflect.Name]protoreflect.EnumNumber{
+		"AUTOMATIC_RETRY_CLASS_UNSPECIFIED":        0,
+		"AUTOMATIC_RETRY_CLASS_UNKNOWN":            1,
+		"AUTOMATIC_RETRY_CLASS_NEVER":              2,
+		"AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT": 3,
+	})
+
+	assertProtoField(t, runtime.Messages().ByName("AgentJob"), "expected_state_version", 19, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, runtime.Messages().ByName("AgentJob"), "assignment_attempt_id", 20, protoreflect.StringKind, false, "")
+	assertProtoField(t, runtime.Messages().ByName("RuntimeRunCompleted"), "expected_state_version", 6, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, runtime.Messages().ByName("RuntimeRunFailed"), "failure_origin", 5, protoreflect.EnumKind, false, "")
+	assertProtoField(t, runtime.Messages().ByName("RuntimeRunFailed"), "automatic_retry_class", 6, protoreflect.EnumKind, false, "")
+	assertProtoField(t, runtime.Messages().ByName("RuntimeRunFailed"), "expected_state_version", 7, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, runtime.Messages().ByName("RuntimeCancelledAck"), "observed_state_version", 2, protoreflect.Int64Kind, false, "")
+	assertProtoFieldMembers(t, runtime.Messages().ByName("AgentJob"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"job_id": 1, "run_id": 2, "session_id": 3, "user_message_id": 4, "assistant_message_id": 5, "agent_id": 6,
+		"trace_id": 7, "model_provider": 8, "model": 9, "user_text": 10, "requested_tools": 11, "attempt": 12,
+		"skills": 13, "external_agent": 14, "required_context_tokens": 15, "minimum_worker_max_concurrent_runs": 16,
+		"egress_decision": 17, "selected_tools": 18, "expected_state_version": 19, "assignment_attempt_id": 20,
+	})
+	assertProtoFieldMembers(t, runtime.Messages().ByName("RuntimeRunCompleted"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"run_id": 1, "assistant_message_id": 2, "content": 3, "usage": 4, "token_usage": 5, "expected_state_version": 6,
+	})
+	assertProtoFieldMembers(t, runtime.Messages().ByName("RuntimeRunFailed"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"run_id": 1, "code": 2, "message": 3, "retryable": 4, "failure_origin": 5, "automatic_retry_class": 6, "expected_state_version": 7,
+	})
+	assertProtoFieldMembers(t, runtime.Messages().ByName("RuntimeCancelledAck"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"run_id": 1, "observed_state_version": 2,
+	})
+
+	resumeReady := runtime.Messages().ByName("RuntimeApprovalResumeReady")
+	assertProtoField(t, resumeReady, "run_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, resumeReady, "approval_id", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, resumeReady, "expected_state_version", 3, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, resumeReady, "assignment_attempt_id", 4, protoreflect.StringKind, false, "")
+	assertProtoField(t, runtime.Messages().ByName("RuntimeUpdate"), "approval_resume_ready", 9, protoreflect.MessageKind, false, "turing.v1.RuntimeApprovalResumeReady")
+	assertProtoOneofMember(t, runtime.Messages().ByName("RuntimeUpdate"), "approval_resume_ready", "update")
+	assertProtoFieldMembers(t, resumeReady, map[protoreflect.Name]protoreflect.FieldNumber{
+		"run_id": 1, "approval_id": 2, "expected_state_version": 3, "assignment_attempt_id": 4,
+	})
+	assertProtoFieldMembers(t, runtime.Messages().ByName("RuntimeUpdate"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"worker_ready": 1, "heartbeat": 2, "event": 3, "tool_beacon": 4, "run_completed": 5, "run_failed": 6,
+		"run_cancelled_ack": 7, "worker_capabilities_updated": 8, "approval_resume_ready": 9,
+	})
+
+	resumeAccepted := runtime.Messages().ByName("RuntimeApprovalResumeAccepted")
+	assertProtoField(t, resumeAccepted, "run_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, resumeAccepted, "approval_id", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, resumeAccepted, "state_version", 3, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, resumeAccepted, "assignment_attempt_id", 4, protoreflect.StringKind, false, "")
+	assertProtoField(t, runtime.Messages().ByName("RuntimeCommand"), "approval_resume_accepted", 8, protoreflect.MessageKind, false, "turing.v1.RuntimeApprovalResumeAccepted")
+	assertProtoOneofMember(t, runtime.Messages().ByName("RuntimeCommand"), "approval_resume_accepted", "command")
+	assertProtoField(t, runtime.Messages().ByName("RuntimeRunCancelled"), "state_version", 3, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, runtime.Messages().ByName("RuntimeApprovalUpdated"), "state_version", 4, protoreflect.Int64Kind, false, "")
+	assertProtoFieldMembers(t, resumeAccepted, map[protoreflect.Name]protoreflect.FieldNumber{
+		"run_id": 1, "approval_id": 2, "state_version": 3, "assignment_attempt_id": 4,
+	})
+	assertProtoFieldMembers(t, runtime.Messages().ByName("RuntimeCommand"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"worker_accepted": 1, "run_assigned": 2, "run_cancelled": 3, "approval_updated": 4,
+		"shutdown_requested": 5, "tool_policy_decision": 6, "mcp_registry_changed": 7, "approval_resume_accepted": 8,
+	})
+	assertProtoFieldMembers(t, runtime.Messages().ByName("RuntimeRunCancelled"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"run_id": 1, "reason": 2, "state_version": 3,
+	})
+	assertProtoFieldMembers(t, runtime.Messages().ByName("RuntimeApprovalUpdated"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"approval_id": 1, "approval_token": 2, "status": 3, "state_version": 4,
+	})
+}
+
+func TestRunStateChangedReservesEventTypeTwentyThree(t *testing.T) {
+	events := turingv1.File_turing_v1_events_proto
+	enum := events.Enums().ByName("TuringEventType")
+	if enum == nil {
+		t.Fatal("enum descriptor is missing")
+	}
+	required := map[protoreflect.Name]protoreflect.EnumNumber{
+		"TURING_EVENT_TYPE_UNSPECIFIED":             0,
+		"TURING_EVENT_TYPE_MESSAGE_STARTED":         1,
+		"TURING_EVENT_TYPE_MESSAGE_DELTA":           2,
+		"TURING_EVENT_TYPE_MESSAGE_COMPLETED":       3,
+		"TURING_EVENT_TYPE_AGENT_RUN_QUEUED":        4,
+		"TURING_EVENT_TYPE_AGENT_RUN_STARTED":       5,
+		"TURING_EVENT_TYPE_AGENT_RUN_STEP":          6,
+		"TURING_EVENT_TYPE_AGENT_RUN_COMPLETED":     7,
+		"TURING_EVENT_TYPE_AGENT_RUN_FAILED":        8,
+		"TURING_EVENT_TYPE_AGENT_RUN_CANCELLED":     9,
+		"TURING_EVENT_TYPE_TOOL_CALL_STARTED":       10,
+		"TURING_EVENT_TYPE_TOOL_CALL_COMPLETED":     11,
+		"TURING_EVENT_TYPE_TOOL_CALL_FAILED":        12,
+		"TURING_EVENT_TYPE_TOOL_CALL_DENIED":        13,
+		"TURING_EVENT_TYPE_APPROVAL_REQUESTED":      14,
+		"TURING_EVENT_TYPE_APPROVAL_APPROVED":       15,
+		"TURING_EVENT_TYPE_APPROVAL_DENIED":         16,
+		"TURING_EVENT_TYPE_APPROVAL_EXPIRED":        17,
+		"TURING_EVENT_TYPE_APPROVAL_CONSUMED":       18,
+		"TURING_EVENT_TYPE_ERROR":                   19,
+		"TURING_EVENT_TYPE_SYSTEM":                  20,
+		"TURING_EVENT_TYPE_SESSION_UPDATED":         21,
+		"TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED": 23,
+	}
+	for name, number := range required {
+		value := enum.Values().ByName(name)
+		if value == nil || value.Number() != number {
+			t.Fatalf("TuringEventType.%s = %v, want %d", name, value, number)
+		}
+	}
+
+	// TUR-009 allocates 23 only. Value 22 belongs to TUR-004 and must stay
+	// reserved until that work lands, whichever order the two features merge in.
+	// TUR-004 is expected to name it TURING_EVENT_TYPE_SESSION_DELETED; if that
+	// allocation changes, update this expected name rather than freeing 22.
+	const tur004Value22 = protoreflect.Name("TURING_EVENT_TYPE_SESSION_DELETED")
+
+	value22 := enum.Values().ByNumber(22)
+	switch {
+	case value22 == nil:
+		if !enum.ReservedRanges().Has(22) {
+			t.Fatalf("TuringEventType value 22 is neither reserved nor allocated; TUR-009 does not allocate 22, so it must stay reserved until TUR-004 (expected %s) uses it", tur004Value22)
+		}
+		if enum.Values().Len() != len(required) {
+			t.Fatalf("TuringEventType has %d values, want %d while 22 is reserved", enum.Values().Len(), len(required))
+		}
+	case value22.Name() == tur004Value22:
+		if enum.ReservedRanges().Has(22) {
+			t.Fatalf("TuringEventType reserves 22 while %s also allocates it; drop the reservation now that TUR-004 has landed", value22.Name())
+		}
+		if enum.Values().Len() != len(required)+1 {
+			t.Fatalf("TuringEventType has %d values, want %d once TUR-004 allocates 22 as %s", enum.Values().Len(), len(required)+1, value22.Name())
+		}
+	default:
+		t.Fatalf("TuringEventType value 22 = %s, which TUR-009 does not allocate; if TUR-004 changed its value 22, update this guard's expected name (currently %s)", value22.Name(), tur004Value22)
+	}
+}
+
+func TestRunFailedRetryableRemainsDeprecatedAtFieldFour(t *testing.T) {
+	runFailed := turingv1.File_turing_v1_chat_proto.Messages().ByName("RunFailed")
+	field := runFailed.Fields().ByName("retryable")
+	if field == nil || field.Number() != 4 || field.Kind() != protoreflect.BoolKind || !field.Options().(*descriptorpb.FieldOptions).GetDeprecated() {
+		t.Fatalf("RunFailed.retryable must remain deprecated bool field 4: %v", field)
+	}
+}
+
 func TestRemoteEgressProtoContract(t *testing.T) {
 	common := turingv1.File_turing_v1_common_proto
 	categories := common.Enums().ByName("EgressDataCategory")
@@ -333,6 +643,13 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	assertProtoField(t, disclosure, "expires_at", 8, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
 	assertProtoField(t, disclosure, "remote_mcp_servers", 9, protoreflect.MessageKind, true, "turing.v1.RemoteMcpEgressDestination")
 	assertProtoField(t, disclosure, "selected_tools", 10, protoreflect.StringKind, true, "")
+	assertProtoField(t, disclosure, "integration_endpoints", 11, protoreflect.MessageKind, true, "turing.v1.IntegrationEgressDestination")
+	assertProtoField(t, disclosure, "skills", 12, protoreflect.MessageKind, true, "turing.v1.SkillEgressDisclosure")
+
+	skill := common.Messages().ByName("SkillEgressDisclosure")
+	assertProtoField(t, skill, "skill_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, skill, "display_name", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, skill, "body_may_be_sent", 3, protoreflect.BoolKind, false, "")
 
 	remoteMCP := common.Messages().ByName("RemoteMcpEgressDestination")
 	assertProtoField(t, remoteMCP, "server_name", 1, protoreflect.StringKind, false, "")
@@ -422,6 +739,8 @@ func TestMCPRegistryProtoContract(t *testing.T) {
 		"ListMcpServers",
 		"SetMcpServerEnabled",
 		"UpdateMcpToolPolicy",
+		"UpdateToolPolicyByName",
+		"ListPseudoServerTools",
 		"DeleteMcpServer",
 		"CallRegisteredMcpTool",
 		"RegisterMcpServer",
@@ -450,8 +769,11 @@ func TestMCPRegistryProtoContract(t *testing.T) {
 	registerReq := file.Messages().ByName("RegisterMcpServerRequest")
 	assertProtoField(t, registerReq, "name", 1, protoreflect.StringKind, false, "")
 	assertProtoField(t, registerReq, "url", 2, protoreflect.StringKind, false, "")
-	assertProtoField(t, registerReq, "tier", 3, protoreflect.EnumKind, false, "")
-	assertProtoField(t, registerReq, "bearer_token", 4, protoreflect.StringKind, false, "")
+	// bearer_token stays at 3 and tier is appended at 4: the tier-less form
+	// of this request shipped on main first, so moving bearer_token would
+	// break every client already built against it on the wire.
+	assertProtoField(t, registerReq, "bearer_token", 3, protoreflect.StringKind, false, "")
+	assertProtoField(t, registerReq, "tier", 4, protoreflect.EnumKind, false, "")
 
 	reimportReq := file.Messages().ByName("ReimportMcpJsonRequest")
 	if reimportReq == nil {
@@ -463,8 +785,10 @@ func TestMCPRegistryProtoContract(t *testing.T) {
 
 	reimportResp := file.Messages().ByName("ReimportMcpJsonResponse")
 	assertProtoField(t, reimportResp, "imported", 1, protoreflect.StringKind, true, "")
-	assertProtoField(t, reimportResp, "skipped", 2, protoreflect.StringKind, true, "")
-	assertProtoField(t, reimportResp, "refused", 3, protoreflect.MessageKind, true, "turing.v1.UnsupportedMcpServer")
+	// unsupported keeps main's number 2 and skipped is appended at 3, for
+	// the same wire-compatibility reason as RegisterMcpServerRequest above.
+	assertProtoField(t, reimportResp, "unsupported", 2, protoreflect.MessageKind, true, "turing.v1.UnsupportedMcpServer")
+	assertProtoField(t, reimportResp, "skipped", 3, protoreflect.StringKind, true, "")
 
 	rotateReq := file.Messages().ByName("RotateMcpServerTokenRequest")
 	assertProtoField(t, rotateReq, "server_id", 1, protoreflect.StringKind, false, "")
@@ -518,6 +842,7 @@ func assertProtoField(t *testing.T, message protoreflect.MessageDescriptor, name
 	if message == nil {
 		t.Fatal("message descriptor is missing")
 	}
+
 	field := message.Fields().ByName(name)
 	if field == nil {
 		t.Fatalf("%s.%s is missing", message.Name(), name)
@@ -527,6 +852,60 @@ func assertProtoField(t *testing.T, message protoreflect.MessageDescriptor, name
 	}
 	if messageType != "" && field.Message().FullName() != messageType {
 		t.Fatalf("%s.%s message type = %q, want %q", message.Name(), name, field.Message().FullName(), messageType)
+	}
+}
+
+func assertProtoOneofMember(t *testing.T, message protoreflect.MessageDescriptor, name protoreflect.Name, oneof protoreflect.Name) {
+	t.Helper()
+	if message == nil {
+		t.Fatal("message descriptor is missing")
+	}
+
+	field := message.Fields().ByName(name)
+	if field == nil {
+		t.Fatalf("%s.%s is missing", message.Name(), name)
+	}
+	containing := field.ContainingOneof()
+	if containing == nil {
+		t.Fatalf("%s.%s is not in a oneof, want oneof %s", message.Name(), name, oneof)
+	}
+	if containing.IsSynthetic() {
+		t.Fatalf("%s.%s is in synthetic oneof %s, want declared oneof %s", message.Name(), name, containing.Name(), oneof)
+	}
+	if containing.Name() != oneof {
+		t.Fatalf("%s.%s is in oneof %s, want %s", message.Name(), name, containing.Name(), oneof)
+	}
+}
+
+func assertProtoEnumValues(t *testing.T, enum protoreflect.EnumDescriptor, want map[protoreflect.Name]protoreflect.EnumNumber) {
+	t.Helper()
+	if enum == nil {
+		t.Fatal("enum descriptor is missing")
+	}
+	if enum.Values().Len() != len(want) {
+		t.Fatalf("%s has %d values, want %d", enum.Name(), enum.Values().Len(), len(want))
+	}
+	for name, number := range want {
+		value := enum.Values().ByName(name)
+		if value == nil || value.Number() != number {
+			t.Fatalf("%s.%s = %v, want %d", enum.Name(), name, value, number)
+		}
+	}
+}
+
+func assertProtoFieldMembers(t *testing.T, message protoreflect.MessageDescriptor, want map[protoreflect.Name]protoreflect.FieldNumber) {
+	t.Helper()
+	if message == nil {
+		t.Fatal("message descriptor is missing")
+	}
+	if message.Fields().Len() != len(want) {
+		t.Fatalf("%s has %d fields, want %d", message.Name(), message.Fields().Len(), len(want))
+	}
+	for name, number := range want {
+		field := message.Fields().ByName(name)
+		if field == nil || field.Number() != number {
+			t.Fatalf("%s.%s = %v, want field %d", message.Name(), name, field, number)
+		}
 	}
 }
 

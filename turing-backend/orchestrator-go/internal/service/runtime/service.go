@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/safejson"
 	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
 	auditsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/audit"
@@ -76,7 +78,7 @@ type unattendedApprover interface {
 const AutomationNotAllowlistedCode = "automation_tool_not_allowlisted"
 
 type worker struct {
-	commands       chan *turingv1.RuntimeCommand
+	commands       chan workerCommand
 	done           chan struct{}
 	registrationID string
 	capabilities   *registeredWorkerCapabilities
@@ -99,6 +101,23 @@ type assignment struct {
 	jobID     string
 	runID     string
 	attemptID string
+	// job is the exact assignment this worker was handed. It is retained so a
+	// same-attempt refresh can carry the committed version forward without
+	// rebuilding a partial job the worker would have to guess at.
+	job *turingv1.AgentJob
+}
+
+// workerCommand is one command queued for a worker, plus whether it is a
+// same-attempt assignment refresh.
+//
+// A refresh reuses the RunAssigned shape because that is the only command the
+// contract has for carrying an assignment's version, but it is not a dispatch:
+// the worker already owns this attempt, the delivery bookkeeping already ran,
+// and running it again would abort a live assignment. The flag is set only by
+// the ownership-proof path in this package, never derived from the command.
+type workerCommand struct {
+	command *turingv1.RuntimeCommand
+	refresh bool
 }
 
 type DispatchConfig struct {
@@ -277,7 +296,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 		return status.Error(codes.Internal, "filter worker tool capabilities")
 	}
 	s.refreshPendingCapabilityStateAdvisory(ctx, "registry seed", "", false, false)
-	commands := make(chan *turingv1.RuntimeCommand, maxWorkerConcurrentRuns)
+	commands := make(chan workerCommand, maxWorkerConcurrentRuns)
 	connectedWorker := &worker{
 		commands:       commands,
 		done:           make(chan struct{}),
@@ -384,7 +403,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				continue
 			}
 			if beacon := update.GetToolBeacon(); beacon != nil {
-				release, beginErr := connectedWorker.beginUpdate(update)
+				_, release, beginErr := connectedWorker.beginUpdate(update)
 				if beginErr != nil {
 					if err := s.sendBeaconDecision(ctx, connectedWorker, beacon, protocolErrorDecision(beacon)); err != nil {
 						recvErr <- err
@@ -403,7 +422,29 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				}
 				continue
 			}
-			release, err := connectedWorker.beginUpdate(update)
+			if resumeReady := update.GetApprovalResumeReady(); resumeReady != nil {
+				_, release, beginErr := connectedWorker.beginUpdate(update)
+				if beginErr != nil {
+					recvErr <- approvalResumeGateError(beginErr)
+					return
+				}
+				accepted, resumeErr := s.resumeApprovedRun(ctx, resumeReady, ready.WorkerId, connectedWorker)
+				// Released before the acceptance goes out: the command loop
+				// takes this same lock to deliver an assignment and then takes
+				// the sender, so holding it across a send would order the two
+				// the other way round.
+				release()
+				if resumeErr != nil {
+					recvErr <- resumeErr
+					return
+				}
+				if err := s.deliverApprovalResumeAcceptance(ctx, stream, accepted, ready.WorkerId, connectedWorker); err != nil {
+					recvErr <- err
+					return
+				}
+				continue
+			}
+			owned, release, err := connectedWorker.beginUpdate(update)
 			if err != nil {
 				ignored, duplicateErr := s.isLateMatchingTerminalUpdate(ctx, update)
 				if duplicateErr != nil {
@@ -427,7 +468,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 						return nil
 					}
 				}
-				suppressDispatch, err := s.applyUpdateForWorker(ctx, update)
+				suppressDispatch, err := s.applyUpdateForWorker(ctx, update, ready.WorkerId, owned)
 				if err != nil {
 					handled, reconcileErr := s.reconcileLateAssignedUpdate(ctx, connectedWorker, ready.WorkerId, update)
 					if reconcileErr != nil {
@@ -471,7 +512,7 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 			return err
 		case cmd := <-commands:
 			if err := s.sendCommand(ctx, stream, cmd, connectedWorker, ready.WorkerId); err != nil {
-				return errors.Join(err, s.handleUndeliveredCommand(ctx, cmd, connectedWorker))
+				return errors.Join(err, s.handleUndeliveredCommand(ctx, cmd.command, ready.WorkerId, connectedWorker))
 			}
 		}
 	}
@@ -591,11 +632,13 @@ func (s *Server) filterRegisteredWorkerTools(
 	filteredCapabilities := cloneRegisteredWorkerCapabilities(capabilities)
 	filtered := make([]repository.DiscoveredTool, 0, len(discovered))
 	for _, tool := range discovered {
-		if tool.ServerName == "skills" {
-			filtered = append(filtered, tool)
-			continue
+		var available bool
+		var err error
+		if tool.ServerName == "skills" || tool.ServerName == "integrations" {
+			available, err = s.repo.PseudoServerToolAvailable(ctx, tool.ServerName, tool.ToolName)
+		} else {
+			available, err = s.repo.MCPToolAvailable(ctx, tool.ServerName, tool.ToolName)
 		}
-		available, err := s.repo.MCPToolAvailable(ctx, tool.ServerName, tool.ToolName)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -678,12 +721,55 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 	if heartbeat.GetWorkerId() != workerID {
 		return status.Error(codes.PermissionDenied, "heartbeat worker_id does not match connected worker")
 	}
+	refreshes, reconciled, err := s.reconcileHeartbeatState(ctx, workerID, connectedWorker)
+	if err != nil {
+		return err
+	}
+	// Queueing happens with the update lock released. The command buffer is
+	// bounded, and the only goroutine that drains it needs that same lock to
+	// deliver an assignment: queueing while holding it lets a full buffer close
+	// a cycle neither side can leave, on a stream context that never expires.
+	//
+	// The proofs are already committed at this point, so a refresh that cannot
+	// be delivered still fails this heartbeat, and the recovering truth stays
+	// durable through the ordinary reconciliation fence when the stream tears
+	// down. Order is preserved: the refreshes go out in the order the proofs
+	// were committed.
+	for _, refresh := range refreshes {
+		if err := connectedWorker.sendAssignmentRefresh(ctx, refresh); err != nil {
+			return err
+		}
+	}
+	if reconciled {
+		return s.DispatchPending(ctx)
+	}
+	return nil
+}
+
+// reconcileHeartbeatState does everything a heartbeat decides, under the update
+// lock, and hands back the refreshes that still have to reach the worker.
+//
+// It returns the refresh commands rather than sending them because sending can
+// block, and nothing that can block may run while this lock is held.
+func (s *Server) reconcileHeartbeatState(
+	ctx context.Context,
+	workerID string,
+	connectedWorker *worker,
+) ([]*turingv1.RuntimeCommand, bool, error) {
 	connectedWorker.updateMu.Lock()
 	defer connectedWorker.updateMu.Unlock()
+	// A run this worker still owns may have been fenced into recovering while
+	// its ownership was in doubt. The heartbeat resolves that doubt, so the
+	// proof runs before recovery: recovering a run whose owner is demonstrably
+	// alive would throw away work nobody needed to lose.
+	refreshes, err := s.proveOwnedRecoveringAssignments(ctx, workerID, connectedWorker)
+	if err != nil {
+		return nil, false, err
+	}
 	assignments := connectedWorker.assignmentSnapshot(workerID)
 	renewed, err := s.repo.RenewAssignments(ctx, assignments, time.Now().UTC().Add(s.dispatch.LeaseDuration))
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	renewedSet := make(map[repository.Assignment]struct{}, len(renewed))
 	for _, assignment := range renewed {
@@ -696,7 +782,7 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 		}
 		result, err := s.repo.RecoverAssignmentWithLimit(ctx, assignment, s.dispatch.MaxAttempts)
 		if err != nil {
-			return err
+			return nil, false, err
 		}
 		released := connectedWorker.releaseAssignmentAttempt(assignment.RunID, assignment.AttemptID)
 		for _, event := range result.Events {
@@ -708,10 +794,80 @@ func (s *Server) renewWorkerLeases(ctx context.Context, workerID string, connect
 	if revived {
 		s.refreshPendingCapabilityStateAdvisory(ctx, "worker heartbeat restored", workerID, false, true)
 	}
-	if reconciled || revived {
-		return s.DispatchPending(ctx)
+	return refreshes, reconciled || revived, nil
+}
+
+// proveOwnedRecoveringAssignments commits recovering -> running for every
+// assignment this worker can still prove it owns, and collects the same-attempt
+// RunAssigned refresh that hands each proof back.
+//
+// The refresh is what makes the transition legitimate. A lifecycle change the
+// worker never learns about is the defect the version fence exists to remove:
+// the worker would keep reporting against the state it last saw, and every one
+// of those reports would be refused. So the proof and the reply belong to one
+// step — but only the proof happens here. Queueing a refresh can block on the
+// worker's bounded command buffer, and this runs under the update lock the
+// command loop needs to drain that buffer, so the caller sends them once the
+// lock is released. A refresh that cannot be delivered still fails the
+// heartbeat, and the recovering truth stays in place through the ordinary
+// reconciliation fence when the stream tears down.
+func (s *Server) proveOwnedRecoveringAssignments(ctx context.Context, workerID string, connectedWorker *worker) ([]*turingv1.RuntimeCommand, error) {
+	var refreshes []*turingv1.RuntimeCommand
+	for _, held := range connectedWorker.assignmentEntries() {
+		if held.job == nil {
+			continue
+		}
+		version, proven, err := s.proveRecoveringOwnership(ctx, held.runID, workerID, held.attemptID)
+		if err != nil {
+			return nil, err
+		}
+		if !proven {
+			continue
+		}
+		refresh := proto.Clone(held.job).(*turingv1.AgentJob)
+		refresh.ExpectedStateVersion = version
+		refreshes = append(refreshes, &turingv1.RuntimeCommand{
+			Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: refresh},
+		})
 	}
-	return nil
+	return refreshes, nil
+}
+
+// proveRecoveringOwnership returns the version a recovering run commits when
+// the named attempt proves it still owns it, and whether anything moved.
+//
+// Ownership is proved by the guarded transition, not by this function: worker
+// and assignment attempt are the transition's identity, so an attempt that no
+// longer owns the row loses the update rather than being trusted here.
+func (s *Server) proveRecoveringOwnership(ctx context.Context, runID string, workerID string, attemptID string) (int64, bool, error) {
+	if runID == "" || workerID == "" || attemptID == "" {
+		return 0, false, nil
+	}
+	state, err := s.repo.GetRunState(ctx, runID)
+	if err != nil {
+		return 0, false, err
+	}
+	if state.Lifecycle != recoveringRunStatus {
+		return 0, false, nil
+	}
+	result, err := s.repo.ResumeRecoveringRun(ctx, repository.ResumeRecoveringRunInput{
+		RunID:                runID,
+		ExpectedStateVersion: state.StateVersion,
+		WorkerID:             workerID,
+		AssignmentAttemptID:  attemptID,
+	})
+	if err != nil {
+		// Losing the guarded update means something else owns this run now.
+		// That is the fence working, not an error this stream should die on.
+		if errors.Is(err, repository.ErrRunTransitionConflict) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	for _, event := range result.Events {
+		s.publishEvent(event)
+	}
+	return result.State.StateVersion, true, nil
 }
 
 func (s *Server) sendBeaconDecision(ctx context.Context, connectedWorker *worker, beacon *turingv1.ToolCallBeacon, decision *turingv1.ToolPolicyDecision) error {
@@ -770,24 +926,255 @@ func updateRunID(update *turingv1.RuntimeUpdate) string {
 	if beacon := update.GetToolBeacon(); beacon != nil {
 		return beacon.RunId
 	}
+	// A resume names its run for the same reason a beacon does: the update lock
+	// this feeds has to serialize the commit against the dispatch bookkeeping
+	// for that exact run, and the assignment check it performs is the first
+	// half of proving the stream owns what it is asking about.
+	if ready := update.GetApprovalResumeReady(); ready != nil {
+		return ready.GetRunId()
+	}
 	return terminalRunID(update)
 }
 
-func (s *Server) handleUndeliveredCommand(ctx context.Context, cmd *turingv1.RuntimeCommand, worker *worker) error {
+// handleUndeliveredCommand answers a command that never reached its worker.
+//
+// Each kind owes something different. A tool-policy decision carrying an
+// approval is the authorization itself, so losing it ends the approval. An
+// approval decision is not: it is news about a decision already durably made,
+// and losing the news does not by itself end anything.
+//
+// A resume acceptance never arrives here. It is handed to the worker directly
+// from the Ready handler rather than queued, because the row is already
+// committed running by then and the delivery has to be answered in the same
+// breath — see deliverApprovalResumeAcceptance, which fences the run itself
+// when its send fails.
+func (s *Server) handleUndeliveredCommand(ctx context.Context, cmd *turingv1.RuntimeCommand, workerID string, owner *worker) error {
 	if decision := cmd.GetToolPolicyDecision(); decision != nil && decision.GetApprovalId() != "" {
-		return s.terminalizeApprovalDeliveryFailure(ctx, decision.GetApprovalId(), worker)
+		return s.terminalizeApprovalDeliveryFailure(ctx, decision.GetApprovalId(), owner)
+	}
+	if updated := cmd.GetApprovalUpdated(); updated != nil {
+		return s.handleUndeliveredApprovalDecision(ctx, updated, workerID, owner)
 	}
 	return nil
 }
 
-func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService_ConnectWorkerServer, cmd *turingv1.RuntimeCommand, connectedWorker *worker, workerID string) error {
+// approvalResumeGateError is what a Ready owes when the update gate refuses it.
+//
+// The gate refuses for two unrelated reasons and they must not be flattened
+// into one. A run this worker does not hold is a precondition the Ready itself
+// violated, and the handshake says so in its own words. A worker that is
+// already disconnected is not about the Ready at all: the stream is going, its
+// teardown reports that same cancellation, and relabelling it here would make
+// the handler's outcome depend on which goroutine noticed first while hiding a
+// cancellation callers recognise inside what looks like a protocol violation.
+func approvalResumeGateError(err error) error {
+	if status.Code(err) == codes.Canceled {
+		return err
+	}
+	return status.Error(codes.FailedPrecondition, "approval resume does not name a live owned assignment")
+}
+
+// handleUndeliveredApprovalDecision answers an approval decision that never
+// reached its worker.
+//
+// Delivering the decision is not what resumes the run — only a Ready/Accepted
+// exchange is — so failing to deliver it must not move the run either. While
+// this attempt still provably owns the run, the honest answer stays
+// waiting-approval at the version already committed, and the worker can still
+// ask again. Once ownership can no longer be proven, the run takes the same
+// fence as any other lost worker: a row that goes on saying it is waiting for
+// an answer nobody will act on is describing a conversation with no second
+// party.
+func (s *Server) handleUndeliveredApprovalDecision(
+	_ context.Context,
+	updated *turingv1.RuntimeApprovalUpdated,
+	workerID string,
+	owner *worker,
+) error {
+	if updated.GetApprovalId() == "" || workerID == "" {
+		return nil
+	}
+	// The caller's context is the stream's, and the stream is exactly what has
+	// just failed. Reading the run through it would report the dead connection
+	// instead of deciding what the run's state should be, so this runs on its
+	// own short-lived one — the same shape every other recovery path here uses.
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	approval, err := s.repo.GetApproval(recoveryCtx, updated.GetApprovalId())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	run, err := s.repo.GetRun(recoveryCtx, approval.RunID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	// A run this stream no longer owns is not this stream's to fence: some
+	// other attempt is answering for it now.
+	if run.WorkerID != workerID {
+		return nil
+	}
+	if s.ownershipProven(workerID, owner, run.RunID, run.ExecutionAttemptID) {
+		return nil
+	}
+	return s.fenceRunOwnership(run.RunID, workerID, run.ExecutionAttemptID)
+}
+
+// ownershipProven reports whether this worker still demonstrably holds the
+// named attempt: it is the current registration, it has not closed, and its
+// lease has not lapsed.
+func (s *Server) ownershipProven(workerID string, owner *worker, runID string, attemptID string) bool {
+	if owner == nil || workerID == "" || runID == "" {
+		return false
+	}
+	s.mu.Lock()
+	current := s.workers[workerID]
+	s.mu.Unlock()
+	if current != owner {
+		return false
+	}
+	return owner.hasLiveAssignmentAttempt(runID, attemptID, time.Now().UTC(), s.dispatch.LeaseDuration)
+}
+
+// fenceRunOwnership is the one ownership-loss transition every caller here
+// shares: an active run whose worker can no longer be reached moves to
+// recovering, one version forward, with its state projection.
+//
+// It runs on its own short-lived context because every caller reaches it
+// exactly when something has already gone wrong — a send failed, a stream is
+// closing — and the context those callers hold is often the one that just died.
+//
+// Losing the guarded transition is not an error. It means another writer owns
+// this run now, which is the fence working rather than failing.
+func (s *Server) fenceRunOwnership(runID string, workerID string, attemptID string) error {
+	if runID == "" || workerID == "" || attemptID == "" {
+		return nil
+	}
+	fenceCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	state, err := s.repo.GetRunState(fenceCtx, runID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if !isActiveRunStatus(state.Lifecycle) {
+		return nil
+	}
+	result, err := s.repo.FenceRunOwnership(fenceCtx, repository.FenceRunOwnershipInput{
+		RunID:                runID,
+		ExpectedStateVersion: state.StateVersion,
+		WorkerID:             workerID,
+		AssignmentAttemptID:  attemptID,
+	})
+	if err != nil {
+		if errors.Is(err, repository.ErrRunTransitionConflict) {
+			return nil
+		}
+		return err
+	}
+	for _, event := range result.Events {
+		s.publishEvent(event)
+	}
+	return nil
+}
+
+// resumeApprovedRun commits one approval resume, or refuses it.
+//
+// It writes nothing but the transition itself. A refusal deliberately does not
+// fence: the Ready handler's job is to decide whether this exact trigger may
+// move the run, and a stream that asked for something it cannot have is fenced
+// by its own teardown, under the cause that is actually true — lost ownership,
+// not a resume that happened.
+//
+// The worker ID is the server-authenticated one from the stream rather than
+// anything the message carried, so a worker cannot name somebody else.
+func (s *Server) resumeApprovedRun(
+	ctx context.Context,
+	ready *turingv1.RuntimeApprovalResumeReady,
+	workerID string,
+	connectedWorker *worker,
+) (*turingv1.RuntimeApprovalResumeAccepted, error) {
+	if ready == nil || ready.GetRunId() == "" || ready.GetApprovalId() == "" ||
+		ready.GetAssignmentAttemptId() == "" || ready.GetExpectedStateVersion() < 1 {
+		return nil, status.Error(codes.FailedPrecondition, "approval resume is incomplete")
+	}
+	if !s.ownershipProven(workerID, connectedWorker, ready.GetRunId(), ready.GetAssignmentAttemptId()) {
+		return nil, status.Error(codes.FailedPrecondition, "approval resume does not name a live owned assignment")
+	}
+	result, err := s.repo.ResumeApprovedRun(ctx, repository.ResumeApprovedRunInput{
+		RunID:                ready.GetRunId(),
+		ApprovalID:           ready.GetApprovalId(),
+		WorkerID:             workerID,
+		AssignmentAttemptID:  ready.GetAssignmentAttemptId(),
+		ExpectedStateVersion: ready.GetExpectedStateVersion(),
+	})
+	if err != nil {
+		if errors.Is(err, repository.ErrRunTransitionConflict) ||
+			errors.Is(err, repository.ErrRunTransitionUnsupported) ||
+			errors.Is(err, repository.ErrRunStateVersionInvalid) ||
+			errors.Is(err, repository.ErrRunStateVersionExhausted) ||
+			errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.FailedPrecondition, "approval resume was fenced")
+		}
+		return nil, err
+	}
+	for _, event := range result.Events {
+		s.publishEvent(event)
+	}
+	// Reconstructed from what the transition durably holds, so a replay of the
+	// same Ready produces the identical acceptance rather than a second one.
+	return &turingv1.RuntimeApprovalResumeAccepted{
+		RunId:               ready.GetRunId(),
+		ApprovalId:          ready.GetApprovalId(),
+		StateVersion:        result.State.StateVersion,
+		AssignmentAttemptId: ready.GetAssignmentAttemptId(),
+	}, nil
+}
+
+// deliverApprovalResumeAcceptance hands the worker the acceptance the commit
+// already made.
+//
+// The row cannot go back. Waiting-approval was left the moment the transition
+// committed, and claiming it again would tell every reader the user's decision
+// is still outstanding. So a failed delivery takes the ownership fence instead,
+// and the stream fails with it.
+func (s *Server) deliverApprovalResumeAcceptance(
+	ctx context.Context,
+	stream turingv1.RuntimeService_ConnectWorkerServer,
+	accepted *turingv1.RuntimeApprovalResumeAccepted,
+	workerID string,
+	connectedWorker *worker,
+) error {
+	sendCtx, cancel := withDefaultTimeout(ctx, commandSendTimeout)
+	defer cancel()
+	err := connectedWorker.commandSender(stream).send(sendCtx, &turingv1.RuntimeCommand{
+		Command: &turingv1.RuntimeCommand_ApprovalResumeAccepted{ApprovalResumeAccepted: accepted},
+	})
+	if err == nil {
+		return nil
+	}
+	return errors.Join(err, s.fenceRunOwnership(accepted.GetRunId(), workerID, accepted.GetAssignmentAttemptId()))
+}
+
+func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService_ConnectWorkerServer, queued workerCommand, connectedWorker *worker, workerID string) error {
+	cmd := queued.command
 	if cmd == nil {
 		return status.Error(codes.Canceled, "worker command queue closed")
 	}
 	sendCtx, cancel := withDefaultTimeout(ctx, commandSendTimeout)
 	defer cancel()
 	assigned := cmd.GetRunAssigned()
-	if assigned == nil {
+	// A refresh names an assignment this worker already holds and already had
+	// delivered. Re-running the claim bookkeeping below would abort a live
+	// assignment, so it goes straight out.
+	if assigned == nil || queued.refresh {
 		return connectedWorker.commandSender(stream).send(sendCtx, cmd)
 	}
 	connectedWorker.updateMu.Lock()
@@ -1136,7 +1523,8 @@ func (s *Server) dispatchToWorker(
 		worker.mu.Unlock()
 		return false, true, false, nil
 	}
-	claimedAssignment := assignment{jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID}
+	assignedJob := mapJob(job)
+	claimedAssignment := assignment{jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID, job: assignedJob}
 	if worker.closed ||
 		worker.lastHeartbeat.IsZero() ||
 		!time.Now().UTC().Before(worker.lastHeartbeat.Add(s.dispatch.LeaseDuration)) ||
@@ -1150,7 +1538,7 @@ func (s *Server) dispatchToWorker(
 	}
 	worker.assignments[job.RunID] = claimedAssignment
 	select {
-	case worker.commands <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: mapJob(job)}}:
+	case worker.commands <- workerCommand{command: &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: assignedJob}}}:
 		worker.mu.Unlock()
 		s.publishEvent(job.StartedEvent)
 		return true, false, false, nil
@@ -1238,7 +1626,9 @@ func (s *Server) CancelRun(ctx context.Context, runID string, reason string) {
 	}
 	sendCtx, cancel := withDefaultTimeout(ctx, 5*time.Second)
 	defer cancel()
-	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunCancelled{RunCancelled: &turingv1.RuntimeRunCancelled{RunId: runID, Reason: reason}}}
+	command := &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunCancelled{RunCancelled: &turingv1.RuntimeRunCancelled{
+		RunId: runID, Reason: reason, StateVersion: s.committedVersion(ctx, runID, 0),
+	}}}
 	_ = owner.send(sendCtx, command)
 }
 
@@ -1287,23 +1677,75 @@ func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Con
 }
 
 func (w *worker) send(ctx context.Context, command *turingv1.RuntimeCommand) error {
+	return w.enqueue(ctx, workerCommand{command: command})
+}
+
+// sendAssignmentRefresh queues a same-attempt refresh. It is separate from send
+// so the refresh flag cannot be set by anything that merely holds a command.
+func (w *worker) sendAssignmentRefresh(ctx context.Context, command *turingv1.RuntimeCommand) error {
+	return w.enqueue(ctx, workerCommand{command: command, refresh: true})
+}
+
+// enqueue queues one command for the command loop to deliver.
+//
+// A buffer with room is filled under the worker lock, exactly as it always was:
+// closing the worker needs that lock too, so a command cannot be queued into a
+// registration that closed in between, and a caller that terminalizes on an
+// undelivered command still gets told.
+//
+// Only a full buffer waits, and that wait happens with the lock released.
+// Holding it across the wait closed a cycle: the command loop takes this same
+// lock to deliver an assignment, so a full buffer left the queueing side
+// waiting for space that only the loop could make and the loop waiting for a
+// lock only the queueing side could release. Closing the worker needs the lock
+// too, so even the teardown that should have broken the tie could not run.
+//
+// While waiting, a close is observed through the done channel. Nothing drains
+// the buffer once the command loop has exited, so a worker that closes mid-wait
+// reports disconnection rather than waiting out the caller's context.
+func (w *worker) enqueue(ctx context.Context, queued workerCommand) error {
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
 		return status.Error(codes.Canceled, "worker is disconnected")
 	}
 	commands := w.commands
+	done := w.done
 	select {
-	case commands <- command:
+	case commands <- queued:
 		w.mu.Unlock()
 		return nil
+	default:
+	}
+	w.mu.Unlock()
+	select {
+	case commands <- queued:
+		return nil
+	case <-done:
+		return status.Error(codes.Canceled, "worker is disconnected")
 	case <-ctx.Done():
-		w.mu.Unlock()
 		return ctx.Err()
 	}
 }
 
-func (w *worker) beginUpdate(update *turingv1.RuntimeUpdate) (func(), error) {
+// beginUpdate gates one update on the worker still being connected and still
+// owning the run the update is about, and returns the assignment it checked.
+//
+// updateMu serializes updates on this stream, so two updates from the same
+// worker do not interleave. The assignment itself is read under w.mu, and that
+// snapshot is advisory: beginUpdate releases w.mu before returning, and a
+// concurrent dispatch installs assignments under w.mu without taking updateMu,
+// so the assignment can be replaced after the gate has read it even while this
+// update is still serialized. The returned value may therefore already be
+// superseded by the time a downstream write runs.
+//
+// Returning the snapshot rather than leaving callers to look it up again is
+// what lets a downstream write name the attempt this update claims to belong
+// to. Correctness does not rest on that name being current: the repository
+// re-reads the run inside its transaction and fences on worker, assignment
+// attempt, and expected state version, so a superseded snapshot is rejected
+// there rather than applied.
+func (w *worker) beginUpdate(update *turingv1.RuntimeUpdate) (assignment, func(), error) {
 	runID := updateRunID(update)
 	w.updateMu.Lock()
 	if runID == "" {
@@ -1312,26 +1754,26 @@ func (w *worker) beginUpdate(update *turingv1.RuntimeUpdate) (func(), error) {
 		w.mu.Unlock()
 		if closed {
 			w.updateMu.Unlock()
-			return nil, status.Error(codes.Canceled, "worker is disconnected")
+			return assignment{}, nil, status.Error(codes.Canceled, "worker is disconnected")
 		}
-		return w.updateMu.Unlock, nil
+		return assignment{}, w.updateMu.Unlock, nil
 	}
 	w.mu.Lock()
-	_, assigned := w.assignments[runID]
+	owned, assigned := w.assignments[runID]
 	closed := w.closed
 	w.mu.Unlock()
 	if closed {
 		w.updateMu.Unlock()
-		return nil, status.Error(codes.Canceled, "worker is disconnected")
+		return assignment{}, nil, status.Error(codes.Canceled, "worker is disconnected")
 	}
 	if !assigned {
 		if beacon := update.GetToolBeacon(); beacon != nil && beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
-			return w.updateMu.Unlock, nil
+			return assignment{}, w.updateMu.Unlock, nil
 		}
 		w.updateMu.Unlock()
-		return nil, status.Error(codes.PermissionDenied, "run is not assigned to worker")
+		return assignment{}, nil, status.Error(codes.PermissionDenied, "run is not assigned to worker")
 	}
-	return w.updateMu.Unlock, nil
+	return owned, w.updateMu.Unlock, nil
 }
 
 func (w *worker) hasAssignment(runID string) bool {
@@ -1379,6 +1821,20 @@ func (w *worker) assignmentForRun(runID string) (assignment, bool) {
 	defer w.mu.Unlock()
 	assignment, ok := w.assignments[runID]
 	return assignment, ok
+}
+
+// assignmentEntries snapshots the assignments this worker holds, including the
+// exact job each was handed. The ownership proof needs the job itself, which
+// the repository-shaped snapshot deliberately does not carry.
+func (w *worker) assignmentEntries() []assignment {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	entries := make([]assignment, 0, len(w.assignments))
+	for _, held := range w.assignments {
+		entries = append(entries, held)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].runID < entries[j].runID })
+	return entries
 }
 
 func (w *worker) assignmentSnapshot(workerID string) []repository.Assignment {
@@ -1500,7 +1956,9 @@ func (s *Server) applyUpdate(ctx context.Context, update *turingv1.RuntimeUpdate
 	case *turingv1.RuntimeUpdate_RunCompleted:
 		return s.handleRunCompleted(ctx, value.RunCompleted)
 	case *turingv1.RuntimeUpdate_RunFailed:
-		_, err := s.handleRunFailed(ctx, value.RunFailed)
+		// applyUpdate has no authenticated stream behind it, so it can name no
+		// owner: a release it cannot attribute is an uncertain one.
+		_, err := s.handleRunFailed(ctx, value.RunFailed, runReleaseOwner{})
 		return err
 	case *turingv1.RuntimeUpdate_RunCancelledAck:
 		return s.handleRunCancelledAck(ctx, value.RunCancelledAck)
@@ -1515,11 +1973,42 @@ func (s *Server) applyUpdate(ctx context.Context, update *turingv1.RuntimeUpdate
 // rejection, so a worker that just said it was full is not immediately handed
 // the whole queue again — see workerBusyFailureCode for why no other retryable
 // failure may skip it.
-func (s *Server) applyUpdateForWorker(ctx context.Context, update *turingv1.RuntimeUpdate) (suppressDispatch bool, err error) {
+//
+// workerID and owned are the identity beginUpdate already established: the
+// authenticated worker on this stream, and the assignment it still holds for
+// this run. They are carried down rather than rediscovered because a retryable
+// failure is the one report that releases a run without ending it, and the
+// repository can only commit that release directly if somebody proves who was
+// holding it.
+func (s *Server) applyUpdateForWorker(
+	ctx context.Context,
+	update *turingv1.RuntimeUpdate,
+	workerID string,
+	owned assignment,
+) (suppressDispatch bool, err error) {
 	if failed := update.GetRunFailed(); failed != nil {
-		return s.handleRunFailed(ctx, failed)
+		return s.handleRunFailed(ctx, failed, releasedBy(workerID, owned))
 	}
 	return false, s.applyUpdate(ctx, update)
+}
+
+// runReleaseOwner is the proven holder of a run at the moment it was released.
+// Both halves are present or neither is: half an identity proves nothing, and
+// the repository refuses it rather than treating it as an anonymous report.
+type runReleaseOwner struct {
+	workerID  string
+	attemptID string
+}
+
+// releasedBy pairs the authenticated worker with the attempt it was gated on.
+// An update that arrived without a live assignment — a late report, or an
+// internal caller with no stream behind it — yields no owner at all, which is
+// the honest input for a release nobody can vouch for.
+func releasedBy(workerID string, owned assignment) runReleaseOwner {
+	if workerID == "" || owned.attemptID == "" {
+		return runReleaseOwner{}
+	}
+	return runReleaseOwner{workerID: workerID, attemptID: owned.attemptID}
 }
 
 func (s *Server) normalizeRuntimeEvent(ctx context.Context, event *turingv1.TuringEvent) (*turingv1.TuringEvent, error) {
@@ -1528,6 +2017,52 @@ func (s *Server) normalizeRuntimeEvent(ctx context.Context, event *turingv1.Turi
 	}
 	if !isKnownRuntimeEventType(event.Type) {
 		return nil, status.Error(codes.InvalidArgument, "runtime event type is invalid")
+	}
+	switch event.Type {
+	case turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_QUEUED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STARTED:
+		return nil, status.Error(codes.InvalidArgument, "run lifecycle projections are repository-authored")
+	case turingv1.TuringEventType_TURING_EVENT_TYPE_SYSTEM,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_ERROR:
+		// Neither type has a dedicated writer anywhere in this product: every
+		// real condition already has a typed, bounded event of its own — a
+		// worker's own narration is agent.run.step, a tool outcome is
+		// tool.call.failed, a terminal run outcome is agent.run.failed. A
+		// generic SYSTEM or ERROR event exists to carry whatever free-form
+		// shape a caller invents — message, error, stack, a token, tool args,
+		// a tool result, a path — and unlike TOOL_CALL_STARTED/
+		// TOOL_CALL_FAILED below, there is no bounded identity to normalize
+		// it into: the type itself promises nothing a client should trust.
+		// So both are refused before the run is even read, and before
+		// anything is persisted.
+		return nil, status.Error(codes.InvalidArgument, "system and error events have no dedicated writer on the generic channel")
+	case turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_APPROVED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_EXPIRED,
+		turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_CONSUMED:
+		// Tool call completion/denial and every approval outcome are settled
+		// by their own guarded flows — handleToolBeacon for a tool call, the
+		// approval service for a decision — each of which proves the run it
+		// acts on and writes a payload that flow controls. The generic
+		// channel is a worker narrating its own run; it proves nothing about
+		// a tool policy decision or an approval outcome. Accepting one of
+		// these types here would let a worker's own payload — a token, tool
+		// args, a tool result, a path, free-form prose — stand in for a
+		// decision only the dedicated flow may author, republished by every
+		// public reader that trusts the type to say what it claims.
+		//
+		// TOOL_CALL_STARTED and TOOL_CALL_FAILED are deliberately not refused
+		// here: agent-runtime's emitAssistantToolCallFailed is a legitimate
+		// producer of both on this same generic channel, reporting a tool
+		// failure that happens before any beacon exists (an unknown tool, no
+		// tool runner, or a non-beacon execution error). Refusing them
+		// outright would tear down the whole AgentStream over that
+		// legitimate report, so instead their payload is rebuilt onto a
+		// bounded safe shape further down rather than accepted verbatim.
+		return nil, status.Error(codes.InvalidArgument, "tool call and approval events are authored by dedicated beacon and approval flows")
 	}
 	run, err := s.repo.GetRun(ctx, event.RunId)
 	if err != nil {
@@ -1545,7 +2080,50 @@ func (s *Server) normalizeRuntimeEvent(ctx context.Context, event *turingv1.Turi
 	out := proto.Clone(event).(*turingv1.TuringEvent)
 	out.SessionId = run.SessionID
 	out.TraceId = run.TraceID
+	// The worker narrates its run; it does not decide canonical state or
+	// repository-owned retry projections. Drop both before anything durable
+	// exists rather than leaving every reader to defend itself.
+	events.StripRepositoryAuthoredEventFields(out)
+	if event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED ||
+		event.Type == turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED {
+		safePayload, err := sanitizeGenericToolCallPayload(event.Type, out.GetPayload())
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "runtime event payload is invalid")
+		}
+		out.Payload = safePayload
+	}
 	return out, nil
+}
+
+// sanitizeGenericToolCallPayload builds the durable payload for the two
+// TOOL_CALL_* types the generic channel still accepts from a worker:
+// TOOL_CALL_STARTED and TOOL_CALL_FAILED, as emitted by agent-runtime's
+// emitAssistantToolCallFailed before any tool beacon exists. Every other
+// TOOL_CALL_* and APPROVAL_* type stays refused above; this only narrows what
+// these two may carry.
+//
+// The payload is rebuilt from an allowlist rather than filtered from a
+// denylist, so a hostile field survives only by first being added to the
+// allowlist. It reuses events.ToolCallIdentityKeys — the same bounded identity
+// the public read boundary already grants a dedicated tool.call.failed or
+// tool.call.denied row — so a worker-authored row and a beacon-authored row
+// are held to one contract instead of two that could drift apart. A
+// TOOL_CALL_FAILED event's category is always the server's own
+// runoutcome.ReasonToolFailure, never whatever the worker's payload named,
+// because the worker's own account of why is exactly the free-form narration
+// this boundary exists to keep off the durable log and the public wire.
+func sanitizeGenericToolCallPayload(eventType turingv1.TuringEventType, payload *structpb.Struct) (*structpb.Struct, error) {
+	source := payload.AsMap()
+	safe := make(map[string]any, len(events.ToolCallIdentityKeys)+1)
+	for _, key := range events.ToolCallIdentityKeys {
+		if text, ok := source[key].(string); ok && text != "" {
+			safe[key] = text
+		}
+	}
+	if eventType == turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED {
+		safe["category"] = string(runoutcome.ReasonToolFailure)
+	}
+	return structpb.NewStruct(safe)
 }
 
 func isKnownRuntimeEventType(eventType turingv1.TuringEventType) bool {
@@ -1576,9 +2154,25 @@ func isKnownRuntimeEventType(eventType turingv1.TuringEventType) bool {
 	}
 }
 
+// isActiveRunStatus reports whether a run is proven to be owned by a live
+// worker and therefore allowed to narrate itself.
+//
+// Recovering deliberately does not count. It means nobody can currently prove
+// which worker owns the run, so a generic event or a before-phase tool beacon
+// arriving under it is an assertion of exactly the thing that is in doubt.
+// Accepting it would let a fenced worker keep writing the run's story and
+// reopen the window the fence exists to close. A recovering run moves on
+// through the specific guarded paths instead — recovery, terminal reports, and
+// approval closure — each of which proves its own identity.
 func isActiveRunStatus(runStatus string) bool {
-	return runStatus == "running" || runStatus == "waiting_approval"
+	return runStatus == runningRunStatus || runStatus == waitingApprovalRunStatus
 }
+
+const (
+	runningRunStatus         = "running"
+	waitingApprovalRunStatus = "waiting_approval"
+	recoveringRunStatus      = "recovering"
+)
 
 func isGenericTerminalEvent(event *turingv1.TuringEvent) bool {
 	if event == nil {
@@ -1605,10 +2199,50 @@ func (s *Server) handleRunCancelledAck(ctx context.Context, ack *turingv1.Runtim
 	if !isTerminalRunStatus(run.Status) {
 		return status.Error(codes.FailedPrecondition, "run is not cancelled")
 	}
+	// Normal dispatch never reaches this check: a real ack always arrives
+	// through reconcileLateAssignedUpdate first, which — by the time a worker
+	// acknowledges a cancellation — finds the run already terminal and
+	// enforces this same version rule itself before this function is ever
+	// called. This copy only matters for the race window between the two
+	// GetRun calls: if the run terminalizes after reconcileLateAssignedUpdate
+	// read it as still non-terminal but before this handler's own GetRun
+	// above, its fallthrough reaches here with no version check yet applied,
+	// and this is the only thing left to enforce it.
+	if !acknowledgedVersionMatches(ack.GetObservedStateVersion(), run) {
+		return status.Error(codes.FailedPrecondition, "run_cancelled_ack observed_state_version does not match run")
+	}
 	if err := s.repo.AcknowledgeExecutionExit(ctx, ack.RunId); err != nil {
 		return mapRunStateError(err)
 	}
 	return nil
+}
+
+// acknowledgedVersionMatches compares the version an execution-exit
+// acknowledgement observed with the versions this run actually reached.
+//
+// The acknowledgement is the last thing a worker says about a run, and what it
+// releases is the execution fence — the guard that keeps a terminal run's
+// identity closed until the process that was running it is known to be gone. A
+// fenced predecessor still holds the version it was assigned at, several
+// transitions behind, so accepting any version at all would let the attempt
+// that LOST the run declare execution finished on behalf of the attempt that
+// owns it.
+//
+// Two versions are legitimate. Normally the worker observes the run's current
+// version: every command that terminalizes a run — the cancellation, the
+// approval decision — is sent after that transition commits, so what the worker
+// was last told is what the run holds. One version of slack is allowed on top of
+// that for a report computed just before the terminal transition, which names
+// the version the run terminalized FROM; that is the same pre-terminal
+// convention matchesPreTerminalVersion applies to terminal reports. Nothing
+// further back belongs to this attempt, and nothing ahead exists.
+//
+// Zero is protobuf absence, not a claim: a worker built before the field
+// existed names no version, and is judged on the terminal status alone exactly
+// as before. This is the same absence rule matchesPreTerminalVersion and
+// terminalExpectation apply to terminal reports.
+func acknowledgedVersionMatches(observed int64, run repository.Run) bool {
+	return observed == 0 || observed == run.StateVersion || observed == run.StateVersion-1
 }
 
 func (s *Server) isLateMatchingTerminalUpdate(ctx context.Context, update *turingv1.RuntimeUpdate) (bool, error) {
@@ -1623,6 +2257,19 @@ func (s *Server) isLateMatchingTerminalUpdate(ctx context.Context, update *turin
 	return isMatchingTerminalUpdate(run, update), nil
 }
 
+// isMatchingTerminalUpdate reports whether a late terminal update is the exact
+// outcome the run already holds.
+//
+// Every part of the canonical identity is compared, because a late report that
+// differs in any of them is a second, different claim about how the run ended —
+// and treating it as a duplicate would let it release the execution fence a
+// conflicting outcome is meant to keep. That means the version the report was
+// computed against, the terminal lifecycle and its outcome reason, the
+// assistant message the content belongs to, and, for a completion, the exact
+// bytes together with the hash and displayability derived from them. A
+// cancellation ack has no outcome of its own to compare against — the run's
+// terminal identity was decided independently of it — so its identity is the
+// version it observed, held to acknowledgedVersionMatches.
 func isMatchingTerminalUpdate(run repository.Run, update *turingv1.RuntimeUpdate) bool {
 	switch {
 	case update.GetRunCompleted() != nil:
@@ -1633,24 +2280,91 @@ func isMatchingTerminalUpdate(run repository.Run, update *turingv1.RuntimeUpdate
 		}
 		return run.Status == "completed" &&
 			run.TerminalEventType == "agent.run.completed" &&
+			matchesPreTerminalVersion(completed.GetExpectedStateVersion(), run) &&
+			run.OutcomeReason == string(completionReason(completed.Content)) &&
 			assistantMessageID != "" &&
 			assistantMessageID == run.AssistantMessageID &&
-			completed.Content != "" &&
-			completed.Content == run.AssistantContent
+			completed.Content == run.AssistantContent &&
+			runoutcome.ContentSHA256(completed.Content) == run.ContentSHA256 &&
+			runoutcome.HasDisplayableContent(completed.Content) == run.HasDisplayableContent()
 	case update.GetRunFailed() != nil:
 		failed := update.GetRunFailed()
-		payload, err := encodePayload(map[string]any{
-			"runId": failed.RunId, "code": failed.Code, "message": failed.Message, "retryable": failed.Retryable,
-		})
-		return err == nil &&
-			run.Status == "failed" &&
+		// Compared against what the canonical writer publishes today: the
+		// normalized code and the always-false compatibility flag. The reported
+		// code is normalized first, so a late duplicate of a report whose code
+		// fell back to unknown still recognizes itself.
+		failure := normalizeRuntimeFailure(failed)
+		return run.Status == "failed" &&
 			run.TerminalEventType == "agent.run.failed" &&
-			payload == run.TerminalEventPayload
+			matchesPreTerminalVersion(failed.GetExpectedStateVersion(), run) &&
+			run.OutcomeReason == string(failure.Reason()) &&
+			matchesReportedTerminalPayload(run.TerminalEventPayload, map[string]any{
+				"runId": failed.RunId, "code": failure.Code(), "retryable": false,
+			})
 	case update.GetRunCancelledAck() != nil:
-		return isTerminalRunStatus(run.Status)
+		// A cancellation ack carries no outcome of its own to compare — the
+		// run's terminal identity was already decided independently of
+		// anything the worker reports. What it does carry is the version it
+		// observed, and that has to be held to the same rule
+		// acknowledgedVersionMatches already applies for handleRunCancelledAck:
+		// a fenced predecessor of the very same attempt can still be carrying a
+		// version from before it was fenced, and treating that as a match would
+		// let it release a fence the current attempt is still holding.
+		return isTerminalRunStatus(run.Status) &&
+			acknowledgedVersionMatches(update.GetRunCancelledAck().GetObservedStateVersion(), run)
 	default:
 		return false
 	}
+}
+
+// matchesReportedTerminalPayload compares a durable terminal payload with what
+// this update would have written.
+//
+// The durable payload also carries the canonical run state the repository
+// merges into every lifecycle projection. That part is derived from the row,
+// not from the report, so it is excluded here: comparing raw bytes would make
+// every late duplicate look like a conflict the moment the state gained a
+// version.
+//
+// matchesPreTerminalVersion compares the version a report was computed against
+// with the version the run terminalized from.
+//
+// A terminal transition increments exactly once, so the state the report
+// expected is the run's current version minus one. A report that names no
+// version comes from a worker built before the field existed and is compared on
+// its other identity alone rather than rejected.
+func matchesPreTerminalVersion(reported int64, run repository.Run) bool {
+	return reported == 0 || reported == run.StateVersion-1
+}
+
+// completionReason is the outcome a completion of exactly these bytes commits.
+// It mirrors the repository writer rather than guessing, so a duplicate report
+// is compared against the reason its own content would have produced.
+func completionReason(content string) runoutcome.Reason {
+	if runoutcome.HasDisplayableContent(content) {
+		return runoutcome.ReasonNone
+	}
+	return runoutcome.ReasonCompletedNoContent
+}
+
+// What remains is the normalized code and the always-false retryable flag the
+// canonical writer publishes. There is no message key to compare, because there
+// is no message: the caller builds the same map the writer would have.
+func matchesReportedTerminalPayload(durablePayload string, reported map[string]any) bool {
+	var durable map[string]any
+	if err := json.Unmarshal([]byte(durablePayload), &durable); err != nil {
+		return false
+	}
+	delete(durable, "runState")
+	rebuilt, err := encodePayload(reported)
+	if err != nil {
+		return false
+	}
+	var expected map[string]any
+	if err := json.Unmarshal([]byte(rebuilt), &expected); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(durable, expected)
 }
 
 func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorker *worker, workerID string, update *turingv1.RuntimeUpdate) (bool, error) {
@@ -1668,7 +2382,29 @@ func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorke
 	if terminalRunID(update) == "" {
 		return true, nil
 	}
-	if run.Status != "cancelled" && !isMatchingTerminalUpdate(run, update) {
+	// A cancellation is decided independently of anything a worker reports, so
+	// once the run is already cancelled, any OTHER terminal-shaped report — a
+	// completion, a failure — is accepted as exit proof without comparing its
+	// content: that outcome already lost, and content it disagrees on cannot
+	// still be the persisted one. A cancellation ack is different: its whole
+	// identity is the version it observed, so it stays behind
+	// isMatchingTerminalUpdate even when the run is cancelled — otherwise a
+	// fenced predecessor of the very same attempt, still carrying a version
+	// from before it was fenced, would release a fence the current attempt is
+	// still holding.
+	//
+	// A version-mismatched ack is deliberately handled — silently ignored,
+	// not surfaced as an error — even though beginUpdate proves the worker
+	// still holds this exact assignment: the mismatch alone means it cannot
+	// release a fence it does not match, so it is treated exactly like an
+	// already-established mismatched late RunCompleted/RunFailed and the
+	// stream stays up for whatever else this worker is still executing. That
+	// leniency is specific to a worker that is still assigned; once the
+	// assignment is gone entirely, the equivalent mismatch instead reaches
+	// isLateMatchingTerminalUpdate through beginUpdate's own ownership error,
+	// where an unassigned or wrong-attempt report remains the protocol
+	// violation it always was.
+	if (run.Status != "cancelled" || update.GetRunCancelledAck() != nil) && !isMatchingTerminalUpdate(run, update) {
 		return true, nil
 	}
 	assignment, assigned := connectedWorker.assignmentForRun(runID)
@@ -1734,9 +2470,11 @@ func (s *Server) handleRunCompleted(ctx context.Context, completed *turingv1.Run
 	if completed == nil || completed.RunId == "" {
 		return status.Error(codes.InvalidArgument, "run_completed is required")
 	}
-	if completed.Content == "" {
-		return status.Error(codes.InvalidArgument, "content is required")
-	}
+	// Empty content is not a malformed report. A model that explicitly finished
+	// with nothing to say produced an empty answer, and the run commits
+	// completed/completed_no_content rather than being rejected or rewritten
+	// into filler. What may not complete a run is the absence of a report,
+	// which is a different thing entirely and never reaches this handler.
 	run, err := s.repo.GetRun(ctx, completed.RunId)
 	if err != nil {
 		return err
@@ -1751,22 +2489,17 @@ func (s *Server) handleRunCompleted(ctx context.Context, completed *turingv1.Run
 	if run.AssistantMessageID != "" && assistantMessageID != run.AssistantMessageID {
 		return status.Error(codes.InvalidArgument, "assistant_message_id does not match run")
 	}
-	payload := map[string]any{
-		"runId":              completed.RunId,
-		"assistantMessageId": assistantMessageID,
-	}
-	if completed.Usage != nil {
-		payload["usage"] = completed.Usage.AsMap()
-	}
-	payloadJSON, err := encodePayload(payload)
-	if err != nil {
-		return err
-	}
-	events, err := s.repo.CompleteRunWithEvent(ctx, completed.RunId, assistantMessageID, completed.Content, payloadJSON, runTokenUsage(completed.GetTokenUsage()))
+	result, err := s.repo.CompleteRunCanonical(ctx, repository.CompleteRunInput{
+		RunID:                completed.RunId,
+		AssistantMessageID:   assistantMessageID,
+		Content:              completed.Content,
+		ExpectedStateVersion: terminalExpectation(completed.GetExpectedStateVersion(), run),
+		Usage:                runTokenUsage(completed.GetTokenUsage()),
+	})
 	if err != nil {
 		return mapRunStateError(err)
 	}
-	for _, event := range events {
+	for _, event := range result.Events {
 		s.publishEvent(event)
 	}
 	return nil
@@ -1790,12 +2523,43 @@ func (s *Server) handleRunCompleted(ctx context.Context, completed *turingv1.Run
 // forever.
 const workerBusyFailureCode = "worker_busy"
 
-func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRunFailed) (bool, error) {
+// terminalExpectation resolves the version a terminal transition must commit
+// from.
+//
+// A worker that names a version is held to it exactly: the guarded update
+// refuses a report whose premises the run has already left. Absent is not
+// wrong — zero is protobuf absence, so a worker built before this field existed
+// names nothing and the run's own current version is used, with the same guard
+// still fencing a concurrent writer.
+func terminalExpectation(reported int64, run repository.Run) int64 {
+	if reported > 0 {
+		return reported
+	}
+	return run.StateVersion
+}
+
+func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRunFailed, owner runReleaseOwner) (bool, error) {
 	if failed == nil || failed.RunId == "" {
 		return false, status.Error(codes.InvalidArgument, "run_failed is required")
 	}
-	if failed.Retryable {
-		decision, err := s.repo.RequeueOrFailRetryableRun(ctx, failed.RunId, failed.Code, failed.Message, s.dispatch.MaxAttempts)
+	run, err := s.repo.GetRun(ctx, failed.RunId)
+	if err != nil {
+		return false, err
+	}
+	failure := normalizeRuntimeFailure(failed)
+	// The same legacy-zero resolution a terminal report gets: a worker built
+	// before the field existed names no version, and the run's own current
+	// version stands in for it under the same guard.
+	expected := terminalExpectation(failed.GetExpectedStateVersion(), run)
+	if failure.RetryClass() == runoutcome.RetryClassSameRunTransient {
+		decision, err := s.repo.RequeueOrFailRetryableRun(ctx, repository.RetryableRunFailureInput{
+			RunID:                failed.RunId,
+			ExpectedStateVersion: expected,
+			WorkerID:             owner.workerID,
+			AssignmentAttemptID:  owner.attemptID,
+			Failure:              failure,
+			MaxAttempts:          s.dispatch.MaxAttempts,
+		})
 		if err != nil {
 			return false, mapRunStateError(err)
 		}
@@ -1804,20 +2568,44 @@ func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRu
 		}
 		// Every retryable failure is requeued, but only an assignment rejection
 		// may skip the dispatch that follows. See workerBusyFailureCode.
-		return decision.Requeued && failed.Code == workerBusyFailureCode, nil
+		return decision.Requeued && failure.Code() == workerBusyFailureCode, nil
 	}
-	payloadJSON, err := encodePayload(map[string]any{"runId": failed.RunId, "code": failed.Code, "message": failed.Message, "retryable": failed.Retryable})
-	if err != nil {
-		return false, err
+	// An abandoned outcome is a cancellation, not a failure: it says the client
+	// went away, which is the one thing this transport can honestly report and
+	// is not something the run did wrong. Routing it onto the failed lifecycle
+	// would ask for an outcome that lifecycle does not allow.
+	var result repository.RunTransitionResult
+	if failure.Reason() == runoutcome.ReasonAbandoned {
+		result, err = s.repo.CancelRunCanonical(ctx, repository.CancelRunInput{
+			RunID:                failed.RunId,
+			ExpectedStateVersion: expected,
+			Cancellation:         runoutcome.AbandonedCancellation(),
+		})
+	} else {
+		result, err = s.repo.FailRunCanonical(ctx, repository.FailRunInput{
+			RunID:                failed.RunId,
+			ExpectedStateVersion: expected,
+			Failure:              failure,
+		})
 	}
-	events, err := s.repo.FailRunWithEvent(ctx, failed.RunId, failed.Code, failed.Message, payloadJSON)
 	if err != nil {
 		return false, mapRunStateError(err)
 	}
-	for _, event := range events {
+	for _, event := range result.Events {
 		s.publishEvent(event)
 	}
 	return false, nil
+}
+
+// normalizeRuntimeFailure closes the ingestion boundary for one worker report.
+//
+// The legacy retryable bool is untrusted and is ignored outright, never
+// translated into a retry request: only the typed automatic_retry_class field
+// can ask for one, and NormalizeRuntimeFailure still fails closed on an
+// unrecognized origin or an unspecified class. Nothing here reads
+// failed.Message.
+func normalizeRuntimeFailure(failed *turingv1.RuntimeRunFailed) runoutcome.Failure {
+	return runoutcome.NormalizeRuntimeFailure(failed.GetFailureOrigin(), failed.GetCode(), failed.GetAutomaticRetryClass())
 }
 
 func encodePayload(payload map[string]any) (string, error) {
@@ -1835,6 +2623,15 @@ func mapRunStateError(err error) error {
 		errors.Is(err, repository.ErrRunNotCancellable),
 		errors.Is(err, repository.ErrRunNotActive):
 		return status.Error(codes.FailedPrecondition, err.Error())
+	case errors.Is(err, repository.ErrAssignmentFenced):
+		// A report the repository fenced was computed against a premise the run
+		// does not hold — a version it never reached, or an attempt it no longer
+		// owns. That is a precondition failure like the others, and reporting it
+		// as one is what tells a worker its report was refused rather than lost.
+		// The sentinel's own text is sent, not the error's: a wrapped fence can
+		// carry the run, job, or worker it was about, and none of that belongs
+		// on a stream the orchestrator is refusing.
+		return status.Error(codes.FailedPrecondition, repository.ErrAssignmentFenced.Error())
 	default:
 		return err
 	}
@@ -1866,12 +2663,72 @@ func (s *Server) handleToolBeaconForWorker(ctx context.Context, beacon *turingv1
 	if err != nil {
 		return nil, err
 	}
+	// An authenticated beacon from the attempt that still owns a recovering run
+	// is the one thing that can settle who owns it, because the decision this
+	// call returns carries the committed version back before any tool or model
+	// work continues. The generic helper below stays exactly as strict: it
+	// answers for updates that have no reply to carry a version on.
+	provenVersion := int64(0)
+	if !isActiveRunStatus(run.Status) && beacon.Phase == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+		version, proven, err := s.proveBeaconOwnership(ctx, run, workerID, owner)
+		if err != nil {
+			return nil, err
+		}
+		if proven {
+			provenVersion = version
+			run, err = s.repo.GetRun(ctx, beacon.RunId)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	if !isActiveRunStatus(run.Status) && beacon.Phase != turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
 		return nil, status.Error(codes.FailedPrecondition, "run is not active")
 	}
 	if beacon.TraceId != run.TraceID {
 		return nil, status.Error(codes.InvalidArgument, "tool call trace_id does not match run")
 	}
+	decision, err := s.dispatchToolBeacon(ctx, beacon, run, workerID, owner)
+	if decision != nil {
+		// Every decision carries the run's committed version forward, not just
+		// the ones that proved ownership. A beacon is the orchestrator's reply
+		// to work that is about to continue, and the lifecycle may well have
+		// moved since this worker was assigned — an approval alone takes the run
+		// through waiting-approval and back. Without the version here the
+		// worker's next terminal report would be computed against a state the
+		// run has already left, and correctly refused.
+		decision.RunStateVersion = s.committedVersion(ctx, beacon.GetRunId(), provenVersion)
+	}
+	return decision, err
+}
+
+// committedVersion reads the version a run holds now, falling back to a version
+// this call already committed if the read fails.
+func (s *Server) committedVersion(ctx context.Context, runID string, fallback int64) int64 {
+	state, err := s.repo.GetRunState(ctx, runID)
+	if err != nil {
+		return fallback
+	}
+	if state.StateVersion > fallback {
+		return state.StateVersion
+	}
+	return fallback
+}
+
+// proveBeaconOwnership resolves a recovering run in favour of the attempt this
+// beacon arrived on, when that attempt is the one the worker still holds.
+func (s *Server) proveBeaconOwnership(ctx context.Context, run repository.Run, workerID string, owner *worker) (int64, bool, error) {
+	if workerID == "" || owner == nil {
+		return 0, false, nil
+	}
+	held, assigned := owner.assignmentForRun(run.RunID)
+	if !assigned {
+		return 0, false, nil
+	}
+	return s.proveRecoveringOwnership(ctx, run.RunID, workerID, held.attemptID)
+}
+
+func (s *Server) dispatchToolBeacon(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, workerID string, owner *worker) (*turingv1.ToolPolicyDecision, error) {
 	switch beacon.Phase {
 	case turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE:
 		return s.handleToolBefore(ctx, beacon, run, workerID, owner)
@@ -1901,6 +2758,15 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	if policy == tools.PolicyApprovalRequired && beacon.Args == nil {
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "approval_args_missing")
 	}
+	if policy == tools.PolicyApprovalRequired && beaconServerName(beacon) == "integrations" && !tools.ToolReadOnly("integrations", beacon.ToolName) {
+		render, renderErr := s.repo.IntegrationApprovalRender(ctx, beacon.ToolName, args)
+		if renderErr != nil {
+			return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "integration_approval_render_invalid")
+		}
+		if len([]byte(render)) > repository.MaxIntegrationApprovalRenderBytes {
+			return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "integration_approval_render_too_large")
+		}
+	}
 	if policy == tools.PolicyDisabled {
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "tool_disabled")
 	}
@@ -1927,7 +2793,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 			s.publishEvent(event)
 		}
 		if !recorded.Inserted {
-			if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied"); handled {
+			if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied", beaconServerName(beacon), beacon.ToolName); handled {
 				return s.withToolProvenance(ctx, decision, beacon, run, argsHash), nil
 			}
 		}
@@ -1947,8 +2813,9 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 			// there is simply no wait.
 			if err := s.grantUnattendedApproval(ctx, approvalID, beacon); err != nil {
 				log.Printf("grant unattended approval %s for automation %s: %v", approvalID, grant.AutomationID, err)
-				return s.failUnattendedRun(ctx, beacon, "automation_approval_failed",
-					"This automation could not be granted the approval it was pre-authorised for, so the run stopped rather than waiting for someone to answer.")
+				return s.failUnattendedRun(ctx, beacon, runoutcome.NormalizeFailure(
+					runoutcome.OriginAutomationPolicy, "automation_approval_failed", runoutcome.RetryClassNever,
+				))
 			}
 		}
 		return &turingv1.ToolPolicyDecision{
@@ -1956,6 +2823,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 			ToolCallId:      beacon.ToolCallId,
 			ApprovalId:      approvalID,
 			ProvenanceToken: s.issueToolProvenance(ctx, beacon, run, argsHash),
+			ReadOnly:        tools.ToolReadOnly(beaconServerName(beacon), beacon.ToolName),
 		}, nil
 	}
 	statusValue := "requested"
@@ -1974,7 +2842,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		s.publishEvent(event)
 	}
 	if !recorded.Inserted {
-		if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied"); handled {
+		if decision, handled := existingToolBeforeDecision(recorded.Record, "tool_denied", beaconServerName(beacon), beacon.ToolName); handled {
 			return s.withToolProvenance(ctx, decision, beacon, run, argsHash), nil
 		}
 	}
@@ -1989,6 +2857,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 			Decision:        turingv1.ToolPolicyDecision_DECISION_ALLOW,
 			ToolCallId:      beacon.ToolCallId,
 			ProvenanceToken: s.issueToolProvenance(ctx, beacon, run, argsHash),
+			ReadOnly:        tools.ToolReadOnly(beaconServerName(beacon), beacon.ToolName),
 		}, nil
 	default:
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "unknown_policy")
@@ -2015,9 +2884,10 @@ func (s *Server) grantUnattendedApproval(ctx context.Context, approvalID string,
 // The alternative — creating the approval and letting it sit — is the failure
 // mode this whole feature exists to avoid: a run waiting on a person who is
 // asleep, silent until the approval TTL quietly expires. So the tool call is
-// denied and the run is failed with a reason naming the automation and the
-// tool, which is what the client renders and what the automation's last-run
-// status reports.
+// denied and the run is failed under the automation-policy origin, which is
+// what the automation's last-run status reports and what the public
+// policy-denied outcome is projected from. Which automation and which tool are
+// in the audit record, not in the run's failure — see below.
 func (s *Server) blockUnattendedTool(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, argsJSON string, argsHash string, grant repository.AutomationRunGrant) (*turingv1.ToolPolicyDecision, error) {
 	decision, err := s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, AutomationNotAllowlistedCode)
 	if err != nil {
@@ -2031,41 +2901,56 @@ func (s *Server) blockUnattendedTool(ctx context.Context, beacon *turingv1.ToolC
 	}); err != nil {
 		log.Printf("record blocked automation tool audit for %s: %v", beacon.ToolCallId, err)
 	}
-	message := fmt.Sprintf(
-		"%q needs approval to run %s, and that tool is not on this automation's allowlist. Nobody was asked, because an automation runs unattended; the run stopped here instead of waiting.",
-		grant.AutomationName, beacon.ToolName)
+	// The automation's name and the tool's name are in the audit record above,
+	// where they belong. They are deliberately not carried into the run's
+	// failure: agent_runs.error_message is a public diagnostic column, and a
+	// sentence naming an automation and a tool is exactly the kind of content
+	// TUR-009 stops persisting there. What is published instead is the
+	// policy-denied outcome, from which Flutter derives localized copy.
+	//
 	// The decision is discarded rather than merged: on a replayed beacon
 	// denyToolBefore reports why the tool call is ALREADY terminal
 	// ("tool_call_already_completed"), and letting that overwrite the reason
 	// here would make the runtime's terminal error disagree with the run's
 	// stored error_code.
 	_ = decision
-	return s.failUnattendedRun(ctx, beacon, AutomationNotAllowlistedCode, message)
+	return s.failUnattendedRun(ctx, beacon, runoutcome.NormalizeFailure(
+		runoutcome.OriginAutomationPolicy, AutomationNotAllowlistedCode, runoutcome.RetryClassNever,
+	))
 }
 
 // failUnattendedRun terminalises a run nobody is watching, and returns the
 // decision that tells the runtime to stop rather than keep calling tools.
-func (s *Server) failUnattendedRun(ctx context.Context, beacon *turingv1.ToolCallBeacon, code string, message string) (*turingv1.ToolPolicyDecision, error) {
-	payloadJSON, err := encodePayload(map[string]any{
-		"runId": beacon.GetRunId(), "code": code, "message": message, "retryable": false,
-	})
+//
+// The failure arrives already normalized, because this is a reporting site the
+// orchestrator owns: it knows the run stopped on automation policy, and that
+// typed fact is what decides the public outcome. The sentence a person would
+// read is derived by the client from that outcome, not persisted here.
+func (s *Server) failUnattendedRun(ctx context.Context, beacon *turingv1.ToolCallBeacon, failure runoutcome.Failure) (*turingv1.ToolPolicyDecision, error) {
+	version, err := s.currentStateVersion(ctx, beacon.GetRunId())
 	if err != nil {
 		return nil, err
 	}
-	events, err := s.repo.FailRunWithEventPreservingExecution(ctx, beacon.GetRunId(), code, message, payloadJSON)
+	result, err := s.repo.FailRunCanonical(ctx, repository.FailRunInput{
+		RunID:                beacon.GetRunId(),
+		ExpectedStateVersion: version,
+		Failure:              failure,
+		PreserveExecution:    true,
+	})
 	if err != nil {
-		// The run is already terminal (cancelled, or failed by another path).
+		// The run is already terminal (cancelled, or failed by another path),
+		// or another writer moved it between the read above and this update.
 		// Telling the runtime to stop is still right; failing the RPC would
 		// only leave it waiting.
-		if errors.Is(err, repository.ErrRunNotFailable) {
-			return terminalRunDecision(beacon, code), nil
+		if errors.Is(err, repository.ErrRunNotFailable) || errors.Is(err, repository.ErrRunTransitionConflict) {
+			return terminalRunDecision(beacon, failure.Code()), nil
 		}
 		return nil, err
 	}
-	for _, event := range events {
+	for _, event := range result.Events {
 		s.publishEvent(event)
 	}
-	return terminalRunDecision(beacon, code), nil
+	return terminalRunDecision(beacon, failure.Code()), nil
 }
 
 func (s *Server) terminalizePostCommitApprovalFailure(_ context.Context, runID string, toolCallID string) error {
@@ -2073,17 +2958,22 @@ func (s *Server) terminalizePostCommitApprovalFailure(_ context.Context, runID s
 	defer cancel()
 	approval, err := s.repo.GetApprovalByToolCall(recoveryCtx, runID, toolCallID)
 	if errors.Is(err, sql.ErrNoRows) {
-		payloadJSON, payloadErr := encodePayload(map[string]any{
-			"runId": runID, "code": "approval_delivery_failed", "message": "Approval lifecycle event could not be recorded", "retryable": false,
-		})
-		if payloadErr != nil {
-			return payloadErr
+		version, versionErr := s.currentStateVersion(recoveryCtx, runID)
+		if versionErr != nil {
+			return versionErr
 		}
-		events, failErr := s.repo.FailRunWithEventPreservingExecution(recoveryCtx, runID, "approval_delivery_failed", "Approval lifecycle event could not be recorded", payloadJSON)
+		result, failErr := s.repo.FailRunCanonical(recoveryCtx, repository.FailRunInput{
+			RunID:                runID,
+			ExpectedStateVersion: version,
+			Failure: runoutcome.NormalizeFailure(
+				runoutcome.OriginApprovalTransport, "approval_delivery_failed", runoutcome.RetryClassNever,
+			),
+			PreserveExecution: true,
+		})
 		if failErr != nil {
 			return failErr
 		}
-		for _, event := range events {
+		for _, event := range result.Events {
 			s.publishEvent(event)
 		}
 		return nil
@@ -2092,6 +2982,20 @@ func (s *Server) terminalizePostCommitApprovalFailure(_ context.Context, runID s
 		return fmt.Errorf("find approval after creation failure: %w", err)
 	}
 	return s.terminalizeApprovalDeliveryFailure(recoveryCtx, approval.ApprovalID, nil)
+}
+
+// currentStateVersion reads the version a run holds right now, for a writer
+// whose decision to terminalize came from somewhere other than the run row.
+//
+// The read is not the guard: the guarded update is, and it refuses the write if
+// another writer moved the row in between. This only supplies the expectation
+// that guard compares against, so no terminal transition is ever unversioned.
+func (s *Server) currentStateVersion(ctx context.Context, runID string) (int64, error) {
+	state, err := s.repo.GetRunState(ctx, runID)
+	if err != nil {
+		return 0, err
+	}
+	return state.StateVersion, nil
 }
 
 func toolStartedEventInput(beacon *turingv1.ToolCallBeacon, run repository.Run) (repository.ToolCallBeforeEvent, error) {
@@ -2109,12 +3013,20 @@ func toolStartedEventInput(beacon *turingv1.ToolCallBeacon, run repository.Run) 
 	}, nil
 }
 
+// denyToolBefore refuses a tool call and records the refusal.
+//
+// reason stays internal: it is the decision the runtime is told, and the
+// rationale the audit log keeps. The durable event gets the identity a client
+// was already promised plus the one category a denial can carry, so a client
+// reading tool.call.denied cannot tell a live denial from a migrated one, and
+// no policy string reaches it under any key.
 func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, argsJSON string, argsHash string, reason string) (*turingv1.ToolPolicyDecision, error) {
+	category, _ := runoutcome.ToolCallFailureCategory("tool.call.denied")
 	deniedPayload, err := safejson.MarshalCanonical(map[string]any{
 		"toolCallId": beacon.ToolCallId,
 		"serverName": beaconServerName(beacon),
 		"toolName":   beacon.ToolName,
-		"error":      reason,
+		"category":   string(category),
 	})
 	if err != nil {
 		return nil, err
@@ -2138,7 +3050,7 @@ func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBe
 		s.publishEvent(event)
 	}
 	if !recorded.Inserted {
-		if decision, handled := existingToolBeforeDecision(recorded.Record, reason); handled {
+		if decision, handled := existingToolBeforeDecision(recorded.Record, reason, beaconServerName(beacon), beacon.ToolName); handled {
 			return decision, nil
 		}
 	}
@@ -2150,8 +3062,8 @@ func (s *Server) denyToolBefore(ctx context.Context, beacon *turingv1.ToolCallBe
 	return &turingv1.ToolPolicyDecision{Decision: turingv1.ToolPolicyDecision_DECISION_DENY, ToolCallId: beacon.ToolCallId, Reason: reason}, nil
 }
 
-func existingToolBeforeDecision(record repository.ToolCallRecord, deniedReason string) (*turingv1.ToolPolicyDecision, bool) {
-	decision := &turingv1.ToolPolicyDecision{ToolCallId: record.ToolCallID}
+func existingToolBeforeDecision(record repository.ToolCallRecord, deniedReason, serverName, toolName string) (*turingv1.ToolPolicyDecision, bool) {
+	decision := &turingv1.ToolPolicyDecision{ToolCallId: record.ToolCallID, ReadOnly: tools.ToolReadOnly(serverName, toolName)}
 	switch record.Status {
 	case "allowed":
 		decision.Decision = turingv1.ToolPolicyDecision_DECISION_ALLOW
@@ -2182,18 +3094,17 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "tool args are not valid JSON")
 	}
-	errorCode, errorMessage := "", ""
-	if beacon.Error != nil {
-		errorCode = beacon.Error.Code
-		errorMessage = beacon.Error.Message
-	}
+	// Normalization happens here, before the tool call row and before the
+	// event, because both are durable and both are read back to clients. What
+	// the beacon actually said — a path, a key, a provider's prose in an error
+	// message — never reaches either.
 	payload := map[string]any{
 		"toolCallId": beacon.ToolCallId,
 		"serverName": beaconServerName(beacon),
 		"toolName":   beacon.ToolName,
 	}
-	if errorText := publicToolEventError(statusValue, beacon.Error); errorText != "" {
-		payload["error"] = errorText
+	if category, isFailure := runoutcome.ToolCallFailureCategory(eventType); isFailure {
+		payload["category"] = string(category)
 	}
 	payloadJSON, err := safejson.MarshalCanonical(payload)
 	if err != nil {
@@ -2209,9 +3120,12 @@ func (s *Server) handleToolAfter(ctx context.Context, beacon *turingv1.ToolCallB
 		WorkerID:        workerID,
 		Status:          statusValue,
 		ResultSummary:   beacon.ResultSummary,
-		ErrorCode:       errorCode,
-		ErrorMessage:    errorMessage,
-		DurationMS:      beacon.DurationMs,
+		ErrorCode:       toolAfterErrorCode(eventType, beacon),
+		// Deliberately empty on every terminal shape. error_message is the
+		// column a tool's or a provider's sentence used to reach a client
+		// through, and nothing the runtime can say belongs in it.
+		ErrorMessage: "",
+		DurationMS:   beacon.DurationMs,
 	}, eventType, string(payloadJSON))
 	if err != nil {
 		return nil, mapToolCallError(err)
@@ -2241,6 +3155,11 @@ func (s *Server) NotifyApprovalUpdated(ctx context.Context, runID string, approv
 		ApprovalId:    approvalID,
 		ApprovalToken: approvalToken,
 		Status:        approvalStatus,
+		// An approval decision moves the run's lifecycle, so the worker is told
+		// which version that landed on. Delivering the decision does not by
+		// itself resume the run; it only stops the worker reporting against a
+		// state that no longer exists.
+		StateVersion: s.committedVersion(ctx, runID, 0),
 	}}}); err != nil {
 		return err
 	}
@@ -2334,22 +3253,44 @@ func toolAfterStatus(beacon *turingv1.ToolCallBeacon) (string, string, error) {
 	}
 }
 
-func publicToolEventError(statusValue string, toolError *turingv1.ToolCallError) string {
-	if toolError != nil {
-		if toolError.Message != "" {
-			return toolError.Message
-		}
-		if toolError.Code != "" {
-			return toolError.Code
-		}
-	}
-	switch statusValue {
-	case "failed":
-		return "Tool call failed"
-	case "denied":
-		return "Tool call denied"
-	default:
+// toolAfterErrorCode is the only thing a tool-after beacon's error object is
+// allowed to contribute to durable storage, and even that survives only if it
+// is on the approved matrix.
+//
+// The beacon has no origin field, so the origin comes from what this call site
+// knows: it is ingesting a tool call's terminal report, and the runtime's tools
+// package reports from a closed vocabulary whose approved origins are fixed. A
+// code outside that vocabulary gets the origin its event type implies and then
+// fails closed to CodeUnknown, so an unrecognized worker cannot widen the
+// column by inventing a code. A non-failure terminal report contributes no code
+// at all.
+func toolAfterErrorCode(eventType string, beacon *turingv1.ToolCallBeacon) string {
+	if _, isFailure := runoutcome.ToolCallFailureCategory(eventType); !isFailure {
 		return ""
+	}
+	code := beacon.GetError().GetCode()
+	return runoutcome.NormalizeFailure(
+		toolAfterFailureOrigin(eventType, code), code, runoutcome.RetryClassNever,
+	).Code()
+}
+
+// toolAfterFailureOrigin names the origin the approved subsidiary mapping gives
+// each code the runtime's tools package can report on an after beacon, and
+// falls back to the origin the event type itself establishes: a denial came
+// from policy, and anything else that ended a tool call ended while it ran.
+func toolAfterFailureOrigin(eventType string, code string) runoutcome.Origin {
+	if eventType == "tool.call.denied" {
+		return runoutcome.OriginToolPolicy
+	}
+	switch code {
+	case "tool_policy_decision_failed", "tool_policy_decision_invalid":
+		return runoutcome.OriginToolPolicy
+	case "approval_wait_failed":
+		return runoutcome.OriginApprovalTransport
+	case "cancelled":
+		return runoutcome.OriginClientLifecycle
+	default:
+		return runoutcome.OriginToolExecution
 	}
 }
 
@@ -2372,6 +3313,9 @@ func canonicalArgs(args map[string]any) (string, string, error) {
 func beaconServerName(beacon *turingv1.ToolCallBeacon) string {
 	if beacon.ServerName != "" {
 		return beacon.ServerName
+	}
+	if strings.HasPrefix(beacon.ToolName, "github.") {
+		return "integrations"
 	}
 	for i, r := range beacon.ToolName {
 		if r == '.' {
@@ -2468,6 +3412,8 @@ func mapJob(job repository.Job) *turingv1.AgentJob {
 		ExternalAgent:                  toProtoExternalAgent(job.ExternalAgent),
 		RequiredContextTokens:          int32(job.RequiredContextTokens),
 		MinimumWorkerMaxConcurrentRuns: int32(job.MinimumWorkerMaxConcurrentRuns),
+		ExpectedStateVersion:           job.ExpectedStateVersion,
+		AssignmentAttemptId:            job.AssignmentAttemptID,
 		EgressDecision:                 toProtoEgressDecision(job.EgressDecision),
 		SelectedTools:                  append([]string(nil), job.SelectedTools...),
 	}
@@ -2495,6 +3441,14 @@ func toProtoEgressDecision(decision *repository.RunEgressDecision) *turingv1.Run
 			EndpointHost: destination.EndpointHost,
 		}
 	}
+	integrationEndpoints := make([]*turingv1.IntegrationEgressDestination, len(decision.IntegrationEndpoints))
+	for index, destination := range decision.IntegrationEndpoints {
+		integrationEndpoints[index] = &turingv1.IntegrationEgressDestination{
+			Endpoint: destination.Endpoint, EndpointHost: destination.EndpointHost,
+			ConnectionId: destination.ConnectionID, DisplayName: destination.DisplayName,
+			Tools: append([]string(nil), destination.Tools...),
+		}
+	}
 	return &turingv1.RunEgressDecision{
 		DecisionId:                decision.DecisionID,
 		Version:                   int32(decision.Version),
@@ -2513,6 +3467,7 @@ func toProtoEgressDecision(decision *repository.RunEgressDecision) *turingv1.Run
 		ExternalCredentialRefHash: decision.ExternalCredentialRefHash,
 		RequestDigest:             decision.RequestDigest,
 		RemoteMcpServers:          remoteMCPServers,
+		IntegrationEndpoints:      integrationEndpoints,
 	}
 }
 

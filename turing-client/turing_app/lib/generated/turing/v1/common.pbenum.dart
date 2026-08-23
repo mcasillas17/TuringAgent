@@ -211,6 +211,10 @@ class ToolPolicy extends $pb.ProtobufEnum {
   const ToolPolicy._(super.value, super.name);
 }
 
+/// Legacy run status. Superseded for durable public outcome snapshots by
+/// RunLifecycle, which adds recovering plus explicit unspecified/unknown
+/// handling. Retained and unrenumbered: existing clients and stored payloads
+/// still read these numbers.
 class RunStatus extends $pb.ProtobufEnum {
   static const RunStatus RUN_STATUS_UNSPECIFIED =
       RunStatus._(0, _omitEnumNames ? '' : 'RUN_STATUS_UNSPECIFIED');
@@ -243,6 +247,139 @@ class RunStatus extends $pb.ProtobufEnum {
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 
   const RunStatus._(super.value, super.name);
+}
+
+/// The authoritative public phase of a run. UNSPECIFIED means the field was
+/// absent on the wire and UNKNOWN stands for a phase a newer server introduced
+/// that this reader cannot name, so neither is ever treated as a real phase;
+/// TUR-009 itself never persists or emits UNKNOWN. Terminal phases (completed,
+/// failed, cancelled) are immutable. Recovering is durable and observable: while
+/// worker ownership is uncertain, both reopen and live streaming show recovering
+/// rather than running.
+class RunLifecycle extends $pb.ProtobufEnum {
+  static const RunLifecycle RUN_LIFECYCLE_UNSPECIFIED =
+      RunLifecycle._(0, _omitEnumNames ? '' : 'RUN_LIFECYCLE_UNSPECIFIED');
+  static const RunLifecycle RUN_LIFECYCLE_UNKNOWN =
+      RunLifecycle._(1, _omitEnumNames ? '' : 'RUN_LIFECYCLE_UNKNOWN');
+  static const RunLifecycle RUN_LIFECYCLE_QUEUED =
+      RunLifecycle._(2, _omitEnumNames ? '' : 'RUN_LIFECYCLE_QUEUED');
+  static const RunLifecycle RUN_LIFECYCLE_RUNNING =
+      RunLifecycle._(3, _omitEnumNames ? '' : 'RUN_LIFECYCLE_RUNNING');
+  static const RunLifecycle RUN_LIFECYCLE_WAITING_APPROVAL =
+      RunLifecycle._(4, _omitEnumNames ? '' : 'RUN_LIFECYCLE_WAITING_APPROVAL');
+  static const RunLifecycle RUN_LIFECYCLE_RECOVERING =
+      RunLifecycle._(5, _omitEnumNames ? '' : 'RUN_LIFECYCLE_RECOVERING');
+  static const RunLifecycle RUN_LIFECYCLE_COMPLETED =
+      RunLifecycle._(6, _omitEnumNames ? '' : 'RUN_LIFECYCLE_COMPLETED');
+  static const RunLifecycle RUN_LIFECYCLE_FAILED =
+      RunLifecycle._(7, _omitEnumNames ? '' : 'RUN_LIFECYCLE_FAILED');
+  static const RunLifecycle RUN_LIFECYCLE_CANCELLED =
+      RunLifecycle._(8, _omitEnumNames ? '' : 'RUN_LIFECYCLE_CANCELLED');
+
+  static const $core.List<RunLifecycle> values = <RunLifecycle>[
+    RUN_LIFECYCLE_UNSPECIFIED,
+    RUN_LIFECYCLE_UNKNOWN,
+    RUN_LIFECYCLE_QUEUED,
+    RUN_LIFECYCLE_RUNNING,
+    RUN_LIFECYCLE_WAITING_APPROVAL,
+    RUN_LIFECYCLE_RECOVERING,
+    RUN_LIFECYCLE_COMPLETED,
+    RUN_LIFECYCLE_FAILED,
+    RUN_LIFECYCLE_CANCELLED,
+  ];
+
+  static final $core.List<RunLifecycle?> _byValue =
+      $pb.ProtobufEnum.$_initByValueList(values, 8);
+  static RunLifecycle? valueOf($core.int value) =>
+      value < 0 || value >= _byValue.length ? null : _byValue[value];
+
+  const RunLifecycle._(super.value, super.name);
+}
+
+/// Why a run reached its terminal lifecycle, as a closed vocabulary a client can
+/// localize instead of rendering server prose. NONE is the reason every
+/// nonterminal phase carries, and also a completed run that produced displayable
+/// content; COMPLETED_NO_CONTENT is a success that produced none. Which reasons
+/// are legal for which lifecycle is fixed by the normative matrix in the design:
+/// cancelled allows only USER_CANCELLED or ABANDONED, failed allows the failure
+/// reasons, and LEGACY_UNKNOWN marks a pre-migration row whose real reason was
+/// never recorded.
+class RunOutcomeReason extends $pb.ProtobufEnum {
+  static const RunOutcomeReason RUN_OUTCOME_REASON_UNSPECIFIED =
+      RunOutcomeReason._(
+          0, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_UNSPECIFIED');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_UNKNOWN =
+      RunOutcomeReason._(1, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_UNKNOWN');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_NONE =
+      RunOutcomeReason._(2, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_NONE');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT =
+      RunOutcomeReason._(
+          3, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_USER_CANCELLED =
+      RunOutcomeReason._(
+          4, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_USER_CANCELLED');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_ABANDONED =
+      RunOutcomeReason._(
+          5, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_ABANDONED');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_EXPIRED =
+      RunOutcomeReason._(6, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_EXPIRED');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_CONTEXT_LIMIT =
+      RunOutcomeReason._(
+          7, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_CONTEXT_LIMIT');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_PROVIDER_FAILURE =
+      RunOutcomeReason._(
+          8, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_PROVIDER_FAILURE');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_TOOL_FAILURE =
+      RunOutcomeReason._(
+          9, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_TOOL_FAILURE');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_POLICY_DENIED =
+      RunOutcomeReason._(
+          10, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_POLICY_DENIED');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_RETRIES_EXHAUSTED =
+      RunOutcomeReason._(
+          11, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_RETRIES_EXHAUSTED');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED =
+      RunOutcomeReason._(
+          12, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN =
+      RunOutcomeReason._(
+          13, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED =
+      RunOutcomeReason._(14,
+          _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_INTERNAL_FAILURE =
+      RunOutcomeReason._(
+          15, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_INTERNAL_FAILURE');
+  static const RunOutcomeReason RUN_OUTCOME_REASON_LEGACY_UNKNOWN =
+      RunOutcomeReason._(
+          16, _omitEnumNames ? '' : 'RUN_OUTCOME_REASON_LEGACY_UNKNOWN');
+
+  static const $core.List<RunOutcomeReason> values = <RunOutcomeReason>[
+    RUN_OUTCOME_REASON_UNSPECIFIED,
+    RUN_OUTCOME_REASON_UNKNOWN,
+    RUN_OUTCOME_REASON_NONE,
+    RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT,
+    RUN_OUTCOME_REASON_USER_CANCELLED,
+    RUN_OUTCOME_REASON_ABANDONED,
+    RUN_OUTCOME_REASON_EXPIRED,
+    RUN_OUTCOME_REASON_CONTEXT_LIMIT,
+    RUN_OUTCOME_REASON_PROVIDER_FAILURE,
+    RUN_OUTCOME_REASON_TOOL_FAILURE,
+    RUN_OUTCOME_REASON_POLICY_DENIED,
+    RUN_OUTCOME_REASON_RETRIES_EXHAUSTED,
+    RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED,
+    RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN,
+    RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED,
+    RUN_OUTCOME_REASON_INTERNAL_FAILURE,
+    RUN_OUTCOME_REASON_LEGACY_UNKNOWN,
+  ];
+
+  static final $core.List<RunOutcomeReason?> _byValue =
+      $pb.ProtobufEnum.$_initByValueList(values, 16);
+  static RunOutcomeReason? valueOf($core.int value) =>
+      value < 0 || value >= _byValue.length ? null : _byValue[value];
+
+  const RunOutcomeReason._(super.value, super.name);
 }
 
 const $core.bool _omitEnumNames =

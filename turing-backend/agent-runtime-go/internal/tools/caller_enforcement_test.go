@@ -26,6 +26,7 @@ func TestRunnerUsesCallerSideApprovalWithoutForwardingTheJWT(t *testing.T) {
 		WaitApproval: func(context.Context, string) (string, error) {
 			return "signed-approval-jwt-must-not-reach-vendor", nil
 		},
+		ResumeApproved: allowResume,
 	}
 
 	if _, err := runner.Run(context.Background(), RunInput{

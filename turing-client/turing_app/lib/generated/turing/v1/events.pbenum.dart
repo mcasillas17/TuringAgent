@@ -82,6 +82,9 @@ class TuringEventType extends $pb.ProtobufEnum {
   static const TuringEventType TURING_EVENT_TYPE_SESSION_DELETED =
       TuringEventType._(
           22, _omitEnumNames ? '' : 'TURING_EVENT_TYPE_SESSION_DELETED');
+  static const TuringEventType TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED =
+      TuringEventType._(23,
+          _omitEnumNames ? '' : 'TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED');
 
   static const $core.List<TuringEventType> values = <TuringEventType>[
     TURING_EVENT_TYPE_UNSPECIFIED,
@@ -107,10 +110,11 @@ class TuringEventType extends $pb.ProtobufEnum {
     TURING_EVENT_TYPE_SYSTEM,
     TURING_EVENT_TYPE_SESSION_UPDATED,
     TURING_EVENT_TYPE_SESSION_DELETED,
+    TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED,
   ];
 
   static final $core.List<TuringEventType?> _byValue =
-      $pb.ProtobufEnum.$_initByValueList(values, 22);
+      $pb.ProtobufEnum.$_initByValueList(values, 23);
   static TuringEventType? valueOf($core.int value) =>
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 

@@ -49,7 +49,8 @@ func TestRunnerForwardsBothApprovalAndProvenanceForMutatingTool(t *testing.T) {
 				ProvenanceToken: "provenance-capability",
 			}, nil
 		},
-		WaitApproval: func(context.Context, string) (string, error) { return "approval-token", nil },
+		WaitApproval:   func(context.Context, string) (string, error) { return "approval-token", nil },
+		ResumeApproved: allowResume,
 	}
 
 	if _, err := runner.Run(context.Background(), RunInput{

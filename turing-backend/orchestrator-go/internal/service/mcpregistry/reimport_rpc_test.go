@@ -182,7 +182,7 @@ func TestReimportMcpJsonRPCMapsSkippedForAlreadyImportedServers(t *testing.T) {
 	if got := response.GetSkipped(); len(got) != 2 || got[0] != "another-vendor" || got[1] != "vendor" {
 		t.Fatalf("Skipped = %v, want sorted [another-vendor vendor]", got)
 	}
-	if got := response.GetRefused(); len(got) != 1 || got[0].GetName() != "bad-vendor" {
+	if got := response.GetUnsupported(); len(got) != 1 || got[0].GetName() != "bad-vendor" {
 		t.Fatalf("Refused = %v, want [bad-vendor]", got)
 	}
 }
@@ -216,12 +216,12 @@ func TestReimportMcpJsonRPCMapsReportFieldsAndSortsRefused(t *testing.T) {
 	if len(response.GetImported()) != 1 || response.GetImported()[0] != "vendor" {
 		t.Fatalf("Imported = %v, want [vendor]", response.GetImported())
 	}
-	if len(response.GetRefused()) != 2 {
-		t.Fatalf("Refused = %v, want 2 entries", response.GetRefused())
+	if len(response.GetUnsupported()) != 2 {
+		t.Fatalf("Refused = %v, want 2 entries", response.GetUnsupported())
 	}
-	if response.GetRefused()[0].GetName() != "aa-bad" || response.GetRefused()[1].GetName() != "zz-bad" {
+	if response.GetUnsupported()[0].GetName() != "aa-bad" || response.GetUnsupported()[1].GetName() != "zz-bad" {
 		t.Fatalf("Refused names = [%q, %q], want sorted [aa-bad, zz-bad]",
-			response.GetRefused()[0].GetName(), response.GetRefused()[1].GetName())
+			response.GetUnsupported()[0].GetName(), response.GetUnsupported()[1].GetName())
 	}
 }
 
@@ -523,7 +523,7 @@ func TestReimportMcpJsonConcurrentOverlappingRunsCannotSwapRefusedResponses(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := responseB.GetRefused(); len(got) != 1 || got[0].GetName() != "bad-b" {
+	if got := responseB.GetUnsupported(); len(got) != 1 || got[0].GetName() != "bad-b" {
 		t.Fatalf("B's Refused = %v, want [bad-b]", got)
 	}
 
@@ -540,7 +540,7 @@ func TestReimportMcpJsonConcurrentOverlappingRunsCannotSwapRefusedResponses(t *t
 	if barrierFired != 1 {
 		t.Fatalf("barrier fired %d times, want exactly 1", barrierFired)
 	}
-	if got := final.response.GetRefused(); len(got) != 1 || got[0].GetName() != "bad-a" {
+	if got := final.response.GetUnsupported(); len(got) != 1 || got[0].GetName() != "bad-a" {
 		t.Fatalf("A's Refused = %v, want [bad-a]: it must never reflect B's concurrent refusal", got)
 	}
 }

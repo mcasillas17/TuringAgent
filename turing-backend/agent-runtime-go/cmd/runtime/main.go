@@ -68,9 +68,14 @@ func run() error {
 		}
 		providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE] = openAIProvider
 	}
-	toolRunner := &tools.Runner{WaitApproval: func(ctx context.Context, approvalID string) (string, error) {
-		return client.WaitForApprovalToken(ctx, approvalID, time.Second, cfg.ApprovalTimeout)
-	}}
+	toolRunner := &tools.Runner{
+		WaitApproval: func(ctx context.Context, approvalID string) (string, error) {
+			return client.WaitForApprovalToken(ctx, approvalID, time.Second, cfg.ApprovalTimeout)
+		},
+		// One budget covers waiting for the decision and waiting for the
+		// orchestrator to accept the resume it permits.
+		ApprovalWaitTimeout: cfg.ApprovalTimeout,
+	}
 	toolset := &agent.GeneralAssistantTools{
 		SystemMCP: mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
 		// The orchestrator client is the Searcher: recall queries SearchMessages
@@ -93,6 +98,9 @@ func run() error {
 				servers[name] = registered
 			}
 			return servers, nil
+		},
+		IntegrationTools: func(context.Context) (agent.ToolLister, error) {
+			return mcp.NewIntegrationClient(client), nil
 		},
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)

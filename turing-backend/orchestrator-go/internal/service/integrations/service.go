@@ -3,9 +3,9 @@
 // Three rules shape everything here:
 //
 //  1. A stored credential is never returned. No response message in
-//     integrations.proto has a field for one, and this package never reads
-//     the sealed column back. What a client can learn about a connection is
-//     the provider, the account it points at, and a redaction.
+//     integrations.proto has a field for one. The internal dispatch path reads
+//     and unseals exactly the named credential for one provider call; public
+//     management paths expose only provider metadata and a redaction.
 //  2. Connecting requires consent to that provider's grants, in the same
 //     request. A missing field is not agreement.
 //  3. Revoking destroys the credential rather than hiding it.
@@ -15,15 +15,17 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
+	"net/http"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
-	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -46,6 +48,20 @@ type AuditRecorder interface {
 	Record(ctx context.Context, correlationID, actorType, actorID, action, target string, payload map[string]any) error
 }
 
+type CredentialSealer interface {
+	Seal(plaintext, boundTo []byte) ([]byte, error)
+	Open(sealed, boundTo []byte) ([]byte, error)
+	SealedWithThisKey(sealedPrefix []byte) bool
+}
+
+type ApprovalEnforcer interface {
+	ConsumeApprovalForThirdParty(ctx context.Context, approvalID, runID, serverName, toolName string, args map[string]any) error
+}
+
+type RegistryChangeNotifier interface {
+	NotifyMCPRegistryChanged(context.Context) error
+}
+
 type Server struct {
 	turingv1.UnimplementedIntegrationServiceServer
 	repo  *repository.Repository
@@ -54,11 +70,27 @@ type Server struct {
 	// fails with a reason, rather than quietly writing the credential in the
 	// clear — a feature that silently downgrades its own protection is worse
 	// than one that says it is not configured.
-	sealer *secretbox.Sealer
+	sealer     CredentialSealer
+	approvals  ApprovalEnforcer
+	notifier   RegistryChangeNotifier
+	httpClient *http.Client
+	lookupIP   backendegress.LookupIP
 }
 
-func New(repo *repository.Repository, sealer *secretbox.Sealer, audit AuditRecorder) *Server {
-	return &Server{repo: repo, sealer: sealer, audit: audit}
+func New(repo *repository.Repository, sealer CredentialSealer, audit AuditRecorder) *Server {
+	return &Server{repo: repo, sealer: sealer, audit: audit, lookupIP: net.DefaultResolver.LookupIPAddr}
+}
+
+func (s *Server) SetApprovalEnforcer(enforcer ApprovalEnforcer)             { s.approvals = enforcer }
+func (s *Server) SetRegistryChangeNotifier(notifier RegistryChangeNotifier) { s.notifier = notifier }
+func (s *Server) SetHTTPClient(client *http.Client)                         { s.httpClient = client }
+
+func (s *Server) notifyRegistryChanged() {
+	if s.notifier != nil {
+		if err := s.notifier.NotifyMCPRegistryChanged(context.Background()); err != nil {
+			log.Printf("notify runtime of integration registry change: %v", err)
+		}
+	}
 }
 
 func (s *Server) ListProviders(context.Context, *turingv1.ListProvidersRequest) (*turingv1.ListProvidersResponse, error) {
@@ -152,6 +184,7 @@ func (s *Server) ConnectAccount(ctx context.Context, req *turingv1.ConnectAccoun
 		return nil, connectionError(err, "connect account failed")
 	}
 	s.record(ctx, "integration.connected", connection)
+	s.notifyRegistryChanged()
 	return s.toProto(connection), nil
 }
 
@@ -183,6 +216,7 @@ func (s *Server) RevokeConnection(ctx context.Context, req *turingv1.RevokeConne
 		return nil, connectionError(err, "revoke connection failed")
 	}
 	s.record(ctx, "integration.revoked", connection)
+	s.notifyRegistryChanged()
 	return s.toProto(connection), nil
 }
 
@@ -200,6 +234,7 @@ func (s *Server) DeleteConnection(ctx context.Context, req *turingv1.DeleteConne
 		return nil, connectionError(err, "delete connection failed")
 	}
 	s.record(ctx, "integration.deleted", connection)
+	s.notifyRegistryChanged()
 	return &turingv1.DeleteConnectionResponse{}, nil
 }
 
@@ -285,7 +320,7 @@ func (s *Server) toProto(connection repository.Connection) *turingv1.Connection 
 		// connection whose key is gone is unusable, and saying so beats
 		// leaving it to claim access it no longer has.
 		CredentialUnreadable: len(connection.CredentialHeader) > 0 &&
-			!s.sealer.SealedWithThisKey(connection.CredentialHeader),
+			(s.sealer == nil || !s.sealer.SealedWithThisKey(connection.CredentialHeader)),
 	}
 }
 

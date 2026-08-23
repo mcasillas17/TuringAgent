@@ -90,6 +90,14 @@ func (s *PublicServer) UpdateMcpToolPolicy(ctx context.Context, req *turingv1.Up
 	return s.service.UpdateMcpToolPolicy(ctx, req)
 }
 
+func (s *PublicServer) UpdateToolPolicyByName(ctx context.Context, req *turingv1.UpdateToolPolicyByNameRequest) (*turingv1.McpToolDescriptor, error) {
+	return s.service.UpdateToolPolicyByName(ctx, req)
+}
+
+func (s *PublicServer) ListPseudoServerTools(ctx context.Context, req *turingv1.ListPseudoServerToolsRequest) (*turingv1.ListPseudoServerToolsResponse, error) {
+	return s.service.ListPseudoServerTools(ctx, req)
+}
+
 func (s *PublicServer) DeleteMcpServer(ctx context.Context, req *turingv1.DeleteMcpServerRequest) (*turingv1.DeleteMcpServerResponse, error) {
 	return s.service.DeleteMcpServer(ctx, req)
 }
@@ -119,6 +127,14 @@ func (*InternalServer) SetMcpServerEnabled(context.Context, *turingv1.SetMcpServ
 }
 
 func (*InternalServer) UpdateMcpToolPolicy(context.Context, *turingv1.UpdateMcpToolPolicyRequest) (*turingv1.McpToolDescriptor, error) {
+	return nil, status.Error(codes.PermissionDenied, "MCP tool policy management is public")
+}
+
+func (*InternalServer) UpdateToolPolicyByName(context.Context, *turingv1.UpdateToolPolicyByNameRequest) (*turingv1.McpToolDescriptor, error) {
+	return nil, status.Error(codes.PermissionDenied, "MCP tool policy management is public")
+}
+
+func (*InternalServer) ListPseudoServerTools(context.Context, *turingv1.ListPseudoServerToolsRequest) (*turingv1.ListPseudoServerToolsResponse, error) {
 	return nil, status.Error(codes.PermissionDenied, "MCP tool policy management is public")
 }
 
@@ -398,6 +414,60 @@ func (s *Server) UpdateMcpToolPolicy(ctx context.Context, req *turingv1.UpdateMc
 	return nil, status.Error(codes.NotFound, "MCP tool not found")
 }
 
+func (s *Server) UpdateToolPolicyByName(ctx context.Context, req *turingv1.UpdateToolPolicyByNameRequest) (*turingv1.McpToolDescriptor, error) {
+	if req == nil || req.GetServerName() == "" || req.GetToolName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "server_name and tool_name are required")
+	}
+	policy, err := policyFromProto(req.GetPolicy())
+	if err != nil {
+		return nil, err
+	}
+	if policy == "safe" && toolpolicy.BundledToolRequiresApproval(req.GetServerName(), req.GetToolName()) {
+		return nil, status.Error(codes.FailedPrecondition, "bundled mutating tools require approval at their server")
+	}
+	if req.GetServerName() == "integrations" && policy == "safe" &&
+		!toolpolicy.ToolReadOnly(req.GetServerName(), req.GetToolName()) {
+		return nil, status.Error(codes.FailedPrecondition, "integration mutating tools require approval")
+	}
+	if err := s.repo.SetToolPolicyByName(ctx, req.GetServerName(), req.GetToolName(), policy); err != nil {
+		if errors.Is(err, repository.ErrMCPToolNotFound) {
+			return nil, status.Error(codes.NotFound, "MCP tool not found")
+		}
+		return nil, status.Error(codes.Internal, "update MCP tool policy failed")
+	}
+	tool, err := s.repo.GetToolByName(ctx, req.GetServerName(), req.GetToolName())
+	if err != nil {
+		if errors.Is(err, repository.ErrMCPToolNotFound) {
+			return nil, status.Error(codes.NotFound, "MCP tool not found")
+		}
+		return nil, status.Error(codes.Internal, "read MCP tool failed")
+	}
+	descriptor, err := toolDescriptor(tool)
+	if err == nil {
+		s.notifyRegistryChanged()
+	}
+	return descriptor, err
+}
+
+func (s *Server) ListPseudoServerTools(ctx context.Context, req *turingv1.ListPseudoServerToolsRequest) (*turingv1.ListPseudoServerToolsResponse, error) {
+	if req == nil || (req.GetServerName() != "skills" && req.GetServerName() != "integrations") {
+		return nil, status.Error(codes.InvalidArgument, "server_name must be skills or integrations")
+	}
+	tools, err := s.repo.ListPseudoServerTools(ctx, req.GetServerName())
+	if err != nil {
+		return nil, status.Error(codes.Internal, "list pseudo-server tools failed")
+	}
+	response := &turingv1.ListPseudoServerToolsResponse{Tools: make([]*turingv1.McpToolDescriptor, 0, len(tools))}
+	for _, tool := range tools {
+		descriptor, err := toolDescriptor(tool)
+		if err != nil {
+			return nil, err
+		}
+		response.Tools = append(response.Tools, descriptor)
+	}
+	return response, nil
+}
+
 func (s *Server) DeleteMcpServer(ctx context.Context, req *turingv1.DeleteMcpServerRequest) (*turingv1.DeleteMcpServerResponse, error) {
 	if req == nil || req.GetServerId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "server_id is required")
@@ -453,18 +523,34 @@ func (s *Server) notifyRegistryChanged() {
 	}
 }
 
-// tierFromProto validates that a RegisterMcpServerRequest names one of the
-// two tiers an operator may explicitly request. BUNDLED is TuringAgent's
-// own tier and UNSPECIFIED leaves the caller not actually deciding, so both
-// are refused rather than defaulted to something else.
-func tierFromProto(tier turingv1.McpServerTier) (repository.MCPServerTier, error) {
+// requestedTierFromProto maps a RegisterMcpServerRequest's declared tier to
+// the optional assertion validateServerDefinition takes. The tier a server
+// actually gets is always derived from its hardened URL — never chosen by
+// the caller — so this only decides whether the caller is *also* asserting
+// what that derivation must produce:
+//
+//   - UNSPECIFIED returns nil: the caller is not asserting anything, and the
+//     URL's own classification stands. This is what a client built against
+//     the tier-less version of this RPC sends, so those clients keep working
+//     unchanged.
+//   - LOCAL_CONTAINER / REMOTE_URL returns that tier: the URL must classify
+//     to exactly it, or validateServerDefinition refuses the registration.
+//     This is what the in-app registration form sends, so a user who picked
+//     the wrong kind for a URL is told rather than silently corrected.
+//   - BUNDLED is refused outright: it is TuringAgent's own tier, never
+//     something an operator registers into.
+func requestedTierFromProto(tier turingv1.McpServerTier) (*repository.MCPServerTier, error) {
 	switch tier {
+	case turingv1.McpServerTier_MCP_SERVER_TIER_UNSPECIFIED:
+		return nil, nil
 	case turingv1.McpServerTier_MCP_SERVER_TIER_LOCAL_CONTAINER:
-		return repository.MCPServerTierLocalContainer, nil
+		requested := repository.MCPServerTierLocalContainer
+		return &requested, nil
 	case turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL:
-		return repository.MCPServerTierRemoteURL, nil
+		requested := repository.MCPServerTierRemoteURL
+		return &requested, nil
 	default:
-		return "", status.Error(codes.InvalidArgument, "tier must be local-container or remote-url")
+		return nil, status.Error(codes.InvalidArgument, "tier must be local-container or remote-url")
 	}
 }
 
@@ -480,6 +566,33 @@ func mapMCPValidationError(err error) error {
 	return status.Error(codes.InvalidArgument, err.Error())
 }
 
+// errMCPBearerTokenBlank is the refusal for a bearer_token that carries
+// something but normalizes to nothing (a paste that was all whitespace, or
+// a stray tab). Both RegisterMcpServer and RotateMcpServerToken treat a
+// genuinely empty bearer_token as "no token" / "clear the token", so a
+// blank one would otherwise be silently indistinguishable from that
+// deliberate choice — a mistake worth naming rather than absorbing.
+var errMCPBearerTokenBlank = errors.New("bearer token must not be only whitespace; send an empty token to leave the server without one")
+
+// requireNonBlankBearerToken refuses a bearer that is present on the wire
+// but empty after normalization. It is applied at the RPC boundary only:
+// mcp.json import reaches the same refusal through bearerFromHeaders' own
+// errMCPAuthorizationHeaderMalformed, which can additionally name the
+// header the operator must fix.
+func requireNonBlankBearerToken(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	normalized, err := normalizeBearerToken(raw)
+	if err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	if normalized == "" {
+		return status.Error(codes.InvalidArgument, errMCPBearerTokenBlank.Error())
+	}
+	return nil
+}
+
 // RegisterMcpServer registers a server directly, without an mcp.json file.
 // It runs the same name/URL/token validation as a file import so the two
 // paths can never diverge, seals the token with the same sealer, and never
@@ -491,11 +604,14 @@ func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMc
 	if req == nil || req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
-	tier, err := tierFromProto(req.GetTier())
+	tier, err := requestedTierFromProto(req.GetTier())
 	if err != nil {
 		return nil, err
 	}
-	validated, err := validateServerDefinition(req.GetName(), req.GetUrl(), &tier, req.GetBearerToken())
+	if err := requireNonBlankBearerToken(req.GetBearerToken()); err != nil {
+		return nil, err
+	}
+	validated, err := validateServerDefinition(req.GetName(), req.GetUrl(), tier, req.GetBearerToken())
 	if err != nil {
 		return nil, mapMCPValidationError(err)
 	}
@@ -564,6 +680,9 @@ func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMc
 func (s *Server) RotateMcpServerToken(ctx context.Context, req *turingv1.RotateMcpServerTokenRequest) (*turingv1.McpServerDescriptor, error) {
 	if req == nil || req.GetServerId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "server_id is required")
+	}
+	if err := requireNonBlankBearerToken(req.GetBearerToken()); err != nil {
+		return nil, err
 	}
 	token, err := normalizeBearerToken(req.GetBearerToken())
 	if err != nil {
@@ -694,7 +813,7 @@ func (s *Server) rotateServerTokenLocked(ctx context.Context, serverID, token st
 // refused entries. audit always runs, unconditionally, recording only
 // counts; unlike notify it is never skipped by a later failure, and two
 // overlapping ReimportMcpJson calls can never suppress or delay each
-// other's audit record. The response's Refused
+// other's audit record. The response's Unsupported
 // list is built directly from this call's own report.Unsupported, sorted
 // by name, rather than by re-reading the shared mcp_import_issues table
 // (which ListMcpServers still uses for its own Unsupported list): a
@@ -752,9 +871,9 @@ func (s *Server) ReimportMcpJson(ctx context.Context, _ *turingv1.ReimportMcpJso
 		})
 	}
 	return &turingv1.ReimportMcpJsonResponse{
-		Imported: report.Imported,
-		Skipped:  report.Skipped,
-		Refused:  refused,
+		Imported:    report.Imported,
+		Skipped:     report.Skipped,
+		Unsupported: refused,
 	}, nil
 }
 

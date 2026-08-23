@@ -49,16 +49,7 @@ func TestRemoteCallCoveredByTheRunDecisionDispatchesExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.MarkRunRunning(context.Background(), enqueued.RunID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.database.ExecContext(
-		context.Background(),
-		`UPDATE agent_runs SET execution_active = 1 WHERE id = ?`,
-		enqueued.RunID,
-	); err != nil {
-		t.Fatal(err)
-	}
+	h.claimAndDeliverRun(t, enqueued.RunID)
 	if err := h.repo.RecordToolCallBefore(
 		context.Background(),
 		repository.ToolCallRecord{ToolCallID: "call_remote_approved", RunID: enqueued.RunID},
@@ -82,6 +73,7 @@ func TestRemoteCallCoveredByTheRunDecisionDispatchesExactlyOnce(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	h.resumeApprovedRun(t, enqueued.RunID, approvalID)
 
 	if _, err := h.registry.CallTool(context.Background(), CallInput{
 		ServerID: h.serverID, RunID: enqueued.RunID, ApprovalID: approvalID,

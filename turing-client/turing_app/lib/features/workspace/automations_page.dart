@@ -118,7 +118,7 @@ String describeOccurrenceFailure(String code) {
     case 'remote_egress_configuration_invalid':
       return 'The remote destination configuration is invalid.';
     default:
-      return code.replaceAll('_', ' ');
+      return 'This scheduled attempt was blocked.';
   }
 }
 
@@ -428,7 +428,7 @@ class _AutomationCard extends StatelessWidget {
               color: palette.textMuted,
             ),
           ),
-          if (automation.lastRunFailed && automation.lastRunError.isNotEmpty)
+          if (automation.lastRunFailed)
             Padding(
               padding: const EdgeInsets.only(top: 12),
               child: Container(
@@ -448,7 +448,7 @@ class _AutomationCard extends StatelessWidget {
                     const SizedBox(width: 9),
                     Expanded(
                       child: Text(
-                        'The last run failed. ${automation.lastRunError}',
+                        'The last run failed.',
                         style: TextStyle(
                           fontSize: 12.5,
                           height: 1.5,
@@ -921,79 +921,94 @@ class _AllowlistPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = AppColors.of(context);
-    return FutureBuilder<List<ToolDescriptor>>(
-      future: tools,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
-            child: SizedBox.square(
-              dimension: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          );
-        }
-        if (snapshot.hasError) {
-          // Not "no tools": claiming an empty list here would invite someone
-          // to save an allowlist they never got to see.
-          return Text(
-            'The list of tools could not be read, so this cannot say what is '
-            'available to allow. Existing ticks are unchanged.',
-            style: TextStyle(fontSize: 12.5, color: AppColors.danger),
-          );
-        }
-        final gated = (snapshot.data ?? const <ToolDescriptor>[])
-            .where((tool) => tool.policy == ToolPolicy.approvalRequired)
-            .map(
-              (tool) => AutomationTool(
-                serverName: tool.serverName,
-                toolName: tool.toolName,
-              ),
-            )
-            .toList();
-        // An entry for a tool no server currently offers is still enforced if
-        // that tool comes back, and is still sent on every save. Hiding it
-        // would make it un-untickable — a permission the user cannot withdraw
-        // because they cannot see it.
-        final stale = selected.where((tool) => !gated.contains(tool)).toList();
-        final rows = [...gated, ...stale]
-          ..sort((a, b) => a.toolName.compareTo(b.toolName));
-        if (rows.isEmpty) {
-          return Text(
-            'No tool currently needs approval, so there is nothing to allow '
-            'in advance.',
-            style: TextStyle(fontSize: 12.5, color: palette.textMuted),
-          );
-        }
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final tool in rows)
-              CheckboxListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                value: selected.contains(tool),
-                onChanged: (checked) => onChanged(tool, checked ?? false),
-                title: Text(
-                  tool.toolName,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontFamily: 'monospace',
-                    color: palette.text,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Connected-account integrations are not available to automations.',
+          style: TextStyle(fontSize: 12.5, color: palette.textMuted),
+        ),
+        const SizedBox(height: 8),
+        FutureBuilder<List<ToolDescriptor>>(
+          future: tools,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              );
+            }
+            if (snapshot.hasError) {
+              // Not "no tools": claiming an empty list here would invite someone
+              // to save an allowlist they never got to see.
+              return Text(
+                'The list of tools could not be read, so this cannot say what is '
+                'available to allow. Existing ticks are unchanged.',
+                style: TextStyle(fontSize: 12.5, color: AppColors.danger),
+              );
+            }
+            final gated = (snapshot.data ?? const <ToolDescriptor>[])
+                .where((tool) => tool.policy == ToolPolicy.approvalRequired)
+                .map(
+                  (tool) => AutomationTool(
+                    serverName: tool.serverName,
+                    toolName: tool.toolName,
                   ),
-                ),
-                subtitle: Text(
-                  stale.contains(tool)
-                      ? 'from ${tool.serverName} — not offered right now, but '
-                            'still allowed if it comes back'
-                      : 'from ${tool.serverName}',
-                  style: TextStyle(fontSize: 11.5, color: palette.textMuted),
-                ),
-              ),
-          ],
-        );
-      },
+                )
+                .toList();
+            // An entry for a tool no server currently offers is still enforced if
+            // that tool comes back, and is still sent on every save. Hiding it
+            // would make it un-untickable — a permission the user cannot withdraw
+            // because they cannot see it.
+            final stale = selected
+                .where((tool) => !gated.contains(tool))
+                .toList();
+            final rows = [...gated, ...stale]
+              ..sort((a, b) => a.toolName.compareTo(b.toolName));
+            if (rows.isEmpty) {
+              return Text(
+                'No tool currently needs approval, so there is nothing to allow '
+                'in advance.',
+                style: TextStyle(fontSize: 12.5, color: palette.textMuted),
+              );
+            }
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final tool in rows)
+                  CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    value: selected.contains(tool),
+                    onChanged: (checked) => onChanged(tool, checked ?? false),
+                    title: Text(
+                      tool.toolName,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontFamily: 'monospace',
+                        color: palette.text,
+                      ),
+                    ),
+                    subtitle: Text(
+                      stale.contains(tool)
+                          ? 'from ${tool.serverName} — not offered right now, but '
+                                'still allowed if it comes back'
+                          : 'from ${tool.serverName}',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: palette.textMuted,
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
     );
   }
 }

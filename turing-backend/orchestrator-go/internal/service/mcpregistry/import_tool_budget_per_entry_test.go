@@ -147,9 +147,9 @@ func TestReimportMcpJsonNotifiesAndAuditsCorrectlyWhenALaterEntryExceedsThirdPar
 	if len(response.GetImported()) != 1 || response.GetImported()[0] != "aaa-vendor" {
 		t.Fatalf("Imported = %v, want [aaa-vendor]", response.GetImported())
 	}
-	if len(response.GetRefused()) != 1 || response.GetRefused()[0].GetName() != "zzz-over-budget" ||
-		response.GetRefused()[0].GetReason() != mcpThirdPartyToolBudgetExceededMessage {
-		t.Fatalf("Refused = %+v, want exactly one zzz-over-budget refusal with the fixed reason", response.GetRefused())
+	if len(response.GetUnsupported()) != 1 || response.GetUnsupported()[0].GetName() != "zzz-over-budget" ||
+		response.GetUnsupported()[0].GetReason() != mcpThirdPartyToolBudgetExceededMessage {
+		t.Fatalf("Refused = %+v, want exactly one zzz-over-budget refusal with the fixed reason", response.GetUnsupported())
 	}
 	if notifier.calls != 1 {
 		t.Fatalf("notify calls = %d, want 1: aaa-vendor really was imported despite zzz-over-budget's refusal", notifier.calls)

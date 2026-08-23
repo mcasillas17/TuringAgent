@@ -14,6 +14,68 @@ import 'dart:convert' as $convert;
 import 'dart:core' as $core;
 import 'dart:typed_data' as $typed_data;
 
+@$core.Deprecated('Use failureOriginDescriptor instead')
+const FailureOrigin$json = {
+  '1': 'FailureOrigin',
+  '2': [
+    {'1': 'FAILURE_ORIGIN_UNSPECIFIED', '2': 0},
+    {'1': 'FAILURE_ORIGIN_UNKNOWN', '2': 1},
+    {'1': 'FAILURE_ORIGIN_CONTEXT_ASSEMBLY', '2': 2},
+    {'1': 'FAILURE_ORIGIN_EXTERNAL_PROVIDER', '2': 3},
+    {'1': 'FAILURE_ORIGIN_PROVIDER_CONFIGURATION', '2': 4},
+    {'1': 'FAILURE_ORIGIN_PROVIDER_PROTOCOL', '2': 5},
+    {'1': 'FAILURE_ORIGIN_PROVIDER_TRANSPORT', '2': 6},
+    {'1': 'FAILURE_ORIGIN_PROVIDER_OUTPUT_GUARD', '2': 7},
+    {'1': 'FAILURE_ORIGIN_TOOL_INFRASTRUCTURE', '2': 8},
+    {'1': 'FAILURE_ORIGIN_TOOL_EXECUTION', '2': 9},
+    {'1': 'FAILURE_ORIGIN_TOOL_GUARD', '2': 10},
+    {'1': 'FAILURE_ORIGIN_TOOL_POLICY', '2': 11},
+    {'1': 'FAILURE_ORIGIN_APPROVAL_TRANSPORT', '2': 12},
+    {'1': 'FAILURE_ORIGIN_APPROVAL_EXPIRY', '2': 13},
+    {'1': 'FAILURE_ORIGIN_AUTOMATION_POLICY', '2': 14},
+    {'1': 'FAILURE_ORIGIN_WORKER_RUNTIME', '2': 15},
+    {'1': 'FAILURE_ORIGIN_DISPATCH', '2': 16},
+    {'1': 'FAILURE_ORIGIN_RECOVERY', '2': 17},
+    {'1': 'FAILURE_ORIGIN_ORCHESTRATOR_INTERNAL', '2': 18},
+    {'1': 'FAILURE_ORIGIN_CLIENT_LIFECYCLE', '2': 19},
+  ],
+};
+
+/// Descriptor for `FailureOrigin`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List failureOriginDescriptor = $convert.base64Decode(
+    'Cg1GYWlsdXJlT3JpZ2luEh4KGkZBSUxVUkVfT1JJR0lOX1VOU1BFQ0lGSUVEEAASGgoWRkFJTF'
+    'VSRV9PUklHSU5fVU5LTk9XThABEiMKH0ZBSUxVUkVfT1JJR0lOX0NPTlRFWFRfQVNTRU1CTFkQ'
+    'AhIkCiBGQUlMVVJFX09SSUdJTl9FWFRFUk5BTF9QUk9WSURFUhADEikKJUZBSUxVUkVfT1JJR0'
+    'lOX1BST1ZJREVSX0NPTkZJR1VSQVRJT04QBBIkCiBGQUlMVVJFX09SSUdJTl9QUk9WSURFUl9Q'
+    'Uk9UT0NPTBAFEiUKIUZBSUxVUkVfT1JJR0lOX1BST1ZJREVSX1RSQU5TUE9SVBAGEigKJEZBSU'
+    'xVUkVfT1JJR0lOX1BST1ZJREVSX09VVFBVVF9HVUFSRBAHEiYKIkZBSUxVUkVfT1JJR0lOX1RP'
+    'T0xfSU5GUkFTVFJVQ1RVUkUQCBIhCh1GQUlMVVJFX09SSUdJTl9UT09MX0VYRUNVVElPThAJEh'
+    '0KGUZBSUxVUkVfT1JJR0lOX1RPT0xfR1VBUkQQChIeChpGQUlMVVJFX09SSUdJTl9UT09MX1BP'
+    'TElDWRALEiUKIUZBSUxVUkVfT1JJR0lOX0FQUFJPVkFMX1RSQU5TUE9SVBAMEiIKHkZBSUxVUk'
+    'VfT1JJR0lOX0FQUFJPVkFMX0VYUElSWRANEiQKIEZBSUxVUkVfT1JJR0lOX0FVVE9NQVRJT05f'
+    'UE9MSUNZEA4SIQodRkFJTFVSRV9PUklHSU5fV09SS0VSX1JVTlRJTUUQDxIbChdGQUlMVVJFX0'
+    '9SSUdJTl9ESVNQQVRDSBAQEhsKF0ZBSUxVUkVfT1JJR0lOX1JFQ09WRVJZEBESKAokRkFJTFVS'
+    'RV9PUklHSU5fT1JDSEVTVFJBVE9SX0lOVEVSTkFMEBISIwofRkFJTFVSRV9PUklHSU5fQ0xJRU'
+    '5UX0xJRkVDWUNMRRAT');
+
+@$core.Deprecated('Use automaticRetryClassDescriptor instead')
+const AutomaticRetryClass$json = {
+  '1': 'AutomaticRetryClass',
+  '2': [
+    {'1': 'AUTOMATIC_RETRY_CLASS_UNSPECIFIED', '2': 0},
+    {'1': 'AUTOMATIC_RETRY_CLASS_UNKNOWN', '2': 1},
+    {'1': 'AUTOMATIC_RETRY_CLASS_NEVER', '2': 2},
+    {'1': 'AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT', '2': 3},
+  ],
+};
+
+/// Descriptor for `AutomaticRetryClass`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List automaticRetryClassDescriptor = $convert.base64Decode(
+    'ChNBdXRvbWF0aWNSZXRyeUNsYXNzEiUKIUFVVE9NQVRJQ19SRVRSWV9DTEFTU19VTlNQRUNJRk'
+    'lFRBAAEiEKHUFVVE9NQVRJQ19SRVRSWV9DTEFTU19VTktOT1dOEAESHwobQVVUT01BVElDX1JF'
+    'VFJZX0NMQVNTX05FVkVSEAISLAooQVVUT01BVElDX1JFVFJZX0NMQVNTX1NBTUVfUlVOX1RSQU'
+    '5TSUVOVBAD');
+
 @$core.Deprecated('Use toolDiscoveryStatusDescriptor instead')
 const ToolDiscoveryStatus$json = {
   '1': 'ToolDiscoveryStatus',
@@ -105,6 +167,20 @@ const AgentJob$json = {
       '10': 'egressDecision'
     },
     {'1': 'selected_tools', '3': 18, '4': 3, '5': 9, '10': 'selectedTools'},
+    {
+      '1': 'expected_state_version',
+      '3': 19,
+      '4': 1,
+      '5': 3,
+      '10': 'expectedStateVersion'
+    },
+    {
+      '1': 'assignment_attempt_id',
+      '3': 20,
+      '4': 1,
+      '5': 9,
+      '10': 'assignmentAttemptId'
+    },
   ],
 };
 
@@ -124,7 +200,9 @@ final $typed_data.Uint8List agentJobDescriptor = $convert.base64Decode(
     'MSSgoibWluaW11bV93b3JrZXJfbWF4X2NvbmN1cnJlbnRfcnVucxgQIAEoBVIebWluaW11bVdv'
     'cmtlck1heENvbmN1cnJlbnRSdW5zEkUKD2VncmVzc19kZWNpc2lvbhgRIAEoCzIcLnR1cmluZy'
     '52MS5SdW5FZ3Jlc3NEZWNpc2lvblIOZWdyZXNzRGVjaXNpb24SJQoOc2VsZWN0ZWRfdG9vbHMY'
-    'EiADKAlSDXNlbGVjdGVkVG9vbHM=');
+    'EiADKAlSDXNlbGVjdGVkVG9vbHMSNAoWZXhwZWN0ZWRfc3RhdGVfdmVyc2lvbhgTIAEoA1IUZX'
+    'hwZWN0ZWRTdGF0ZVZlcnNpb24SMgoVYXNzaWdubWVudF9hdHRlbXB0X2lkGBQgASgJUhNhc3Np'
+    'Z25tZW50QXR0ZW1wdElk');
 
 @$core.Deprecated('Use externalAgentTargetDescriptor instead')
 const ExternalAgentTarget$json = {
@@ -444,6 +522,13 @@ const RuntimeRunCompleted$json = {
       '6': '.turing.v1.RunTokenUsage',
       '10': 'tokenUsage'
     },
+    {
+      '1': 'expected_state_version',
+      '3': 6,
+      '4': 1,
+      '5': 3,
+      '10': 'expectedStateVersion'
+    },
   ],
 };
 
@@ -453,7 +538,8 @@ final $typed_data.Uint8List runtimeRunCompletedDescriptor = $convert.base64Decod
     '50X21lc3NhZ2VfaWQYAiABKAlSEmFzc2lzdGFudE1lc3NhZ2VJZBIYCgdjb250ZW50GAMgASgJ'
     'Ugdjb250ZW50Ei0KBXVzYWdlGAQgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIFdXNhZ2'
     'USOQoLdG9rZW5fdXNhZ2UYBSABKAsyGC50dXJpbmcudjEuUnVuVG9rZW5Vc2FnZVIKdG9rZW5V'
-    'c2FnZQ==');
+    'c2FnZRI0ChZleHBlY3RlZF9zdGF0ZV92ZXJzaW9uGAYgASgDUhRleHBlY3RlZFN0YXRlVmVyc2'
+    'lvbg==');
 
 @$core.Deprecated('Use runtimeRunFailedDescriptor instead')
 const RuntimeRunFailed$json = {
@@ -463,6 +549,29 @@ const RuntimeRunFailed$json = {
     {'1': 'code', '3': 2, '4': 1, '5': 9, '10': 'code'},
     {'1': 'message', '3': 3, '4': 1, '5': 9, '10': 'message'},
     {'1': 'retryable', '3': 4, '4': 1, '5': 8, '10': 'retryable'},
+    {
+      '1': 'failure_origin',
+      '3': 5,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.FailureOrigin',
+      '10': 'failureOrigin'
+    },
+    {
+      '1': 'automatic_retry_class',
+      '3': 6,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.AutomaticRetryClass',
+      '10': 'automaticRetryClass'
+    },
+    {
+      '1': 'expected_state_version',
+      '3': 7,
+      '4': 1,
+      '5': 3,
+      '10': 'expectedStateVersion'
+    },
   ],
 };
 
@@ -470,20 +579,60 @@ const RuntimeRunFailed$json = {
 final $typed_data.Uint8List runtimeRunFailedDescriptor = $convert.base64Decode(
     'ChBSdW50aW1lUnVuRmFpbGVkEhUKBnJ1bl9pZBgBIAEoCVIFcnVuSWQSEgoEY29kZRgCIAEoCV'
     'IEY29kZRIYCgdtZXNzYWdlGAMgASgJUgdtZXNzYWdlEhwKCXJldHJ5YWJsZRgEIAEoCFIJcmV0'
-    'cnlhYmxl');
+    'cnlhYmxlEj8KDmZhaWx1cmVfb3JpZ2luGAUgASgOMhgudHVyaW5nLnYxLkZhaWx1cmVPcmlnaW'
+    '5SDWZhaWx1cmVPcmlnaW4SUgoVYXV0b21hdGljX3JldHJ5X2NsYXNzGAYgASgOMh4udHVyaW5n'
+    'LnYxLkF1dG9tYXRpY1JldHJ5Q2xhc3NSE2F1dG9tYXRpY1JldHJ5Q2xhc3MSNAoWZXhwZWN0ZW'
+    'Rfc3RhdGVfdmVyc2lvbhgHIAEoA1IUZXhwZWN0ZWRTdGF0ZVZlcnNpb24=');
 
 @$core.Deprecated('Use runtimeCancelledAckDescriptor instead')
 const RuntimeCancelledAck$json = {
   '1': 'RuntimeCancelledAck',
   '2': [
     {'1': 'run_id', '3': 1, '4': 1, '5': 9, '10': 'runId'},
+    {
+      '1': 'observed_state_version',
+      '3': 2,
+      '4': 1,
+      '5': 3,
+      '10': 'observedStateVersion'
+    },
   ],
 };
 
 /// Descriptor for `RuntimeCancelledAck`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List runtimeCancelledAckDescriptor =
-    $convert.base64Decode(
-        'ChNSdW50aW1lQ2FuY2VsbGVkQWNrEhUKBnJ1bl9pZBgBIAEoCVIFcnVuSWQ=');
+final $typed_data.Uint8List runtimeCancelledAckDescriptor = $convert.base64Decode(
+    'ChNSdW50aW1lQ2FuY2VsbGVkQWNrEhUKBnJ1bl9pZBgBIAEoCVIFcnVuSWQSNAoWb2JzZXJ2ZW'
+    'Rfc3RhdGVfdmVyc2lvbhgCIAEoA1IUb2JzZXJ2ZWRTdGF0ZVZlcnNpb24=');
+
+@$core.Deprecated('Use runtimeApprovalResumeReadyDescriptor instead')
+const RuntimeApprovalResumeReady$json = {
+  '1': 'RuntimeApprovalResumeReady',
+  '2': [
+    {'1': 'run_id', '3': 1, '4': 1, '5': 9, '10': 'runId'},
+    {'1': 'approval_id', '3': 2, '4': 1, '5': 9, '10': 'approvalId'},
+    {
+      '1': 'expected_state_version',
+      '3': 3,
+      '4': 1,
+      '5': 3,
+      '10': 'expectedStateVersion'
+    },
+    {
+      '1': 'assignment_attempt_id',
+      '3': 4,
+      '4': 1,
+      '5': 9,
+      '10': 'assignmentAttemptId'
+    },
+  ],
+};
+
+/// Descriptor for `RuntimeApprovalResumeReady`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List runtimeApprovalResumeReadyDescriptor = $convert.base64Decode(
+    'ChpSdW50aW1lQXBwcm92YWxSZXN1bWVSZWFkeRIVCgZydW5faWQYASABKAlSBXJ1bklkEh8KC2'
+    'FwcHJvdmFsX2lkGAIgASgJUgphcHByb3ZhbElkEjQKFmV4cGVjdGVkX3N0YXRlX3ZlcnNpb24Y'
+    'AyABKANSFGV4cGVjdGVkU3RhdGVWZXJzaW9uEjIKFWFzc2lnbm1lbnRfYXR0ZW1wdF9pZBgEIA'
+    'EoCVITYXNzaWdubWVudEF0dGVtcHRJZA==');
 
 @$core.Deprecated('Use runtimeUpdateDescriptor instead')
 const RuntimeUpdate$json = {
@@ -561,6 +710,15 @@ const RuntimeUpdate$json = {
       '9': 0,
       '10': 'workerCapabilitiesUpdated'
     },
+    {
+      '1': 'approval_resume_ready',
+      '3': 9,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RuntimeApprovalResumeReady',
+      '9': 0,
+      '10': 'approvalResumeReady'
+    },
   ],
   '8': [
     {'1': 'update'},
@@ -579,7 +737,9 @@ final $typed_data.Uint8List runtimeUpdateDescriptor = $convert.base64Decode(
     'wKEXJ1bl9jYW5jZWxsZWRfYWNrGAcgASgLMh4udHVyaW5nLnYxLlJ1bnRpbWVDYW5jZWxsZWRB'
     'Y2tIAFIPcnVuQ2FuY2VsbGVkQWNrEm0KG3dvcmtlcl9jYXBhYmlsaXRpZXNfdXBkYXRlZBgIIA'
     'EoCzIrLnR1cmluZy52MS5SdW50aW1lV29ya2VyQ2FwYWJpbGl0aWVzVXBkYXRlZEgAUhl3b3Jr'
-    'ZXJDYXBhYmlsaXRpZXNVcGRhdGVkQggKBnVwZGF0ZQ==');
+    'ZXJDYXBhYmlsaXRpZXNVcGRhdGVkElsKFWFwcHJvdmFsX3Jlc3VtZV9yZWFkeRgJIAEoCzIlLn'
+    'R1cmluZy52MS5SdW50aW1lQXBwcm92YWxSZXN1bWVSZWFkeUgAUhNhcHByb3ZhbFJlc3VtZVJl'
+    'YWR5QggKBnVwZGF0ZQ==');
 
 @$core.Deprecated('Use runtimeWorkerAcceptedDescriptor instead')
 const RuntimeWorkerAccepted$json = {
@@ -601,13 +761,14 @@ const RuntimeRunCancelled$json = {
   '2': [
     {'1': 'run_id', '3': 1, '4': 1, '5': 9, '10': 'runId'},
     {'1': 'reason', '3': 2, '4': 1, '5': 9, '10': 'reason'},
+    {'1': 'state_version', '3': 3, '4': 1, '5': 3, '10': 'stateVersion'},
   ],
 };
 
 /// Descriptor for `RuntimeRunCancelled`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List runtimeRunCancelledDescriptor = $convert.base64Decode(
     'ChNSdW50aW1lUnVuQ2FuY2VsbGVkEhUKBnJ1bl9pZBgBIAEoCVIFcnVuSWQSFgoGcmVhc29uGA'
-    'IgASgJUgZyZWFzb24=');
+    'IgASgJUgZyZWFzb24SIwoNc3RhdGVfdmVyc2lvbhgDIAEoA1IMc3RhdGVWZXJzaW9u');
 
 @$core.Deprecated('Use runtimeApprovalUpdatedDescriptor instead')
 const RuntimeApprovalUpdated$json = {
@@ -616,6 +777,7 @@ const RuntimeApprovalUpdated$json = {
     {'1': 'approval_id', '3': 1, '4': 1, '5': 9, '10': 'approvalId'},
     {'1': 'approval_token', '3': 2, '4': 1, '5': 9, '10': 'approvalToken'},
     {'1': 'status', '3': 3, '4': 1, '5': 9, '10': 'status'},
+    {'1': 'state_version', '3': 4, '4': 1, '5': 3, '10': 'stateVersion'},
   ],
 };
 
@@ -623,7 +785,31 @@ const RuntimeApprovalUpdated$json = {
 final $typed_data.Uint8List runtimeApprovalUpdatedDescriptor = $convert.base64Decode(
     'ChZSdW50aW1lQXBwcm92YWxVcGRhdGVkEh8KC2FwcHJvdmFsX2lkGAEgASgJUgphcHByb3ZhbE'
     'lkEiUKDmFwcHJvdmFsX3Rva2VuGAIgASgJUg1hcHByb3ZhbFRva2VuEhYKBnN0YXR1cxgDIAEo'
-    'CVIGc3RhdHVz');
+    'CVIGc3RhdHVzEiMKDXN0YXRlX3ZlcnNpb24YBCABKANSDHN0YXRlVmVyc2lvbg==');
+
+@$core.Deprecated('Use runtimeApprovalResumeAcceptedDescriptor instead')
+const RuntimeApprovalResumeAccepted$json = {
+  '1': 'RuntimeApprovalResumeAccepted',
+  '2': [
+    {'1': 'run_id', '3': 1, '4': 1, '5': 9, '10': 'runId'},
+    {'1': 'approval_id', '3': 2, '4': 1, '5': 9, '10': 'approvalId'},
+    {'1': 'state_version', '3': 3, '4': 1, '5': 3, '10': 'stateVersion'},
+    {
+      '1': 'assignment_attempt_id',
+      '3': 4,
+      '4': 1,
+      '5': 9,
+      '10': 'assignmentAttemptId'
+    },
+  ],
+};
+
+/// Descriptor for `RuntimeApprovalResumeAccepted`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List runtimeApprovalResumeAcceptedDescriptor = $convert.base64Decode(
+    'Ch1SdW50aW1lQXBwcm92YWxSZXN1bWVBY2NlcHRlZBIVCgZydW5faWQYASABKAlSBXJ1bklkEh'
+    '8KC2FwcHJvdmFsX2lkGAIgASgJUgphcHByb3ZhbElkEiMKDXN0YXRlX3ZlcnNpb24YAyABKANS'
+    'DHN0YXRlVmVyc2lvbhIyChVhc3NpZ25tZW50X2F0dGVtcHRfaWQYBCABKAlSE2Fzc2lnbm1lbn'
+    'RBdHRlbXB0SWQ=');
 
 @$core.Deprecated('Use runtimeShutdownRequestedDescriptor instead')
 const RuntimeShutdownRequested$json = {
@@ -719,6 +905,15 @@ const RuntimeCommand$json = {
       '9': 0,
       '10': 'mcpRegistryChanged'
     },
+    {
+      '1': 'approval_resume_accepted',
+      '3': 8,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RuntimeApprovalResumeAccepted',
+      '9': 0,
+      '10': 'approvalResumeAccepted'
+    },
   ],
   '8': [
     {'1': 'command'},
@@ -737,4 +932,6 @@ final $typed_data.Uint8List runtimeCommandDescriptor = $convert.base64Decode(
     'JRChR0b29sX3BvbGljeV9kZWNpc2lvbhgGIAEoCzIdLnR1cmluZy52MS5Ub29sUG9saWN5RGVj'
     'aXNpb25IAFISdG9vbFBvbGljeURlY2lzaW9uElgKFG1jcF9yZWdpc3RyeV9jaGFuZ2VkGAcgAS'
     'gLMiQudHVyaW5nLnYxLlJ1bnRpbWVNY3BSZWdpc3RyeUNoYW5nZWRIAFISbWNwUmVnaXN0cnlD'
-    'aGFuZ2VkQgkKB2NvbW1hbmQ=');
+    'aGFuZ2VkEmQKGGFwcHJvdmFsX3Jlc3VtZV9hY2NlcHRlZBgIIAEoCzIoLnR1cmluZy52MS5SdW'
+    '50aW1lQXBwcm92YWxSZXN1bWVBY2NlcHRlZEgAUhZhcHByb3ZhbFJlc3VtZUFjY2VwdGVkQgkK'
+    'B2NvbW1hbmQ=');

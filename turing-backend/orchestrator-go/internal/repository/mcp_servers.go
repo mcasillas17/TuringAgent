@@ -165,7 +165,6 @@ func (r *Repository) ImportMCPServer(ctx context.Context, input ImportedMCPServe
 		return MCPImportResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-
 	var suppressed int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM mcp_import_tombstones WHERE name = ?

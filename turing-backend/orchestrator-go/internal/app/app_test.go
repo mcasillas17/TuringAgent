@@ -363,6 +363,29 @@ func TestMCPRegistryRPCsAreSeparatedAcrossPublicAndInternalServers(t *testing.T)
 	if _, err := internalClient.ListMcpServers(internalContext, &turingv1.ListMcpServersRequest{}); err != nil {
 		t.Fatalf("internal ListMcpServers: %v", err)
 	}
+	if _, err := internalClient.RegisterMcpServer(internalContext, &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp",
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("internal RegisterMcpServer error = %v, want PermissionDenied", err)
+	}
+	if _, err := internalClient.ReimportMcpJson(internalContext, &turingv1.ReimportMcpJsonRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("internal ReimportMcpJson error = %v, want PermissionDenied", err)
+	}
+	if _, err := internalClient.RotateMcpServerToken(internalContext, &turingv1.RotateMcpServerTokenRequest{
+		ServerId: "missing",
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("internal RotateMcpServerToken error = %v, want PermissionDenied", err)
+	}
+	if _, err := publicClient.RegisterMcpServer(publicContext, &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp",
+	}); err != nil {
+		t.Fatalf("public RegisterMcpServer: %v", err)
+	}
+	if _, err := publicClient.RotateMcpServerToken(publicContext, &turingv1.RotateMcpServerTokenRequest{
+		ServerId: "missing",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("public RotateMcpServerToken error = %v, want NotFound past the facet", err)
+	}
 }
 
 // This is the real wiring in app.New — the exact allowlists a compromised
@@ -636,19 +659,16 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 	if _, ok := internalServices["turing.v1.HealthService"]; ok {
 		t.Fatal("internal server should not register public health service")
 	}
-	// Third-party connections are the user's business, not the runtime's.
-	// Registering them internally would put them behind the internal
-	// server's per-identity authorization instead of removing them from it
-	// entirely — belt and suspenders, since every internal identity's
-	// allowlist is scoped to specific methods on specific services already.
+	// IntegrationService is split: management is refused by its internal
+	// facet while discovery and dispatch are refused by its public facet.
 	// Nothing outside the orchestrator schedules a run, and the runtime has no
 	// reason to read the automation library — including the tool allowlists
 	// that decide what it may do unattended.
 	if _, ok := internalServices["turing.v1.AutomationService"]; ok {
 		t.Fatal("internal server should not expose the automation library to the runtime")
 	}
-	if _, ok := internalServices["turing.v1.IntegrationService"]; ok {
-		t.Fatal("internal server should not expose the integration service to the runtime")
+	if _, ok := internalServices["turing.v1.IntegrationService"]; !ok {
+		t.Fatal("internal server missing integration dispatch facet")
 	}
 	// A usage report is for the person, not for the machinery. Registering it
 	// internally would put it behind per-identity authorization instead of
@@ -656,6 +676,55 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 	// need to grow to include it.
 	if _, ok := internalServices["turing.v1.TelemetryService"]; ok {
 		t.Fatal("internal server should not expose telemetry to the runtime")
+	}
+}
+
+func TestIntegrationServiceFacetAndRuntimeIdentityWiring(t *testing.T) {
+	app := newTestApp(t)
+	publicClient := turingv1.NewIntegrationServiceClient(newBufconnClient(t, app.PublicServer))
+	internalClient := turingv1.NewIntegrationServiceClient(newBufconnClient(t, app.InternalServer))
+	publicCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer client")
+	internalCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer internal")
+	if _, err := publicClient.CallIntegrationTool(publicCtx, &turingv1.CallIntegrationToolRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("public dispatch error = %v, want PermissionDenied", err)
+	}
+	if _, err := publicClient.ListIntegrationTools(publicCtx, &turingv1.ListIntegrationToolsRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("public discovery error = %v, want PermissionDenied", err)
+	}
+	managementCalls := map[string]func() error{
+		"ListProviders": func() error {
+			_, err := internalClient.ListProviders(internalCtx, &turingv1.ListProvidersRequest{})
+			return err
+		},
+		"ConnectAccount": func() error {
+			_, err := internalClient.ConnectAccount(internalCtx, &turingv1.ConnectAccountRequest{})
+			return err
+		},
+		"ListConnections": func() error {
+			_, err := internalClient.ListConnections(internalCtx, &turingv1.ListConnectionsRequest{})
+			return err
+		},
+		"GetConnection": func() error {
+			_, err := internalClient.GetConnection(internalCtx, &turingv1.GetConnectionRequest{})
+			return err
+		},
+		"RevokeConnection": func() error {
+			_, err := internalClient.RevokeConnection(internalCtx, &turingv1.RevokeConnectionRequest{})
+			return err
+		},
+		"DeleteConnection": func() error {
+			_, err := internalClient.DeleteConnection(internalCtx, &turingv1.DeleteConnectionRequest{})
+			return err
+		},
+	}
+	for name, call := range managementCalls {
+		if err := call(); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("internal %s error = %v, want PermissionDenied", name, err)
+		}
+	}
+	response, err := internalClient.ListIntegrationTools(internalCtx, &turingv1.ListIntegrationToolsRequest{})
+	if err != nil || response == nil || len(response.GetTools()) != 0 {
+		t.Fatalf("runtime discovery response = %+v err=%v, want keyless empty list", response, err)
 	}
 }
 

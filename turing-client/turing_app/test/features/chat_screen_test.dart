@@ -4,15 +4,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart' show GrpcError;
+import 'package:turing_flutter_app/features/approvals/approval_card.dart';
 import 'package:turing_flutter_app/features/chat/message_send_failure_card.dart';
 import 'package:turing_flutter_app/features/chat/message_send_unconfirmed_card.dart';
 import 'package:turing_flutter_app/features/chat/run_cancelled_card.dart';
 import 'package:turing_flutter_app/features/chat/run_failure_card.dart';
 import 'package:turing_flutter_app/features/chat/run_notice_card.dart';
+import 'package:turing_flutter_app/features/chat/run_state_card.dart';
 import 'package:turing_flutter_app/features/chat/chat_screen.dart';
 import 'package:turing_flutter_app/features/chat/tool_call_card.dart';
+import 'package:turing_flutter_app/l10n/generated/app_localizations.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/remote_egress.dart';
+import 'package:turing_flutter_app/models/run_lifecycle.dart';
+import 'package:turing_flutter_app/models/run_state.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/session_deletion.dart';
@@ -37,6 +42,8 @@ void main() {
     final events = StreamController<TuringEvent>(sync: true);
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -76,6 +83,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -106,6 +115,85 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
   });
+
+  testWidgets(
+    'later tokens stay notifier-only after content removes the status card',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Working'), findsOneWidget);
+
+      var chatScreenRebuilds = 0;
+      final previousRebuildHook = debugOnRebuildDirtyWidget;
+      debugOnRebuildDirtyWidget = (element, builtOnce) {
+        previousRebuildHook?.call(element, builtOnce);
+        if (element.widget is ChatScreen) chatScreenRebuilds++;
+      };
+      addTearDown(() => debugOnRebuildDirtyWidget = previousRebuildHook);
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          runId: 'run_1',
+          payload: const {'messageId': 'msg_asst', 'delta': 'First'},
+        ),
+      );
+      await tester.pump();
+      expect(chatScreenRebuilds, 1);
+      expect(find.byType(RunStateCard), findsNothing);
+
+      chatScreenRebuilds = 0;
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 2,
+          runId: 'run_1',
+          payload: const {'messageId': 'msg_asst', 'delta': ' token'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('First token'), findsOneWidget);
+      expect(
+        chatScreenRebuilds,
+        0,
+        reason:
+            'once card presence already matches content, streaming must stay '
+            'on the message ValueNotifier instead of rebuilding ChatScreen',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
 
   testWidgets('session.deleted notifies the owner and ignores stale events', (
     tester,
@@ -147,6 +235,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -182,6 +272,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -226,6 +318,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -258,6 +352,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -300,6 +396,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -348,6 +446,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -391,6 +491,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -428,6 +530,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -451,7 +555,15 @@ void main() {
     await tester.pump();
 
     expect(find.byType(RunFailureCard), findsOneWidget);
-    expect(find.text('Job timed out'), findsOneWidget);
+    // The legacy payload's own `message`/`code` text must never reach the
+    // screen — only the fixed, truthful, localized "Run failed" copy does.
+    expect(find.text('Job timed out'), findsNothing);
+    expect(find.text('job_timeout'), findsNothing);
+    expect(find.text('Run failed'), findsOneWidget);
+    expect(
+      find.text('The run ended before it could complete.'),
+      findsOneWidget,
+    );
     // A failure must not be indistinguishable from routine retry progress.
     expect(find.byType(RunNoticeCard), findsNothing);
 
@@ -466,6 +578,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -501,6 +615,204 @@ void main() {
     unawaited(events.close());
   });
 
+  // Also exercises the modern, `RunState`-bearing path: with content already
+  // visible via an earlier delta, a terminal `agent.run.failed` carrying a
+  // canonical `RunState` must still render its own card below that content,
+  // never suppress the bubble, and never duplicate it with a second card.
+  testWidgets('partial live content remains before later terminal card', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: {
+          'messageId': 'msg_asst',
+          'delta': 'Here is what I found so far.',
+        },
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'agent.run.failed',
+        sequence: 2,
+        runState: _runState(
+          lifecycle: RunLifecycle.failed,
+          outcomeReason: RunOutcomeReason.providerFailure,
+          stateVersion: 2,
+          hasDisplayableContent: true,
+        ),
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Here is what I found so far.'), findsOneWidget);
+    expect(find.byType(RunFailureCard), findsOneWidget);
+    expect(find.text('Provider unavailable'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byType(RunFailureCard)).dy,
+      greaterThan(
+        tester.getTopLeft(find.text('Here is what I found so far.')).dy,
+      ),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  // Live-path baseline: the modern `RunState`-bearing terminal event itself
+  // carries no post-tool delta — the assistant bubble's last content
+  // arrived BEFORE the tool card, so the same, single assistant row is what
+  // `_assistantEntryIndexForRun` resolves to. `_upsertRunStateCard` always
+  // walks past contiguous same-run artifacts via
+  // `_runStateCardInsertionIndex`, so this must pass regardless of path — it
+  // is the parity target the page/resync, duplicate-row, and
+  // startup-buffer-drain paths below are held to.
+  //
+  // For a plain live event there is no watermark/history reason to
+  // classify it as historical, so `_isHistoricalRunEvent(event)` is false
+  // and artifact-aware insertion (walk past artifacts) already applied to
+  // this path before this fix. It is a GREEN-before parity control the
+  // other paths are held to, not a RED-before regression test.
+  testWidgets(
+    'a live terminal state with no post-tool delta still renders below the '
+    'tool card',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: _FakeApiClient(),
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+      // Deliberately no further `message.delta` here: this is the exact
+      // "production shape" from the defect report — content, then a
+      // same-run artifact, then straight to the terminal report below.
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 3,
+          runState: _runState(
+            stateVersion: 1,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('Before tool.'), findsOneWidget);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('failed content renders content before adjacent failure card', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Here is what I found before the run stopped.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.providerFailure,
+            stateVersion: 3,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.text('Here is what I found before the run stopped.'),
+      findsOneWidget,
+    );
+    expect(find.byType(RunFailureCard), findsOneWidget);
+    expect(find.byType(NoResponseCard), findsNothing);
+    expect(
+      tester.getTopLeft(find.byType(RunFailureCard)).dy,
+      greaterThan(
+        tester
+            .getTopLeft(
+              find.text('Here is what I found before the run stopped.'),
+            )
+            .dy,
+      ),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('the run failure renders below the last tool card', (
     tester,
   ) async {
@@ -508,6 +820,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -550,6 +864,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -584,208 +900,65 @@ void main() {
     unawaited(events.close());
   });
 
+  // Pre-TUR-009 legacy `agent.run.failed` events (no canonical `RunState`)
+  // carry a machine `code`/`message` this app must never echo verbatim —
+  // "do not allow raw backend message/note/reason/code ... text into
+  // failure-like output" applies just as much to a legacy fallback as to the
+  // modern semantic path. Every payload shape below — a real code, a
+  // whitespace-only message, an underscore-only code, a non-string code, or
+  // nothing at all — must resolve to the exact same fixed, truthful,
+  // localized copy, never a humanized fragment of the payload itself.
   testWidgets(
-    'agent.run.failed falls back to a humanized code when the message is '
-    'absent',
+    'legacy failure payload text never reaches the screen, regardless of '
+    'code or message shape',
     (tester) async {
-      final events = StreamController<TuringEvent>(sync: true);
+      const payloads = [
+        {'code': 'tool_discovery_failed', 'message': ''},
+        {'code': 'tool_discovery_failed', 'message': '   '},
+        {'code': '_'},
+        {'code': 42, 'message': 'Job timed out'},
+        <String, Object?>{},
+      ];
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ChatScreen(
-            sessionId: 'sess_1',
-            apiClient: _FakeApiClient(),
-            eventSource: _FakeEventSource(events.stream),
+      for (var i = 0; i < payloads.length; i++) {
+        final events = StreamController<TuringEvent>(sync: true);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: ChatScreen(
+              sessionId: 'sess_1',
+              apiClient: _FakeApiClient(),
+              eventSource: _FakeEventSource(events.stream),
+            ),
           ),
-        ),
-      );
-      await tester.pump();
+        );
+        await tester.pump();
 
-      events.add(
-        _event(
-          type: 'agent.run.failed',
-          sequence: 1,
-          payload: const {'code': 'tool_discovery_failed', 'message': ''},
-        ),
-      );
-      await tester.pump();
+        events.add(
+          _event(type: 'agent.run.failed', sequence: 1, payload: payloads[i]),
+        );
+        await tester.pump();
 
-      // Never the bare machine code as the whole message.
-      expect(find.text('tool_discovery_failed'), findsNothing);
-      expect(find.text('Tool discovery failed'), findsOneWidget);
-
-      await tester.pumpWidget(const SizedBox.shrink());
-      unawaited(events.close());
-    },
-  );
-
-  testWidgets('agent.run.failed falls back to the code when the message is '
-      'whitespace-only', (tester) async {
-    final events = StreamController<TuringEvent>(sync: true);
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(
-          sessionId: 'sess_1',
-          apiClient: _FakeApiClient(),
-          eventSource: _FakeEventSource(events.stream),
-        ),
-      ),
-    );
-    await tester.pump();
-
-    events.add(
-      _event(
-        type: 'agent.run.failed',
-        sequence: 1,
-        payload: const {'code': 'tool_discovery_failed', 'message': '   '},
-      ),
-    );
-    await tester.pump();
-
-    // A blank-but-present message must not win over a usable code.
-    expect(find.text('   '), findsNothing);
-    expect(find.text('Tool discovery failed'), findsOneWidget);
-
-    await tester.pumpWidget(const SizedBox.shrink());
-    unawaited(events.close());
-  });
-
-  // `_humanizeFailureCode` strips underscores before deriving a sentence
-  // fragment from the code, so a code that is nothing BUT underscores (a
-  // producer bug, or a not-yet-classified code stored as a literal `_`)
-  // strips down to an empty string. Guard against that collapsing to a blank
-  // card: assert the generic fallback renders instead, and that the stream
-  // keeps delivering afterwards. Removing the empty-after-strip guard would
-  // index into that empty string and throw, taking the whole subscription
-  // (and every later event) down with it — the later `message.delta` in this
-  // test is what would fail to appear if that regressed.
-  testWidgets(
-    'agent.run.failed falls back to generic text for an underscore-only '
-    'code, and the stream keeps delivering afterwards',
-    (tester) async {
-      final events = StreamController<TuringEvent>(sync: true);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ChatScreen(
-            sessionId: 'sess_1',
-            apiClient: _FakeApiClient(),
-            eventSource: _FakeEventSource(events.stream),
+        expect(find.byType(RunFailureCard), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byType(RunFailureCard),
+            matching: find.text('The run ended before it could complete.'),
           ),
-        ),
-      );
-      await tester.pump();
+          findsOneWidget,
+          reason: 'payload #$i must fall back to the fixed generic copy',
+        );
+        expect(find.text('tool_discovery_failed'), findsNothing);
+        expect(find.text('Tool discovery failed'), findsNothing);
+        expect(find.text('_'), findsNothing);
+        expect(find.text('Job timed out'), findsNothing);
+        expect(tester.takeException(), isNull);
 
-      events.add(
-        _event(
-          type: 'agent.run.failed',
-          sequence: 1,
-          payload: const {'code': '_'},
-        ),
-      );
-      await tester.pump();
-
-      expect(find.byType(RunFailureCard), findsOneWidget);
-      // Narrow to the message text specifically: `RunFailureCard` now also
-      // renders its outcome label ("Run failed") as a second, sibling `Text`
-      // descendant, so grabbing "the" `Text` under this card is no longer
-      // unambiguous.
-      expect(
-        find.descendant(
-          of: find.byType(RunFailureCard),
-          matching: find.text('The run failed with no further details'),
-        ),
-        findsOneWidget,
-      );
-      expect(find.text('_'), findsNothing);
-
-      events.add(
-        _event(
-          type: 'message.delta',
-          sequence: 2,
-          payload: {'messageId': 'm1', 'delta': 'still alive'},
-        ),
-      );
-      await tester.pump();
-
-      expect(find.text('still alive'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-
-      await tester.pumpWidget(const SizedBox.shrink());
-      unawaited(events.close());
-    },
-  );
-
-  testWidgets(
-    'agent.run.failed prefers a valid message over a non-string code',
-    (tester) async {
-      final events = StreamController<TuringEvent>(sync: true);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ChatScreen(
-            sessionId: 'sess_1',
-            apiClient: _FakeApiClient(),
-            eventSource: _FakeEventSource(events.stream),
-          ),
-        ),
-      );
-      await tester.pump();
-
-      events.add(
-        _event(
-          type: 'agent.run.failed',
-          sequence: 1,
-          payload: const {'code': 42, 'message': 'Job timed out'},
-        ),
-      );
-      await tester.pump();
-
-      expect(find.text('Job timed out'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-
-      await tester.pumpWidget(const SizedBox.shrink());
-      unawaited(events.close());
-    },
-  );
-
-  testWidgets(
-    'agent.run.failed falls back to generic text when message and code are '
-    'both absent',
-    (tester) async {
-      final events = StreamController<TuringEvent>(sync: true);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ChatScreen(
-            sessionId: 'sess_1',
-            apiClient: _FakeApiClient(),
-            eventSource: _FakeEventSource(events.stream),
-          ),
-        ),
-      );
-      await tester.pump();
-
-      events.add(
-        _event(type: 'agent.run.failed', sequence: 1, payload: const {}),
-      );
-      await tester.pump();
-
-      expect(find.byType(RunFailureCard), findsOneWidget);
-      // Narrow to the message text specifically: `RunFailureCard` now also
-      // renders its outcome label ("Run failed") as a second, sibling `Text`
-      // descendant, so grabbing "the" `Text` under this card is no longer
-      // unambiguous.
-      expect(
-        find.descendant(
-          of: find.byType(RunFailureCard),
-          matching: find.text('The run failed with no further details'),
-        ),
-        findsOneWidget,
-      );
-      await tester.pumpWidget(const SizedBox.shrink());
-      unawaited(events.close());
+        await tester.pumpWidget(const SizedBox.shrink());
+        unawaited(events.close());
+      }
     },
   );
 
@@ -802,6 +975,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -852,6 +1027,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -900,6 +1077,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -920,17 +1099,13 @@ void main() {
 
     expect(find.byType(RunCancelledCard), findsOneWidget);
     // `client_cancelled` is machine metadata (see `cancelRun` above), not
-    // display copy, and it is truthful across both of its triggers — so the
-    // card must show human wording valid for both, never the bare enum
+    // display copy — the card must show human wording, never the bare enum
     // value.
-    expect(
-      find.text('The run was cancelled before it could finish'),
-      findsOneWidget,
-    );
+    expect(find.text('The run ended before it could finish.'), findsOneWidget);
     expect(find.text('client_cancelled'), findsNothing);
     // The outcome title itself must also be visible on screen, not only in
     // the accessibility tree, and must never say "failed".
-    expect(find.text('Run cancelled'), findsOneWidget);
+    expect(find.text('Run interrupted'), findsOneWidget);
     expect(find.text('Run failed'), findsNothing);
     // A cancellation must not be indistinguishable from a failure or from
     // routine retry progress.
@@ -941,15 +1116,67 @@ void main() {
     unawaited(events.close());
   });
 
+  testWidgets('abandoned run uses localized abandonment card', (tester) async {
+    // Ambiguous `client_cancelled` maps to abandonment — never a false
+    // "you cancelled this" claim (there is no user-cancel affordance on
+    // this screen at all).
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: {'messageId': 'msg_asst', 'delta': ''},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'agent.run.cancelled',
+        sequence: 2,
+        runState: _runState(
+          lifecycle: RunLifecycle.cancelled,
+          outcomeReason: RunOutcomeReason.abandoned,
+          stateVersion: 2,
+        ),
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(RunCancelledCard), findsOneWidget);
+    expect(find.text('Run interrupted'), findsOneWidget);
+    expect(find.text('The run ended before it could finish.'), findsOneWidget);
+    expect(find.text('You cancelled this run.'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets(
     'the rendered agent.run.cancelled semantics label is truthful — "Run '
-    'cancelled", never "Run failed"',
+    'interrupted", never "Run failed"',
     (tester) async {
       final handle = tester.ensureSemantics();
       final events = StreamController<TuringEvent>(sync: true);
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: _FakeApiClient(),
@@ -970,13 +1197,13 @@ void main() {
 
       expect(
         find.bySemanticsLabel(
-          'Run cancelled: The run was cancelled before it could finish',
+          'Run interrupted: The run ended before it could finish.',
         ),
         findsOneWidget,
       );
       expect(
         find.bySemanticsLabel(
-          'Run failed: The run was cancelled before it could finish',
+          'Run failed: The run ended before it could finish.',
         ),
         findsNothing,
       );
@@ -987,116 +1214,61 @@ void main() {
     },
   );
 
-  testWidgets('agent.run.cancelled falls back to generic text when the '
-      'reason is absent', (tester) async {
-    final events = StreamController<TuringEvent>(sync: true);
+  // Every legacy `reason` shape — absent, whitespace-only, or an
+  // unrecognized non-empty value — must fall back to the exact same fixed,
+  // truthful, localized copy. Only the one known `client_cancelled` value
+  // (see above) resolves to anything more specific.
+  testWidgets(
+    'legacy cancellation payload text never reaches the screen, regardless '
+    'of the reason shape',
+    (tester) async {
+      const payloads = [
+        <String, Object?>{},
+        {'reason': '   '},
+        {'reason': 'some_future_reason'},
+        {'reason': 42},
+      ];
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(
-          sessionId: 'sess_1',
-          apiClient: _FakeApiClient(),
-          eventSource: _FakeEventSource(events.stream),
-        ),
-      ),
-    );
-    await tester.pump();
+      for (var i = 0; i < payloads.length; i++) {
+        final events = StreamController<TuringEvent>(sync: true);
 
-    events.add(
-      _event(type: 'agent.run.cancelled', sequence: 1, payload: const {}),
-    );
-    await tester.pump();
+        await tester.pumpWidget(
+          MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: ChatScreen(
+              sessionId: 'sess_1',
+              apiClient: _FakeApiClient(),
+              eventSource: _FakeEventSource(events.stream),
+            ),
+          ),
+        );
+        await tester.pump();
 
-    expect(find.byType(RunCancelledCard), findsOneWidget);
-    // Narrow to the message text specifically: `RunCancelledCard` now also
-    // renders its outcome label ("Run cancelled") as a second, sibling
-    // `Text` descendant, so grabbing "the" `Text` under this card is no
-    // longer unambiguous.
-    expect(
-      find.descendant(
-        of: find.byType(RunCancelledCard),
-        matching: find.text('The run was cancelled with no further details'),
-      ),
-      findsOneWidget,
-    );
+        events.add(
+          _event(
+            type: 'agent.run.cancelled',
+            sequence: 1,
+            payload: payloads[i],
+          ),
+        );
+        await tester.pump();
 
-    await tester.pumpWidget(const SizedBox.shrink());
-    unawaited(events.close());
-  });
+        expect(find.byType(RunCancelledCard), findsOneWidget);
+        expect(
+          find.text('The run ended before it could finish.'),
+          findsOneWidget,
+          reason: 'payload #$i must fall back to the fixed generic copy',
+        );
+        expect(find.text('some_future_reason'), findsNothing);
+        expect(find.text('   '), findsNothing);
+        expect(tester.takeException(), isNull);
 
-  testWidgets('agent.run.cancelled falls back to generic text when the '
-      'reason is whitespace-only', (tester) async {
-    final events = StreamController<TuringEvent>(sync: true);
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(
-          sessionId: 'sess_1',
-          apiClient: _FakeApiClient(),
-          eventSource: _FakeEventSource(events.stream),
-        ),
-      ),
-    );
-    await tester.pump();
-
-    events.add(
-      _event(
-        type: 'agent.run.cancelled',
-        sequence: 1,
-        payload: const {'reason': '   '},
-      ),
-    );
-    await tester.pump();
-
-    expect(find.text('   '), findsNothing);
-    expect(
-      find.text('The run was cancelled with no further details'),
-      findsOneWidget,
-    );
-
-    await tester.pumpWidget(const SizedBox.shrink());
-    unawaited(events.close());
-  });
-
-  testWidgets('agent.run.cancelled falls back to generic text when the '
-      'reason is an unrecognized, non-empty value', (tester) async {
-    final events = StreamController<TuringEvent>(sync: true);
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(
-          sessionId: 'sess_1',
-          apiClient: _FakeApiClient(),
-          eventSource: _FakeEventSource(events.stream),
-        ),
-      ),
-    );
-    await tester.pump();
-
-    events.add(
-      _event(
-        type: 'agent.run.cancelled',
-        sequence: 1,
-        // `client_cancelled` is currently the only reason the backend ever
-        // emits (`cancelRun`, orchestrator-go internal/service/chat/
-        // service.go). An unrecognized value is not a real producer today,
-        // but the client must not surface it verbatim if one ever appears —
-        // that would leak a bare enum straight to the user.
-        payload: const {'reason': 'some_future_reason'},
-      ),
-    );
-    await tester.pump();
-
-    expect(find.byType(RunCancelledCard), findsOneWidget);
-    expect(find.text('some_future_reason'), findsNothing);
-    expect(
-      find.text('The run was cancelled with no further details'),
-      findsOneWidget,
-    );
-
-    await tester.pumpWidget(const SizedBox.shrink());
-    unawaited(events.close());
-  });
+        await tester.pumpWidget(const SizedBox.shrink());
+        unawaited(events.close());
+      }
+    },
+  );
 
   testWidgets(
     'a non-String agent.run.cancelled reason does not break the stream, and '
@@ -1106,6 +1278,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: _FakeApiClient(),
@@ -1126,7 +1300,7 @@ void main() {
 
       expect(find.byType(RunCancelledCard), findsOneWidget);
       expect(
-        find.text('The run was cancelled with no further details'),
+        find.text('The run ended before it could finish.'),
         findsOneWidget,
       );
       expect(tester.takeException(), isNull);
@@ -1155,6 +1329,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -1203,6 +1379,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -1253,6 +1431,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -1302,6 +1482,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: _FakeApiClient(),
@@ -1314,18 +1496,11 @@ void main() {
       // Mirrors repository.RetryDecision for the exhausted-retries path
       // (`repository/jobs.go:120-133`, `giveUpNote`): the give-up
       // `agent.run.step` is ordered first (it explains why retrying
-      // stopped), the terminal `agent.run.failed` follows. Once attempts
-      // are exhausted, `RequeueOrFailRetryableRun` overwrites the failure
-      // code to `RetriesExhaustedCode` ("retries_exhausted",
-      // `repository/jobs.go:122`) but passes the *original* retryable
-      // failure's message straight through unchanged (`failCode, failMessage
-      // := code, message` at jobs.go:119). "worker cannot accept the run" is
-      // that original message verbatim for the `worker_busy` producer
-      // (`agent-runtime-go/internal/worker/worker.go:522-527`) — a real,
-      // non-empty message reaching this path, distinct from the give-up
-      // wording. Both events share one runId.
+      // stopped), the terminal `agent.run.failed` follows. Both events
+      // share one runId. This category-less event models a pre-TUR-009 legacy
+      // replay, so its governed historical note remains visible; modern
+      // failure-adjacent events carry a typed category and never render note.
       const giveUpNote = 'Gave up after 3 attempts';
-      const failureMessage = 'worker cannot accept the run';
       events.add(
         _event(
           type: 'agent.run.step',
@@ -1340,7 +1515,7 @@ void main() {
           sequence: 2,
           payload: {
             'code': 'retries_exhausted',
-            'message': failureMessage,
+            'message': 'worker cannot accept the run',
             'retryable': false,
           },
         ),
@@ -1352,7 +1527,8 @@ void main() {
       expect(find.byType(RunFailureCard), findsOneWidget);
 
       // The give-up wording, verbatim from the backend's `giveUpNote`, is
-      // shown only inside the notice card.
+      // shown only inside the notice card — this governed copy is
+      // untouched by the failure-card semantic conversion.
       expect(
         find.descendant(
           of: find.byType(RunNoticeCard),
@@ -1360,22 +1536,19 @@ void main() {
         ),
         findsOneWidget,
       );
-      // The passed-through failure message, distinct wording, is shown only
-      // inside the failure card.
+      // The terminal card's fixed, generic copy is shown only inside the
+      // failure card, never inside the notice.
       expect(
         find.descendant(
           of: find.byType(RunFailureCard),
-          matching: find.text(failureMessage),
+          matching: find.text('The run ended before it could complete.'),
         ),
         findsOneWidget,
       );
-
-      // Non-duplicative: neither card renders the other's text anywhere
-      // inside it.
       expect(
         find.descendant(
           of: find.byType(RunNoticeCard),
-          matching: find.text(failureMessage),
+          matching: find.text('The run ended before it could complete.'),
         ),
         findsNothing,
       );
@@ -1386,6 +1559,9 @@ void main() {
         ),
         findsNothing,
       );
+      // The legacy failure payload's own message must never reach either
+      // card.
+      expect(find.text('worker cannot accept the run'), findsNothing);
 
       // Event order preserved: the notice (why we stopped retrying) reads
       // above the failure card (what actually happened) in the transcript.
@@ -1399,26 +1575,577 @@ void main() {
     },
   );
 
-  // The `message` the runtime passes into `RequeueOrFailRetryableRun` is an
-  // ordinary proto string field (`RuntimeRunFailed.Message`), so nothing in
-  // the contract guarantees it is non-empty by the time it reaches this
-  // `code: "retries_exhausted"` terminal payload. Naively humanizing the code
-  // here ("retries_exhausted" -> "Retries exhausted") would just restate the
-  // give-up notice a second time with no new information — the actual cause
-  // is still unknown at this point, so `_applyRunFailed` special-cases this
-  // one code and renders the same cause-free generic fallback it uses when
-  // no code or message is present at all (`chat_screen.dart`'s
-  // `_runFailureFallbackNotice`). Pin that exact, non-repetitive wording so
-  // the double-report never collapses into two cards that say the same
-  // thing in different words.
+  // --- TUR-009 Task 10: RunState reconciliation & adjacent card rendering ---
+
+  testWidgets('completed content has bubble and no redundant terminal card', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: {'messageId': 'msg_asst', 'delta': 'All done.'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'agent.run.state_changed',
+        sequence: 2,
+        runState: _runState(
+          lifecycle: RunLifecycle.completed,
+          stateVersion: 2,
+          hasDisplayableContent: true,
+        ),
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('All done.'), findsOneWidget);
+    expect(find.byType(RunStateCard), findsNothing);
+    expect(find.byType(NoResponseCard), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets(
-    'retry exhaustion with an empty failure message falls back to the '
-    'generic notice, not a restated "Retries exhausted"',
+    'completed no content suppresses blank bubble and shows completion card',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 2,
+            createdAt: _fixedDate,
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 1,
+          runState: _runState(
+            lifecycle: RunLifecycle.completed,
+            outcomeReason: RunOutcomeReason.completedNoContent,
+            stateVersion: 2,
+            hasDisplayableContent: false,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      // No blank bubble anywhere in the message list.
+      expect(
+        find.descendant(
+          of: find.byType(ListView),
+          matching: find.byWidgetPredicate(
+            (widget) => widget is SelectableText && widget.data == '',
+          ),
+        ),
+        findsNothing,
+      );
+      expect(find.byType(RunStateCard), findsOneWidget);
+      expect(find.text('Completed'), findsOneWidget);
+      expect(find.text('No assistant response was recorded.'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('nonterminal empty run shows adjacent status card', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_user',
+          runId: 'run_1',
+          role: 'user',
+          content: 'hi',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(stateVersion: 3, lifecycle: RunLifecycle.running),
+        ),
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: 2,
+          createdAt: _fixedDate,
+          runState: _runState(stateVersion: 3, lifecycle: RunLifecycle.running),
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(RunStateCard), findsOneWidget);
+    expect(find.text('Working'), findsOneWidget);
+    expect(find.byType(NoResponseCard), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('missing state empty assistant shows neutral no-response card', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(NoResponseCard), findsOneWidget);
+    expect(find.text('No response recorded'), findsOneWidget);
+    expect(find.byType(RunStateCard), findsNothing);
+
+    // A later delta for that exact row must clear the fallback card and
+    // fill the bubble instead — the row was always adopted for live text,
+    // never permanently written off.
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 2,
+        payload: {'messageId': 'msg_asst', 'delta': 'Actually, here it is.'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Actually, here it is.'), findsOneWidget);
+    expect(find.byType(NoResponseCard), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'missing state whitespace-only assistant suppresses its blank bubble',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: ' \u00a0\t',
+            sequence: 1,
+            createdAt: _fixedDate,
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(NoResponseCard), findsOneWidget);
+      expect(find.byType(MarkdownBody), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'a no-response fallback is cleared once a genuine RunState reconciles '
+    'for its row, not only when content itself arrives',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(NoResponseCard), findsOneWidget);
+
+      // A later run-state-bearing event for the SAME run, still with no
+      // content (e.g. discovered recovering), must replace the neutral
+      // no-response fallback with the run's own real, adjacent status
+      // card — never render both stacked on the same row at once.
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 2,
+          runState: _runState(
+            stateVersion: 1,
+            lifecycle: RunLifecycle.recovering,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.byType(NoResponseCard),
+        findsNothing,
+        reason:
+            'a genuine RunState is now known for this row, so the '
+            "'no response recorded' fallback would misstate what this app "
+            'actually knows',
+      );
+      expect(find.byType(RunStateCard), findsOneWidget);
+      expect(find.text('Recovering'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'a run state arriving synchronously before startup settles is buffered '
+    'and drained adjacent to its own row, not appended past unrelated '
+    'later content',
+    (tester) async {
+      // Two runs already loaded: an OLDER one (run_a, still nonterminal,
+      // no state known yet) followed by a NEWER, already-answered one
+      // (run_b). The synchronously-delivered event belongs to the OLDER
+      // run, so a correct drain must insert its card right after run_a's
+      // own row — never at the very end, past run_b's later content.
+      final runAState = _runState(
+        runId: 'run_a',
+        assistantMessageId: 'msg_asst_a',
+        stateVersion: 1,
+        lifecycle: RunLifecycle.recovering,
+      );
+      final syncEvent = _event(
+        type: 'agent.run.state_changed',
+        sequence: 1,
+        runId: 'run_a',
+        runState: runAState,
+        payload: const {},
+      );
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst_a',
+            runId: 'run_a',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+          ),
+          Message(
+            messageId: 'msg_asst_b',
+            runId: 'run_b',
+            role: 'assistant',
+            content: 'Already answered.',
+            sequence: 2,
+            createdAt: _fixedDate,
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _SynchronousDeliveryEventSource(syncEvent),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byType(RunStateCard), findsOneWidget);
+      expect(find.text('Recovering'), findsOneWidget);
+      expect(find.text('Already answered.'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunStateCard)).dy,
+        lessThan(tester.getTopLeft(find.text('Already answered.')).dy),
+        reason:
+            'a state buffered during the synchronous startup window must '
+            "drain adjacent to its OWN run's row, never appended past a "
+            'later, unrelated row',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  // Production shape (F10): the run's own tool artifact is already live on
+  // screen — created while `_initializing` is still true, since only
+  // `RunState` snapshots buffer during that window (see
+  // `_handleIncomingRunState`), not tool events — by the time the buffered
+  // terminal state drains. With NO later delta to open a fresh assistant
+  // bubble below that artifact, the drain must still walk past it rather
+  // than reinserting the card at the assistant row's OWN index (which sat
+  // there before the artifact existed), or it lands above the artifact —
+  // exactly backward from the live path's own ordering.
+  testWidgets(
+    'a startup-buffered terminal state drains after a same-run tool '
+    'artifact, not above it',
+    (tester) async {
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst_a',
+            runId: 'run_a',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+          ),
+        ];
+      final terminalState = _runState(
+        runId: 'run_a',
+        assistantMessageId: 'msg_asst_a',
+        stateVersion: 1,
+        lifecycle: RunLifecycle.cancelled,
+      );
+      final syncEvents = [
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst_a', 'delta': 'Before tool.'},
+        ),
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          runId: 'run_a',
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+        _event(
+          type: 'agent.run.cancelled',
+          sequence: 3,
+          runId: 'run_a',
+          runState: terminalState,
+          payload: const {},
+        ),
+      ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _SynchronousDeliveryEventSource.events(syncEvents),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Before tool.'), findsOneWidget);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(find.byType(RunCancelledCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunCancelledCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason:
+            'the tool artifact was already live on screen by the time the '
+            'startup buffer drained; the drained card must land after it, '
+            'not immediately after the assistant row at the index the '
+            'artifact did not yet occupy when the row was first inserted',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'startup buffer overflow coalesces one newest-page resync without detached cards',
+    (tester) async {
+      final apiClient = _FakeApiClient()
+        ..initialMessages = List<Message>.generate(65, (index) {
+          return Message(
+            messageId: 'msg_overflow_$index',
+            runId: 'run_overflow_$index',
+            role: 'assistant',
+            content: 'answer $index',
+            sequence: index + 1,
+            createdAt: _fixedDate,
+          );
+        });
+      final events = List<TuringEvent>.generate(65, (index) {
+        final runId = 'run_overflow_$index';
+        return _event(
+          type: 'agent.run.state_changed',
+          sequence: index + 1,
+          runId: runId,
+          runState: _runState(
+            runId: runId,
+            assistantMessageId: 'msg_overflow_$index',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.completed,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        );
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _SynchronousDeliveryEventSource.events(events),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(apiClient.listMessagesCallCount, 2);
+      expect(find.byType(RunStateCard), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'startup-buffered state for an unloaded run resyncs without a detached card',
+    (tester) async {
+      final apiClient = _FakeApiClient();
+      final state = _runState(
+        runId: 'run_unloaded',
+        assistantMessageId: 'msg_unloaded',
+        stateVersion: 1,
+        lifecycle: RunLifecycle.recovering,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _SynchronousDeliveryEventSource(
+              _event(
+                type: 'agent.run.state_changed',
+                sequence: 1,
+                runId: state.runId,
+                runState: state,
+                payload: const {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(apiClient.listMessagesCallCount, 2);
+      expect(find.byType(RunStateCard), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'failure run step uses localized category and bounded attempts without '
+    'note',
     (tester) async {
       final events = StreamController<TuringEvent>(sync: true);
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: _FakeApiClient(),
@@ -1428,54 +2155,3197 @@ void main() {
       );
       await tester.pump();
 
-      const giveUpNote = 'Gave up after 1 attempt';
       events.add(
         _event(
           type: 'agent.run.step',
           sequence: 1,
-          payload: {'attempts': 1, 'maxAttempts': 1, 'note': giveUpNote},
-        ),
-      );
-      await tester.pump();
-      events.add(
-        _event(
-          type: 'agent.run.failed',
-          sequence: 2,
           payload: {
-            'code': 'retries_exhausted',
-            'message': '',
-            'retryable': false,
+            'category': 'dispatch_retry',
+            'attempt': 2.0,
+            'maxAttempts': 5.0,
+            'note':
+                'dial tcp 127.0.0.1:11434: connection refused '
+                'with credential secret-provider-token',
           },
         ),
       );
       await tester.pump();
 
       expect(find.byType(RunNoticeCard), findsOneWidget);
-      expect(find.byType(RunFailureCard), findsOneWidget);
-
-      // Exact, cause-free copy: not the humanized code, not the give-up
-      // wording restated. Narrow to the message text specifically:
-      // `RunFailureCard` now also renders its outcome label ("Run failed")
-      // as a second, sibling `Text` descendant, so grabbing "the" `Text`
-      // under this card is no longer unambiguous.
+      expect(find.text('Starting attempt 2 of 5.'), findsOneWidget);
       expect(
-        find.descendant(
-          of: find.byType(RunFailureCard),
-          matching: find.text('The run failed with no further details'),
+        find.text('The run reported a step with no description'),
+        findsNothing,
+      );
+      expect(find.textContaining('127.0.0.1'), findsNothing);
+      expect(find.textContaining('secret-provider-token'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'malformed categorized run-step counters fail closed without raw note',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: _FakeApiClient(),
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final invalidCounters = <Map<String, dynamic>>[
+        {'attempt': 0.0, 'maxAttempts': 3.0},
+        {'attempt': 4.0, 'maxAttempts': 3.0},
+        {'attempt': 1.5, 'maxAttempts': 3.0},
+        {'attempt': 1.0, 'maxAttempts': 1001.0},
+        {'attempt': '1', 'maxAttempts': 3.0},
+        {'attempt': double.nan, 'maxAttempts': 3.0},
+      ];
+      for (var i = 0; i < invalidCounters.length; i++) {
+        events.add(
+          _event(
+            type: 'agent.run.step',
+            sequence: i + 1,
+            payload: {
+              'category': 'recovery_exhausted',
+              ...invalidCounters[i],
+              'note': 'raw provider failure $i',
+            },
+          ),
+        );
+      }
+      await tester.pump();
+
+      expect(
+        find.text('The run reported a step with no description'),
+        findsNWidgets(invalidCounters.length),
+      );
+      expect(find.textContaining('raw provider failure'), findsNothing);
+      expect(find.textContaining('attempt 0'), findsNothing);
+      expect(find.textContaining('attempt 4 of 3'), findsNothing);
+      expect(find.textContaining('1001'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('nonfailure redacted run step preserves governed notice copy', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'agent.run.step',
+        sequence: 1,
+        payload: {'note': '[redacted egress notice] request blocked'},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(RunNoticeCard), findsOneWidget);
+    expect(
+      find.text('[redacted egress notice] request blocked'),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('state bearing queued started approval and state changed events '
+      'reconcile before type handling', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(stateVersion: 1, lifecycle: RunLifecycle.queued),
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Queued'), findsOneWidget);
+
+    events.add(
+      _event(
+        type: 'agent.run.started',
+        sequence: 2,
+        runState: _runState(stateVersion: 2, lifecycle: RunLifecycle.running),
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Working'), findsOneWidget);
+
+    events.add(
+      _event(
+        type: 'approval.requested',
+        sequence: 3,
+        runState: _runState(
+          stateVersion: 3,
+          lifecycle: RunLifecycle.waitingApproval,
+        ),
+        payload: const {'approvalId': 'appr_1', 'toolName': 'files.write'},
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Waiting for approval'), findsOneWidget);
+    // The type-specific work for `approval.requested` still runs too.
+    expect(find.byType(ApprovalCard), findsOneWidget);
+
+    events.add(
+      _event(
+        type: 'agent.run.state_changed',
+        sequence: 4,
+        runState: _runState(stateVersion: 4, lifecycle: RunLifecycle.running),
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Working'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'overlapping pages deduplicate by message id and run id version',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Working'), findsOneWidget);
+      expect(find.byType(RunStateCard), findsOneWidget);
+
+      // A brand-new, unloaded run's event triggers a coalesced resync — the
+      // returned page overlaps entirely with the already-loaded row above
+      // (same message id) but reports a higher, terminal version for it.
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'The final answer.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.completed,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 2,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      // Exactly one bubble for msg_asst (the message-id dedup), and its run
+      // state advanced through NORMAL reconciliation rather than being
+      // duplicated into a second card.
+      expect(find.byType(RunStateCard), findsNothing);
+      expect(find.text('The final answer.'), findsOneWidget);
+      expect(find.text('Working'), findsNothing);
+      expect(apiClient.listMessagesCallCount, 2);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'coalesced resync adopts the persisted user row without duplicating '
+    'its optimistic bubble',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final sendGate = Completer<Map<String, dynamic>>();
+      final apiClient = _FakeApiClient()..sendMessagePending = sendGate;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'Please inspect this.');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(find.text('Please inspect this.'), findsOneWidget);
+
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_user',
+          role: 'user',
+          content: 'Please inspect this.',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: 2,
+          createdAt: _fixedDate,
+          runState: _runState(stateVersion: 1, lifecycle: RunLifecycle.queued),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.queued',
+          sequence: 1,
+          runState: _runState(stateVersion: 1, lifecycle: RunLifecycle.queued),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.text('Please inspect this.'),
+        findsOneWidget,
+        reason:
+            'the persisted user row must adopt the pending optimistic turn, '
+            'not render a second copy',
+      );
+      expect(apiClient.listMessagesCallCount, 2);
+
+      sendGate.complete({
+        'sessionId': 'sess_1',
+        'userMessageId': 'msg_user',
+        'assistantMessageId': 'msg_asst',
+        'runId': 'run_1',
+        'jobId': 'job_1',
+        'traceId': 'trace_1',
+        'status': 'queued',
+      });
+      await tester.pump();
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'coalesced resync collapses tool-split assistant content and keeps the '
+    'terminal card after the tool',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool. '},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.started',
+          sequence: 2,
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 3,
+          payload: const {'messageId': 'msg_asst', 'delta': 'After tool.'},
+        ),
+      );
+      await tester.pump();
+
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before tool. After tool.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 4,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Before tool. After tool.'), findsOneWidget);
+      expect(find.text('After tool.'), findsNothing);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason:
+            'the page-sourced terminal card belongs after every live segment '
+            'and tool artifact for that run',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Production shape (F10 defect): unlike the sibling test above, there is
+  // deliberately NO post-tool delta here. The turn's only assistant bubble
+  // is the one BEFORE the tool card, so `_assistantEntryIndexForRun` (which
+  // scans backward for the run's LAST bubble) resolves to that same
+  // pre-tool row both before and after the resync. A page/resync-sourced
+  // card that reinserts itself immediately after that row — rather than
+  // walking forward past the already-live tool artifact — lands ABOVE the
+  // artifact, breaking parity with the live path (see the baseline test
+  // above, "a live terminal state with no post-tool delta still renders
+  // below the tool card").
+  //
+  // `msg_asst` IS already loaded before the resync returns it again
+  // (`pageResult.isDuplicateMessage` is true), but the resync's own row
+  // here advances the run from v1/running to v2/failed — a genuinely
+  // `accepted` state update — so this row's card is positioned by the
+  // unconditional `pageResults` loop at the end of `_ingestMessagePage`,
+  // never by the duplicate-row branch's own, separate
+  // `_syncRunStateCardPresenceForContent` call (that call only runs when
+  // `pageResult.stateResult?.isAccepted != true`, which does not hold
+  // here). See the "duplicate, not-accepted resync" test below for one
+  // that actually takes that other branch.
+  testWidgets(
+    'coalesced resync keeps the terminal card after a tool artifact with no '
+    'post-tool delta',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+      // No further delta: the exact "no post-tool delta" production shape.
+
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before tool.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 3,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Before tool.'), findsOneWidget);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason:
+            'with no post-tool delta the last assistant bubble sits above '
+            'the tool artifact, so a page/resync-sourced card must still '
+            'land after that artifact — never immediately after the '
+            'bubble, which would place it above the tool card and break '
+            'parity with the live path',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Notice-artifact variant of the test above: the same
+  // `_upsertRunStateCard`/`_runStateCardInsertionIndex` path also has to
+  // walk past a contiguous `_RunNoticeEntry`, not only a `_ToolCallEntry`.
+  testWidgets(
+    'coalesced resync keeps the terminal card after a run notice artifact '
+    'with no post-notice delta',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {
+            'messageId': 'msg_asst',
+            'delta': 'Before notice.',
+          },
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'agent.run.step',
+          sequence: 2,
+          payload: const {'note': 'maximum tool iterations reached'},
+        ),
+      );
+      await tester.pump();
+      // No further delta: the exact "no post-artifact delta" shape.
+
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before notice.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 3,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Before notice.'), findsOneWidget);
+      expect(find.byType(RunNoticeCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(RunNoticeCard)).dy),
+        reason:
+            'a page/resync-sourced card must land after a same-run notice '
+            'artifact too, not only after a tool card',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Boundary (F10 contract): a LATER, OTHER-run artifact must not be leaped
+  // over. The fix must walk past exactly the requesting run's own
+  // contiguous artifacts and stop the instant it reaches one that belongs
+  // to a different run — proving the insertion is turn-scoped, not "insert
+  // at the very end of same-type artifacts regardless of owner".
+  testWidgets(
+    'coalesced resync does not leap a card past a later, other-run tool '
+    'artifact',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          runId: 'run_1',
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+      // A different run's tool call, interleaved right after run_1's own —
+      // the boundary this insertion must never cross.
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 3,
+          runId: 'run_2',
+          payload: const {'toolCallId': 'call_2', 'toolName': 'other.tool'},
+        ),
+      );
+      await tester.pump();
+
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before tool.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 4,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('system.time'), findsOneWidget);
+      expect(find.text('other.tool'), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.text('system.time')).dy),
+        reason: "the card belongs after run_1's own tool artifact",
+      );
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        lessThan(tester.getTopLeft(find.text('other.tool')).dy),
+        reason:
+            "the card must not leap past run_2's later, unrelated tool "
+            'artifact merely because run_1 finally advanced its own state',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Boundary (F10 contract, LIVE `_applyEvent` path): the reconciliation at
+  // the top of `_applyEvent` runs unconditionally for ANY event carrying a
+  // `RunState` — before the type-specific switch, and before
+  // `_isHistoricalRunEvent` is even consulted for that same event (see
+  // `_applyRunFailed`'s own early return the instant `event.runState` is
+  // non-null). A run can be marked completed/historical by an EARLIER
+  // resync's duplicate-row branch the moment its content becomes
+  // displayable — independent of whether that resync's OWN state update
+  // was accepted — and STILL later receive a genuine, higher-version
+  // terminal `RunState` on a LIVE event. `_isHistoricalRunEvent` classifies
+  // that later event as historical too, purely because its runId is now in
+  // `_completedHistoryRunIds` — even though the event is arriving live and
+  // carries the one state update that actually advances this run.
+  //
+  // Durable invariant: artifact-aware placement of a run's terminal card
+  // must NOT be conditional on `_isHistoricalRunEvent`. If placement is
+  // ever made to walk past artifacts only when the event is classified as
+  // live (skipping that walk once `_isHistoricalRunEvent` says otherwise),
+  // this run's card would land immediately beside the assistant row —
+  // ABOVE the tool artifact — instead of walking past it. Reintroducing
+  // that classification-dependent artifact walking must fail this test.
+  testWidgets(
+    'a live terminal event for a run already marked historical by an '
+    'earlier resync still lands after a tool artifact',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+
+      // A coalesced resync whose own row carries NO `RunState` at all —
+      // `pageResult.stateResult` is null, so the reconciler's held
+      // v1/running state for run_1 never advances. The row's now-
+      // displayable content alone is enough to mark run_1 into
+      // `_completedHistoryRunIds` via `_ingestMessagePage`'s duplicate-row
+      // branch — the one thing this test needs from it.
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before tool.',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 3,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      // The LATER live terminal event for run_1 itself. By now run_1 is in
+      // `_completedHistoryRunIds` (see above), so `_isHistoricalRunEvent`
+      // classifies THIS very event as historical too — even though it
+      // carries a genuine, higher-version `RunState` arriving live, never
+      // through `_ingestMessagePage` at all.
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 4,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Before tool.'), findsOneWidget);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason:
+            'a live event this screen itself classifies as historical must '
+            'still position its card via the same unconditional artifact '
+            'walk as any other caller — conditional historical placement '
+            'must not put the card before the same-run tool artifact just '
+            'because a run happens to already be historical for an '
+            'unrelated reason',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Reachable regression coverage (F10): the "duplicate, not-accepted
+  // resync" test below reaches this same production shape but explicitly
+  // does NOT exercise `_upsertRunStateCard`'s existing-entry
+  // remove-then-reinsert branch — its own comment says so. This test
+  // isolates exactly that branch. The initial PAGE load already carries a
+  // v1/running `RunState` for an assistant row with no displayable
+  // content, so `_ingestMessagePage`'s unconditional `pageResults` loop
+  // creates run_1's ONE adjacent card immediately, before any event at all
+  // — the `existing == null` create branch, not the one under test. Only
+  // THEN does a live, same-run tool artifact land below that
+  // already-present card, and only THEN does a live v2/failed `RunState`
+  // arrive through `_handleIncomingRunState` — reaching
+  // `_upsertRunStateCard` with `existing != null` for the first and only
+  // time in this test, forcing it through the remove-then-reinsert-at-
+  // `_runStateCardInsertionIndex` path. Deleting or no-op'ing that block
+  // leaves the already-present card pinned at the index it occupied
+  // BEFORE the tool artifact existed — immediately after the assistant
+  // row, above the artifact the block exists to walk past — so this test
+  // must fail the instant that block is removed.
+  testWidgets(
+    'a live state update repositions an existing page-created card below a '
+    'later same-run tool artifact',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // The page-loaded v1/running state alone already produced run_1's
+      // one adjacent card, before any event has been delivered at all.
+      expect(
+        find.byType(RunStateCard),
+        findsOneWidget,
+        reason:
+            'a no-displayable-content row with a v1/running RunState wants '
+            'its own adjacent card straight from the initial page load',
+      );
+
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 1,
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(
+        find.byType(RunStateCard),
+        findsOneWidget,
+        reason:
+            'the same card must still be the only one on screen once a '
+            'live, same-run tool artifact lands beside it — it is not '
+            'recreated or duplicated merely because a sibling artifact '
+            'appeared',
+      );
+
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 2,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.byType(RunStateCard),
+        findsOneWidget,
+        reason:
+            'the v2/failed update must reuse the SAME card — one adjacent '
+            'card per run, never a second one appended alongside it',
+      );
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason:
+            'the existing card must reposition itself after the tool '
+            'artifact that landed below it while the card was still '
+            "running — not stay pinned at the index it occupied before "
+            'that artifact existed',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Structural coverage (GREEN before and after — not a RED-then-fixed
+  // regression case): a non-null, not-accepted `stateResult` can mean
+  // `duplicate`, `stale`, or `inconsistent` — unlike every
+  // `_ingestMessagePage`-sourced test above, whose resync always ADVANCES
+  // the run's state (v1 -> v2, genuinely `accepted`) and so is positioned
+  // via the unconditional `pageResults` loop at the end of
+  // `_ingestMessagePage`, this resync's own row offers back the SAME
+  // version, byte-for-byte identical state already held: the `duplicate`
+  // outcome specifically, taking the duplicate-row branch's own
+  // `_syncRunStateCardPresenceForContent` call instead of the accepted
+  // loop. Because a duplicate row's synced content can only ADD
+  // displayable content, never remove it, that call can only remove an
+  // existing card or no-op — never newly create one. Here the run is
+  // `failed`, so `_wantsAdjacentCard` always wants a card regardless of
+  // content: presence already matches, so the call early-returns before
+  // ever reaching `_upsertRunStateCard`'s reposition logic. This test does
+  // not exercise that reposition logic; it guards that the early-return
+  // no-op leaves the card — already correctly positioned by the earlier
+  // LIVE acceptance — undisturbed after run_1's own tool artifact, rather
+  // than the duplicate-row branch quietly moving or dropping it.
+  testWidgets(
+    'a duplicate, not-accepted resync is a no-op that leaves an '
+    "already-correct card undisturbed after its run's own tool artifact",
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+
+      // The one, genuine acceptance: a LIVE terminal event advances run_1
+      // from v1/running to v2/failed, correctly positioning its card after
+      // the tool artifact already on screen — exactly like the live-path
+      // baseline test above.
+      final terminalState = _runState(
+        stateVersion: 2,
+        lifecycle: RunLifecycle.failed,
+        outcomeReason: RunOutcomeReason.toolFailure,
+        hasDisplayableContent: true,
+      );
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 3,
+          runState: terminalState,
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason: 'sanity: the live acceptance above must already be correct',
+      );
+
+      // A coalesced resync whose own row offers back the IDENTICAL v2/
+      // failed state (same object) alongside the same already-displayed
+      // content — a `duplicate` outcome, not accepted: one of the three
+      // non-accepted outcomes (`duplicate`, `stale`, `inconsistent`) a
+      // non-null `stateResult` can carry, exercising
+      // `_ingestMessagePage`'s duplicate-row `_syncRunStateCardPresenceForContent`
+      // call for the `duplicate` case.
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before tool.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: terminalState,
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 4,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Before tool.'), findsOneWidget);
+      expect(find.byType(ToolCallCard), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+        reason:
+            'a duplicate, not-accepted resync round must not disturb the '
+            "run's already-correctly-positioned card",
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  // Boundary (F10 contract): the SAME turn-scoped stop `_runStateCardInsertionIndex`
+  // already proves for a later, other-run TOOL artifact (the sibling test
+  // above) must also hold for a later, other-run NOTICE artifact — the walk
+  // checks `entry is _RunNoticeEntry && entry.runId == runId` as its own,
+  // independent disjunct. Dropping the `runId` half of that check (treating
+  // any `_RunNoticeEntry` as this run's own regardless of owner) would let
+  // run_1's card leap over run_2's later notice — this test must fail if
+  // that check is ever dropped.
+  testWidgets(
+    'coalesced resync does not leap a card past a later, other-run notice '
+    'artifact',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'tool.call.completed',
+          sequence: 2,
+          runId: 'run_1',
+          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+        ),
+      );
+      await tester.pump();
+      // A different run's notice, interleaved right after run_1's own tool
+      // artifact — the boundary this insertion must never cross.
+      events.add(
+        _event(
+          type: 'agent.run.step',
+          sequence: 3,
+          runId: 'run_2',
+          payload: const {'note': "run_2's own notice"},
+        ),
+      );
+      await tester.pump();
+
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Before tool.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 4,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('system.time'), findsOneWidget);
+      expect(find.text("run_2's own notice"), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        greaterThan(tester.getTopLeft(find.text('system.time')).dy),
+        reason: "the card belongs after run_1's own tool artifact",
+      );
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        lessThan(tester.getTopLeft(find.text("run_2's own notice")).dy),
+        reason:
+            "the card must not leap past run_2's later, unrelated notice "
+            'artifact merely because run_1 finally advanced its own state',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'identical historical replay keeps an older terminal card beside its '
+    'assistant row',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final terminalState = _runState(
+        runId: 'run_1',
+        assistantMessageId: 'msg_asst_1',
+        stateVersion: 2,
+        lifecycle: RunLifecycle.failed,
+        outcomeReason: RunOutcomeReason.providerFailure,
+      );
+      final replayed = _event(
+        type: 'agent.run.failed',
+        sequence: 5,
+        runId: 'run_1',
+        runState: terminalState,
+        payload: const {},
+      );
+      final apiClient = _FakeApiClient()
+        ..initialEvents = [replayed]
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst_1',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: terminalState,
+          ),
+          Message(
+            messageId: 'msg_asst_2',
+            runId: 'run_2',
+            role: 'assistant',
+            content: 'A later answer.',
+            sequence: 2,
+            createdAt: _fixedDate,
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(replayed);
+      await tester.pump();
+
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        lessThan(tester.getTopLeft(find.text('A later answer.')).dy),
+        reason:
+            'an identical replay is a semantic no-op and must not move the '
+            "older run's card below a later turn",
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'accepted live terminal state keeps an older run card above a later turn',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst_1',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              runId: 'run_1',
+              assistantMessageId: 'msg_asst_1',
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+          Message(
+            messageId: 'msg_asst_2',
+            runId: 'run_2',
+            role: 'assistant',
+            content: 'A later answer.',
+            sequence: 2,
+            createdAt: _fixedDate,
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Working'), findsOneWidget);
+
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 1,
+          runId: 'run_1',
+          runState: _runState(
+            runId: 'run_1',
+            assistantMessageId: 'msg_asst_1',
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.providerFailure,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RunFailureCard)).dy,
+        lessThan(tester.getTopLeft(find.text('A later answer.')).dy),
+        reason:
+            "a live version advance must update run_1's card in place, not "
+            "move it below run_2's later answer",
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'resync after failed initial history restores user and assistant order',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..messagesError = const TuringApiException(
+          code: 'unavailable',
+          message: 'history temporarily unavailable',
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(apiClient.listMessagesCallCount, 1);
+
+      final resyncGate = Completer<List<Message>>();
+      apiClient
+        ..messagesError = null
+        ..messagesGate = resyncGate;
+      events.add(
+        _event(
+          type: 'agent.run.queued',
+          sequence: 1,
+          runId: 'run_1',
+          runState: _runState(
+            runId: 'run_1',
+            assistantMessageId: 'msg_asst_1',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 2,
+          runId: 'run_1',
+          payload: const {'messageId': 'msg_asst_1', 'delta': 'First answer.'},
+        ),
+      );
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 3,
+          runId: 'run_2',
+          payload: const {'messageId': 'msg_asst_2', 'delta': 'Second answer.'},
+        ),
+      );
+      await tester.pump();
+      expect(apiClient.listMessagesCallCount, 2);
+
+      resyncGate.complete([
+        Message(
+          messageId: 'msg_user_1',
+          role: 'user',
+          content: 'First question.',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+        Message(
+          messageId: 'msg_asst_1',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: 2,
+          createdAt: _fixedDate,
+          runState: _runState(
+            runId: 'run_1',
+            assistantMessageId: 'msg_asst_1',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+        ),
+        Message(
+          messageId: 'msg_user_2',
+          role: 'user',
+          content: 'Second question.',
+          sequence: 3,
+          createdAt: _fixedDate,
+        ),
+        Message(
+          messageId: 'msg_asst_2',
+          runId: 'run_2',
+          role: 'assistant',
+          content: '',
+          sequence: 4,
+          createdAt: _fixedDate,
+        ),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      final firstQuestion = tester.getTopLeft(find.text('First question.')).dy;
+      final firstAnswer = tester.getTopLeft(find.text('First answer.')).dy;
+      final secondQuestion = tester
+          .getTopLeft(find.text('Second question.'))
+          .dy;
+      final secondAnswer = tester.getTopLeft(find.text('Second answer.')).dy;
+      expect(firstQuestion, lessThan(firstAnswer));
+      expect(firstAnswer, lessThan(secondQuestion));
+      expect(secondQuestion, lessThan(secondAnswer));
+
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 4,
+          runId: 'run_1',
+          payload: const {'messageId': 'msg_asst_1', 'delta': ' More.'},
+        ),
+      );
+      await tester.pump();
+      expect(
+        find.text('First answer. More.'),
+        findsOneWidget,
+        reason:
+            'preserved replay text must remain an adopted live row until the '
+            'durable run actually terminalizes',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'empty resync after failed history preserves replayed text and warning',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..messagesError = const TuringApiException(
+          code: 'unavailable',
+          message: 'history temporarily unavailable',
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final resyncGate = Completer<List<Message>>();
+      apiClient
+        ..messagesError = null
+        ..messagesGate = resyncGate;
+      events.add(
+        _event(
+          type: 'agent.run.queued',
+          sequence: 1,
+          runState: _runState(
+            assistantMessageId: 'msg_asst',
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 2,
+          payload: const {
+            'messageId': 'msg_asst',
+            'delta': 'Recovered only from replay.',
+          },
+        ),
+      );
+      await tester.pump();
+      resyncGate.complete(const []);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Recovered only from replay.'), findsOneWidget);
+      expect(
+        find.text(
+          'Earlier messages could not be loaded. '
+          'This session is live from here on.',
         ),
         findsOneWidget,
       );
 
-      // Never the humanized code anywhere: that would just repeat the
-      // give-up notice's meaning without adding anything.
-      expect(find.text('Retries exhausted'), findsNothing);
-      expect(
-        find.descendant(
-          of: find.byType(RunFailureCard),
-          matching: find.text(giveUpNote),
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'failed-history resync cannot replace a newer live terminal state',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..messagesError = const TuringApiException(
+          code: 'unavailable',
+          message: 'history temporarily unavailable',
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
         ),
-        findsNothing,
       );
+      await tester.pump();
+
+      final resyncGate = Completer<List<Message>>();
+      apiClient
+        ..messagesError = null
+        ..messagesGate = resyncGate;
+      events.add(
+        _event(
+          type: 'agent.run.queued',
+          sequence: 1,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 2,
+          runId: 'run_1',
+          payload: const {
+            'messageId': 'msg_asst_1',
+            'delta': 'Partial result.',
+          },
+        ),
+      );
+      events.add(
+        _event(
+          type: 'agent.run.started',
+          sequence: 3,
+          runId: 'run_1',
+          runState: _runState(
+            runId: 'run_1',
+            assistantMessageId: 'msg_asst_1',
+            stateVersion: 4,
+            lifecycle: RunLifecycle.running,
+          ),
+          payload: const {},
+        ),
+      );
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 4,
+          runId: 'run_1',
+          runState: _runState(
+            runId: 'run_1',
+            assistantMessageId: 'msg_asst_1',
+            stateVersion: 5,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.providerFailure,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      expect(find.byType(RunFailureCard), findsOneWidget);
+
+      resyncGate.complete([
+        Message(
+          messageId: 'msg_asst_1',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            runId: 'run_1',
+            assistantMessageId: 'msg_asst_1',
+            stateVersion: 2,
+            lifecycle: RunLifecycle.running,
+          ),
+        ),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(find.text('Provider unavailable'), findsOneWidget);
+      expect(find.text('Working'), findsNothing);
+      expect(find.text('Partial result.'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'completed state that promises missing content keeps a card and resyncs',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Working'), findsOneWidget);
+
+      final resyncGate = Completer<List<Message>>();
+      apiClient.messagesGate = resyncGate;
+      events.add(
+        _event(
+          type: 'agent.run.completed',
+          sequence: 1,
+          runId: 'run_1',
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.completed,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      expect(apiClient.listMessagesCallCount, 2);
+      expect(find.text('Response unavailable'), findsOneWidget);
+      expect(
+        find.text(
+          'The run completed, but the saved assistant response could not be '
+          'loaded.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.byType(RunStateCard), findsOneWidget);
+
+      resyncGate.complete([
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Recovered completed answer.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.completed,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Recovered completed answer.'), findsOneWidget);
+      expect(find.byType(RunStateCard), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'resync page snapshot wins through normal version reconciliation',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Working'), findsOneWidget);
+
+      final resyncGate = Completer<List<Message>>();
+      apiClient.messagesGate = resyncGate;
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 1,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      resyncGate.complete([
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.recovering,
+          ),
+        ),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      expect(apiClient.listMessagesCallCount, 2);
+      expect(find.text('Working'), findsNothing);
+      expect(find.text('Recovering'), findsOneWidget);
+      expect(find.byType(RunStateCard), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'resync adopts run identity onto a live row created without one',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      events.add(
+        TuringEvent(
+          eventId: 'evt_1',
+          sessionId: 'sess_1',
+          type: 'message.delta',
+          sequence: 1,
+          traceId: 'trace_1',
+          createdAt: _fixedDate,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Partial answer.'},
+        ),
+      );
+      await tester.pump();
+
+      final resyncGate = Completer<List<Message>>();
+      apiClient.messagesGate = resyncGate;
+      events.add(
+        _event(
+          type: 'agent.run.started',
+          sequence: 2,
+          runId: 'run_1',
+          runState: _runState(stateVersion: 1, lifecycle: RunLifecycle.running),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      expect(apiClient.listMessagesCallCount, 2);
+
+      resyncGate.complete([
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: 'Partial answer.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(stateVersion: 1, lifecycle: RunLifecycle.running),
+        ),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 3,
+          runId: 'run_1',
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.providerFailure,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      expect(apiClient.listMessagesCallCount, 2);
+      expect(find.text('Partial answer.'), findsOneWidget);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(find.text('Provider unavailable'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'failed-history recovery preserves a retryable send and its outcome anchor',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..messagesError = const TuringApiException(
+          code: 'unavailable',
+          message: 'history temporarily unavailable',
+        )
+        ..sendMessageErrors.add(
+          const TuringApiException(code: 'unavailable', message: 'no backend'),
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'retry after recovery');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      final firstKey = apiClient.idempotencyKeys.single;
+      expect(find.text('retry after recovery'), findsNWidgets(2));
+      expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
+
+      final resyncGate = Completer<List<Message>>();
+      apiClient
+        ..messagesError = null
+        ..messagesGate = resyncGate;
+      events.add(
+        _event(
+          type: 'agent.run.queued',
+          sequence: 1,
+          runId: 'run_unloaded',
+          runState: _runState(
+            runId: 'run_unloaded',
+            assistantMessageId: 'msg_unloaded',
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      resyncGate.complete([
+        Message(
+          messageId: 'msg_old_user',
+          role: 'user',
+          content: 'Recovered older question',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Recovered older question'), findsOneWidget);
+      expect(find.text('retry after recovery'), findsNWidgets(2));
+      expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(apiClient.idempotencyKeys, hasLength(2));
+      expect(apiClient.idempotencyKeys.last, firstKey);
+      expect(find.text('retry after recovery'), findsOneWidget);
+      expect(find.byType(MessageSendUnconfirmedCard), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'durable page adopts an unconfirmed optimistic send without duplication',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..sendMessageErrors.add(
+          const TuringApiException(code: 'unavailable', message: 'no backend'),
+        );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextField), 'possibly durable send');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(
+        find.text('possibly durable send'),
+        findsNWidgets(2),
+        reason: 'one optimistic bubble plus the restored composer text',
+      );
+      expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'different next draft');
+      await tester.pump();
+
+      final resyncGate = Completer<List<Message>>();
+      apiClient.messagesGate = resyncGate;
+      events.add(
+        _event(
+          type: 'agent.run.queued',
+          sequence: 1,
+          runId: 'run_1',
+          runState: _runState(
+            userMessageId: 'msg_user_durable',
+            assistantMessageId: 'msg_asst_durable',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      resyncGate.complete([
+        Message(
+          messageId: 'msg_user_durable',
+          role: 'user',
+          content: 'possibly durable send',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+        Message(
+          messageId: 'msg_asst_durable',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: 2,
+          createdAt: _fixedDate,
+          runState: _runState(
+            userMessageId: 'msg_user_durable',
+            assistantMessageId: 'msg_asst_durable',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+        ),
+      ]);
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.text('possibly durable send'),
+        findsOneWidget,
+        reason:
+            'the durable row must adopt the optimistic bubble and clear the '
+            'restored retry draft; rendering another copy would misrepresent '
+            'one send as two turns',
+      );
+      expect(find.byType(MessageSendUnconfirmedCard), findsNothing);
+      expect(find.text('Queued'), findsOneWidget);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        'different next draft',
+        reason:
+            'adoption clears the stale outcome card but must not erase an '
+            'edited draft that no longer belongs to that attempt',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'a durable-identity adoption while the send RPC is still pending must '
+    'not let that RPC\'s later ambiguous rejection re-arm retry/warning '
+    'state',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final sendGate = Completer<Map<String, dynamic>>();
+      final apiClient = _FakeApiClient()..sendMessagePending = sendGate;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // The send RPC below never resolves during this test — [sendGate] is
+      // only ever completed with an error, at the very end. Everything
+      // that happens before that must happen while it is still pending.
+      await tester.enterText(find.byType(TextField), 'possibly durable send');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(find.text('possibly durable send'), findsOneWidget);
+
+      // A resync/live page adopts this exact optimistic bubble onto a
+      // durable message/run identity (by content + the run's
+      // `userMessageId`) BEFORE the still-pending `sendMessage` RPC ever
+      // resolves — the race this test exists to pin.
+      apiClient.initialMessages = [
+        Message(
+          messageId: 'msg_user_durable',
+          role: 'user',
+          content: 'possibly durable send',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+        Message(
+          messageId: 'msg_asst_durable',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: 2,
+          createdAt: _fixedDate,
+          runState: _runState(
+            userMessageId: 'msg_user_durable',
+            assistantMessageId: 'msg_asst_durable',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.queued',
+          sequence: 1,
+          runState: _runState(
+            userMessageId: 'msg_user_durable',
+            assistantMessageId: 'msg_asst_durable',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.text('possibly durable send'),
+        findsOneWidget,
+        reason: 'the resync must have adopted the optimistic bubble already',
+      );
+      expect(find.text('Queued'), findsOneWidget);
+      expect(find.byType(MessageSendUnconfirmedCard), findsNothing);
+
+      // Now the ORIGINAL, still-pending `sendMessage` RPC for this same
+      // attempt finally settles — with an ambiguous rejection of exactly
+      // the kind that (absent adoption) would render
+      // `MessageSendUnconfirmedCard` and restore the composer/retry draft.
+      // Durable identity already proved this send was accepted; this
+      // stale rejection must change nothing observable.
+      sendGate.completeError(
+        const GrpcError.unavailable('no backend'),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.text('possibly durable send'),
+        findsOneWidget,
+        reason:
+            'still exactly the one adopted, durable bubble — no duplicate '
+            'and no restored composer copy',
+      );
+      expect(
+        find.byType(MessageSendUnconfirmedCard),
+        findsNothing,
+        reason:
+            'durable identity already proved this send was accepted; a '
+            'later rejection of the same pending RPC must not warn',
+      );
+      expect(find.byType(MessageSendFailureCard), findsNothing);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        '',
+        reason:
+            'the composer must not be restored to the sent text — that '
+            'text was already durably accepted',
+      );
+      expect(
+        find.text('Queued'),
+        findsOneWidget,
+        reason: 'the durable run state card must still render correctly',
+      );
+
+      // And the composer must be usable again for a NEW attempt, not stuck
+      // re-armed against the adopted one. The old completer is already
+      // settled, so it must be cleared first, or the fake would replay its
+      // stale rejection for this new, unrelated send too.
+      apiClient.sendMessagePending = null;
+      await tester.enterText(find.byType(TextField), 'a fresh message');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      expect(
+        apiClient.lastSentContent,
+        'a fresh message',
+        reason:
+            'a stale retry draft for the adopted attempt must not have '
+            'blocked or hijacked this new send',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'an adopted send\'s later ambiguous rejection must not force the '
+    'scroll position back to the bottom while the user is reading older '
+    'history',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final sendGate = Completer<Map<String, dynamic>>();
+      final history = List<Message>.generate(60, (index) {
+        return Message(
+          messageId: 'msg_history_$index',
+          role: index.isEven ? 'user' : 'assistant',
+          content:
+              'history message $index padding this conversation with enough '
+              'content that the list must scroll to reach the newest row',
+          sequence: index + 1,
+          createdAt: _fixedDate,
+        );
+      });
+      final apiClient = _FakeApiClient()
+        ..sendMessagePending = sendGate
+        ..initialMessages = List<Message>.of(history);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      // Let the initial-load scroll-to-bottom animation finish (see
+      // `_loadInitialMessages`) so the viewport starts at the bottom, the
+      // same as every other assertion below assumes.
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final scrollController =
+          tester.widget<ListView>(find.byType(ListView)).controller!;
+      expect(
+        scrollController.position.maxScrollExtent,
+        greaterThan(0),
+        reason:
+            'enough history must be loaded that the list is actually '
+            'scrollable, or scrolling away from the bottom below would '
+            'prove nothing',
+      );
+
+      // The send RPC below never resolves during this test — [sendGate] is
+      // only ever completed with an error, at the very end. Everything
+      // that happens before that must happen while it is still pending.
+      await tester.enterText(find.byType(TextField), 'possibly durable send');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      // Let this send's own scroll-to-bottom animation finish so the new
+      // bubble is actually laid out within `ListView.builder`'s lazily
+      // built range before asserting on it.
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('possibly durable send'), findsOneWidget);
+
+      // A resync/live page adopts this exact optimistic bubble onto a
+      // durable message/run identity WHILE the still-pending `sendMessage`
+      // RPC has not resolved yet — same race as the "durable-identity
+      // adoption" test above, but now with enough history behind it that
+      // the user can meaningfully scroll away afterwards.
+      apiClient.initialMessages = [
+        ...history,
+        Message(
+          messageId: 'msg_user_durable',
+          role: 'user',
+          content: 'possibly durable send',
+          sequence: history.length + 1,
+          createdAt: _fixedDate,
+        ),
+        Message(
+          messageId: 'msg_asst_durable',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: history.length + 2,
+          createdAt: _fixedDate,
+          runState: _runState(
+            userMessageId: 'msg_user_durable',
+            assistantMessageId: 'msg_asst_durable',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+        ),
+      ];
+      events.add(
+        _event(
+          type: 'agent.run.queued',
+          sequence: 1,
+          runState: _runState(
+            userMessageId: 'msg_user_durable',
+            assistantMessageId: 'msg_asst_durable',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.queued,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      // Let the resync's own (legitimate, out-of-scope) scroll-to-bottom
+      // animation finish before reading the scroll position below.
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        find.text('possibly durable send'),
+        findsOneWidget,
+        reason: 'the resync must have adopted the optimistic bubble already',
+      );
+      expect(find.text('Queued'), findsOneWidget);
+      expect(find.byType(MessageSendUnconfirmedCard), findsNothing);
+      expect(
+        scrollController.position.pixels,
+        scrollController.position.maxScrollExtent,
+        reason:
+            'the adoption resync itself legitimately scrolls to the bottom '
+            '(see _reloadNewestPage) — unrelated, existing behaviour this '
+            'test does not challenge',
+      );
+
+      // The user now scrolls AWAY from the bottom to read older history.
+      // This is the state the rejection below must not disturb.
+      scrollController.jumpTo(0);
+      await tester.pump();
+      expect(
+        scrollController.position.pixels,
+        0,
+        reason:
+            'sanity check that the manual scroll away from the bottom '
+            'actually took effect before the rejection below',
+      );
+
+      // Now the ORIGINAL, still-pending `sendMessage` RPC for this same
+      // attempt finally settles — with an ambiguous rejection of exactly
+      // the kind that (absent adoption) would render
+      // `MessageSendUnconfirmedCard` and restore the composer/retry draft.
+      // Durable identity already proved this send was accepted, so the
+      // catch's early return makes no other visible change here — it must
+      // not yank the user back to the bottom either.
+      sendGate.completeError(const GrpcError.unavailable('no backend'));
+      await tester.pump();
+      await tester.pump();
+      // If a scroll-to-bottom were (wrongly) triggered, give its animation
+      // every chance to run before asserting it did not move anything.
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        scrollController.position.pixels,
+        0,
+        reason:
+            'a rejection that changes nothing else on screen must not '
+            'scroll the user away from the older history they were '
+            'reading',
+      );
+
+      // With the no-forced-scroll invariant proven above, navigate back to
+      // the bottom manually (this is a virtualized `ListView.builder` — a
+      // row scrolled out of range is not built at all, so it cannot be
+      // asserted on from off-screen) to check the same content invariants
+      // the original adoption-race test covers: no duplicate bubble, no
+      // stale warning/failure card, and no restored composer draft.
+      scrollController.jumpTo(scrollController.position.maxScrollExtent);
+      await tester.pump();
+      expect(
+        find.text('possibly durable send'),
+        findsOneWidget,
+        reason:
+            'still exactly the one adopted, durable bubble — no duplicate '
+            'and no restored composer copy',
+      );
+      expect(
+        find.byType(MessageSendUnconfirmedCard),
+        findsNothing,
+        reason:
+            'durable identity already proved this send was accepted; a '
+            'later rejection of the same pending RPC must not warn',
+      );
+      expect(find.byType(MessageSendFailureCard), findsNothing);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        '',
+        reason:
+            'the composer must not be restored to the sent text — that '
+            'text was already durably accepted',
+      );
+      expect(
+        find.text('Queued'),
+        findsOneWidget,
+        reason: 'the durable run state card must still render correctly',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'an ambiguous send rejection that is NOT adopted still inserts its '
+    'warning card and scrolls to it, even if the user had scrolled away',
+    (tester) async {
+      // Complements the adopted-send test above: that one proves the catch
+      // block's early-return path must NOT force a scroll. This proves the
+      // opposite branch — the one that actually inserts a card — still
+      // does, so `shouldScroll` guarding `_scrollToBottom()` was not
+      // accidentally left false on every path.
+      final events = StreamController<TuringEvent>(sync: true);
+      final sendGate = Completer<Map<String, dynamic>>();
+      final history = List<Message>.generate(60, (index) {
+        return Message(
+          messageId: 'msg_history_$index',
+          role: index.isEven ? 'user' : 'assistant',
+          content:
+              'history message $index padding this conversation with enough '
+              'content that the list must scroll to reach the newest row',
+          sequence: index + 1,
+          createdAt: _fixedDate,
+        );
+      });
+      final apiClient = _FakeApiClient()
+        ..sendMessagePending = sendGate
+        ..initialMessages = List<Message>.of(history);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final scrollController =
+          tester.widget<ListView>(find.byType(ListView)).controller!;
+      expect(scrollController.position.maxScrollExtent, greaterThan(0));
+
+      await tester.enterText(find.byType(TextField), 'never adopted send');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('never adopted send'), findsOneWidget);
+
+      // The user scrolls away from the bottom — nothing ever adopts this
+      // attempt's identity, unlike the companion test above.
+      scrollController.jumpTo(0);
+      await tester.pump();
+      expect(scrollController.position.pixels, 0);
+
+      // An ambiguous rejection settles: `_isConfirmedPreEnqueueSendFailure`
+      // returns false for this error, so it renders
+      // `MessageSendUnconfirmedCard` and restores the composer draft — a
+      // real, visible change this time, which must scroll into view.
+      sendGate.completeError(const GrpcError.unavailable('no backend'));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      // One more settle: inserting the card and restoring the composer
+      // draft can itself change layout height slightly after the scroll
+      // animation's target was computed, so give it a final frame.
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        scrollController.position.pixels,
+        greaterThan(scrollController.position.maxScrollExtent - 50),
+        reason:
+            'inserting the unconfirmed-send warning card is a real visible '
+            'change and must still scroll it (back) into view, unlike the '
+            "adopted-send test's no-op early return which must leave "
+            'pixels at 0',
+      );
+      expect(find.byType(MessageSendUnconfirmedCard), findsOneWidget);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        'never adopted send',
+        reason: 'the composer draft is restored on this path',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('coalesced resync never replaces partial live text with an empty '
+      'persisted assistant row', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(stateVersion: 1, lifecycle: RunLifecycle.running),
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: const {
+          'messageId': 'msg_asst',
+          'delta': 'Partial answer still streaming.',
+        },
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Partial answer still streaming.'), findsOneWidget);
+
+    events.add(
+      _event(
+        type: 'agent.run.state_changed',
+        sequence: 2,
+        runId: 'run_unloaded',
+        runState: _runState(
+          runId: 'run_unloaded',
+          assistantMessageId: 'msg_unloaded',
+          stateVersion: 1,
+          lifecycle: RunLifecycle.queued,
+        ),
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      find.text('Partial answer still streaming.'),
+      findsOneWidget,
+      reason:
+          'an empty persisted placeholder is not authoritative over '
+          'displayable live text',
+    );
+    expect(apiClient.listMessagesCallCount, 2);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'unloaded events never create detached cards for historical messages',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(apiClient.listMessagesCallCount, 1);
+
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 1,
+          runId: 'run_ghost',
+          runState: _runState(
+            runId: 'run_ghost',
+            assistantMessageId: 'msg_ghost',
+            stateVersion: 1,
+            lifecycle: RunLifecycle.running,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.byType(RunStateCard),
+        findsNothing,
+        reason: 'no local row exists for this run — never a detached card',
+      );
+      expect(find.byType(NoResponseCard), findsNothing);
+
+      await tester.pump();
+      expect(
+        apiClient.listMessagesCallCount,
+        2,
+        reason: 'the unloaded event coalesces exactly one newest-page resync',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'post-load unloaded live event coalesces one newest-page resync',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final gate = Completer<List<Message>>();
+      final apiClient = _FakeApiClient();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(apiClient.listMessagesCallCount, 1);
+
+      // Gate the SECOND `listMessages` call (the coalesced resync) so
+      // several unloaded events can arrive while it is still pending.
+      apiClient.messagesGate = gate;
+
+      for (var i = 0; i < 5; i++) {
+        events.add(
+          _event(
+            type: 'agent.run.state_changed',
+            sequence: i + 1,
+            runId: 'run_ghost_$i',
+            runState: _runState(
+              runId: 'run_ghost_$i',
+              assistantMessageId: 'msg_ghost_$i',
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+            payload: const {},
+          ),
+        );
+        await tester.pump();
+      }
+
+      expect(
+        apiClient.listMessagesCallCount,
+        2,
+        reason:
+            'five unloaded events in a row still coalesce to one resync '
+            'call while it is in flight',
+      );
+      expect(find.byType(RunStateCard), findsNothing);
+
+      gate.complete(const []);
+      await tester.pump();
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(RunStateCard), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'terminal state arriving during resync schedules one bounded follow-up',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(apiClient.listMessagesCallCount, 1);
+
+      final firstResync = Completer<List<Message>>();
+      apiClient.messagesGate = firstResync;
+      events.add(
+        _event(
+          type: 'agent.run.queued',
+          sequence: 1,
+          runId: 'run_1',
+          runState: _runState(stateVersion: 1, lifecycle: RunLifecycle.queued),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      expect(apiClient.listMessagesCallCount, 2);
+
+      events.add(
+        _event(
+          type: 'agent.run.failed',
+          sequence: 2,
+          runId: 'run_1',
+          runState: _runState(
+            stateVersion: 2,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.providerFailure,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      expect(apiClient.listMessagesCallCount, 2);
+
+      firstResync.complete([
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          role: 'assistant',
+          content: '',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(stateVersion: 1, lifecycle: RunLifecycle.queued),
+        ),
+      ]);
+      apiClient
+        ..messagesGate = null
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 2,
+              lifecycle: RunLifecycle.failed,
+              outcomeReason: RunOutcomeReason.providerFailure,
+            ),
+          ),
+        ];
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        apiClient.listMessagesCallCount,
+        3,
+        reason:
+            'any number of suppressed requests during one in-flight pass '
+            'coalesces into one correctness-preserving follow-up',
+      );
+      expect(find.text('Queued'), findsNothing);
+      expect(find.byType(RunFailureCard), findsOneWidget);
+      expect(find.text('Provider unavailable'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'ten thousand unloaded live events coalesce into one bounded follow-up',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(apiClient.listMessagesCallCount, 1);
+
+      for (var i = 0; i < 10000; i++) {
+        events.add(
+          _event(
+            type: 'agent.run.state_changed',
+            sequence: i + 1,
+            runId: 'run_ghost_$i',
+            runState: _runState(
+              runId: 'run_ghost_$i',
+              assistantMessageId: 'msg_ghost_$i',
+              stateVersion: 1,
+              lifecycle: RunLifecycle.running,
+            ),
+            payload: const {},
+          ),
+        );
+      }
+      await tester.pump();
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(RunStateCard), findsNothing);
+      expect(
+        apiClient.listMessagesCallCount,
+        3,
+        reason:
+            'ten thousand events arriving during one resync cost exactly one '
+            'correctness-preserving follow-up, not one request per event',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets('a state card lies exactly at a backend page boundary without '
+      'duplicating or detaching', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_last_page_asst',
+          runId: 'run_boundary',
+          role: 'assistant',
+          content: 'Saved partial answer.',
+          sequence: 1,
+          createdAt: _fixedDate,
+          runState: _runState(
+            runId: 'run_boundary',
+            assistantMessageId: 'msg_last_page_asst',
+            stateVersion: 5,
+            lifecycle: RunLifecycle.failed,
+            outcomeReason: RunOutcomeReason.toolFailure,
+            hasDisplayableContent: true,
+          ),
+        ),
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(RunFailureCard), findsOneWidget);
+    expect(find.text('Tool failed'), findsOneWidget);
+    expect(find.text('Saved partial answer.'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Saved partial answer.')).dy,
+      lessThan(tester.getTopLeft(find.byType(RunFailureCard)).dy),
+    );
+
+    // A later, unrelated resync (triggered by some other run entirely)
+    // returns the exact same boundary row again — the card must not
+    // duplicate.
+    events.add(
+      _event(
+        type: 'agent.run.state_changed',
+        sequence: 2,
+        runId: 'run_other_unloaded',
+        runState: _runState(
+          runId: 'run_other_unloaded',
+          assistantMessageId: 'msg_other_unloaded',
+          stateVersion: 1,
+          lifecycle: RunLifecycle.queued,
+        ),
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(RunFailureCard), findsOneWidget);
+    expect(find.text('Tool failed'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'a stale replayed run state cannot regress an already-advanced card',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final apiClient = _FakeApiClient()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+            runState: _runState(
+              stateVersion: 3,
+              lifecycle: RunLifecycle.running,
+            ),
+          ),
+        ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: apiClient,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Working'), findsOneWidget);
+
+      // A replayed, STALE (lower-version) state must never overwrite the
+      // already-accepted, higher version.
+      events.add(
+        _event(
+          type: 'agent.run.state_changed',
+          sequence: 1,
+          runState: _runState(stateVersion: 2, lifecycle: RunLifecycle.queued),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('Working'), findsOneWidget);
+      expect(find.text('Queued'), findsNothing);
+
+      // An invalid transition at a higher version is also rejected.
+      events.add(
+        _event(
+          type: 'agent.run.completed',
+          sequence: 2,
+          runState: _runState(
+            stateVersion: 4,
+            lifecycle: RunLifecycle.completed,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      // (running -> completed at version 4 IS a valid, real edge — accept
+      // it, proving the reconciler is not simply rejecting everything.) The
+      // state promises content this empty row has not loaded, so a temporary
+      // completion card remains until a resync supplies the bytes.
+      expect(find.byType(RunStateCard), findsOneWidget);
+      expect(find.text('Response unavailable'), findsOneWidget);
+
+      // A duplicate at the same version replayed again is a safe no-op.
+      events.add(
+        _event(
+          type: 'agent.run.completed',
+          sequence: 3,
+          runState: _runState(
+            stateVersion: 4,
+            lifecycle: RunLifecycle.completed,
+            hasDisplayableContent: true,
+          ),
+          payload: const {},
+        ),
+      );
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      expect(find.byType(RunStateCard), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox.shrink());
       unawaited(events.close());
@@ -1566,6 +5436,8 @@ void main() {
       );
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -1596,6 +5468,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -1653,6 +5527,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -1684,6 +5560,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -1723,6 +5601,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -1768,6 +5648,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -1812,6 +5694,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -1873,6 +5757,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -1911,6 +5797,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -1953,6 +5841,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -1987,6 +5877,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -2053,6 +5945,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -2106,6 +6000,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -2174,6 +6070,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -2214,6 +6112,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -2280,6 +6180,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -2358,6 +6260,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -2427,6 +6331,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -2495,6 +6401,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -2539,6 +6447,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -2602,6 +6512,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: _FakeApiClient(),
@@ -2683,6 +6595,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -2714,6 +6628,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -2760,6 +6676,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -2818,6 +6736,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -2872,6 +6792,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -2914,6 +6836,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -2966,6 +6890,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -3009,6 +6935,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -3040,6 +6968,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -3086,6 +7016,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -3129,6 +7061,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -3175,6 +7109,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -3263,6 +7199,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -3350,6 +7288,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -3432,6 +7372,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -3477,6 +7419,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -3528,6 +7472,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -3589,6 +7535,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -3690,6 +7638,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -3734,6 +7684,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -3824,6 +7776,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -3923,6 +7877,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -4009,6 +7965,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -4063,6 +8021,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -4116,6 +8076,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -4227,6 +8189,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -4284,6 +8248,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -4324,6 +8290,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: _FakeApiClient(),
@@ -4400,6 +8368,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: _FakeApiClient(),
@@ -4469,6 +8439,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: _FakeApiClient(),
@@ -4604,6 +8576,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: _FakeApiClient(),
@@ -4654,6 +8628,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -4704,6 +8680,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -4759,6 +8737,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -4817,6 +8797,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -4855,10 +8837,7 @@ void main() {
           'a run started after readiness must never be classified as '
           'replay of history that predates this screen',
     );
-    expect(
-      find.text('The run was cancelled before it could finish'),
-      findsOneWidget,
-    );
+    expect(find.text('The run ended before it could finish.'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
@@ -4871,6 +8850,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -4933,6 +8914,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -5007,6 +8990,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5065,6 +9050,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -5110,6 +9097,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5158,6 +9147,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5209,6 +9200,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -5396,6 +9389,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -5434,6 +9429,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5449,6 +9446,8 @@ void main() {
       await tester.pump();
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5481,6 +9480,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5499,6 +9500,8 @@ void main() {
       await tester.pump();
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5539,6 +9542,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5594,6 +9599,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5658,6 +9665,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5731,6 +9740,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5779,6 +9790,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5835,6 +9848,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -5931,6 +9946,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -6014,6 +10031,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -6122,6 +10141,8 @@ void main() {
 
         await tester.pumpWidget(
           MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
             home: ChatScreen(
               sessionId: 'sess_1',
               apiClient: apiClient,
@@ -6204,6 +10225,8 @@ void main() {
 
         await tester.pumpWidget(
           MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
             home: ChatScreen(
               sessionId: 'sess_1',
               apiClient: apiClient,
@@ -6254,6 +10277,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -6302,6 +10327,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -6344,6 +10371,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -6396,6 +10425,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -6447,6 +10478,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -6502,6 +10535,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -6553,6 +10588,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -6639,6 +10676,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -6715,6 +10754,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -6772,6 +10813,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -6829,6 +10872,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -6914,6 +10959,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -6978,6 +11025,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -7043,6 +11092,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -7143,6 +11194,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -7208,6 +11261,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -7296,6 +11351,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -7379,6 +11436,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -7534,6 +11593,8 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -7675,6 +11736,7 @@ TuringEvent _event({
   required Map<String, dynamic> payload,
   DateTime? createdAt,
   String runId = 'run_1',
+  RunState? runState,
 }) {
   return TuringEvent(
     eventId: 'evt_$sequence',
@@ -7685,6 +11747,35 @@ TuringEvent _event({
     type: type,
     createdAt: createdAt ?? _liveDate,
     payload: payload,
+    runState: runState,
+  );
+}
+
+/// Builds a canonical [RunState] fixture for a TUR-009-aware event or
+/// message row. Defaults describe a run still in progress with no
+/// displayable content yet — the common nonterminal case — so a test only
+/// needs to override the fields it actually cares about.
+RunState _runState({
+  String runId = 'run_1',
+  String userMessageId = 'msg_user',
+  String assistantMessageId = 'msg_asst',
+  RunLifecycle lifecycle = RunLifecycle.running,
+  RunOutcomeReason outcomeReason = RunOutcomeReason.none,
+  int stateVersion = 1,
+  bool hasDisplayableContent = false,
+  DateTime? stateUpdatedAt,
+  DateTime? finishedAt,
+}) {
+  return RunState(
+    runId: runId,
+    userMessageId: userMessageId,
+    assistantMessageId: assistantMessageId,
+    lifecycle: lifecycle,
+    outcomeReason: outcomeReason,
+    stateVersion: stateVersion,
+    stateUpdatedAt: stateUpdatedAt ?? _liveDate,
+    finishedAt: finishedAt,
+    hasDisplayableContent: hasDisplayableContent,
   );
 }
 
@@ -8199,4 +12290,57 @@ class _UncancellableSubscription implements StreamSubscription<TuringEvent> {
 
   @override
   void resume() => _inner.resume();
+}
+
+/// Event source whose returned stream delivers ONE event SYNCHRONOUSLY
+/// within the very `listen()` call, before `listen()` returns a
+/// subscription — the same technique [_ImmediatelyTerminalStream] uses.
+/// [_ChatScreenState._openSubscription] runs strictly after
+/// `_loadInitialMessages` has already resolved but strictly before
+/// `_initializing` is cleared, so an event delivered this way genuinely
+/// arrives inside that narrow window — proving the bounded
+/// `RunStateLoadBuffer` this app wires into `_start` is reachable, not
+/// merely unit-tested in isolation.
+class _SynchronousDeliveryEventSource implements TuringEventSource {
+  _SynchronousDeliveryEventSource(TuringEvent event) : _events = [event];
+
+  _SynchronousDeliveryEventSource.events(this._events);
+
+  final List<TuringEvent> _events;
+
+  @override
+  Stream<TuringEvent> connect({required String sessionId, int? lastSequence}) {
+    return _SynchronousDeliveryStream(_events);
+  }
+
+  @override
+  void close() {}
+}
+
+class _SynchronousDeliveryStream extends Stream<TuringEvent> {
+  _SynchronousDeliveryStream(this._events);
+
+  final List<TuringEvent> _events;
+
+  @override
+  StreamSubscription<TuringEvent> listen(
+    void Function(TuringEvent event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    final controller = StreamController<TuringEvent>(sync: true);
+    final subscription = controller.stream.listen(
+      onData,
+      onError: onError,
+      onDone: onDone,
+      cancelOnError: cancelOnError,
+    );
+    // Delivered synchronously: the listener above is already attached, and
+    // this is a `sync: true` controller.
+    for (final event in _events) {
+      controller.add(event);
+    }
+    return subscription;
+  }
 }

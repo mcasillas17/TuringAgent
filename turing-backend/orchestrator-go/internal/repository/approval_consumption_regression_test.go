@@ -98,7 +98,7 @@ func TestConsumeApprovalAfterExpiryTerminalizesVerifiedAuthorization(t *testing.
 				"toolCallId": "call_consume_expiry",
 				"toolName":   "files.update",
 				"serverName": "files",
-				"error":      "Approval expired",
+				"category":   "expired",
 			}
 			if !reflect.DeepEqual(payload, want) {
 				t.Fatalf("tool.call.failed payload = %#v, want %#v", payload, want)

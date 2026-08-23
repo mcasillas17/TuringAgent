@@ -1,9 +1,12 @@
 package mcpregistry
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +15,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/encoding/prototext"
 )
 
 // countingRoundTripper fails every request and counts how many it saw, so a
@@ -53,20 +57,48 @@ func TestRegisterMcpServerDoesNotContactTheEndpoint(t *testing.T) {
 	}
 }
 
-func TestRegisterMcpServerRequiresExplicitTier(t *testing.T) {
+// MCP_SERVER_TIER_BUNDLED is TuringAgent's own tier and is never something
+// an operator registers into, so it is refused outright. An UNSPECIFIED
+// tier is not refused: it is what a client built against the tier-less
+// version of this RPC sends, and the URL's own classification stands (see
+// TestRegisterMcpServerUnspecifiedTierIsDerivedFromTheURL).
+func TestRegisterMcpServerRefusesBundledTier(t *testing.T) {
 	service, _ := newRegistryTestService(t)
-	for _, tier := range []turingv1.McpServerTier{
-		turingv1.McpServerTier_MCP_SERVER_TIER_UNSPECIFIED,
-		turingv1.McpServerTier_MCP_SERVER_TIER_BUNDLED,
+	_, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+		Name: "vendor",
+		Url:  "https://vendor.example/mcp",
+		Tier: turingv1.McpServerTier_MCP_SERVER_TIER_BUNDLED,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument for an explicitly bundled tier", status.Code(err))
+	}
+}
+
+// A request that names no tier at all — every client built against the
+// tier-less version of this RPC — must still register, taking the tier the
+// hardened URL classifies to, for both classifications.
+func TestRegisterMcpServerUnspecifiedTierIsDerivedFromTheURL(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		url  string
+		want turingv1.McpServerTier
+	}{
+		{"remote", "https://vendor.example/mcp", turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL},
+		{"local", "http://vendor-container:8080/mcp", turingv1.McpServerTier_MCP_SERVER_TIER_LOCAL_CONTAINER},
 	} {
-		_, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
-			Name: "vendor",
-			Url:  "https://vendor.example/mcp",
-			Tier: tier,
+		t.Run(testCase.name, func(t *testing.T) {
+			service, _ := newRegistryTestService(t)
+			descriptor, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+				Name: "vendor",
+				Url:  testCase.url,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if descriptor.GetTier() != testCase.want {
+				t.Fatalf("tier = %v, want %v derived from the URL", descriptor.GetTier(), testCase.want)
+			}
 		})
-		if status.Code(err) != codes.InvalidArgument {
-			t.Fatalf("tier %v: code = %v, want InvalidArgument", tier, status.Code(err))
-		}
 	}
 }
 
@@ -106,17 +138,18 @@ func TestRegisterMcpServerRefusesInvalidName(t *testing.T) {
 	}
 }
 
-func TestRegisterMcpServerRefusesReservedBundledName(t *testing.T) {
+func TestRegisterMcpServerRefusesReservedName(t *testing.T) {
 	service, _ := newRegistryTestService(t)
 	// Reserved names are refused case-insensitively: "Files"/"SYSTEM"/
-	// "sKiLlS" all name the same bundled namespaces as their lowercase
-	// forms, and mcpServerNamePattern itself accepts mixed case, so
-	// without a case-insensitive check these would otherwise register
-	// successfully and shadow a bundled server under a differently-cased
-	// name.
+	// "sKiLlS"/"Integrations" all name the same first-party namespaces as
+	// their lowercase forms, and mcpServerNamePattern itself accepts mixed
+	// case, so without a case-insensitive check these would otherwise
+	// register successfully and shadow a bundled server — or the
+	// "integrations" pseudo-server that owns the github.* tools — under a
+	// differently-cased name.
 	for _, name := range []string{
-		"system", "files", "skills",
-		"Files", "SYSTEM", "sKiLlS",
+		"system", "files", "skills", "integrations",
+		"Files", "SYSTEM", "sKiLlS", "Integrations",
 	} {
 		_, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
 			Name: name,
@@ -412,4 +445,427 @@ func seedBundledMCPServer(t *testing.T, repo *repository.Repository, name string
 		Name: name, URL: "https://bundled.example/mcp", Tier: repository.MCPServerTierBundled,
 	})
 	return err
+}
+
+func TestRegisterMcpServerArrivesDisabledWithDerivedTierAndSealedToken(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	notifier := &countingRegistryNotifier{}
+	service.SetRegistryChangeNotifier(notifier)
+
+	descriptor, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp", BearerToken: "register-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.GetEnabled() {
+		t.Fatal("a registered server must arrive disabled")
+	}
+	if descriptor.GetTier() != turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL {
+		t.Fatalf("tier = %v, want remote URL derived from the URL", descriptor.GetTier())
+	}
+	// The descriptor has no token field by construction; assert against the
+	// serialized message so a future field cannot smuggle it back.
+	if rendered := prototext.Format(descriptor); strings.Contains(rendered, "register-secret") {
+		t.Fatalf("response echoes the bearer token: %s", rendered)
+	}
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vendor := findRepositoryServer(t, servers, "vendor")
+	if len(vendor.SealedToken) == 0 || bytes.Contains(vendor.SealedToken, []byte("register-secret")) {
+		t.Fatal("the bearer token was not stored sealed")
+	}
+	if notifier.calls.Load() != 1 {
+		t.Fatalf("registry notifications = %d, want 1", notifier.calls.Load())
+	}
+}
+
+// Ported from the pre-merge origin/main registration surface, with the
+// reserved/bundled cases expecting this branch's FailedPrecondition
+// (see mapMCPValidationError) rather than InvalidArgument: a reserved
+// name names a precondition about who owns it, not a malformed request.
+func TestRegisterMcpServerRefusesReservedAndInvalidInput(t *testing.T) {
+	service, _ := newRegistryTestService(t)
+	for name, testCase := range map[string]struct {
+		request *turingv1.RegisterMcpServerRequest
+		want    codes.Code
+	}{
+		"reserved name":   {&turingv1.RegisterMcpServerRequest{Name: "integrations", Url: "https://vendor.example/mcp"}, codes.FailedPrecondition},
+		"bundled name":    {&turingv1.RegisterMcpServerRequest{Name: "files", Url: "https://vendor.example/mcp"}, codes.FailedPrecondition},
+		"invalid name":    {&turingv1.RegisterMcpServerRequest{Name: "../escape", Url: "https://vendor.example/mcp"}, codes.InvalidArgument},
+		"userinfo url":    {&turingv1.RegisterMcpServerRequest{Name: "vendor", Url: "https://user:pass@vendor.example/mcp"}, codes.InvalidArgument},
+		"relative url":    {&turingv1.RegisterMcpServerRequest{Name: "vendor", Url: "/mcp"}, codes.InvalidArgument},
+		"stdio-ish blank": {&turingv1.RegisterMcpServerRequest{Name: "vendor", Url: ""}, codes.InvalidArgument},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := service.RegisterMcpServer(context.Background(), testCase.request); status.Code(err) != testCase.want {
+				t.Fatalf("err = %v, want %v", err, testCase.want)
+			}
+		})
+	}
+}
+
+func TestExplicitRegisterClearsTombstoneButReimportDoesNot(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	document := []byte(`{"mcpServers": {"vendor": {"url": "https://vendor.example/mcp"}}}`)
+	if _, err := service.ImportJSON(context.Background(), document); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vendor := findRepositoryServer(t, servers, "vendor")
+	if _, err := repo.DeleteMCPServer(context.Background(), vendor.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// File re-import must not resurrect the deletion.
+	report, err := service.ImportJSON(context.Background(), document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report.Unsupported["vendor"], "suppressed") {
+		t.Fatalf("re-import after delete = %v, want suppression", report.Unsupported)
+	}
+
+	// The user asking for the name by hand is the consent the tombstone was
+	// waiting for.
+	if _, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	servers, err = repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findRepositoryServer(t, servers, "vendor").Enabled {
+		t.Fatal("re-registered server must arrive disabled")
+	}
+}
+
+func TestReimportPreservesUserDecisions(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mcp.json")
+	document := []byte(`{"mcpServers": {"vendor": {
+		"url": "https://vendor.example/mcp",
+		"tools": [{"name": "vendor.lookup", "inputSchema": {"type": "object"}}]
+	}}}`)
+	if err := os.WriteFile(path, document, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service.SetMCPConfigRoot(filepath.Dir(path))
+
+	first, err := service.ReimportMcpJson(context.Background(), &turingv1.ReimportMcpJsonRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.GetImported()) != 1 || first.GetImported()[0] != "vendor" {
+		t.Fatalf("imported = %v, want [vendor]", first.GetImported())
+	}
+
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vendor := findRepositoryServer(t, servers, "vendor")
+	if err := repo.SetMCPServerEnabled(context.Background(), vendor.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetMCPToolPolicy(context.Background(), vendor.ID, "vendor.lookup", "safe"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := service.ReimportMcpJson(context.Background(), &turingv1.ReimportMcpJsonRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	servers, err = repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !findRepositoryServer(t, servers, "vendor").Enabled {
+		t.Fatal("re-import with an unchanged URL flipped the user's enablement")
+	}
+	tools, err := repo.ListMCPServerTools(context.Background(), vendor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 || tools[0].Policy != "safe" {
+		t.Fatalf("tools after re-import = %+v, want the edited policy preserved", tools)
+	}
+}
+
+func TestReimportReportsUnsupportedEntries(t *testing.T) {
+	service, _ := newRegistryTestService(t)
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(path, []byte(`{"mcpServers": {
+		"runner": {"command": "npx", "args": ["some-server"]},
+		"vendor": {"url": "https://vendor.example/mcp"}
+	}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service.SetMCPConfigRoot(filepath.Dir(path))
+	report, err := service.ReimportMcpJson(context.Background(), &turingv1.ReimportMcpJsonRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.GetImported()) != 1 || report.GetImported()[0] != "vendor" {
+		t.Fatalf("imported = %v, want [vendor]", report.GetImported())
+	}
+	if len(report.GetUnsupported()) != 1 || report.GetUnsupported()[0].GetName() != "runner" ||
+		!strings.Contains(report.GetUnsupported()[0].GetReason(), "stdio") {
+		t.Fatalf("unsupported = %v, want the stdio refusal", report.GetUnsupported())
+	}
+}
+
+func TestRotateMcpServerTokenReplacesClearsAndNeverEchoes(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	registered, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp", BearerToken: "old-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealedBefore := currentSealedToken(t, repo, "vendor")
+
+	descriptor, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: registered.GetServerId(), BearerToken: "new-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered := prototext.Format(descriptor); strings.Contains(rendered, "new-secret") || strings.Contains(rendered, "old-secret") {
+		t.Fatalf("rotation response echoes a token: %s", rendered)
+	}
+	sealedAfter := currentSealedToken(t, repo, "vendor")
+	if bytes.Equal(sealedBefore, sealedAfter) || len(sealedAfter) == 0 {
+		t.Fatal("rotation did not replace the sealed token")
+	}
+	if bytes.Contains(sealedAfter, []byte("new-secret")) {
+		t.Fatal("rotated token stored in plaintext")
+	}
+
+	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: registered.GetServerId(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if sealed := currentSealedToken(t, repo, "vendor"); len(sealed) != 0 {
+		t.Fatal("an empty rotation must clear the stored token")
+	}
+}
+
+func TestRotateMcpServerTokenRefusesBundledAndUnknown(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundled := findRepositoryServer(t, servers, "files")
+	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: bundled.ID, BearerToken: "nope",
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("bundled rotation err = %v, want FailedPrecondition", err)
+	}
+	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: "mcp_missing", BearerToken: "nope",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("unknown rotation err = %v, want NotFound", err)
+	}
+}
+
+func currentSealedToken(t *testing.T, repo *repository.Repository, name string) []byte {
+	t.Helper()
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return findRepositoryServer(t, servers, name).SealedToken
+}
+
+func TestRegisterMcpServerRefusesAnExistingName(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	request := &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp", BearerToken: "first-token",
+	}
+	if _, err := service.RegisterMcpServer(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	// Re-adding must not silently re-point the URL or wipe the stored token.
+	again := &turingv1.RegisterMcpServerRequest{Name: "vendor", Url: "https://other.example/mcp"}
+	if _, err := service.RegisterMcpServer(context.Background(), again); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("err = %v, want AlreadyExists", err)
+	}
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vendor := findRepositoryServer(t, servers, "vendor")
+	if vendor.URL != "https://vendor.example/mcp" || len(vendor.SealedToken) == 0 {
+		t.Fatalf("existing server mutated by refused register: url=%q sealedLen=%d", vendor.URL, len(vendor.SealedToken))
+	}
+}
+
+// Register and rotate share mcp.json import's own token hygiene: a pasted
+// line break is refused, and a whitespace-only token is a mistake rather
+// than a request to clear the stored one (only a genuinely empty token
+// clears it).
+func TestRegisterAndRotateApplyImportTokenHygiene(t *testing.T) {
+	service, _ := newRegistryTestService(t)
+	if _, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp", BearerToken: "tok\nen",
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("register with line break err = %v, want InvalidArgument", err)
+	}
+	registered, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: registered.GetServerId(), BearerToken: "   ",
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("whitespace-only rotation err = %v, want InvalidArgument (empty means clear, blanks mean mistake)", err)
+	}
+	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: "", BearerToken: "x",
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty server_id err = %v, want InvalidArgument", err)
+	}
+}
+
+func TestRotatedTokenOpensUnderTheServerNameBinding(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	registered, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp", BearerToken: "old-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetMCPServerStatus(context.Background(), registered.GetServerId(), "down", "401 unauthorized"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: registered.GetServerId(), BearerToken: "  new-secret  ",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The rotated token must be openable under the same associated data the
+	// dispatch path uses — the server NAME — or every later call would fail
+	// with an unreadable-token error. Trimming is part of the contract too.
+	opened, err := service.sealer.Open(currentSealedToken(t, repo, "vendor"), []byte("vendor"))
+	if err != nil || string(opened) != "new-secret" {
+		t.Fatalf("opened=%q err=%v, want the trimmed rotated secret under the name binding", opened, err)
+	}
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findRepositoryServer(t, servers, "vendor").Status; got != "unknown" {
+		t.Fatalf("status after rotation = %q, want the stale 401 reset to unknown", got)
+	}
+}
+
+// The RPC refuses legibly when no config root was ever wired, and — unlike
+// the pre-merge origin/main behaviour, which treated an absent file as its
+// own FailedPrecondition — a configured root whose mcp.json simply does not
+// exist yet is a successful, empty re-import that clears any stale issues
+// (see ReimportConfiguredJSON): a user who deleted the file is telling the
+// registry there is nothing to import, not making a mistake.
+func TestReimportWithoutMountedFileRefusesLegibly(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	if _, err := service.ReimportMcpJson(context.Background(), &turingv1.ReimportMcpJsonRequest{}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("err = %v, want FailedPrecondition before any config root is wired", err)
+	}
+	if err := repo.ReplaceMCPImportIssues(context.Background(), map[string]string{
+		"stale": "a previous run's issue",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service.SetMCPConfigRoot(t.TempDir())
+	response, err := service.ReimportMcpJson(context.Background(), &turingv1.ReimportMcpJsonRequest{})
+	if err != nil {
+		t.Fatalf("an absent mcp.json must re-import to an empty report, not an error: %v", err)
+	}
+	if len(response.GetImported()) != 0 || len(response.GetSkipped()) != 0 || len(response.GetUnsupported()) != 0 {
+		t.Fatalf("response = %+v, want an empty report for an absent mcp.json", response)
+	}
+	issues, err := repo.ListMCPImportIssues(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %+v, want the stale issue cleared", issues)
+	}
+}
+
+// A malformed document replaces the previous run's issues rather than
+// leaving them standing. Unlike the pre-merge origin/main behaviour, which
+// mapped this to FailedPrecondition, the whole-document refusal is reported
+// through the response's own Unsupported list as the bounded "_document"
+// entry (see recordDocumentRefusal), so a client renders it exactly the way
+// it renders a per-entry refusal.
+func TestReimportMalformedDocumentReplacesStaleIssues(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "mcp.json")
+	if err := os.WriteFile(path, []byte(`{"mcpServers": {"runner": {"command": "npx"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service.SetMCPConfigRoot(root)
+	if _, err := service.ReimportMcpJson(context.Background(), &turingv1.ReimportMcpJsonRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{not json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response, err := service.ReimportMcpJson(context.Background(), &turingv1.ReimportMcpJsonRequest{})
+	if err != nil {
+		t.Fatalf("a malformed document must be reported, not returned as an error: %v", err)
+	}
+	if len(response.GetUnsupported()) != 1 || response.GetUnsupported()[0].GetName() != "_document" {
+		t.Fatalf("unsupported = %+v, want only the _document refusal", response.GetUnsupported())
+	}
+	issues, err := repo.ListMCPImportIssues(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || issues[0].Name != "_document" {
+		t.Fatalf("issues after malformed re-import = %+v, want only the _document decode issue replacing the stale runner row", issues)
+	}
+}
+
+// A bearer that is present on the wire but normalizes to nothing is a
+// mistake, not a request to register without one — asserted directly on the
+// register path, since TestRegisterAndRotateApplyImportTokenHygiene's own
+// register case trips normalizeBearerToken's control-character branch rather
+// than requireNonBlankBearerToken's blank branch.
+func TestRegisterMcpServerRefusesWhitespaceOnlyBearerToken(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	for name, token := range map[string]string{
+		"spaces": "   ",
+		"tab":    "\t",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+				Name:        "vendor",
+				Url:         "https://vendor.example/mcp",
+				Tier:        turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL,
+				BearerToken: token,
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("code = %v, want InvalidArgument for a whitespace-only bearer", status.Code(err))
+			}
+			// Nothing was registered: a refused blank token must not leave a
+			// tokenless server behind under the requested name.
+			if _, err := repo.GetMCPServerByName(context.Background(), "vendor"); !errors.Is(err, repository.ErrMCPServerNotFound) {
+				t.Fatalf("GetMCPServerByName err = %v, want ErrMCPServerNotFound", err)
+			}
+		})
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -192,6 +193,29 @@ func TestValidateMCPServerNameIsSharedByImportAndValidateServerDefinition(t *tes
 			t.Fatalf("validateServerDefinition(%q) = %q, want the same reason as validateMCPServerName: %q",
 				name, defErr.Error(), nameErr.Error())
 		}
+	}
+}
+
+// The "integrations" pseudo-server name is reserved at import, and the
+// "github." tool namespace it owns cannot be claimed by a third-party
+// server's discovery either — the second half is what keeps a registered
+// vendor from shadowing a first-party integration tool after the fact.
+func TestIntegrationsNameAndGitHubToolNamespaceAreReserved(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	report, err := service.ImportJSON(context.Background(), []byte(`{"mcpServers":{"integrations":{"url":"https://vendor.example/mcp"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report.Unsupported["integrations"], "reserved") {
+		t.Fatalf("report = %+v", report.Unsupported)
+	}
+	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{Name: "vendor", URL: "https://vendor.example/mcp", Tier: repository.MCPServerTierRemoteURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = service.RecordDiscovery(context.Background(), server.Server.ID, []DiscoveredTool{{Name: "github.list_issues", SchemaJSON: `{}`}})
+	if !errors.Is(err, repository.ErrMCPToolNameCollision) {
+		t.Fatalf("collision error = %v", err)
 	}
 }
 

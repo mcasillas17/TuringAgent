@@ -145,7 +145,7 @@ func TestEventServiceMapsSessionUpdated(t *testing.T) {
 }
 
 func TestEventServiceMapsSessionDeleted(t *testing.T) {
-	if got := mapEventType("session.deleted"); got != turingv1.TuringEventType(22) {
+	if got := MapEventType("session.deleted"); got != turingv1.TuringEventType(22) {
 		t.Fatalf("session.deleted type = %v, want event enum value 22", got)
 	}
 }

@@ -201,6 +201,8 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0014_session_deletion_withdrawal",
 		"0015_session_lifecycle",
 		"0016_mcp_registry",
+		"0017_integrations_consumer",
+		"0017_run_outcomes",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
@@ -330,7 +332,9 @@ func TestRunEgressMigrationFailsQueuedRemoteWorkWithoutConsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if eventType != "agent.run.failed" ||
-		!strings.Contains(payload, `"code":"egress_decision_required"`) {
+		!strings.Contains(payload, `"outcomeReason":"policy_denied"`) ||
+		strings.Contains(payload, "egress_decision_required") ||
+		strings.Contains(payload, "remote run was queued before explicit egress consent") {
 		t.Fatalf("legacy remote failure event = %s %s", eventType, payload)
 	}
 	var idempotencyRows int
@@ -372,6 +376,9 @@ func TestWorkerCapabilityMigrationBackfillsPopulatedJobsForKeysetOrdering(t *tes
 			'routing-run', 'routing-upgrade', 'routing-message', 'general_assistant',
 			'routing-trace', 'queued', 'ollama', 'qwen2.5:7b', '2026-01-01T00:00:00Z'
 		);
+		INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at)
+		VALUES ('routing-answer', 'routing-upgrade', 'routing-run', 'assistant', '', 'text', 2, '2026-01-01T00:00:00Z');
+		UPDATE agent_runs SET assistant_message_id = 'routing-answer' WHERE id = 'routing-run';
 		INSERT INTO jobs (id, run_id, agent_id, status, payload_json, created_at)
 		VALUES
 			('job-no-fraction', 'routing-run', 'general_assistant', 'pending', '{}', '2026-01-01T00:00:00Z'),
@@ -516,8 +523,8 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0016" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0016", got)
+	if got != "0017" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0017", got)
 	}
 }
 
@@ -1090,6 +1097,9 @@ func TestApplyMigrationsUpgradesPopulated0002DatabaseWithNullableModelToolCallID
 		VALUES ('message_1', 'session_1', 'user', 'hello', 'text', 1, '2026-01-01T00:00:00Z');
 		INSERT INTO agent_runs (id, session_id, user_message_id, agent_id, trace_id, status, model_provider, model_name, created_at)
 		VALUES ('run_1', 'session_1', 'message_1', 'general_assistant', 'trace_1', 'running', 'ollama', 'llama3.2', '2026-01-01T00:00:00Z');
+		INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at)
+		VALUES ('message_2', 'session_1', 'run_1', 'assistant', '', 'text', 2, '2026-01-01T00:00:00Z');
+		UPDATE agent_runs SET assistant_message_id = 'message_2' WHERE id = 'run_1';
 		INSERT INTO tool_calls (id, run_id, agent_id, server_name, tool_name, args_json, args_hash, status, result_summary, created_at)
 		VALUES ('call_1', 'run_1', 'general_assistant', 'system', 'system.echo', '{"value":"hello"}', 'sha256:args', 'completed', 'hello', '2026-01-01T00:00:00Z');
 	`); err != nil {

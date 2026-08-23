@@ -90,6 +90,147 @@ func TestBeginSessionDeletionMakesSessionUnreadable(t *testing.T) {
 	}
 }
 
+func TestBeginSessionDeletionTerminalizesRecoveringRuns(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued, _, _ := recoveringRun(t, repo, "worker-delete-recovering")
+
+	if _, err := repo.BeginSessionDeletion(ctx, enqueued.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+
+	state, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+	if state.Lifecycle != lifecycleCancelled {
+		t.Fatalf("recovering run lifecycle = %q, want cancelled", state.Lifecycle)
+	}
+}
+
+func TestBeginSessionDeletionCommitsCanonicalCancellation(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Canonical deletion cancellation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "delete this run", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+
+	after, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Lifecycle != lifecycleCancelled || after.OutcomeReason != "abandoned" {
+		t.Fatalf("deleted-session run state = %s/%s, want cancelled/abandoned",
+			after.Lifecycle, after.OutcomeReason)
+	}
+	if after.StateVersion != before.StateVersion+1 {
+		t.Fatalf("deleted-session run version = %d, want %d", after.StateVersion, before.StateVersion+1)
+	}
+	var cancelledEvents int
+	if err := repo.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM events
+		WHERE run_id = ? AND type = 'agent.run.cancelled'
+	`, enqueued.RunID).Scan(&cancelledEvents); err != nil {
+		t.Fatal(err)
+	}
+	if cancelledEvents != 1 {
+		t.Fatalf("agent.run.cancelled events = %d, want exactly one", cancelledEvents)
+	}
+
+	if _, err := repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatalf("idempotent BeginSessionDeletion: %v", err)
+	}
+	replayed, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.StateVersion != after.StateVersion {
+		t.Fatalf("idempotent deletion changed run version from %d to %d",
+			after.StateVersion, replayed.StateVersion)
+	}
+}
+
+func TestBeginSessionDeletionRevokesApprovalsOnRecoveringRuns(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	const workerID = "worker-delete-approval"
+	enqueued := enqueueRun(t, repo, "Delete recovering approval")
+	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", workerID)
+	if err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
+	}
+	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
+		ToolCallID: "call_delete_recovering", RunID: enqueued.RunID,
+		ModelToolCallID: "model_delete_recovering",
+	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:delete-recovering"); err != nil {
+		t.Fatalf("RecordToolCallBefore: %v", err)
+	}
+	approval, _, err := repo.CreateApprovalWithEvent(
+		ctx,
+		enqueued.RunID,
+		"call_delete_recovering",
+		"general_assistant",
+		"files.update",
+		`{"path":"note.txt"}`,
+		"sha256:delete-recovering",
+		"2099-01-01T00:00:00Z",
+	)
+	if err != nil {
+		t.Fatalf("CreateApprovalWithEvent: %v", err)
+	}
+	if _, err := repo.ApproveApprovalWithEvent(
+		ctx,
+		approval.ApprovalID,
+		"approval-token",
+		sql.NullString{},
+		now(),
+	); err != nil {
+		t.Fatalf("ApproveApprovalWithEvent: %v", err)
+	}
+	waiting, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.FenceRunOwnership(ctx, FenceRunOwnershipInput{
+		RunID: enqueued.RunID, ExpectedStateVersion: waiting.StateVersion,
+		WorkerID: workerID, AssignmentAttemptID: claimed.AssignmentAttemptID,
+	}); err != nil {
+		t.Fatalf("FenceRunOwnership: %v", err)
+	}
+
+	if _, err := repo.BeginSessionDeletion(ctx, enqueued.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+
+	if _, err := repo.ConsumeApprovalWithEvent(ctx, approval.ApprovalID, ""); err == nil {
+		t.Fatal("approval on a recovering deleted-session run remained consumable")
+	}
+	stored, err := repo.GetApproval(ctx, approval.ApprovalID)
+	if err != nil {
+		t.Fatalf("GetApproval: %v", err)
+	}
+	if stored.Status != "expired" {
+		t.Fatalf("approval status = %q, want expired", stored.Status)
+	}
+}
+
 func TestBeginSessionDeletionExcludesMessagesFromSearch(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
@@ -1028,7 +1169,7 @@ func TestDeleteSessionRefusesAfterCancelLeavesExecutionActive(t *testing.T) {
 	ctx := context.Background()
 	enqueued := seedDeletableSession(t, repo, "Cancelled", "cancel me")
 
-	if err := repo.CancelRun(ctx, enqueued.RunID, "user cancelled"); err != nil {
+	if _, err := cancelRunAtCurrentVersion(t, repo, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 	var status string

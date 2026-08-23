@@ -9,34 +9,13 @@ import (
 	"net/netip"
 	"time"
 
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
 type mcpLookupIP func(context.Context, string) ([]net.IPAddr, error)
 
 var localMCPNetwork = netip.MustParsePrefix("172.31.254.0/24")
-
-var specialUseMCPNetworks = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("192.0.0.0/24"),
-	netip.MustParsePrefix("192.0.2.0/24"),
-	netip.MustParsePrefix("192.88.99.0/24"),
-	netip.MustParsePrefix("198.18.0.0/15"),
-	netip.MustParsePrefix("198.51.100.0/24"),
-	netip.MustParsePrefix("203.0.113.0/24"),
-	netip.MustParsePrefix("240.0.0.0/4"),
-	netip.MustParsePrefix("::/96"),
-	netip.MustParsePrefix("64:ff9b::/96"),
-	netip.MustParsePrefix("64:ff9b:1::/48"),
-	netip.MustParsePrefix("100::/64"),
-	netip.MustParsePrefix("100:0:0:1::/64"),
-	netip.MustParsePrefix("2001::/23"),
-	netip.MustParsePrefix("2001:db8::/32"),
-	netip.MustParsePrefix("2002::/16"),
-	netip.MustParsePrefix("3fff::/20"),
-	netip.MustParsePrefix("5f00::/16"),
-}
 
 func (s *Server) clientFor(server repository.MCPServerRecord) *http.Client {
 	if s.httpClient != nil {
@@ -118,40 +97,7 @@ func resolveLocalMCPAddress(ctx context.Context, address string, lookup mcpLooku
 }
 
 func resolvePublicMCPAddress(ctx context.Context, address string, lookup mcpLookupIP) (string, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil || host == "" || port == "" {
-		return "", errors.New("remote MCP dial address is invalid")
-	}
-	addresses, err := lookup(ctx, host)
-	if err != nil {
-		return "", fmt.Errorf("resolve remote MCP host: %w", err)
-	}
-	if len(addresses) == 0 {
-		return "", errors.New("remote MCP host resolved to no addresses")
-	}
-	for _, resolved := range addresses {
-		ip, ok := netip.AddrFromSlice(resolved.IP)
-		if !ok {
-			return "", errors.New("remote MCP host resolved to an invalid address")
-		}
-		ip = ip.Unmap()
-		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() ||
-			ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-			ip.IsMulticast() || ip.IsUnspecified() || isSpecialUseMCPAddress(ip) {
-			return "", errors.New("remote MCP host must resolve only to public addresses")
-		}
-	}
-
-	return net.JoinHostPort(addresses[0].IP.String(), port), nil
-}
-
-func isSpecialUseMCPAddress(address netip.Addr) bool {
-	for _, network := range specialUseMCPNetworks {
-		if network.Contains(address) {
-			return true
-		}
-	}
-	return false
+	return backendegress.ResolvePublicAddress(ctx, address, backendegress.LookupIP(lookup))
 }
 
 func rejectMCPRedirect(_ *http.Request, _ []*http.Request) error {

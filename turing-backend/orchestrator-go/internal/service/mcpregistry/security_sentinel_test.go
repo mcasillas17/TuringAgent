@@ -210,10 +210,10 @@ func TestImportUnsupportedHeaderKeyEqualToBearerTokenNeverLeaks(t *testing.T) {
 	}
 
 	// refusal / RPC response.
-	if len(response.GetRefused()) != 1 {
-		t.Fatalf("Refused = %+v, want exactly one refused entry", response.GetRefused())
+	if len(response.GetUnsupported()) != 1 {
+		t.Fatalf("Refused = %+v, want exactly one refused entry", response.GetUnsupported())
 	}
-	refused := response.GetRefused()[0]
+	refused := response.GetUnsupported()[0]
 	if refused.GetName() != "vendor" {
 		t.Fatalf("Refused[0].Name = %q, want vendor", refused.GetName())
 	}

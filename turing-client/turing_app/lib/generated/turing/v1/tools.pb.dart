@@ -315,6 +315,8 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     $core.bool? terminalRun,
     ToolCallPhase? phase,
     $core.String? provenanceToken,
+    $core.bool? readOnly,
+    $fixnum.Int64? runStateVersion,
   }) {
     final result = create();
     if (decision != null) result.decision = decision;
@@ -324,6 +326,8 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     if (terminalRun != null) result.terminalRun = terminalRun;
     if (phase != null) result.phase = phase;
     if (provenanceToken != null) result.provenanceToken = provenanceToken;
+    if (readOnly != null) result.readOnly = readOnly;
+    if (runStateVersion != null) result.runStateVersion = runStateVersion;
     return result;
   }
 
@@ -354,6 +358,8 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
         valueOf: ToolCallPhase.valueOf,
         enumValues: ToolCallPhase.values)
     ..aOS(7, _omitFieldNames ? '' : 'provenanceToken')
+    ..aOB(8, _omitFieldNames ? '' : 'readOnly')
+    ..aInt64(9, _omitFieldNames ? '' : 'runStateVersion')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -442,6 +448,30 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   $core.bool hasProvenanceToken() => $_has(6);
   @$pb.TagNumber(7)
   void clearProvenanceToken() => $_clearField(7);
+
+  /// Authored by the orchestrator. Approval waiting is still policy-driven;
+  /// this bit only controls failure/side-effect classification.
+  @$pb.TagNumber(8)
+  $core.bool get readOnly => $_getBF(7);
+  @$pb.TagNumber(8)
+  set readOnly($core.bool value) => $_setBool(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasReadOnly() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearReadOnly() => $_clearField(8);
+
+  /// The run's committed state version at the moment of this decision. A
+  /// matching tool beacon can therefore prove ownership: the response carries
+  /// the version forward before tool or model work continues, so a worker never
+  /// advances past the state the orchestrator has committed.
+  @$pb.TagNumber(9)
+  $fixnum.Int64 get runStateVersion => $_getI64(8);
+  @$pb.TagNumber(9)
+  set runStateVersion($fixnum.Int64 value) => $_setInt64(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasRunStateVersion() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearRunStateVersion() => $_clearField(9);
 }
 
 const $core.bool _omitFieldNames =

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 )
 
 func TestOllamaStreamChatParsesDeltaAndCompletion(t *testing.T) {
@@ -1057,5 +1059,49 @@ func TestOllamaRequestSendsForeverKeepAliveAsNumber(t *testing.T) {
 	body := captureOllamaRequestWith(t, ChatRequest{Model: "qwen2.5:7b"}, "-1")
 	if body["keep_alive"] != json.Number("-1") {
 		t.Fatalf("keep_alive = %#v, want the number -1", body["keep_alive"])
+	}
+}
+
+// The provider is the only place that can see the protocol facts a failure came
+// from — a malformed chunk, an error field the server sent, a stream that
+// stopped early. Classifying downstream would mean reading the provider's own
+// message text, which is exactly the channel TUR-009 closes.
+func TestOllamaTypedFailureOriginAccompaniesEveryErrorCode(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantCode   string
+		wantOrigin turingv1.FailureOrigin
+	}{
+		{
+			name:       "malformed_chunk_is_provider_protocol",
+			body:       `{"message":` + "\n",
+			wantCode:   "model_bad_chunk",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+		},
+		{
+			name:       "reported_provider_error_is_provider_protocol",
+			body:       `{"error":"model not found"}` + "\n",
+			wantCode:   "model_unavailable",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+		},
+		{
+			name:       "stream_without_terminal_chunk_is_provider_transport",
+			body:       `{"message":{"content":"partial"},"done":false}` + "\n",
+			wantCode:   "model_stream_error",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := streamOllamaEvents(t, test.body)
+			last := got[len(got)-1]
+			if last.Type != "error" || last.Code != test.wantCode {
+				t.Fatalf("last event = %+v, want error %q", last, test.wantCode)
+			}
+			if last.Origin != test.wantOrigin {
+				t.Fatalf("origin = %v, want %v", last.Origin, test.wantOrigin)
+			}
+		})
 	}
 }

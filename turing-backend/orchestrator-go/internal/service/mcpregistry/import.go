@@ -10,7 +10,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -37,12 +36,16 @@ var (
 	localContainerHostPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 )
 
-// reservedMCPServerNames are names TuringAgent's bundled servers own; a
-// caller cannot register or import over them regardless of tier.
+// reservedMCPServerNames are names TuringAgent's own first-party servers
+// own — the three bundled MCP servers plus the "integrations" pseudo-server
+// that owns the `github.` tool namespace (see UpdateToolPolicyByName and
+// ListPseudoServerTools) — and a caller cannot register or import over any
+// of them regardless of tier.
 var reservedMCPServerNames = map[string]struct{}{
-	"system": {},
-	"files":  {},
-	"skills": {},
+	"system":       {},
+	"files":        {},
+	"skills":       {},
+	"integrations": {},
 }
 
 // isReservedMCPServerName compares case-insensitively: mcpServerNamePattern
@@ -2213,10 +2216,7 @@ func canonicalHostPort(host, port string) string {
 }
 
 func isNonPublicIP(ip net.IP) bool {
-	address, ok := netip.AddrFromSlice(ip)
-	return !ok || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() ||
-		isSpecialUseMCPAddress(address.Unmap())
+	return !backendegress.IsPublicIP(ip)
 }
 
 func requireImportEOF(decoder *json.Decoder) error {

@@ -471,6 +471,12 @@ func TestSessionLifecycleRPCsHonorDeletionPrecedence(t *testing.T) {
 	}); status.Code(err) != codes.NotFound {
 		t.Fatalf("GetSession error = %v, want NotFound", err)
 	}
+	if _, err := client.ListMessages(ctx, &turingv1.ListMessagesRequest{
+		SessionId: session.SessionID,
+		Limit:     10,
+	}); status.Code(err) != codes.NotFound || status.Convert(err).Message() != "session not found" {
+		t.Fatalf("ListMessages error = %v, want NotFound session not found", err)
+	}
 	for name, operation := range map[string]func() error{
 		"rename": func() error {
 			_, err := client.RenameSession(ctx, &turingv1.RenameSessionRequest{
@@ -964,6 +970,13 @@ func TestDeleteSessionRetainsFailedExternalReceiptWhenArtifactCleanerFails(t *te
 		response.GetDeletion().GetErrorCode() != "artifact_cleanup_failed" ||
 		!response.GetDeletion().GetRetryable() {
 		t.Fatalf("failed cleanup receipt = %+v", response.GetDeletion())
+	}
+	persisted, err := repo.SessionDeletionReceipt(ctx, session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ErrorCode != "artifact_cleanup_failed" {
+		t.Fatalf("persisted cleanup error = %q, want artifact_cleanup_failed", persisted.ErrorCode)
 	}
 	var auditPayload string
 	if err := database.QueryRowContext(ctx, `
@@ -2009,6 +2022,97 @@ func TestDeleteSessionReportsDistinctStatusCodes(t *testing.T) {
 	}
 	if _, err := client.GetSession(ctx, &turingv1.GetSessionRequest{SessionId: idle.SessionID}); status.Code(err) != codes.NotFound {
 		t.Fatalf("deleted session still readable: %v", status.Code(err))
+	}
+}
+
+// TestListMessagesRoundTripsRunStateAfterDatabaseReopen is the promise the
+// whole feature exists for: a user closes the app while a run is finishing, and
+// what they see when they come back is what actually happened — read from the
+// file, not from anything the previous process still held in memory.
+func TestListMessagesRoundTripsRunStateAfterDatabaseReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "turing.db")
+	ctx := context.Background()
+	database, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := db.ApplyMigrations(ctx, database); err != nil {
+		t.Fatalf("apply migrations: %v", err)
+	}
+	repo := repository.New(database)
+	session, err := repo.CreateSession(ctx, "Reopened outcome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "what happened?", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	running, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := repo.CompleteRunCanonical(ctx, repository.CompleteRunInput{
+		RunID:                enqueued.RunID,
+		AssistantMessageID:   enqueued.AssistantMessageID,
+		Content:              "it finished",
+		ExpectedStateVersion: running.StateVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	h := newSessionHarnessWithDB(t, reopened)
+	listed, err := turingv1.NewSessionServiceClient(h.conn).ListMessages(ctx, &turingv1.ListMessagesRequest{
+		SessionId: session.SessionID, Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(listed.GetMessages()) != 2 {
+		t.Fatalf("message count = %d, want the two rows the run owns", len(listed.GetMessages()))
+	}
+	user, assistant := listed.GetMessages()[0], listed.GetMessages()[1]
+	if user.GetRunState() != nil {
+		t.Fatalf("user message carries run state %+v", user.GetRunState())
+	}
+	state := assistant.GetRunState()
+	if state == nil {
+		t.Fatal("the reopened assistant message carries no run state")
+	}
+	if state.GetRunId() != enqueued.RunID || state.GetUserMessageId() != enqueued.UserMessageID ||
+		state.GetAssistantMessageId() != enqueued.AssistantMessageID {
+		t.Fatalf("run state identity = %+v, want the enqueued run", state)
+	}
+	if state.GetLifecycle() != turingv1.RunLifecycle_RUN_LIFECYCLE_COMPLETED ||
+		state.GetOutcomeReason() != turingv1.RunOutcomeReason_RUN_OUTCOME_REASON_NONE {
+		t.Fatalf("run state outcome = %v/%v, want completed with no reason", state.GetLifecycle(), state.GetOutcomeReason())
+	}
+	if state.GetStateVersion() != completed.State.StateVersion {
+		t.Fatalf("state version = %d, want the committed %d", state.GetStateVersion(), completed.State.StateVersion)
+	}
+	if !state.GetHasDisplayableContent() {
+		t.Fatal("run state reports no displayable content for an answer that has some")
+	}
+	if got := state.GetStateUpdatedAt().AsTime().Format("2006-01-02T15:04:05.000000000Z"); got != completed.State.StateUpdatedAt {
+		t.Fatalf("state updated at = %q, want %q", got, completed.State.StateUpdatedAt)
+	}
+	if got := state.GetFinishedAt().AsTime().Format("2006-01-02T15:04:05.000000000Z"); got != completed.State.FinishedAt.String {
+		t.Fatalf("finished at = %q, want %q", got, completed.State.FinishedAt.String)
 	}
 }
 

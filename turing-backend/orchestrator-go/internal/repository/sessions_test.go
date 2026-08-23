@@ -3,13 +3,17 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runcorrelation"
 )
 
 func TestListSessionsPageFiltersAndOrders(t *testing.T) {
@@ -587,4 +591,484 @@ func assertSearchMessageIDs(t *testing.T, messages []Message, want []string) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("message IDs = %v, want %v", got, want)
 	}
+}
+
+// completedRunForHistory drives one fresh run all the way to a committed
+// success through the real writers, so a history test asserts against the state
+// those writers actually produced rather than a row it wrote by hand.
+func completedRunForHistory(t *testing.T, repo *Repository, title, content string) (EnqueueUserMessageResult, RunState) {
+	t.Helper()
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, title)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "hello", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatalf("EnqueueUserMessage: %v", err)
+	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatalf("MarkRunRunning: %v", err)
+	}
+	running, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+	completed, err := repo.CompleteRunCanonical(ctx, CompleteRunInput{
+		RunID:                enqueued.RunID,
+		AssistantMessageID:   enqueued.AssistantMessageID,
+		Content:              content,
+		ExpectedStateVersion: running.StateVersion,
+	})
+	if err != nil {
+		t.Fatalf("CompleteRunCanonical: %v", err)
+	}
+	return enqueued, completed.State
+}
+
+func messageByID(t *testing.T, messages []Message, messageID string) Message {
+	t.Helper()
+	for _, message := range messages {
+		if message.MessageID == messageID {
+			return message
+		}
+	}
+	t.Fatalf("message %q missing from page %+v", messageID, messages)
+	return Message{}
+}
+
+func TestListMessagesReturnsEmptyPageForActiveSessionWithoutMessages(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Empty history")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	messages, err := repo.ListMessages(ctx, session.SessionID, 50)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("ListMessages returned %+v, want an empty page", messages)
+	}
+
+	messages, err = repo.ListMessagesBefore(ctx, session.SessionID, "", 50)
+	if err != nil {
+		t.Fatalf("ListMessagesBefore: %v", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("ListMessagesBefore returned %+v, want an empty page", messages)
+	}
+}
+
+// TestListMessagesEmbedsMatchingRunStateWithoutChangingCardinality is the whole
+// point of the join: reopening a conversation must answer "what happened to
+// this run" from the same page that carries the message, and it must answer it
+// without turning one message into two rows.
+func TestListMessagesEmbedsMatchingRunStateWithoutChangingCardinality(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued, committed := completedRunForHistory(t, repo, "Embedded state", "the answer")
+
+	messages, err := repo.ListMessages(ctx, enqueued.SessionID, 50)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("page size = %d, want the two message rows the run owns", len(messages))
+	}
+	user := messageByID(t, messages, enqueued.UserMessageID)
+	if user.RunState != nil {
+		t.Fatalf("user message carries run state %+v, want none", user.RunState)
+	}
+	assistant := messageByID(t, messages, enqueued.AssistantMessageID)
+	if assistant.RunState == nil {
+		t.Fatal("assistant message carries no run state")
+	}
+	// The digest is internal duplicate-report identity. The history reader has
+	// no use for it, so it is never selected and never carried out of the join.
+	want := committed
+	want.ContentSHA256 = ""
+	if *assistant.RunState != want {
+		t.Fatalf("embedded state = %+v, want the committed state %+v", *assistant.RunState, want)
+	}
+	if assistant.RunState.ContentSHA256 != "" {
+		t.Fatalf("history join carried the internal content digest %q", assistant.RunState.ContentSHA256)
+	}
+}
+
+// TestListMessagesOmitsStateForNullOrSingleMismatchedLegacyCorrelation covers
+// the neutral legacy path. A message with no run, or with a link only one side
+// agrees with, has no provable owner — so the reader returns the message and no
+// state rather than attaching a run's outcome to somebody else's turn.
+func TestListMessagesOmitsStateForNullOrSingleMismatchedLegacyCorrelation(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	enqueued, _ := completedRunForHistory(t, repo, "Legacy correlation", "the answer")
+	other, err := repo.CreateSession(ctx, "Foreign session")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	const legacyAt = "2026-08-12T00:00:00.000000000Z"
+	// An assistant turn from before runs were correlated at all.
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+		VALUES ('msg_legacy_null', ?, 'assistant', 'orphan', 'text', 90, ?)
+	`, enqueued.SessionID, legacyAt); err != nil {
+		t.Fatal(err)
+	}
+	// A message naming a run that names a different message back. The run's
+	// own assistant turn exists and is untouched, so exactly one side of the
+	// circular link disagrees.
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+		VALUES ('msg_mismatch_target', ?, 'assistant', 'the run''s real turn', 'text', 91, ?)
+	`, enqueued.SessionID, legacyAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id,
+			status, model_provider, model_name, created_at, state_version, state_updated_at, outcome_reason,
+			assistant_content_sha256)
+		VALUES ('run_mismatch', ?, ?, 'msg_mismatch_target', 'general_assistant', 'trace_mismatch',
+			'completed', 'ollama', 'llama3.2', ?, 3, ?, 'none', ?)
+	`, enqueued.SessionID, enqueued.UserMessageID, legacyAt, legacyAt, emptyAssistantContentSHA256); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at)
+		VALUES ('msg_legacy_mismatch', ?, 'run_mismatch', 'assistant', 'mismatched', 'text', 92, ?)
+	`, enqueued.SessionID, legacyAt); err != nil {
+		t.Fatal(err)
+	}
+	// A run that lives in another session entirely.
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+		VALUES ('msg_foreign_assistant', ?, 'assistant', 'foreign', 'text', 1, ?)
+	`, other.SessionID, legacyAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id,
+			status, model_provider, model_name, created_at, state_version, state_updated_at, outcome_reason,
+			assistant_content_sha256)
+		VALUES ('run_foreign', ?, ?, 'msg_foreign_assistant', 'general_assistant', 'trace_foreign',
+			'completed', 'ollama', 'llama3.2', ?, 3, ?, 'none', ?)
+	`, other.SessionID, enqueued.UserMessageID, legacyAt, legacyAt, emptyAssistantContentSHA256); err != nil {
+		t.Fatal(err)
+	}
+	// The foreign run's assistant message is moved into this session's history
+	// while the run stays behind, so only the session disagrees.
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at)
+		VALUES ('msg_session_mismatch', ?, 'run_foreign', 'assistant', 'cross session', 'text', 93, ?)
+	`, enqueued.SessionID, legacyAt); err != nil {
+		t.Fatal(err)
+	}
+	// A user turn wearing a run ID is still not a run's assistant answer.
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at)
+		VALUES ('msg_wrong_role', ?, ?, 'user', 'not an answer', 'text', 94, ?)
+	`, enqueued.SessionID, enqueued.RunID, legacyAt); err != nil {
+		t.Fatal(err)
+	}
+
+	messages, err := repo.ListMessages(ctx, enqueued.SessionID, 50)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(messages) != 7 {
+		t.Fatalf("page size = %d, want every message row exactly once", len(messages))
+	}
+	for _, id := range []string{
+		"msg_legacy_null", "msg_legacy_mismatch", "msg_mismatch_target",
+		"msg_session_mismatch", "msg_wrong_role",
+	} {
+		if state := messageByID(t, messages, id).RunState; state != nil {
+			t.Fatalf("message %q carries run state %+v, want the neutral legacy path", id, state)
+		}
+	}
+	if messageByID(t, messages, enqueued.AssistantMessageID).RunState == nil {
+		t.Fatal("the one provable link lost its state alongside the legacy rows")
+	}
+}
+
+// TestListMessagesRejectsValueFreeDuplicateCorrelation covers ownership that is
+// ambiguous rather than merely absent. Two assistant turns claiming one run
+// means no reader can say which of them the outcome belongs to, so history
+// fails closed — and says so without echoing a row.
+func TestListMessagesRejectsValueFreeDuplicateCorrelation(t *testing.T) {
+	database := openTestDB(t)
+	repo := New(database)
+	ctx := context.Background()
+	enqueued, _ := completedRunForHistory(t, repo, "Duplicate ownership", "the answer")
+
+	// The unique index is exactly what stops this today. Dropping it is how a
+	// database that predates the index, or one restored from a corrupt backup,
+	// reaches this reader.
+	if _, err := database.ExecContext(ctx, `DROP INDEX idx_messages_assistant_run_unique`); err != nil {
+		t.Fatalf("drop correlation index: %v", err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, run_id, role, content, content_type, sequence, created_at)
+		VALUES ('msg_second_claimant', ?, ?, 'assistant', 'second claimant', 'text', 90, '2026-08-12T00:00:00.000000000Z')
+	`, enqueued.SessionID, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
+	// An anchor after both claimants, so the older page actually contains the
+	// ambiguity. The check sees the page the reader returns, which is the same
+	// bound everything else here obeys.
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, role, content, content_type, sequence, created_at)
+		VALUES ('msg_anchor', ?, 'user', 'anchor', 'text', 91, '2026-08-12T00:00:01.000000000Z')
+	`, enqueued.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := repo.ListMessages(ctx, enqueued.SessionID, 50)
+	if !errors.Is(err, runcorrelation.ErrConflict) {
+		t.Fatalf("ListMessages error = %v, want the correlation conflict sentinel", err)
+	}
+	assertValueFreeCorrelationError(t, err, enqueued, "msg_second_claimant", "second claimant", "the answer")
+
+	_, err = repo.ListMessagesBefore(ctx, enqueued.SessionID, "msg_anchor", 50)
+	if !errors.Is(err, runcorrelation.ErrConflict) {
+		t.Fatalf("ListMessagesBefore error = %v, want the correlation conflict sentinel", err)
+	}
+	assertValueFreeCorrelationError(t, err, enqueued, "msg_second_claimant", "second claimant", "the answer")
+}
+
+// assertValueFreeCorrelationError proves the failure names a remediation class
+// and nothing else. An operator reads this in a log; a row value read there is
+// a leak that no amount of care downstream can take back.
+//
+// The rendered text is pinned to the bare sentinel rather than merely searched,
+// because the cheapest way to leak a row is to wrap the sentinel in a message
+// that explains which one — and every secret this test knows to look for is a
+// value some future writer might think is safe to name.
+func assertValueFreeCorrelationError(t *testing.T, err error, enqueued EnqueueUserMessageResult, extra ...string) {
+	t.Helper()
+	message := err.Error()
+	secrets := append([]string{
+		enqueued.RunID, enqueued.SessionID, enqueued.AssistantMessageID, enqueued.UserMessageID,
+	}, extra...)
+	for _, secret := range secrets {
+		if strings.Contains(message, secret) {
+			t.Fatalf("correlation error %q leaked %q", message, secret)
+		}
+	}
+	if message != runcorrelation.ErrConflict.Error() {
+		t.Fatalf("correlation error = %q, want only the sentinel %q", message, runcorrelation.ErrConflict.Error())
+	}
+}
+
+// TestRunProjectionDoesNotIssuePerMessageQueries pins the cost of the join. The
+// alternative design — read the page, then look up each message's run — is
+// invisible in the returned values and only shows up as a conversation that
+// gets slower the longer it gets, so the query count is asserted directly.
+func TestRunProjectionDoesNotIssuePerMessageQueries(t *testing.T) {
+	counter := &countingSQLiteDriver{}
+	database := openCountingTestDB(t, counter)
+	repo := New(database)
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Query budget")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	var anchor string
+	for turn := 0; turn < 8; turn++ {
+		enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+			SessionID: session.SessionID, Content: fmt.Sprintf("turn %d", turn), AgentID: "general_assistant",
+			ModelProvider: "ollama", Model: "llama3.2",
+		})
+		if err != nil {
+			t.Fatalf("EnqueueUserMessage: %v", err)
+		}
+		if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+			t.Fatalf("MarkRunRunning: %v", err)
+		}
+		running, err := repo.GetRunState(ctx, enqueued.RunID)
+		if err != nil {
+			t.Fatalf("GetRunState: %v", err)
+		}
+		if _, err := repo.CompleteRunCanonical(ctx, CompleteRunInput{
+			RunID:                enqueued.RunID,
+			AssistantMessageID:   enqueued.AssistantMessageID,
+			Content:              fmt.Sprintf("answer %d", turn),
+			ExpectedStateVersion: running.StateVersion,
+		}); err != nil {
+			t.Fatalf("CompleteRunCanonical: %v", err)
+		}
+		if anchor == "" {
+			anchor = enqueued.AssistantMessageID
+		}
+	}
+
+	counter.reset()
+	newest, err := repo.ListMessages(ctx, session.SessionID, 50)
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if got := counter.count(); got != 1 {
+		t.Fatalf("ListMessages issued %d queries for %d messages, want exactly one history query", got, len(newest))
+	}
+	if len(newest) != 16 {
+		t.Fatalf("page size = %d, want all sixteen message rows", len(newest))
+	}
+	states := 0
+	for _, message := range newest {
+		if message.RunState != nil {
+			states++
+		}
+	}
+	if states != 8 {
+		t.Fatalf("embedded states = %d, want one per completed run", states)
+	}
+
+	counter.reset()
+	if _, err := repo.ListMessagesBefore(ctx, session.SessionID, anchor, 50); err != nil {
+		t.Fatalf("ListMessagesBefore: %v", err)
+	}
+	// One anchor resolution plus one history query. Neither scales with the
+	// page, which is the property under test.
+	if got := counter.count(); got != 2 {
+		t.Fatalf("ListMessagesBefore issued %d queries, want one anchor lookup and one history query", got)
+	}
+}
+
+// countingDriverSequence keeps each registered counting driver name unique.
+// database/sql panics on a duplicate registration, and a test binary run with
+// -count=2 would otherwise register the same name twice.
+var countingDriverSequence atomic.Int64
+
+// countingSQLiteDriver wraps the driver the repository actually uses and counts
+// the queries that reach it.
+//
+// It counts at the driver rather than through a SQLite trace hook because the
+// question is what database/sql sent, and because the available SQLite bindings
+// expose no trace API this test could depend on.
+type countingSQLiteDriver struct {
+	base    driver.Driver
+	queries atomic.Int64
+}
+
+func (d *countingSQLiteDriver) Open(name string) (driver.Conn, error) {
+	conn, err := d.base.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return &countingConn{Conn: conn, owner: d}, nil
+}
+
+func (d *countingSQLiteDriver) reset()       { d.queries.Store(0) }
+func (d *countingSQLiteDriver) count() int64 { return d.queries.Load() }
+
+type countingConn struct {
+	driver.Conn
+	owner *countingSQLiteDriver
+}
+
+// QueryContext is the fast path database/sql prefers. A driver that declines
+// with ErrSkip did not issue the query, so the count is taken back.
+func (c *countingConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	queryer, ok := c.Conn.(driver.QueryerContext)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	c.owner.queries.Add(1)
+	rows, err := queryer.QueryContext(ctx, query, args)
+	if errors.Is(err, driver.ErrSkip) {
+		c.owner.queries.Add(-1)
+	}
+	return rows, err
+}
+
+func (c *countingConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	execer, ok := c.Conn.(driver.ExecerContext)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	return execer.ExecContext(ctx, query, args)
+}
+
+func (c *countingConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	// The wrapped driver is the repository's own SQLite driver, which
+	// implements the context form. Anything else is a bug in this wrapper, not
+	// a case to paper over with the deprecated one.
+	beginner, ok := c.Conn.(driver.ConnBeginTx)
+	if !ok {
+		return nil, errors.New("counting driver: wrapped connection cannot begin a context transaction")
+	}
+	return beginner.BeginTx(ctx, opts)
+}
+
+func (c *countingConn) Prepare(query string) (driver.Stmt, error) {
+	stmt, err := c.Conn.Prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	return &countingStmt{Stmt: stmt, owner: c.owner}, nil
+}
+
+// PrepareContext is wrapped for the same reason Prepare is: a prepared
+// statement is the fallback path, and an uncounted fallback would let a
+// per-message read hide behind it.
+func (c *countingConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+	preparer, ok := c.Conn.(driver.ConnPrepareContext)
+	if !ok {
+		return c.Prepare(query)
+	}
+	stmt, err := preparer.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return &countingStmt{Stmt: stmt, owner: c.owner}, nil
+}
+
+type countingStmt struct {
+	driver.Stmt
+	owner *countingSQLiteDriver
+}
+
+// QueryContext is the only query path database/sql can take here: it prefers
+// StmtQueryContext, which this wrapper implements, so no statement query can
+// slip past the counter through the older form.
+func (s *countingStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	queryer, ok := s.Stmt.(driver.StmtQueryContext)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	s.owner.queries.Add(1)
+	rows, err := queryer.QueryContext(ctx, args)
+	if errors.Is(err, driver.ErrSkip) {
+		s.owner.queries.Add(-1)
+	}
+	return rows, err
+}
+
+// openCountingTestDB opens a migrated database on the counting wrapper. The
+// wrapped driver is read off a real repository connection rather than looked up
+// by name, so the count is taken on exactly the driver production uses.
+func openCountingTestDB(t *testing.T, counter *countingSQLiteDriver) *db.DB {
+	t.Helper()
+	counter.base = openTestDB(t).Driver()
+	name := fmt.Sprintf("turing_sqlite3_counting_%d", countingDriverSequence.Add(1))
+	sql.Register(name, counter)
+	sqlDB, err := sql.Open(name, "file:"+filepath.Join(t.TempDir(), "counted.db")+"?_foreign_keys=on")
+	if err != nil {
+		t.Fatalf("open counted db: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	database := &db.DB{DB: sqlDB}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := db.ApplyMigrations(context.Background(), database); err != nil {
+		t.Fatalf("apply migrations: %v", err)
+	}
+	return database
 }

@@ -18,8 +18,11 @@ stores the request text in the idempotency record.
 
 On the first request, the messages, run, job, durable events, and idempotency
 record commit in one bounded SQLite transaction. Only that request publishes
-new events. A matching replay returns the original run/job/trace IDs, emits the
-original `RunQueued` event, and continues from the persisted event sequence.
+new events. A matching replay returns the original user-message,
+assistant-message, run, job, and trace IDs, emits the original version-1
+`RunQueued` event with its durable `RunState`, and continues from the persisted
+event sequence. It never creates a second run, message pair, state version, or
+event.
 If a prior dispatch left its run queued, the replay re-dispatches the existing
 job rather than creating one. This record survives an orchestrator restart;
 model and tool work never run inside the transaction. Once a keyed operation

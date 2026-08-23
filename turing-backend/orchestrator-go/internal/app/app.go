@@ -41,6 +41,7 @@ type App struct {
 	Repository         *repository.Repository
 	EventBus           *eventsvc.Bus
 	RuntimeService     *runtimesvc.Server
+	IntegrationService *integrationsvc.Server
 	SessionService     *sessionsvc.Server
 	EventService       *eventsvc.Server
 	ChatService        *chatsvc.Server
@@ -181,6 +182,8 @@ func New(cfg config.Config) (*App, error) {
 		}
 	}
 	integrationService := integrationsvc.New(repo, integrationSealer, auditService)
+	integrationService.SetApprovalEnforcer(approvalService)
+	integrationService.SetRegistryChangeNotifier(runtimeService)
 	mcpRegistryService := mcpregistrysvc.New(repo, integrationSealer, nil)
 	mcpRegistryService.SetAuditRecorder(auditService)
 	mcpRegistryService.SetMCPConfigRoot(cfg.MCPConfigRoot)
@@ -251,6 +254,8 @@ func New(cfg config.Config) (*App, error) {
 			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
 			turingv1.McpRegistryService_ListMcpServers_FullMethodName,
 			turingv1.McpRegistryService_CallRegisteredMcpTool_FullMethodName,
+			turingv1.IntegrationService_ListIntegrationTools_FullMethodName,
+			turingv1.IntegrationService_CallIntegrationTool_FullMethodName,
 		),
 		auth.NewServiceIdentity("approval-consumer", cfg.ApprovalConsumerToken,
 			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
@@ -294,9 +299,9 @@ func New(cfg config.Config) (*App, error) {
 	// Public only, for the same reason: the runtime is handed the destination
 	// on the job it claims and never asks for it.
 	turingv1.RegisterExternalAgentServiceServer(publicServer, agentService)
-	// Public only: nothing internal reads a connection today, and the sealed
-	// credential is not served to anyone at all.
-	turingv1.RegisterIntegrationServiceServer(publicServer, integrationService)
+	// The public facet manages connections; the internal facet can only list
+	// and dispatch tools. Neither facet ever returns a sealed credential.
+	turingv1.RegisterIntegrationServiceServer(publicServer, integrationsvc.NewPublicServer(integrationService))
 	turingv1.RegisterMcpRegistryServiceServer(publicServer, mcpregistrysvc.NewPublicServer(mcpRegistryService))
 	// Public only: nothing outside the orchestrator schedules a run, and the
 	// runtime has no reason to read the automation library.
@@ -316,6 +321,7 @@ func New(cfg config.Config) (*App, error) {
 	turingv1.RegisterApprovalServiceServer(internalServer, approvalsvc.NewInternalServer(approvalService))
 	turingv1.RegisterRuntimeServiceServer(internalServer, runtimeService)
 	turingv1.RegisterMcpRegistryServiceServer(internalServer, mcpregistrysvc.NewInternalServer(mcpRegistryService))
+	turingv1.RegisterIntegrationServiceServer(internalServer, integrationsvc.NewInternalServer(integrationService))
 
 	application := &App{
 		PublicServer:          publicServer,
@@ -323,6 +329,7 @@ func New(cfg config.Config) (*App, error) {
 		Repository:            repo,
 		EventBus:              eventBus,
 		RuntimeService:        runtimeService,
+		IntegrationService:    integrationService,
 		SessionService:        sessionService,
 		EventService:          eventService,
 		ChatService:           chatService,

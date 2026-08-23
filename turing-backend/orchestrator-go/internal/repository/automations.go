@@ -25,14 +25,15 @@ const (
 )
 
 var (
-	ErrAutomationNotFound     = errors.New("automation not found")
-	ErrAutomationNameTaken    = errors.New("an automation with that name already exists")
-	ErrAutomationNameEmpty    = errors.New("automation name is required")
-	ErrAutomationNameTooLong  = errors.New("automation name is too long")
-	ErrAutomationNoPrompt     = errors.New("automation prompt is required")
-	ErrAutomationPromptLong   = errors.New("automation prompt is too long")
-	ErrAutomationToolInvalid  = errors.New("an allowed tool needs both a server and a tool name")
-	ErrAutomationTooManyTools = errors.New("too many allowed tools")
+	ErrAutomationNotFound                   = errors.New("automation not found")
+	ErrAutomationNameTaken                  = errors.New("an automation with that name already exists")
+	ErrAutomationNameEmpty                  = errors.New("automation name is required")
+	ErrAutomationNameTooLong                = errors.New("automation name is too long")
+	ErrAutomationNoPrompt                   = errors.New("automation prompt is required")
+	ErrAutomationPromptLong                 = errors.New("automation prompt is too long")
+	ErrAutomationToolInvalid                = errors.New("an allowed tool needs both a server and a tool name")
+	ErrAutomationTooManyTools               = errors.New("too many allowed tools")
+	ErrAutomationIntegrationToolUnsupported = errors.New("integration tools are not available to automations")
 )
 
 // AutomationTool names a tool by the same (server, tool) pair the
@@ -58,7 +59,8 @@ type Automation struct {
 	SessionID string
 	// The outcome of LastRunID, joined from agent_runs so "what happened while
 	// I was asleep" is answerable without opening the conversation.
-	LastRunStatus             string
+	LastRunStatus string
+	// Kept for protobuf compatibility. Raw run diagnostics are never projected.
 	LastRunError              string
 	LastOccurrenceFailureCode string
 	LastOccurrenceFailedAt    string
@@ -178,6 +180,9 @@ func normalizeAllowedTools(tools []AutomationTool) ([]AutomationTool, error) {
 		tool.ToolName = strings.TrimSpace(tool.ToolName)
 		if tool.ServerName == "" || tool.ToolName == "" {
 			return nil, ErrAutomationToolInvalid
+		}
+		if tool.ServerName == "integrations" {
+			return nil, ErrAutomationIntegrationToolUnsupported
 		}
 		if _, duplicate := seen[tool]; duplicate {
 			continue
@@ -795,7 +800,7 @@ const automationDueSelect = `
 const automationSelect = `
 	SELECT a.id, a.name, a.prompt, a.schedule_kind, a.interval_seconds, a.daily_minute_utc, a.enabled,
 		a.next_due_at, a.last_run_at, a.last_run_id, a.session_id,
-		COALESCE(r.status, ''), COALESCE(r.error_message, ''),
+		COALESCE(r.status, ''), '',
 		COALESCE(json_extract(blocked.payload_json, '$.code'), ''),
 		COALESCE(blocked.created_at, ''),
 		a.created_at, a.updated_at

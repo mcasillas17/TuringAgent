@@ -17,6 +17,8 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 )
 
+const registryCallWorkerID = "worker-registry-call"
+
 func TestMutatingCallToANonCooperatingServerIsRefusedWithoutApproval(t *testing.T) {
 	h := newRegistryCallHarness(t)
 	args := map[string]any{"path": "x"}
@@ -34,6 +36,59 @@ func TestMutatingCallToANonCooperatingServerIsRefusedWithoutApproval(t *testing.
 	}
 	if got := h.reached.Load(); got != 0 {
 		t.Fatalf("vendor requests = %d, want zero", got)
+	}
+}
+
+func TestApprovalRequiredMCPDispatchNeedsVersionedResume(t *testing.T) {
+	h := newRegistryCallHarness(t)
+	ctx := context.Background()
+	args := map[string]any{"path": "x"}
+	runID := h.runningToolCall(t, "call_resume_required", args)
+	approvalID, err := h.approvals.CreateApprovalForTool(
+		ctx,
+		runID,
+		"call_resume_required",
+		"general_assistant",
+		"vendor.write",
+		args,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.approvals.ApproveApproval(ctx, &turingv1.ApproveApprovalRequest{
+		ApprovalId: approvalID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	active, err := h.repo.MCPDispatchActive(ctx, h.serverID, runID, "vendor.write", "approval_required")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active {
+		t.Fatal("approval-required MCP dispatch became active before the worker resumed the run")
+	}
+
+	waiting, err := h.repo.GetRunState(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed := h.resumeApprovedRun(t, runID, approvalID)
+	if resumed.State.StateVersion != waiting.StateVersion+1 {
+		t.Fatalf("resumed state version = %d, want %d", resumed.State.StateVersion, waiting.StateVersion+1)
+	}
+
+	if _, err := h.registry.CallTool(ctx, CallInput{
+		ServerID:   h.serverID,
+		RunID:      runID,
+		ApprovalID: approvalID,
+		ToolName:   "vendor.write",
+		Args:       args,
+	}); err != nil {
+		t.Fatalf("CallTool after versioned resume: %v", err)
+	}
+	if got := h.reached.Load(); got != 1 {
+		t.Fatalf("vendor requests = %d, want exactly one", got)
 	}
 }
 
@@ -58,6 +113,7 @@ func TestTheOrchestratorConsumesTheApprovalItselfExactlyOnce(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	h.resumeApprovedRun(t, runID, approvalID)
 
 	input := CallInput{
 		ServerID:   h.serverID,
@@ -249,16 +305,7 @@ func (h *registryCallHarness) runningToolCall(t *testing.T, toolCallID string, a
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.MarkRunRunning(context.Background(), enqueued.RunID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.database.ExecContext(
-		context.Background(),
-		`UPDATE agent_runs SET execution_active = 1 WHERE id = ?`,
-		enqueued.RunID,
-	); err != nil {
-		t.Fatal(err)
-	}
+	h.claimAndDeliverRun(t, enqueued.RunID)
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		t.Fatal(err)
@@ -275,4 +322,56 @@ func (h *registryCallHarness) runningToolCall(t *testing.T, toolCallID string, a
 		t.Fatal(err)
 	}
 	return enqueued.RunID
+}
+
+func (h *registryCallHarness) claimAndDeliverRun(t *testing.T, runID string) {
+	t.Helper()
+	ctx := context.Background()
+	claimed, err := h.repo.ClaimNextJob(ctx, "general_assistant", registryCallWorkerID)
+	if err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
+	}
+	if claimed.RunID != runID {
+		t.Fatalf("claimed run = %q, want %q", claimed.RunID, runID)
+	}
+	assignment := repository.Assignment{
+		JobID:     claimed.JobID,
+		RunID:     claimed.RunID,
+		WorkerID:  registryCallWorkerID,
+		AttemptID: claimed.AssignmentAttemptID,
+	}
+	if err := h.repo.BeginAssignmentSend(ctx, assignment); err != nil {
+		t.Fatalf("BeginAssignmentSend: %v", err)
+	}
+	if err := h.repo.MarkAssignmentDelivered(ctx, assignment); err != nil {
+		t.Fatalf("MarkAssignmentDelivered: %v", err)
+	}
+}
+
+func (h *registryCallHarness) resumeApprovedRun(
+	t *testing.T,
+	runID string,
+	approvalID string,
+) repository.RunTransitionResult {
+	t.Helper()
+	ctx := context.Background()
+	waiting, err := h.repo.GetRunState(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := h.repo.GetRun(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := h.repo.ResumeApprovedRun(ctx, repository.ResumeApprovedRunInput{
+		RunID:                runID,
+		ApprovalID:           approvalID,
+		WorkerID:             registryCallWorkerID,
+		AssignmentAttemptID:  run.ExecutionAttemptID,
+		ExpectedStateVersion: waiting.StateVersion,
+	})
+	if err != nil {
+		t.Fatalf("ResumeApprovedRun: %v", err)
+	}
+	return resumed
 }

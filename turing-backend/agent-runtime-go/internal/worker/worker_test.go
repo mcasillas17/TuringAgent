@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -329,7 +330,7 @@ func TestOutboundWriterCanRestartForASubsequentStream(t *testing.T) {
 	firstStream := newFakeStream()
 	worker := New(Options{WorkerID: "worker-reconnect", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: firstStream}, terminalExecutor{})
 	worker.startOutboundWriter(firstStream)
-	if err := worker.send(context.Background(), firstStream, &turingv1.RuntimeUpdate{}); err != nil {
+	if err := worker.send(context.Background(), firstStream, &turingv1.RuntimeUpdate{}, nil); err != nil {
 		t.Fatalf("send on first stream: %v", err)
 	}
 	worker.stopOutboundWriter()
@@ -337,13 +338,285 @@ func TestOutboundWriterCanRestartForASubsequentStream(t *testing.T) {
 	secondStream := newFakeStream()
 	worker.startOutboundWriter(secondStream)
 	defer worker.stopOutboundWriter()
-	if err := worker.send(context.Background(), secondStream, &turingv1.RuntimeUpdate{}); err != nil {
+	if err := worker.send(context.Background(), secondStream, &turingv1.RuntimeUpdate{}, nil); err != nil {
 		t.Fatalf("send on second stream: %v", err)
 	}
 	select {
 	case <-secondStream.sent:
 	case <-time.After(time.Second):
 		t.Fatal("second stream did not receive update")
+	}
+}
+
+// TestSendFiresOnStartedExactlyOnceImmediatelyBeforeTransportSend pins the
+// positive half of onStarted's contract: for a request that actually reaches
+// the outbound writer's own goroutine and begins, onStarted runs exactly
+// once, and strictly before stream.Send is invoked for it — never after,
+// never concurrently, and never more than once. Both onStarted and
+// stream.Send run on the writer's single goroutine in run(), so appending to
+// the same unsynchronized slice from both is safe and the order recorded is
+// exactly the order they executed in.
+func TestSendFiresOnStartedExactlyOnceImmediatelyBeforeTransportSend(t *testing.T) {
+	stream := newFakeStream()
+	var order []string
+	stream.sendFn = func(*turingv1.RuntimeUpdate) error {
+		order = append(order, "send")
+		return nil
+	}
+	worker := New(Options{WorkerID: "worker-onstarted-order", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	worker.startOutboundWriter(stream)
+	defer worker.stopOutboundWriter()
+
+	var calls int
+	err := worker.send(context.Background(), stream, &turingv1.RuntimeUpdate{}, func() {
+		calls++
+		order = append(order, "onStarted")
+	})
+
+	if err != nil {
+		t.Fatalf("send error = %v, want nil", err)
+	}
+	if calls != 1 {
+		t.Fatalf("onStarted called %d times, want exactly 1", calls)
+	}
+	if len(order) != 2 || order[0] != "onStarted" || order[1] != "send" {
+		t.Fatalf("call order = %v, want [onStarted send]: onStarted must run immediately before stream.Send", order)
+	}
+}
+
+// TestSendOnStartedFiresOnlyForItsOwnRequestInFIFOOrder pins that when
+// several requests are genuinely queued together behind the writer — not
+// completed one at a time before the next is even issued, which is all an
+// earlier version of this test exercised, since calling send() synchronously
+// in a loop lets each request finish before the next is created and never
+// puts more than one request in the queue at once — each one's onStarted
+// still fires paired with its own stream.Send, and the writer still starts
+// them in the order they were queued.
+//
+// Request 1 is sent on its own goroutine and blocked inside stream.Send by
+// the fake transport, so the writer's single goroutine is provably busy and
+// cannot dequeue anything else. Requests 2 and 3 are then placed directly
+// onto the writer's own queue, in that order, from this goroutine — not from
+// two goroutines racing worker.send against each other, which would leave
+// their relative order exactly as undetermined as the bug this test exists to
+// catch. That is the one deterministic way to fix "2 before 3" without
+// relying on a scheduler race: a channel send is synchronous once it
+// executes, so doing both from a single goroutine, in this order, fixes their
+// arrival order in the buffered queue by construction. Both are still handed
+// their own goroutine to await completion, so the queue genuinely holds two
+// requests concurrently while the writer works through them one at a time —
+// the load-bearing part of the invariant this test checks.
+func TestSendOnStartedFiresOnlyForItsOwnRequestInFIFOOrder(t *testing.T) {
+	stream := newFakeStream()
+	var mu sync.Mutex
+	var order []string
+	blocked1 := make(chan struct{})
+	release1 := make(chan struct{})
+	var blockOnce sync.Once
+	stream.sendFn = func(update *turingv1.RuntimeUpdate) error {
+		id := update.GetHeartbeat().GetWorkerId()
+		if id == "1" {
+			blockOnce.Do(func() { close(blocked1) })
+			<-release1
+		}
+		mu.Lock()
+		order = append(order, "send:"+id)
+		mu.Unlock()
+		return nil
+	}
+	worker := New(Options{WorkerID: "worker-fifo-onstarted", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	worker.startOutboundWriter(stream)
+	defer worker.stopOutboundWriter()
+
+	heartbeat := func(id string) *turingv1.RuntimeUpdate {
+		return &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{Heartbeat: &turingv1.RuntimeHeartbeat{WorkerId: id}}}
+	}
+	onStarted := func(id string) func() {
+		return func() {
+			mu.Lock()
+			order = append(order, "onStarted:"+id)
+			mu.Unlock()
+		}
+	}
+
+	results := make(chan error, 3)
+	go func() {
+		results <- worker.send(context.Background(), stream, heartbeat("1"), onStarted("1"))
+	}()
+	select {
+	case <-blocked1:
+	case <-time.After(time.Second):
+		t.Fatal("first send never reached the outbound writer")
+	}
+
+	worker.writerMu.Lock()
+	writer := worker.writer
+	worker.writerMu.Unlock()
+	if writer == nil {
+		t.Fatal("outbound writer not initialized")
+	}
+	req2 := &outboundRequest{ctx: context.Background(), update: heartbeat("2"), result: make(chan error, 1), started: make(chan struct{}), onStarted: onStarted("2")}
+	req3 := &outboundRequest{ctx: context.Background(), update: heartbeat("3"), result: make(chan error, 1), started: make(chan struct{}), onStarted: onStarted("3")}
+	select {
+	case writer.queue <- req2:
+	case <-time.After(time.Second):
+		t.Fatal("request 2 never queued")
+	}
+	select {
+	case writer.queue <- req3:
+	case <-time.After(time.Second):
+		t.Fatal("request 3 never queued")
+	}
+	if n := len(writer.queue); n != 2 {
+		t.Fatalf("outbound queue length = %d, want 2: requests 2 and 3 must both be genuinely queued behind the blocked request 1", n)
+	}
+	go func() { results <- req2.classify(<-req2.result) }()
+	go func() { results <- req3.classify(<-req3.result) }()
+
+	close(release1)
+
+	for i := 0; i < 3; i++ {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("queued send result %d error = %v", i, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for queued sends to complete")
+		}
+	}
+
+	want := []string{"onStarted:1", "send:1", "onStarted:2", "send:2", "onStarted:3", "send:3"}
+	mu.Lock()
+	got := append([]string(nil), order...)
+	mu.Unlock()
+	if !slices.Equal(got, want) {
+		t.Fatalf("call order = %v, want %v: each request's onStarted must fire only for its own send, immediately before it, in the order the requests were queued", got, want)
+	}
+}
+
+// TestSendRunUpdateReportingPauseGatedFiresOnStartedEvenWithNilEntry pins the
+// nil-entry fix directly at the layer that makes it: a hook-supplying caller
+// with a nil entry has no pause check to skip past — outboundPaused() is
+// never even asked — but that must not stop onStarted from being threaded
+// through to a send that actually begins. Every production caller that
+// supplies a hook (only resumeApproval) always has a non-nil entry, so
+// without this test the nil-entry branch of that fix is exercised only by
+// code inspection, never by anything that fails if it regresses.
+func TestSendRunUpdateReportingPauseGatedFiresOnStartedEvenWithNilEntry(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-nil-entry-hook", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	worker.startOutboundWriter(stream)
+	defer worker.stopOutboundWriter()
+
+	var started bool
+	err := worker.sendRunUpdateReportingPauseGated(context.Background(), nil, stream, &turingv1.RuntimeUpdate{}, func() { started = true })
+
+	if err != nil {
+		t.Fatalf("send error = %v, want nil", err)
+	}
+	if !started {
+		t.Fatal("onStarted never fired for a nil-entry caller even though the send began: a nil entry must skip only the pause check, not the hook")
+	}
+	select {
+	case <-stream.sent:
+	case <-time.After(time.Second):
+		t.Fatal("update never reached the stream")
+	}
+}
+
+// TestSendNeverFiresOnStartedWhenNoWriterIsInitialized and the two tests that
+// follow pin the negative half: onStarted must never fire for a request that
+// never reaches the writer's own run() loop at all, no matter which of the
+// three ways that can happen. A caller that supplies onStarted expecting it
+// to gate something durable — resumeApproval's recordAccepted gate is the
+// only production example — must never see it armed for a send this process
+// never actually attempted.
+func TestSendNeverFiresOnStartedWhenNoWriterIsInitialized(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-no-writer", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+
+	var started bool
+	err := worker.send(context.Background(), stream, &turingv1.RuntimeUpdate{}, func() { started = true })
+
+	if err == nil {
+		t.Fatal("send with no outbound writer initialized = nil error, want a failure")
+	}
+	if started {
+		t.Fatal("onStarted fired for a send that never reached an outbound writer at all")
+	}
+}
+
+func TestSendNeverFiresOnStartedWhenTheWriterHasAlreadyStopped(t *testing.T) {
+	stream := newFakeStream()
+	worker := New(Options{WorkerID: "worker-stopped-writer", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	worker.startOutboundWriter(stream)
+	defer worker.stopOutboundWriter()
+	worker.writerMu.Lock()
+	writer := worker.writer
+	worker.writerMu.Unlock()
+	writer.stop(errors.New("writer stopped ahead of the send"))
+	waitForOutboundWriterExit(t, worker)
+
+	var started bool
+	err := worker.send(context.Background(), stream, &turingv1.RuntimeUpdate{}, func() { started = true })
+
+	if err == nil {
+		t.Fatal("send handed to an already-stopped writer = nil error, want a failure")
+	}
+	if started {
+		t.Fatal("onStarted fired for a send handed to a writer that had already stopped")
+	}
+}
+
+// TestSendNeverFiresOnStartedForARequestAbandonedUnstartedInTheQueue is the
+// third and most important way onStarted must never fire: a request that is
+// genuinely queued behind another still in flight, and whose own context runs
+// out before the writer ever gets to dequeue it. begin() abandons a request
+// like that without ever transitioning it to started, so onStarted — which
+// run() only calls once begin() has succeeded — must never see it. This is
+// the exact case an earlier placement of the equivalent hook (armed by the
+// caller of w.send, before the request was even queued) got wrong: it would
+// have fired regardless of whether the request was ever dequeued at all.
+func TestSendNeverFiresOnStartedForARequestAbandonedUnstartedInTheQueue(t *testing.T) {
+	stream := newFakeStream()
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	stream.sendFn = func(*turingv1.RuntimeUpdate) error {
+		close(blocked)
+		<-release
+		return nil
+	}
+	worker := New(Options{WorkerID: "worker-abandoned-queue", MaxConcurrentRuns: 1}, &fakeRuntimeClient{stream: stream}, terminalExecutor{})
+	worker.startOutboundWriter(stream)
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		worker.stopOutboundWriter()
+	})
+
+	// Occupy the writer with a send it will not finish, so the next request
+	// queues behind it and the writer never gets to dequeue that one.
+	go func() { _ = worker.send(context.Background(), stream, &turingv1.RuntimeUpdate{}, nil) }()
+	select {
+	case <-blocked:
+	case <-time.After(time.Second):
+		t.Fatal("the outbound writer never started the blocking send")
+	}
+
+	sendCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	var started bool
+	err := worker.send(sendCtx, stream, &turingv1.RuntimeUpdate{}, func() { started = true })
+
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("send error = %v, want the spent context", err)
+	}
+	if outboundSendStarted(err) {
+		t.Fatalf("send error = %v, claims the send started for a request abandoned unstarted in the queue", err)
+	}
+	if started {
+		t.Fatal("onStarted fired for a request abandoned unstarted while still sitting in the writer's queue")
 	}
 }
 
@@ -1090,7 +1363,7 @@ func TestWorkerRejectsAssignmentItCannotRun(t *testing.T) {
 	if failed.RunId != "run_2" {
 		t.Fatalf("rejected run_id = %q, want run_2", failed.RunId)
 	}
-	if !failed.Retryable {
+	if !retryableFailure(failed) {
 		t.Fatal("rejection must be retryable: the worker was busy, the run is not broken")
 	}
 	cancel()
@@ -1405,4 +1678,381 @@ func TestModernWorkerWithoutDiscoveryReportsAuthoritativeEmptyTools(t *testing.T
 	}
 	cancel()
 	<-done
+}
+
+// ---------------------------------------------------------------------------
+// Assignment version identity.
+//
+// The worker is the only thing that knows which state its report was computed
+// against, so it retains the highest version the orchestrator has committed for
+// the assignment it owns and echoes it back on every terminal report.
+// ---------------------------------------------------------------------------
+
+// scriptedExecutor runs whatever the test hands it, so version behaviour can be
+// driven step by step instead of inferred from a real agent's timing.
+type scriptedExecutor struct {
+	started chan *turingv1.AgentJob
+	release chan struct{}
+	emitted chan func(*turingv1.RuntimeUpdate) error
+	posters chan func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)
+	run     func(job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error
+}
+
+func (e *scriptedExecutor) SetToolBeaconPoster(post func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error)) {
+	e.posters <- post
+}
+
+func newScriptedExecutor(run func(job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error) *scriptedExecutor {
+	return &scriptedExecutor{
+		started: make(chan *turingv1.AgentJob, 4),
+		release: make(chan struct{}),
+		emitted: make(chan func(*turingv1.RuntimeUpdate) error, 4),
+		posters: make(chan func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error), 4),
+		run:     run,
+	}
+}
+
+func (e *scriptedExecutor) Execute(ctx context.Context, job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error {
+	e.started <- job
+	if e.run != nil {
+		return e.run(job, emit)
+	}
+	e.emitted <- emit
+	select {
+	case <-e.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func startScriptedWorker(t *testing.T, executor Executor, stream *fakeStream, adjust ...func(*Options)) (*Worker, func()) {
+	t.Helper()
+	options := Options{
+		WorkerID:                 "worker-version",
+		MaxConcurrentRuns:        1,
+		UpdateSendTimeout:        time.Second,
+		DisconnectCleanupTimeout: 50 * time.Millisecond,
+	}
+	for _, apply := range adjust {
+		apply(&options)
+	}
+	worker := New(options, &fakeRuntimeClient{stream: stream}, executor)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	// The worker_ready registration is the first thing on the wire; drain it so
+	// tests read only the updates they are about.
+	_ = nextSent(t, stream)
+	return worker, func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for worker Run to return")
+		}
+		waitForOutboundWriterExit(t, worker)
+	}
+}
+
+func assignJob(t *testing.T, stream *fakeStream, runID string, attemptID string, version int64) {
+	t.Helper()
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{
+		RunAssigned: &turingv1.AgentJob{
+			JobId:                "job_" + runID,
+			RunId:                runID,
+			AssistantMessageId:   "msg_" + runID,
+			AssignmentAttemptId:  attemptID,
+			ExpectedStateVersion: version,
+		},
+	}}
+}
+
+func TestWorkerEchoesExpectedVersionOnCompletionAndFailure(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		terminal func(runID string) *turingv1.RuntimeUpdate
+		observed func(*turingv1.RuntimeUpdate) int64
+	}{
+		{
+			name: "completion",
+			terminal: func(runID string) *turingv1.RuntimeUpdate {
+				return &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{
+					RunCompleted: &turingv1.RuntimeRunCompleted{
+						RunId: runID, AssistantMessageId: "msg_" + runID, Content: "done",
+					},
+				}}
+			},
+			observed: func(update *turingv1.RuntimeUpdate) int64 {
+				return update.GetRunCompleted().GetExpectedStateVersion()
+			},
+		},
+		{
+			name: "failure",
+			terminal: func(runID string) *turingv1.RuntimeUpdate {
+				return &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunFailed{
+					RunFailed: &turingv1.RuntimeRunFailed{RunId: runID, Code: "runtime_error"},
+				}}
+			},
+			observed: func(update *turingv1.RuntimeUpdate) int64 {
+				return update.GetRunFailed().GetExpectedStateVersion()
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const runID = "run_echo_version"
+			const assignedVersion = int64(7)
+			stream := newFakeStream()
+			executor := newScriptedExecutor(func(job *turingv1.AgentJob, emit func(*turingv1.RuntimeUpdate) error) error {
+				return emit(test.terminal(job.GetRunId()))
+			})
+			_, stop := startScriptedWorker(t, executor, stream)
+			defer stop()
+
+			assignJob(t, stream, runID, "attempt-echo", assignedVersion)
+			update := nextSent(t, stream)
+			if got := test.observed(update); got != assignedVersion {
+				t.Fatalf("terminal report carried version %d, want the assigned %d", got, assignedVersion)
+			}
+		})
+	}
+}
+
+func TestWorkerKeepsHighestAcceptedVersionPerAssignment(t *testing.T) {
+	const runID = "run_highest_version"
+	const attemptID = "attempt-highest"
+	stream := newFakeStream()
+	executor := newScriptedExecutor(nil)
+	worker, stop := startScriptedWorker(t, executor, stream)
+	defer stop()
+
+	post := <-executor.posters
+	assignJob(t, stream, runID, attemptID, 3)
+	emit := <-executor.emitted
+
+	// A same-attempt refresh at a newer version is the orchestrator committing
+	// forward, and the worker follows it.
+	assignJob(t, stream, runID, attemptID, 5)
+	waitForWorkerVersion(t, worker, runID, 5)
+
+	// A refresh computed against an older state cannot roll the worker back,
+	// and one naming a different attempt is a fenced predecessor's command.
+	assignJob(t, stream, runID, attemptID, 4)
+	assignJob(t, stream, runID, "attempt-other", 9)
+	// Both rejected commands are observed through a later accepted one, so the
+	// assertion never races the receive loop.
+	assignJob(t, stream, runID, attemptID, 5)
+	waitForWorkerVersion(t, worker, runID, 5)
+
+	// A beacon's own decision is the one reply that carries a committed version
+	// back before tool work continues, so it moves the assignment forward.
+	decided := make(chan *turingv1.ToolPolicyDecision, 1)
+	go func() {
+		decision, err := post(context.Background(), &turingv1.ToolCallBeacon{
+			Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, ToolCallId: "call_current",
+			RunId: runID, ToolName: "system.time",
+		})
+		if err != nil {
+			decided <- nil
+			return
+		}
+		decided <- decision
+	}()
+	if beacon := nextSent(t, stream); beacon.GetToolBeacon() == nil {
+		t.Fatalf("worker sent %+v, want the tool beacon", beacon)
+	}
+	stream.recv <- &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_ToolPolicyDecision{
+		ToolPolicyDecision: &turingv1.ToolPolicyDecision{
+			Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: "call_current",
+			Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, RunStateVersion: 6,
+		},
+	}}
+	select {
+	case decision := <-decided:
+		if decision == nil {
+			t.Fatal("tool beacon returned no decision")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the tool policy decision")
+	}
+	waitForWorkerVersion(t, worker, runID, 6)
+
+	if err := emit(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCompleted{
+		RunCompleted: &turingv1.RuntimeRunCompleted{RunId: runID, AssistantMessageId: "msg_" + runID, Content: "done"},
+	}}); err != nil {
+		t.Fatalf("emit terminal: %v", err)
+	}
+	close(executor.release)
+	terminal := nextSent(t, stream)
+	if got := terminal.GetRunCompleted().GetExpectedStateVersion(); got != 6 {
+		t.Fatalf("terminal report carried version %d, want the highest accepted 6", got)
+	}
+}
+
+func TestWorkerPausesOutboundRunUpdatesUntilSameAttemptRefresh(t *testing.T) {
+	const runID = "run_paused_outbound"
+	const attemptID = "attempt-paused"
+	stream := newFakeStream()
+	// A stalled send is the honest shape of stream loss here: the update may or
+	// may not have arrived, so the run's ownership is exactly as uncertain as
+	// the orchestrator's fence assumes. The stall is released rather than
+	// failed, because a failed send stops the outbound writer for good and
+	// there would be no stream left to resume onto.
+	stall := make(chan struct{})
+	stalled := make(chan struct{})
+	var stallOnce sync.Once
+	stalledOne := false
+	stream.sendFn = func(update *turingv1.RuntimeUpdate) error {
+		// Only the FIRST run-step stalls. Everything after it is forwarded, so
+		// what does and does not reach the wire later is observable rather than
+		// swallowed by the fixture.
+		if !stalledOne && update.GetEvent().GetType() == turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP {
+			stalledOne = true
+			stallOnce.Do(func() { close(stalled) })
+			<-stall
+			return nil
+		}
+		stream.sent <- update
+		return nil
+	}
+	executor := newScriptedExecutor(nil)
+	worker, stop := startScriptedWorker(t, executor, stream, func(options *Options) {
+		options.UpdateSendTimeout = 50 * time.Millisecond
+	})
+	defer stop()
+
+	assignJob(t, stream, runID, attemptID, 3)
+	emit := <-executor.emitted
+
+	lost := make(chan error, 1)
+	go func() {
+		lost <- emit(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+			RunId: runID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP,
+		}}})
+	}()
+	<-stalled
+	select {
+	case err := <-lost:
+		if err == nil {
+			t.Fatal("stalled send reported success")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the stalled send to give up")
+	}
+	close(stall)
+
+	// Withheld while paused, and given a type nothing else in this test uses so
+	// the wire can be read for its absence rather than timed for it.
+	withheld := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+		RunId: runID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED,
+	}}}
+	if err := emit(withheld); err != nil {
+		t.Fatalf("withheld update reported an error to the executor: %v", err)
+	}
+
+	assignJob(t, stream, runID, attemptID, 5)
+	// A second assignment the worker has no capacity for. Its rejection is sent
+	// synchronously from the same receive loop that just applied the refresh, so
+	// reading it off the wire proves the refresh landed — no polling, and no
+	// waiting out a duration to conclude nothing happened.
+	assignJob(t, stream, "run_capacity_probe", "attempt-probe", 1)
+	busy := nextSent(t, stream)
+	if failed := busy.GetRunFailed(); failed == nil || failed.GetCode() != "worker_busy" {
+		t.Fatalf("first update after the refresh = %+v, want the busy rejection; a withheld update reached the wire", busy)
+	}
+	if entry := worker.activeRun(runID); entry == nil || entry.expectedVersion() != 5 {
+		t.Fatalf("worker version after the refresh = %+v, want 5", entry)
+	}
+
+	delta := &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+		RunId: runID, Type: turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
+	}}}
+	if err := emit(delta); err != nil {
+		t.Fatalf("resumed update failed: %v", err)
+	}
+	// The writer sends in order, so the withheld update would have arrived
+	// before this one had it been queued rather than dropped.
+	if update := nextSent(t, stream); update.GetEvent().GetType() != turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA {
+		t.Fatalf("resumed update = %+v, want the message delta", update)
+	}
+}
+
+func waitForWorkerVersion(t *testing.T, worker *Worker, runID string, want int64) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		entry := worker.activeRun(runID)
+		if entry != nil && entry.expectedVersion() == want {
+			return
+		}
+		select {
+		case <-deadline:
+			got := int64(-1)
+			if entry != nil {
+				got = entry.expectedVersion()
+			}
+			t.Fatalf("worker version for %s = %d, want %d", runID, got, want)
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+// The worker itself reports two failures: a run it cannot accept, and a run
+// whose executor died. Both name a typed origin, so the orchestrator never has
+// to read a Go error string to decide whether to requeue.
+func TestWorkerTypedFailureOriginsForRuntimeAndDispatch(t *testing.T) {
+	t.Run("busy_rejection_is_dispatch_and_transient", func(t *testing.T) {
+		stream := newFakeStream()
+		executor := newScriptedExecutor(nil)
+		_, stop := startScriptedWorker(t, executor, stream)
+		defer stop()
+
+		assignJob(t, stream, "run_first", "attempt-first", 1)
+		<-executor.emitted
+		assignJob(t, stream, "run_second", "attempt-second", 1)
+
+		failed := nextSent(t, stream).GetRunFailed()
+		if failed == nil || failed.GetCode() != "worker_busy" {
+			t.Fatalf("update = %+v, want worker_busy", failed)
+		}
+		if failed.GetFailureOrigin() != turingv1.FailureOrigin_FAILURE_ORIGIN_DISPATCH {
+			t.Fatalf("origin = %v, want dispatch", failed.GetFailureOrigin())
+		}
+		if failed.GetAutomaticRetryClass() != turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT {
+			t.Fatalf("retry class = %v, want same-run transient", failed.GetAutomaticRetryClass())
+		}
+		if failed.GetMessage() != "" {
+			t.Fatalf("busy rejection carried message %q, want none", failed.GetMessage())
+		}
+	})
+
+	t.Run("executor_failure_is_worker_runtime_and_never", func(t *testing.T) {
+		stream := newFakeStream()
+		executor := newScriptedExecutor(func(*turingv1.AgentJob, func(*turingv1.RuntimeUpdate) error) error {
+			return errors.New("model_quota_exceeded: tool_call_failed")
+		})
+		_, stop := startScriptedWorker(t, executor, stream)
+		defer stop()
+
+		assignJob(t, stream, "run_broken", "attempt-broken", 4)
+
+		failed := nextSent(t, stream).GetRunFailed()
+		if failed == nil || failed.GetCode() != "runtime_error" {
+			t.Fatalf("update = %+v, want runtime_error", failed)
+		}
+		if failed.GetFailureOrigin() != turingv1.FailureOrigin_FAILURE_ORIGIN_WORKER_RUNTIME {
+			t.Fatalf("origin = %v, want worker runtime", failed.GetFailureOrigin())
+		}
+		if failed.GetAutomaticRetryClass() != turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER {
+			t.Fatalf("retry class = %v, want never", failed.GetAutomaticRetryClass())
+		}
+		if failed.GetMessage() != "" {
+			t.Fatalf("executor error text crossed the boundary as %q", failed.GetMessage())
+		}
+	})
+}
+
+// retryableFailure reads the typed retry class the worker now reports.
+func retryableFailure(failed *turingv1.RuntimeRunFailed) bool {
+	return failed.GetAutomaticRetryClass() == turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT
 }

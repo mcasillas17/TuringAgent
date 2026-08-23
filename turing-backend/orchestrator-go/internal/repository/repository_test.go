@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runcorrelation"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -199,7 +202,7 @@ func TestCancelRunUpdatesRunAndJob(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CancelRun(ctx, enqueued.RunID, "client_cancelled"); err != nil {
+	if _, err := cancelRunAtCurrentVersion(t, repo, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -249,7 +252,7 @@ func TestCancelRunWithEventRollsBackWhenEventAppendFails(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`)
+	_, err = cancelRunEvents(t, repo, enqueued.RunID)
 	if err == nil {
 		t.Fatal("CancelRunWithEvent succeeded, want trigger failure")
 	}
@@ -286,7 +289,7 @@ func TestCancelRunFailsForTerminalRun(t *testing.T) {
 	if _, err := database.ExecContext(ctx, `UPDATE agent_runs SET status = 'completed' WHERE id = ?`, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CancelRun(ctx, enqueued.RunID, "client_cancelled"); err == nil {
+	if _, err := cancelRunAtCurrentVersion(t, repo, enqueued.RunID); err == nil {
 		t.Fatal("expected cancel run to fail for completed run")
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -366,7 +369,7 @@ func TestFailRunWithEventPreservingExecutionHoldsGlobalCapacityUntilExitAck(t *t
 	if claimed.RunID != first.RunID {
 		t.Fatalf("claimed run = %q, want %q", claimed.RunID, first.RunID)
 	}
-	if _, err := repo.FailRunWithEventPreservingExecution(ctx, first.RunID, "approval_delivery_failed", "approval event failed", `{"code":"approval_delivery_failed"}`); err != nil {
+	if _, err := failRunPreservingExecutionAtCurrentVersion(t, repo, first.RunID, testFailure("approval_delivery_failed")); err != nil {
 		t.Fatalf("FailRunWithEventPreservingExecution: %v", err)
 	}
 	run, err := repo.GetRun(ctx, first.RunID)
@@ -412,7 +415,7 @@ func TestFailRunWithEventPreservingExecutionFinalizesInactiveRun(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.FailRunWithEventPreservingExecution(ctx, enqueued.RunID, "approval_delivery_failed", "approval event failed", `{"code":"approval_delivery_failed"}`); err != nil {
+	if _, err := failRunPreservingExecutionAtCurrentVersion(t, repo, enqueued.RunID, testFailure("approval_delivery_failed")); err != nil {
 		t.Fatal(err)
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -526,7 +529,7 @@ func TestClaimNextJobWaitsForEarlierSessionRunToTerminalize(t *testing.T) {
 		t.Fatalf("claimed later same-session job while earlier run was active: %+v", blocked)
 	}
 
-	if err := repo.CompleteRun(ctx, first.RunID, first.AssistantMessageID, "first done"); err != nil {
+	if _, err := completeRunAtCurrentVersion(t, repo, first.RunID, first.AssistantMessageID, "first done", nil); err != nil {
 		t.Fatal(err)
 	}
 	claimedSecond, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-2")
@@ -638,7 +641,7 @@ func TestCompleteRunUpdatesRunJobAndAssistantMessage(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CompleteRun(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done"); err != nil {
+	if _, err := completeRunAtCurrentVersion(t, repo, enqueued.RunID, enqueued.AssistantMessageID, "done", nil); err != nil {
 		t.Fatal(err)
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -687,7 +690,7 @@ func TestCompleteRunWithEventRollsBackWhenEventAppendFails(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`, nil)
+	_, err = completeRunEvents(t, repo, enqueued.RunID, enqueued.AssistantMessageID, "done", nil)
 	if err == nil {
 		t.Fatal("CompleteRunWithEvent succeeded, want trigger failure")
 	}
@@ -727,7 +730,7 @@ func TestCompleteRunWithEventAppendsMessageCompletedBeforeRunCompleted(t *testin
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	completedEvents, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`, nil)
+	completedEvents, err := completeRunEvents(t, repo, enqueued.RunID, enqueued.AssistantMessageID, "done", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -795,7 +798,7 @@ func TestCompleteRunWithEventAppendsAuthoritativeMessageCompleted(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	completedEvents, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "authoritative", `{"assistantMessageId":"`+enqueued.AssistantMessageID+`"}`, nil)
+	completedEvents, err := completeRunEvents(t, repo, enqueued.RunID, enqueued.AssistantMessageID, "authoritative", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -828,7 +831,7 @@ func TestAppendRuntimeEventRejectsNonActiveRun(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
+	if _, err := cancelRunEvents(t, repo, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 	payload, err := structpb.NewStruct(map[string]any{"delta": "late"})
@@ -861,7 +864,7 @@ func TestFailRunUpdatesRunAndJobError(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.FailRun(ctx, enqueued.RunID, "model_error", "model failed"); err != nil {
+	if _, err := failRunAtCurrentVersion(t, repo, enqueued.RunID, testFailure("model_error")); err != nil {
 		t.Fatal(err)
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -871,15 +874,22 @@ func TestFailRunUpdatesRunAndJobError(t *testing.T) {
 	if run.Status != "failed" {
 		t.Fatalf("run status = %q, want failed", run.Status)
 	}
-	var jobStatus, runCode, runMessage, jobCode, jobMessage string
+	var jobStatus, runCode, jobCode string
+	var runMessage, jobMessage sql.NullString
 	if err := database.QueryRowContext(ctx, `SELECT error_code, error_message FROM agent_runs WHERE id = ?`, enqueued.RunID).Scan(&runCode, &runMessage); err != nil {
 		t.Fatalf("query failed run: %v", err)
 	}
 	if err := database.QueryRowContext(ctx, `SELECT status, error_code, error_message FROM jobs WHERE id = ?`, enqueued.JobID).Scan(&jobStatus, &jobCode, &jobMessage); err != nil {
 		t.Fatalf("query failed job: %v", err)
 	}
-	if jobStatus != "failed" || runCode != "model_error" || runMessage != "model failed" || jobCode != "model_error" || jobMessage != "model failed" {
-		t.Fatalf("bad failure state: job_status=%q run=%q/%q job=%q/%q", jobStatus, runCode, runMessage, jobCode, jobMessage)
+	if jobStatus != "failed" || runCode != "model_error" || jobCode != "model_error" {
+		t.Fatalf("bad failure state: job_status=%q run=%q job=%q", jobStatus, runCode, jobCode)
+	}
+	// The normalized code is the whole diagnostic. Both message columns stay
+	// NULL, because they were the channel a provider's sentence used to reach a
+	// client through.
+	if runMessage.Valid || jobMessage.Valid {
+		t.Fatalf("failure persisted messages: run=%q job=%q", runMessage.String, jobMessage.String)
 	}
 }
 
@@ -895,6 +905,12 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 		SessionID: session.SessionID, Content: "needs approval", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	// A run only reaches an approval by running: a queued run has no worker to
+	// have requested the tool, and waiting-approval is reachable only from
+	// running.
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{ToolCallID: "tool_1", RunID: enqueued.RunID}, "general_assistant", "mcp-files", "write_file", `{"path":"notes.txt"}`, "args_hash_1"); err != nil {
@@ -939,7 +955,10 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "running" {
+	// The decision is recorded and its token minted, and neither of those is
+	// the worker proving it can act on them. The run leaves waiting-approval
+	// only when the resume commits.
+	if run.Status != "waiting_approval" {
 		t.Fatalf("run status = %q", run.Status)
 	}
 	var approvalJTI, approvalToken string
@@ -1219,6 +1238,9 @@ func TestDenyApprovalDoesNotMutateNonWaitingRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
+		t.Fatal(err)
+	}
 	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "", "general_assistant", "write_file", `{}`, "args_hash_1", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
@@ -1426,7 +1448,7 @@ func TestRuntimeFailureTerminalizesPendingApprovalBeforeLateResolution(t *testin
 			}, "tool.call.failed", `{"code":"approval_wait_failed"}`); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := repo.FailRunWithEvent(ctx, enqueued.RunID, "runtime_error", "approval transport failed", `{"code":"runtime_error"}`); err != nil {
+			if _, err := failRunAtCurrentVersion(t, repo, enqueued.RunID, testFailure("runtime_error")); err != nil {
 				t.Fatal(err)
 			}
 
@@ -1479,4 +1501,116 @@ func TestRuntimeFailureTerminalizesPendingApprovalBeforeLateResolution(t *testin
 			}
 		})
 	}
+}
+
+// -----------------------------------------------------------------------------
+// A corrupt active run must block its session rather than be stepped over
+//
+// Same-session claim ordering used to be decided by joining each run to its
+// assistant message and comparing sequences. That join silently drops a run
+// whose assistant link is missing, so a run that is still active on paper stops
+// counting as an earlier blocker and the next turn in the same conversation is
+// dispatched around it. Combined with a correlation gate that refuses to
+// transition that same run, the result is the worst pair available: the stuck
+// run can never be cleared, and the session keeps moving without it.
+// -----------------------------------------------------------------------------
+
+// corruptActiveSameSessionRuns enqueues two runs in one session, claims the
+// first, and then removes both directions of the first run's assistant link.
+// The second run is untouched: its link is intact, so nothing about it explains
+// a claim it should not get.
+func corruptActiveSameSessionRuns(t *testing.T) (*Repository, EnqueueUserMessageResult, EnqueueUserMessageResult) {
+	t.Helper()
+	ctx := context.Background()
+	repo := New(openTestDB(t))
+	session, err := repo.CreateSession(ctx, "Corrupt active run")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	first, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "first", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatalf("enqueue first: %v", err)
+	}
+	second, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "second", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatalf("enqueue second: %v", err)
+	}
+	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-corrupt")
+	if err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
+	}
+	if claimed.RunID != first.RunID {
+		t.Fatalf("first claim run = %q, want %q", claimed.RunID, first.RunID)
+	}
+	breakAssistantLinkBothDirections(t, repo, first.RunID)
+	return repo, first, second
+}
+
+func TestCorruptActiveRunCannotBeTransitionedOrLeapfrogged(t *testing.T) {
+	t.Run("cancelling the corrupt run is refused without writing", func(t *testing.T) {
+		ctx := context.Background()
+		repo, first, _ := corruptActiveSameSessionRuns(t)
+		before := snapshotRunWrites(t, repo, first.RunID)
+
+		// No assistant message is named, so the terminal identity guard cannot
+		// be what refuses this: only the correlation gate can.
+		_, err := repo.CancelRunCanonical(ctx, CancelRunInput{
+			RunID:                first.RunID,
+			ExpectedStateVersion: before.state.StateVersion,
+			Cancellation:         runoutcome.AbandonedCancellation(),
+		})
+		if !errors.Is(err, runcorrelation.ErrConflict) {
+			t.Fatalf("cancel of a corrupt active run = %v, want runcorrelation.ErrConflict", err)
+		}
+		if got := err.Error(); got != "run/message correlation conflict" {
+			t.Fatalf("cancel error = %q, want exactly the value-free correlation sentinel", got)
+		}
+		after := snapshotRunWrites(t, repo, first.RunID)
+		if after.state != before.state || !reflect.DeepEqual(after.jobs, before.jobs) || after.events != before.events {
+			t.Fatalf("refused cancel wrote something: %+v, want %+v", after, before)
+		}
+	})
+
+	t.Run("later same-session work does not leapfrog it", func(t *testing.T) {
+		ctx := context.Background()
+		repo, _, second := corruptActiveSameSessionRuns(t)
+
+		claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-later")
+		if err != nil {
+			t.Fatalf("ClaimNextJob: %v", err)
+		}
+		if claimed.JobID != "" {
+			t.Fatalf("claimed %+v while an earlier active run in the same session was unprogressable", claimed)
+		}
+		var jobStatus string
+		if err := repo.db.QueryRowContext(ctx,
+			`SELECT status FROM jobs WHERE run_id = ?`, second.RunID).Scan(&jobStatus); err != nil {
+			t.Fatalf("read second job: %v", err)
+		}
+		if jobStatus != "pending" {
+			t.Fatalf("second job status = %q, want pending", jobStatus)
+		}
+		state, err := repo.GetRunState(ctx, second.RunID)
+		if err != nil {
+			t.Fatalf("GetRunState: %v", err)
+		}
+		if state.Lifecycle != lifecycleQueued || state.StateVersion != 1 {
+			t.Fatalf("second run = %s at version %d, want queued at version 1", state.Lifecycle, state.StateVersion)
+		}
+		var started int
+		if err := repo.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM events WHERE run_id = ? AND type = 'agent.run.started'`,
+			second.RunID).Scan(&started); err != nil {
+			t.Fatalf("count started events: %v", err)
+		}
+		if started != 0 {
+			t.Fatalf("second run has %d started events, want none", started)
+		}
+	})
 }

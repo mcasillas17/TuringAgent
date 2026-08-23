@@ -21,9 +21,10 @@ subnet. An empty
 configured bundled bearer token denies every request rather than opening the
 service.
 
-Servers can be registered directly from the Flutter MCPs page — a name, an
-explicit local-container or remote-URL tier, a hardened URL, and an optional
-write-only bearer — with no file edit and no backend restart. In-app
+Servers can be registered directly from the Flutter MCPs page — a name, a
+hardened URL, a local-container or remote-URL tier (the in-app form always
+states one), and an optional write-only bearer — with no file edit and no
+backend restart. In-app
 registration runs the same validation an `mcp.json` import runs: name-pattern
 and bundled-name refusal, stdio refusal, URL canonicalization/hardening, and
 bearer-token normalization, then seals the token with the same
@@ -44,6 +45,29 @@ renders each server's canonical `url` (selectable, ellipsized, with a tooltip
 for the full value) so an operator can verify the destination they
 registered; an unadopted placeholder with no URL renders an explicit
 "Endpoint not configured" warning instead of blank space.
+
+The tier is always derived from the hardened URL, exactly as an `mcp.json`
+import derives it. `RegisterMcpServerRequest.tier` is only a caller
+assertion: an unspecified tier accepts whatever the URL classifies to (which
+is what a client built against the tier-less form of this RPC sends), a
+local-container or remote-url tier must match that classification or the
+request is refused, and `MCP_SERVER_TIER_BUNDLED` is never accepted. An
+explicit registration also clears the deletion tombstone for that name — the
+user asking for the name by hand is the consent the tombstone was waiting for
+— while file re-import never does. A stored bearer token can be replaced or
+cleared afterwards (`RotateMcpServerToken`); a token that is present but only
+whitespace is refused rather than silently treated as "clear it". The token
+is write-only end to end, and no response, event, or audit row ever carries
+it back.
+
+Import preserves a previous user enablement decision only while the endpoint
+and tier are unchanged; repointing a server disables it and withdraws the old
+tool snapshot. An explicit empty `tools` snapshot withdraws prior tools, and
+policy edits cannot reactivate a tool the current snapshot no longer
+contains. New servers never arrive enabled. Removal writes a local import
+tombstone, so an unchanged `mcp.json` cannot silently recreate the server at
+the next restart or re-import; bringing it back requires either a new name in
+the file or an explicit in-app registration of the old one.
 
 `mcp.json` remains the bulk/config-file path. The orchestrator imports it at
 startup and, without a restart, whenever an operator chooses Re-import
@@ -137,7 +161,7 @@ for every other malformed tool definition — never `encoding/json`'s own
 `"unknown field %q"` wording, which would otherwise name the offending key
 verbatim (a JSON key inside a tool definition is exactly as attacker-controlled
 as its value). Each on-demand Reimport RPC's
-response is call-local and deterministic: its `Refused` list is built from
+response is call-local and deterministic: its `unsupported` list is built from
 that call's own report, sorted by name, rather than by re-reading the shared
 issues table two overlapping reimports could otherwise race and swap into
 each other's response. Skipped names in that response mean the row already had a real,
@@ -737,6 +761,22 @@ direct request itself. A third-party server would not; the guarantee holds
 because its registered endpoint and sealed bearer are usable only through the
 orchestrator proxy. A process that can reach or authenticate to that server by
 some other route is outside this guarantee.
+
+The same caller-side rule covers the orchestrator-owned `integrations`
+pseudo-server. `github.create_comment` cannot be made safe, and every
+`approval_required` integration call—including reads—consumes the
+argument-bound approval at the orchestrator before dispatch. The runtime can
+discover and dispatch integration tools through the internal service facet but
+cannot enumerate, create, revoke, or delete connections; the public client can
+manage connections but cannot reach dispatch.
+
+Integration credentials are AES-256-GCM-sealed at rest and opened once per
+call in the orchestrator. Plaintext exists only in the provider-call stack
+frame, travels only in GitHub's `Authorization` header, and is never placed in
+a URL, event, audit row, log, error, or tool result. Provider HTTP uses the
+shared public-address resolver and no-redirect client, so a private DNS answer
+or redirect cannot move the header away from the pinned `api.github.com`
+destination.
 
 Immediately before HTTP dispatch, the proxy rechecks that the run is still
 execution-active, the session is not being withdrawn, the server and tool are

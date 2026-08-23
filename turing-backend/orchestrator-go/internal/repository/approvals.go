@@ -5,10 +5,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
+
+const MaxIntegrationApprovalRenderBytes = 32 * 1024
 
 var (
 	ErrApprovalExpired         = errors.New("approval expired")
@@ -74,11 +79,7 @@ func (r *Repository) CreateApproval(ctx context.Context, runID string, toolCallI
 			return ApprovalRecord{}, err
 		}
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'waiting_approval' WHERE id = ? AND status IN ('queued','running','waiting_approval')`, runID)
-	if err != nil {
-		return ApprovalRecord{}, err
-	}
-	if err := expectOneRow(result, "run cannot wait for approval"); err != nil {
+	if _, err := awaitApprovalTransitionTx(ctx, tx, runID, record.ApprovalID); err != nil {
 		return ApprovalRecord{}, err
 	}
 	record, err = approvalByID(ctx, tx, record.ApprovalID)
@@ -147,25 +148,122 @@ func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, 
 			return ApprovalRecord{}, Event{}, err
 		}
 	}
-	result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'waiting_approval' WHERE id = ? AND status IN ('queued','running','waiting_approval')`, runID)
-	if err != nil {
-		return ApprovalRecord{}, Event{}, err
-	}
-	if err := expectOneRow(result, "run cannot wait for approval"); err != nil {
-		return ApprovalRecord{}, Event{}, err
-	}
 	record, err = approvalByID(ctx, tx, record.ApprovalID)
 	if err != nil {
 		return ApprovalRecord{}, Event{}, err
 	}
-	event, err := appendApprovalLifecycleEventTx(ctx, tx, record, "approval.requested", createdAt)
+	// approval.requested IS the lifecycle event for running -> waiting approval,
+	// so it carries the resulting state instead of a second state-changed event
+	// landing beside it.
+	var requestTraceID string
+	if err := tx.QueryRowContext(ctx, `SELECT trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&requestTraceID); err != nil {
+		return ApprovalRecord{}, Event{}, err
+	}
+	requestPayload, err := approvalLifecyclePayloadTx(ctx, tx, record, requestTraceID, "approval.requested")
 	if err != nil {
 		return ApprovalRecord{}, Event{}, err
+	}
+	transition, err := awaitApprovalTransitionTx(ctx, tx, runID, record.ApprovalID,
+		requestPayload)
+	if err != nil {
+		return ApprovalRecord{}, Event{}, err
+	}
+	var event Event
+	if len(transition.Events) > 0 {
+		event = transition.Events[0]
+	} else {
+		// The run was already waiting on an earlier approval, so its lifecycle
+		// did not change. The request still has to be announced, on the same
+		// terms as the decision below: inside this transaction, carrying the
+		// run state as it stands, so a client cannot receive one
+		// approval.requested with a state projection and another without.
+		event, err = appendApprovalRunStateEventTx(ctx, tx, record, "approval.requested", transition.State, createdAt)
+		if err != nil {
+			return ApprovalRecord{}, Event{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return ApprovalRecord{}, Event{}, err
 	}
 	return record, event, nil
+}
+
+// awaitApprovalTransitionTx commits running -> waiting approval.
+//
+// Recovering is deliberately not an allowed source. A run whose worker
+// ownership is unproven cannot promise to make the call the user would be
+// authorizing, and a second pending approval on a run nobody owns is a decision
+// the user makes for nothing. Queued is not a source either: there is no worker
+// yet to have asked.
+func awaitApprovalTransitionTx(ctx context.Context, tx *sql.Tx, runID string, approvalID string, payload ...map[string]any) (RunTransitionResult, error) {
+	transition := runTransition{
+		runID:            runID,
+		expectedVersion:  unresolvedStateVersion,
+		transactionLocal: true,
+		allowedFrom:      []string{lifecycleRunning},
+		to:               lifecycleWaitingApproval,
+		reason:           runoutcome.ReasonNone,
+		identity:         runTransitionIdentity{approvalID: approvalID},
+	}
+	if len(payload) == 1 {
+		transition.eventType = "approval.requested"
+		transition.eventPayload = payload[0]
+	}
+	return applyRunTransitionTx(ctx, tx, transition, nil)
+}
+
+// ResumeApprovedRunInput is the trigger identity a worker must prove to move a
+// run out of waiting-approval.
+//
+// Every field is part of that identity rather than a hint: the run the resume
+// is about, the approval the decision belongs to, the worker the orchestrator
+// authenticated, the assignment attempt that still owns the run, and the
+// version the worker computed its readiness against. A resume missing any of
+// them could be a fenced predecessor's, and a fenced predecessor resuming a run
+// somebody else now owns is the exact failure this transition exists to refuse.
+type ResumeApprovedRunInput struct {
+	RunID                string
+	ApprovalID           string
+	WorkerID             string
+	AssignmentAttemptID  string
+	ExpectedStateVersion int64
+}
+
+// ResumeApprovedRun returns a waiting-approval run to running.
+//
+// Persisting a decision, minting its token, or delivering it to a worker does
+// not do this: none of them is the worker saying it has restored the paused
+// attempt and is ready to act. This is that statement, and it is guarded like
+// every other lifecycle change — one version forward, from waiting-approval
+// only, for the exact worker and attempt the row still records.
+//
+// The approval is guarded twice over, because it is the only part of the
+// trigger the run row cannot vouch for. It has to still authorize something,
+// which pending, denied and expired do not; and it is committed into the
+// transition's own event so the duplicate rule can tell the resume that
+// actually moved this run from a second one arriving behind it. Without that,
+// a run with two outstanding authorizations answers the second Ready with the
+// first one's acceptance.
+//
+// A repeat of the identical resume is the write-free duplicate the shared core
+// already recognizes, which is what lets a worker that lost the acceptance ask
+// again and be told the same thing rather than fenced.
+func (r *Repository) ResumeApprovedRun(ctx context.Context, input ResumeApprovedRunInput) (RunTransitionResult, error) {
+	return r.runInTransition(ctx, runTransition{
+		runID:           input.RunID,
+		expectedVersion: input.ExpectedStateVersion,
+		allowedFrom:     []string{lifecycleWaitingApproval},
+		to:              lifecycleRunning,
+		reason:          runoutcome.ReasonNone,
+		identity: runTransitionIdentity{
+			workerID:            input.WorkerID,
+			assignmentAttemptID: input.AssignmentAttemptID,
+			approvalID:          input.ApprovalID,
+		},
+		requiresAuthorizedApproval: true,
+		durableApprovalIdentity:    true,
+		eventPayload:               map[string]any{approvalIdentityPayloadKey: input.ApprovalID},
+	}, nil)
 }
 
 func (r *Repository) GetApproval(ctx context.Context, approvalID string) (ApprovalRecord, error) {
@@ -234,18 +332,37 @@ func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID st
 	if err := expectOneRow(result, "approval is not pending"); err != nil {
 		return ApprovalTerminalization{}, err
 	}
-	result, err = tx.ExecContext(ctx, `UPDATE agent_runs SET status = 'running' WHERE id = (SELECT run_id FROM approvals WHERE id = ?) AND status = 'waiting_approval'`, approvalID)
-	if err != nil {
-		return ApprovalTerminalization{}, err
-	}
-	if err := expectOneRow(result, "run is not waiting for approval"); err != nil {
-		return ApprovalTerminalization{}, err
-	}
 	record, err = approvalByID(ctx, tx, approvalID)
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
-	event, err := appendApprovalLifecycleEventTx(ctx, tx, record, "approval.approved", decidedAt)
+	// Approving records a decision; it does not resume the run.
+	//
+	// Persisting the approval and minting its token are both things the
+	// orchestrator does to itself, and the worker they are for may not even be
+	// reachable. The row leaves waiting-approval only when that worker proves
+	// it restored the paused attempt and the guarded resume commits — see
+	// ResumeApprovedRun. Moving it here used to mean a run could report itself
+	// running while the only process that could act on the approval had
+	// already gone.
+	//
+	// The decision still has to be announced inside this transaction, or every
+	// client goes on asking the user to authorize something they already
+	// authorized. It carries the run state as it stands, so the projection can
+	// never disagree with the row it describes.
+	row, err := readRunRow(ctx, tx, record.RunID)
+	if err != nil {
+		return ApprovalTerminalization{}, err
+	}
+	// A decision may only be recorded for a run that could still act on it.
+	// Waiting-approval is the ordinary case; running covers a run an earlier
+	// decision already resumed while it still held this second authorization.
+	// Anything else — recovering, queued, or terminal — has no attempt that
+	// could make the call the user is being asked to authorize.
+	if row.lifecycle != lifecycleWaitingApproval && row.lifecycle != lifecycleRunning {
+		return ApprovalTerminalization{}, errors.New("run is not waiting for approval")
+	}
+	event, err := appendApprovalRunStateEventTx(ctx, tx, record, "approval.approved", row.state(), decidedAt)
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
@@ -266,15 +383,23 @@ func (r *Repository) DenyApproval(ctx context.Context, approvalID string, denial
 }
 
 func (r *Repository) ExpireApprovalWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, sql.NullString{}, decidedAt, "expired", "approval_expired", "Approval expired", "failed", "approval.expired", false)
+	return r.terminalizeApproval(ctx, approvalID, sql.NullString{}, decidedAt, "expired",
+		runoutcome.NormalizeFailure(runoutcome.OriginApprovalExpiry, "approval_expired", runoutcome.RetryClassNever),
+		"failed", "approval.expired", false)
 }
 
 func (r *Repository) DenyApprovalWithEvent(ctx context.Context, approvalID string, denialReason sql.NullString, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, denialReason, decidedAt, "denied", "approval_denied", "User denied approval", "denied", "approval.denied", true)
+	// approval_denied is not an allowlisted failure code, and it is not meant to
+	// be: a user refusing a tool call is a policy outcome, not a system fault.
+	return r.terminalizeApproval(ctx, approvalID, denialReason, decidedAt, "denied",
+		runoutcome.NormalizeFailure(runoutcome.OriginToolPolicy, "tool_policy_decision_failed", runoutcome.RetryClassNever),
+		"denied", "approval.denied", true)
 }
 
 func (r *Repository) FailApprovalDeliveryWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
-	return r.terminalizeApproval(ctx, approvalID, sql.NullString{}, decidedAt, "denied", "approval_delivery_failed", "Tool policy decision delivery failed", "failed", "approval.denied", false)
+	return r.terminalizeApproval(ctx, approvalID, sql.NullString{}, decidedAt, "denied",
+		runoutcome.NormalizeFailure(runoutcome.OriginApprovalTransport, "approval_delivery_failed", runoutcome.RetryClassNever),
+		"failed", "approval.denied", false)
 }
 
 func (r *Repository) terminalizeApproval(
@@ -283,8 +408,7 @@ func (r *Repository) terminalizeApproval(
 	denialReason sql.NullString,
 	decidedAt string,
 	approvalStatus string,
-	errorCode string,
-	errorMessage string,
+	failure runoutcome.Failure,
 	toolCallStatus string,
 	approvalEventType string,
 	expireAtDeadline bool,
@@ -313,17 +437,22 @@ func (r *Repository) terminalizeApproval(
 	}
 	if expireAtDeadline && approvalExpiredAtDecision(record.ExpiresAt, decidedAt) {
 		approvalStatus = "expired"
-		errorCode = "approval_expired"
-		errorMessage = "Approval expired"
+		failure = runoutcome.NormalizeFailure(runoutcome.OriginApprovalExpiry, "approval_expired", runoutcome.RetryClassNever)
 		toolCallStatus = "failed"
 		approvalEventType = "approval.expired"
 	}
+	errorCode := failure.Code()
+	category := failure.Reason()
 	var sessionID, traceID, runStatus string
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id, status FROM agent_runs WHERE id = ?`, record.RunID).Scan(&sessionID, &traceID, &runStatus); err != nil {
 		return ApprovalTerminalization{}, err
 	}
-	lateRuntimeFailure := runStatus == "failed"
-	if runStatus != "waiting_approval" && !lateRuntimeFailure && (!approvedExpiration || runStatus != "running") {
+	lateRuntimeFailure := runStatus == lifecycleFailed
+	// Recovering is accepted for the same reason the recovery scan sees it: a
+	// run fenced out of waiting-approval still holds this pending approval, and
+	// refusing to close it here would leave the user's decision stranded.
+	awaitingDecision := runStatus == lifecycleWaitingApproval || runStatus == lifecycleRecovering
+	if !awaitingDecision && !lateRuntimeFailure && (!approvedExpiration || runStatus != lifecycleRunning) {
 		return ApprovalTerminalization{}, errors.New("run not found for approval")
 	}
 	if lateRuntimeFailure {
@@ -365,9 +494,9 @@ func (r *Repository) terminalizeApproval(
 	if record.ToolCallID != "" {
 		result, err = tx.ExecContext(ctx, `
 			UPDATE tool_calls
-			SET status = ?, error_code = ?, error_message = ?, completed_at = ?
+			SET status = ?, error_code = ?, error_message = NULL, completed_at = ?
 			WHERE id = ? AND run_id = ? AND status IN ('requested', 'allowed', 'approval_required')
-		`, toolCallStatus, errorCode, errorMessage, decidedAt, record.ToolCallID, record.RunID)
+		`, toolCallStatus, errorCode, decidedAt, record.ToolCallID, record.RunID)
 		if err != nil {
 			return ApprovalTerminalization{}, err
 		}
@@ -404,7 +533,7 @@ func (r *Repository) terminalizeApproval(
 	}
 	var toolEvent Event
 	if toolCallChanged {
-		payloadJSON, err := marshalToolLifecyclePayload(record.ToolCallID, toolCallServerName, record.ToolName, errorMessage)
+		payloadJSON, err := marshalToolLifecyclePayload(record.ToolCallID, toolCallServerName, record.ToolName, category)
 		if err != nil {
 			return ApprovalTerminalization{}, err
 		}
@@ -419,43 +548,32 @@ func (r *Repository) terminalizeApproval(
 	}
 	var event Event
 	if !lateRuntimeFailure {
-		runStatusPredicate := "status = 'waiting_approval'"
+		// Recovering is a legal source here: a run fenced out of waiting
+		// approval still holds the pending approval, and leaving it
+		// unterminalizable would strand the user's decision forever. An
+		// already-approved authorization that expires may also be terminalized
+		// from running.
+		allowedFrom := []string{lifecycleWaitingApproval, lifecycleRecovering}
 		if approvedExpiration {
-			runStatusPredicate = "status IN ('waiting_approval', 'running')"
+			allowedFrom = append(allowedFrom, lifecycleRunning)
 		}
-		result, err = tx.ExecContext(ctx, `
-			UPDATE agent_runs
-			SET status = 'failed', error_code = ?, error_message = ?, finished_at = ?
-			WHERE id = ? AND `+runStatusPredicate, errorCode, errorMessage, decidedAt, record.RunID)
-		if err != nil {
-			return ApprovalTerminalization{}, err
-		}
-		if err := expectOneRow(result, "run not found for approval"); err != nil {
-			return ApprovalTerminalization{}, err
-		}
-		result, err = tx.ExecContext(ctx, `
-			UPDATE jobs
-			SET status = 'failed', finished_at = ?, error_code = ?, error_message = ?, lease_owner = NULL, lease_expires_at = NULL, lease_expires_at_ns = NULL
-			WHERE run_id = ? AND status IN ('pending', 'in_progress')
-		`, decidedAt, errorCode, errorMessage, record.RunID)
-		if err != nil {
-			return ApprovalTerminalization{}, err
-		}
-		if err := expectOneRow(result, "job not found for approval"); err != nil {
-			return ApprovalTerminalization{}, err
-		}
-		payloadJSON, err := json.Marshal(map[string]any{
-			"runId":     record.RunID,
-			"code":      errorCode,
-			"message":   errorMessage,
-			"retryable": false,
+		terminal, err := failRunTx(ctx, tx, FailRunInput{
+			RunID:                   record.RunID,
+			Failure:                 failure,
+			allowedFrom:             allowedFrom,
+			resolveVersionInTx:      true,
+			leaveExecutionUntouched: true,
 		})
 		if err != nil {
+			if errors.Is(err, ErrRunNotFailable) || errors.Is(err, ErrRunTransitionConflict) {
+				return ApprovalTerminalization{}, errors.New("run not found for approval")
+			}
 			return ApprovalTerminalization{}, err
 		}
-		event, err = appendRunEventTx(ctx, tx, sessionID, record.RunID, traceID, "agent.run.failed", string(payloadJSON), decidedAt)
-		if err != nil {
-			return ApprovalTerminalization{}, err
+		for _, appended := range terminal.Events {
+			if appended.Type == "agent.run.failed" {
+				event = appended
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -631,17 +749,31 @@ func approvalByID(ctx context.Context, q approvalQuerier, approvalID string) (Ap
 	return record, nil
 }
 
-func appendApprovalLifecycleEventTx(ctx context.Context, tx *sql.Tx, approval ApprovalRecord, eventType string, createdAt string) (Event, error) {
-	var sessionID, traceID string
-	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, approval.RunID).Scan(&sessionID, &traceID); err != nil {
-		return Event{}, err
-	}
+// approvalFailureCategory is the repository's alias for the shared rule that
+// maps an approval event type to the one category it may carry. The rule lives
+// in runoutcome so the live writers here and the migration that rewrites
+// historical rows cannot answer the question differently.
+func approvalFailureCategory(eventType string) (runoutcome.Reason, bool) {
+	return runoutcome.ApprovalFailureCategory(eventType)
+}
+
+// approvalLifecyclePayload is the shared approval projection. It is built
+// separately from the append so an approval event that IS a run lifecycle
+// transition can be emitted by the guarded transition core, carrying the
+// resulting run state, instead of being appended beside it.
+func approvalLifecyclePayload(approval ApprovalRecord, traceID string, eventType string) map[string]any {
 	payload := map[string]any{
 		"approvalId": approval.ApprovalID,
-		"toolCallId": approval.ToolCallID,
 		"toolName":   approval.ToolName,
 		"runId":      approval.RunID,
 		"traceId":    traceID,
+	}
+	// tool_call_id is nullable, and the migration drops identity keys that are
+	// empty rather than publishing a blank one. Emitting "" here would make a
+	// freshly written approval failure distinguishable from a rewritten one on
+	// exactly the key a client uses to join the event to its tool call.
+	if approval.ToolCallID != "" {
+		payload["toolCallId"] = approval.ToolCallID
 	}
 	if eventType == "approval.requested" {
 		payload["argsSummary"] = approvalArgsSummary(approval.ArgsJSON)
@@ -649,11 +781,163 @@ func appendApprovalLifecycleEventTx(ctx context.Context, tx *sql.Tx, approval Ap
 	if approval.ModelToolCallID != "" {
 		payload["modelToolCallId"] = approval.ModelToolCallID
 	}
-	payloadJSON, err := json.Marshal(payload)
+	if category, ok := approvalFailureCategory(eventType); ok {
+		payload["category"] = string(category)
+	}
+	return payload
+}
+
+func approvalLifecyclePayloadTx(ctx context.Context, tx *sql.Tx, approval ApprovalRecord, traceID string, eventType string) (map[string]any, error) {
+	payload := approvalLifecyclePayload(approval, traceID, eventType)
+	if eventType != "approval.requested" {
+		return payload, nil
+	}
+	var serverName string
+	if approval.ToolCallID != "" {
+		_ = tx.QueryRowContext(ctx, `SELECT server_name FROM tool_calls WHERE id = ?`, approval.ToolCallID).Scan(&serverName)
+	}
+	if serverName != "integrations" || approval.ToolName != "github.create_comment" {
+		return payload, nil
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(approval.ArgsJSON), &args); err != nil {
+		return nil, err
+	}
+	render, err := buildIntegrationApprovalRender(ctx, tx, approval.ToolName, args)
+	if err != nil {
+		return nil, err
+	}
+	payload["fullArguments"] = render
+	return payload, nil
+}
+
+// terminalApproval is the identity of one approval that a run-level cleanup is
+// ending. The two cleanups that revoke approvals in bulk — a run reaching a
+// terminal state, and a recovery discarding an authorization it can no longer
+// trust — read approvals directly rather than through ApprovalRecord, so this
+// carries just the identity the projection is allowed to publish.
+type terminalApproval struct {
+	id, toolCallID, toolName, modelToolCallID string
+}
+
+// appendApprovalTerminalEventTx writes the terminal projection for one approval
+// revoked by a run-level cleanup.
+//
+// Both cleanups used to hand-build this payload and label it with a category
+// borrowed from whatever was failing around them — the run's own failure
+// reason in one case, side_effect_uncertain in the other. Neither described the
+// approval: an approval swept up by a terminal run or a lost lease expired,
+// full stop. Routing both through one helper means the category comes from the
+// event type, exactly as it does for the decided approvals, so a reader cannot
+// tell whether an approval.expired was written by a decision path or a cleanup.
+func appendApprovalTerminalEventTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+	runID string,
+	traceID string,
+	approval terminalApproval,
+	eventType string,
+	createdAt string,
+) (Event, error) {
+	category, ok := approvalFailureCategory(eventType)
+	if !ok {
+		return Event{}, fmt.Errorf("%q is not an approval failure event", eventType)
+	}
+	payload := map[string]any{
+		"approvalId": approval.id,
+		"toolName":   approval.toolName,
+		"category":   string(category),
+	}
+	if approval.toolCallID != "" {
+		payload["toolCallId"] = approval.toolCallID
+	}
+	if approval.modelToolCallID != "" {
+		payload["modelToolCallId"] = approval.modelToolCallID
+	}
+	payloadJSON, err := marshalEventPayload(payload)
 	if err != nil {
 		return Event{}, err
 	}
-	return appendRunEventTx(ctx, tx, sessionID, approval.RunID, traceID, eventType, string(payloadJSON), createdAt)
+	return appendRunEventTx(ctx, tx, sessionID, runID, traceID, eventType, payloadJSON, createdAt)
+}
+
+func appendApprovalLifecycleEventTx(ctx context.Context, tx *sql.Tx, approval ApprovalRecord, eventType string, createdAt string) (Event, error) {
+	var sessionID, traceID string
+	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, approval.RunID).Scan(&sessionID, &traceID); err != nil {
+		return Event{}, err
+	}
+	payload, err := approvalLifecyclePayloadTx(ctx, tx, approval, traceID, eventType)
+	if err != nil {
+		return Event{}, err
+	}
+	payloadJSON, err := marshalEventPayload(payload)
+	if err != nil {
+		return Event{}, err
+	}
+	return appendRunEventTx(ctx, tx, sessionID, approval.RunID, traceID, eventType, payloadJSON, createdAt)
+}
+
+// appendApprovalRunStateEventTx announces an approval lifecycle event on a run
+// whose lifecycle did not change, carrying the state that is actually current.
+//
+// It is the fallback for the two events that normally ARE run transitions:
+// when a run already has a pending approval, a second request does not move it
+// to waiting approval, and when an earlier decision already resumed it, a
+// second decision does not move it to running. The approval row still changed,
+// so the event is owed — and it carries the same snapshot the transition-borne
+// event would have carried, so one event type never arrives sometimes with a
+// run state and sometimes without.
+//
+// The state must be the one the guarded transition just reported, read under
+// the same transaction, rather than a fresh read that could disagree with it.
+func appendApprovalRunStateEventTx(ctx context.Context, tx *sql.Tx, approval ApprovalRecord, eventType string, state RunState, createdAt string) (Event, error) {
+	var sessionID, traceID string
+	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, approval.RunID).Scan(&sessionID, &traceID); err != nil {
+		return Event{}, err
+	}
+	payload, err := approvalLifecyclePayloadTx(ctx, tx, approval, traceID, eventType)
+	if err != nil {
+		return Event{}, err
+	}
+	payloadJSON, err := marshalRunStatePayload(payload, state)
+	if err != nil {
+		return Event{}, err
+	}
+	return appendRunEventTx(ctx, tx, sessionID, approval.RunID, traceID, eventType, payloadJSON, createdAt)
+}
+
+type approvalRenderQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (r *Repository) IntegrationApprovalRender(ctx context.Context, toolName string, args map[string]any) (string, error) {
+	return buildIntegrationApprovalRender(ctx, r.db, toolName, args)
+}
+
+func buildIntegrationApprovalRender(ctx context.Context, queryer approvalRenderQueryer, toolName string, args map[string]any) (string, error) {
+	if toolName != "github.create_comment" {
+		return "", errors.New("integration approval render is not defined for this tool")
+	}
+	connectionID, ok := args["connection_id"].(string)
+	if !ok || connectionID == "" {
+		return "", errors.New("connection_id is required")
+	}
+	owner, ownerOK := args["owner"].(string)
+	repo, repoOK := args["repo"].(string)
+	body, bodyOK := args["body"].(string)
+	number, numberOK := args["issue_number"].(float64)
+	if !ownerOK || !repoOK || !bodyOK || !numberOK || owner == "" || repo == "" || number < 1 || number != float64(int(number)) {
+		return "", errors.New("GitHub comment approval arguments are invalid")
+	}
+	if owner != strings.TrimSpace(owner) || repo != strings.TrimSpace(repo) {
+		return "", errors.New("GitHub comment approval destination is not normalized")
+	}
+	var displayName string
+	if err := queryer.QueryRowContext(ctx, `SELECT display_name FROM integration_connections WHERE id = ? AND provider = 'github' AND status = 'connected'`, connectionID).Scan(&displayName); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Connection: %s (%s)\nDestination: api.github.com/%s/%s/issues/%d\nAction: create issue comment\n\nFull comment body:\n%s", displayName, connectionID, owner, repo, int(number), body), nil
 }
 
 func approvalArgsSummary(argsJSON string) string {

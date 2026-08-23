@@ -41,6 +41,7 @@ const TuringEventType$json = {
     {'1': 'TURING_EVENT_TYPE_SYSTEM', '2': 20},
     {'1': 'TURING_EVENT_TYPE_SESSION_UPDATED', '2': 21},
     {'1': 'TURING_EVENT_TYPE_SESSION_DELETED', '2': 22},
+    {'1': 'TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED', '2': 23},
   ],
 };
 
@@ -62,7 +63,8 @@ final $typed_data.Uint8List turingEventTypeDescriptor = $convert.base64Decode(
     '9BUFBST1ZBTF9FWFBJUkVEEBESJwojVFVSSU5HX0VWRU5UX1RZUEVfQVBQUk9WQUxfQ09OU1VN'
     'RUQQEhIbChdUVVJJTkdfRVZFTlRfVFlQRV9FUlJPUhATEhwKGFRVUklOR19FVkVOVF9UWVBFX1'
     'NZU1RFTRAUEiUKIVRVUklOR19FVkVOVF9UWVBFX1NFU1NJT05fVVBEQVRFRBAVEiUKIVRVUklO'
-    'R19FVkVOVF9UWVBFX1NFU1NJT05fREVMRVRFRBAW');
+    'R19FVkVOVF9UWVBFX1NFU1NJT05fREVMRVRFRBAWEi0KKVRVUklOR19FVkVOVF9UWVBFX0FHRU'
+    '5UX1JVTl9TVEFURV9DSEFOR0VEEBc=');
 
 @$core.Deprecated('Use turingEventDescriptor instead')
 const TuringEvent$json = {
@@ -97,6 +99,14 @@ const TuringEvent$json = {
       '6': '.google.protobuf.Struct',
       '10': 'payload'
     },
+    {
+      '1': 'run_state',
+      '3': 9,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RunState',
+      '10': 'runState'
+    },
   ],
 };
 
@@ -107,7 +117,8 @@ final $typed_data.Uint8List turingEventDescriptor = $convert.base64Decode(
     'CVIHdHJhY2VJZBIaCghzZXF1ZW5jZRgFIAEoA1IIc2VxdWVuY2USLgoEdHlwZRgGIAEoDjIaLn'
     'R1cmluZy52MS5UdXJpbmdFdmVudFR5cGVSBHR5cGUSOQoKY3JlYXRlZF9hdBgHIAEoCzIaLmdv'
     'b2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBSCWNyZWF0ZWRBdBIxCgdwYXlsb2FkGAggASgLMhcuZ2'
-    '9vZ2xlLnByb3RvYnVmLlN0cnVjdFIHcGF5bG9hZA==');
+    '9vZ2xlLnByb3RvYnVmLlN0cnVjdFIHcGF5bG9hZBIwCglydW5fc3RhdGUYCSABKAsyEy50dXJp'
+    'bmcudjEuUnVuU3RhdGVSCHJ1blN0YXRl');
 
 @$core.Deprecated('Use listEventsRequestDescriptor instead')
 const ListEventsRequest$json = {

@@ -1,5 +1,7 @@
 import 'package:fixnum/fixnum.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:turing_flutter_app/generated/turing/v1/automations.pb.dart'
+    as automationpb;
 import 'package:turing_flutter_app/generated/turing/v1/chat.pb.dart';
 import 'package:turing_flutter_app/generated/turing/v1/common.pb.dart'
     as commonpb;
@@ -14,6 +16,8 @@ import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/session_page.dart';
 import 'package:turing_flutter_app/generated/google/protobuf/struct.pb.dart'
     as structpb;
+import 'package:turing_flutter_app/models/run_lifecycle.dart';
+import 'package:turing_flutter_app/models/run_state.dart';
 
 void main() {
   // Guards the tool-call UI: the chat screen switches on these dotted strings,
@@ -70,6 +74,27 @@ void main() {
         eventpb.TuringEventType.TURING_EVENT_TYPE_SESSION_DELETED,
       ),
       'session.deleted',
+    );
+  });
+
+  test('maps automation occurrence failure fields', () {
+    final model = GrpcMappers.automationToModel(
+      automationpb.Automation(
+        lastOccurrenceFailureCode: 'remote_egress_configuration_invalid',
+        lastOccurrenceFailedAt: timestamppb.Timestamp(
+          seconds: Int64(1770000000),
+          nanos: 123,
+        ),
+      ),
+    );
+
+    expect(
+      model.lastOccurrenceFailureCode,
+      'remote_egress_configuration_invalid',
+    );
+    expect(
+      model.lastOccurrenceFailedAt,
+      DateTime.fromMillisecondsSinceEpoch(1770000000000, isUtc: true).toLocal(),
     );
   });
 
@@ -160,6 +185,213 @@ void main() {
     expect(mapped.payload['toolCallId'], 'call_1');
     expect(mapped.payload['toolName'], 'system.time');
     expect(mapped.payload['serverName'], 'system');
+  });
+
+  test('chat persisted state changed maps type and semantic run state', () {
+    final mapped = GrpcMappers.chatStreamEventToTuringEvent(
+      ChatStreamEvent(
+        sessionId: 'sess_1',
+        runId: 'run_1',
+        sequence: Int64(44),
+        runStateChanged: RunStateChanged(
+          runState: commonpb.RunState(
+            runId: 'run_1',
+            stateVersion: Int64(7),
+            stateUpdatedAt: timestamppb.Timestamp(),
+          ),
+        ),
+      ),
+    );
+
+    expect(mapped.type, 'agent.run.state_changed');
+    expect(mapped.runState?.runId, 'run_1');
+    expect(mapped.runState?.stateVersion, 7);
+    expect(mapped.runState?.lifecycle, RunLifecycle.unknown);
+    expect(mapped.runState?.outcomeReason, RunOutcomeReason.unknown);
+    expect(mapped.payload, isEmpty);
+  });
+
+  test('event service state changed maps type and semantic run state', () {
+    final mapped = GrpcMappers.turingEventToTuringEvent(
+      eventpb.TuringEvent(
+        type: eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED,
+        runState: commonpb.RunState(
+          runId: 'run_1',
+          stateVersion: Int64(7),
+          stateUpdatedAt: timestamppb.Timestamp(),
+        ),
+        payload: structpb.Struct(
+          fields: <String, structpb.Value>{
+            'outcomeReason': structpb.Value(stringValue: 'provider_failure'),
+          }.entries,
+        ),
+      ),
+    );
+
+    expect(mapped.type, 'agent.run.state_changed');
+    expect(mapped.runState?.runId, 'run_1');
+    expect(mapped.runState?.stateVersion, 7);
+    expect(mapped.runState?.lifecycle, RunLifecycle.unknown);
+    expect(mapped.runState?.outcomeReason, RunOutcomeReason.unknown);
+    expect(mapped.payload, {'outcomeReason': 'provider_failure'});
+  });
+
+  // A server that types an event as state-changed without filling the typed
+  // RunState still carries meaning in its persisted Struct. Fabricating
+  // {'runId': '', 'stateVersion': 0} would invent an authoritative-looking run
+  // identity and version that nobody reported, and discard the real payload.
+  test('preserves the persisted payload when run state is absent', () {
+    final mapped = GrpcMappers.turingEventToTuringEvent(
+      eventpb.TuringEvent(
+        type: eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED,
+        payload: structpb.Struct(
+          fields: <String, structpb.Value>{
+            'runId': structpb.Value(stringValue: 'run_1'),
+            'note': structpb.Value(stringValue: 'legacy projection'),
+          }.entries,
+        ),
+      ),
+    );
+
+    expect(mapped.type, 'agent.run.state_changed');
+    expect(mapped.runState, isNull);
+    expect(mapped.payload, {'runId': 'run_1', 'note': 'legacy projection'});
+  });
+
+  // The RunState allowlist is scoped to state-changed events by type, not just
+  // by presence. A failure event may carry a RunState alongside its own
+  // persisted Struct; collapsing it to {runId, stateVersion} would erase the
+  // error detail the failure view renders.
+  test('preserves the persisted payload for a non state-changed event', () {
+    final mapped = GrpcMappers.turingEventToTuringEvent(
+      eventpb.TuringEvent(
+        type: eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_FAILED,
+        runState: commonpb.RunState(
+          runId: 'run_1',
+          stateVersion: Int64(7),
+          stateUpdatedAt: timestamppb.Timestamp(),
+        ),
+        payload: structpb.Struct(
+          fields: <String, structpb.Value>{
+            'errorCode': structpb.Value(stringValue: 'provider_failure'),
+            'message': structpb.Value(stringValue: 'upstream timeout'),
+          }.entries,
+        ),
+      ),
+    );
+
+    expect(mapped.type, 'agent.run.failed');
+    expect(mapped.runState?.stateVersion, 7);
+    expect(mapped.payload, {
+      'errorCode': 'provider_failure',
+      'message': 'upstream timeout',
+    });
+  });
+
+  test('maps a run state changed chat event with no run state to empty', () {
+    final mapped = GrpcMappers.chatStreamEventToTuringEvent(
+      ChatStreamEvent(
+        sessionId: 'sess_1',
+        runId: 'run_1',
+        sequence: Int64(45),
+        runStateChanged: RunStateChanged(),
+      ),
+    );
+
+    expect(mapped.type, 'agent.run.state_changed');
+    expect(mapped.runState, isNull);
+    expect(mapped.payload, isEmpty);
+  });
+
+  test('absent message run state remains neutral legacy absence', () {
+    final mapped = GrpcMappers.messageToModel(
+      commonpb.Message(
+        messageId: 'msg_assistant',
+        role: commonpb.MessageRole.MESSAGE_ROLE_ASSISTANT,
+      ),
+    );
+
+    expect(mapped.runState, isNull);
+  });
+
+  test('unknown event type never becomes a raw numeric label', () {
+    final mapped = GrpcMappers.turingEventToTuringEvent(
+      eventpb.TuringEvent.fromBuffer(const [0x30, 0x7f]),
+    );
+
+    expect(mapped.type, 'system');
+    expect(mapped.type, isNot(contains('127')));
+  });
+
+  test('generated chat event oneof remains exhaustively mapped', () {
+    final cases = <ChatStreamEvent_Event, ChatStreamEvent>{
+      ChatStreamEvent_Event.runQueued: ChatStreamEvent(runQueued: RunQueued()),
+      ChatStreamEvent_Event.runStarted: ChatStreamEvent(
+        runStarted: RunStarted(),
+      ),
+      ChatStreamEvent_Event.messageStarted: ChatStreamEvent(
+        messageStarted: MessageStarted(),
+      ),
+      ChatStreamEvent_Event.tokenDelta: ChatStreamEvent(
+        tokenDelta: TokenDelta(),
+      ),
+      ChatStreamEvent_Event.toolCallStarted: ChatStreamEvent(
+        toolCallStarted: ToolEvent(),
+      ),
+      ChatStreamEvent_Event.toolCallCompleted: ChatStreamEvent(
+        toolCallCompleted: ToolEvent(),
+      ),
+      ChatStreamEvent_Event.toolCallFailed: ChatStreamEvent(
+        toolCallFailed: ToolEvent(),
+      ),
+      ChatStreamEvent_Event.approvalRequested: ChatStreamEvent(
+        approvalRequested: ApprovalEvent(),
+      ),
+      ChatStreamEvent_Event.approvalApproved: ChatStreamEvent(
+        approvalApproved: ApprovalEvent(),
+      ),
+      ChatStreamEvent_Event.approvalDenied: ChatStreamEvent(
+        approvalDenied: ApprovalEvent(),
+      ),
+      ChatStreamEvent_Event.approvalExpired: ChatStreamEvent(
+        approvalExpired: ApprovalEvent(),
+      ),
+      ChatStreamEvent_Event.approvalConsumed: ChatStreamEvent(
+        approvalConsumed: ApprovalEvent(),
+      ),
+      ChatStreamEvent_Event.messageCompleted: ChatStreamEvent(
+        messageCompleted: MessageCompleted(),
+      ),
+      ChatStreamEvent_Event.runCompleted: ChatStreamEvent(
+        runCompleted: RunCompleted(),
+      ),
+      ChatStreamEvent_Event.runFailed: ChatStreamEvent(runFailed: RunFailed()),
+      ChatStreamEvent_Event.runCancelled: ChatStreamEvent(
+        runCancelled: RunCancelled(),
+      ),
+      ChatStreamEvent_Event.persistedEvent: ChatStreamEvent(
+        persistedEvent: eventpb.TuringEvent(),
+      ),
+      ChatStreamEvent_Event.runStateChanged: ChatStreamEvent(
+        runStateChanged: RunStateChanged(),
+      ),
+      ChatStreamEvent_Event.notSet: ChatStreamEvent(),
+    };
+
+    expect(cases.keys.toSet(), ChatStreamEvent_Event.values.toSet());
+    cases.forEach((expectedCase, streamEvent) {
+      expect(streamEvent.whichEvent(), expectedCase);
+      expect(
+        GrpcMappers.chatStreamEventToTuringEvent(streamEvent).type,
+        isNotEmpty,
+      );
+    });
+    expect(
+      GrpcMappers.chatStreamEventToTuringEvent(
+        cases[ChatStreamEvent_Event.runStateChanged]!,
+      ).type,
+      'agent.run.state_changed',
+    );
   });
 
   test('maps a message run id for history correlation', () {

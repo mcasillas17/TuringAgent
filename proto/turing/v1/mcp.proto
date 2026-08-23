@@ -65,6 +65,20 @@ message UpdateMcpToolPolicyRequest {
   ToolPolicy policy = 3;
 }
 
+message UpdateToolPolicyByNameRequest {
+  string server_name = 1;
+  string tool_name = 2;
+  ToolPolicy policy = 3;
+}
+
+message ListPseudoServerToolsRequest {
+  string server_name = 1;
+}
+
+message ListPseudoServerToolsResponse {
+  repeated McpToolDescriptor tools = 1;
+}
+
 message DeleteMcpServerRequest {
   string server_id = 1;
 }
@@ -73,21 +87,33 @@ message DeleteMcpServerResponse {}
 
 message RegisterMcpServerRequest {
   string name = 1;
+  // Absolute HTTP(S) endpoint. The tier is always derived from the hardened
+  // URL exactly as mcp.json import derives it; `tier` below is only a caller
+  // assertion that must agree with that derivation.
   string url = 2;
-  McpServerTier tier = 3;
-  string bearer_token = 4;
+  // Optional bearer token. Write-only: sealed at rest, never echoed by any
+  // response, and absent from McpServerDescriptor by construction.
+  string bearer_token = 3;
+  // Optional caller-declared tier. MCP_SERVER_TIER_UNSPECIFIED accepts the
+  // tier derived from `url`; any other value must match that derivation or the
+  // request is refused. MCP_SERVER_TIER_BUNDLED is never accepted.
+  McpServerTier tier = 4;
 }
 
 message ReimportMcpJsonRequest {}
 
 message ReimportMcpJsonResponse {
   repeated string imported = 1;
-  repeated string skipped = 2;
-  repeated UnsupportedMcpServer refused = 3;
+  // Entries the registry refused to import, with a redacted reason.
+  repeated UnsupportedMcpServer unsupported = 2;
+  // Entries left untouched because a server with that identity already exists.
+  repeated string skipped = 3;
 }
 
 message RotateMcpServerTokenRequest {
   string server_id = 1;
+  // The replacement bearer token. Empty clears the stored token. Write-only,
+  // like RegisterMcpServerRequest.bearer_token.
   string bearer_token = 2;
 }
 
@@ -117,9 +143,11 @@ service McpRegistryService {
   rpc ListMcpServers(ListMcpServersRequest) returns (ListMcpServersResponse);
   rpc SetMcpServerEnabled(SetMcpServerEnabledRequest) returns (McpServerDescriptor);
   rpc UpdateMcpToolPolicy(UpdateMcpToolPolicyRequest) returns (McpToolDescriptor);
+  rpc UpdateToolPolicyByName(UpdateToolPolicyByNameRequest) returns (McpToolDescriptor);
+  rpc ListPseudoServerTools(ListPseudoServerToolsRequest) returns (ListPseudoServerToolsResponse);
   rpc DeleteMcpServer(DeleteMcpServerRequest) returns (DeleteMcpServerResponse);
-  rpc CallRegisteredMcpTool(CallRegisteredMcpToolRequest) returns (CallRegisteredMcpToolResponse);
   rpc RegisterMcpServer(RegisterMcpServerRequest) returns (McpServerDescriptor);
   rpc ReimportMcpJson(ReimportMcpJsonRequest) returns (ReimportMcpJsonResponse);
   rpc RotateMcpServerToken(RotateMcpServerTokenRequest) returns (McpServerDescriptor);
+  rpc CallRegisteredMcpTool(CallRegisteredMcpToolRequest) returns (CallRegisteredMcpToolResponse);
 }

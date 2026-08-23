@@ -658,7 +658,9 @@ func TestARequeuedRoutedJobIsStillRoutedOnItsNextAttempt(t *testing.T) {
 		t.Fatal("first claim lost egress decision")
 	}
 
-	decision, err := repo.RequeueOrFailRetryableRun(ctx, enqueued.RunID, "worker_busy", "busy", 3)
+	decision, err := repo.RequeueOrFailRetryableRun(ctx, RetryableRunFailureInput{
+		RunID: enqueued.RunID, Failure: dispatchCondition("worker_busy"), MaxAttempts: 3,
+	})
 	if err != nil {
 		t.Fatalf("requeue: %v", err)
 	}

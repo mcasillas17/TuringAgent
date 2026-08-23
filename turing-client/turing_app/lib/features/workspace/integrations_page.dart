@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../constants/app_colors.dart';
 import '../../models/integration.dart';
+import '../../models/tool_descriptor.dart';
 import '../../networking/api_client.dart';
 import 'workspace_pages.dart';
 
@@ -11,10 +12,8 @@ import 'workspace_pages.dart';
 /// Two things this page refuses to do. It does not offer a Connect button for
 /// a provider that only issues credentials through OAuth, because TuringAgent
 /// has no registered client with any of them and the flow would fail at the
-/// end; those are listed with the reason instead. And it does not imply that
-/// connecting makes something happen — no tool reads a connection yet, and
-/// the notice at the top says so rather than letting a connected account
-/// suggest a capability that is not there.
+/// end; those are listed with the reason instead. GitHub is the first provider
+/// with agent tools, and its connection card exposes their policy explicitly.
 class IntegrationsPage extends StatefulWidget {
   const IntegrationsPage({super.key, required this.apiClient});
 
@@ -25,10 +24,15 @@ class IntegrationsPage extends StatefulWidget {
 }
 
 class _IntegrationsData {
-  const _IntegrationsData({required this.catalogue, required this.connections});
+  const _IntegrationsData({
+    required this.catalogue,
+    required this.connections,
+    required this.tools,
+  });
 
   final IntegrationCatalogue catalogue;
   final List<IntegrationConnection> connections;
+  final List<ToolDescriptor> tools;
 }
 
 class _IntegrationsPageState extends State<IntegrationsPage> {
@@ -43,13 +47,19 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
   Future<_IntegrationsData> _load() async {
     // Both, or neither: a connection list without the catalogue could not say
     // what any of them grants.
+    final policyApi = widget.apiClient is PseudoServerPolicyApi
+        ? widget.apiClient as PseudoServerPolicyApi
+        : null;
     final results = await Future.wait([
       widget.apiClient.listIntegrationProviders(),
       widget.apiClient.listConnections(),
+      policyApi?.listPseudoServerTools(serverName: 'integrations') ??
+          Future.value(const <ToolDescriptor>[]),
     ]);
     return _IntegrationsData(
       catalogue: results[0] as IntegrationCatalogue,
       connections: results[1] as List<IntegrationConnection>,
+      tools: results[2] as List<ToolDescriptor>,
     );
   }
 
@@ -148,6 +158,20 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
     }
   }
 
+  Future<void> _setPolicy(ToolDescriptor tool, ToolPolicy policy) async {
+    final policyApi = widget.apiClient is PseudoServerPolicyApi
+        ? widget.apiClient as PseudoServerPolicyApi
+        : null;
+    if (policyApi == null) return;
+    await _run(() async {
+      await policyApi.updateToolPolicyByName(
+        serverName: 'integrations',
+        toolName: tool.toolName,
+        policy: policy,
+      );
+    }, 'Could not update the tool policy');
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = AppColors.of(context);
@@ -181,6 +205,7 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
                   storageConfigured: false,
                 ),
                 connections: [],
+                tools: [],
               );
           final catalogue = data.catalogue;
           final canConnect =
@@ -188,16 +213,13 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // First, before any of it looks useful: nothing reads these yet.
               WorkspaceNotice(
-                icon: Icons.construction_outlined,
-                title: 'Nothing uses these yet',
+                icon: Icons.shield_outlined,
+                title: 'Connected-account tools ask before every call',
                 body:
-                    'A connection is stored, described and revocable, but no '
-                    'tool reads one — the agent cannot open your mail or your '
-                    'notes today. When a tool server does use a connection, '
-                    'acting on your behalf will be a mutation like any other '
-                    'and will stop to ask you first.',
+                    'GitHub tools can use a connected GitHub account. Reads '
+                    'and writes default to “Asks first,” and a local-model '
+                    'send asks for per-run consent while any tool is enabled.',
                 tone: AppColors.warning,
               ),
               const SizedBox(height: 18),
@@ -247,6 +269,11 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
                       palette: palette,
                       onRevoke: () => _revoke(connection),
                       onRemove: () => _remove(connection),
+                      tools:
+                          connection.provider == IntegrationProviderKind.github
+                          ? data.tools
+                          : const [],
+                      onPolicyChanged: _setPolicy,
                     ),
                   ),
               if (catalogue.refused.isNotEmpty) ...[
@@ -310,12 +337,16 @@ class _ConnectionCard extends StatelessWidget {
     required this.palette,
     required this.onRevoke,
     required this.onRemove,
+    required this.tools,
+    required this.onPolicyChanged,
   });
 
   final IntegrationConnection connection;
   final AppPalette palette;
   final VoidCallback onRevoke;
   final VoidCallback onRemove;
+  final List<ToolDescriptor> tools;
+  final Future<void> Function(ToolDescriptor, ToolPolicy) onPolicyChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -427,6 +458,57 @@ class _ConnectionCard extends StatelessWidget {
                           color: palette.textMuted,
                         ),
                       ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+          if (connection.isConnected && tools.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Agent tools',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: palette.text,
+              ),
+            ),
+            const SizedBox(height: 5),
+            for (final tool in tools)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      tool.toolName,
+                      style: const TextStyle(fontFamily: 'monospace'),
+                    ),
+                    const SizedBox(height: 2),
+                    DropdownButton<ToolPolicy>(
+                      value: tool.policy == ToolPolicy.unspecified
+                          ? null
+                          : tool.policy,
+                      hint: const Text('Unknown policy'),
+                      isDense: true,
+                      isExpanded: true,
+                      onChanged: (policy) {
+                        if (policy != null) onPolicyChanged(tool, policy);
+                      },
+                      items: const [
+                        DropdownMenuItem(
+                          value: ToolPolicy.safe,
+                          child: Text('Runs freely'),
+                        ),
+                        DropdownMenuItem(
+                          value: ToolPolicy.approvalRequired,
+                          child: Text('Asks first'),
+                        ),
+                        DropdownMenuItem(
+                          value: ToolPolicy.disabled,
+                          child: Text('Disabled'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -726,6 +808,20 @@ class _ConnectDialogState extends State<_ConnectDialog> {
                     ],
                   ),
                 ),
+              if (_provider.kind == IntegrationProviderKind.github) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'After connecting, GitHub tools become available. Their '
+                  'default “Asks first” policy covers reads too, and local '
+                  'chat sends will also ask for per-run egress consent until '
+                  'you disable those tools.',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    height: 1.5,
+                    color: AppColors.warning,
+                  ),
+                ),
+              ],
               const SizedBox(height: 6),
               CheckboxListTile(
                 value: _consented,

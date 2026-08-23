@@ -11,7 +11,7 @@ MCP server is the second egress path and uses the same decision.
 
 `ChatService.PrepareRemoteEgress` is read-only. It resolves the effective
 provider, model, external-agent identity, canonical model endpoint, every
-remote MCP server and endpoint, selected tool
+remote MCP server and endpoint, integration endpoint and connection, selected tool
 names, eligible skill snapshot, recall/memory flags, and conservative maximum
 data categories for the request. It returns a short-lived challenge signed by
 the orchestrator-only `TURING_EGRESS_SIGNING_SECRET`.
@@ -44,6 +44,16 @@ runtime use may be smaller, never larger. Memory/profile and attachments are
 currently unsupported and therefore absent. Routed external agents also omit
 cross-session recall. Direct OpenAI-compatible runs may include recall.
 
+Skill content appears only when the model provider is remote and the frozen,
+parseable enabled-skill snapshot is non-empty. The disclosure names every
+skill in that snapshot and distinguishes skills whose full content may be sent
+from those limited to name and description. This is a ceiling: the runtime
+always injects the skill index, while a permitted body and its references are
+sent only when the user invokes the skill or the model calls `skill_view`.
+The existing skill-snapshot fingerprint binds each displayed skill id, name,
+and content ceiling; the names are the legible face of that signed binding,
+not a second signature surface.
+
 A local-model run that may call a remote MCP server discloses only the
 categories that can cross that boundary: tool arguments and tool results. A
 mixed run takes the conservative union. Enabling a remote server is not consent
@@ -73,6 +83,14 @@ service name; redirects, reserved names, host aliases and IP literals are
 refused. At dispatch the name must resolve entirely inside the fixed
 `172.31.254.0/24` subnet of the internal-only `net-mcp-registry` network.
 
+Connected-account integrations are the third egress path beside remote model
+providers and remote MCP servers. Their signed entries bind the canonical
+endpoint, connection id, display name, and frozen tools. The consent is
+endpoint-granular, not repository-granular: consent to `api.github.com` for a
+GitHub connection covers any repository that credential can reach. Because
+enabled integration tools may be called by a local run, connecting an account
+makes every local send ask until those tools are disabled.
+
 Ollama is the local provider identity, so its endpoint is restricted to
 `localhost`, `host.docker.internal`, or a loopback IP literal. Pointing the
 Ollama configuration at a remote host is refused instead of bypassing consent.
@@ -81,7 +99,10 @@ Runs already queued for a remote provider before TUR-003 have no run-owned
 egress decision. Migration 0014 terminalizes them with
 `egress_decision_required` rather than leaving them stranded behind the
 egress-aware worker gate; resend them from the client to review and record a
-fresh disclosure.
+fresh disclosure. The later run-outcome migration preserves populated
+`run_egress_decisions` exactly and projects this legacy terminal code (and the
+legacy `egress_decision_invalid` code) as bounded `policy_denied`, with no raw
+diagnostic text in public history.
 
 ## Background work and audit
 

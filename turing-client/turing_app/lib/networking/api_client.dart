@@ -387,6 +387,18 @@ abstract interface class RemoteEgressApi {
   });
 }
 
+abstract interface class PseudoServerPolicyApi {
+  Future<List<ToolDescriptor>> listPseudoServerTools({
+    required String serverName,
+  });
+
+  Future<ToolDescriptor> updateToolPolicyByName({
+    required String serverName,
+    required String toolName,
+    required ToolPolicy policy,
+  });
+}
+
 class TuringApiException implements Exception {
   const TuringApiException({
     required this.code,

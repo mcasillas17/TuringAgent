@@ -629,6 +629,209 @@ class UpdateMcpToolPolicyRequest extends $pb.GeneratedMessage {
   void clearPolicy() => $_clearField(3);
 }
 
+class UpdateToolPolicyByNameRequest extends $pb.GeneratedMessage {
+  factory UpdateToolPolicyByNameRequest({
+    $core.String? serverName,
+    $core.String? toolName,
+    $2.ToolPolicy? policy,
+  }) {
+    final result = create();
+    if (serverName != null) result.serverName = serverName;
+    if (toolName != null) result.toolName = toolName;
+    if (policy != null) result.policy = policy;
+    return result;
+  }
+
+  UpdateToolPolicyByNameRequest._();
+
+  factory UpdateToolPolicyByNameRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory UpdateToolPolicyByNameRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'UpdateToolPolicyByNameRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'serverName')
+    ..aOS(2, _omitFieldNames ? '' : 'toolName')
+    ..e<$2.ToolPolicy>(3, _omitFieldNames ? '' : 'policy', $pb.PbFieldType.OE,
+        defaultOrMaker: $2.ToolPolicy.TOOL_POLICY_UNSPECIFIED,
+        valueOf: $2.ToolPolicy.valueOf,
+        enumValues: $2.ToolPolicy.values)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  UpdateToolPolicyByNameRequest clone() =>
+      UpdateToolPolicyByNameRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  UpdateToolPolicyByNameRequest copyWith(
+          void Function(UpdateToolPolicyByNameRequest) updates) =>
+      super.copyWith(
+              (message) => updates(message as UpdateToolPolicyByNameRequest))
+          as UpdateToolPolicyByNameRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static UpdateToolPolicyByNameRequest create() =>
+      UpdateToolPolicyByNameRequest._();
+  @$core.override
+  UpdateToolPolicyByNameRequest createEmptyInstance() => create();
+  static $pb.PbList<UpdateToolPolicyByNameRequest> createRepeated() =>
+      $pb.PbList<UpdateToolPolicyByNameRequest>();
+  @$core.pragma('dart2js:noInline')
+  static UpdateToolPolicyByNameRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<UpdateToolPolicyByNameRequest>(create);
+  static UpdateToolPolicyByNameRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get serverName => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set serverName($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasServerName() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearServerName() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get toolName => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set toolName($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasToolName() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearToolName() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $2.ToolPolicy get policy => $_getN(2);
+  @$pb.TagNumber(3)
+  set policy($2.ToolPolicy value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasPolicy() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearPolicy() => $_clearField(3);
+}
+
+class ListPseudoServerToolsRequest extends $pb.GeneratedMessage {
+  factory ListPseudoServerToolsRequest({
+    $core.String? serverName,
+  }) {
+    final result = create();
+    if (serverName != null) result.serverName = serverName;
+    return result;
+  }
+
+  ListPseudoServerToolsRequest._();
+
+  factory ListPseudoServerToolsRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ListPseudoServerToolsRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ListPseudoServerToolsRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'serverName')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListPseudoServerToolsRequest clone() =>
+      ListPseudoServerToolsRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListPseudoServerToolsRequest copyWith(
+          void Function(ListPseudoServerToolsRequest) updates) =>
+      super.copyWith(
+              (message) => updates(message as ListPseudoServerToolsRequest))
+          as ListPseudoServerToolsRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ListPseudoServerToolsRequest create() =>
+      ListPseudoServerToolsRequest._();
+  @$core.override
+  ListPseudoServerToolsRequest createEmptyInstance() => create();
+  static $pb.PbList<ListPseudoServerToolsRequest> createRepeated() =>
+      $pb.PbList<ListPseudoServerToolsRequest>();
+  @$core.pragma('dart2js:noInline')
+  static ListPseudoServerToolsRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ListPseudoServerToolsRequest>(create);
+  static ListPseudoServerToolsRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get serverName => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set serverName($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasServerName() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearServerName() => $_clearField(1);
+}
+
+class ListPseudoServerToolsResponse extends $pb.GeneratedMessage {
+  factory ListPseudoServerToolsResponse({
+    $core.Iterable<McpToolDescriptor>? tools,
+  }) {
+    final result = create();
+    if (tools != null) result.tools.addAll(tools);
+    return result;
+  }
+
+  ListPseudoServerToolsResponse._();
+
+  factory ListPseudoServerToolsResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ListPseudoServerToolsResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ListPseudoServerToolsResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..pc<McpToolDescriptor>(
+        1, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
+        subBuilder: McpToolDescriptor.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListPseudoServerToolsResponse clone() =>
+      ListPseudoServerToolsResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListPseudoServerToolsResponse copyWith(
+          void Function(ListPseudoServerToolsResponse) updates) =>
+      super.copyWith(
+              (message) => updates(message as ListPseudoServerToolsResponse))
+          as ListPseudoServerToolsResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ListPseudoServerToolsResponse create() =>
+      ListPseudoServerToolsResponse._();
+  @$core.override
+  ListPseudoServerToolsResponse createEmptyInstance() => create();
+  static $pb.PbList<ListPseudoServerToolsResponse> createRepeated() =>
+      $pb.PbList<ListPseudoServerToolsResponse>();
+  @$core.pragma('dart2js:noInline')
+  static ListPseudoServerToolsResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ListPseudoServerToolsResponse>(create);
+  static ListPseudoServerToolsResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $pb.PbList<McpToolDescriptor> get tools => $_getList(0);
+}
+
 class DeleteMcpServerRequest extends $pb.GeneratedMessage {
   factory DeleteMcpServerRequest({
     $core.String? serverId,
@@ -733,14 +936,14 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
   factory RegisterMcpServerRequest({
     $core.String? name,
     $core.String? url,
-    McpServerTier? tier,
     $core.String? bearerToken,
+    McpServerTier? tier,
   }) {
     final result = create();
     if (name != null) result.name = name;
     if (url != null) result.url = url;
-    if (tier != null) result.tier = tier;
     if (bearerToken != null) result.bearerToken = bearerToken;
+    if (tier != null) result.tier = tier;
     return result;
   }
 
@@ -759,11 +962,11 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'name')
     ..aOS(2, _omitFieldNames ? '' : 'url')
-    ..e<McpServerTier>(3, _omitFieldNames ? '' : 'tier', $pb.PbFieldType.OE,
+    ..aOS(3, _omitFieldNames ? '' : 'bearerToken')
+    ..e<McpServerTier>(4, _omitFieldNames ? '' : 'tier', $pb.PbFieldType.OE,
         defaultOrMaker: McpServerTier.MCP_SERVER_TIER_UNSPECIFIED,
         valueOf: McpServerTier.valueOf,
         enumValues: McpServerTier.values)
-    ..aOS(4, _omitFieldNames ? '' : 'bearerToken')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -798,6 +1001,9 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearName() => $_clearField(1);
 
+  /// Absolute HTTP(S) endpoint. The tier is always derived from the hardened
+  /// URL exactly as mcp.json import derives it; `tier` below is only a caller
+  /// assertion that must agree with that derivation.
   @$pb.TagNumber(2)
   $core.String get url => $_getSZ(1);
   @$pb.TagNumber(2)
@@ -807,23 +1013,28 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(2)
   void clearUrl() => $_clearField(2);
 
+  /// Optional bearer token. Write-only: sealed at rest, never echoed by any
+  /// response, and absent from McpServerDescriptor by construction.
   @$pb.TagNumber(3)
-  McpServerTier get tier => $_getN(2);
+  $core.String get bearerToken => $_getSZ(2);
   @$pb.TagNumber(3)
-  set tier(McpServerTier value) => $_setField(3, value);
+  set bearerToken($core.String value) => $_setString(2, value);
   @$pb.TagNumber(3)
-  $core.bool hasTier() => $_has(2);
+  $core.bool hasBearerToken() => $_has(2);
   @$pb.TagNumber(3)
-  void clearTier() => $_clearField(3);
+  void clearBearerToken() => $_clearField(3);
 
+  /// Optional caller-declared tier. MCP_SERVER_TIER_UNSPECIFIED accepts the
+  /// tier derived from `url`; any other value must match that derivation or the
+  /// request is refused. MCP_SERVER_TIER_BUNDLED is never accepted.
   @$pb.TagNumber(4)
-  $core.String get bearerToken => $_getSZ(3);
+  McpServerTier get tier => $_getN(3);
   @$pb.TagNumber(4)
-  set bearerToken($core.String value) => $_setString(3, value);
+  set tier(McpServerTier value) => $_setField(4, value);
   @$pb.TagNumber(4)
-  $core.bool hasBearerToken() => $_has(3);
+  $core.bool hasTier() => $_has(3);
   @$pb.TagNumber(4)
-  void clearBearerToken() => $_clearField(4);
+  void clearTier() => $_clearField(4);
 }
 
 class ReimportMcpJsonRequest extends $pb.GeneratedMessage {
@@ -871,13 +1082,13 @@ class ReimportMcpJsonRequest extends $pb.GeneratedMessage {
 class ReimportMcpJsonResponse extends $pb.GeneratedMessage {
   factory ReimportMcpJsonResponse({
     $core.Iterable<$core.String>? imported,
+    $core.Iterable<UnsupportedMcpServer>? unsupported,
     $core.Iterable<$core.String>? skipped,
-    $core.Iterable<UnsupportedMcpServer>? refused,
   }) {
     final result = create();
     if (imported != null) result.imported.addAll(imported);
+    if (unsupported != null) result.unsupported.addAll(unsupported);
     if (skipped != null) result.skipped.addAll(skipped);
-    if (refused != null) result.refused.addAll(refused);
     return result;
   }
 
@@ -895,10 +1106,10 @@ class ReimportMcpJsonResponse extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..pPS(1, _omitFieldNames ? '' : 'imported')
-    ..pPS(2, _omitFieldNames ? '' : 'skipped')
     ..pc<UnsupportedMcpServer>(
-        3, _omitFieldNames ? '' : 'refused', $pb.PbFieldType.PM,
+        2, _omitFieldNames ? '' : 'unsupported', $pb.PbFieldType.PM,
         subBuilder: UnsupportedMcpServer.create)
+    ..pPS(3, _omitFieldNames ? '' : 'skipped')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -927,11 +1138,13 @@ class ReimportMcpJsonResponse extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   $pb.PbList<$core.String> get imported => $_getList(0);
 
+  /// Entries the registry refused to import, with a redacted reason.
   @$pb.TagNumber(2)
-  $pb.PbList<$core.String> get skipped => $_getList(1);
+  $pb.PbList<UnsupportedMcpServer> get unsupported => $_getList(1);
 
+  /// Entries left untouched because a server with that identity already exists.
   @$pb.TagNumber(3)
-  $pb.PbList<UnsupportedMcpServer> get refused => $_getList(2);
+  $pb.PbList<$core.String> get skipped => $_getList(2);
 }
 
 class RotateMcpServerTokenRequest extends $pb.GeneratedMessage {
@@ -996,6 +1209,8 @@ class RotateMcpServerTokenRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearServerId() => $_clearField(1);
 
+  /// The replacement bearer token. Empty clears the stored token. Write-only,
+  /// like RegisterMcpServerRequest.bearer_token.
   @$pb.TagNumber(2)
   $core.String get bearerToken => $_getSZ(1);
   @$pb.TagNumber(2)

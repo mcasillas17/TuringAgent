@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	egressChallengeVersion     = 1
+	egressChallengeVersion     = 2
 	egressChallengeDomain      = "turing.remote-egress.challenge.v1"
 	defaultEgressChallengeTTL  = 5 * time.Minute
 	maxEgressChallengeBytes    = 32 * 1024
@@ -32,6 +32,7 @@ const (
 	maxEgressIDBytes           = 512
 	maxEgressModelBytes        = 512
 	maxEgressTools             = 256
+	maxEgressSkills            = 256
 	maxEgressToolNameBytes     = 512
 	maxEgressSelectedToolBytes = 16 * 1024
 )
@@ -60,9 +61,11 @@ type egressContext struct {
 	DataCategories            []turingv1.EgressDataCategory
 	SelectedTools             []string
 	SkillSnapshotFingerprint  string
+	SkillInfo                 []repository.SkillEgressInfo
 	RecallApplicable          bool
 	MemoryProfileApplicable   bool
 	RemoteMCPServers          []repository.RemoteMCPServerEgress
+	IntegrationEndpoints      []repository.IntegrationEndpointEgress
 }
 
 type remoteMCPChallengeDestination struct {
@@ -72,25 +75,26 @@ type remoteMCPChallengeDestination struct {
 }
 
 type egressChallengePayload struct {
-	Version                   int                             `json:"version"`
-	Nonce                     string                          `json:"nonce"`
-	IssuedAtUnixNano          int64                           `json:"issued_at_unix_nano"`
-	ExpiresAtUnixNano         int64                           `json:"expires_at_unix_nano"`
-	SessionID                 string                          `json:"session_id"`
-	IdempotencyKey            string                          `json:"idempotency_key"`
-	RequestDigest             string                          `json:"request_digest"`
-	Provider                  string                          `json:"provider"`
-	Model                     string                          `json:"model"`
-	ExternalAgentID           string                          `json:"external_agent_id,omitempty"`
-	ExternalCredentialRefHash string                          `json:"external_credential_ref_hash,omitempty"`
-	Endpoint                  string                          `json:"endpoint"`
-	EndpointHost              string                          `json:"endpoint_host"`
-	DataCategories            []int32                         `json:"data_categories"`
-	SelectedTools             []string                        `json:"selected_tools"`
-	SkillSnapshotFingerprint  string                          `json:"skill_snapshot_fingerprint"`
-	RecallApplicable          bool                            `json:"recall_applicable"`
-	MemoryProfileApplicable   bool                            `json:"memory_profile_applicable"`
-	RemoteMCPServers          []remoteMCPChallengeDestination `json:"remote_mcp_servers,omitempty"`
+	Version                   int                                    `json:"version"`
+	Nonce                     string                                 `json:"nonce"`
+	IssuedAtUnixNano          int64                                  `json:"issued_at_unix_nano"`
+	ExpiresAtUnixNano         int64                                  `json:"expires_at_unix_nano"`
+	SessionID                 string                                 `json:"session_id"`
+	IdempotencyKey            string                                 `json:"idempotency_key"`
+	RequestDigest             string                                 `json:"request_digest"`
+	Provider                  string                                 `json:"provider"`
+	Model                     string                                 `json:"model"`
+	ExternalAgentID           string                                 `json:"external_agent_id,omitempty"`
+	ExternalCredentialRefHash string                                 `json:"external_credential_ref_hash,omitempty"`
+	Endpoint                  string                                 `json:"endpoint"`
+	EndpointHost              string                                 `json:"endpoint_host"`
+	DataCategories            []int32                                `json:"data_categories"`
+	SelectedTools             []string                               `json:"selected_tools"`
+	SkillSnapshotFingerprint  string                                 `json:"skill_snapshot_fingerprint"`
+	RecallApplicable          bool                                   `json:"recall_applicable"`
+	MemoryProfileApplicable   bool                                   `json:"memory_profile_applicable"`
+	RemoteMCPServers          []remoteMCPChallengeDestination        `json:"remote_mcp_servers,omitempty"`
+	IntegrationEndpoints      []repository.IntegrationEndpointEgress `json:"integration_endpoints,omitempty"`
 }
 
 func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareRemoteEgressRequest) (*turingv1.PrepareRemoteEgressResponse, error) {
@@ -148,23 +152,30 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 		RecallApplicable:          resolved.RecallApplicable,
 		MemoryProfileApplicable:   resolved.MemoryProfileApplicable,
 		RemoteMCPServers:          toChallengeRemoteMCPServers(resolved.RemoteMCPServers),
+		IntegrationEndpoints:      cloneChallengeIntegrationEndpoints(resolved.IntegrationEndpoints),
 	}
 	challenge, err := s.signEgressChallenge(payload)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "create remote egress disclosure failed")
 	}
+	disclosedSkills := []*turingv1.SkillEgressDisclosure(nil)
+	if slices.Contains(resolved.DataCategories, turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT) {
+		disclosedSkills = toProtoSkillEgressDisclosures(resolved.SkillInfo)
+	}
 	return &turingv1.PrepareRemoteEgressResponse{
 		Disclosure: &turingv1.RemoteEgressDisclosure{
-			Challenge:        challenge,
-			Provider:         providerToProto(resolved.Provider),
-			Model:            resolved.Model,
-			Endpoint:         resolved.Endpoint,
-			EndpointHost:     resolved.EndpointHost,
-			ExternalAgentId:  resolved.ExternalAgentID,
-			DataCategories:   append([]turingv1.EgressDataCategory(nil), resolved.DataCategories...),
-			ExpiresAt:        timestamppb.New(time.Unix(0, payload.ExpiresAtUnixNano).UTC()),
-			RemoteMcpServers: toProtoRemoteMCPServers(resolved.RemoteMCPServers),
-			SelectedTools:    append([]string(nil), resolved.SelectedTools...),
+			Challenge:            challenge,
+			Provider:             providerToProto(resolved.Provider),
+			Model:                resolved.Model,
+			Endpoint:             resolved.Endpoint,
+			EndpointHost:         resolved.EndpointHost,
+			ExternalAgentId:      resolved.ExternalAgentID,
+			DataCategories:       append([]turingv1.EgressDataCategory(nil), resolved.DataCategories...),
+			ExpiresAt:            timestamppb.New(time.Unix(0, payload.ExpiresAtUnixNano).UTC()),
+			RemoteMcpServers:     toProtoRemoteMCPServers(resolved.RemoteMCPServers),
+			IntegrationEndpoints: toProtoIntegrationEndpoints(resolved.IntegrationEndpoints),
+			SelectedTools:        append([]string(nil), resolved.SelectedTools...),
+			Skills:               disclosedSkills,
 		},
 	}, nil
 }
@@ -241,6 +252,7 @@ func (s *Server) applyRemoteEgress(
 		RecallApplicable:          payload.RecallApplicable,
 		MemoryProfileApplicable:   payload.MemoryProfileApplicable,
 		RemoteMCPServers:          fromChallengeRemoteMCPServers(payload.RemoteMCPServers),
+		IntegrationEndpoints:      cloneChallengeIntegrationEndpoints(payload.IntegrationEndpoints),
 		ConsentGrantedAt:          repository.FormatTimestamp(s.now().UTC()),
 	}
 	currentModel := input.Model
@@ -281,6 +293,10 @@ func (s *Server) applyRemoteEgress(
 		return repository.EnqueueUserMessageResult{}, false, err
 	}
 	if resolved == nil || !payloadMatchesEgressContext(payload, *resolved) {
+		if resolved != nil && payload.SkillSnapshotFingerprint != resolved.SkillSnapshotFingerprint {
+			return repository.EnqueueUserMessageResult{}, false,
+				status.Error(codes.FailedPrecondition, "the skill snapshot changed since consent was prepared; prepare the send again")
+		}
 		return repository.EnqueueUserMessageResult{}, false,
 			status.Error(codes.FailedPrecondition, "remote egress context changed; prepare the send again")
 	}
@@ -460,7 +476,20 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "resolve remote MCP egress failed")
 	}
-	if !providerEgress && len(resolved.RemoteMCPServers) == 0 {
+	resolved.IntegrationEndpoints, err = s.integrationEndpointResolver(ctx, resolved.SelectedTools)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, "resolve integration egress failed")
+	}
+	if len(resolved.IntegrationEndpoints) > repository.MaxIntegrationEndpoints {
+		return nil, status.Error(codes.FailedPrecondition, "too many integration connections; revoke connections or disable integration tools")
+	}
+	for _, destination := range resolved.IntegrationEndpoints {
+		size, sizeErr := repository.IntegrationEndpointEntrySize(destination)
+		if sizeErr != nil || size > repository.MaxIntegrationEndpointEntryBytes {
+			return nil, status.Error(codes.FailedPrecondition, "integration egress entry is too large; shorten the connection name or disable integration tools")
+		}
+	}
+	if !providerEgress && len(resolved.RemoteMCPServers) == 0 && len(resolved.IntegrationEndpoints) == 0 {
 		return nil, nil
 	}
 	if providerEgress {
@@ -475,15 +504,21 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 		resolved.Endpoint = endpoint.Canonical
 		resolved.EndpointHost = endpoint.Host
 	}
-	resolved.SkillSnapshotFingerprint, err = s.repo.EgressSkillSnapshotFingerprint(ctx)
+	resolved.SkillSnapshotFingerprint, resolved.SkillInfo, err = s.repo.EgressSkillSnapshotFingerprint(ctx)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "resolve remote egress skill context failed")
+	}
+	if providerEgress && len(resolved.SkillInfo) > maxEgressSkills {
+		return nil, status.Error(codes.FailedPrecondition, "too many enabled skills for remote egress disclosure; disable skills and try again")
 	}
 	if providerEgress {
 		resolved.DataCategories = []turingv1.EgressDataCategory{
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
-			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
+		}
+		if len(resolved.SkillInfo) > 0 {
+			resolved.DataCategories = append(resolved.DataCategories,
+				turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT)
 		}
 	}
 	if resolved.RecallApplicable {
@@ -497,6 +532,11 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS)
 	}
 	if len(resolved.RemoteMCPServers) > 0 {
+		resolved.DataCategories = append(resolved.DataCategories,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS)
+	}
+	if len(resolved.IntegrationEndpoints) > 0 {
 		resolved.DataCategories = append(resolved.DataCategories,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS)
@@ -618,7 +658,7 @@ func validChallengePayload(payload egressChallengePayload) bool {
 		}
 	} else if payload.Endpoint != "" || payload.EndpointHost != "" ||
 		payload.ExternalAgentID != "" || payload.ExternalCredentialRefHash != "" ||
-		len(payload.RemoteMCPServers) == 0 {
+		len(payload.RemoteMCPServers) == 0 && len(payload.IntegrationEndpoints) == 0 {
 		return false
 	}
 	for index, category := range payload.DataCategories {
@@ -655,6 +695,33 @@ func validChallengePayload(payload egressChallengePayload) bool {
 			return false
 		}
 	}
+	if len(payload.IntegrationEndpoints) > repository.MaxIntegrationEndpoints {
+		return false
+	}
+	for index, destination := range payload.IntegrationEndpoints {
+		if destination.Endpoint != repository.GitHubIntegrationEndpoint ||
+			destination.EndpointHost != repository.GitHubIntegrationEndpointHost ||
+			destination.ConnectionID == "" || destination.DisplayName == "" || len(destination.Tools) == 0 ||
+			!slices.IsSorted(destination.Tools) {
+			return false
+		}
+		if index > 0 {
+			previous := payload.IntegrationEndpoints[index-1]
+			if previous.Endpoint > destination.Endpoint ||
+				(previous.Endpoint == destination.Endpoint && previous.ConnectionID >= destination.ConnectionID) {
+				return false
+			}
+		}
+		for toolIndex, tool := range destination.Tools {
+			if tool == "" || (toolIndex > 0 && destination.Tools[toolIndex-1] == tool) {
+				return false
+			}
+		}
+		size, err := repository.IntegrationEndpointEntrySize(destination)
+		if err != nil || size > repository.MaxIntegrationEndpointEntryBytes {
+			return false
+		}
+	}
 	return true
 }
 
@@ -670,7 +737,20 @@ func payloadMatchesEgressContext(payload egressChallengePayload, resolved egress
 		payload.MemoryProfileApplicable == resolved.MemoryProfileApplicable &&
 		slices.Equal(payload.SelectedTools, resolved.SelectedTools) &&
 		slices.Equal(payload.RemoteMCPServers, toChallengeRemoteMCPServers(resolved.RemoteMCPServers)) &&
+		slices.EqualFunc(payload.IntegrationEndpoints, resolved.IntegrationEndpoints, func(left, right repository.IntegrationEndpointEgress) bool {
+			return left.Endpoint == right.Endpoint && left.EndpointHost == right.EndpointHost &&
+				left.ConnectionID == right.ConnectionID && left.DisplayName == right.DisplayName && slices.Equal(left.Tools, right.Tools)
+		}) &&
 		slices.Equal(payload.DataCategories, categoryNumbers(resolved.DataCategories))
+}
+
+func cloneChallengeIntegrationEndpoints(destinations []repository.IntegrationEndpointEgress) []repository.IntegrationEndpointEgress {
+	result := make([]repository.IntegrationEndpointEgress, len(destinations))
+	for index := range destinations {
+		result[index] = destinations[index]
+		result[index].Tools = append([]string{}, destinations[index].Tools...)
+	}
+	return result
 }
 
 func categoryNumbers(categories []turingv1.EgressDataCategory) []int32 {
@@ -730,6 +810,29 @@ func toProtoRemoteMCPServers(destinations []repository.RemoteMCPServerEgress) []
 			ServerName:   destination.ServerName,
 			Endpoint:     destination.Endpoint,
 			EndpointHost: destination.EndpointHost,
+		}
+	}
+	return result
+}
+
+func toProtoSkillEgressDisclosures(skills []repository.SkillEgressInfo) []*turingv1.SkillEgressDisclosure {
+	result := make([]*turingv1.SkillEgressDisclosure, len(skills))
+	for index, skill := range skills {
+		result[index] = &turingv1.SkillEgressDisclosure{
+			SkillId: skill.SkillID, DisplayName: skill.DisplayName,
+			BodyMayBeSent: skill.BodyMayBeSent,
+		}
+	}
+	return result
+}
+
+func toProtoIntegrationEndpoints(destinations []repository.IntegrationEndpointEgress) []*turingv1.IntegrationEgressDestination {
+	result := make([]*turingv1.IntegrationEgressDestination, len(destinations))
+	for index, destination := range destinations {
+		result[index] = &turingv1.IntegrationEgressDestination{
+			Endpoint: destination.Endpoint, EndpointHost: destination.EndpointHost,
+			ConnectionId: destination.ConnectionID, DisplayName: destination.DisplayName,
+			Tools: append([]string(nil), destination.Tools...),
 		}
 	}
 	return result

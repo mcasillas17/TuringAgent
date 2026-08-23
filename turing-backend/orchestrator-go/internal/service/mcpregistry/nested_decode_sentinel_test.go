@@ -108,10 +108,10 @@ func TestImportNestedUnknownToolKeyNeverLeaksAcrossAllSurfaces(t *testing.T) {
 	}
 	// ...and the malformed one must be refused with a fixed, generic,
 	// sentinel-free reason rather than collapsing the whole document.
-	if len(response.GetRefused()) != 1 {
-		t.Fatalf("Refused = %+v, want exactly one refused entry", response.GetRefused())
+	if len(response.GetUnsupported()) != 1 {
+		t.Fatalf("Refused = %+v, want exactly one refused entry", response.GetUnsupported())
 	}
-	refused := response.GetRefused()[0]
+	refused := response.GetUnsupported()[0]
 	if refused.GetName() != "vendor-bad" {
 		t.Fatalf("Refused[0].Name = %q, want vendor-bad", refused.GetName())
 	}

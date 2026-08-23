@@ -515,7 +515,7 @@ func TestCompleteRunWithEventStoresReportedTokensAndNothingElse(t *testing.T) {
 			if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 				t.Fatalf("mark running: %v", err)
 			}
-			if _, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{"runId":"x"}`, tt.usage); err != nil {
+			if _, err := completeRunAtCurrentVersion(t, repo, enqueued.RunID, enqueued.AssistantMessageID, "done", tt.usage); err != nil {
 				t.Fatalf("complete run: %v", err)
 			}
 
@@ -612,7 +612,7 @@ func TestOnlyCompletionWritesTokenColumns(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatalf("mark running: %v", err)
 	}
-	if err := repo.FailRun(ctx, enqueued.RunID, "model_error", "the model fell over"); err != nil {
+	if _, err := failRunAtCurrentVersion(t, repo, enqueued.RunID, testFailure("model_error")); err != nil {
 		t.Fatalf("fail run: %v", err)
 	}
 
@@ -769,13 +769,34 @@ func insertTelemetryRun(t *testing.T, ctx context.Context, repo *Repository, run
 		INSERT INTO agent_runs (
 			id, session_id, user_message_id, agent_id, trace_id, status,
 			model_provider, model_name, input_tokens, output_tokens,
-			external_agent_name, external_agent_host, created_at, started_at, finished_at)
-		VALUES (?, ?, ?, 'general_assistant', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			external_agent_name, external_agent_host, created_at, started_at, finished_at,
+			state_version, state_updated_at, outcome_reason, assistant_content_sha256)
+		VALUES (?, ?, ?, 'general_assistant', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
 		run.id, sessionID, messageID, "trace_"+run.id, run.status, provider, model,
 		nonNegativeNullInt64(run.inputTokens), nonNegativeNullInt64(run.outputTokens),
 		externalName, externalHost,
-		FormatTimestamp(run.createdAt), startedAt, finishedAt); err != nil {
+		FormatTimestamp(run.createdAt), startedAt, finishedAt,
+		FormatTimestamp(run.createdAt), telemetryOutcomeReason(run.status), emptyAssistantContentSHA256); err != nil {
 		t.Fatalf("insert run: %v", err)
+	}
+}
+
+// telemetryOutcomeReason gives these direct fixtures an outcome that reads
+// sensibly next to their status. What the schema actually enforces is the
+// closed outcome_reason vocabulary, not the pairing of an outcome with a
+// lifecycle: that cross-column rule belongs to the versioned transitions, and
+// no constraint here would reject a mismatched pair today. Telemetry does not
+// read the outcome at all; the fixtures only have to be legal rows.
+func telemetryOutcomeReason(status string) string {
+	switch status {
+	case "completed":
+		return "completed_no_content"
+	case "failed":
+		return "internal_failure"
+	case "cancelled":
+		return "abandoned"
+	default:
+		return "none"
 	}
 }
 

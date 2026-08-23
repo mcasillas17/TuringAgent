@@ -21,7 +21,8 @@ func validateEgressDecisionShape(job *turingv1.AgentJob) error {
 		return nil
 	}
 	hasRemoteMCP := len(decision.GetRemoteMcpServers()) > 0
-	if !providerRemote && !hasRemoteMCP {
+	hasIntegrations := len(decision.GetIntegrationEndpoints()) > 0
+	if !providerRemote && !hasRemoteMCP && !hasIntegrations {
 		return errors.New("local run carries an inapplicable egress decision")
 	}
 	if providerRemote && job.GetModelProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE {
@@ -82,6 +83,25 @@ func validateEgressDecisionShape(job *turingv1.AgentJob) error {
 			return errors.New("remote MCP destination has no selected tool")
 		}
 	}
+	for index, destination := range decision.GetIntegrationEndpoints() {
+		if destination.GetEndpoint() != "https://api.github.com" || destination.GetEndpointHost() != "api.github.com" ||
+			destination.GetConnectionId() == "" || destination.GetDisplayName() == "" || len(destination.GetTools()) == 0 ||
+			!slices.IsSorted(destination.GetTools()) {
+			return errors.New("integration destinations are invalid")
+		}
+		if index > 0 {
+			previous := decision.GetIntegrationEndpoints()[index-1]
+			if previous.GetEndpoint() > destination.GetEndpoint() ||
+				(previous.GetEndpoint() == destination.GetEndpoint() && previous.GetConnectionId() >= destination.GetConnectionId()) {
+				return errors.New("integration destinations are unsorted")
+			}
+		}
+		for _, tool := range destination.GetTools() {
+			if !slices.Contains(job.GetSelectedTools(), "integrations/"+tool) {
+				return errors.New("integration destination has an unselected tool")
+			}
+		}
+	}
 
 	present := make(map[turingv1.EgressDataCategory]struct{}, len(decision.GetDataCategories()))
 	for _, category := range decision.GetDataCategories() {
@@ -98,8 +118,11 @@ func validateEgressDecisionShape(job *turingv1.AgentJob) error {
 	if providerRemote {
 		required = append(required,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
-			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
-			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT)
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY)
+		if len(job.GetSkills()) > 0 {
+			required = append(required,
+				turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT)
+		}
 		if job.GetExternalAgent() == nil {
 			required = append(required, turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL)
 		}
@@ -111,6 +134,11 @@ func validateEgressDecisionShape(job *turingv1.AgentJob) error {
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS)
 	}
 	if hasRemoteMCP {
+		required = append(required,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS)
+	}
+	if hasIntegrations {
 		required = append(required,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS)

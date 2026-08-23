@@ -9,7 +9,7 @@ import (
 
 func TestSendBeaconDecisionEchoesBeaconPhase(t *testing.T) {
 	h := newHarness(t)
-	commands := make(chan *turingv1.RuntimeCommand, 1)
+	commands := make(chan workerCommand, 1)
 	connected := &worker{
 		commands:    commands,
 		done:        make(chan struct{}),
@@ -27,7 +27,7 @@ func TestSendBeaconDecisionEchoesBeaconPhase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	command := <-commands
+	command := (<-commands).command
 	if phase := command.GetToolPolicyDecision().GetPhase(); phase != beacon.Phase {
 		t.Fatalf("decision phase = %s, want %s", phase, beacon.Phase)
 	}

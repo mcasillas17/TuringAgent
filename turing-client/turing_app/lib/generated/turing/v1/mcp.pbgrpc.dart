@@ -53,18 +53,26 @@ class McpRegistryServiceClient extends $grpc.Client {
     return $createUnaryCall(_$updateMcpToolPolicy, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.McpToolDescriptor> updateToolPolicyByName(
+    $0.UpdateToolPolicyByNameRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$updateToolPolicyByName, request,
+        options: options);
+  }
+
+  $grpc.ResponseFuture<$0.ListPseudoServerToolsResponse> listPseudoServerTools(
+    $0.ListPseudoServerToolsRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$listPseudoServerTools, request, options: options);
+  }
+
   $grpc.ResponseFuture<$0.DeleteMcpServerResponse> deleteMcpServer(
     $0.DeleteMcpServerRequest request, {
     $grpc.CallOptions? options,
   }) {
     return $createUnaryCall(_$deleteMcpServer, request, options: options);
-  }
-
-  $grpc.ResponseFuture<$0.CallRegisteredMcpToolResponse> callRegisteredMcpTool(
-    $0.CallRegisteredMcpToolRequest request, {
-    $grpc.CallOptions? options,
-  }) {
-    return $createUnaryCall(_$callRegisteredMcpTool, request, options: options);
   }
 
   $grpc.ResponseFuture<$0.McpServerDescriptor> registerMcpServer(
@@ -88,6 +96,13 @@ class McpRegistryServiceClient extends $grpc.Client {
     return $createUnaryCall(_$rotateMcpServerToken, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.CallRegisteredMcpToolResponse> callRegisteredMcpTool(
+    $0.CallRegisteredMcpToolRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$callRegisteredMcpTool, request, options: options);
+  }
+
   // method descriptors
 
   static final _$listMcpServers =
@@ -105,16 +120,21 @@ class McpRegistryServiceClient extends $grpc.Client {
           '/turing.v1.McpRegistryService/UpdateMcpToolPolicy',
           ($0.UpdateMcpToolPolicyRequest value) => value.writeToBuffer(),
           $0.McpToolDescriptor.fromBuffer);
+  static final _$updateToolPolicyByName = $grpc.ClientMethod<
+          $0.UpdateToolPolicyByNameRequest, $0.McpToolDescriptor>(
+      '/turing.v1.McpRegistryService/UpdateToolPolicyByName',
+      ($0.UpdateToolPolicyByNameRequest value) => value.writeToBuffer(),
+      $0.McpToolDescriptor.fromBuffer);
+  static final _$listPseudoServerTools = $grpc.ClientMethod<
+          $0.ListPseudoServerToolsRequest, $0.ListPseudoServerToolsResponse>(
+      '/turing.v1.McpRegistryService/ListPseudoServerTools',
+      ($0.ListPseudoServerToolsRequest value) => value.writeToBuffer(),
+      $0.ListPseudoServerToolsResponse.fromBuffer);
   static final _$deleteMcpServer =
       $grpc.ClientMethod<$0.DeleteMcpServerRequest, $0.DeleteMcpServerResponse>(
           '/turing.v1.McpRegistryService/DeleteMcpServer',
           ($0.DeleteMcpServerRequest value) => value.writeToBuffer(),
           $0.DeleteMcpServerResponse.fromBuffer);
-  static final _$callRegisteredMcpTool = $grpc.ClientMethod<
-          $0.CallRegisteredMcpToolRequest, $0.CallRegisteredMcpToolResponse>(
-      '/turing.v1.McpRegistryService/CallRegisteredMcpTool',
-      ($0.CallRegisteredMcpToolRequest value) => value.writeToBuffer(),
-      $0.CallRegisteredMcpToolResponse.fromBuffer);
   static final _$registerMcpServer =
       $grpc.ClientMethod<$0.RegisterMcpServerRequest, $0.McpServerDescriptor>(
           '/turing.v1.McpRegistryService/RegisterMcpServer',
@@ -130,6 +150,11 @@ class McpRegistryServiceClient extends $grpc.Client {
       '/turing.v1.McpRegistryService/RotateMcpServerToken',
       ($0.RotateMcpServerTokenRequest value) => value.writeToBuffer(),
       $0.McpServerDescriptor.fromBuffer);
+  static final _$callRegisteredMcpTool = $grpc.ClientMethod<
+          $0.CallRegisteredMcpToolRequest, $0.CallRegisteredMcpToolResponse>(
+      '/turing.v1.McpRegistryService/CallRegisteredMcpTool',
+      ($0.CallRegisteredMcpToolRequest value) => value.writeToBuffer(),
+      $0.CallRegisteredMcpToolResponse.fromBuffer);
 }
 
 @$pb.GrpcServiceName('turing.v1.McpRegistryService')
@@ -164,6 +189,24 @@ abstract class McpRegistryServiceBase extends $grpc.Service {
         ($core.List<$core.int> value) =>
             $0.UpdateMcpToolPolicyRequest.fromBuffer(value),
         ($0.McpToolDescriptor value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.UpdateToolPolicyByNameRequest,
+            $0.McpToolDescriptor>(
+        'UpdateToolPolicyByName',
+        updateToolPolicyByName_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.UpdateToolPolicyByNameRequest.fromBuffer(value),
+        ($0.McpToolDescriptor value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.ListPseudoServerToolsRequest,
+            $0.ListPseudoServerToolsResponse>(
+        'ListPseudoServerTools',
+        listPseudoServerTools_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.ListPseudoServerToolsRequest.fromBuffer(value),
+        ($0.ListPseudoServerToolsResponse value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.DeleteMcpServerRequest,
             $0.DeleteMcpServerResponse>(
         'DeleteMcpServer',
@@ -173,15 +216,6 @@ abstract class McpRegistryServiceBase extends $grpc.Service {
         ($core.List<$core.int> value) =>
             $0.DeleteMcpServerRequest.fromBuffer(value),
         ($0.DeleteMcpServerResponse value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.CallRegisteredMcpToolRequest,
-            $0.CallRegisteredMcpToolResponse>(
-        'CallRegisteredMcpTool',
-        callRegisteredMcpTool_Pre,
-        false,
-        false,
-        ($core.List<$core.int> value) =>
-            $0.CallRegisteredMcpToolRequest.fromBuffer(value),
-        ($0.CallRegisteredMcpToolResponse value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.RegisterMcpServerRequest,
             $0.McpServerDescriptor>(
         'RegisterMcpServer',
@@ -209,6 +243,15 @@ abstract class McpRegistryServiceBase extends $grpc.Service {
         ($core.List<$core.int> value) =>
             $0.RotateMcpServerTokenRequest.fromBuffer(value),
         ($0.McpServerDescriptor value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.CallRegisteredMcpToolRequest,
+            $0.CallRegisteredMcpToolResponse>(
+        'CallRegisteredMcpTool',
+        callRegisteredMcpTool_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.CallRegisteredMcpToolRequest.fromBuffer(value),
+        ($0.CallRegisteredMcpToolResponse value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.ListMcpServersResponse> listMcpServers_Pre(
@@ -238,6 +281,24 @@ abstract class McpRegistryServiceBase extends $grpc.Service {
   $async.Future<$0.McpToolDescriptor> updateMcpToolPolicy(
       $grpc.ServiceCall call, $0.UpdateMcpToolPolicyRequest request);
 
+  $async.Future<$0.McpToolDescriptor> updateToolPolicyByName_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.UpdateToolPolicyByNameRequest> $request) async {
+    return updateToolPolicyByName($call, await $request);
+  }
+
+  $async.Future<$0.McpToolDescriptor> updateToolPolicyByName(
+      $grpc.ServiceCall call, $0.UpdateToolPolicyByNameRequest request);
+
+  $async.Future<$0.ListPseudoServerToolsResponse> listPseudoServerTools_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.ListPseudoServerToolsRequest> $request) async {
+    return listPseudoServerTools($call, await $request);
+  }
+
+  $async.Future<$0.ListPseudoServerToolsResponse> listPseudoServerTools(
+      $grpc.ServiceCall call, $0.ListPseudoServerToolsRequest request);
+
   $async.Future<$0.DeleteMcpServerResponse> deleteMcpServer_Pre(
       $grpc.ServiceCall $call,
       $async.Future<$0.DeleteMcpServerRequest> $request) async {
@@ -246,15 +307,6 @@ abstract class McpRegistryServiceBase extends $grpc.Service {
 
   $async.Future<$0.DeleteMcpServerResponse> deleteMcpServer(
       $grpc.ServiceCall call, $0.DeleteMcpServerRequest request);
-
-  $async.Future<$0.CallRegisteredMcpToolResponse> callRegisteredMcpTool_Pre(
-      $grpc.ServiceCall $call,
-      $async.Future<$0.CallRegisteredMcpToolRequest> $request) async {
-    return callRegisteredMcpTool($call, await $request);
-  }
-
-  $async.Future<$0.CallRegisteredMcpToolResponse> callRegisteredMcpTool(
-      $grpc.ServiceCall call, $0.CallRegisteredMcpToolRequest request);
 
   $async.Future<$0.McpServerDescriptor> registerMcpServer_Pre(
       $grpc.ServiceCall $call,
@@ -282,4 +334,13 @@ abstract class McpRegistryServiceBase extends $grpc.Service {
 
   $async.Future<$0.McpServerDescriptor> rotateMcpServerToken(
       $grpc.ServiceCall call, $0.RotateMcpServerTokenRequest request);
+
+  $async.Future<$0.CallRegisteredMcpToolResponse> callRegisteredMcpTool_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.CallRegisteredMcpToolRequest> $request) async {
+    return callRegisteredMcpTool($call, await $request);
+  }
+
+  $async.Future<$0.CallRegisteredMcpToolResponse> callRegisteredMcpTool(
+      $grpc.ServiceCall call, $0.CallRegisteredMcpToolRequest request);
 }

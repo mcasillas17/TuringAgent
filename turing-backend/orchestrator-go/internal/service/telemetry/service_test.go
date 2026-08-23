@@ -190,7 +190,17 @@ func enqueueAndComplete(t *testing.T, repo *repository.Repository, sessionID str
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatalf("mark running: %v", err)
 	}
-	if _, err := repo.CompleteRunWithEvent(ctx, enqueued.RunID, enqueued.AssistantMessageID, "done", `{}`, usage); err != nil {
+	state, err := repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatalf("read run state: %v", err)
+	}
+	if _, err := repo.CompleteRunCanonical(ctx, repository.CompleteRunInput{
+		RunID:                enqueued.RunID,
+		AssistantMessageID:   enqueued.AssistantMessageID,
+		Content:              "done",
+		ExpectedStateVersion: state.StateVersion,
+		Usage:                usage,
+	}); err != nil {
 		t.Fatalf("complete run: %v", err)
 	}
 	return enqueued.RunID

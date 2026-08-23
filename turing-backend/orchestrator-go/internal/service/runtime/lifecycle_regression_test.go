@@ -44,8 +44,11 @@ func TestAmbiguousAssignmentSendKeepsAttemptFenced(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "running" || !run.ExecutionActive {
-		t.Fatalf("ambiguous assignment run = %+v, want active running fence", run)
+	// Recovering, not running: the send was ambiguous, so nobody can say the
+	// worker is making progress. Execution stays contained, which is what keeps
+	// a fresh worker from claiming the attempt below.
+	if run.Status != "recovering" || !run.ExecutionActive {
+		t.Fatalf("ambiguous assignment run = %+v, want active recovering fence", run)
 	}
 	claimed, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-fresh")
 	if err != nil {
@@ -102,7 +105,7 @@ func TestDisconnectFencesDeliveredAssignmentUntilRecovery(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		run, getErr := h.repo.GetRun(context.Background(), enqueued.RunID)
-		if getErr == nil && run.Status == "running" && run.ExecutionActive && run.ExecutionState == "uncertain" {
+		if getErr == nil && run.Status == "recovering" && run.ExecutionActive && run.ExecutionState == "uncertain" {
 			break
 		}
 		time.Sleep(time.Millisecond)
@@ -111,7 +114,7 @@ func TestDisconnectFencesDeliveredAssignmentUntilRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != "running" || !run.ExecutionActive || run.ExecutionState != "uncertain" {
+	if run.Status != "recovering" || !run.ExecutionActive || run.ExecutionState != "uncertain" {
 		t.Fatalf("disconnected delivered run = %+v, want active uncertain fence", run)
 	}
 	select {
@@ -401,9 +404,7 @@ func TestDelayedIdenticalAfterDoesNotCloseWorkerStream(t *testing.T) {
 	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
 		return command.GetToolPolicyDecision() != nil && command.GetToolPolicyDecision().GetToolCallId() == beacon.ToolCallId
 	})
-	if _, err := h.repo.CancelRunWithEvent(context.Background(), first.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
-		t.Fatal(err)
-	}
+	cancelRunFixture(t, h, first.RunID)
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: first.RunID}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +417,10 @@ func TestDelayedIdenticalAfterDoesNotCloseWorkerStream(t *testing.T) {
 	if decision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_ALLOW {
 		t.Fatalf("late cleanup decision = %+v, want allow", decision)
 	}
-	after.Error = &turingv1.ToolCallError{Code: "cancelled", Message: "conflicting cleanup"}
+	// A different typed code is what makes this report conflict. The message no
+	// longer participates: it is not persisted at all, so two reports that
+	// differ only in prose are the same durable fact.
+	after.Error = &turingv1.ToolCallError{Code: "mcp_call_failed", Message: "conflicting cleanup"}
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_ToolBeacon{ToolBeacon: after}}); err != nil {
 		t.Fatal(err)
 	}
@@ -472,4 +476,86 @@ func (s *deliveredThenFailedAssignmentStream) Send(command *turingv1.RuntimeComm
 		return errors.New("assignment reached executor but Send returned an error")
 	}
 	return nil
+}
+
+// TestFencedRunRefusesGenericOwnershipClaims guards the ingest predicate that
+// must NOT learn about recovering.
+//
+// Recovering says nobody can currently prove which worker owns the run. A
+// generic runtime event or a before-phase tool beacon is a worker asserting the
+// opposite — narrating the run, or asking to act in its name — so admitting one
+// would let an unproven owner keep writing the run's story and reopen the
+// window fencing exists to close. The specific recovery, terminal, and
+// approval-closing paths are how a fenced run moves on; they are guarded
+// transitions that prove their own identity, not this predicate.
+func TestFencedRunRefusesGenericOwnershipClaims(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	enqueued := h.enqueueRun(t, "fenced narration")
+	claimed, err := h.repo.ClaimNextJob(ctx, "general_assistant", "worker-fenced")
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := h.repo.GetRunState(ctx, enqueued.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.FenceRunOwnership(ctx, repository.FenceRunOwnershipInput{
+		RunID: enqueued.RunID, ExpectedStateVersion: running.StateVersion,
+		WorkerID: "worker-fenced", AssignmentAttemptID: claimed.AssignmentAttemptID,
+	}); err != nil {
+		t.Fatalf("FenceRunOwnership: %v", err)
+	}
+
+	if !isActiveRunStatus("running") || !isActiveRunStatus("waiting_approval") {
+		t.Fatal("a proven-owned run was not treated as active")
+	}
+	if isActiveRunStatus("recovering") {
+		t.Fatal("recovering counted as proven ownership")
+	}
+
+	var before int
+	if err := h.database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE run_id = ?`, enqueued.RunID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+
+	eventErr := h.service.applyUpdate(ctx, &turingv1.RuntimeUpdate{
+		Update: &turingv1.RuntimeUpdate_Event{Event: &turingv1.TuringEvent{
+			RunId: enqueued.RunID,
+			Type:  turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA,
+		}},
+	})
+	if status.Code(eventErr) != codes.FailedPrecondition {
+		t.Fatalf("runtime event on a fenced run = %v, want FailedPrecondition", eventErr)
+	}
+	if _, err := h.service.handleToolBeacon(ctx, &turingv1.ToolCallBeacon{
+		RunId:      enqueued.RunID,
+		TraceId:    enqueued.TraceID,
+		ToolCallId: "call_fenced",
+		AgentId:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ServerName: "files",
+		ToolName:   "files.update",
+		Phase:      turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE,
+		Args:       mustStruct(t, map[string]any{"path": "note.txt", "content": "hello"}),
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("before-phase tool beacon on a fenced run = %v, want FailedPrecondition", err)
+	}
+
+	var after int
+	if err := h.database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE run_id = ?`, enqueued.RunID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("refused claims appended %d events to a fenced run", after-before)
+	}
+	var toolCalls int
+	if err := h.database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM tool_calls WHERE run_id = ?`, enqueued.RunID).Scan(&toolCalls); err != nil {
+		t.Fatal(err)
+	}
+	if toolCalls != 0 {
+		t.Fatalf("a refused beacon recorded %d tool calls on a fenced run", toolCalls)
+	}
 }

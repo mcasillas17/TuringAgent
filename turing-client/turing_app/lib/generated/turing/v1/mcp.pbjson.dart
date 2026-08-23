@@ -220,6 +220,65 @@ final $typed_data.Uint8List updateMcpToolPolicyRequestDescriptor =
         'lkEhsKCXRvb2xfbmFtZRgCIAEoCVIIdG9vbE5hbWUSLQoGcG9saWN5GAMgASgOMhUudHVyaW5n'
         'LnYxLlRvb2xQb2xpY3lSBnBvbGljeQ==');
 
+@$core.Deprecated('Use updateToolPolicyByNameRequestDescriptor instead')
+const UpdateToolPolicyByNameRequest$json = {
+  '1': 'UpdateToolPolicyByNameRequest',
+  '2': [
+    {'1': 'server_name', '3': 1, '4': 1, '5': 9, '10': 'serverName'},
+    {'1': 'tool_name', '3': 2, '4': 1, '5': 9, '10': 'toolName'},
+    {
+      '1': 'policy',
+      '3': 3,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.ToolPolicy',
+      '10': 'policy'
+    },
+  ],
+};
+
+/// Descriptor for `UpdateToolPolicyByNameRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List updateToolPolicyByNameRequestDescriptor =
+    $convert.base64Decode(
+        'Ch1VcGRhdGVUb29sUG9saWN5QnlOYW1lUmVxdWVzdBIfCgtzZXJ2ZXJfbmFtZRgBIAEoCVIKc2'
+        'VydmVyTmFtZRIbCgl0b29sX25hbWUYAiABKAlSCHRvb2xOYW1lEi0KBnBvbGljeRgDIAEoDjIV'
+        'LnR1cmluZy52MS5Ub29sUG9saWN5UgZwb2xpY3k=');
+
+@$core.Deprecated('Use listPseudoServerToolsRequestDescriptor instead')
+const ListPseudoServerToolsRequest$json = {
+  '1': 'ListPseudoServerToolsRequest',
+  '2': [
+    {'1': 'server_name', '3': 1, '4': 1, '5': 9, '10': 'serverName'},
+  ],
+};
+
+/// Descriptor for `ListPseudoServerToolsRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List listPseudoServerToolsRequestDescriptor =
+    $convert.base64Decode(
+        'ChxMaXN0UHNldWRvU2VydmVyVG9vbHNSZXF1ZXN0Eh8KC3NlcnZlcl9uYW1lGAEgASgJUgpzZX'
+        'J2ZXJOYW1l');
+
+@$core.Deprecated('Use listPseudoServerToolsResponseDescriptor instead')
+const ListPseudoServerToolsResponse$json = {
+  '1': 'ListPseudoServerToolsResponse',
+  '2': [
+    {
+      '1': 'tools',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.McpToolDescriptor',
+      '10': 'tools'
+    },
+  ],
+};
+
+/// Descriptor for `ListPseudoServerToolsResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List listPseudoServerToolsResponseDescriptor =
+    $convert.base64Decode(
+        'Ch1MaXN0UHNldWRvU2VydmVyVG9vbHNSZXNwb25zZRIyCgV0b29scxgBIAMoCzIcLnR1cmluZy'
+        '52MS5NY3BUb29sRGVzY3JpcHRvclIFdG9vbHM=');
+
 @$core.Deprecated('Use deleteMcpServerRequestDescriptor instead')
 const DeleteMcpServerRequest$json = {
   '1': 'DeleteMcpServerRequest',
@@ -248,23 +307,23 @@ const RegisterMcpServerRequest$json = {
   '2': [
     {'1': 'name', '3': 1, '4': 1, '5': 9, '10': 'name'},
     {'1': 'url', '3': 2, '4': 1, '5': 9, '10': 'url'},
+    {'1': 'bearer_token', '3': 3, '4': 1, '5': 9, '10': 'bearerToken'},
     {
       '1': 'tier',
-      '3': 3,
+      '3': 4,
       '4': 1,
       '5': 14,
       '6': '.turing.v1.McpServerTier',
       '10': 'tier'
     },
-    {'1': 'bearer_token', '3': 4, '4': 1, '5': 9, '10': 'bearerToken'},
   ],
 };
 
 /// Descriptor for `RegisterMcpServerRequest`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List registerMcpServerRequestDescriptor = $convert.base64Decode(
     'ChhSZWdpc3Rlck1jcFNlcnZlclJlcXVlc3QSEgoEbmFtZRgBIAEoCVIEbmFtZRIQCgN1cmwYAi'
-    'ABKAlSA3VybBIsCgR0aWVyGAMgASgOMhgudHVyaW5nLnYxLk1jcFNlcnZlclRpZXJSBHRpZXIS'
-    'IQoMYmVhcmVyX3Rva2VuGAQgASgJUgtiZWFyZXJUb2tlbg==');
+    'ABKAlSA3VybBIhCgxiZWFyZXJfdG9rZW4YAyABKAlSC2JlYXJlclRva2VuEiwKBHRpZXIYBCAB'
+    'KA4yGC50dXJpbmcudjEuTWNwU2VydmVyVGllclIEdGllcg==');
 
 @$core.Deprecated('Use reimportMcpJsonRequestDescriptor instead')
 const ReimportMcpJsonRequest$json = {
@@ -280,23 +339,23 @@ const ReimportMcpJsonResponse$json = {
   '1': 'ReimportMcpJsonResponse',
   '2': [
     {'1': 'imported', '3': 1, '4': 3, '5': 9, '10': 'imported'},
-    {'1': 'skipped', '3': 2, '4': 3, '5': 9, '10': 'skipped'},
     {
-      '1': 'refused',
-      '3': 3,
+      '1': 'unsupported',
+      '3': 2,
       '4': 3,
       '5': 11,
       '6': '.turing.v1.UnsupportedMcpServer',
-      '10': 'refused'
+      '10': 'unsupported'
     },
+    {'1': 'skipped', '3': 3, '4': 3, '5': 9, '10': 'skipped'},
   ],
 };
 
 /// Descriptor for `ReimportMcpJsonResponse`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List reimportMcpJsonResponseDescriptor = $convert.base64Decode(
-    'ChdSZWltcG9ydE1jcEpzb25SZXNwb25zZRIaCghpbXBvcnRlZBgBIAMoCVIIaW1wb3J0ZWQSGA'
-    'oHc2tpcHBlZBgCIAMoCVIHc2tpcHBlZBI5CgdyZWZ1c2VkGAMgAygLMh8udHVyaW5nLnYxLlVu'
-    'c3VwcG9ydGVkTWNwU2VydmVyUgdyZWZ1c2Vk');
+    'ChdSZWltcG9ydE1jcEpzb25SZXNwb25zZRIaCghpbXBvcnRlZBgBIAMoCVIIaW1wb3J0ZWQSQQ'
+    'oLdW5zdXBwb3J0ZWQYAiADKAsyHy50dXJpbmcudjEuVW5zdXBwb3J0ZWRNY3BTZXJ2ZXJSC3Vu'
+    'c3VwcG9ydGVkEhgKB3NraXBwZWQYAyADKAlSB3NraXBwZWQ=');
 
 @$core.Deprecated('Use rotateMcpServerTokenRequestDescriptor instead')
 const RotateMcpServerTokenRequest$json = {

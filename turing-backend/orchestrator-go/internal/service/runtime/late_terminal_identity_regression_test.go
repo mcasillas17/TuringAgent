@@ -25,7 +25,7 @@ func claimLateTerminalAssignment(t *testing.T, h *harness, content string) (repo
 		t.Fatal(err)
 	}
 	return enqueued, repoAssignment, &worker{
-		commands:    make(chan *turingv1.RuntimeCommand, 1),
+		commands:    make(chan workerCommand, 1),
 		assignments: map[string]assignment{enqueued.RunID: {jobID: repoAssignment.JobID, runID: repoAssignment.RunID, attemptID: repoAssignment.AttemptID}},
 	}
 }
@@ -54,18 +54,11 @@ func requireLateTerminalFence(t *testing.T, h *harness, runID string, connected 
 func TestLateAssignedTerminalUpdateDoesNotReleaseConflictingFailure(t *testing.T) {
 	h := newHarness(t)
 	enqueued, _, connected := claimLateTerminalAssignment(t, h, "failure identity")
-	payload, err := encodePayload(map[string]any{
-		"runId": enqueued.RunID, "code": "persisted", "message": "persisted failure", "retryable": false,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.repo.FailRunWithEventPreservingExecution(context.Background(), enqueued.RunID, "persisted", "persisted failure", payload); err != nil {
-		t.Fatal(err)
-	}
+	failRunFixture(t, h, enqueued.RunID, toolExecutionFailure())
 	requireLateTerminalFence(t, h, enqueued.RunID, connected, &turingv1.RuntimeUpdate{
 		Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
-			RunId: enqueued.RunID, Code: "stale", Message: "stale failure", Retryable: true,
+			RunId: enqueued.RunID, Code: "model_stream_failed",
+			FailureOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
 		}},
 	})
 }
@@ -73,15 +66,7 @@ func TestLateAssignedTerminalUpdateDoesNotReleaseConflictingFailure(t *testing.T
 func TestLateAssignedTerminalUpdateDoesNotReleaseConflictingCompletion(t *testing.T) {
 	h := newHarness(t)
 	enqueued, _, connected := claimLateTerminalAssignment(t, h, "completion identity")
-	payload, err := encodePayload(map[string]any{
-		"runId": enqueued.RunID, "assistantMessageId": enqueued.AssistantMessageID,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.repo.CompleteRunWithEvent(context.Background(), enqueued.RunID, enqueued.AssistantMessageID, "persisted completion", payload, nil); err != nil {
-		t.Fatal(err)
-	}
+	completeRunFixture(t, h, enqueued.RunID, enqueued.AssistantMessageID, "persisted completion")
 	if _, err := h.database.ExecContext(context.Background(), `
 		UPDATE agent_runs
 		SET execution_active = 1, execution_state = 'delivered'
@@ -99,19 +84,12 @@ func TestLateAssignedTerminalUpdateDoesNotReleaseConflictingCompletion(t *testin
 func TestLateAssignedTerminalUpdateDoesNotReleaseStaleAttempt(t *testing.T) {
 	h := newHarness(t)
 	enqueued, repoAssignment, connected := claimLateTerminalAssignment(t, h, "attempt identity")
-	payload, err := encodePayload(map[string]any{
-		"runId": enqueued.RunID, "code": "persisted", "message": "persisted failure", "retryable": false,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.repo.FailRunWithEventPreservingExecution(context.Background(), enqueued.RunID, "persisted", "persisted failure", payload); err != nil {
-		t.Fatal(err)
-	}
+	failRunFixture(t, h, enqueued.RunID, toolExecutionFailure())
 	connected.assignments[enqueued.RunID] = assignment{jobID: repoAssignment.JobID, runID: repoAssignment.RunID, attemptID: "stale-attempt"}
 	requireLateTerminalFence(t, h, enqueued.RunID, connected, &turingv1.RuntimeUpdate{
 		Update: &turingv1.RuntimeUpdate_RunFailed{RunFailed: &turingv1.RuntimeRunFailed{
-			RunId: enqueued.RunID, Code: "persisted", Message: "persisted failure", Retryable: false,
+			RunId: enqueued.RunID, Code: "tool_call_failed",
+			FailureOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_EXECUTION,
 		}},
 	})
 }

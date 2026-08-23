@@ -148,13 +148,17 @@ func TestCreateApprovalForToolPersistsEventAndAudit(t *testing.T) {
 	if requested.EventID == "" {
 		t.Fatal("approval.requested event was not persisted")
 	}
-	var payload map[string]string
+	// map[string]any, not map[string]string: approval.requested is the run's
+	// waiting-approval lifecycle event, so it now also carries the nested
+	// canonical run state.
+	var payload map[string]any
 	if err := json.Unmarshal([]byte(requested.PayloadJSON), &payload); err != nil {
 		t.Fatal(err)
 	}
+	argsSummary, _ := payload["argsSummary"].(string)
 	if payload["approvalId"] != approvalID || payload["toolName"] != "files.update" ||
-		payload["argsSummary"] != "Requested change to note.txt" ||
-		strings.Contains(payload["argsSummary"], "hello") {
+		argsSummary != "Requested change to note.txt" ||
+		strings.Contains(argsSummary, "hello") {
 		t.Fatalf("approval.requested payload = %+v", payload)
 	}
 	var auditAction string
@@ -1328,6 +1332,58 @@ func TestApprovalRationaleSurvivesDatabaseRestart(t *testing.T) {
 	}
 }
 
+// TestEveryApprovalDecisionOnARunIsPublished covers a run that asked for two
+// authorizations before either was answered. The first decision resumes the
+// run; the second one arrives at a run that is already running, so it commits
+// no lifecycle change — but the user did decide, and a decision nobody
+// publishes leaves the request on screen forever.
+func TestEveryApprovalDecisionOnARunIsPublished(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	if err := h.repo.RecordToolCallBefore(context.Background(), repository.ToolCallRecord{ToolCallID: "call_2", RunID: enqueued.RunID},
+		"general_assistant", "files", "files.update", `{"path":"second.txt"}`, "sha256:second"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID, "call_2", "general_assistant", "files.update", map[string]any{"path": "second.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
+	defer unsubscribe()
+	client := turingv1.NewApprovalServiceClient(h.conn)
+
+	for _, approvalID := range []string{first, second} {
+		if _, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+			t.Fatalf("ApproveApproval %s: %v", approvalID, err)
+		}
+	}
+	var approved []string
+	for len(approved) < 2 {
+		select {
+		case event := <-published:
+			if event.Type != "approval.approved" {
+				continue
+			}
+			var payload struct {
+				ApprovalID string `json:"approvalId"`
+			}
+			if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+				t.Fatal(err)
+			}
+			approved = append(approved, payload.ApprovalID)
+		case <-time.After(time.Second):
+			t.Fatalf("published approval decisions = %v, want both %s and %s", approved, first, second)
+		}
+	}
+	if want := []string{first, second}; !reflect.DeepEqual(approved, want) {
+		t.Fatalf("published approval decisions = %v, want %v", approved, want)
+	}
+}
+
 func TestDenyApprovalPublishesCommittedTerminalRunEventOnlyOnce(t *testing.T) {
 	h := newApprovalHarness(t)
 	enqueued := h.createRunningToolCall(t)
@@ -1353,11 +1409,14 @@ func TestDenyApprovalPublishesCommittedTerminalRunEventOnlyOnce(t *testing.T) {
 					if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 						t.Fatal(err)
 					}
+					// A closed category, not the sentence the backend used to
+					// write: a client localizes "policy denied", and nothing
+					// a tool or provider said can ride along inside it.
 					want := map[string]any{
 						"toolCallId": "call_1",
 						"toolName":   "files.update",
 						"serverName": "files",
-						"error":      "User denied approval",
+						"category":   "policy_denied",
 					}
 					if !reflect.DeepEqual(payload, want) {
 						t.Fatalf("tool.call.denied payload = %#v, want %#v", payload, want)
@@ -1497,5 +1556,88 @@ func TestReapproveExpiredApprovedApprovalRevokesToken(t *testing.T) {
 	}
 	if approval.Status != "expired" || approval.ApprovalToken != "" {
 		t.Fatalf("approval after reapprove = %+v, want expired with revoked token", approval)
+	}
+}
+
+// TestApprovalDenialRationaleStaysOutOfRunStateAndFailureEvents holds the line
+// TUR-002 drew. A human's reason for refusing a tool call is governed audit
+// input, not a generic machine diagnostic: it belongs in the approval row and
+// the bounded audit projection, and it must not reach a public event payload,
+// a run state, or a failure event on the way out.
+func TestApprovalDenialRationaleStaysOutOfRunStateAndFailureEvents(t *testing.T) {
+	h := newApprovalHarness(t)
+	enqueued := h.createRunningToolCall(t)
+	approvalID, err := h.service.CreateApprovalForTool(context.Background(), enqueued.RunID,
+		"call_1", "general_assistant", "files.update", map[string]any{"path": "note.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const rationale = "denied because this would email the whole company"
+	if _, err := turingv1.NewApprovalServiceClient(h.conn).DenyApproval(context.Background(),
+		&turingv1.DenyApprovalRequest{ApprovalId: approvalID, Reason: rationale}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The rationale is still where governance put it.
+	approval, err := h.repo.GetApproval(context.Background(), approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !approval.DenialReason.Valid || approval.DenialReason.String != rationale {
+		t.Fatalf("stored denial reason = %+v, want the operator's words preserved", approval.DenialReason)
+	}
+	var auditPayloads int
+	rows, err := h.database.QueryContext(context.Background(),
+		`SELECT payload_json FROM audit_logs WHERE payload_json LIKE ?`, "%"+rationale+"%")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var payload string
+		if err := rows.Scan(&payload); err != nil {
+			t.Fatal(err)
+		}
+		auditPayloads++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if auditPayloads == 0 {
+		t.Fatal("the governed audit projection lost the denial rationale")
+	}
+
+	// And nowhere else. Every public event this session can serve is read
+	// through the same boundary a client reads.
+	server := events.NewServer(h.repo, h.bus)
+	listed, err := server.ListEvents(context.Background(),
+		&turingv1.ListEventsRequest{SessionId: enqueued.SessionID, Limit: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawDenial, sawFailure bool
+	for _, event := range listed.GetEvents() {
+		switch event.GetType() {
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED:
+			sawDenial = true
+		case turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_FAILED:
+			sawFailure = true
+		}
+		for key, value := range event.GetPayload().AsMap() {
+			text, isText := value.(string)
+			if isText && strings.Contains(text, rationale) {
+				t.Fatalf("public %v payload republished the denial rationale under %q", event.GetType(), key)
+			}
+		}
+		state := event.GetRunState()
+		if state == nil {
+			continue
+		}
+		if strings.Contains(state.String(), rationale) {
+			t.Fatalf("run state on %v carries the denial rationale", event.GetType())
+		}
+	}
+	if !sawDenial || !sawFailure {
+		t.Fatalf("seeded events denial=%v failure=%v, want both public paths covered", sawDenial, sawFailure)
 	}
 }

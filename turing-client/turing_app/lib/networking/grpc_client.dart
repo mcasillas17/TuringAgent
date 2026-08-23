@@ -93,7 +93,8 @@ abstract class ClosableTuringApi extends TuringApi {
   Future<void> close();
 }
 
-class TuringGrpcApi implements ClosableTuringApi, RemoteEgressApi {
+class TuringGrpcApi
+    implements ClosableTuringApi, RemoteEgressApi, PseudoServerPolicyApi {
   TuringGrpcApi({
     required this.baseUrl,
     required this.apiKey,
@@ -425,6 +426,26 @@ class TuringGrpcApi implements ClosableTuringApi, RemoteEgressApi {
             ),
           )
           .toList(growable: false),
+      integrationEndpoints: disclosure.integrationEndpoints
+          .map(
+            (entry) => IntegrationEgressDestination(
+              endpoint: entry.endpoint,
+              endpointHost: entry.endpointHost,
+              connectionId: entry.connectionId,
+              displayName: entry.displayName,
+              tools: List.unmodifiable(entry.tools),
+            ),
+          )
+          .toList(growable: false),
+      skills: disclosure.skills
+          .map(
+            (skill) => SkillEgressDisclosure(
+              skillId: skill.skillId,
+              displayName: skill.displayName,
+              bodyMayBeSent: skill.bodyMayBeSent,
+            ),
+          )
+          .toList(growable: false),
       selectedTools: List.unmodifiable(disclosure.selectedTools),
       expiresAt: disclosure.expiresAt.toDateTime().toUtc(),
     );
@@ -669,6 +690,54 @@ class TuringGrpcApi implements ClosableTuringApi, RemoteEgressApi {
   }
 
   @override
+  Future<List<ToolDescriptor>> listPseudoServerTools({
+    required String serverName,
+  }) async {
+    final response = await _mcpRegistry.listPseudoServerTools(
+      mcppb.ListPseudoServerToolsRequest(serverName: serverName),
+    );
+    return response.tools
+        .map(
+          (tool) => ToolDescriptor(
+            serverName: serverName,
+            toolName: tool.toolName,
+            policy: GrpcMappers.toolPolicyToModel(tool.policy),
+            enabled: tool.enabled,
+            present: tool.present,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  @override
+  Future<ToolDescriptor> updateToolPolicyByName({
+    required String serverName,
+    required String toolName,
+    required ToolPolicy policy,
+  }) async {
+    final response = await _mcpRegistry.updateToolPolicyByName(
+      mcppb.UpdateToolPolicyByNameRequest(
+        serverName: serverName,
+        toolName: toolName,
+        policy: switch (policy) {
+          ToolPolicy.safe => commonpb.ToolPolicy.TOOL_POLICY_SAFE,
+          ToolPolicy.approvalRequired =>
+            commonpb.ToolPolicy.TOOL_POLICY_APPROVAL_REQUIRED,
+          ToolPolicy.disabled => commonpb.ToolPolicy.TOOL_POLICY_DISABLED,
+          ToolPolicy.unspecified => commonpb.ToolPolicy.TOOL_POLICY_UNSPECIFIED,
+        },
+      ),
+    );
+    return ToolDescriptor(
+      serverName: serverName,
+      toolName: response.toolName,
+      policy: GrpcMappers.toolPolicyToModel(response.policy),
+      enabled: response.enabled,
+      present: response.present,
+    );
+  }
+
+  @override
   Future<void> deleteMcpServer({required String serverId}) async {
     await _mcpRegistry.deleteMcpServer(
       mcppb.DeleteMcpServerRequest(serverId: serverId),
@@ -716,7 +785,7 @@ class TuringGrpcApi implements ClosableTuringApi, RemoteEgressApi {
     return McpImportReport(
       imported: response.imported,
       skipped: response.skipped,
-      refused: response.refused
+      refused: response.unsupported
           .map(
             (entry) =>
                 UnsupportedMcpServer(name: entry.name, reason: entry.reason),

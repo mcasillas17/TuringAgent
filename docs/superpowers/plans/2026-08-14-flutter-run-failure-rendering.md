@@ -79,8 +79,13 @@ Use the **list-entry** pattern, not the screen banner: a failure belongs at the 
 
 ## Known limits (state them, do not fix them here)
 
-- **Failures are suppressed on reopen.** `_isHistoricalRunEvent` filters anything at or below the replay watermark, so reopening a session will not show a past failure. This is consistent with tool cards and run notices, and `docs/VISION.md` already records it as a known limit. Changing replay semantics affects all three and is a separate piece of work — **do not change it here.**
-- Consequence worth knowing: a user who reopens a session containing a failed run still sees an unexplained empty turn. That is a real gap; it is just not this one.
+- **Historical note:** when this plan shipped, `_isHistoricalRunEvent` suppressed
+  failures at or below the replay watermark. TUR-009 later replaced that limit:
+  correlated assistant messages now carry authoritative versioned `RunState`,
+  and reopening reconstructs localized failure/cancellation cards without
+  replaying historical event placement. Historical tool cards and nonterminal
+  notices remain separate because they still lack a message/event interleaving
+  key.
 
 ## Verification
 
