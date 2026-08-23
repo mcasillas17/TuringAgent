@@ -170,11 +170,20 @@ class AuditPayload {
   /// / `.token_cleared` — never the token itself.
   final bool? tokenConfigured;
 
-  /// Whether `mcp.server.enabled` / `.disabled` attempted live discovery
-  /// against the server.
+  /// Whether `mcp.server.enabled` attempted *remote* live discovery
+  /// against the server: true only when enabling a `remote_url`-tier
+  /// server. Enabling a `local_container`-tier server also performs
+  /// discovery, but reaches it over the sandboxed internal network
+  /// rather than an external request, so this stays false for that
+  /// tier; disabling never contacts the server at all, so this is also
+  /// always false on `.disabled`.
   final bool? remoteDiscoveryAttempted;
 
-  /// Whether that discovery attempt succeeded, on the same two actions.
+  /// Whether discovery actually succeeded. Recorded whenever
+  /// `mcp.server.enabled` performs discovery — for either
+  /// `local_container` or `remote_url` tier, not only when
+  /// [remoteDiscoveryAttempted] is true — and always false on
+  /// `.disabled`, which never attempts discovery at all.
   final bool? discoverySucceeded;
 
   /// Counts from `mcp.server.reimported` — never the imported/skipped/

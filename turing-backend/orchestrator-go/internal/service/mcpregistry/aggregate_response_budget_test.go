@@ -1,6 +1,7 @@
 package mcpregistry
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -68,6 +69,31 @@ func manyMinimalTools(t *testing.T, toolBudget int) []*turingv1.McpToolDescripto
 	return tools
 }
 
+// numberArraySchemaJSON builds the raw schema JSON text shaped
+// `{"type":"object","x":[0,0,0,...]}` — an array of single-digit JSON
+// numbers — sized so that len(name)+len(schema) equals exactly
+// toolBudget raw bytes. Shared by numberArrayTool (which wraps it into a
+// McpToolDescriptor for a hand-built response) and any test that instead
+// needs to write this same worst-case shape through a real repository
+// write path.
+func numberArraySchemaJSON(name string, toolBudget int) string {
+	const prefix = `{"type":"object","x":[`
+	const suffix = `]}`
+	targetSchemaBytes := toolBudget - len(name)
+	buf := make([]byte, 0, targetSchemaBytes)
+	buf = append(buf, prefix...)
+	first := true
+	for len(buf)+len(suffix) < targetSchemaBytes {
+		if !first {
+			buf = append(buf, ',')
+		}
+		buf = append(buf, '0')
+		first = false
+	}
+	buf = append(buf, suffix...)
+	return string(buf)
+}
+
 // numberArrayTool builds a single McpToolDescriptor whose schema is
 // exactly toolBudget raw bytes, shaped
 // `{"type":"object","x":[0,0,0,...]}`: an array of single-digit JSON
@@ -85,22 +111,8 @@ func manyMinimalTools(t *testing.T, toolBudget int) []*turingv1.McpToolDescripto
 func numberArrayTool(t *testing.T, toolBudget int) []*turingv1.McpToolDescriptor {
 	t.Helper()
 	const name = "t"
-	const prefix = `{"type":"object","x":[`
-	const suffix = `]}`
-	targetSchemaBytes := toolBudget - len(name)
-	buf := make([]byte, 0, targetSchemaBytes)
-	buf = append(buf, prefix...)
-	first := true
-	for len(buf)+len(suffix) < targetSchemaBytes {
-		if !first {
-			buf = append(buf, ',')
-		}
-		buf = append(buf, '0')
-		first = false
-	}
-	buf = append(buf, suffix...)
 	tool, err := toolDescriptor(repository.MCPServerTool{
-		Name: name, Policy: "safe", SchemaJSON: string(buf), Enabled: true, Present: true,
+		Name: name, Policy: "safe", SchemaJSON: numberArraySchemaJSON(name, toolBudget), Enabled: true, Present: true,
 	})
 	if err != nil {
 		t.Fatalf("toolDescriptor: %v", err)
@@ -208,6 +220,63 @@ func TestListMcpServersResponseManyMinimalToolsShapeStaysUnderGRPCMessageSize(t 
 		t.Fatalf("marshal worst-case ListMcpServersResponse: %v", err)
 	}
 	assertUnderGRPCMessageSizeWithMargin(t, "worst-case ListMcpServersResponse (many-minimal-tools shape)", encoded, 512*1024)
+}
+
+// TestListMcpServersResponseWorstCaseViaUpsertToolsPathStaysUnderGRPCMessageSize
+// is the UpsertTools-path counterpart to
+// TestListMcpServersResponseWorstCaseStaysUnderGRPCMessageSize above: that
+// test hand-builds a ListMcpServersResponse directly (bypassing the
+// repository and the service entirely) to measure the worst case cheaply
+// across many dimensions at once. This test instead writes the same
+// worst-measured single-tool shape (numberArraySchemaJSON) through the
+// real repository.UpsertTools — the bundled/skills/legacy path that,
+// before this fix, enforced no aggregate budget of its own at all — at
+// exactly the registry-wide MaxMCPRegistryToolBytes cap, attributed to
+// "system" (a real, migration-seeded bundled server row; "skills" tools
+// carry no mcp_servers row at all — see schema/0016_mcp_registry.sql —
+// and so are deliberately excluded from ListMcpServers' response
+// entirely, making them unsuitable for proving *this* response's wire
+// size), then calls the real service.ListMcpServers and marshals its
+// real response. This is narrower than the hand-built worst case (one
+// server, no Unsupported entries) but proves the actual code path end to
+// end: real UpsertTools enforcement, real serverDescriptor/toolDescriptor
+// conversion, and a real marshal size, rather than only ever modeling
+// that path synthetically.
+func TestListMcpServersResponseWorstCaseViaUpsertToolsPathStaysUnderGRPCMessageSize(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx := context.Background()
+
+	const name = "system.worst_case"
+	if err := repo.UpsertTools(ctx, []repository.DiscoveredTool{{
+		ServerName: "system", ToolName: name, Policy: "safe",
+		SchemaJSON: numberArraySchemaJSON(name, repository.MaxMCPRegistryToolBytes),
+	}}); err != nil {
+		t.Fatalf("UpsertTools at exactly MaxMCPRegistryToolBytes must not be refused: %v", err)
+	}
+
+	response, err := service.ListMcpServers(ctx, &turingv1.ListMcpServersRequest{})
+	if err != nil {
+		t.Fatalf("ListMcpServers: %v", err)
+	}
+	found := false
+	for _, server := range response.GetServers() {
+		if server.GetName() != "system" {
+			continue
+		}
+		for _, tool := range server.GetTools() {
+			if tool.GetToolName() == name {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("test setup is broken: the worst-case tool written via UpsertTools does not appear under system's descriptor")
+	}
+	encoded, err := proto.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal ListMcpServersResponse built from a real UpsertTools write: %v", err)
+	}
+	assertUnderGRPCMessageSizeWithMargin(t, "ListMcpServersResponse via the real UpsertTools path", encoded, 512*1024)
 }
 
 // TestReimportMcpJsonResponseWorstCaseStaysUnderGRPCMessageSize builds a

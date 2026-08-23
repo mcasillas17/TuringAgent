@@ -862,6 +862,49 @@ const MaxMCPRegistryToolBytes = 256 * 1024
 // at all.
 var ErrMCPRegistryToolBudgetExceeded = errors.New("MCP registry aggregate tool budget exceeded")
 
+// toolBudgetQueryRow is satisfied by both *sql.DB (via the embedding
+// *db.DB) and *sql.Tx: aggregatePresentToolBytes runs against whichever
+// one a caller has on hand — a live transaction mid-reconciliation
+// (replaceServerToolsTx, UpsertTools) or a plain read outside any
+// transaction (AggregateMCPToolBytes) — without needing two near-
+// identical copies of the same query.
+type toolBudgetQueryRow interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// aggregatePresentToolBytes returns the registry-wide total of every
+// currently-present tool's raw (tool_name + schema_json) byte length. This
+// is the one query replaceServerToolsTx, UpsertTools, and
+// AggregateMCPToolBytes all need to enforce (or, for the last, merely
+// read) MaxMCPRegistryToolBytes, so all three share this single
+// implementation rather than three copies that could silently drift from
+// computing the same total differently.
+func aggregatePresentToolBytes(ctx context.Context, q toolBudgetQueryRow) (int64, error) {
+	var total int64
+	err := q.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(LENGTH(CAST(tool_name AS BLOB)) + LENGTH(CAST(schema_json AS BLOB))), 0)
+		FROM tools
+		WHERE present = 1
+	`).Scan(&total)
+	return total, err
+}
+
+// AggregateMCPToolBytes returns the registry-wide total of every
+// currently-present tool's raw (tool_name + schema_json) byte length —
+// the exact same query replaceServerToolsTx and UpsertTools each run
+// against their own replacement snapshot to enforce
+// MaxMCPRegistryToolBytes. Exposed as its own read so a caller
+// (ListMcpServers) can refuse to build a response at all when the
+// aggregate is somehow already over budget, rather than only ever
+// checking it at write time: every write path now enforces the same
+// budget transactionally, so this should be unreachable in practice, but
+// ListMcpServers guards it anyway rather than trusting that invariant
+// unconditionally — see ListMcpServers' own comment for the fuller
+// reasoning.
+func (r *Repository) AggregateMCPToolBytes(ctx context.Context) (int64, error) {
+	return aggregatePresentToolBytes(ctx, r.db)
+}
+
 // replaceServerToolsTx is the one shared implementation of "withdraw every
 // tool currently attributed to server, then reconfirm exactly the tools
 // supplied, refusing a name collision with another server's present tool":
@@ -893,12 +936,8 @@ func replaceServerToolsTx(ctx context.Context, tx *sql.Tx, server MCPServerRecor
 	// function) are still counted: present=1 bundled rows are already in
 	// the table by the time this SELECT runs, regardless of how they got
 	// there.
-	var existingBytes int64
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(LENGTH(CAST(tool_name AS BLOB)) + LENGTH(CAST(schema_json AS BLOB))), 0)
-		FROM tools
-		WHERE present = 1
-	`).Scan(&existingBytes); err != nil {
+	existingBytes, err := aggregatePresentToolBytes(ctx, tx)
+	if err != nil {
 		return err
 	}
 	var newBytes int64

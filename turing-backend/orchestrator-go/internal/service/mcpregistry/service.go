@@ -21,6 +21,23 @@ import (
 
 const maxMCPStatusMessageBytes = 512
 
+// mcpRegistryAggregateBudgetExceededMessage is the fixed, generic reason
+// ListMcpServers refuses to build its response at all when
+// repository.AggregateMCPToolBytes already exceeds
+// repository.MaxMCPRegistryToolBytes — a state every tool-reconciliation
+// write path (replaceServerToolsTx, and, since this fix, UpsertTools too)
+// now refuses to create. This is a defense-in-depth guard, not a state
+// any normal operation should ever reach: it exists so a database
+// somehow already over budget (this branch has not shipped, so no real
+// deployment can carry one written before every path enforced this
+// budget, but a future regression reintroducing an unguarded write path
+// could) is refused with a fixed status before any attempt to marshal
+// and send a response sized against an unbounded aggregate, rather than
+// silently trusting every write path forever. See
+// docs/mcp-security-and-integration.md for the fuller accounting of this
+// upgrade assumption.
+const mcpRegistryAggregateBudgetExceededMessage = "MCP registry aggregate tool budget is exhausted"
+
 // enableDiscoveryTimeout bounds the entire enable-time discovery operation
 // (every tools/list page, not just a single HTTP request) so a vendor that
 // never stops paginating cannot force SetMcpServerEnabled to hang for up to
@@ -121,6 +138,23 @@ func (s *InternalServer) CallRegisteredMcpTool(ctx context.Context, req *turingv
 }
 
 func (s *Server) ListMcpServers(ctx context.Context, _ *turingv1.ListMcpServersRequest) (*turingv1.ListMcpServersResponse, error) {
+	// A conservative defense-in-depth guard, checked before any of the
+	// (potentially large) per-server tool descriptors below are even
+	// read: every tool-reconciliation write path already refuses to push
+	// the registry-wide aggregate over repository.MaxMCPRegistryToolBytes
+	// (see replaceServerToolsTx and, since this fix, UpsertTools), so this
+	// should never actually trip — but if it somehow did, this refuses
+	// with a fixed, generic ResourceExhausted status before ever
+	// attempting to build (let alone marshal and send) a response sized
+	// against an unbounded aggregate, rather than silently trusting that
+	// invariant unconditionally.
+	aggregateBytes, err := s.repo.AggregateMCPToolBytes(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "list MCP servers failed")
+	}
+	if aggregateBytes > repository.MaxMCPRegistryToolBytes {
+		return nil, status.Error(codes.ResourceExhausted, mcpRegistryAggregateBudgetExceededMessage)
+	}
 	servers, err := s.repo.ListMCPServers(ctx)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "list MCP servers failed")
@@ -591,12 +625,30 @@ func (s *Server) rotateServerTokenLocked(ctx context.Context, serverID, token st
 	server, err := s.repo.GetMCPServer(ctx, serverID)
 	if err != nil {
 		if errors.Is(err, repository.ErrMCPServerNotFound) {
+			// The row was deleted between the unlocked precheck above and
+			// this re-read — possibly by a DeleteMcpServer that has
+			// already forgotten this id's credentialLocks entry (its own
+			// forget only ever runs once, on its own successful delete),
+			// meaning credentialLock above may itself have just
+			// (re-)created the entry this cleans back up: see
+			// forgetCredentialLockIfCurrent's own doc comment.
+			s.forgetCredentialLockIfCurrent(serverID, lock)
 			return repository.MCPServerRecord{}, status.Error(codes.NotFound, "MCP server not found")
 		}
 		return repository.MCPServerRecord{}, status.Error(codes.Internal, "read MCP server failed")
 	}
 	if server.Tier == repository.MCPServerTierBundled {
 		return repository.MCPServerRecord{}, status.Error(codes.FailedPrecondition, bundledServerRegistrationMessage)
+	}
+	// Symmetric with validateServerDefinition's own check for
+	// register/import: there is no new name or URL being set during a
+	// rotation, only a new token, so this compares that new token
+	// against the *existing* row's own name/url — both exactly as
+	// public as they are for a fresh registration (see
+	// tokenAppearsInPublicMetadata's own doc comment for why either
+	// makes the token unable to be secret).
+	if tokenAppearsInPublicMetadata(token, server.Name, server.URL) {
+		return repository.MCPServerRecord{}, status.Error(codes.InvalidArgument, errMCPTokenMatchesPublicMetadata.Error())
 	}
 	sealed, err := s.sealServerToken(server.Name, token)
 	if err != nil {
@@ -710,11 +762,27 @@ func (s *Server) CallRegisteredMcpTool(ctx context.Context, req *turingv1.CallRe
 // "down" also failed — SetMcpServerEnabled needs both to decide its own
 // audit payload and final response.
 func (s *Server) discoverLocked(ctx context.Context, serverID string) (discoverySucceeded bool, statusErr error) {
+	if s.discoverCredentialLockBarrier != nil {
+		s.discoverCredentialLockBarrier()
+	}
 	lock := s.credentialLock(serverID)
 	lock.RLock()
 	defer lock.RUnlock()
 	discoverErr := s.discover(ctx, serverID)
 	if discoverErr != nil {
+		if errors.Is(discoverErr, repository.ErrMCPServerNotFound) {
+			// The server was deleted between whatever precheck the
+			// caller (SetMcpServerEnabled) already ran and this call
+			// reaching credentialLock above — which may be exactly what
+			// (re-)created this lock's entry, for an id DeleteMcpServer
+			// will never forget again (see
+			// forgetCredentialLockIfCurrent's own doc comment). There is
+			// no status to record for a server row that no longer
+			// exists, so this returns directly rather than also
+			// attempting SetMCPServerStatus below.
+			s.forgetCredentialLockIfCurrent(serverID, lock)
+			return false, nil
+		}
 		// Detached from ctx for the same reason SetMcpServerEnabled's
 		// disable branch already is: discovery failing (including via
 		// context cancellation) must not suppress recording that the

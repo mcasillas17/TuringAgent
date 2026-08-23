@@ -127,7 +127,16 @@ whatever the operator or a running session currently trusts it to be.
 Reimport is create-only: an existing row for a name that already has a real,
 non-empty endpoint is left completely untouched — its enabled state,
 endpoint, tier, liveness, rotated token, tool snapshot, and policies never
-change, and that entry's own `Tools` is not even inspected. The one exception
+change. That entry's own `Tools` is decoded as part of the entry's strict
+JSON-shape validation, which runs before the existing-row check (so a
+malformed `tools` array — an unknown key nested inside one of its
+elements, say, or a field of the wrong JSON type — still produces the
+same decode-error refusal it would for a brand-new name, rather than a
+silent skip that would hide the malformed shape), but it is never validated
+against buildImportTools' own deeper rules (duplicate names, per-tool
+schema/size limits, a token appearing in a tool's own metadata), never
+reconciled through replaceServerToolsTx, and never persisted for that row.
+The one exception
 is a legacy migration-0016 placeholder: a non-bundled row seeded with
 `url == ""` solely to carry a pre-registry tool policy forward until an
 operator supplies a real endpoint. A file reimport or an explicit in-app
@@ -201,6 +210,45 @@ live rediscovery opens — so a server that already had tools is never left
 with none, and a brand-new import that would have exceeded the budget
 creates no row at all.
 
+`UpsertTools` — the bundled/skills/legacy path the runtime uses to publish
+worker tool capabilities (`system`, `files`, and `skills`), and the one
+path the paragraph above already notes contributes to
+`replaceServerToolsTx`'s own aggregate query — enforces the identical
+`MaxMCPRegistryToolBytes` budget against its *own* replacement snapshot,
+transactionally, the same way: computed after its own withdrawal (every
+present bundled/`NULL`-`mcp_server_id` tool set to `present = 0`) so its
+own prior contribution is naturally excluded, with a third-party server's
+present tools (populated entirely separately, via
+`replaceServerToolsTx`) still counted since both paths read the same
+table. A refusal rolls back the whole transaction, the same way, so a
+refused snapshot never leaves the tools it was about to replace withdrawn
+with nothing reconfirmed. Before this, `UpsertTools` was the one write
+path that enforced no aggregate budget of its own at all, even though its
+own writes count toward the same total every other path already bounded.
+
+As defense in depth on top of every write path now sharing one enforced
+budget, `ListMcpServers` itself re-checks the current aggregate
+(`repository.AggregateMCPToolBytes`, the same query) before building any
+part of its response, and refuses with a fixed, generic
+`ResourceExhausted` status if it is somehow already over budget, or
+`Internal` if the check itself fails to run — never attempting to marshal
+and send a response sized against an unbounded aggregate. This should be
+unreachable in ordinary operation now that every write path enforces the
+same limit, but is not asserted to be *impossible* forever: it protects
+against a future regression that reintroduces an unguarded write path,
+and against upgrading a database that predates this budget being
+universally enforced. That second case is a documented assumption rather
+than a migration this change ships: because the MCP registry feature this
+whole document describes has not shipped in a release yet, no real
+deployment's database can already carry rows written by the
+since-fixed, unbounded `UpsertTools` path, so no destructive migration to
+truncate or reconcile a pre-existing oversized aggregate was required
+here — an operator upgrading a database that somehow does carry one is
+expected to see the fixed `ResourceExhausted` refusal above and correct
+the underlying data (e.g. by re-running whatever discovery produced it)
+rather than the backend silently discarding or truncating tool rows on
+their behalf.
+
 Deleting a server writes a local import tombstone, so an unchanged
 `mcp.json` cannot silently recreate it on the next reimport; the file path
 keeps refusing a tombstoned name. An explicit in-app Register of that same
@@ -225,6 +273,27 @@ registry-change event, or audit row ever carries the plaintext token or its
 ciphertext; audit rows record only the server name and whether a token is
 now configured.
 
+A nonempty token is also refused outright — before it is ever sealed,
+persisted, or audited — if it appears verbatim anywhere in the server's
+own name or canonical URL, including that URL's independently re-decoded
+path (catching a token containing a character `url.URL.String()` would
+otherwise percent-encode, such as a quote or backslash, differently from
+how the token itself reads). A name and a canonical URL are both public:
+returned in every list/register/rotate response and recorded in every
+audit row for that server, so a token equal to (or contained in) either
+one can never actually be secret regardless of how carefully it is
+sealed — anyone who can see the server's name or URL already has it. This
+one check is shared by registration and file import (both funnel through
+`validateServerDefinition`) and mirrored, separately, by rotation
+(`RotateMcpServerToken` compares the *new* token against the *existing*
+row's own name/url, since a rotation never sets a new name or URL of its
+own); every path refuses with the same fixed, generic reason, naming
+neither which of the two matched nor how, the same way this document's
+own token-in-tool-metadata and unsupported-header-name checks already do.
+This intentionally may refuse a short, coincidentally-ambiguous token
+that happens to share characters with an unrelated name/URL substring —
+the secrecy invariant wins over that inconvenience.
+
 A per-server credential lock — one `sync.RWMutex` per server id, created on
 first use and keyed by that id — fences a rotation against a concurrent call
 or discovery for the *same* server: `CallTool` and enable-time discovery hold
@@ -242,6 +311,21 @@ over a long-running process's lifetime; a rotation request naming a server id
 that was never real does not create an entry for it either; a lock object a
 goroutine already obtained keeps working safely even if its map entry is
 removed moments later, since a deleted server's id is never reused.
+
+That last guarantee has one more edge DeleteMcpServer's own cleanup alone
+cannot close: DeleteMcpServer forgets a server's entry the instant its own
+delete commits, but `CallTool`, enable-time discovery, and
+`RotateMcpServerToken` may each not call into the lazily-creating lock
+lookup for that same server until sometime *after* that — if any of them
+does, the lookup reinstates a brand-new entry for an id DeleteMcpServer
+will never forget again, which would otherwise leak permanently rather
+than the map's size actually tracking the registry's own row count the
+way the paragraph above describes. All three close this the same way:
+once their own post-lock re-read of the server discovers it no longer
+exists, each removes its own lock entry itself — but only if it is still
+the exact object that call installed or found, never a different one
+some other goroutine has since installed for the same id, so this can
+never race away a lock a concurrent, legitimate use still holds.
 
 Enabling any non-bundled server — local-container or remote-URL — performs a
 bounded `tools/list` liveness discovery as part of that call. A server with

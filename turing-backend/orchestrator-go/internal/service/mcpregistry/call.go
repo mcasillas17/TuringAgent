@@ -121,18 +121,31 @@ func (s *Server) CallTool(ctx context.Context, input CallInput) (map[string]any,
 	// recording this call's own liveness status below, no concurrent
 	// rotation of *this* server can be silently finishing underneath it
 	// — a rotation of any other server is entirely unaffected, since the
-	// lock is keyed by server id (see credentialLock). The server row is
-	// re-read here — token, url, and tier alike, not just the token —
-	// rather than reused from the server fetched at the top of this
-	// function, so that a rotation completing during the (possibly long)
-	// approval wait above is never missed: this always uses whatever
-	// RotateMcpServerToken most recently committed, never a value
-	// captured before that wait started.
+	// lock is keyed by server id (see credentialLock).
+	if s.callCredentialLockBarrier != nil {
+		s.callCredentialLockBarrier()
+	}
 	lock := s.credentialLock(server.ID)
 	lock.RLock()
 	defer lock.RUnlock()
+	// The server row is re-read here — token, url, and tier alike, not
+	// just the token — rather than reused from the server fetched at the
+	// top of this function, so that a rotation completing during the
+	// (possibly long) approval wait above is never missed: this always
+	// uses whatever RotateMcpServerToken most recently committed, never a
+	// value captured before that wait started. A concurrent
+	// DeleteMcpServer can equally have committed during that same wait
+	// (or even just before the credentialLock call above, if this is the
+	// first time this server's lock was ever requested since a prior
+	// forget — see forgetCredentialLockIfCurrent): this re-read is what
+	// notices that, and the cleanup below is what keeps credentialLocks
+	// itself from leaking the entry credentialLock just (re-)created for
+	// an id nothing else will ever forget again.
 	current, err := s.repo.GetMCPServer(ctx, server.ID)
 	if err != nil {
+		if errors.Is(err, repository.ErrMCPServerNotFound) {
+			s.forgetCredentialLockIfCurrent(server.ID, lock)
+		}
 		return nil, err
 	}
 	token := ""

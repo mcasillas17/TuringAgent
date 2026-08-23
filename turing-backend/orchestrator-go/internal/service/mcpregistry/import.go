@@ -27,6 +27,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 	toolpolicy "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/tools"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -97,18 +98,43 @@ const mcpServerRegistryFullMessage = "MCP server registry is full"
 // or rotation.
 const mcpMissingIntegrationKeyMessage = "server token requires the TURING_INTEGRATION_KEY integration key so it can be stored sealed"
 
+// mcpRegistryToolBudgetExceededMessage is the wording used whenever
+// ImportMCPServer refuses an entry's static tools snapshot because
+// accepting it would push the registry's aggregate present-tool byte
+// total (repository.MaxMCPRegistryToolBytes, enforced transactionally by
+// replaceServerToolsTx) over budget. Recorded as an ordinary per-entry
+// Unsupported refusal — exactly like ErrMCPServerRegistryFull and
+// ErrMCPToolNameCollision immediately below already are — rather than an
+// error that aborts the rest of the document: a document naming several
+// entries once the registry-wide tool budget is already exhausted must
+// still report every one of them refused, deterministically, and must
+// never discard an earlier entry in the same run that already committed
+// successfully (the repository's own transaction for the offending entry
+// itself has already rolled back completely by the time this runs — see
+// ErrMCPRegistryToolBudgetExceeded's own doc comment — so there is never a
+// partial row left behind for a corrected reimport to get stuck skipping).
+const mcpRegistryToolBudgetExceededMessage = "MCP registry tool budget is exhausted"
+
 type Server struct {
 	turingv1.UnimplementedMcpRegistryServiceServer
-	repo         *repository.Repository
-	sealer       *secretbox.Sealer
-	httpClient   *http.Client
-	approvals    ApprovalEnforcer
-	notifier     RegistryChangeNotifier
-	audit        AuditRecorder
-	configRoot   string
-	clientMu     sync.Mutex
-	localClient  *http.Client
-	remoteClient *http.Client
+	repo       *repository.Repository
+	sealer     *secretbox.Sealer
+	httpClient *http.Client
+	approvals  ApprovalEnforcer
+	notifier   RegistryChangeNotifier
+	audit      AuditRecorder
+	configRoot string
+	// beforeConfigFileOpen, when set (test-only, nil in production), is
+	// invoked by ReimportConfiguredJSON with mcp.json's full path
+	// immediately before it opens that path. It lets a test win a
+	// TOCTOU-shaped race deterministically — replacing a regular file
+	// with a FIFO or a symlink at exactly the moment this call commits to
+	// opening it — rather than relying on genuine goroutine-scheduling
+	// timing to land in an already-narrow window.
+	beforeConfigFileOpen func(path string)
+	clientMu             sync.Mutex
+	localClient          *http.Client
+	remoteClient         *http.Client
 	// enableDiscoveryTimeoutOverride replaces enableDiscoveryTimeout when
 	// set (test-only, zero value unused in production): it lets a test
 	// prove the whole-operation timeout wrapper itself bounds discovery,
@@ -141,8 +167,15 @@ type Server struct {
 	// unrelated server B needed, so B's rotation (and any call to B)
 	// waited on A's traffic for no correctness reason — the fence only
 	// ever needs to be per-server. A map entry is removed on that
-	// server's successful DeleteMcpServer (see forgetCredentialLock), so
-	// steady-state size tracks the registry's own row count — bounded by
+	// server's successful DeleteMcpServer (see forgetCredentialLock), and
+	// also by CallTool/discoverLocked/rotateServerTokenLocked themselves
+	// whenever their own post-lock re-read discovers the server no
+	// longer exists (see forgetCredentialLockIfCurrent) — needed because
+	// any of those three may not call credentialLock for a given server
+	// until after DeleteMcpServer has already forgotten it, and
+	// credentialLock's own lazy-create behavior would otherwise reinstate
+	// an entry DeleteMcpServer will never forget again. Together, steady-
+	// state size tracks the registry's own row count — bounded by
 	// repository.MaxNonBundledMCPServers plus the fixed, small number of
 	// bundled servers — rather than growing without bound across
 	// register/delete cycles over a long-running process's lifetime. A
@@ -164,6 +197,26 @@ type Server struct {
 	// RotateMcpServerToken's real repository work is otherwise too fast
 	// to reliably race against.
 	rotateBarrier func()
+	// callCredentialLockBarrier, when set (test-only, nil/unused in
+	// production), is invoked by CallTool immediately before it calls
+	// credentialLock — after every check that can refuse the call without
+	// ever touching the credential lock, but before the lock is acquired
+	// (or, if this is the first call for this server since it was last
+	// forgotten, created). It lets a test force a genuine "deleted-id lock
+	// recreation" interleaving: a concurrent DeleteMcpServer completing
+	// (row gone, its own credentialLocks entry — if any existed —
+	// forgotten) entirely before CallTool ever reaches credentialLock, so
+	// CallTool's own call is what (re)creates the entry, proving
+	// forgetCredentialLockIfCurrent cleans it back up once CallTool's own
+	// post-lock re-read discovers the row is gone.
+	callCredentialLockBarrier func()
+	// discoverCredentialLockBarrier is discoverLocked's own counterpart to
+	// callCredentialLockBarrier (test-only, nil/unused in production),
+	// invoked immediately before discoverLocked calls credentialLock —
+	// the very first thing discoverLocked does — for the same
+	// deleted-id-recreation interleaving proof, via SetMcpServerEnabled's
+	// enable-time discovery instead of CallTool.
+	discoverCredentialLockBarrier func()
 }
 
 // credentialLock returns the one *sync.RWMutex that fences reading/using
@@ -205,6 +258,40 @@ func (s *Server) forgetCredentialLock(serverID string) {
 	s.credentialLocksMu.Lock()
 	defer s.credentialLocksMu.Unlock()
 	delete(s.credentialLocks, serverID)
+}
+
+// forgetCredentialLockIfCurrent removes serverID's entry from
+// credentialLocks only if it still maps to lock — the exact *sync.RWMutex
+// the caller is holding — rather than forgetCredentialLock's own
+// unconditional delete-by-key. CallTool, discoverLocked, and
+// rotateServerTokenLocked each call this once their own post-lock re-read
+// of the server discovers it no longer exists (repository.ErrMCPServerNotFound).
+//
+// This closes a leak forgetCredentialLock alone cannot: DeleteMcpServer
+// forgets a server's entry the instant its own delete commits, but a
+// concurrent CallTool/discoverLocked/rotateServerTokenLocked may not call
+// credentialLock for that same server until sometime *after* that —
+// credentialLock's own lazy-create behavior then installs a brand-new
+// lock object for an id DeleteMcpServer will never forget again (it only
+// ever runs once, on its own successful delete). Without this cleanup,
+// that freshly (re-)created entry would remain in credentialLocks
+// permanently — one leaked entry per race hit, growing the map without
+// bound over a long-running process's register/delete/race cycles,
+// contrary to credentialLocks' own doc comment that its steady-state size
+// tracks the registry's own row count.
+//
+// The comparison is by identity (the exact *sync.RWMutex pointer), not
+// merely "is some entry present for serverID": that is what keeps this
+// safe to call even when another goroutine has, in the meantime,
+// installed a genuinely different object for the same key — this only
+// ever removes the caller's own object, never a fresher one it does not
+// recognize, so it can never race away a legitimate concurrent use.
+func (s *Server) forgetCredentialLockIfCurrent(serverID string, lock *sync.RWMutex) {
+	s.credentialLocksMu.Lock()
+	defer s.credentialLocksMu.Unlock()
+	if s.credentialLocks[serverID] == lock {
+		delete(s.credentialLocks, serverID)
+	}
 }
 
 // AuditRecorder is the audit service, narrowed to the one method this
@@ -816,7 +903,32 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 		entryDecoder := json.NewDecoder(bytes.NewReader(raw))
 		entryDecoder.DisallowUnknownFields()
 		if err := entryDecoder.Decode(&entry); err != nil {
-			recordUnsupported(report.Unsupported, name, "entry is invalid: "+err.Error())
+			// The fixed, generic errMCPEntryFieldInvalid reason — never
+			// err.Error() — for every way this decode can fail: a type
+			// mismatch (encoding/json's own message names the Go
+			// struct/field involved, not attacker input, but is still
+			// internal detail this response has no reason to expose),
+			// and, critically, an unknown field nested arbitrarily deep
+			// (e.g. inside a "tools" array element, whose own shape
+			// validateMCPEntryFields never inspects — it only checks
+			// this entry's *top-level* key names). DisallowUnknownFields'
+			// message names that offending key verbatim ("unknown field
+			// %q"), and a JSON key is exactly as attacker-controlled as
+			// any value, so echoing it back here would leak it into
+			// every place an ordinary Unsupported reason already reaches
+			// (ImportReport, mcp_import_issues, the ReimportMcpJson RPC
+			// response, ListMcpServers' own Unsupported list, and the
+			// audit/event/log surfaces that mirror them) — the same
+			// class of leak errMCPUnsupportedHeader already closes for
+			// an unsupported header's own name. Reusing
+			// errMCPEntryFieldInvalid's exact text — rather than a
+			// second, differently-worded fixed string — means this
+			// site says exactly the same thing
+			// validateMCPEntryFields' own top-level canonical-key
+			// check already does for a sibling class of malformed
+			// shape, never distinguishing the two to whoever reads the
+			// refusal.
+			recordUnsupported(report.Unsupported, name, errMCPEntryFieldInvalid.Error())
 			continue
 		}
 		if entry.Command != "" {
@@ -930,6 +1042,19 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 				// colliding tool) starts clean rather than skipping a
 				// poisoned partial row.
 				recordUnsupported(report.Unsupported, name, err.Error())
+			case errors.Is(err, repository.ErrMCPRegistryToolBudgetExceeded):
+				// Recorded as an ordinary per-entry refusal for the same
+				// reason ErrMCPServerRegistryFull is immediately above:
+				// the repository's own transaction has already rolled
+				// back entirely (see replaceServerToolsTx), so this
+				// entry leaves no partial row, and a document naming
+				// several entries once the registry-wide aggregate tool
+				// budget is already exhausted must still report every
+				// one of them refused — never lose track of whatever
+				// earlier entries in this same document already
+				// committed successfully by returning an error from
+				// ImportJSON itself.
+				recordUnsupported(report.Unsupported, name, mcpRegistryToolBudgetExceededMessage)
 			default:
 				return ImportReport{}, fmt.Errorf("import MCP server %q: %w", name, err)
 			}
@@ -1364,6 +1489,53 @@ func (v validatedMCPServer) GoString() string {
 	return v.String()
 }
 
+// errMCPTokenMatchesPublicMetadata is the one fixed, generic reason a
+// bearer token is refused when it appears, verbatim, inside metadata that
+// is not secret at all: the server's own name, or its canonical URL
+// (including that URL's own decoded path representation — see
+// tokenAppearsInPublicMetadata). A name or a canonical URL is returned by
+// every list/register/rotate response, recorded in every audit row for
+// that server, and visible in the Flutter MCPs page, so a token that
+// equals or is contained in either can never actually be secret: anyone
+// who can already see the name or URL already has it. This intentionally
+// may refuse a short, ambiguous token that only coincidentally shares
+// characters with an unrelated name/URL substring — the secrecy
+// invariant (a token must never be recoverable from public metadata
+// alone) wins over convenience for that edge case. The message
+// deliberately never says which of the two matched, or where: naming
+// that would confirm to whoever controls the input exactly which
+// comparison tripped, the same reasoning mcpToolDefinitionRefusedMessage
+// and errMCPUnsupportedHeader already document for their own checks.
+var errMCPTokenMatchesPublicMetadata = errors.New("server token must not appear in the server's own name or url")
+
+// tokenAppearsInPublicMetadata reports whether the non-empty token
+// appears, verbatim, anywhere in name or canonicalURL. canonicalURL is
+// checked two ways: as the raw string this package actually stores and
+// returns (catching a token in the host or an unescaped path segment),
+// and via its independently re-parsed, decoded Path (catching a token
+// containing a character url.URL.String() would percent-encode — a
+// space, a quote, a backslash — that would otherwise hide behind
+// whatever escaping that encoding step applies; see
+// mcpRawMetadataContainsToken's own doc comment for the same reasoning
+// applied to a tool's schema). canonicalURL is always this package's own
+// already-canonicalized output (classifyImportedURL's return value, or a
+// stored server's own URL column), so re-parsing it here can never fail
+// in practice; a parse failure is treated as "no additional decoded
+// match" rather than an error, since the raw-string check above still
+// runs regardless.
+func tokenAppearsInPublicMetadata(token, name, canonicalURL string) bool {
+	if token == "" {
+		return false
+	}
+	if strings.Contains(name, token) || strings.Contains(canonicalURL, token) {
+		return true
+	}
+	if parsed, err := url.Parse(canonicalURL); err == nil && strings.Contains(parsed.Path, token) {
+		return true
+	}
+	return false
+}
+
 // validateServerDefinition applies the one set of rules a server definition
 // must satisfy regardless of whether it arrived through an mcp.json import
 // or a direct RegisterMcpServer call: the name must match
@@ -1373,7 +1545,9 @@ func (v validatedMCPServer) GoString() string {
 // same way a malformed URL is); and, when the caller already knows which
 // tier it asked for, that tier must agree with the URL's classification
 // rather than silently overriding it. The bearer token, if any, is
-// normalized the same way for both callers.
+// normalized the same way for both callers, and — once normalized — must
+// not appear verbatim in the name or canonical URL it is about to be
+// paired with (see tokenAppearsInPublicMetadata).
 func validateServerDefinition(name, rawURL string, requestedTier *repository.MCPServerTier, token string) (validatedMCPServer, error) {
 	if err := validateMCPServerName(name); err != nil {
 		return validatedMCPServer{}, err
@@ -1388,6 +1562,9 @@ func validateServerDefinition(name, rawURL string, requestedTier *repository.MCP
 	normalizedToken, err := normalizeBearerToken(token)
 	if err != nil {
 		return validatedMCPServer{}, err
+	}
+	if tokenAppearsInPublicMetadata(normalizedToken, name, canonicalURL) {
+		return validatedMCPServer{}, errMCPTokenMatchesPublicMetadata
 	}
 	return validatedMCPServer{Name: name, URL: canonicalURL, Token: normalizedToken, Tier: tier}, nil
 }
@@ -1423,6 +1600,57 @@ func (s *Server) sealServerToken(name, token string) ([]byte, error) {
 // rather than guessing a location or silently no-op'ing.
 var errMCPConfigRootNotConfigured = errors.New("MCP config root is not configured")
 
+// errMCPConfigNotRegularFile is openRegularMCPConfigFile's own internal
+// signal that a successfully opened descriptor is not a regular file —
+// used only for an fstat-confirmed non-regular result (a FIFO opened
+// non-blockingly with no writer, a device, a directory); ENOENT and
+// ELOOP are the raw OS errors from open(2) itself. Every caller collapses
+// all of these into the one fixed, path-free "read mcp.json failed"
+// message regardless of which one occurred.
+var errMCPConfigNotRegularFile = errors.New("mcp.json is not a regular file")
+
+// openRegularMCPConfigFile opens path for reading using O_NOFOLLOW and
+// O_NONBLOCK — the same two flags, and the same open-then-fstat shape, the
+// mcp-files sandbox already uses for exactly this reason (see
+// FilesTools.openRegularFileContext in
+// turing-backend/mcp-files/internal/tools/safe_fs.go) — replacing a
+// separate os.Lstat-then-plain-os.Open pair that left a TOCTOU gap
+// between the two syscalls: path could in principle be replaced with
+// something non-regular in the moment between them, and a plain os.Open
+// reached in that window would either silently follow a symlink or block
+// indefinitely on a FIFO's read-side open waiting for a writer that may
+// never come — no bounded read afterward can help, since the read never
+// even starts. O_NOFOLLOW makes open(2) itself fail (ELOOP) rather than
+// resolving a symlink as the final path component; O_NONBLOCK makes a
+// FIFO's open return immediately regardless of whether a writer is
+// connected, rather than blocking the calling goroutine. A missing path
+// (ENOENT) is returned as-is for the caller to treat as "no mcp.json".
+// Once open, the descriptor — not the path a second time — is fstat-ed:
+// this is the same open file description any subsequent read would use,
+// so nothing about the path can change underneath this check the way it
+// could between two path-based syscalls. Only a confirmed regular file is
+// returned; every other outcome (FIFO, socket, device, directory) closes
+// the descriptor and returns errMCPConfigNotRegularFile, never anything
+// that could repeat path in a message a caller might log or return
+// as-is (this function itself never logs).
+func openRegularMCPConfigFile(path string) (*os.File, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		_ = file.Close()
+		return nil, errMCPConfigNotRegularFile
+	}
+	return file, nil
+}
+
 // ReimportConfiguredJSON re-reads mcp.json from the configured config root
 // and imports it, the same way app startup does. An absent file is not a
 // failure: it clears any previously recorded import issues and reports an
@@ -1434,30 +1662,15 @@ var errMCPConfigRootNotConfigured = errors.New("MCP config root is not configure
 // other refused entry. Any other failure to read the file is returned as
 // a fixed error that never repeats the file's contents or path.
 //
-// mcp.json must be a regular file, checked with os.Lstat *before* it is
-// ever opened: a FIFO's read-side os.Open call blocks until a writer
-// connects to the other end — which, unlike a slow or hostile regular
-// file, an io.LimitReader-bounded read below can do nothing about, since
-// the read never even starts — so refusing on Lstat's reported mode is
-// what actually keeps this call from hanging, not merely a bounded read
-// that would follow. A socket or device node is refused the same way:
-// opening either for an ordinary read is meaningless. A symlink is
-// refused without ever being resolved: os.Lstat (unlike os.Stat, which
-// this function deliberately does not use here) reports the link itself,
-// never whatever it points to, so this never has to decide how far to
-// follow a chain of links or defend against one that never terminates or
-// ultimately points at a FIFO/socket/device. A directory is refused the
-// same way too — previously that surfaced as a failing read one layer
-// later (os.Open succeeds on a directory; the subsequent Read does not),
-// producing the identical fixed message, so this is not a behavior change
-// for that case. Once past this check, the file is opened and re-checked
-// with Fstat before any read: the Lstat above and the Open below are two
-// separate syscalls, so the path could in principle have been replaced
-// with something non-regular in between; Fstat closes that gap by
-// checking the same open file description a read would actually use, not
-// the path again.
+// mcp.json is opened through openRegularMCPConfigFile, whose own doc
+// comment covers exactly what makes that safe against a FIFO, a symlink,
+// a socket, a device, or a directory in its place — including one swapped
+// in at the last possible moment, since there is no longer a separate
+// check-then-open pair of path-based syscalls for such a swap to land
+// between. A directory is refused the same fixed way every other
+// non-regular result is, matching this function's own prior behavior.
 //
-// Only once both checks agree the target is a regular file is it read,
+// Only once the descriptor is confirmed to be a regular file is it read,
 // through io.LimitReader(maxMCPImportDocumentBytes+1) — the same
 // bounded-read shape mcpClient.request already applies to a live HTTP
 // response body: os.ReadFile has no size bound of its own and would
@@ -1473,7 +1686,10 @@ func (s *Server) ReimportConfiguredJSON(ctx context.Context) (ImportReport, erro
 		return ImportReport{}, errMCPConfigRootNotConfigured
 	}
 	path := filepath.Join(s.configRoot, "mcp.json")
-	info, err := os.Lstat(path)
+	if s.beforeConfigFileOpen != nil {
+		s.beforeConfigFileOpen(path)
+	}
+	file, err := openRegularMCPConfigFile(path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		if clearErr := s.repo.ReplaceMCPImportIssues(ctx, map[string]string{}); clearErr != nil {
@@ -1481,26 +1697,7 @@ func (s *Server) ReimportConfiguredJSON(ctx context.Context) (ImportReport, erro
 		}
 		return ImportReport{}, nil
 	case err != nil:
-		log.Printf("stat mcp.json: %v", err)
-		return ImportReport{}, errors.New("read mcp.json failed")
-	case !info.Mode().IsRegular():
-		log.Printf("mcp.json is not a regular file (mode %s)", info.Mode())
-		return ImportReport{}, errors.New("read mcp.json failed")
-	}
-	file, err := os.Open(path)
-	if err != nil {
 		log.Printf("open mcp.json: %v", err)
-		return ImportReport{}, errors.New("read mcp.json failed")
-	}
-	fileInfo, statErr := file.Stat()
-	if statErr != nil {
-		_ = file.Close()
-		log.Printf("fstat mcp.json: %v", statErr)
-		return ImportReport{}, errors.New("read mcp.json failed")
-	}
-	if !fileInfo.Mode().IsRegular() {
-		_ = file.Close()
-		log.Printf("mcp.json is not a regular file after open (mode %s)", fileInfo.Mode())
 		return ImportReport{}, errors.New("read mcp.json failed")
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxMCPImportDocumentBytes+1))
