@@ -93,16 +93,16 @@ func TestPrepareRemoteEgressBoundsSkillDisclosureOnlyForProviderEgress(t *testin
 	t.Run("local remote MCP does not apply the undisclosed skill bound", func(t *testing.T) {
 		h := newHarness(t)
 		enableManyChatSkills(t, h, 257)
-		server, err := h.repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+		server, err := h.repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 			Name: "vendor", URL: "https://vendor.example/mcp", Tier: repository.MCPServerTierRemoteURL,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := h.repo.SetMCPServerEnabled(context.Background(), server.ID, true); err != nil {
+		if err := h.repo.SetMCPServerEnabled(context.Background(), server.Server.ID, true); err != nil {
 			t.Fatal(err)
 		}
-		if err := h.repo.ReplaceMCPServerTools(context.Background(), server.ID, []repository.MCPServerTool{{
+		if err := h.repo.ReplaceMCPServerTools(context.Background(), server.Server.ID, []repository.MCPServerTool{{
 			Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`,
 		}}); err != nil {
 			t.Fatal(err)
@@ -450,7 +450,7 @@ func TestRemoteServerToolsEnterThePerRunEgressDecision(t *testing.T) {
 	if _, err := h.repo.SetSkillEnabled(context.Background(), "writing/tone", true); err != nil {
 		t.Fatal(err)
 	}
-	server, err := h.repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+	server, err := h.repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name: "vendor",
 		URL:  "https://vendor.example/mcp",
 		Tier: repository.MCPServerTierRemoteURL,
@@ -458,10 +458,10 @@ func TestRemoteServerToolsEnterThePerRunEgressDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.SetMCPServerEnabled(context.Background(), server.ID, true); err != nil {
+	if err := h.repo.SetMCPServerEnabled(context.Background(), server.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.ReplaceMCPServerTools(context.Background(), server.ID, []repository.MCPServerTool{{
+	if err := h.repo.ReplaceMCPServerTools(context.Background(), server.Server.ID, []repository.MCPServerTool{{
 		Name: "vendor.lookup", Policy: "approval_required", SchemaJSON: `{"type":"object"}`,
 	}}); err != nil {
 		t.Fatal(err)

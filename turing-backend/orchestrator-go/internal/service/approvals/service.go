@@ -579,11 +579,36 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 // the caller when the destination server cannot verify or consume Turing's JWT.
 // The guarantee is intentionally narrower than mcp-files: it holds because the
 // orchestrator is the only component with the registered endpoint and bearer.
+//
+// serverID is the caller's own current, live-resolved server identity —
+// mcpregistry.CallTool passes the mcp_servers.id it just re-read the
+// server row by (never a cached/earlier value), and the integrations
+// package passes "" (it has no mcp_servers row at all; see
+// repository.recordToolCallBeforeTx). It must equal approval.MCPServerID
+// (the id the underlying tool_calls row was actually bound to at insert
+// time — see ApprovalRecord's own doc comment) exactly, in addition to
+// the existing run/name/tool/args match: a server name can be reused
+// after its original row is deleted (DeleteMcpServer) and a different
+// server registered under that same name, and comparing names alone
+// would let an approval created and approved against the *original*
+// server still be silently consumed against the *new* one. Comparing
+// this immutable id instead closes that gap — including the case where
+// approval.MCPServerID is empty (either a legacy tool_calls row that
+// predates this column and could never be backfilled to a specific
+// current server — see schema/0018_mcp_approval_identity.sql — or one
+// whose original server has since been deleted, which ON DELETE SET
+// NULL leaves in the identical state): an empty binding can only ever
+// equal a caller-supplied serverID that is itself empty (the
+// integrations/skills pseudo-server path), so a live third-party call
+// naming any real, currently-resolved server id is refused rather than
+// silently allowed to consume an approval nothing can actually vouch for
+// anymore.
 func (s *Server) ConsumeApprovalForThirdParty(
 	ctx context.Context,
 	approvalID string,
 	runID string,
 	serverName string,
+	serverID string,
 	toolName string,
 	args map[string]any,
 ) error {
@@ -600,6 +625,7 @@ func (s *Server) ConsumeApprovalForThirdParty(
 	}
 	if approval.RunID != runID ||
 		approval.ServerName != serverName ||
+		approval.MCPServerID != serverID ||
 		approval.ToolName != toolName ||
 		approval.ArgsHash != argsHash {
 		return status.Error(codes.FailedPrecondition, "approval does not match this tool call")

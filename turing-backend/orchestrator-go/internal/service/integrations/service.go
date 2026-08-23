@@ -55,7 +55,7 @@ type CredentialSealer interface {
 }
 
 type ApprovalEnforcer interface {
-	ConsumeApprovalForThirdParty(ctx context.Context, approvalID, runID, serverName, toolName string, args map[string]any) error
+	ConsumeApprovalForThirdParty(ctx context.Context, approvalID, runID, serverName, serverID, toolName string, args map[string]any) error
 }
 
 type RegistryChangeNotifier interface {

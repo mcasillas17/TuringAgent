@@ -91,16 +91,16 @@ func newHarnessWithDispatch(t *testing.T, dispatch DispatchConfig) *harness {
 	}
 	database := openRuntimeTestDB(t)
 	repo := repository.New(database)
-	customServer, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+	customServer, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name: "custom", URL: "http://custom:9000/mcp", Tier: repository.MCPServerTierLocalContainer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPServerEnabled(context.Background(), customServer.ID, true); err != nil {
+	if err := repo.SetMCPServerEnabled(context.Background(), customServer.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(context.Background(), customServer.ID, []repository.MCPServerTool{
+	if err := repo.ReplaceMCPServerTools(context.Background(), customServer.Server.ID, []repository.MCPServerTool{
 		{Name: "custom.unrecognized", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 		{Name: "custom.inspect", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},
 		{Name: "custom.replace", Policy: "approval_required", SchemaJSON: `{"type":"object"}`},

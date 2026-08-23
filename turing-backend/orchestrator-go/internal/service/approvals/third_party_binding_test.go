@@ -8,17 +8,26 @@ import (
 )
 
 func TestThirdPartyConsumeRejectsEveryApprovalBindingMismatch(t *testing.T) {
+	// "mcp_bundled_files" is the real, migration-seeded id of the
+	// bundled "files" server (see schema/0016_mcp_registry.sql) that
+	// createRunningToolCall's own tool_calls row (server_name "files")
+	// resolves to via repository.lookupMCPServerIDByNameTx — the correct
+	// serverID every case below keeps fixed except the one case that
+	// mismatches it on purpose.
+	const filesServerID = "mcp_bundled_files"
 	tests := []struct {
 		name       string
 		runID      string
 		serverName string
+		serverID   string
 		toolName   string
 		args       map[string]any
 	}{
-		{name: "run", runID: "other-run", serverName: "files", toolName: "files.update", args: map[string]any{"path": "note.txt"}},
-		{name: "server", serverName: "vendor", toolName: "files.update", args: map[string]any{"path": "note.txt"}},
-		{name: "tool", serverName: "files", toolName: "files.create", args: map[string]any{"path": "note.txt"}},
-		{name: "arguments", serverName: "files", toolName: "files.update", args: map[string]any{"path": "other.txt"}},
+		{name: "run", runID: "other-run", serverName: "files", serverID: filesServerID, toolName: "files.update", args: map[string]any{"path": "note.txt"}},
+		{name: "server", serverName: "vendor", serverID: filesServerID, toolName: "files.update", args: map[string]any{"path": "note.txt"}},
+		{name: "serverID", serverName: "files", serverID: "mcp_bundled_system", toolName: "files.update", args: map[string]any{"path": "note.txt"}},
+		{name: "tool", serverName: "files", serverID: filesServerID, toolName: "files.create", args: map[string]any{"path": "note.txt"}},
+		{name: "arguments", serverName: "files", serverID: filesServerID, toolName: "files.update", args: map[string]any{"path": "other.txt"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -51,6 +60,7 @@ func TestThirdPartyConsumeRejectsEveryApprovalBindingMismatch(t *testing.T) {
 				approvalID,
 				runID,
 				test.serverName,
+				test.serverID,
 				test.toolName,
 				test.args,
 			)

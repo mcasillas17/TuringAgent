@@ -649,6 +649,8 @@ class TuringGrpcApi
                 UnsupportedMcpServer(name: entry.name, reason: entry.reason),
           )
           .toList(),
+      registryDegraded: response.registryDegraded,
+      registryDegradationReason: response.registryDegradationReason,
     );
   }
 
@@ -748,12 +750,29 @@ class TuringGrpcApi
   Future<McpServer> registerMcpServer({
     required String name,
     required String url,
+    required McpServerTier tier,
     String bearerToken = '',
   }) async {
+    final protoTier = switch (tier) {
+      McpServerTier.localContainer =>
+        mcppb.McpServerTier.MCP_SERVER_TIER_LOCAL_CONTAINER,
+      McpServerTier.remoteUrl => mcppb.McpServerTier.MCP_SERVER_TIER_REMOTE_URL,
+      McpServerTier.bundled => throw const TuringApiException(
+        code: 'mcp_server_tier_unsupported',
+        message:
+            'Only local-container and remote-url servers can be registered '
+            'from this client',
+      ),
+      McpServerTier.unspecified => throw const TuringApiException(
+        code: 'mcp_server_tier_unspecified',
+        message: 'A tier must be chosen to register an MCP server',
+      ),
+    };
     final response = await _mcpRegistry.registerMcpServer(
       mcppb.RegisterMcpServerRequest(
         name: name,
         url: url,
+        tier: protoTier,
         bearerToken: bearerToken,
       ),
     );
@@ -761,13 +780,14 @@ class TuringGrpcApi
   }
 
   @override
-  Future<McpReimportReport> reimportMcpJson() async {
+  Future<McpImportReport> reimportMcpJson() async {
     final response = await _mcpRegistry.reimportMcpJson(
       mcppb.ReimportMcpJsonRequest(),
     );
-    return McpReimportReport(
+    return McpImportReport(
       imported: response.imported,
-      unsupported: response.unsupported
+      skipped: response.skipped,
+      refused: response.unsupported
           .map(
             (entry) =>
                 UnsupportedMcpServer(name: entry.name, reason: entry.reason),
@@ -779,7 +799,7 @@ class TuringGrpcApi
   @override
   Future<McpServer> rotateMcpServerToken({
     required String serverId,
-    String bearerToken = '',
+    required String bearerToken,
   }) async {
     final response = await _mcpRegistry.rotateMcpServerToken(
       mcppb.RotateMcpServerTokenRequest(

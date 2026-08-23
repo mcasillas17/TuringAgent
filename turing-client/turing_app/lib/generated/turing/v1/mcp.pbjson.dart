@@ -172,6 +172,20 @@ const ListMcpServersResponse$json = {
       '6': '.turing.v1.UnsupportedMcpServer',
       '10': 'unsupported'
     },
+    {
+      '1': 'registry_degraded',
+      '3': 3,
+      '4': 1,
+      '5': 8,
+      '10': 'registryDegraded'
+    },
+    {
+      '1': 'registry_degradation_reason',
+      '3': 4,
+      '4': 1,
+      '5': 9,
+      '10': 'registryDegradationReason'
+    },
   ],
 };
 
@@ -179,7 +193,9 @@ const ListMcpServersResponse$json = {
 final $typed_data.Uint8List listMcpServersResponseDescriptor = $convert.base64Decode(
     'ChZMaXN0TWNwU2VydmVyc1Jlc3BvbnNlEjgKB3NlcnZlcnMYASADKAsyHi50dXJpbmcudjEuTW'
     'NwU2VydmVyRGVzY3JpcHRvclIHc2VydmVycxJBCgt1bnN1cHBvcnRlZBgCIAMoCzIfLnR1cmlu'
-    'Zy52MS5VbnN1cHBvcnRlZE1jcFNlcnZlclILdW5zdXBwb3J0ZWQ=');
+    'Zy52MS5VbnN1cHBvcnRlZE1jcFNlcnZlclILdW5zdXBwb3J0ZWQSKwoRcmVnaXN0cnlfZGVncm'
+    'FkZWQYAyABKAhSEHJlZ2lzdHJ5RGVncmFkZWQSPgobcmVnaXN0cnlfZGVncmFkYXRpb25fcmVh'
+    'c29uGAQgASgJUhlyZWdpc3RyeURlZ3JhZGF0aW9uUmVhc29u');
 
 @$core.Deprecated('Use setMcpServerEnabledRequestDescriptor instead')
 const SetMcpServerEnabledRequest$json = {
@@ -308,14 +324,22 @@ const RegisterMcpServerRequest$json = {
     {'1': 'name', '3': 1, '4': 1, '5': 9, '10': 'name'},
     {'1': 'url', '3': 2, '4': 1, '5': 9, '10': 'url'},
     {'1': 'bearer_token', '3': 3, '4': 1, '5': 9, '10': 'bearerToken'},
+    {
+      '1': 'tier',
+      '3': 4,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.McpServerTier',
+      '10': 'tier'
+    },
   ],
 };
 
 /// Descriptor for `RegisterMcpServerRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List registerMcpServerRequestDescriptor =
-    $convert.base64Decode(
-        'ChhSZWdpc3Rlck1jcFNlcnZlclJlcXVlc3QSEgoEbmFtZRgBIAEoCVIEbmFtZRIQCgN1cmwYAi'
-        'ABKAlSA3VybBIhCgxiZWFyZXJfdG9rZW4YAyABKAlSC2JlYXJlclRva2Vu');
+final $typed_data.Uint8List registerMcpServerRequestDescriptor = $convert.base64Decode(
+    'ChhSZWdpc3Rlck1jcFNlcnZlclJlcXVlc3QSEgoEbmFtZRgBIAEoCVIEbmFtZRIQCgN1cmwYAi'
+    'ABKAlSA3VybBIhCgxiZWFyZXJfdG9rZW4YAyABKAlSC2JlYXJlclRva2VuEiwKBHRpZXIYBCAB'
+    'KA4yGC50dXJpbmcudjEuTWNwU2VydmVyVGllclIEdGllcg==');
 
 @$core.Deprecated('Use reimportMcpJsonRequestDescriptor instead')
 const ReimportMcpJsonRequest$json = {
@@ -339,6 +363,7 @@ const ReimportMcpJsonResponse$json = {
       '6': '.turing.v1.UnsupportedMcpServer',
       '10': 'unsupported'
     },
+    {'1': 'skipped', '3': 3, '4': 3, '5': 9, '10': 'skipped'},
   ],
 };
 
@@ -346,7 +371,7 @@ const ReimportMcpJsonResponse$json = {
 final $typed_data.Uint8List reimportMcpJsonResponseDescriptor = $convert.base64Decode(
     'ChdSZWltcG9ydE1jcEpzb25SZXNwb25zZRIaCghpbXBvcnRlZBgBIAMoCVIIaW1wb3J0ZWQSQQ'
     'oLdW5zdXBwb3J0ZWQYAiADKAsyHy50dXJpbmcudjEuVW5zdXBwb3J0ZWRNY3BTZXJ2ZXJSC3Vu'
-    'c3VwcG9ydGVk');
+    'c3VwcG9ydGVkEhgKB3NraXBwZWQYAyADKAlSB3NraXBwZWQ=');
 
 @$core.Deprecated('Use rotateMcpServerTokenRequestDescriptor instead')
 const RotateMcpServerTokenRequest$json = {

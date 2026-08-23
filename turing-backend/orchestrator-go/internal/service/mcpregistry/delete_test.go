@@ -10,20 +10,20 @@ import (
 
 func TestDeleteMCPServerRemovesImportedServerAndItsTools(t *testing.T) {
 	service, repo := newRegistryTestService(t)
-	server, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name: "vendor", URL: "http://vendor:9000/mcp", Tier: repository.MCPServerTierLocalContainer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.RecordDiscovery(context.Background(), server.ID, []DiscoveredTool{{
+	if err := service.RecordDiscovery(context.Background(), server.Server.ID, []DiscoveredTool{{
 		Name: "vendor.lookup", SchemaJSON: `{"type":"object"}`,
 	}}); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := service.DeleteMcpServer(context.Background(), &turingv1.DeleteMcpServerRequest{
-		ServerId: server.ID,
+		ServerId: server.Server.ID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestDeleteMCPServerRemovesImportedServerAndItsTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, listed := range servers {
-		if listed.ID == server.ID {
+		if listed.ID == server.Server.ID {
 			t.Fatal("deleted MCP server remains registered")
 		}
 	}

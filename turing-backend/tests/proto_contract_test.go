@@ -731,26 +731,121 @@ func TestMCPRegistryProtoContract(t *testing.T) {
 	assertProtoField(t, server, "status_message", 8, protoreflect.StringKind, false, "")
 	assertProtoField(t, server, "sandbox_confined", 9, protoreflect.BoolKind, false, "")
 	assertProtoField(t, server, "tools", 10, protoreflect.MessageKind, true, "turing.v1.McpToolDescriptor")
-	if server.Fields().ByName("token") != nil || server.Fields().ByName("sealed_token") != nil {
-		t.Fatal("McpServerDescriptor must not expose server credentials")
-	}
 	tool := file.Messages().ByName("McpToolDescriptor")
 	assertProtoField(t, tool, "present", 5, protoreflect.BoolKind, false, "")
+
+	listResp := file.Messages().ByName("ListMcpServersResponse")
+	assertProtoField(t, listResp, "servers", 1, protoreflect.MessageKind, true, "turing.v1.McpServerDescriptor")
+	assertProtoField(t, listResp, "unsupported", 2, protoreflect.MessageKind, true, "turing.v1.UnsupportedMcpServer")
+	// registry_degraded/registry_degradation_reason are additive fields 3
+	// and 4: an explicit, structured signal for a bounded/degraded
+	// registry read (see repository.MCPRegistrySnapshot), replacing a
+	// synthetic "_registry"-named Unsupported entry rather than
+	// overloading that list with a non-per-entry systemic status.
+	assertProtoField(t, listResp, "registry_degraded", 3, protoreflect.BoolKind, false, "")
+	assertProtoField(t, listResp, "registry_degradation_reason", 4, protoreflect.StringKind, false, "")
 
 	service := file.Services().ByName("McpRegistryService")
 	for _, name := range []protoreflect.Name{
 		"ListMcpServers",
 		"SetMcpServerEnabled",
 		"UpdateMcpToolPolicy",
+		"UpdateToolPolicyByName",
+		"ListPseudoServerTools",
 		"DeleteMcpServer",
 		"CallRegisteredMcpTool",
+		"RegisterMcpServer",
+		"ReimportMcpJson",
+		"RotateMcpServerToken",
 	} {
 		if service == nil || service.Methods().ByName(name) == nil {
 			t.Fatalf("McpRegistryService.%s is missing", name)
 		}
 	}
+	if service.Methods().ByName("RegisterMcpServer").Input().FullName() != "turing.v1.RegisterMcpServerRequest" ||
+		service.Methods().ByName("RegisterMcpServer").Output().FullName() != "turing.v1.McpServerDescriptor" {
+		t.Fatal("McpRegistryService.RegisterMcpServer must accept RegisterMcpServerRequest and return McpServerDescriptor")
+	}
+	if service.Methods().ByName("ReimportMcpJson").Input().FullName() != "turing.v1.ReimportMcpJsonRequest" ||
+		service.Methods().ByName("ReimportMcpJson").Output().FullName() != "turing.v1.ReimportMcpJsonResponse" {
+		t.Fatal("McpRegistryService.ReimportMcpJson must accept ReimportMcpJsonRequest and return ReimportMcpJsonResponse")
+	}
+	if service.Methods().ByName("RotateMcpServerToken").Input().FullName() != "turing.v1.RotateMcpServerTokenRequest" ||
+		service.Methods().ByName("RotateMcpServerToken").Output().FullName() != "turing.v1.McpServerDescriptor" {
+		t.Fatal("McpRegistryService.RotateMcpServerToken must accept RotateMcpServerTokenRequest and return McpServerDescriptor")
+	}
 	command := turingv1.File_turing_v1_runtime_proto.Messages().ByName("RuntimeCommand")
 	assertProtoField(t, command, "mcp_registry_changed", 7, protoreflect.MessageKind, false, "turing.v1.RuntimeMcpRegistryChanged")
+
+	registerReq := file.Messages().ByName("RegisterMcpServerRequest")
+	assertProtoField(t, registerReq, "name", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, registerReq, "url", 2, protoreflect.StringKind, false, "")
+	// bearer_token stays at 3 and tier is appended at 4: the tier-less form
+	// of this request shipped on main first, so moving bearer_token would
+	// break every client already built against it on the wire.
+	assertProtoField(t, registerReq, "bearer_token", 3, protoreflect.StringKind, false, "")
+	assertProtoField(t, registerReq, "tier", 4, protoreflect.EnumKind, false, "")
+
+	reimportReq := file.Messages().ByName("ReimportMcpJsonRequest")
+	if reimportReq == nil {
+		t.Fatal("ReimportMcpJsonRequest is missing")
+	}
+	if reimportReq.Fields().Len() != 0 {
+		t.Fatal("ReimportMcpJsonRequest must remain empty")
+	}
+
+	reimportResp := file.Messages().ByName("ReimportMcpJsonResponse")
+	assertProtoField(t, reimportResp, "imported", 1, protoreflect.StringKind, true, "")
+	// unsupported keeps main's number 2 and skipped is appended at 3, for
+	// the same wire-compatibility reason as RegisterMcpServerRequest above.
+	assertProtoField(t, reimportResp, "unsupported", 2, protoreflect.MessageKind, true, "turing.v1.UnsupportedMcpServer")
+	assertProtoField(t, reimportResp, "skipped", 3, protoreflect.StringKind, true, "")
+
+	rotateReq := file.Messages().ByName("RotateMcpServerTokenRequest")
+	assertProtoField(t, rotateReq, "server_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, rotateReq, "bearer_token", 2, protoreflect.StringKind, false, "")
+
+	// No MCP management response message may leak the bearer token or any
+	// sealed/ciphertext form of it back to the client.
+	forbiddenCredentialFields := []protoreflect.Name{"bearer_token", "sealed_token", "ciphertext", "token"}
+	for _, respName := range []string{"McpServerDescriptor", "ReimportMcpJsonResponse"} {
+		resp := file.Messages().ByName(protoreflect.Name(respName))
+		if resp == nil {
+			t.Fatalf("%s is missing", respName)
+		}
+		for _, forbidden := range forbiddenCredentialFields {
+			if resp.Fields().ByName(forbidden) != nil {
+				t.Fatalf("%s must not expose a %s field", respName, forbidden)
+			}
+		}
+	}
+}
+
+// TestMCPRegistryAuditPayloadProtoContract pins the exact field numbers and
+// kinds of the AuditPayload fields the MCP registry audit projection reads.
+// These are additive fields 26-35 appended after the existing 25 (see
+// TestRemoteEgressProtoContract for 22-25): server_name (3) and tool_name (2)
+// are deliberately reused rather than duplicated, so only the ten new,
+// MCP-specific fields are asserted here. A wrong number/kind here would let
+// the wire contract silently drift out from under audit/service.go's
+// applyAuditActionPolicy, which reads these fields by exact name.
+func TestMCPRegistryAuditPayloadProtoContract(t *testing.T) {
+	auditPayload := turingv1.File_turing_v1_audit_proto.Messages().ByName("AuditPayload")
+	assertProtoField(t, auditPayload, "mcp_server_tier", 26, protoreflect.StringKind, false, "")
+	assertProtoField(t, auditPayload, "mcp_server_url", 27, protoreflect.StringKind, false, "")
+	assertProtoField(t, auditPayload, "adopted", 28, protoreflect.BoolKind, false, "")
+	assertProtoField(t, auditPayload, "token_configured", 29, protoreflect.BoolKind, false, "")
+	assertProtoField(t, auditPayload, "remote_discovery_attempted", 30, protoreflect.BoolKind, false, "")
+	assertProtoField(t, auditPayload, "discovery_succeeded", 31, protoreflect.BoolKind, false, "")
+	assertProtoField(t, auditPayload, "imported_servers", 32, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, auditPayload, "skipped_servers", 33, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, auditPayload, "refused_servers", 34, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, auditPayload, "tool_policy", 35, protoreflect.StringKind, false, "")
+
+	// None of the ten new fields may collide with (or replace) the reused
+	// server_name/tool_name fields at their existing numbers.
+	assertProtoField(t, auditPayload, "tool_name", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, auditPayload, "server_name", 3, protoreflect.StringKind, false, "")
 }
 
 func assertProtoField(t *testing.T, message protoreflect.MessageDescriptor, name protoreflect.Name, number protoreflect.FieldNumber, kind protoreflect.Kind, repeated bool, messageType protoreflect.FullName) {
