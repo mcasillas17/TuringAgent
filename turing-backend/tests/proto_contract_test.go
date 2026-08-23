@@ -390,11 +390,11 @@ func TestRunOutcomeProtoContractUsesApprovedAllocations(t *testing.T) {
 		"event_id": 1, "session_id": 2, "run_id": 3, "trace_id": 4, "sequence": 5, "type": 6,
 		"created_at": 7, "payload": 8, "run_state": 9,
 	})
-	assertProtoField(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), "run_state_version", 8, protoreflect.Int64Kind, false, "")
-	assertProtoField(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), "read_only", 9, protoreflect.BoolKind, false, "")
+	assertProtoField(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), "read_only", 8, protoreflect.BoolKind, false, "")
+	assertProtoField(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), "run_state_version", 9, protoreflect.Int64Kind, false, "")
 	assertProtoFieldMembers(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), map[protoreflect.Name]protoreflect.FieldNumber{
 		"decision": 1, "tool_call_id": 2, "approval_id": 3, "reason": 4, "terminal_run": 5, "phase": 6,
-		"provenance_token": 7, "run_state_version": 8, "read_only": 9,
+		"provenance_token": 7, "read_only": 8, "run_state_version": 9,
 	})
 }
 

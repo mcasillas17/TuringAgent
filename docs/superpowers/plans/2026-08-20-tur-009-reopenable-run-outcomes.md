@@ -297,7 +297,7 @@ In `runtime.proto`:
 
 In `tools.proto`:
 
-- add `ToolPolicyDecision.run_state_version = 8`; retain merged fields 1 through
+- add `ToolPolicyDecision.run_state_version = 9`; retain `read_only = 8` and merged fields 1 through
   7, including the provenance token.
 
 - [ ] **Step 3: Generate with the pinned toolchain**

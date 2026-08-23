@@ -58,12 +58,12 @@ message ToolPolicyDecision {
   // session, run, deletion generation, tool, arguments and path scope. The
   // runtime forwards it verbatim; it never mints or edits one.
   string provenance_token = 7;
+  // Authored by the orchestrator. Approval waiting is still policy-driven;
+  // this bit only controls failure/side-effect classification.
+  bool read_only = 8;
   // The run's committed state version at the moment of this decision. A
   // matching tool beacon can therefore prove ownership: the response carries
   // the version forward before tool or model work continues, so a worker never
   // advances past the state the orchestrator has committed.
-  int64 run_state_version = 8;
-  // Authored by the orchestrator. Approval waiting is still policy-driven;
-  // this bit only controls failure/side-effect classification.
-  bool read_only = 9;
+  int64 run_state_version = 9;
 }

@@ -218,7 +218,7 @@ Internal runtime allocations are `AgentJob.expected_state_version = 19`,
 `RuntimeCommand.approval_resume_accepted = 8` (merged MCP registry change owns 7),
 `RuntimeRunCancelled.state_version = 3`,
 `RuntimeApprovalUpdated.state_version = 4`, and
-`ToolPolicyDecision.run_state_version = 8` (merged provenance token owns 7).
+`ToolPolicyDecision.run_state_version = 9` (`read_only = 8` is preserved for compatibility).
 Existing merged field numbers are unchanged; `RuntimeUpdate` value `8` remains
 `worker_capabilities_updated`. Existing runtime retryable field `4` is
 deprecated and ignored by the new normalizer.
