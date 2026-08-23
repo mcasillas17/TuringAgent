@@ -170,6 +170,20 @@ type AuditPayload struct {
 	EgressDataCategories     []EgressDataCategory   `protobuf:"varint,23,rep,packed,name=egress_data_categories,json=egressDataCategories,proto3,enum=turing.v1.EgressDataCategory" json:"egress_data_categories,omitempty"`
 	EgressDecisionVersion    *int32                 `protobuf:"varint,24,opt,name=egress_decision_version,json=egressDecisionVersion,proto3,oneof" json:"egress_decision_version,omitempty"`
 	EgressConsentGrantedAt   *timestamppb.Timestamp `protobuf:"bytes,25,opt,name=egress_consent_granted_at,json=egressConsentGrantedAt,proto3,oneof" json:"egress_consent_granted_at,omitempty"`
+	// MCP registry fields. server_name (3) and tool_name (2) above are reused
+	// rather than duplicated; provider (9) and display_name (10) are the
+	// integration.* fields and are deliberately not reused here since an MCP
+	// server is not an integration.
+	McpServerTier            *string `protobuf:"bytes,26,opt,name=mcp_server_tier,json=mcpServerTier,proto3,oneof" json:"mcp_server_tier,omitempty"`
+	McpServerUrl             *string `protobuf:"bytes,27,opt,name=mcp_server_url,json=mcpServerUrl,proto3,oneof" json:"mcp_server_url,omitempty"`
+	Adopted                  *bool   `protobuf:"varint,28,opt,name=adopted,proto3,oneof" json:"adopted,omitempty"`
+	TokenConfigured          *bool   `protobuf:"varint,29,opt,name=token_configured,json=tokenConfigured,proto3,oneof" json:"token_configured,omitempty"`
+	RemoteDiscoveryAttempted *bool   `protobuf:"varint,30,opt,name=remote_discovery_attempted,json=remoteDiscoveryAttempted,proto3,oneof" json:"remote_discovery_attempted,omitempty"`
+	DiscoverySucceeded       *bool   `protobuf:"varint,31,opt,name=discovery_succeeded,json=discoverySucceeded,proto3,oneof" json:"discovery_succeeded,omitempty"`
+	ImportedServers          *int64  `protobuf:"varint,32,opt,name=imported_servers,json=importedServers,proto3,oneof" json:"imported_servers,omitempty"`
+	SkippedServers           *int64  `protobuf:"varint,33,opt,name=skipped_servers,json=skippedServers,proto3,oneof" json:"skipped_servers,omitempty"`
+	RefusedServers           *int64  `protobuf:"varint,34,opt,name=refused_servers,json=refusedServers,proto3,oneof" json:"refused_servers,omitempty"`
+	ToolPolicy               *string `protobuf:"bytes,35,opt,name=tool_policy,json=toolPolicy,proto3,oneof" json:"tool_policy,omitempty"`
 	unknownFields            protoimpl.UnknownFields
 	sizeCache                protoimpl.SizeCache
 }
@@ -377,6 +391,76 @@ func (x *AuditPayload) GetEgressConsentGrantedAt() *timestamppb.Timestamp {
 		return x.EgressConsentGrantedAt
 	}
 	return nil
+}
+
+func (x *AuditPayload) GetMcpServerTier() string {
+	if x != nil && x.McpServerTier != nil {
+		return *x.McpServerTier
+	}
+	return ""
+}
+
+func (x *AuditPayload) GetMcpServerUrl() string {
+	if x != nil && x.McpServerUrl != nil {
+		return *x.McpServerUrl
+	}
+	return ""
+}
+
+func (x *AuditPayload) GetAdopted() bool {
+	if x != nil && x.Adopted != nil {
+		return *x.Adopted
+	}
+	return false
+}
+
+func (x *AuditPayload) GetTokenConfigured() bool {
+	if x != nil && x.TokenConfigured != nil {
+		return *x.TokenConfigured
+	}
+	return false
+}
+
+func (x *AuditPayload) GetRemoteDiscoveryAttempted() bool {
+	if x != nil && x.RemoteDiscoveryAttempted != nil {
+		return *x.RemoteDiscoveryAttempted
+	}
+	return false
+}
+
+func (x *AuditPayload) GetDiscoverySucceeded() bool {
+	if x != nil && x.DiscoverySucceeded != nil {
+		return *x.DiscoverySucceeded
+	}
+	return false
+}
+
+func (x *AuditPayload) GetImportedServers() int64 {
+	if x != nil && x.ImportedServers != nil {
+		return *x.ImportedServers
+	}
+	return 0
+}
+
+func (x *AuditPayload) GetSkippedServers() int64 {
+	if x != nil && x.SkippedServers != nil {
+		return *x.SkippedServers
+	}
+	return 0
+}
+
+func (x *AuditPayload) GetRefusedServers() int64 {
+	if x != nil && x.RefusedServers != nil {
+		return *x.RefusedServers
+	}
+	return 0
+}
+
+func (x *AuditPayload) GetToolPolicy() string {
+	if x != nil && x.ToolPolicy != nil {
+		return *x.ToolPolicy
+	}
+	return ""
 }
 
 type AuditEntry struct {
@@ -622,7 +706,7 @@ var File_turing_v1_audit_proto protoreflect.FileDescriptor
 
 const file_turing_v1_audit_proto_rawDesc = "" +
 	"\n" +
-	"\x15turing/v1/audit.proto\x12\tturing.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16turing/v1/common.proto\"\x98\f\n" +
+	"\x15turing/v1/audit.proto\x12\tturing.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16turing/v1/common.proto\"\xb6\x11\n" +
 	"\fAuditPayload\x122\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x1c.turing.v1.AuditPayloadStateR\x05state\x12 \n" +
 	"\ttool_name\x18\x02 \x01(\tH\x00R\btoolName\x88\x01\x01\x12$\n" +
@@ -656,7 +740,18 @@ const file_turing_v1_audit_proto_rawDesc = "" +
 	"\rendpoint_host\x18\x16 \x01(\tH\x14R\fendpointHost\x88\x01\x01\x12S\n" +
 	"\x16egress_data_categories\x18\x17 \x03(\x0e2\x1d.turing.v1.EgressDataCategoryR\x14egressDataCategories\x12;\n" +
 	"\x17egress_decision_version\x18\x18 \x01(\x05H\x15R\x15egressDecisionVersion\x88\x01\x01\x12Z\n" +
-	"\x19egress_consent_granted_at\x18\x19 \x01(\v2\x1a.google.protobuf.TimestampH\x16R\x16egressConsentGrantedAt\x88\x01\x01B\f\n" +
+	"\x19egress_consent_granted_at\x18\x19 \x01(\v2\x1a.google.protobuf.TimestampH\x16R\x16egressConsentGrantedAt\x88\x01\x01\x12+\n" +
+	"\x0fmcp_server_tier\x18\x1a \x01(\tH\x17R\rmcpServerTier\x88\x01\x01\x12)\n" +
+	"\x0emcp_server_url\x18\x1b \x01(\tH\x18R\fmcpServerUrl\x88\x01\x01\x12\x1d\n" +
+	"\aadopted\x18\x1c \x01(\bH\x19R\aadopted\x88\x01\x01\x12.\n" +
+	"\x10token_configured\x18\x1d \x01(\bH\x1aR\x0ftokenConfigured\x88\x01\x01\x12A\n" +
+	"\x1aremote_discovery_attempted\x18\x1e \x01(\bH\x1bR\x18remoteDiscoveryAttempted\x88\x01\x01\x124\n" +
+	"\x13discovery_succeeded\x18\x1f \x01(\bH\x1cR\x12discoverySucceeded\x88\x01\x01\x12.\n" +
+	"\x10imported_servers\x18  \x01(\x03H\x1dR\x0fimportedServers\x88\x01\x01\x12,\n" +
+	"\x0fskipped_servers\x18! \x01(\x03H\x1eR\x0eskippedServers\x88\x01\x01\x12,\n" +
+	"\x0frefused_servers\x18\" \x01(\x03H\x1fR\x0erefusedServers\x88\x01\x01\x12$\n" +
+	"\vtool_policy\x18# \x01(\tH R\n" +
+	"toolPolicy\x88\x01\x01B\f\n" +
 	"\n" +
 	"_tool_nameB\x0e\n" +
 	"\f_server_nameB\b\n" +
@@ -680,7 +775,18 @@ const file_turing_v1_audit_proto_rawDesc = "" +
 	"\x18_denial_reason_truncatedB\x10\n" +
 	"\x0e_endpoint_hostB\x1a\n" +
 	"\x18_egress_decision_versionB\x1c\n" +
-	"\x1a_egress_consent_granted_at\"\xe0\x02\n" +
+	"\x1a_egress_consent_granted_atB\x12\n" +
+	"\x10_mcp_server_tierB\x11\n" +
+	"\x0f_mcp_server_urlB\n" +
+	"\n" +
+	"\b_adoptedB\x13\n" +
+	"\x11_token_configuredB\x1d\n" +
+	"\x1b_remote_discovery_attemptedB\x16\n" +
+	"\x14_discovery_succeededB\x13\n" +
+	"\x11_imported_serversB\x12\n" +
+	"\x10_skipped_serversB\x12\n" +
+	"\x10_refused_serversB\x0e\n" +
+	"\f_tool_policy\"\xe0\x02\n" +
 	"\n" +
 	"AuditEntry\x12\x19\n" +
 	"\baudit_id\x18\x01 \x01(\tR\aauditId\x12*\n" +

@@ -155,6 +155,21 @@ const (
 	// *Truncated flag when it had to). This reader re-checks the same bound
 	// against untrusted stored bytes rather than trusting it.
 	maxAuditDecisionRationaleBytes = 512
+	// maxAuditMCPServerTierBytes bounds the stored tier label
+	// ("bundled" / "local_container" / "remote_url" —
+	// repository.MCPServerTier), far larger than any of those three but
+	// still small enough to reject a garbled value outright rather than
+	// forwarding it.
+	maxAuditMCPServerTierBytes = 128
+	// maxAuditMCPServerURLBytes matches mcpregistry's own
+	// maxMCPServerURLBytes: that is the writer's own bound on the
+	// canonicalized URL it stores, so this reader accepts nothing that
+	// writer could not have produced.
+	maxAuditMCPServerURLBytes = 2048
+	// maxAuditToolPolicyBytes bounds the canonical policy string
+	// ("safe" / "approval_required" / "disabled" — mcpregistry's own
+	// policyFromProto), the same reasoning as maxAuditMCPServerTierBytes.
+	maxAuditToolPolicyBytes = 128
 )
 
 // auditTimestampLayout is repository.FormatTimestamp's fixed-width layout. The
@@ -782,6 +797,30 @@ func applyAuditActionPolicy(payload *turingv1.AuditPayload, action string, objec
 		payload.Status = auditString(object, "state", maxAuditStatusBytes)
 		payload.Reason = auditString(object, "policy", maxAuditReasonBytes)
 		payload.ErrorCode = auditString(object, "errorCode", maxAuditErrorCodeBytes)
+	case "mcp.server.registered":
+		payload.ServerName = auditString(object, "name", maxAuditServerNameBytes)
+		payload.McpServerTier = auditString(object, "tier", maxAuditMCPServerTierBytes)
+		payload.McpServerUrl = auditString(object, "url", maxAuditMCPServerURLBytes)
+		payload.Adopted = auditBool(object, "adopted")
+	case "mcp.server.enabled", "mcp.server.disabled":
+		payload.ServerName = auditString(object, "name", maxAuditServerNameBytes)
+		payload.McpServerTier = auditString(object, "tier", maxAuditMCPServerTierBytes)
+		payload.RemoteDiscoveryAttempted = auditBool(object, "remoteDiscoveryAttempted")
+		payload.DiscoverySucceeded = auditBool(object, "discoverySucceeded")
+	case "mcp.server.token_rotated", "mcp.server.token_cleared":
+		payload.ServerName = auditString(object, "name", maxAuditServerNameBytes)
+		payload.TokenConfigured = auditBool(object, "tokenConfigured")
+	case "mcp.server.reimported":
+		payload.ImportedServers = auditInt64(object, "imported")
+		payload.SkippedServers = auditInt64(object, "skipped")
+		payload.RefusedServers = auditInt64(object, "refused")
+	case "mcp.server.deleted":
+		payload.ServerName = auditString(object, "name", maxAuditServerNameBytes)
+		payload.McpServerTier = auditString(object, "tier", maxAuditMCPServerTierBytes)
+	case "mcp.server.tool_policy_changed":
+		payload.ServerName = auditString(object, "name", maxAuditServerNameBytes)
+		payload.ToolName = auditString(object, "toolName", maxAuditToolNameBytes)
+		payload.ToolPolicy = auditString(object, "toolPolicy", maxAuditToolPolicyBytes)
 	default:
 		// Unknown / future action: metadata only, no payload fields.
 	}

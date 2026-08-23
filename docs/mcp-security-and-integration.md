@@ -207,6 +207,10 @@ keeps refusing a tombstoned name. An explicit in-app Register of that same
 name is the user's own consent: it atomically clears the tombstone in the
 same transaction and does not require a new name. Registering over a name
 that still has a live row, or over a bundled name, is refused either way.
+Deletion itself reads the server before removing it — the delete decision
+and its atomicity stay entirely the repository's own — so the row's name and
+tier can still be recorded in a post-commit `mcp.server.deleted` audit
+entry even though the row itself is gone by the time that entry is written.
 
 Token rotation is write-only for non-bundled servers: a new bearer replaces
 the sealed value, an empty bearer clears it, and a bundled server refuses
@@ -272,8 +276,20 @@ failed discovery leaves the enabled state exactly as the operator set it,
 marks the server down with a bounded, bearer-redacted status message, and
 preserves whatever tool snapshot the last successful discovery produced.
 Enable/disable, discovery outcome, registration (including whether it
-adopted a placeholder), and token rotation are all audited; the audit
-payload and any status text never carry a token.
+adopted a placeholder), token rotation, deletion, and a tool policy change are
+all audited; the audit payload and any status text never carry a token. Each
+of these actions is also readable back through the audit read API
+([Action allowlist](architecture/audit-read-api.md#action-allowlist)): that
+API is itself default-deny, so these records only surface at all because each
+action has an explicit, reviewed, typed field rule — `mcp.server.registered`
+discloses the server name, tier, and URL and whether it adopted a placeholder;
+`.enabled`/`.disabled` disclose the name, tier, and whether/whether-succeeded
+discovery was attempted; `.token_rotated`/`.token_cleared` disclose the name
+and whether a token is now configured (never the token); `.deleted` discloses
+the name and tier; and `.tool_policy_changed` discloses the server name, tool
+name, and the new canonical policy string. No MCP audit record — through this
+API or otherwise — ever exposes a raw stored payload, a bearer token, or its
+sealed/ciphertext form.
 
 Peer-controlled MCP errors and results are scrubbed of the registered bearer
 before they can cross the internal RPC boundary or reach liveness state, tool

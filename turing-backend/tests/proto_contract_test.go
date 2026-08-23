@@ -486,6 +486,33 @@ func TestMCPRegistryProtoContract(t *testing.T) {
 	}
 }
 
+// TestMCPRegistryAuditPayloadProtoContract pins the exact field numbers and
+// kinds of the AuditPayload fields the MCP registry audit projection reads.
+// These are additive fields 26-35 appended after the existing 25 (see
+// TestRemoteEgressProtoContract for 22-25): server_name (3) and tool_name (2)
+// are deliberately reused rather than duplicated, so only the ten new,
+// MCP-specific fields are asserted here. A wrong number/kind here would let
+// the wire contract silently drift out from under audit/service.go's
+// applyAuditActionPolicy, which reads these fields by exact name.
+func TestMCPRegistryAuditPayloadProtoContract(t *testing.T) {
+	auditPayload := turingv1.File_turing_v1_audit_proto.Messages().ByName("AuditPayload")
+	assertProtoField(t, auditPayload, "mcp_server_tier", 26, protoreflect.StringKind, false, "")
+	assertProtoField(t, auditPayload, "mcp_server_url", 27, protoreflect.StringKind, false, "")
+	assertProtoField(t, auditPayload, "adopted", 28, protoreflect.BoolKind, false, "")
+	assertProtoField(t, auditPayload, "token_configured", 29, protoreflect.BoolKind, false, "")
+	assertProtoField(t, auditPayload, "remote_discovery_attempted", 30, protoreflect.BoolKind, false, "")
+	assertProtoField(t, auditPayload, "discovery_succeeded", 31, protoreflect.BoolKind, false, "")
+	assertProtoField(t, auditPayload, "imported_servers", 32, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, auditPayload, "skipped_servers", 33, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, auditPayload, "refused_servers", 34, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, auditPayload, "tool_policy", 35, protoreflect.StringKind, false, "")
+
+	// None of the ten new fields may collide with (or replace) the reused
+	// server_name/tool_name fields at their existing numbers.
+	assertProtoField(t, auditPayload, "tool_name", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, auditPayload, "server_name", 3, protoreflect.StringKind, false, "")
+}
+
 func assertProtoField(t *testing.T, message protoreflect.MessageDescriptor, name protoreflect.Name, number protoreflect.FieldNumber, kind protoreflect.Kind, repeated bool, messageType protoreflect.FullName) {
 	t.Helper()
 	if message == nil {

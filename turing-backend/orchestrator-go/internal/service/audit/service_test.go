@@ -222,6 +222,36 @@ func presentPayloadFields(p *turingv1.AuditPayload) map[string]bool {
 	if p.EgressConsentGrantedAt != nil {
 		set["egress_consent_granted_at"] = true
 	}
+	if p.McpServerTier != nil {
+		set["mcp_server_tier"] = true
+	}
+	if p.McpServerUrl != nil {
+		set["mcp_server_url"] = true
+	}
+	if p.Adopted != nil {
+		set["adopted"] = true
+	}
+	if p.TokenConfigured != nil {
+		set["token_configured"] = true
+	}
+	if p.RemoteDiscoveryAttempted != nil {
+		set["remote_discovery_attempted"] = true
+	}
+	if p.DiscoverySucceeded != nil {
+		set["discovery_succeeded"] = true
+	}
+	if p.ImportedServers != nil {
+		set["imported_servers"] = true
+	}
+	if p.SkippedServers != nil {
+		set["skipped_servers"] = true
+	}
+	if p.RefusedServers != nil {
+		set["refused_servers"] = true
+	}
+	if p.ToolPolicy != nil {
+		set["tool_policy"] = true
+	}
 	return set
 }
 
@@ -260,6 +290,19 @@ func TestListAuditEntriesReturnsEveryCurrentActionUnderExplicitPolicy(t *testing
 		{"a_sd", "session.deleted", `{"runs":3,"messages":42}`},
 		{"a_ec", "egress.consent.recorded", `{"provider":"openai_compatible","endpointHost":"api.example.com","dataCategories":["EGRESS_DATA_CATEGORY_CURRENT_MESSAGE","EGRESS_DATA_CATEGORY_TOOL_SCHEMAS"],"decisionVersion":1,"consentGrantedAt":"2026-08-20T01:02:03.000000000Z","challenge":"SENTINEL_CHALLENGE","nonce":"SENTINEL_NONCE","requestFingerprint":"SENTINEL_FINGERPRINT","credentialRef":"SENTINEL_CREDENTIAL","content":"SENTINEL_CONTENT"}`},
 		{"a_erb", "automation.remote_egress_blocked", `{"code":"remote_egress_requires_interactive_consent","provider":"openai_compatible","endpointHost":"SENTINEL_ENDPOINT","prompt":"SENTINEL_CONTENT"}`},
+		// MCP registry actions. Each fixture also carries a token/ciphertext-
+		// shaped sentinel under a key the reviewed rule never reads, proving
+		// the projection is a strict allowlist rather than "everything that
+		// looks safe": token/sealedToken/bearerToken/schema/args are exactly
+		// the shapes a raw payload dump would otherwise leak.
+		{"a_mcpreg", "mcp.server.registered", `{"name":"vendor","tier":"remote_url","url":"https://vendor.example/mcp","adopted":true,"token":"SENTINEL_MCP_TOKEN","sealedToken":"SENTINEL_MCP_TOKEN","bearerToken":"SENTINEL_MCP_TOKEN"}`},
+		{"a_mcpen", "mcp.server.enabled", `{"name":"vendor","tier":"remote_url","remoteDiscoveryAttempted":true,"discoverySucceeded":true,"token":"SENTINEL_MCP_TOKEN"}`},
+		{"a_mcpdis", "mcp.server.disabled", `{"name":"vendor","tier":"local_container","remoteDiscoveryAttempted":false,"discoverySucceeded":false,"token":"SENTINEL_MCP_TOKEN"}`},
+		{"a_mcprot", "mcp.server.token_rotated", `{"name":"vendor","tokenConfigured":true,"token":"SENTINEL_MCP_TOKEN","sealedToken":"SENTINEL_MCP_TOKEN"}`},
+		{"a_mcpclr", "mcp.server.token_cleared", `{"name":"vendor","tokenConfigured":false,"token":"SENTINEL_MCP_TOKEN"}`},
+		{"a_mcpreimp", "mcp.server.reimported", `{"imported":2,"skipped":1,"refused":3,"names":["SENTINEL_MCP_TOKEN"]}`},
+		{"a_mcpdel", "mcp.server.deleted", `{"name":"vendor","tier":"remote_url","token":"SENTINEL_MCP_TOKEN","url":"https://vendor.example/mcp"}`},
+		{"a_mcppol", "mcp.server.tool_policy_changed", `{"name":"vendor","toolName":"vendor.write","toolPolicy":"approval_required","schema":{"type":"SENTINEL_MCP_SCHEMA"},"args":{"path":"SENTINEL_MCP_ARGS"}}`},
 		// session.routed / session.unrouted are direct recordAuditTx writes with
 		// no reviewed field rule, so they are default-deny: retrievable, PRESENT,
 		// but every payload field (agentId/agent/endpoint/model) must be dropped.
@@ -358,6 +401,61 @@ func TestListAuditEntriesReturnsEveryCurrentActionUnderExplicitPolicy(t *testing
 			t.Fatalf("blocked automation payload values wrong: %+v", p)
 		}
 	})
+	check("mcp.server.registered", []string{
+		"server_name", "mcp_server_tier", "mcp_server_url", "adopted",
+	}, func(p *turingv1.AuditPayload) {
+		if p.GetServerName() != "vendor" || p.GetMcpServerTier() != "remote_url" ||
+			p.GetMcpServerUrl() != "https://vendor.example/mcp" || !p.GetAdopted() {
+			t.Fatalf("mcp.server.registered values wrong: %+v", p)
+		}
+	})
+	check("mcp.server.enabled", []string{
+		"server_name", "mcp_server_tier", "remote_discovery_attempted", "discovery_succeeded",
+	}, func(p *turingv1.AuditPayload) {
+		if p.GetServerName() != "vendor" || p.GetMcpServerTier() != "remote_url" ||
+			!p.GetRemoteDiscoveryAttempted() || !p.GetDiscoverySucceeded() {
+			t.Fatalf("mcp.server.enabled values wrong: %+v", p)
+		}
+	})
+	check("mcp.server.disabled", []string{
+		"server_name", "mcp_server_tier", "remote_discovery_attempted", "discovery_succeeded",
+	}, func(p *turingv1.AuditPayload) {
+		if p.GetServerName() != "vendor" || p.GetMcpServerTier() != "local_container" ||
+			p.GetRemoteDiscoveryAttempted() || p.GetDiscoverySucceeded() {
+			t.Fatalf("mcp.server.disabled values wrong: %+v", p)
+		}
+	})
+	check("mcp.server.token_rotated", []string{"server_name", "token_configured"}, func(p *turingv1.AuditPayload) {
+		if p.GetServerName() != "vendor" || !p.GetTokenConfigured() {
+			t.Fatalf("mcp.server.token_rotated values wrong: %+v", p)
+		}
+	})
+	check("mcp.server.token_cleared", []string{"server_name", "token_configured"}, func(p *turingv1.AuditPayload) {
+		if p.GetServerName() != "vendor" || p.GetTokenConfigured() {
+			t.Fatalf("mcp.server.token_cleared values wrong: %+v", p)
+		}
+	})
+	check("mcp.server.reimported", []string{
+		"imported_servers", "skipped_servers", "refused_servers",
+	}, func(p *turingv1.AuditPayload) {
+		if p.GetImportedServers() != 2 || p.GetSkippedServers() != 1 || p.GetRefusedServers() != 3 {
+			t.Fatalf("mcp.server.reimported values wrong: %+v", p)
+		}
+	})
+	// The fixture also carries a "url" key, proving .deleted's rule never
+	// projects mcp_server_url even though .registered's rule does.
+	check("mcp.server.deleted", []string{"server_name", "mcp_server_tier"}, func(p *turingv1.AuditPayload) {
+		if p.GetServerName() != "vendor" || p.GetMcpServerTier() != "remote_url" {
+			t.Fatalf("mcp.server.deleted values wrong: %+v", p)
+		}
+	})
+	check("mcp.server.tool_policy_changed", []string{
+		"server_name", "tool_name", "tool_policy",
+	}, func(p *turingv1.AuditPayload) {
+		if p.GetServerName() != "vendor" || p.GetToolName() != "vendor.write" || p.GetToolPolicy() != "approval_required" {
+			t.Fatalf("mcp.server.tool_policy_changed values wrong: %+v", p)
+		}
+	})
 	// Direct-write routing actions have no reviewed field rule: PRESENT with no
 	// projected fields at all.
 	for _, action := range []string{"session.routed", "session.unrouted"} {
@@ -367,6 +465,9 @@ func TestListAuditEntriesReturnsEveryCurrentActionUnderExplicitPolicy(t *testing
 	// Belt and suspenders: nothing from the routing payloads may reach the wire,
 	// even though none of agentId/agent/endpoint/model has a proto field to
 	// carry it. Marshal the whole response and prove every sentinel is absent.
+	// This also covers every MCP registry fixture's token/schema/args
+	// sentinel above: none of them is named by any reviewed rule, so none may
+	// reach the wire regardless of which action carried it.
 	raw, err := protojson.Marshal(resp)
 	if err != nil {
 		t.Fatalf("protojson.Marshal: %v", err)
@@ -375,6 +476,7 @@ func TestListAuditEntriesReturnsEveryCurrentActionUnderExplicitPolicy(t *testing
 		"SENTINEL_AGENTID", "SENTINEL_AGENT", "SENTINEL_ENDPOINT", "SENTINEL_MODEL",
 		"SENTINEL_CHALLENGE", "SENTINEL_NONCE", "SENTINEL_FINGERPRINT",
 		"SENTINEL_CREDENTIAL", "SENTINEL_CONTENT",
+		"SENTINEL_MCP_TOKEN", "SENTINEL_MCP_SCHEMA", "SENTINEL_MCP_ARGS",
 	} {
 		if strings.Contains(string(raw), sentinel) {
 			t.Fatalf("routing payload leaked sentinel %q into the response: %s", sentinel, raw)
@@ -1606,6 +1708,112 @@ func TestListAuditEntriesEnforcesStrictNumericAndBoolTyping(t *testing.T) {
 	}
 	if p := byID["c_ok"].Payload; p.GetDeletedRuns() != 3 || p.GetDeletedMessages() != 42 {
 		t.Fatalf("c_ok: counts = (%d,%d), want (3,42)", p.GetDeletedRuns(), p.GetDeletedMessages())
+	}
+}
+
+// TestListAuditEntriesEnforcesTypeAndBoundsForMCPRegistryFields extends the
+// same strict-typing/bounds/control-character rules every other allowlisted
+// field already gets to the ten MCP-registry-specific fields: a non-bool for
+// adopted/token_configured/remote_discovery_attempted/discovery_succeeded, a
+// non-integral or negative count for imported/skipped/refused_servers, an
+// over-bound or control-character-carrying string for mcp_server_tier/
+// mcp_server_url/tool_policy, and a numeric value where a string is expected
+// must all omit only the offending field — never coerce it, never fail the
+// row, and never drop a structurally clean sibling.
+func TestListAuditEntriesEnforcesTypeAndBoundsForMCPRegistryFields(t *testing.T) {
+	service, database := newAuditServer(t)
+
+	overlongTier := strings.Repeat("a", 129)
+	overlongURL := "https://vendor.example/" + strings.Repeat("a", maxAuditMCPServerURLBytes)
+	overlongPolicy := strings.Repeat("a", 129)
+	seed := []struct {
+		id      string
+		action  string
+		payload string
+	}{
+		{"bool_str", "mcp.server.registered", `{"name":"vendor","tier":"remote_url","url":"https://vendor.example/mcp","adopted":"true"}`},
+		{"bool_ok_true", "mcp.server.registered", `{"name":"vendor","tier":"remote_url","url":"https://vendor.example/mcp","adopted":true}`},
+		{"bool_ok_false", "mcp.server.registered", `{"name":"vendor","tier":"remote_url","url":"https://vendor.example/mcp","adopted":false}`},
+		{"count_frac", "mcp.server.reimported", `{"imported":1.5,"skipped":2.5,"refused":3.5}`},
+		{"count_neg", "mcp.server.reimported", `{"imported":-1,"skipped":-2,"refused":-3}`},
+		{"count_str", "mcp.server.reimported", `{"imported":"1","skipped":"2","refused":"3"}`},
+		{"count_ok", "mcp.server.reimported", `{"imported":0,"skipped":0,"refused":0}`},
+		{"tier_long", "mcp.server.deleted", fmt.Sprintf(`{"name":"vendor","tier":%q}`, overlongTier)},
+		{"tier_ctl", "mcp.server.deleted", `{"name":"vendor","tier":"remote\nurl"}`},
+		{"tier_numeric", "mcp.server.deleted", `{"name":"vendor","tier":123}`},
+		{"url_long", "mcp.server.registered", fmt.Sprintf(`{"name":"vendor","tier":"remote_url","url":%q,"adopted":false}`, overlongURL)},
+		{"policy_long", "mcp.server.tool_policy_changed", fmt.Sprintf(`{"name":"vendor","toolName":"vendor.write","toolPolicy":%q}`, overlongPolicy)},
+		{"policy_ctl", "mcp.server.tool_policy_changed", `{"name":"vendor","toolName":"vendor.write","toolPolicy":"approval\trequired"}`},
+	}
+	for i, s := range seed {
+		insertAuditRow(t, database, s.id, "run_mcp_strict", "client", "", s.action, "", s.payload, canonicalTime(i))
+	}
+
+	resp := listEntries(t, service, &turingv1.ListAuditEntriesRequest{
+		CorrelationId: strptr("run_mcp_strict"),
+		Order:         turingv1.AuditOrder_AUDIT_ORDER_ASCENDING,
+		Page:          &turingv1.PageRequest{Limit: 100},
+	})
+	byID := map[string]*turingv1.AuditEntry{}
+	for _, entry := range resp.Entries {
+		byID[entry.AuditId] = entry
+	}
+
+	if p := byID["bool_str"].Payload; p.Adopted != nil {
+		t.Fatalf("bool_str: adopted = %v, want omitted (a JSON string must not coerce to bool)", p.GetAdopted())
+	}
+	if p := byID["bool_ok_true"].Payload; p.Adopted == nil || !p.GetAdopted() {
+		t.Fatalf("bool_ok_true: adopted = %v, want true", p.Adopted)
+	}
+	if p := byID["bool_ok_false"].Payload; p.Adopted == nil || p.GetAdopted() {
+		t.Fatalf("bool_ok_false: adopted = %v, want false", p.Adopted)
+	}
+
+	for _, id := range []string{"count_frac", "count_neg", "count_str"} {
+		p := byID[id].Payload
+		if p.ImportedServers != nil || p.SkippedServers != nil || p.RefusedServers != nil {
+			t.Fatalf("%s: counts coerced (imported=%v skipped=%v refused=%v), want all omitted", id, p.ImportedServers, p.SkippedServers, p.RefusedServers)
+		}
+	}
+	if p := byID["count_ok"].Payload; p.GetImportedServers() != 0 || p.GetSkippedServers() != 0 || p.GetRefusedServers() != 0 ||
+		p.ImportedServers == nil || p.SkippedServers == nil || p.RefusedServers == nil {
+		t.Fatalf("count_ok: counts = (%v,%v,%v), want all present and zero", p.ImportedServers, p.SkippedServers, p.RefusedServers)
+	}
+
+	if p := byID["tier_long"].Payload; p.McpServerTier != nil {
+		t.Fatalf("tier_long: mcp_server_tier = %q, want omitted (exceeds the byte bound)", p.GetMcpServerTier())
+	}
+	if p := byID["tier_ctl"].Payload; p.McpServerTier != nil {
+		t.Fatalf("tier_ctl: mcp_server_tier = %q, want omitted (control character)", p.GetMcpServerTier())
+	}
+	if p := byID["tier_numeric"].Payload; p.McpServerTier != nil {
+		t.Fatalf("tier_numeric: mcp_server_tier = %q, want omitted (numeric value must not coerce to string)", p.GetMcpServerTier())
+	}
+	// server_name is a clean sibling on every row above: one bad field must
+	// never drop the rest of the row.
+	for _, id := range []string{"tier_long", "tier_ctl", "tier_numeric"} {
+		if got := byID[id].Payload.GetServerName(); got != "vendor" {
+			t.Fatalf("%s: server_name = %q, want \"vendor\" (a valid sibling must still map)", id, got)
+		}
+	}
+
+	if p := byID["url_long"].Payload; p.McpServerUrl != nil {
+		t.Fatalf("url_long: mcp_server_url = %q, want omitted (exceeds the byte bound)", p.GetMcpServerUrl())
+	}
+	if got := byID["url_long"].Payload.GetMcpServerTier(); got != "remote_url" {
+		t.Fatalf("url_long: mcp_server_tier = %q, want \"remote_url\" (a valid sibling must still map)", got)
+	}
+
+	if p := byID["policy_long"].Payload; p.ToolPolicy != nil {
+		t.Fatalf("policy_long: tool_policy = %q, want omitted (exceeds the byte bound)", p.GetToolPolicy())
+	}
+	if p := byID["policy_ctl"].Payload; p.ToolPolicy != nil {
+		t.Fatalf("policy_ctl: tool_policy = %q, want omitted (control character)", p.GetToolPolicy())
+	}
+	for _, id := range []string{"policy_long", "policy_ctl"} {
+		if got := byID[id].Payload.GetToolName(); got != "vendor.write" {
+			t.Fatalf("%s: tool_name = %q, want \"vendor.write\" (a valid sibling must still map)", id, got)
+		}
 	}
 }
 

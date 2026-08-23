@@ -771,6 +771,16 @@ void main() {
               decisionCommentTruncated: false,
               denialReason: '',
               denialReasonTruncated: false,
+              mcpServerTier: '',
+              mcpServerUrl: '',
+              adopted: false,
+              tokenConfigured: false,
+              remoteDiscoveryAttempted: false,
+              discoverySucceeded: false,
+              importedServers: Int64(0),
+              skippedServers: Int64(0),
+              refusedServers: Int64(0),
+              toolPolicy: '',
             ),
             createdAt: timestamppb.Timestamp.fromDateTime(
               DateTime.utc(2026, 8, 18, 10),
@@ -846,6 +856,16 @@ void main() {
     expect(full.payload.decisionCommentTruncated, false);
     expect(full.payload.denialReason, '');
     expect(full.payload.denialReasonTruncated, false);
+    expect(full.payload.mcpServerTier, '');
+    expect(full.payload.mcpServerUrl, '');
+    expect(full.payload.adopted, false);
+    expect(full.payload.tokenConfigured, false);
+    expect(full.payload.remoteDiscoveryAttempted, false);
+    expect(full.payload.discoverySucceeded, false);
+    expect(full.payload.importedServers, 0);
+    expect(full.payload.skippedServers, 0);
+    expect(full.payload.refusedServers, 0);
+    expect(full.payload.toolPolicy, '');
 
     final minimal = page.entries[1];
     expect(minimal.auditId, 'audit-2');
@@ -876,6 +896,16 @@ void main() {
     expect(minimal.payload.decisionCommentTruncated, isNull);
     expect(minimal.payload.denialReason, isNull);
     expect(minimal.payload.denialReasonTruncated, isNull);
+    expect(minimal.payload.mcpServerTier, isNull);
+    expect(minimal.payload.mcpServerUrl, isNull);
+    expect(minimal.payload.adopted, isNull);
+    expect(minimal.payload.tokenConfigured, isNull);
+    expect(minimal.payload.remoteDiscoveryAttempted, isNull);
+    expect(minimal.payload.discoverySucceeded, isNull);
+    expect(minimal.payload.importedServers, isNull);
+    expect(minimal.payload.skippedServers, isNull);
+    expect(minimal.payload.refusedServers, isNull);
+    expect(minimal.payload.toolPolicy, isNull);
   });
 
   // The approval rationale is the one payload field a person authored, so the

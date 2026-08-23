@@ -95,6 +95,16 @@ class AuditPayload {
     this.egressDataCategories = const [],
     this.egressDecisionVersion,
     this.egressConsentGrantedAt,
+    this.mcpServerTier,
+    this.mcpServerUrl,
+    this.adopted,
+    this.tokenConfigured,
+    this.remoteDiscoveryAttempted,
+    this.discoverySucceeded,
+    this.importedServers,
+    this.skippedServers,
+    this.refusedServers,
+    this.toolPolicy,
   });
 
   final AuditPayloadState state;
@@ -142,4 +152,39 @@ class AuditPayload {
   /// True when the backend had to shorten [denialReason]; see
   /// [decisionCommentTruncated].
   final bool? denialReasonTruncated;
+
+  /// The MCP server's tier (`bundled` / `local_container` / `remote_url`) on
+  /// `mcp.server.registered`, `.enabled`, `.disabled`, and `.deleted`.
+  final String? mcpServerTier;
+
+  /// The MCP server's canonicalized URL. Disclosed only on
+  /// `mcp.server.registered` — never on `.enabled`/`.disabled`/`.deleted`,
+  /// and never a bearer token or its sealed form.
+  final String? mcpServerUrl;
+
+  /// True when `mcp.server.registered` adopted a pre-existing placeholder
+  /// row rather than inserting a brand-new one.
+  final bool? adopted;
+
+  /// Whether a bearer token is now configured, on `mcp.server.token_rotated`
+  /// / `.token_cleared` — never the token itself.
+  final bool? tokenConfigured;
+
+  /// Whether `mcp.server.enabled` / `.disabled` attempted live discovery
+  /// against the server.
+  final bool? remoteDiscoveryAttempted;
+
+  /// Whether that discovery attempt succeeded, on the same two actions.
+  final bool? discoverySucceeded;
+
+  /// Counts from `mcp.server.reimported` — never the imported/skipped/
+  /// refused server names themselves.
+  final int? importedServers;
+  final int? skippedServers;
+  final int? refusedServers;
+
+  /// The canonical tool policy string (`safe` / `approval_required` /
+  /// `disabled`) on `mcp.server.tool_policy_changed` — never the tool's
+  /// schema or call arguments.
+  final String? toolPolicy;
 }

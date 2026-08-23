@@ -304,14 +304,22 @@ func (s *Server) UpdateMcpToolPolicy(ctx context.Context, req *turingv1.UpdateMc
 		}
 		return nil, status.Error(codes.Internal, "update MCP tool policy failed")
 	}
-	// Notify immediately once the policy mutation above has committed —
-	// before the fallible list/descriptor mapping below — so a failure
-	// reading the tool list back or mapping it to a descriptor (e.g. a
-	// corrupted stored schema) can never leave an already-persisted
-	// policy change unannounced, the same reasoning
-	// SetMcpServerEnabled/RegisterMcpServer/RotateMcpServerToken already
-	// apply to their own post-commit notify calls.
+	// Notify and audit immediately once the policy mutation above has
+	// committed — before the fallible list/descriptor mapping below — so
+	// a failure reading the tool list back or mapping it to a descriptor
+	// (e.g. a corrupted stored schema) can never leave an already-
+	// persisted policy change unannounced or unaudited, the same
+	// reasoning SetMcpServerEnabled/RegisterMcpServer/RotateMcpServerToken/
+	// DeleteMcpServer already apply to their own post-commit notify/audit.
+	// The payload carries only the server name, the tool name, and the
+	// canonical policy string SetMCPToolPolicy just committed — never the
+	// tool's schema, call arguments, or any token.
 	s.notifyRegistryChanged()
+	s.auditMCPEvent(ctx, "mcp.server.tool_policy_changed", server.ID, map[string]any{
+		"name":       server.Name,
+		"toolName":   req.GetToolName(),
+		"toolPolicy": policy,
+	})
 	tools, err := s.repo.ListMCPServerTools(ctx, req.GetServerId())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "read MCP tool failed")
@@ -339,6 +347,22 @@ func (s *Server) DeleteMcpServer(ctx context.Context, req *turingv1.DeleteMcpSer
 	if req == nil || req.GetServerId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "server_id is required")
 	}
+	// Read the server before deleting it: DeleteMCPServer's own error
+	// mapping below (NotFound/Bundled/Internal) remains the sole authority
+	// over whether the delete actually happens, so this pre-read changes
+	// nothing about atomicity — it exists only to capture the name/tier a
+	// deleted row can no longer be read back from, for the audit payload
+	// below. A missing server fails here first, mapped to the same NotFound
+	// DeleteMCPServer would have returned anyway; a bundled server still
+	// passes this read (GetMCPServer does not consider tier) and is refused,
+	// as always, by the delete call itself.
+	server, err := s.repo.GetMCPServer(ctx, req.GetServerId())
+	if err != nil {
+		if errors.Is(err, repository.ErrMCPServerNotFound) {
+			return nil, status.Error(codes.NotFound, "MCP server not found")
+		}
+		return nil, status.Error(codes.Internal, "read MCP server failed")
+	}
 	if err := s.repo.DeleteMCPServer(ctx, req.GetServerId()); err != nil {
 		switch {
 		case errors.Is(err, repository.ErrMCPServerNotFound):
@@ -355,7 +379,17 @@ func (s *Server) DeleteMcpServer(ctx context.Context, req *turingv1.DeleteMcpSer
 	// delete above has actually succeeded, so this never removes an entry
 	// for an id that still names a live server.
 	s.forgetCredentialLock(req.GetServerId())
+	// Notify and audit immediately once the delete above has committed —
+	// the same reasoning every other mutation in this file already
+	// applies to its own post-commit notify/audit. The payload carries
+	// only the name and tier captured by the pre-read above: no URL, no
+	// token-related key — narrower than RegisterMcpServer's own payload,
+	// matching the reviewed policy in audit/service.go.
 	s.notifyRegistryChanged()
+	s.auditMCPEvent(ctx, "mcp.server.deleted", server.ID, map[string]any{
+		"name": server.Name,
+		"tier": string(server.Tier),
+	})
 	return &turingv1.DeleteMcpServerResponse{}, nil
 }
 

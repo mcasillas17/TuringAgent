@@ -50,6 +50,16 @@ class AuditPayload extends $pb.GeneratedMessage {
     $core.Iterable<$2.EgressDataCategory>? egressDataCategories,
     $core.int? egressDecisionVersion,
     $1.Timestamp? egressConsentGrantedAt,
+    $core.String? mcpServerTier,
+    $core.String? mcpServerUrl,
+    $core.bool? adopted,
+    $core.bool? tokenConfigured,
+    $core.bool? remoteDiscoveryAttempted,
+    $core.bool? discoverySucceeded,
+    $fixnum.Int64? importedServers,
+    $fixnum.Int64? skippedServers,
+    $fixnum.Int64? refusedServers,
+    $core.String? toolPolicy,
   }) {
     final result = create();
     if (state != null) result.state = state;
@@ -82,6 +92,18 @@ class AuditPayload extends $pb.GeneratedMessage {
       result.egressDecisionVersion = egressDecisionVersion;
     if (egressConsentGrantedAt != null)
       result.egressConsentGrantedAt = egressConsentGrantedAt;
+    if (mcpServerTier != null) result.mcpServerTier = mcpServerTier;
+    if (mcpServerUrl != null) result.mcpServerUrl = mcpServerUrl;
+    if (adopted != null) result.adopted = adopted;
+    if (tokenConfigured != null) result.tokenConfigured = tokenConfigured;
+    if (remoteDiscoveryAttempted != null)
+      result.remoteDiscoveryAttempted = remoteDiscoveryAttempted;
+    if (discoverySucceeded != null)
+      result.discoverySucceeded = discoverySucceeded;
+    if (importedServers != null) result.importedServers = importedServers;
+    if (skippedServers != null) result.skippedServers = skippedServers;
+    if (refusedServers != null) result.refusedServers = refusedServers;
+    if (toolPolicy != null) result.toolPolicy = toolPolicy;
     return result;
   }
 
@@ -134,6 +156,16 @@ class AuditPayload extends $pb.GeneratedMessage {
         24, _omitFieldNames ? '' : 'egressDecisionVersion', $pb.PbFieldType.O3)
     ..aOM<$1.Timestamp>(25, _omitFieldNames ? '' : 'egressConsentGrantedAt',
         subBuilder: $1.Timestamp.create)
+    ..aOS(26, _omitFieldNames ? '' : 'mcpServerTier')
+    ..aOS(27, _omitFieldNames ? '' : 'mcpServerUrl')
+    ..aOB(28, _omitFieldNames ? '' : 'adopted')
+    ..aOB(29, _omitFieldNames ? '' : 'tokenConfigured')
+    ..aOB(30, _omitFieldNames ? '' : 'remoteDiscoveryAttempted')
+    ..aOB(31, _omitFieldNames ? '' : 'discoverySucceeded')
+    ..aInt64(32, _omitFieldNames ? '' : 'importedServers')
+    ..aInt64(33, _omitFieldNames ? '' : 'skippedServers')
+    ..aInt64(34, _omitFieldNames ? '' : 'refusedServers')
+    ..aOS(35, _omitFieldNames ? '' : 'toolPolicy')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -392,6 +424,100 @@ class AuditPayload extends $pb.GeneratedMessage {
   void clearEgressConsentGrantedAt() => $_clearField(25);
   @$pb.TagNumber(25)
   $1.Timestamp ensureEgressConsentGrantedAt() => $_ensure(24);
+
+  /// MCP registry fields. server_name (3) and tool_name (2) above are reused
+  /// rather than duplicated; provider (9) and display_name (10) are the
+  /// integration.* fields and are deliberately not reused here since an MCP
+  /// server is not an integration.
+  @$pb.TagNumber(26)
+  $core.String get mcpServerTier => $_getSZ(25);
+  @$pb.TagNumber(26)
+  set mcpServerTier($core.String value) => $_setString(25, value);
+  @$pb.TagNumber(26)
+  $core.bool hasMcpServerTier() => $_has(25);
+  @$pb.TagNumber(26)
+  void clearMcpServerTier() => $_clearField(26);
+
+  @$pb.TagNumber(27)
+  $core.String get mcpServerUrl => $_getSZ(26);
+  @$pb.TagNumber(27)
+  set mcpServerUrl($core.String value) => $_setString(26, value);
+  @$pb.TagNumber(27)
+  $core.bool hasMcpServerUrl() => $_has(26);
+  @$pb.TagNumber(27)
+  void clearMcpServerUrl() => $_clearField(27);
+
+  @$pb.TagNumber(28)
+  $core.bool get adopted => $_getBF(27);
+  @$pb.TagNumber(28)
+  set adopted($core.bool value) => $_setBool(27, value);
+  @$pb.TagNumber(28)
+  $core.bool hasAdopted() => $_has(27);
+  @$pb.TagNumber(28)
+  void clearAdopted() => $_clearField(28);
+
+  @$pb.TagNumber(29)
+  $core.bool get tokenConfigured => $_getBF(28);
+  @$pb.TagNumber(29)
+  set tokenConfigured($core.bool value) => $_setBool(28, value);
+  @$pb.TagNumber(29)
+  $core.bool hasTokenConfigured() => $_has(28);
+  @$pb.TagNumber(29)
+  void clearTokenConfigured() => $_clearField(29);
+
+  @$pb.TagNumber(30)
+  $core.bool get remoteDiscoveryAttempted => $_getBF(29);
+  @$pb.TagNumber(30)
+  set remoteDiscoveryAttempted($core.bool value) => $_setBool(29, value);
+  @$pb.TagNumber(30)
+  $core.bool hasRemoteDiscoveryAttempted() => $_has(29);
+  @$pb.TagNumber(30)
+  void clearRemoteDiscoveryAttempted() => $_clearField(30);
+
+  @$pb.TagNumber(31)
+  $core.bool get discoverySucceeded => $_getBF(30);
+  @$pb.TagNumber(31)
+  set discoverySucceeded($core.bool value) => $_setBool(30, value);
+  @$pb.TagNumber(31)
+  $core.bool hasDiscoverySucceeded() => $_has(30);
+  @$pb.TagNumber(31)
+  void clearDiscoverySucceeded() => $_clearField(31);
+
+  @$pb.TagNumber(32)
+  $fixnum.Int64 get importedServers => $_getI64(31);
+  @$pb.TagNumber(32)
+  set importedServers($fixnum.Int64 value) => $_setInt64(31, value);
+  @$pb.TagNumber(32)
+  $core.bool hasImportedServers() => $_has(31);
+  @$pb.TagNumber(32)
+  void clearImportedServers() => $_clearField(32);
+
+  @$pb.TagNumber(33)
+  $fixnum.Int64 get skippedServers => $_getI64(32);
+  @$pb.TagNumber(33)
+  set skippedServers($fixnum.Int64 value) => $_setInt64(32, value);
+  @$pb.TagNumber(33)
+  $core.bool hasSkippedServers() => $_has(32);
+  @$pb.TagNumber(33)
+  void clearSkippedServers() => $_clearField(33);
+
+  @$pb.TagNumber(34)
+  $fixnum.Int64 get refusedServers => $_getI64(33);
+  @$pb.TagNumber(34)
+  set refusedServers($fixnum.Int64 value) => $_setInt64(33, value);
+  @$pb.TagNumber(34)
+  $core.bool hasRefusedServers() => $_has(33);
+  @$pb.TagNumber(34)
+  void clearRefusedServers() => $_clearField(34);
+
+  @$pb.TagNumber(35)
+  $core.String get toolPolicy => $_getSZ(34);
+  @$pb.TagNumber(35)
+  set toolPolicy($core.String value) => $_setString(34, value);
+  @$pb.TagNumber(35)
+  $core.bool hasToolPolicy() => $_has(34);
+  @$pb.TagNumber(35)
+  void clearToolPolicy() => $_clearField(35);
 }
 
 class AuditEntry extends $pb.GeneratedMessage {
