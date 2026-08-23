@@ -499,6 +499,30 @@ var errMCPRootKeyInvalid = errors.New(`mcp.json must declare exactly one "mcpSer
 // actually being present.
 var errMCPRootServersRequired = errors.New(`decode mcp.json: "mcpServers" object is required`)
 
+// maxMCPRootFields bounds how many top-level members decodeMCPRootServers
+// ever walks — independent of whether any given member turns out to be
+// the one canonical "mcpServers" key it actually reads (see
+// TestImportJSONIgnoresUnrelatedTopLevelKeys: an unrelated sibling key is
+// deliberately *not* refused on its own). Without this, a root object
+// packed with an unbounded number of distinct, otherwise-irrelevant
+// sibling keys would force this loop to decode (and discard) every one of
+// their values before ever reaching a well-formed document's single
+// "mcpServers" key — the same class of parser-cardinality amplification
+// maxMCPServerEntryFields/maxMCPToolObjectFields/maxMCPHeaderEntries close
+// for the collections nested one level down. A small, fixed cap is enough
+// headroom for any realistic mcp.json (a handful of sibling keys such as
+// "$schema" alongside "mcpServers") without letting the count grow
+// unbounded.
+const maxMCPRootFields = 8
+
+// errMCPRootTooManyFields is the one fixed, generic reason
+// decodeMCPRootServers refuses a root object naming more than
+// maxMCPRootFields top-level members — checked the instant the
+// (maxMCPRootFields+1)-th member's key is seen, before its value is ever
+// decoded, so an oversized or malformed excess member costs nothing to
+// refuse. It never echoes any member's own name.
+var errMCPRootTooManyFields = errors.New("decode mcp.json: root object has too many top-level fields")
+
 // decodeMCPRootServers stream-parses mcp.json's root object with a
 // token-level walk (mirroring decodeMCPEntryFields/decodeMCPHeaderEntries
 // one level up) rather than json.Decoder.Decode into a struct, so this
@@ -521,7 +545,11 @@ func decodeMCPRootServers(data []byte) (json.RawMessage, error) {
 	}
 	var servers json.RawMessage
 	seenMcpServersKey := false
+	fieldCount := 0
 	for decoder.More() {
+		if fieldCount >= maxMCPRootFields {
+			return nil, errMCPRootTooManyFields
+		}
 		keyToken, err := decoder.Token()
 		if err != nil {
 			return nil, fmt.Errorf("decode mcp.json: %w", err)
@@ -534,6 +562,7 @@ func decodeMCPRootServers(data []byte) (json.RawMessage, error) {
 		if err := decoder.Decode(&value); err != nil {
 			return nil, fmt.Errorf("decode mcp.json: %w", err)
 		}
+		fieldCount++
 		if !strings.EqualFold(key, "mcpServers") {
 			continue
 		}
@@ -753,7 +782,11 @@ func mcpRawMetadataContainsToken(value any, token string) bool {
 // snapshot could only skip.
 func buildImportTools(tier repository.MCPServerTier, serverName string, rawTools []mcpJSONTool, token string) ([]repository.MCPServerTool, error) {
 	if len(rawTools) > maxMCPTools {
-		return nil, fmt.Errorf("static tools snapshot exceeds limit of %d tools", maxMCPTools)
+		// Defense-in-depth only: decodeMCPToolEntries (see its own
+		// errMCPStaticToolCountExceeded check) already refuses a static
+		// snapshot naming more than maxMCPTools entries before rawTools
+		// is ever built, so this should be unreachable in practice.
+		return nil, errMCPStaticToolCountExceeded
 	}
 	tools := make([]repository.MCPServerTool, 0, len(rawTools))
 	encodedBytes := 0
@@ -1297,16 +1330,29 @@ var canonicalMCPEntryFieldNames = map[string]struct{}{
 	"tools":   {},
 }
 
+// maxMCPServerEntryFields bounds how many top-level fields
+// decodeMCPEntryFields ever appends before refusing further growth —
+// exactly len(canonicalMCPEntryFieldNames): no well-formed entry could
+// ever declare more than that many distinct top-level keys.
+// validateMCPEntryFields already refuses any entry naming more than one of
+// each, but only after decodeMCPEntryFields had already appended every
+// field an attacker supplied; checking here first means an entry with an
+// unbounded number of (however invalid, however many times repeated)
+// top-level keys is refused the instant the seventh one is seen, before
+// its value is even decoded.
+var maxMCPServerEntryFields = len(canonicalMCPEntryFieldNames)
+
 // errMCPEntryFieldInvalid is the one fixed, generic reason
 // decodeMCPEntryFields/validateMCPEntryFields return for every way an
 // entry's own top-level field names can be malformed: not an object at
 // all, a name that does not match one of canonicalMCPEntryFieldNames at
 // all (case-insensitively), a canonical name spelled with the wrong case
-// (e.g. "Tools" instead of "tools"), or the same canonical name repeated
+// (e.g. "Tools" instead of "tools"), the same canonical name repeated
 // more than once (an exact-spelling repeat, which JSON itself permits
 // inside one object, or a case-insensitive one such as "tools" and
-// "Tools" both present). It deliberately never says which of those
-// tripped, the same reasoning mcpToolDefinitionRefusedMessage documents.
+// "Tools" both present), or more than maxMCPServerEntryFields fields
+// present at all. It deliberately never says which of those tripped, the
+// same reasoning mcpToolDefinitionRefusedMessage documents.
 var errMCPEntryFieldInvalid = errors.New("entry is invalid")
 
 // decodeMCPEntryFields parses an mcp.json server entry's raw JSON object
@@ -1333,6 +1379,9 @@ func decodeMCPEntryFields(raw json.RawMessage) ([]mcpEntryField, error) {
 	}
 	var fields []mcpEntryField
 	for decoder.More() {
+		if len(fields) >= maxMCPServerEntryFields {
+			return nil, errMCPEntryFieldInvalid
+		}
 		keyToken, err := decoder.Token()
 		if err != nil {
 			return nil, errMCPEntryFieldInvalid
@@ -1416,6 +1465,19 @@ var canonicalMCPToolFieldNames = map[string]string{
 	"inputschema": "inputSchema",
 }
 
+// maxMCPToolObjectFields bounds how many top-level fields
+// decodeMCPToolFields ever appends before refusing further growth —
+// exactly len(canonicalMCPToolFieldNames): no well-formed tool object
+// could ever declare more than that many distinct top-level keys.
+// validateMCPToolFields already refuses any element naming more than one
+// of each, but only after decodeMCPToolFields had already appended every
+// field an attacker supplied; checking here first means a tool element
+// with an unbounded number of (however invalid) top-level keys is refused
+// the instant the fourth one is seen, before its value — potentially a
+// large inputSchema-shaped payload under some other name — is even
+// decoded.
+var maxMCPToolObjectFields = len(canonicalMCPToolFieldNames)
+
 // validateMCPToolFields requires every one of a "tools" array element's
 // top-level field names to exactly match one of canonicalMCPToolFieldNames'
 // canonical spellings — never merely case-insensitively, the way
@@ -1467,6 +1529,9 @@ func decodeMCPToolFields(raw json.RawMessage) ([]mcpToolField, error) {
 	}
 	var fields []mcpToolField
 	for decoder.More() {
+		if len(fields) >= maxMCPToolObjectFields {
+			return nil, errors.New(mcpToolDefinitionRefusedMessage)
+		}
 		keyToken, err := decoder.Token()
 		if err != nil {
 			return nil, errors.New(mcpToolDefinitionRefusedMessage)
@@ -1517,6 +1582,16 @@ func mcpToolFromFields(fields []mcpToolField) (mcpJSONTool, error) {
 	return tool, nil
 }
 
+// errMCPStaticToolCountExceeded is the one fixed, generic reason a static
+// "tools" snapshot naming more than maxMCPTools entries is refused —
+// shared by decodeMCPToolEntries (checked before the
+// (maxMCPTools+1)-th element is ever decoded) and buildImportTools' own
+// defense-in-depth len(rawTools) > maxMCPTools check, so both report the
+// exact same wording regardless of which one actually trips. It names the
+// fixed limit itself, never the offending entry's own tool count or any
+// tool's name.
+var errMCPStaticToolCountExceeded = fmt.Errorf("static tools snapshot exceeds limit of %d tools", maxMCPTools)
+
 // decodeMCPToolEntries parses an mcp.json entry's raw "tools" value —
 // captured as json.RawMessage (see mcpJSONServer.Tools) precisely so this
 // can inspect it before anything collapses a tool object's fields into a
@@ -1530,6 +1605,16 @@ func mcpToolFromFields(fields []mcpToolField) (mcpJSONTool, error) {
 // actually decides whether buildImportTools runs at all. Any other
 // non-array value, or any non-object element, is refused with the one
 // fixed, generic mcpToolDefinitionRefusedMessage.
+//
+// The element count is enforced (errMCPStaticToolCountExceeded) the
+// instant it would exceed maxMCPTools — the same maxMCPTools limit
+// buildImportTools itself already enforces, checked here first, before
+// that (maxMCPTools+1)-th element's own raw bytes are even decoded, let
+// alone its (potentially large) inputSchema or description parsed by
+// decodeMCPToolFields/mcpToolFromFields. Without this, an attacker-sized
+// static snapshot could force every excess tool's full shape to be
+// decoded for no possible benefit before buildImportTools' own
+// after-the-fact count check ever ran.
 func decodeMCPToolEntries(raw json.RawMessage) ([]mcpJSONTool, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
@@ -1545,6 +1630,9 @@ func decodeMCPToolEntries(raw json.RawMessage) ([]mcpJSONTool, error) {
 	}
 	var tools []mcpJSONTool
 	for decoder.More() {
+		if len(tools) >= maxMCPTools {
+			return nil, errMCPStaticToolCountExceeded
+		}
 		var element json.RawMessage
 		if err := decoder.Decode(&element); err != nil {
 			return nil, errors.New(mcpToolDefinitionRefusedMessage)
@@ -1608,6 +1696,29 @@ type mcpHeaderEntry struct {
 	Value string
 }
 
+// maxMCPHeaderEntries bounds how many "headers" members decodeMCPHeaderEntries
+// ever appends before refusing further growth — even though
+// bearerFromHeaders ultimately supports only a single case-insensitive
+// Authorization key, at most one entry beyond that is enough to still
+// classify a headers object deterministically as carrying either an
+// unsupported header name or more than one Authorization key (see
+// header_hardening_test.go's own duplicate/unsupported classification
+// tests, none of which needs more than a handful of headers to exercise).
+// Without a cap here, a headers object packed with an unbounded number of
+// distinct, tiny member names could force this decode loop to grow an
+// unbounded slice before bearerFromHeaders ever gets a chance to refuse
+// it — the same class of parser-cardinality amplification
+// maxMCPServerEntryFields/maxMCPToolObjectFields/maxMCPRootFields close
+// for the collections above and below this one.
+const maxMCPHeaderEntries = 8
+
+// errMCPTooManyHeaderEntries is the one fixed, generic reason
+// decodeMCPHeaderEntries refuses a "headers" object naming more than
+// maxMCPHeaderEntries members — checked the instant the
+// (maxMCPHeaderEntries+1)-th member's key is seen, before its value is
+// ever decoded. It never echoes any header's own name or value.
+var errMCPTooManyHeaderEntries = errors.New("headers object has too many entries")
+
 // decodeMCPHeaderEntries parses an mcp.json entry's raw "headers" value
 // with a token-level walk (json.Decoder.Token/More), rather than
 // json.Unmarshal into a map[string]string, specifically so that two JSON
@@ -1636,6 +1747,9 @@ func decodeMCPHeaderEntries(raw json.RawMessage) ([]mcpHeaderEntry, error) {
 	}
 	var entries []mcpHeaderEntry
 	for decoder.More() {
+		if len(entries) >= maxMCPHeaderEntries {
+			return nil, errMCPTooManyHeaderEntries
+		}
 		keyToken, err := decoder.Token()
 		if err != nil {
 			return nil, errors.New("headers must be an object")

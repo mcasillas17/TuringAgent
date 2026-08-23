@@ -1094,11 +1094,16 @@ func aggregateAllToolBytes(ctx context.Context, q toolBudgetQueryRow) (int64, er
 // 128KiB was not merely assumed: it is measured against the actual
 // combined byte total of every tool TuringAgent's own bundled servers
 // register today ("system"'s 4 tools, "files"'s 5, and "skills"'s 2 —
-// see internal/service/runtime's own
+// mirrored byte-for-byte real schemas, not estimates). That measurement —
+// with a generous safety margin, not just scraping by — is
+// internal/service/runtime's own
+// TestFirstPartyBundledToolSchemasFitWithinReservedHeadroom; a second,
+// separate test in that same package,
 // TestConnectWorkerSucceedsWhenThirdPartyToolsFillExactlyTheReservedSubBudget,
-// which mirrors those real schemas and asserts their combined raw
-// (tool_name + schema_json) byte total stays comfortably under this
-// reservation, with generous margin for those schemas to grow). See also
+// proves the reservation end-to-end at its exact boundary: with the
+// third-party sub-budget filled to precisely its own cap, a worker's
+// ConnectWorker registration of those same real bundled schemas still
+// succeeds, and one more third-party byte on top is refused. See also
 // MaxMCPRegistryToolBytes's own comment and
 // docs/mcp-security-and-integration.md for the full aggregate's own
 // worst-case wire-size accounting, which this narrower cap does not

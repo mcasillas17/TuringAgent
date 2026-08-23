@@ -58,6 +58,16 @@ class WorkspacePage extends StatelessWidget {
   }
 }
 
+/// The reserved name the backend records a degraded, registry-wide
+/// aggregate-tool-budget notice under (see
+/// internal/service/mcpregistry.mcpRegistryOverBudgetNoticeMessage) —
+/// distinct from every ordinary UnsupportedMcpServer entry, which names an
+/// mcp.json entry that failed to import. This is a systemic status, not a
+/// per-entry import failure, so McpsPage gives it its own title and a
+/// calmer, compact presentation rather than the generic "`<name>` was not
+/// imported" framing.
+const _mcpRegistryOverBudgetName = '_registry';
+
 /// Every tool the backend discovered, grouped by the MCP server offering it.
 class McpsPage extends StatefulWidget {
   const McpsPage({super.key, required this.apiClient});
@@ -300,12 +310,23 @@ class _McpsPageState extends State<McpsPage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   for (final unsupported in registry.unsupported) ...[
-                    WorkspaceNotice(
-                      icon: Icons.block_outlined,
-                      title: '${unsupported.name} was not imported',
-                      body: unsupported.reason,
-                      tone: AppColors.warning,
-                    ),
+                    if (unsupported.name == _mcpRegistryOverBudgetName)
+                      WorkspaceNotice(
+                        key: const Key('mcpRegistryOverBudgetNotice'),
+                        icon: Icons.info_outline,
+                        title: 'MCP registry is over its tool budget',
+                        body: unsupported.reason,
+                        tone: AppColors.success,
+                        compact: true,
+                      )
+                    else
+                      WorkspaceNotice(
+                        key: Key('mcpUnsupportedNotice-${unsupported.name}'),
+                        icon: Icons.block_outlined,
+                        title: '${unsupported.name} was not imported',
+                        body: unsupported.reason,
+                        tone: AppColors.warning,
+                      ),
                     const SizedBox(height: 12),
                   ],
                   for (final server in servers) ...[
@@ -1302,6 +1323,7 @@ class WorkspaceNotice extends StatelessWidget {
     required this.body,
     this.onRetry,
     this.tone,
+    this.compact = false,
   });
 
   final IconData icon;
@@ -1309,13 +1331,18 @@ class WorkspaceNotice extends StatelessWidget {
   final String body;
   final VoidCallback? onRetry;
   final Color? tone;
+  // A tighter, lower-emphasis rendering — smaller padding and spacing —
+  // for a notice that reports ambient/systemic status (e.g. the MCP
+  // registry's own over-budget notice) rather than one specific failure
+  // an operator needs to visually stop on.
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final palette = AppColors.of(context);
     final color = tone ?? palette.textMuted;
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.all(compact ? 12 : 18),
       decoration: BoxDecoration(
         color: palette.raised,
         borderRadius: BorderRadius.circular(12),
@@ -1326,7 +1353,7 @@ class WorkspaceNotice extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(icon, size: 17, color: color),
+              Icon(icon, size: compact ? 15 : 17, color: color),
               const SizedBox(width: 9),
               Expanded(
                 child: Text(
@@ -1340,7 +1367,7 @@ class WorkspaceNotice extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 11),
+          SizedBox(height: compact ? 6 : 11),
           Text(
             body,
             style: TextStyle(

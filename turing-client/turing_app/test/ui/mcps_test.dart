@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:turing_flutter_app/constants/app_colors.dart';
 import 'package:turing_flutter_app/features/workspace/workspace_pages.dart';
 import 'package:turing_flutter_app/models/mcp_server.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
@@ -1898,6 +1899,83 @@ void main() {
         );
       },
     );
+  });
+
+  group('the degraded registry-over-budget notice', () {
+    // The backend records the registry-wide aggregate-tool-budget notice
+    // under the reserved "_registry" name (see
+    // internal/service/mcpregistry.mcpRegistryOverBudgetNoticeMessage) —
+    // this is not an ordinary per-server import refusal, so the UI must
+    // not describe it as one.
+    testWidgets(
+      'special-cases the reserved "_registry" name to a budget-specific title',
+      (tester) async {
+        final api = _McpApi()
+          ..servers = [_bundledServer()]
+          ..unsupported = const [
+            UnsupportedMcpServer(
+              name: '_registry',
+              reason:
+                  'MCP registry aggregate tool budget is exhausted; tool '
+                  'schemas are hidden until an oversized or excess server '
+                  'is deleted',
+            ),
+          ];
+        await _pumpMcps(tester, api);
+
+        expect(
+          find.text('MCP registry is over its tool budget'),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining('MCP registry aggregate tool budget is exhausted'),
+          findsOneWidget,
+        );
+        // Never the generic "<name> was not imported" framing an ordinary
+        // refused entry gets: "_registry" was never an import attempt.
+        expect(find.textContaining('_registry was not imported'), findsNothing);
+
+        final notice = tester.widget<WorkspaceNotice>(
+          find.byKey(const Key('mcpRegistryOverBudgetNotice')),
+        );
+        expect(
+          notice.tone,
+          AppColors.success,
+          reason: 'the degraded notice reads as a compact, calm status, not '
+              'a warning about one bad entry',
+        );
+        expect(notice.compact, isTrue);
+      },
+    );
+
+    testWidgets('an ordinary refused name keeps the unchanged framing', (
+      tester,
+    ) async {
+      final api = _McpApi()
+        ..unsupported = const [
+          UnsupportedMcpServer(
+            name: 'stdio-vendor',
+            reason: 'stdio/command MCP servers are unsupported',
+          ),
+        ];
+      await _pumpMcps(tester, api);
+
+      expect(find.text('stdio-vendor was not imported'), findsOneWidget);
+      expect(
+        find.textContaining('stdio/command MCP servers are unsupported'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('MCP registry is over its tool budget'),
+        findsNothing,
+      );
+
+      final notice = tester.widget<WorkspaceNotice>(
+        find.byKey(const Key('mcpUnsupportedNotice-stdio-vendor')),
+      );
+      expect(notice.tone, AppColors.warning);
+      expect(notice.compact, isFalse);
+    });
   });
 
   group('no overflow at compact widths', () {

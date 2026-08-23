@@ -818,13 +818,15 @@ func (s *Server) CallRegisteredMcpTool(ctx context.Context, req *turingv1.CallRe
 		return nil, status.Error(codes.Internal, "MCP result is invalid")
 	}
 	response := &turingv1.CallRegisteredMcpToolResponse{Result: value}
-	// Checked after the full response is built (so this measures exactly
-	// what would be marshaled and sent, not an estimate from the raw
-	// result alone) but before it is ever returned to the gRPC layer:
-	// CallTool's own direct result — the map[string]any this method
-	// received above — is completely unaffected by this check and is
-	// returned to its own internal callers (e.g. persisted tool-call
-	// history) exactly as before.
+	// This guard applies only to the *gRPC response* CallRegisteredMcpTool
+	// itself returns — checked after the full response is built (so it
+	// measures exactly what would be marshaled and sent, not an estimate
+	// from the raw result alone) but before it is ever returned to the
+	// gRPC layer. CallTool's own return value — the map[string]any
+	// `result` this method received above — is a completely separate,
+	// unaffected code path: CallRegisteredMcpTool is CallTool's only
+	// direct caller today, so there is no other in-process caller for
+	// this check to (correctly or incorrectly) claim is unaffected.
 	if proto.Size(response) > maxMCPToolResultWireBytes {
 		return nil, status.Error(codes.ResourceExhausted, mcpToolResultTooLargeMessage)
 	}
