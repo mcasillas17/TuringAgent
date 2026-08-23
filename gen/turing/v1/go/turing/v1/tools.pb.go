@@ -381,9 +381,14 @@ type ToolPolicyDecision struct {
 	ProvenanceToken string `protobuf:"bytes,7,opt,name=provenance_token,json=provenanceToken,proto3" json:"provenance_token,omitempty"`
 	// Authored by the orchestrator. Approval waiting is still policy-driven;
 	// this bit only controls failure/side-effect classification.
-	ReadOnly      bool `protobuf:"varint,8,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ReadOnly bool `protobuf:"varint,8,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	// The run's committed state version at the moment of this decision. A
+	// matching tool beacon can therefore prove ownership: the response carries
+	// the version forward before tool or model work continues, so a worker never
+	// advances past the state the orchestrator has committed.
+	RunStateVersion int64 `protobuf:"varint,9,opt,name=run_state_version,json=runStateVersion,proto3" json:"run_state_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ToolPolicyDecision) Reset() {
@@ -472,6 +477,13 @@ func (x *ToolPolicyDecision) GetReadOnly() bool {
 	return false
 }
 
+func (x *ToolPolicyDecision) GetRunStateVersion() int64 {
+	if x != nil {
+		return x.RunStateVersion
+	}
+	return 0
+}
+
 var File_turing_v1_tools_proto protoreflect.FileDescriptor
 
 const file_turing_v1_tools_proto_rawDesc = "" +
@@ -497,7 +509,7 @@ const file_turing_v1_tools_proto_rawDesc = "" +
 	" \x01(\v2\x18.turing.v1.ToolCallErrorR\x05error\x12\x15\n" +
 	"\x06run_id\x18\v \x01(\tR\x05runId\x12\x19\n" +
 	"\btrace_id\x18\f \x01(\tR\atraceId\x12+\n" +
-	"\x12model_tool_call_id\x18\r \x01(\tR\x0fmodelToolCallId\"\xbb\x03\n" +
+	"\x12model_tool_call_id\x18\r \x01(\tR\x0fmodelToolCallId\"\xe7\x03\n" +
 	"\x12ToolPolicyDecision\x12B\n" +
 	"\bdecision\x18\x01 \x01(\x0e2&.turing.v1.ToolPolicyDecision.DecisionR\bdecision\x12 \n" +
 	"\ftool_call_id\x18\x02 \x01(\tR\n" +
@@ -508,7 +520,8 @@ const file_turing_v1_tools_proto_rawDesc = "" +
 	"\fterminal_run\x18\x05 \x01(\bR\vterminalRun\x12.\n" +
 	"\x05phase\x18\x06 \x01(\x0e2\x18.turing.v1.ToolCallPhaseR\x05phase\x12)\n" +
 	"\x10provenance_token\x18\a \x01(\tR\x0fprovenanceToken\x12\x1b\n" +
-	"\tread_only\x18\b \x01(\bR\breadOnly\"k\n" +
+	"\tread_only\x18\b \x01(\bR\breadOnly\x12*\n" +
+	"\x11run_state_version\x18\t \x01(\x03R\x0frunStateVersion\"k\n" +
 	"\bDecision\x12\x18\n" +
 	"\x14DECISION_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eDECISION_ALLOW\x10\x01\x12\x11\n" +

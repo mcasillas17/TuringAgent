@@ -49,12 +49,14 @@ message RunQueued {
   string run_id = 1;
   string job_id = 2;
   string trace_id = 3;
+  RunState run_state = 4;
 }
 
 message RunStarted {
   string run_id = 1;
   string job_id = 2;
   int32 attempt = 3;
+  RunState run_state = 4;
 }
 
 message MessageStarted {
@@ -78,6 +80,10 @@ message ApprovalEvent {
   string approval_id = 1;
   string tool_name = 2;
   string args_summary = 3;
+  // Present when this approval event is the one that moved the run's
+  // lifecycle, so the client learns waiting-approval or resumed-running from
+  // the same event that reports the approval.
+  RunState run_state = 4;
 }
 
 message MessageCompleted {
@@ -88,18 +94,32 @@ message MessageCompleted {
 message RunCompleted {
   string run_id = 1;
   string assistant_message_id = 2;
+  RunState run_state = 3;
 }
 
 message RunFailed {
   string run_id = 1;
   string code = 2;
   string message = 3;
-  bool retryable = 4;
+  // Automatic retry is an internal dispatch decision, not a promise that
+  // repeating the request is safe. Always serialized as false for new events
+  // and ignored by new clients; kept at field 4 for wire compatibility.
+  bool retryable = 4 [deprecated = true];
+  RunState run_state = 5;
 }
 
 message RunCancelled {
   string run_id = 1;
   string reason = 2;
+  RunState run_state = 3;
+}
+
+// A lifecycle transition that has no existing lifecycle event of its own, such
+// as entering recovering or returning to running. Terminal transitions keep
+// using their existing completed/failed/cancelled events and never also emit
+// this one, so a transition is never reported twice.
+message RunStateChanged {
+  RunState run_state = 1;
 }
 
 message ChatStreamEvent {
@@ -125,6 +145,7 @@ message ChatStreamEvent {
     RunFailed run_failed = 24;
     RunCancelled run_cancelled = 25;
     TuringEvent persisted_event = 26;
+    RunStateChanged run_state_changed = 27;
   }
 }
 

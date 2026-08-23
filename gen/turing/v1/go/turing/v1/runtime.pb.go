@@ -22,6 +22,168 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Where a run failure actually came from, supplied by the reporting call site
+// so the orchestrator can normalize it into a public RunOutcomeReason without
+// classifying on provider-controlled message text. UNSPECIFIED means the field
+// was absent and UNKNOWN covers an origin a newer reporter introduced; both
+// fail closed to an internal-failure outcome. Internal to the runtime protocol,
+// never surfaced to clients.
+type FailureOrigin int32
+
+const (
+	FailureOrigin_FAILURE_ORIGIN_UNSPECIFIED            FailureOrigin = 0
+	FailureOrigin_FAILURE_ORIGIN_UNKNOWN                FailureOrigin = 1
+	FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY       FailureOrigin = 2
+	FailureOrigin_FAILURE_ORIGIN_EXTERNAL_PROVIDER      FailureOrigin = 3
+	FailureOrigin_FAILURE_ORIGIN_PROVIDER_CONFIGURATION FailureOrigin = 4
+	FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL      FailureOrigin = 5
+	FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT     FailureOrigin = 6
+	FailureOrigin_FAILURE_ORIGIN_PROVIDER_OUTPUT_GUARD  FailureOrigin = 7
+	FailureOrigin_FAILURE_ORIGIN_TOOL_INFRASTRUCTURE    FailureOrigin = 8
+	FailureOrigin_FAILURE_ORIGIN_TOOL_EXECUTION         FailureOrigin = 9
+	FailureOrigin_FAILURE_ORIGIN_TOOL_GUARD             FailureOrigin = 10
+	FailureOrigin_FAILURE_ORIGIN_TOOL_POLICY            FailureOrigin = 11
+	FailureOrigin_FAILURE_ORIGIN_APPROVAL_TRANSPORT     FailureOrigin = 12
+	FailureOrigin_FAILURE_ORIGIN_APPROVAL_EXPIRY        FailureOrigin = 13
+	FailureOrigin_FAILURE_ORIGIN_AUTOMATION_POLICY      FailureOrigin = 14
+	FailureOrigin_FAILURE_ORIGIN_WORKER_RUNTIME         FailureOrigin = 15
+	FailureOrigin_FAILURE_ORIGIN_DISPATCH               FailureOrigin = 16
+	FailureOrigin_FAILURE_ORIGIN_RECOVERY               FailureOrigin = 17
+	FailureOrigin_FAILURE_ORIGIN_ORCHESTRATOR_INTERNAL  FailureOrigin = 18
+	FailureOrigin_FAILURE_ORIGIN_CLIENT_LIFECYCLE       FailureOrigin = 19
+)
+
+// Enum value maps for FailureOrigin.
+var (
+	FailureOrigin_name = map[int32]string{
+		0:  "FAILURE_ORIGIN_UNSPECIFIED",
+		1:  "FAILURE_ORIGIN_UNKNOWN",
+		2:  "FAILURE_ORIGIN_CONTEXT_ASSEMBLY",
+		3:  "FAILURE_ORIGIN_EXTERNAL_PROVIDER",
+		4:  "FAILURE_ORIGIN_PROVIDER_CONFIGURATION",
+		5:  "FAILURE_ORIGIN_PROVIDER_PROTOCOL",
+		6:  "FAILURE_ORIGIN_PROVIDER_TRANSPORT",
+		7:  "FAILURE_ORIGIN_PROVIDER_OUTPUT_GUARD",
+		8:  "FAILURE_ORIGIN_TOOL_INFRASTRUCTURE",
+		9:  "FAILURE_ORIGIN_TOOL_EXECUTION",
+		10: "FAILURE_ORIGIN_TOOL_GUARD",
+		11: "FAILURE_ORIGIN_TOOL_POLICY",
+		12: "FAILURE_ORIGIN_APPROVAL_TRANSPORT",
+		13: "FAILURE_ORIGIN_APPROVAL_EXPIRY",
+		14: "FAILURE_ORIGIN_AUTOMATION_POLICY",
+		15: "FAILURE_ORIGIN_WORKER_RUNTIME",
+		16: "FAILURE_ORIGIN_DISPATCH",
+		17: "FAILURE_ORIGIN_RECOVERY",
+		18: "FAILURE_ORIGIN_ORCHESTRATOR_INTERNAL",
+		19: "FAILURE_ORIGIN_CLIENT_LIFECYCLE",
+	}
+	FailureOrigin_value = map[string]int32{
+		"FAILURE_ORIGIN_UNSPECIFIED":            0,
+		"FAILURE_ORIGIN_UNKNOWN":                1,
+		"FAILURE_ORIGIN_CONTEXT_ASSEMBLY":       2,
+		"FAILURE_ORIGIN_EXTERNAL_PROVIDER":      3,
+		"FAILURE_ORIGIN_PROVIDER_CONFIGURATION": 4,
+		"FAILURE_ORIGIN_PROVIDER_PROTOCOL":      5,
+		"FAILURE_ORIGIN_PROVIDER_TRANSPORT":     6,
+		"FAILURE_ORIGIN_PROVIDER_OUTPUT_GUARD":  7,
+		"FAILURE_ORIGIN_TOOL_INFRASTRUCTURE":    8,
+		"FAILURE_ORIGIN_TOOL_EXECUTION":         9,
+		"FAILURE_ORIGIN_TOOL_GUARD":             10,
+		"FAILURE_ORIGIN_TOOL_POLICY":            11,
+		"FAILURE_ORIGIN_APPROVAL_TRANSPORT":     12,
+		"FAILURE_ORIGIN_APPROVAL_EXPIRY":        13,
+		"FAILURE_ORIGIN_AUTOMATION_POLICY":      14,
+		"FAILURE_ORIGIN_WORKER_RUNTIME":         15,
+		"FAILURE_ORIGIN_DISPATCH":               16,
+		"FAILURE_ORIGIN_RECOVERY":               17,
+		"FAILURE_ORIGIN_ORCHESTRATOR_INTERNAL":  18,
+		"FAILURE_ORIGIN_CLIENT_LIFECYCLE":       19,
+	}
+)
+
+func (x FailureOrigin) Enum() *FailureOrigin {
+	p := new(FailureOrigin)
+	*p = x
+	return p
+}
+
+func (x FailureOrigin) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (FailureOrigin) Descriptor() protoreflect.EnumDescriptor {
+	return file_turing_v1_runtime_proto_enumTypes[0].Descriptor()
+}
+
+func (FailureOrigin) Type() protoreflect.EnumType {
+	return &file_turing_v1_runtime_proto_enumTypes[0]
+}
+
+func (x FailureOrigin) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use FailureOrigin.Descriptor instead.
+func (FailureOrigin) EnumDescriptor() ([]byte, []int) {
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{0}
+}
+
+// Whether the orchestrator may retry this failure inside the same run. Internal
+// dispatch policy only: it is not a user-facing retry promise and never becomes
+// public outcome text. Unspecified and unknown are both treated as never, so an
+// unrecognized class can never widen automatic retrying.
+type AutomaticRetryClass int32
+
+const (
+	AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_UNSPECIFIED        AutomaticRetryClass = 0
+	AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_UNKNOWN            AutomaticRetryClass = 1
+	AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER              AutomaticRetryClass = 2
+	AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT AutomaticRetryClass = 3
+)
+
+// Enum value maps for AutomaticRetryClass.
+var (
+	AutomaticRetryClass_name = map[int32]string{
+		0: "AUTOMATIC_RETRY_CLASS_UNSPECIFIED",
+		1: "AUTOMATIC_RETRY_CLASS_UNKNOWN",
+		2: "AUTOMATIC_RETRY_CLASS_NEVER",
+		3: "AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT",
+	}
+	AutomaticRetryClass_value = map[string]int32{
+		"AUTOMATIC_RETRY_CLASS_UNSPECIFIED":        0,
+		"AUTOMATIC_RETRY_CLASS_UNKNOWN":            1,
+		"AUTOMATIC_RETRY_CLASS_NEVER":              2,
+		"AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT": 3,
+	}
+)
+
+func (x AutomaticRetryClass) Enum() *AutomaticRetryClass {
+	p := new(AutomaticRetryClass)
+	*p = x
+	return p
+}
+
+func (x AutomaticRetryClass) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AutomaticRetryClass) Descriptor() protoreflect.EnumDescriptor {
+	return file_turing_v1_runtime_proto_enumTypes[1].Descriptor()
+}
+
+func (AutomaticRetryClass) Type() protoreflect.EnumType {
+	return &file_turing_v1_runtime_proto_enumTypes[1]
+}
+
+func (x AutomaticRetryClass) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AutomaticRetryClass.Descriptor instead.
+func (AutomaticRetryClass) EnumDescriptor() ([]byte, []int) {
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{1}
+}
+
 type ToolDiscoveryStatus int32
 
 const (
@@ -58,11 +220,11 @@ func (x ToolDiscoveryStatus) String() string {
 }
 
 func (ToolDiscoveryStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_turing_v1_runtime_proto_enumTypes[0].Descriptor()
+	return file_turing_v1_runtime_proto_enumTypes[2].Descriptor()
 }
 
 func (ToolDiscoveryStatus) Type() protoreflect.EnumType {
-	return &file_turing_v1_runtime_proto_enumTypes[0]
+	return &file_turing_v1_runtime_proto_enumTypes[2]
 }
 
 func (x ToolDiscoveryStatus) Number() protoreflect.EnumNumber {
@@ -71,7 +233,7 @@ func (x ToolDiscoveryStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ToolDiscoveryStatus.Descriptor instead.
 func (ToolDiscoveryStatus) EnumDescriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{0}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{2}
 }
 
 type AgentJob struct {
@@ -101,8 +263,16 @@ type AgentJob struct {
 	// Exact tool names frozen by the orchestrator for this run. The runtime may
 	// expose a subset after context budgeting, never tools outside this set.
 	SelectedTools []string `protobuf:"bytes,18,rep,name=selected_tools,json=selectedTools,proto3" json:"selected_tools,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The run's state version at assignment. The worker echoes it on later
+	// reports so the orchestrator can reject anything computed against a state it
+	// has already moved past.
+	ExpectedStateVersion int64 `protobuf:"varint,19,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
+	// Durable identity of this assignment attempt. It is what proves a later
+	// report or resume came from the attempt that still owns the run, rather than
+	// from a fenced predecessor; the worker must echo it unchanged.
+	AssignmentAttemptId string `protobuf:"bytes,20,opt,name=assignment_attempt_id,json=assignmentAttemptId,proto3" json:"assignment_attempt_id,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *AgentJob) Reset() {
@@ -259,6 +429,20 @@ func (x *AgentJob) GetSelectedTools() []string {
 		return x.SelectedTools
 	}
 	return nil
+}
+
+func (x *AgentJob) GetExpectedStateVersion() int64 {
+	if x != nil {
+		return x.ExpectedStateVersion
+	}
+	return 0
+}
+
+func (x *AgentJob) GetAssignmentAttemptId() string {
+	if x != nil {
+		return x.AssignmentAttemptId
+	}
+	return ""
 }
 
 // Where to send a run that the user routed off this machine.
@@ -874,10 +1058,13 @@ type RuntimeRunCompleted struct {
 	// it was rather than repurposed: token counts need presence semantics a
 	// Struct cannot express without the reader guessing whether a missing key
 	// means zero, so they travel in their own typed field below.
-	Usage         *structpb.Struct `protobuf:"bytes,4,opt,name=usage,proto3" json:"usage,omitempty"`
-	TokenUsage    *RunTokenUsage   `protobuf:"bytes,5,opt,name=token_usage,json=tokenUsage,proto3" json:"token_usage,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Usage      *structpb.Struct `protobuf:"bytes,4,opt,name=usage,proto3" json:"usage,omitempty"`
+	TokenUsage *RunTokenUsage   `protobuf:"bytes,5,opt,name=token_usage,json=tokenUsage,proto3" json:"token_usage,omitempty"`
+	// The state version this report was computed against; the terminal
+	// transition commits only from that exact version.
+	ExpectedStateVersion int64 `protobuf:"varint,6,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *RuntimeRunCompleted) Reset() {
@@ -945,14 +1132,31 @@ func (x *RuntimeRunCompleted) GetTokenUsage() *RunTokenUsage {
 	return nil
 }
 
+func (x *RuntimeRunCompleted) GetExpectedStateVersion() int64 {
+	if x != nil {
+		return x.ExpectedStateVersion
+	}
+	return 0
+}
+
 type RuntimeRunFailed struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	Code          string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
-	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
-	Retryable     bool                   `protobuf:"varint,4,opt,name=retryable,proto3" json:"retryable,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	RunId   string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Code    string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`
+	Message string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	// Superseded by automatic_retry_class and ignored by the failure normalizer.
+	// Retained at field 4 for wire compatibility with older workers.
+	Retryable bool `protobuf:"varint,4,opt,name=retryable,proto3" json:"retryable,omitempty"`
+	// Where the failure came from, used to normalize a public outcome reason
+	// instead of leaking worker-authored text to clients.
+	FailureOrigin FailureOrigin `protobuf:"varint,5,opt,name=failure_origin,json=failureOrigin,proto3,enum=turing.v1.FailureOrigin" json:"failure_origin,omitempty"`
+	// Whether the orchestrator may retry inside this run. Internal policy only.
+	AutomaticRetryClass AutomaticRetryClass `protobuf:"varint,6,opt,name=automatic_retry_class,json=automaticRetryClass,proto3,enum=turing.v1.AutomaticRetryClass" json:"automatic_retry_class,omitempty"`
+	// The state version this report was computed against; the terminal
+	// transition commits only from that exact version.
+	ExpectedStateVersion int64 `protobuf:"varint,7,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *RuntimeRunFailed) Reset() {
@@ -1013,11 +1217,35 @@ func (x *RuntimeRunFailed) GetRetryable() bool {
 	return false
 }
 
+func (x *RuntimeRunFailed) GetFailureOrigin() FailureOrigin {
+	if x != nil {
+		return x.FailureOrigin
+	}
+	return FailureOrigin_FAILURE_ORIGIN_UNSPECIFIED
+}
+
+func (x *RuntimeRunFailed) GetAutomaticRetryClass() AutomaticRetryClass {
+	if x != nil {
+		return x.AutomaticRetryClass
+	}
+	return AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_UNSPECIFIED
+}
+
+func (x *RuntimeRunFailed) GetExpectedStateVersion() int64 {
+	if x != nil {
+		return x.ExpectedStateVersion
+	}
+	return 0
+}
+
 type RuntimeCancelledAck struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	RunId string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	// The version the worker had actually observed when it acknowledged, which
+	// lets the orchestrator tell a current acknowledgement from a stale one.
+	ObservedStateVersion int64 `protobuf:"varint,2,opt,name=observed_state_version,json=observedStateVersion,proto3" json:"observed_state_version,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *RuntimeCancelledAck) Reset() {
@@ -1057,6 +1285,88 @@ func (x *RuntimeCancelledAck) GetRunId() string {
 	return ""
 }
 
+func (x *RuntimeCancelledAck) GetObservedStateVersion() int64 {
+	if x != nil {
+		return x.ObservedStateVersion
+	}
+	return 0
+}
+
+// Sent only after the worker accepted an approval decision and restored the
+// matching owned attempt to a ready-but-paused boundary. Run, approval, worker,
+// assignment attempt, and expected version together are the fencing identity:
+// a repeat of the exact same identity on the same live stream replays the same
+// acceptance, and anything else is fenced.
+type RuntimeApprovalResumeReady struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	RunId      string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	ApprovalId string                 `protobuf:"bytes,2,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	// The pre-transition version the worker expects; waiting-approval commits to
+	// running at expected_state_version + 1.
+	ExpectedStateVersion int64  `protobuf:"varint,3,opt,name=expected_state_version,json=expectedStateVersion,proto3" json:"expected_state_version,omitempty"`
+	AssignmentAttemptId  string `protobuf:"bytes,4,opt,name=assignment_attempt_id,json=assignmentAttemptId,proto3" json:"assignment_attempt_id,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *RuntimeApprovalResumeReady) Reset() {
+	*x = RuntimeApprovalResumeReady{}
+	mi := &file_turing_v1_runtime_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuntimeApprovalResumeReady) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuntimeApprovalResumeReady) ProtoMessage() {}
+
+func (x *RuntimeApprovalResumeReady) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_runtime_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuntimeApprovalResumeReady.ProtoReflect.Descriptor instead.
+func (*RuntimeApprovalResumeReady) Descriptor() ([]byte, []int) {
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *RuntimeApprovalResumeReady) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *RuntimeApprovalResumeReady) GetApprovalId() string {
+	if x != nil {
+		return x.ApprovalId
+	}
+	return ""
+}
+
+func (x *RuntimeApprovalResumeReady) GetExpectedStateVersion() int64 {
+	if x != nil {
+		return x.ExpectedStateVersion
+	}
+	return 0
+}
+
+func (x *RuntimeApprovalResumeReady) GetAssignmentAttemptId() string {
+	if x != nil {
+		return x.AssignmentAttemptId
+	}
+	return ""
+}
+
 type RuntimeUpdate struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Update:
@@ -1069,6 +1379,7 @@ type RuntimeUpdate struct {
 	//	*RuntimeUpdate_RunFailed
 	//	*RuntimeUpdate_RunCancelledAck
 	//	*RuntimeUpdate_WorkerCapabilitiesUpdated
+	//	*RuntimeUpdate_ApprovalResumeReady
 	Update        isRuntimeUpdate_Update `protobuf_oneof:"update"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1076,7 +1387,7 @@ type RuntimeUpdate struct {
 
 func (x *RuntimeUpdate) Reset() {
 	*x = RuntimeUpdate{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[12]
+	mi := &file_turing_v1_runtime_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1088,7 +1399,7 @@ func (x *RuntimeUpdate) String() string {
 func (*RuntimeUpdate) ProtoMessage() {}
 
 func (x *RuntimeUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[12]
+	mi := &file_turing_v1_runtime_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1101,7 +1412,7 @@ func (x *RuntimeUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeUpdate.ProtoReflect.Descriptor instead.
 func (*RuntimeUpdate) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{12}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RuntimeUpdate) GetUpdate() isRuntimeUpdate_Update {
@@ -1183,6 +1494,15 @@ func (x *RuntimeUpdate) GetWorkerCapabilitiesUpdated() *RuntimeWorkerCapabilitie
 	return nil
 }
 
+func (x *RuntimeUpdate) GetApprovalResumeReady() *RuntimeApprovalResumeReady {
+	if x != nil {
+		if x, ok := x.Update.(*RuntimeUpdate_ApprovalResumeReady); ok {
+			return x.ApprovalResumeReady
+		}
+	}
+	return nil
+}
+
 type isRuntimeUpdate_Update interface {
 	isRuntimeUpdate_Update()
 }
@@ -1219,6 +1539,10 @@ type RuntimeUpdate_WorkerCapabilitiesUpdated struct {
 	WorkerCapabilitiesUpdated *RuntimeWorkerCapabilitiesUpdated `protobuf:"bytes,8,opt,name=worker_capabilities_updated,json=workerCapabilitiesUpdated,proto3,oneof"`
 }
 
+type RuntimeUpdate_ApprovalResumeReady struct {
+	ApprovalResumeReady *RuntimeApprovalResumeReady `protobuf:"bytes,9,opt,name=approval_resume_ready,json=approvalResumeReady,proto3,oneof"`
+}
+
 func (*RuntimeUpdate_WorkerReady) isRuntimeUpdate_Update() {}
 
 func (*RuntimeUpdate_Heartbeat) isRuntimeUpdate_Update() {}
@@ -1235,6 +1559,8 @@ func (*RuntimeUpdate_RunCancelledAck) isRuntimeUpdate_Update() {}
 
 func (*RuntimeUpdate_WorkerCapabilitiesUpdated) isRuntimeUpdate_Update() {}
 
+func (*RuntimeUpdate_ApprovalResumeReady) isRuntimeUpdate_Update() {}
+
 type RuntimeWorkerAccepted struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	WorkerId       string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
@@ -1245,7 +1571,7 @@ type RuntimeWorkerAccepted struct {
 
 func (x *RuntimeWorkerAccepted) Reset() {
 	*x = RuntimeWorkerAccepted{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[13]
+	mi := &file_turing_v1_runtime_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1257,7 +1583,7 @@ func (x *RuntimeWorkerAccepted) String() string {
 func (*RuntimeWorkerAccepted) ProtoMessage() {}
 
 func (x *RuntimeWorkerAccepted) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[13]
+	mi := &file_turing_v1_runtime_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1270,7 +1596,7 @@ func (x *RuntimeWorkerAccepted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeWorkerAccepted.ProtoReflect.Descriptor instead.
 func (*RuntimeWorkerAccepted) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{13}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RuntimeWorkerAccepted) GetWorkerId() string {
@@ -1288,16 +1614,19 @@ func (x *RuntimeWorkerAccepted) GetRegistrationId() string {
 }
 
 type RuntimeRunCancelled struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	RunId  string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Reason string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	// The version this cancellation committed at, so the worker never rolls its
+	// view back to an older state.
+	StateVersion  int64 `protobuf:"varint,3,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RuntimeRunCancelled) Reset() {
 	*x = RuntimeRunCancelled{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[14]
+	mi := &file_turing_v1_runtime_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1309,7 +1638,7 @@ func (x *RuntimeRunCancelled) String() string {
 func (*RuntimeRunCancelled) ProtoMessage() {}
 
 func (x *RuntimeRunCancelled) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[14]
+	mi := &file_turing_v1_runtime_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1322,7 +1651,7 @@ func (x *RuntimeRunCancelled) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeRunCancelled.ProtoReflect.Descriptor instead.
 func (*RuntimeRunCancelled) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{14}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *RuntimeRunCancelled) GetRunId() string {
@@ -1339,18 +1668,28 @@ func (x *RuntimeRunCancelled) GetReason() string {
 	return ""
 }
 
+func (x *RuntimeRunCancelled) GetStateVersion() int64 {
+	if x != nil {
+		return x.StateVersion
+	}
+	return 0
+}
+
 type RuntimeApprovalUpdated struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ApprovalId    string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
 	ApprovalToken string                 `protobuf:"bytes,2,opt,name=approval_token,json=approvalToken,proto3" json:"approval_token,omitempty"`
 	Status        string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`
+	// The run version at the time of this decision. Delivering a decision does
+	// not by itself resume the run; only a matching Ready/Accepted exchange does.
+	StateVersion  int64 `protobuf:"varint,4,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RuntimeApprovalUpdated) Reset() {
 	*x = RuntimeApprovalUpdated{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[15]
+	mi := &file_turing_v1_runtime_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1362,7 +1701,7 @@ func (x *RuntimeApprovalUpdated) String() string {
 func (*RuntimeApprovalUpdated) ProtoMessage() {}
 
 func (x *RuntimeApprovalUpdated) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[15]
+	mi := &file_turing_v1_runtime_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1375,7 +1714,7 @@ func (x *RuntimeApprovalUpdated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeApprovalUpdated.ProtoReflect.Descriptor instead.
 func (*RuntimeApprovalUpdated) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{15}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *RuntimeApprovalUpdated) GetApprovalId() string {
@@ -1399,6 +1738,86 @@ func (x *RuntimeApprovalUpdated) GetStatus() string {
 	return ""
 }
 
+func (x *RuntimeApprovalUpdated) GetStateVersion() int64 {
+	if x != nil {
+		return x.StateVersion
+	}
+	return 0
+}
+
+// The orchestrator's durable acceptance of a resume: waiting-approval has
+// committed to running at state_version. It names the commit, not proof that
+// the worker received it, and the worker must not execute the approved tool or
+// continue model work until it arrives. If delivery fails after the commit, the
+// run is fenced to recovering rather than reverted.
+type RuntimeApprovalResumeAccepted struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	RunId               string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	ApprovalId          string                 `protobuf:"bytes,2,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	StateVersion        int64                  `protobuf:"varint,3,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
+	AssignmentAttemptId string                 `protobuf:"bytes,4,opt,name=assignment_attempt_id,json=assignmentAttemptId,proto3" json:"assignment_attempt_id,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *RuntimeApprovalResumeAccepted) Reset() {
+	*x = RuntimeApprovalResumeAccepted{}
+	mi := &file_turing_v1_runtime_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuntimeApprovalResumeAccepted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuntimeApprovalResumeAccepted) ProtoMessage() {}
+
+func (x *RuntimeApprovalResumeAccepted) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_runtime_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuntimeApprovalResumeAccepted.ProtoReflect.Descriptor instead.
+func (*RuntimeApprovalResumeAccepted) Descriptor() ([]byte, []int) {
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *RuntimeApprovalResumeAccepted) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *RuntimeApprovalResumeAccepted) GetApprovalId() string {
+	if x != nil {
+		return x.ApprovalId
+	}
+	return ""
+}
+
+func (x *RuntimeApprovalResumeAccepted) GetStateVersion() int64 {
+	if x != nil {
+		return x.StateVersion
+	}
+	return 0
+}
+
+func (x *RuntimeApprovalResumeAccepted) GetAssignmentAttemptId() string {
+	if x != nil {
+		return x.AssignmentAttemptId
+	}
+	return ""
+}
+
 type RuntimeShutdownRequested struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
@@ -1408,7 +1827,7 @@ type RuntimeShutdownRequested struct {
 
 func (x *RuntimeShutdownRequested) Reset() {
 	*x = RuntimeShutdownRequested{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[16]
+	mi := &file_turing_v1_runtime_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1420,7 +1839,7 @@ func (x *RuntimeShutdownRequested) String() string {
 func (*RuntimeShutdownRequested) ProtoMessage() {}
 
 func (x *RuntimeShutdownRequested) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[16]
+	mi := &file_turing_v1_runtime_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1433,7 +1852,7 @@ func (x *RuntimeShutdownRequested) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeShutdownRequested.ProtoReflect.Descriptor instead.
 func (*RuntimeShutdownRequested) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{16}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RuntimeShutdownRequested) GetReason() string {
@@ -1452,7 +1871,7 @@ type RuntimeMcpRegistryChanged struct {
 
 func (x *RuntimeMcpRegistryChanged) Reset() {
 	*x = RuntimeMcpRegistryChanged{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[17]
+	mi := &file_turing_v1_runtime_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1464,7 +1883,7 @@ func (x *RuntimeMcpRegistryChanged) String() string {
 func (*RuntimeMcpRegistryChanged) ProtoMessage() {}
 
 func (x *RuntimeMcpRegistryChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[17]
+	mi := &file_turing_v1_runtime_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1477,7 +1896,7 @@ func (x *RuntimeMcpRegistryChanged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeMcpRegistryChanged.ProtoReflect.Descriptor instead.
 func (*RuntimeMcpRegistryChanged) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{17}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *RuntimeMcpRegistryChanged) GetRegistrationId() string {
@@ -1498,6 +1917,7 @@ type RuntimeCommand struct {
 	//	*RuntimeCommand_ShutdownRequested
 	//	*RuntimeCommand_ToolPolicyDecision
 	//	*RuntimeCommand_McpRegistryChanged
+	//	*RuntimeCommand_ApprovalResumeAccepted
 	Command       isRuntimeCommand_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1505,7 +1925,7 @@ type RuntimeCommand struct {
 
 func (x *RuntimeCommand) Reset() {
 	*x = RuntimeCommand{}
-	mi := &file_turing_v1_runtime_proto_msgTypes[18]
+	mi := &file_turing_v1_runtime_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1517,7 +1937,7 @@ func (x *RuntimeCommand) String() string {
 func (*RuntimeCommand) ProtoMessage() {}
 
 func (x *RuntimeCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_runtime_proto_msgTypes[18]
+	mi := &file_turing_v1_runtime_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1530,7 +1950,7 @@ func (x *RuntimeCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeCommand.ProtoReflect.Descriptor instead.
 func (*RuntimeCommand) Descriptor() ([]byte, []int) {
-	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{18}
+	return file_turing_v1_runtime_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *RuntimeCommand) GetCommand() isRuntimeCommand_Command {
@@ -1603,6 +2023,15 @@ func (x *RuntimeCommand) GetMcpRegistryChanged() *RuntimeMcpRegistryChanged {
 	return nil
 }
 
+func (x *RuntimeCommand) GetApprovalResumeAccepted() *RuntimeApprovalResumeAccepted {
+	if x != nil {
+		if x, ok := x.Command.(*RuntimeCommand_ApprovalResumeAccepted); ok {
+			return x.ApprovalResumeAccepted
+		}
+	}
+	return nil
+}
+
 type isRuntimeCommand_Command interface {
 	isRuntimeCommand_Command()
 }
@@ -1635,6 +2064,10 @@ type RuntimeCommand_McpRegistryChanged struct {
 	McpRegistryChanged *RuntimeMcpRegistryChanged `protobuf:"bytes,7,opt,name=mcp_registry_changed,json=mcpRegistryChanged,proto3,oneof"`
 }
 
+type RuntimeCommand_ApprovalResumeAccepted struct {
+	ApprovalResumeAccepted *RuntimeApprovalResumeAccepted `protobuf:"bytes,8,opt,name=approval_resume_accepted,json=approvalResumeAccepted,proto3,oneof"`
+}
+
 func (*RuntimeCommand_WorkerAccepted) isRuntimeCommand_Command() {}
 
 func (*RuntimeCommand_RunAssigned) isRuntimeCommand_Command() {}
@@ -1649,11 +2082,13 @@ func (*RuntimeCommand_ToolPolicyDecision) isRuntimeCommand_Command() {}
 
 func (*RuntimeCommand_McpRegistryChanged) isRuntimeCommand_Command() {}
 
+func (*RuntimeCommand_ApprovalResumeAccepted) isRuntimeCommand_Command() {}
+
 var File_turing_v1_runtime_proto protoreflect.FileDescriptor
 
 const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\n" +
-	"\x17turing/v1/runtime.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\x1a\x16turing/v1/events.proto\x1a\x15turing/v1/tools.proto\"\x9d\x06\n" +
+	"\x17turing/v1/runtime.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\x1a\x16turing/v1/events.proto\x1a\x15turing/v1/tools.proto\"\x87\a\n" +
 	"\bAgentJob\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x15\n" +
 	"\x06run_id\x18\x02 \x01(\tR\x05runId\x12\x1d\n" +
@@ -1674,7 +2109,9 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\x17required_context_tokens\x18\x0f \x01(\x05R\x15requiredContextTokens\x12J\n" +
 	"\"minimum_worker_max_concurrent_runs\x18\x10 \x01(\x05R\x1eminimumWorkerMaxConcurrentRuns\x12E\n" +
 	"\x0fegress_decision\x18\x11 \x01(\v2\x1c.turing.v1.RunEgressDecisionR\x0eegressDecision\x12%\n" +
-	"\x0eselected_tools\x18\x12 \x03(\tR\rselectedTools\"\x95\x01\n" +
+	"\x0eselected_tools\x18\x12 \x03(\tR\rselectedTools\x124\n" +
+	"\x16expected_state_version\x18\x13 \x01(\x03R\x14expectedStateVersion\x122\n" +
+	"\x15assignment_attempt_id\x18\x14 \x01(\tR\x13assignmentAttemptId\"\x95\x01\n" +
 	"\x13ExternalAgentTarget\x12!\n" +
 	"\fdisplay_name\x18\x01 \x01(\tR\vdisplayName\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12%\n" +
@@ -1725,21 +2162,32 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\finput_tokens\x18\x01 \x01(\x03H\x00R\vinputTokens\x88\x01\x01\x12(\n" +
 	"\routput_tokens\x18\x02 \x01(\x03H\x01R\foutputTokens\x88\x01\x01B\x0f\n" +
 	"\r_input_tokensB\x10\n" +
-	"\x0e_output_tokens\"\xe2\x01\n" +
+	"\x0e_output_tokens\"\x98\x02\n" +
 	"\x13RuntimeRunCompleted\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x120\n" +
 	"\x14assistant_message_id\x18\x02 \x01(\tR\x12assistantMessageId\x12\x18\n" +
 	"\acontent\x18\x03 \x01(\tR\acontent\x12-\n" +
 	"\x05usage\x18\x04 \x01(\v2\x17.google.protobuf.StructR\x05usage\x129\n" +
 	"\vtoken_usage\x18\x05 \x01(\v2\x18.turing.v1.RunTokenUsageR\n" +
-	"tokenUsage\"u\n" +
+	"tokenUsage\x124\n" +
+	"\x16expected_state_version\x18\x06 \x01(\x03R\x14expectedStateVersion\"\xc0\x02\n" +
 	"\x10RuntimeRunFailed\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x18\n" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x12\x1c\n" +
-	"\tretryable\x18\x04 \x01(\bR\tretryable\",\n" +
+	"\tretryable\x18\x04 \x01(\bR\tretryable\x12?\n" +
+	"\x0efailure_origin\x18\x05 \x01(\x0e2\x18.turing.v1.FailureOriginR\rfailureOrigin\x12R\n" +
+	"\x15automatic_retry_class\x18\x06 \x01(\x0e2\x1e.turing.v1.AutomaticRetryClassR\x13automaticRetryClass\x124\n" +
+	"\x16expected_state_version\x18\a \x01(\x03R\x14expectedStateVersion\"b\n" +
 	"\x13RuntimeCancelledAck\x12\x15\n" +
-	"\x06run_id\x18\x01 \x01(\tR\x05runId\"\xca\x04\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\x124\n" +
+	"\x16observed_state_version\x18\x02 \x01(\x03R\x14observedStateVersion\"\xbe\x01\n" +
+	"\x1aRuntimeApprovalResumeReady\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1f\n" +
+	"\vapproval_id\x18\x02 \x01(\tR\n" +
+	"approvalId\x124\n" +
+	"\x16expected_state_version\x18\x03 \x01(\x03R\x14expectedStateVersion\x122\n" +
+	"\x15assignment_attempt_id\x18\x04 \x01(\tR\x13assignmentAttemptId\"\xa7\x05\n" +
 	"\rRuntimeUpdate\x12B\n" +
 	"\fworker_ready\x18\x01 \x01(\v2\x1d.turing.v1.RuntimeWorkerReadyH\x00R\vworkerReady\x12;\n" +
 	"\theartbeat\x18\x02 \x01(\v2\x1b.turing.v1.RuntimeHeartbeatH\x00R\theartbeat\x12.\n" +
@@ -1750,23 +2198,32 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\n" +
 	"run_failed\x18\x06 \x01(\v2\x1b.turing.v1.RuntimeRunFailedH\x00R\trunFailed\x12L\n" +
 	"\x11run_cancelled_ack\x18\a \x01(\v2\x1e.turing.v1.RuntimeCancelledAckH\x00R\x0frunCancelledAck\x12m\n" +
-	"\x1bworker_capabilities_updated\x18\b \x01(\v2+.turing.v1.RuntimeWorkerCapabilitiesUpdatedH\x00R\x19workerCapabilitiesUpdatedB\b\n" +
+	"\x1bworker_capabilities_updated\x18\b \x01(\v2+.turing.v1.RuntimeWorkerCapabilitiesUpdatedH\x00R\x19workerCapabilitiesUpdated\x12[\n" +
+	"\x15approval_resume_ready\x18\t \x01(\v2%.turing.v1.RuntimeApprovalResumeReadyH\x00R\x13approvalResumeReadyB\b\n" +
 	"\x06update\"]\n" +
 	"\x15RuntimeWorkerAccepted\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12'\n" +
-	"\x0fregistration_id\x18\x02 \x01(\tR\x0eregistrationId\"D\n" +
+	"\x0fregistration_id\x18\x02 \x01(\tR\x0eregistrationId\"i\n" +
 	"\x13RuntimeRunCancelled\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"x\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12#\n" +
+	"\rstate_version\x18\x03 \x01(\x03R\fstateVersion\"\x9d\x01\n" +
 	"\x16RuntimeApprovalUpdated\x12\x1f\n" +
 	"\vapproval_id\x18\x01 \x01(\tR\n" +
 	"approvalId\x12%\n" +
 	"\x0eapproval_token\x18\x02 \x01(\tR\rapprovalToken\x12\x16\n" +
-	"\x06status\x18\x03 \x01(\tR\x06status\"2\n" +
+	"\x06status\x18\x03 \x01(\tR\x06status\x12#\n" +
+	"\rstate_version\x18\x04 \x01(\x03R\fstateVersion\"\xb0\x01\n" +
+	"\x1dRuntimeApprovalResumeAccepted\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1f\n" +
+	"\vapproval_id\x18\x02 \x01(\tR\n" +
+	"approvalId\x12#\n" +
+	"\rstate_version\x18\x03 \x01(\x03R\fstateVersion\x122\n" +
+	"\x15assignment_attempt_id\x18\x04 \x01(\tR\x13assignmentAttemptId\"2\n" +
 	"\x18RuntimeShutdownRequested\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\"D\n" +
 	"\x19RuntimeMcpRegistryChanged\x12'\n" +
-	"\x0fregistration_id\x18\x01 \x01(\tR\x0eregistrationId\"\xbc\x04\n" +
+	"\x0fregistration_id\x18\x01 \x01(\tR\x0eregistrationId\"\xa2\x05\n" +
 	"\x0eRuntimeCommand\x12K\n" +
 	"\x0fworker_accepted\x18\x01 \x01(\v2 .turing.v1.RuntimeWorkerAcceptedH\x00R\x0eworkerAccepted\x128\n" +
 	"\frun_assigned\x18\x02 \x01(\v2\x13.turing.v1.AgentJobH\x00R\vrunAssigned\x12E\n" +
@@ -1774,8 +2231,36 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\x10approval_updated\x18\x04 \x01(\v2!.turing.v1.RuntimeApprovalUpdatedH\x00R\x0fapprovalUpdated\x12T\n" +
 	"\x12shutdown_requested\x18\x05 \x01(\v2#.turing.v1.RuntimeShutdownRequestedH\x00R\x11shutdownRequested\x12Q\n" +
 	"\x14tool_policy_decision\x18\x06 \x01(\v2\x1d.turing.v1.ToolPolicyDecisionH\x00R\x12toolPolicyDecision\x12X\n" +
-	"\x14mcp_registry_changed\x18\a \x01(\v2$.turing.v1.RuntimeMcpRegistryChangedH\x00R\x12mcpRegistryChangedB\t\n" +
-	"\acommand*\x82\x01\n" +
+	"\x14mcp_registry_changed\x18\a \x01(\v2$.turing.v1.RuntimeMcpRegistryChangedH\x00R\x12mcpRegistryChanged\x12d\n" +
+	"\x18approval_resume_accepted\x18\b \x01(\v2(.turing.v1.RuntimeApprovalResumeAcceptedH\x00R\x16approvalResumeAcceptedB\t\n" +
+	"\acommand*\xdf\x05\n" +
+	"\rFailureOrigin\x12\x1e\n" +
+	"\x1aFAILURE_ORIGIN_UNSPECIFIED\x10\x00\x12\x1a\n" +
+	"\x16FAILURE_ORIGIN_UNKNOWN\x10\x01\x12#\n" +
+	"\x1fFAILURE_ORIGIN_CONTEXT_ASSEMBLY\x10\x02\x12$\n" +
+	" FAILURE_ORIGIN_EXTERNAL_PROVIDER\x10\x03\x12)\n" +
+	"%FAILURE_ORIGIN_PROVIDER_CONFIGURATION\x10\x04\x12$\n" +
+	" FAILURE_ORIGIN_PROVIDER_PROTOCOL\x10\x05\x12%\n" +
+	"!FAILURE_ORIGIN_PROVIDER_TRANSPORT\x10\x06\x12(\n" +
+	"$FAILURE_ORIGIN_PROVIDER_OUTPUT_GUARD\x10\a\x12&\n" +
+	"\"FAILURE_ORIGIN_TOOL_INFRASTRUCTURE\x10\b\x12!\n" +
+	"\x1dFAILURE_ORIGIN_TOOL_EXECUTION\x10\t\x12\x1d\n" +
+	"\x19FAILURE_ORIGIN_TOOL_GUARD\x10\n" +
+	"\x12\x1e\n" +
+	"\x1aFAILURE_ORIGIN_TOOL_POLICY\x10\v\x12%\n" +
+	"!FAILURE_ORIGIN_APPROVAL_TRANSPORT\x10\f\x12\"\n" +
+	"\x1eFAILURE_ORIGIN_APPROVAL_EXPIRY\x10\r\x12$\n" +
+	" FAILURE_ORIGIN_AUTOMATION_POLICY\x10\x0e\x12!\n" +
+	"\x1dFAILURE_ORIGIN_WORKER_RUNTIME\x10\x0f\x12\x1b\n" +
+	"\x17FAILURE_ORIGIN_DISPATCH\x10\x10\x12\x1b\n" +
+	"\x17FAILURE_ORIGIN_RECOVERY\x10\x11\x12(\n" +
+	"$FAILURE_ORIGIN_ORCHESTRATOR_INTERNAL\x10\x12\x12#\n" +
+	"\x1fFAILURE_ORIGIN_CLIENT_LIFECYCLE\x10\x13*\xae\x01\n" +
+	"\x13AutomaticRetryClass\x12%\n" +
+	"!AUTOMATIC_RETRY_CLASS_UNSPECIFIED\x10\x00\x12!\n" +
+	"\x1dAUTOMATIC_RETRY_CLASS_UNKNOWN\x10\x01\x12\x1f\n" +
+	"\x1bAUTOMATIC_RETRY_CLASS_NEVER\x10\x02\x12,\n" +
+	"(AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT\x10\x03*\x82\x01\n" +
 	"\x13ToolDiscoveryStatus\x12%\n" +
 	"!TOOL_DISCOVERY_STATUS_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eTOOL_DISCOVERY_STATUS_COMPLETE\x10\x01\x12 \n" +
@@ -1795,79 +2280,87 @@ func file_turing_v1_runtime_proto_rawDescGZIP() []byte {
 	return file_turing_v1_runtime_proto_rawDescData
 }
 
-var file_turing_v1_runtime_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_turing_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_turing_v1_runtime_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_turing_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_turing_v1_runtime_proto_goTypes = []any{
-	(ToolDiscoveryStatus)(0),                 // 0: turing.v1.ToolDiscoveryStatus
-	(*AgentJob)(nil),                         // 1: turing.v1.AgentJob
-	(*ExternalAgentTarget)(nil),              // 2: turing.v1.ExternalAgentTarget
-	(*SkillSnapshot)(nil),                    // 3: turing.v1.SkillSnapshot
-	(*DiscoveredTool)(nil),                   // 4: turing.v1.DiscoveredTool
-	(*WorkerCapabilities)(nil),               // 5: turing.v1.WorkerCapabilities
-	(*RuntimeWorkerReady)(nil),               // 6: turing.v1.RuntimeWorkerReady
-	(*RuntimeWorkerCapabilitiesUpdated)(nil), // 7: turing.v1.RuntimeWorkerCapabilitiesUpdated
-	(*RuntimeHeartbeat)(nil),                 // 8: turing.v1.RuntimeHeartbeat
-	(*RunTokenUsage)(nil),                    // 9: turing.v1.RunTokenUsage
-	(*RuntimeRunCompleted)(nil),              // 10: turing.v1.RuntimeRunCompleted
-	(*RuntimeRunFailed)(nil),                 // 11: turing.v1.RuntimeRunFailed
-	(*RuntimeCancelledAck)(nil),              // 12: turing.v1.RuntimeCancelledAck
-	(*RuntimeUpdate)(nil),                    // 13: turing.v1.RuntimeUpdate
-	(*RuntimeWorkerAccepted)(nil),            // 14: turing.v1.RuntimeWorkerAccepted
-	(*RuntimeRunCancelled)(nil),              // 15: turing.v1.RuntimeRunCancelled
-	(*RuntimeApprovalUpdated)(nil),           // 16: turing.v1.RuntimeApprovalUpdated
-	(*RuntimeShutdownRequested)(nil),         // 17: turing.v1.RuntimeShutdownRequested
-	(*RuntimeMcpRegistryChanged)(nil),        // 18: turing.v1.RuntimeMcpRegistryChanged
-	(*RuntimeCommand)(nil),                   // 19: turing.v1.RuntimeCommand
-	nil,                                      // 20: turing.v1.SkillSnapshot.ReferencesEntry
-	(AgentId)(0),                             // 21: turing.v1.AgentId
-	(ModelProvider)(0),                       // 22: turing.v1.ModelProvider
-	(*RunEgressDecision)(nil),                // 23: turing.v1.RunEgressDecision
-	(*structpb.Struct)(nil),                  // 24: google.protobuf.Struct
-	(*ModelCapability)(nil),                  // 25: turing.v1.ModelCapability
-	(*TuringEvent)(nil),                      // 26: turing.v1.TuringEvent
-	(*ToolCallBeacon)(nil),                   // 27: turing.v1.ToolCallBeacon
-	(*ToolPolicyDecision)(nil),               // 28: turing.v1.ToolPolicyDecision
+	(FailureOrigin)(0),                       // 0: turing.v1.FailureOrigin
+	(AutomaticRetryClass)(0),                 // 1: turing.v1.AutomaticRetryClass
+	(ToolDiscoveryStatus)(0),                 // 2: turing.v1.ToolDiscoveryStatus
+	(*AgentJob)(nil),                         // 3: turing.v1.AgentJob
+	(*ExternalAgentTarget)(nil),              // 4: turing.v1.ExternalAgentTarget
+	(*SkillSnapshot)(nil),                    // 5: turing.v1.SkillSnapshot
+	(*DiscoveredTool)(nil),                   // 6: turing.v1.DiscoveredTool
+	(*WorkerCapabilities)(nil),               // 7: turing.v1.WorkerCapabilities
+	(*RuntimeWorkerReady)(nil),               // 8: turing.v1.RuntimeWorkerReady
+	(*RuntimeWorkerCapabilitiesUpdated)(nil), // 9: turing.v1.RuntimeWorkerCapabilitiesUpdated
+	(*RuntimeHeartbeat)(nil),                 // 10: turing.v1.RuntimeHeartbeat
+	(*RunTokenUsage)(nil),                    // 11: turing.v1.RunTokenUsage
+	(*RuntimeRunCompleted)(nil),              // 12: turing.v1.RuntimeRunCompleted
+	(*RuntimeRunFailed)(nil),                 // 13: turing.v1.RuntimeRunFailed
+	(*RuntimeCancelledAck)(nil),              // 14: turing.v1.RuntimeCancelledAck
+	(*RuntimeApprovalResumeReady)(nil),       // 15: turing.v1.RuntimeApprovalResumeReady
+	(*RuntimeUpdate)(nil),                    // 16: turing.v1.RuntimeUpdate
+	(*RuntimeWorkerAccepted)(nil),            // 17: turing.v1.RuntimeWorkerAccepted
+	(*RuntimeRunCancelled)(nil),              // 18: turing.v1.RuntimeRunCancelled
+	(*RuntimeApprovalUpdated)(nil),           // 19: turing.v1.RuntimeApprovalUpdated
+	(*RuntimeApprovalResumeAccepted)(nil),    // 20: turing.v1.RuntimeApprovalResumeAccepted
+	(*RuntimeShutdownRequested)(nil),         // 21: turing.v1.RuntimeShutdownRequested
+	(*RuntimeMcpRegistryChanged)(nil),        // 22: turing.v1.RuntimeMcpRegistryChanged
+	(*RuntimeCommand)(nil),                   // 23: turing.v1.RuntimeCommand
+	nil,                                      // 24: turing.v1.SkillSnapshot.ReferencesEntry
+	(AgentId)(0),                             // 25: turing.v1.AgentId
+	(ModelProvider)(0),                       // 26: turing.v1.ModelProvider
+	(*RunEgressDecision)(nil),                // 27: turing.v1.RunEgressDecision
+	(*structpb.Struct)(nil),                  // 28: google.protobuf.Struct
+	(*ModelCapability)(nil),                  // 29: turing.v1.ModelCapability
+	(*TuringEvent)(nil),                      // 30: turing.v1.TuringEvent
+	(*ToolCallBeacon)(nil),                   // 31: turing.v1.ToolCallBeacon
+	(*ToolPolicyDecision)(nil),               // 32: turing.v1.ToolPolicyDecision
 }
 var file_turing_v1_runtime_proto_depIdxs = []int32{
-	21, // 0: turing.v1.AgentJob.agent_id:type_name -> turing.v1.AgentId
-	22, // 1: turing.v1.AgentJob.model_provider:type_name -> turing.v1.ModelProvider
-	3,  // 2: turing.v1.AgentJob.skills:type_name -> turing.v1.SkillSnapshot
-	2,  // 3: turing.v1.AgentJob.external_agent:type_name -> turing.v1.ExternalAgentTarget
-	23, // 4: turing.v1.AgentJob.egress_decision:type_name -> turing.v1.RunEgressDecision
-	20, // 5: turing.v1.SkillSnapshot.references:type_name -> turing.v1.SkillSnapshot.ReferencesEntry
-	24, // 6: turing.v1.DiscoveredTool.schema:type_name -> google.protobuf.Struct
-	25, // 7: turing.v1.WorkerCapabilities.models:type_name -> turing.v1.ModelCapability
-	21, // 8: turing.v1.WorkerCapabilities.agent_ids:type_name -> turing.v1.AgentId
-	4,  // 9: turing.v1.WorkerCapabilities.tools:type_name -> turing.v1.DiscoveredTool
-	21, // 10: turing.v1.RuntimeWorkerReady.agent_id:type_name -> turing.v1.AgentId
-	4,  // 11: turing.v1.RuntimeWorkerReady.tools:type_name -> turing.v1.DiscoveredTool
-	0,  // 12: turing.v1.RuntimeWorkerReady.tool_discovery_status:type_name -> turing.v1.ToolDiscoveryStatus
-	5,  // 13: turing.v1.RuntimeWorkerReady.capabilities:type_name -> turing.v1.WorkerCapabilities
-	5,  // 14: turing.v1.RuntimeWorkerCapabilitiesUpdated.capabilities:type_name -> turing.v1.WorkerCapabilities
-	24, // 15: turing.v1.RuntimeRunCompleted.usage:type_name -> google.protobuf.Struct
-	9,  // 16: turing.v1.RuntimeRunCompleted.token_usage:type_name -> turing.v1.RunTokenUsage
-	6,  // 17: turing.v1.RuntimeUpdate.worker_ready:type_name -> turing.v1.RuntimeWorkerReady
-	8,  // 18: turing.v1.RuntimeUpdate.heartbeat:type_name -> turing.v1.RuntimeHeartbeat
-	26, // 19: turing.v1.RuntimeUpdate.event:type_name -> turing.v1.TuringEvent
-	27, // 20: turing.v1.RuntimeUpdate.tool_beacon:type_name -> turing.v1.ToolCallBeacon
-	10, // 21: turing.v1.RuntimeUpdate.run_completed:type_name -> turing.v1.RuntimeRunCompleted
-	11, // 22: turing.v1.RuntimeUpdate.run_failed:type_name -> turing.v1.RuntimeRunFailed
-	12, // 23: turing.v1.RuntimeUpdate.run_cancelled_ack:type_name -> turing.v1.RuntimeCancelledAck
-	7,  // 24: turing.v1.RuntimeUpdate.worker_capabilities_updated:type_name -> turing.v1.RuntimeWorkerCapabilitiesUpdated
-	14, // 25: turing.v1.RuntimeCommand.worker_accepted:type_name -> turing.v1.RuntimeWorkerAccepted
-	1,  // 26: turing.v1.RuntimeCommand.run_assigned:type_name -> turing.v1.AgentJob
-	15, // 27: turing.v1.RuntimeCommand.run_cancelled:type_name -> turing.v1.RuntimeRunCancelled
-	16, // 28: turing.v1.RuntimeCommand.approval_updated:type_name -> turing.v1.RuntimeApprovalUpdated
-	17, // 29: turing.v1.RuntimeCommand.shutdown_requested:type_name -> turing.v1.RuntimeShutdownRequested
-	28, // 30: turing.v1.RuntimeCommand.tool_policy_decision:type_name -> turing.v1.ToolPolicyDecision
-	18, // 31: turing.v1.RuntimeCommand.mcp_registry_changed:type_name -> turing.v1.RuntimeMcpRegistryChanged
-	13, // 32: turing.v1.RuntimeService.ConnectWorker:input_type -> turing.v1.RuntimeUpdate
-	19, // 33: turing.v1.RuntimeService.ConnectWorker:output_type -> turing.v1.RuntimeCommand
-	33, // [33:34] is the sub-list for method output_type
-	32, // [32:33] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	25, // 0: turing.v1.AgentJob.agent_id:type_name -> turing.v1.AgentId
+	26, // 1: turing.v1.AgentJob.model_provider:type_name -> turing.v1.ModelProvider
+	5,  // 2: turing.v1.AgentJob.skills:type_name -> turing.v1.SkillSnapshot
+	4,  // 3: turing.v1.AgentJob.external_agent:type_name -> turing.v1.ExternalAgentTarget
+	27, // 4: turing.v1.AgentJob.egress_decision:type_name -> turing.v1.RunEgressDecision
+	24, // 5: turing.v1.SkillSnapshot.references:type_name -> turing.v1.SkillSnapshot.ReferencesEntry
+	28, // 6: turing.v1.DiscoveredTool.schema:type_name -> google.protobuf.Struct
+	29, // 7: turing.v1.WorkerCapabilities.models:type_name -> turing.v1.ModelCapability
+	25, // 8: turing.v1.WorkerCapabilities.agent_ids:type_name -> turing.v1.AgentId
+	6,  // 9: turing.v1.WorkerCapabilities.tools:type_name -> turing.v1.DiscoveredTool
+	25, // 10: turing.v1.RuntimeWorkerReady.agent_id:type_name -> turing.v1.AgentId
+	6,  // 11: turing.v1.RuntimeWorkerReady.tools:type_name -> turing.v1.DiscoveredTool
+	2,  // 12: turing.v1.RuntimeWorkerReady.tool_discovery_status:type_name -> turing.v1.ToolDiscoveryStatus
+	7,  // 13: turing.v1.RuntimeWorkerReady.capabilities:type_name -> turing.v1.WorkerCapabilities
+	7,  // 14: turing.v1.RuntimeWorkerCapabilitiesUpdated.capabilities:type_name -> turing.v1.WorkerCapabilities
+	28, // 15: turing.v1.RuntimeRunCompleted.usage:type_name -> google.protobuf.Struct
+	11, // 16: turing.v1.RuntimeRunCompleted.token_usage:type_name -> turing.v1.RunTokenUsage
+	0,  // 17: turing.v1.RuntimeRunFailed.failure_origin:type_name -> turing.v1.FailureOrigin
+	1,  // 18: turing.v1.RuntimeRunFailed.automatic_retry_class:type_name -> turing.v1.AutomaticRetryClass
+	8,  // 19: turing.v1.RuntimeUpdate.worker_ready:type_name -> turing.v1.RuntimeWorkerReady
+	10, // 20: turing.v1.RuntimeUpdate.heartbeat:type_name -> turing.v1.RuntimeHeartbeat
+	30, // 21: turing.v1.RuntimeUpdate.event:type_name -> turing.v1.TuringEvent
+	31, // 22: turing.v1.RuntimeUpdate.tool_beacon:type_name -> turing.v1.ToolCallBeacon
+	12, // 23: turing.v1.RuntimeUpdate.run_completed:type_name -> turing.v1.RuntimeRunCompleted
+	13, // 24: turing.v1.RuntimeUpdate.run_failed:type_name -> turing.v1.RuntimeRunFailed
+	14, // 25: turing.v1.RuntimeUpdate.run_cancelled_ack:type_name -> turing.v1.RuntimeCancelledAck
+	9,  // 26: turing.v1.RuntimeUpdate.worker_capabilities_updated:type_name -> turing.v1.RuntimeWorkerCapabilitiesUpdated
+	15, // 27: turing.v1.RuntimeUpdate.approval_resume_ready:type_name -> turing.v1.RuntimeApprovalResumeReady
+	17, // 28: turing.v1.RuntimeCommand.worker_accepted:type_name -> turing.v1.RuntimeWorkerAccepted
+	3,  // 29: turing.v1.RuntimeCommand.run_assigned:type_name -> turing.v1.AgentJob
+	18, // 30: turing.v1.RuntimeCommand.run_cancelled:type_name -> turing.v1.RuntimeRunCancelled
+	19, // 31: turing.v1.RuntimeCommand.approval_updated:type_name -> turing.v1.RuntimeApprovalUpdated
+	21, // 32: turing.v1.RuntimeCommand.shutdown_requested:type_name -> turing.v1.RuntimeShutdownRequested
+	32, // 33: turing.v1.RuntimeCommand.tool_policy_decision:type_name -> turing.v1.ToolPolicyDecision
+	22, // 34: turing.v1.RuntimeCommand.mcp_registry_changed:type_name -> turing.v1.RuntimeMcpRegistryChanged
+	20, // 35: turing.v1.RuntimeCommand.approval_resume_accepted:type_name -> turing.v1.RuntimeApprovalResumeAccepted
+	16, // 36: turing.v1.RuntimeService.ConnectWorker:input_type -> turing.v1.RuntimeUpdate
+	23, // 37: turing.v1.RuntimeService.ConnectWorker:output_type -> turing.v1.RuntimeCommand
+	37, // [37:38] is the sub-list for method output_type
+	36, // [36:37] is the sub-list for method input_type
+	36, // [36:36] is the sub-list for extension type_name
+	36, // [36:36] is the sub-list for extension extendee
+	0,  // [0:36] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_runtime_proto_init() }
@@ -1879,7 +2372,7 @@ func file_turing_v1_runtime_proto_init() {
 	file_turing_v1_events_proto_init()
 	file_turing_v1_tools_proto_init()
 	file_turing_v1_runtime_proto_msgTypes[8].OneofWrappers = []any{}
-	file_turing_v1_runtime_proto_msgTypes[12].OneofWrappers = []any{
+	file_turing_v1_runtime_proto_msgTypes[13].OneofWrappers = []any{
 		(*RuntimeUpdate_WorkerReady)(nil),
 		(*RuntimeUpdate_Heartbeat)(nil),
 		(*RuntimeUpdate_Event)(nil),
@@ -1888,8 +2381,9 @@ func file_turing_v1_runtime_proto_init() {
 		(*RuntimeUpdate_RunFailed)(nil),
 		(*RuntimeUpdate_RunCancelledAck)(nil),
 		(*RuntimeUpdate_WorkerCapabilitiesUpdated)(nil),
+		(*RuntimeUpdate_ApprovalResumeReady)(nil),
 	}
-	file_turing_v1_runtime_proto_msgTypes[18].OneofWrappers = []any{
+	file_turing_v1_runtime_proto_msgTypes[20].OneofWrappers = []any{
 		(*RuntimeCommand_WorkerAccepted)(nil),
 		(*RuntimeCommand_RunAssigned)(nil),
 		(*RuntimeCommand_RunCancelled)(nil),
@@ -1897,14 +2391,15 @@ func file_turing_v1_runtime_proto_init() {
 		(*RuntimeCommand_ShutdownRequested)(nil),
 		(*RuntimeCommand_ToolPolicyDecision)(nil),
 		(*RuntimeCommand_McpRegistryChanged)(nil),
+		(*RuntimeCommand_ApprovalResumeAccepted)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_runtime_proto_rawDesc), len(file_turing_v1_runtime_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   20,
+			NumEnums:      3,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

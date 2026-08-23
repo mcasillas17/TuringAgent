@@ -10,10 +10,12 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 )
 
@@ -480,7 +482,7 @@ func TestOpenAIEmitsProviderErrorEnvelopeWithoutCodeOrCompletion(t *testing.T) {
 			got := streamOpenAIEvents(t, "data: "+tt.data+"\n\ndata: [DONE]\n\n")
 
 			assertOpenAIEventTypes(t, got, "error")
-			if got[0].Code != "model_unavailable" ||
+			if got[0].Code != "model_error" ||
 				got[0].Message != "OpenAI-compatible provider error: quota exceeded" {
 				t.Fatalf("error event = %+v", got[0])
 			}
@@ -528,7 +530,7 @@ func TestOpenAIClassifiesStreamedProviderErrorEnvelopes(t *testing.T) {
 		{
 			name:        "context error from message with null fields",
 			errorJSON:   `{"message":"maximum context length exceeded","type":null,"code":null}`,
-			wantCode:    "model_request_failed",
+			wantCode:    "model_error",
 			wantMessage: "OpenAI-compatible provider error: maximum context length exceeded",
 		},
 		{
@@ -558,7 +560,7 @@ func TestOpenAIClassifiesStreamedProviderErrorEnvelopes(t *testing.T) {
 		{
 			name:        "overloaded from message with absent fields",
 			errorJSON:   `{"message":"The service is overloaded"}`,
-			wantCode:    "model_unavailable",
+			wantCode:    "model_error",
 			wantMessage: "OpenAI-compatible provider error: The service is overloaded",
 		},
 		{
@@ -1748,6 +1750,7 @@ func captureOpenAIToolFunctions(t *testing.T, definitions []ToolDefinition, mess
 }
 
 func captureOpenAIRequest(t *testing.T, definitions []ToolDefinition, messages []ChatMessage) ([]map[string]any, map[string]any) {
+	t.Helper()
 	return captureOpenAIRequestForModel(t, "gpt-4o-mini", definitions, messages)
 }
 
@@ -1860,4 +1863,124 @@ func (r *failingReadCloser) Read([]byte) (int, error) {
 
 func (r *failingReadCloser) Close() error {
 	return nil
+}
+
+// HTTP status and the provider's own typed error code are protocol facts, so
+// they may decide an origin. The provider's message never does.
+func TestOpenAICompatibleTypedFailureOriginComesFromProtocolFactsNotText(t *testing.T) {
+	statusTests := []struct {
+		name       string
+		status     int
+		body       string
+		wantCode   string
+		wantOrigin turingv1.FailureOrigin
+	}{
+		{
+			name:       "unauthorized_is_provider_protocol",
+			status:     http.StatusUnauthorized,
+			body:       `{"error":{"message":"tool_call_limit_exceeded"}}`,
+			wantCode:   "model_auth_failed",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+		},
+		{
+			name:       "server_error_is_provider_protocol",
+			status:     http.StatusBadGateway,
+			body:       `{"error":{"message":"context_budget_exceeded"}}`,
+			wantCode:   "model_unavailable",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+		},
+		{
+			name:       "quota_is_provider_protocol",
+			status:     http.StatusTooManyRequests,
+			body:       `{"error":{"type":"insufficient_quota","message":"whatever"}}`,
+			wantCode:   "model_quota_exceeded",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+		},
+		{
+			name:       "bad_request_is_provider_protocol",
+			status:     http.StatusBadRequest,
+			body:       `{"error":{"message":"runtime_error"}}`,
+			wantCode:   "model_request_failed",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+		},
+	}
+	for _, test := range statusTests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(test.status)
+				fmt.Fprint(w, test.body)
+			}))
+			t.Cleanup(server.Close)
+			provider := NewOpenAICompatible(server.URL, "", server.Client())
+			events, err := provider.StreamChat(context.Background(), ChatRequest{Model: "gpt-4o-mini"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := collectEvents(events)
+			last := got[len(got)-1]
+			if last.Type != "error" || last.Code != test.wantCode {
+				t.Fatalf("last event = %+v, want error %q", last, test.wantCode)
+			}
+			if last.Origin != test.wantOrigin {
+				t.Fatalf("origin = %v, want %v", last.Origin, test.wantOrigin)
+			}
+		})
+	}
+
+	streamTests := []struct {
+		name       string
+		body       string
+		wantCode   string
+		wantOrigin turingv1.FailureOrigin
+	}{
+		{
+			name:       "malformed_chunk_is_provider_protocol",
+			body:       "data: {\n\n",
+			wantCode:   "model_bad_chunk",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_PROTOCOL,
+		},
+		{
+			name:       "stream_without_done_is_provider_transport",
+			body:       "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n",
+			wantCode:   "model_stream_error",
+			wantOrigin: turingv1.FailureOrigin_FAILURE_ORIGIN_PROVIDER_TRANSPORT,
+		},
+	}
+	for _, test := range streamTests {
+		t.Run(test.name, func(t *testing.T) {
+			got := streamOpenAIEvents(t, test.body)
+			last := got[len(got)-1]
+			if last.Type != "error" || last.Code != test.wantCode {
+				t.Fatalf("last event = %+v, want error %q", last, test.wantCode)
+			}
+			if last.Origin != test.wantOrigin {
+				t.Fatalf("origin = %v, want %v", last.Origin, test.wantOrigin)
+			}
+		})
+	}
+}
+
+func TestOpenAICompatibleSSEErrorMessageCannotChooseTypedFailure(t *testing.T) {
+	for _, message := range []string{
+		"The service is overloaded",
+		"quota exceeded",
+		"request timed out",
+		"invalid API key",
+		"maximum context length exceeded",
+	} {
+		t.Run(message, func(t *testing.T) {
+			got := streamOpenAIEvents(t,
+				"data: {\"error\":{\"message\":"+strconv.Quote(message)+"}}\n\n"+
+					"data: [DONE]\n\n",
+			)
+			assertOpenAIEventTypes(t, got, "error")
+			if got[0].Code != "model_error" {
+				t.Fatalf("provider message %q selected code %q, want model_error", message, got[0].Code)
+			}
+			if got[0].Origin != turingv1.FailureOrigin_FAILURE_ORIGIN_EXTERNAL_PROVIDER {
+				t.Fatalf("provider message %q selected origin %v, want EXTERNAL_PROVIDER",
+					message, got[0].Origin)
+			}
+		})
+	}
 }

@@ -10,16 +10,17 @@ Run these in order and report the outcome of each. Stop and surface failures —
 ```bash
 # 1. Root module
 go test -tags sqlite_fts5 ./... -count=1
+go test -tags sqlite_fts5 -race ./... -count=1
 go build -tags sqlite_fts5 ./...
 
 # 2. mcp-files (separate module)
-( cd turing-backend/mcp-files && go test ./... -count=1 && go build ./cmd/server )
+( cd turing-backend/mcp-files && go test ./... -count=1 && go test -race ./... -count=1 && go build ./cmd/server )
 
 # 3. mcp-system (separate module — the root ./... never reaches it)
-( cd turing-backend/mcp-system && go test ./... -count=1 && go build ./... )
+( cd turing-backend/mcp-system && go test ./... -count=1 && go test -race ./... -count=1 && go build ./... )
 
 # 4. Flutter client
-( cd turing-client/turing_app && flutter test )
+( cd turing-client/turing_app && flutter analyze && flutter test )
 
 # 5. Proto contract — regenerates and fails on any git diff
 tools/proto/check.sh

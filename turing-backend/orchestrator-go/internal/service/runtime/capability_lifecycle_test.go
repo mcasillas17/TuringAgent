@@ -769,7 +769,7 @@ func TestCapabilityFenceRestartsDispatchForWorkerAddedDuringClaim(t *testing.T) 
 		t.Fatal(err)
 	}
 	replacement := &worker{
-		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		commands:       make(chan workerCommand, 1),
 		done:           make(chan struct{}),
 		registrationID: "registration-claim-replacement",
 		capabilities:   compatible,
@@ -799,7 +799,7 @@ func TestCapabilityFenceRestartsDispatchForWorkerAddedDuringClaim(t *testing.T) 
 	}
 	select {
 	case command := <-replacement.commands:
-		if command.GetRunAssigned().GetRunId() != enqueued.RunID {
+		if command.command.GetRunAssigned().GetRunId() != enqueued.RunID {
 			t.Fatalf("replacement assignment = %+v, want run %q", command, enqueued.RunID)
 		}
 	case <-time.After(time.Second):
@@ -865,11 +865,7 @@ func TestCancellationFenceAfterClaimReleasesTerminalExecution(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if _, err := h.repo.CancelRunWithEvent(
-		context.Background(), enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`,
-	); err != nil {
-		t.Fatal(err)
-	}
+	cancelRunFixture(t, h, enqueued.RunID)
 	unsupported, _, err := decodeWorkerCapabilities(modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
 	))
@@ -900,7 +896,7 @@ func TestCancellationFenceWhileQueueingCommandDoesNotJoinAssignmentFence(t *test
 		t.Fatal(err)
 	}
 	worker := &worker{
-		commands:       make(chan *turingv1.RuntimeCommand, 1),
+		commands:       make(chan workerCommand, 1),
 		done:           make(chan struct{}),
 		registrationID: "registration-cancelled-command",
 		capabilities:   capabilities,
@@ -908,7 +904,7 @@ func TestCancellationFenceWhileQueueingCommandDoesNotJoinAssignmentFence(t *test
 		lastHeartbeat:  time.Now().UTC(),
 		assignments:    map[string]assignment{},
 	}
-	worker.commands <- &turingv1.RuntimeCommand{}
+	worker.commands <- workerCommand{command: &turingv1.RuntimeCommand{}}
 	session, err := h.repo.CreateSession(context.Background(), "Cancelled queued command")
 	if err != nil {
 		t.Fatal(err)
@@ -945,11 +941,7 @@ func TestCancellationFenceWhileQueueingCommandDoesNotJoinAssignmentFence(t *test
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if _, err := h.repo.CancelRunWithEvent(
-		context.Background(), enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`,
-	); err != nil {
-		t.Fatal(err)
-	}
+	cancelRunFixture(t, h, enqueued.RunID)
 	cancel()
 	result := <-dispatchDone
 	if !errors.Is(result.err, context.Canceled) {

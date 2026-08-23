@@ -118,23 +118,38 @@ func TestIntegrationWriteApprovalUsesFullRenderOrRefusesBeforeCreatingApproval(t
 			if err != nil || len([]byte(wantRender)) != repository.MaxIntegrationApprovalRenderBytes {
 				t.Fatalf("render bytes=%d err=%v", len([]byte(wantRender)), err)
 			}
+			secondDecision, err := h.service.handleToolBeacon(context.Background(), &turingv1.ToolCallBeacon{
+				RunId: enqueued.RunID, TraceId: enqueued.TraceID, ToolCallId: "call_comment_second",
+				AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, ToolName: "github.create_comment",
+				Phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE, Args: args,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if secondDecision.GetDecision() != turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED {
+				t.Fatalf("second decision=%+v, want approval", secondDecision)
+			}
 			events, _, err := h.repo.ReplayEvents(context.Background(), enqueued.SessionID, 0, 20)
 			if err != nil {
 				t.Fatal(err)
 			}
-			var gotRender string
+			requests := 0
 			for _, event := range events {
 				if event.Type != "approval.requested" {
 					continue
 				}
+				requests++
 				var payload map[string]any
 				if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 					t.Fatal(err)
 				}
-				gotRender, _ = payload["fullArguments"].(string)
+				gotRender, _ := payload["fullArguments"].(string)
+				if gotRender != wantRender || !strings.Contains(gotRender, test.body) {
+					t.Fatalf("event render differs from checked full render")
+				}
 			}
-			if gotRender != wantRender || !strings.Contains(gotRender, test.body) {
-				t.Fatalf("event render differs from checked full render")
+			if requests != 2 {
+				t.Fatalf("approval request events=%d, want 2", requests)
 			}
 		})
 	}

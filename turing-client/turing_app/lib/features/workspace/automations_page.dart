@@ -118,7 +118,7 @@ String describeOccurrenceFailure(String code) {
     case 'remote_egress_configuration_invalid':
       return 'The remote destination configuration is invalid.';
     default:
-      return code.replaceAll('_', ' ');
+      return 'This scheduled attempt was blocked.';
   }
 }
 
@@ -428,7 +428,7 @@ class _AutomationCard extends StatelessWidget {
               color: palette.textMuted,
             ),
           ),
-          if (automation.lastRunFailed && automation.lastRunError.isNotEmpty)
+          if (automation.lastRunFailed)
             Padding(
               padding: const EdgeInsets.only(top: 12),
               child: Container(
@@ -448,7 +448,7 @@ class _AutomationCard extends StatelessWidget {
                     const SizedBox(width: 9),
                     Expanded(
                       child: Text(
-                        'The last run failed. ${automation.lastRunError}',
+                        'The last run failed.',
                         style: TextStyle(
                           fontSize: 12.5,
                           height: 1.5,

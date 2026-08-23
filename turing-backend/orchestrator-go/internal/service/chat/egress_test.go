@@ -13,6 +13,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	serviceevents "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -1172,10 +1173,7 @@ func replayRunNoticeNote(t *testing.T, h *harness, sessionID, runID string) stri
 	}
 	for _, event := range events {
 		if event.RunID.Valid && event.RunID.String == runID && event.Type == "agent.run.step" {
-			payload, err := decodePayload(event.PayloadJSON)
-			if err != nil {
-				t.Fatal(err)
-			}
+			payload := serviceevents.Decode(event.Type, runID, event.PayloadJSON).Payload
 			if note, ok := payload["note"].(string); ok && strings.Contains(note, "disclosed data categories") {
 				return note
 			}

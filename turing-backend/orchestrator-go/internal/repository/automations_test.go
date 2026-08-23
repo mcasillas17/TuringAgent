@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 var automationDefaults = AutomationRunDefaults{
@@ -652,7 +654,7 @@ func TestDeletingAnAutomationLeavesAnInFlightRunItsGrant(t *testing.T) {
 	}
 }
 
-func TestListAutomationsReportsTheLastRunOutcome(t *testing.T) {
+func TestListAutomationsReportsCanonicalLastRunFailure(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 
 	automation := mustCreateDueAutomation(t, repo, ctx, "Digest", everyFiveMinutes())
@@ -660,8 +662,15 @@ func TestListAutomationsReportsTheLastRunOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.db.ExecContext(ctx,
-		`UPDATE agent_runs SET status = 'failed', error_message = 'no one was watching' WHERE id = ?`, fire.RunID); err != nil {
+	if _, err := repo.FailRunCanonical(ctx, FailRunInput{
+		RunID:                fire.RunID,
+		ExpectedStateVersion: currentVersion(t, repo, fire.RunID),
+		Failure: runoutcome.NormalizeFailure(
+			runoutcome.OriginAutomationPolicy,
+			"automation_tool_not_allowlisted",
+			runoutcome.RetryClassNever,
+		),
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -672,11 +681,40 @@ func TestListAutomationsReportsTheLastRunOutcome(t *testing.T) {
 	if len(listed) != 1 {
 		t.Fatalf("listed %d automations, want 1", len(listed))
 	}
-	if listed[0].LastRunStatus != "failed" || listed[0].LastRunError != "no one was watching" {
-		t.Fatalf("last run = %q / %q, want failed / no one was watching", listed[0].LastRunStatus, listed[0].LastRunError)
+	if listed[0].LastRunStatus != "failed" || listed[0].LastRunError != "" {
+		t.Fatalf("last run = %q / %q, want failed with no raw diagnostic", listed[0].LastRunStatus, listed[0].LastRunError)
 	}
 	if listed[0].LastRunAt == "" {
 		t.Fatal("a fired automation reports no last run time")
+	}
+}
+
+func TestListAutomationsDoesNotProjectStoredRunDiagnostic(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+
+	automation := mustCreateDueAutomation(t, repo, ctx, "Digest", everyFiveMinutes())
+	fire, _, err := repo.ClaimDueAutomation(ctx, mustParse(t, automation.NextDueAt), automationDefaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.db.ExecContext(ctx, `
+		UPDATE agent_runs
+		SET status = 'failed', error_message = 'token=secret path=/private/data'
+		WHERE id = ?
+	`, fire.RunID); err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := repo.ListAutomations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("listed %d automations, want 1", len(listed))
+	}
+	if listed[0].LastRunStatus != "failed" || listed[0].LastRunError != "" {
+		t.Fatalf("last run = %q / %q, want failed with the stored diagnostic withheld",
+			listed[0].LastRunStatus, listed[0].LastRunError)
 	}
 }
 

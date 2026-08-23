@@ -3,29 +3,31 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestToolLifecyclePersistedAndStreamedEventContract(t *testing.T) {
 	tests := []struct {
-		name      string
-		eventType string
-		toolName  string
-		errorText string
-		withError bool
-		terminal  turingv1.ToolCallStatus
+		name         string
+		eventType    string
+		toolName     string
+		wantCategory runoutcome.Reason
+		withError    bool
+		terminal     turingv1.ToolCallStatus
 	}{
 		{name: "started", eventType: "tool.call.started", toolName: "system.time"},
 		{name: "completed", eventType: "tool.call.completed", toolName: "system.time", terminal: turingv1.ToolCallStatus_TOOL_CALL_STATUS_COMPLETED},
-		{name: "failed", eventType: "tool.call.failed", toolName: "system.time", errorText: "tool exploded", withError: true, terminal: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED},
-		{name: "failed without error", eventType: "tool.call.failed", toolName: "system.time", errorText: "Tool call failed", terminal: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED},
-		{name: "denied", eventType: "tool.call.denied", toolName: "system.shell", errorText: "unknown_tool"},
+		{name: "failed", eventType: "tool.call.failed", toolName: "system.time", wantCategory: runoutcome.ReasonToolFailure, withError: true, terminal: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED},
+		{name: "failed without error", eventType: "tool.call.failed", toolName: "system.time", wantCategory: runoutcome.ReasonToolFailure, terminal: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED},
+		{name: "denied", eventType: "tool.call.denied", toolName: "system.shell", wantCategory: runoutcome.ReasonPolicyDenied},
 	}
 
 	for _, test := range tests {
@@ -54,15 +56,15 @@ func TestToolLifecyclePersistedAndStreamedEventContract(t *testing.T) {
 				after.ResultSummary = "private result"
 				after.DurationMs = 42
 				if test.withError {
-					after.Error = &turingv1.ToolCallError{Code: "mcp_call_failed", Message: test.errorText}
+					after.Error = &turingv1.ToolCallError{Code: "mcp_call_failed", Message: "tool exploded"}
 				}
 				applyToolBeaconForContract(t, h, after)
 			}
 
 			persisted := persistedToolEventForContract(t, h, enqueued, test.eventType)
 			streamed := streamedToolEventForContract(t, stream, test.eventType)
-			assertToolEventPayloadContract(t, persisted.PayloadJSON, toolCallID, test.toolName, test.errorText)
-			assertToolEventPayloadContract(t, streamed.PayloadJSON, toolCallID, test.toolName, test.errorText)
+			assertToolEventPayloadContract(t, persisted.PayloadJSON, toolCallID, test.toolName, test.wantCategory)
+			assertToolEventPayloadContract(t, streamed.PayloadJSON, toolCallID, test.toolName, test.wantCategory)
 		})
 	}
 }
@@ -107,7 +109,10 @@ func streamedToolEventForContract(t *testing.T, stream <-chan events.Event, even
 	}
 }
 
-func assertToolEventPayloadContract(t *testing.T, payloadJSON, toolCallID, toolName, errorText string) {
+// A tool lifecycle payload carries the identity a client was already promised.
+// A terminal failure or denial adds one allowlisted category and nothing else:
+// no error text, no result, and no key a tool or a provider chose the value of.
+func assertToolEventPayloadContract(t *testing.T, payloadJSON, toolCallID, toolName string, category runoutcome.Reason) {
 	t.Helper()
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
@@ -126,22 +131,70 @@ func assertToolEventPayloadContract(t *testing.T, payloadJSON, toolCallID, toolN
 	}
 	for _, forbidden := range []string{
 		"tool_call_id", "tool_name", "server_name", "args", "status", "resultSummary",
-		"durationMs", "errorCode", "reason", "modelToolCallId",
+		"durationMs", "errorCode", "reason", "modelToolCallId", "error", "message",
 	} {
 		if _, exists := payload[forbidden]; exists {
 			t.Fatalf("payload uses forbidden key %q: %#v", forbidden, payload)
 		}
 	}
-	if errorText == "" {
-		if _, exists := payload["error"]; exists {
-			t.Fatalf("successful lifecycle payload has error: %#v", payload["error"])
+	if category == "" {
+		if _, exists := payload["category"]; exists {
+			t.Fatalf("successful lifecycle payload has category: %#v", payload["category"])
 		}
 		return
 	}
-	if got, ok := payload["error"].(string); !ok || got != errorText {
-		t.Fatalf("error = %#v, want %q string", payload["error"], errorText)
+	if got, ok := payload["category"].(string); !ok || got != string(category) {
+		t.Fatalf("category = %#v, want %q string", payload["category"], category)
 	}
 	if len(payload) != 4 {
-		t.Fatalf("terminal error payload keys = %#v, want only toolCallId/toolName/serverName/error", payload)
+		t.Fatalf("terminal payload keys = %#v, want only toolCallId/toolName/serverName/category", payload)
+	}
+}
+
+// TestToolEventContractSurvivesThePublicReadBoundary carries the contract above
+// one step further than the write. A worker's beacon is normalized before it is
+// stored, but a database can be restored from a backup taken before that
+// normalization existed — so the boundary a client actually reads through has to
+// reach the same payload from a row that was never normalized at all.
+func TestToolEventContractSurvivesThePublicReadBoundary(t *testing.T) {
+	tests := []struct {
+		name         string
+		eventType    string
+		legacy       string
+		wantCategory runoutcome.Reason
+	}{
+		{
+			name:      "failed",
+			eventType: "tool.call.failed",
+			legacy: `{"toolCallId":"call_1","toolName":"system.time","serverName":"system",` +
+				`"error":"the tool wrote /Users/someone/secrets/private.key",` +
+				`"message":"tool exploded","resultSummary":"private result","durationMs":42,` +
+				`"args":{"secret":"not public"}}`,
+			wantCategory: runoutcome.ReasonToolFailure,
+		},
+		{
+			name:      "denied",
+			eventType: "tool.call.denied",
+			legacy: `{"toolCallId":"call_2","toolName":"system.shell","serverName":"system",` +
+				`"reason":"policy said no because the user objected","args":{"secret":"not public"}}`,
+			wantCategory: runoutcome.ReasonPolicyDenied,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			safe := events.Decode(test.eventType, "run_1", test.legacy)
+			want := map[string]any{
+				"toolCallId": map[string]string{"failed": "call_1", "denied": "call_2"}[test.name],
+				"toolName":   map[string]string{"failed": "system.time", "denied": "system.shell"}[test.name],
+				"serverName": "system",
+				"category":   string(test.wantCategory),
+			}
+			if !reflect.DeepEqual(safe.Payload, want) {
+				t.Fatalf("public payload = %#v, want %#v", safe.Payload, want)
+			}
+			if safe.RunState != nil {
+				t.Fatalf("a tool event produced a run state %+v", safe.RunState)
+			}
+		})
 	}
 }

@@ -59,7 +59,8 @@ type Automation struct {
 	SessionID string
 	// The outcome of LastRunID, joined from agent_runs so "what happened while
 	// I was asleep" is answerable without opening the conversation.
-	LastRunStatus             string
+	LastRunStatus string
+	// Kept for protobuf compatibility. Raw run diagnostics are never projected.
 	LastRunError              string
 	LastOccurrenceFailureCode string
 	LastOccurrenceFailedAt    string
@@ -799,7 +800,7 @@ const automationDueSelect = `
 const automationSelect = `
 	SELECT a.id, a.name, a.prompt, a.schedule_kind, a.interval_seconds, a.daily_minute_utc, a.enabled,
 		a.next_due_at, a.last_run_at, a.last_run_id, a.session_id,
-		COALESCE(r.status, ''), COALESCE(r.error_message, ''),
+		COALESCE(r.status, ''), '',
 		COALESCE(json_extract(blocked.payload_json, '$.code'), ''),
 		COALESCE(blocked.created_at, ''),
 		a.created_at, a.updated_at

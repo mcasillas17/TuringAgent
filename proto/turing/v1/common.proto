@@ -57,6 +57,10 @@ enum ToolPolicy {
   TOOL_POLICY_DISABLED = 3;
 }
 
+// Legacy run status. Superseded for durable public outcome snapshots by
+// RunLifecycle, which adds recovering plus explicit unspecified/unknown
+// handling. Retained and unrenumbered: existing clients and stored payloads
+// still read these numbers.
 enum RunStatus {
   RUN_STATUS_UNSPECIFIED = 0;
   RUN_STATUS_QUEUED = 1;
@@ -65,6 +69,85 @@ enum RunStatus {
   RUN_STATUS_COMPLETED = 4;
   RUN_STATUS_FAILED = 5;
   RUN_STATUS_CANCELLED = 6;
+}
+
+// The authoritative public phase of a run. UNSPECIFIED means the field was
+// absent on the wire and UNKNOWN stands for a phase a newer server introduced
+// that this reader cannot name, so neither is ever treated as a real phase;
+// TUR-009 itself never persists or emits UNKNOWN. Terminal phases (completed,
+// failed, cancelled) are immutable. Recovering is durable and observable: while
+// worker ownership is uncertain, both reopen and live streaming show recovering
+// rather than running.
+enum RunLifecycle {
+  RUN_LIFECYCLE_UNSPECIFIED = 0;
+  RUN_LIFECYCLE_UNKNOWN = 1;
+  RUN_LIFECYCLE_QUEUED = 2;
+  RUN_LIFECYCLE_RUNNING = 3;
+  RUN_LIFECYCLE_WAITING_APPROVAL = 4;
+  RUN_LIFECYCLE_RECOVERING = 5;
+  RUN_LIFECYCLE_COMPLETED = 6;
+  RUN_LIFECYCLE_FAILED = 7;
+  RUN_LIFECYCLE_CANCELLED = 8;
+}
+
+// Why a run reached its terminal lifecycle, as a closed vocabulary a client can
+// localize instead of rendering server prose. NONE is the reason every
+// nonterminal phase carries, and also a completed run that produced displayable
+// content; COMPLETED_NO_CONTENT is a success that produced none. Which reasons
+// are legal for which lifecycle is fixed by the normative matrix in the design:
+// cancelled allows only USER_CANCELLED or ABANDONED, failed allows the failure
+// reasons, and LEGACY_UNKNOWN marks a pre-migration row whose real reason was
+// never recorded.
+enum RunOutcomeReason {
+  RUN_OUTCOME_REASON_UNSPECIFIED = 0;
+  RUN_OUTCOME_REASON_UNKNOWN = 1;
+  RUN_OUTCOME_REASON_NONE = 2;
+  RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT = 3;
+  RUN_OUTCOME_REASON_USER_CANCELLED = 4;
+  RUN_OUTCOME_REASON_ABANDONED = 5;
+  RUN_OUTCOME_REASON_EXPIRED = 6;
+  RUN_OUTCOME_REASON_CONTEXT_LIMIT = 7;
+  RUN_OUTCOME_REASON_PROVIDER_FAILURE = 8;
+  RUN_OUTCOME_REASON_TOOL_FAILURE = 9;
+  RUN_OUTCOME_REASON_POLICY_DENIED = 10;
+  RUN_OUTCOME_REASON_RETRIES_EXHAUSTED = 11;
+  RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED = 12;
+  RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN = 13;
+  RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED = 14;
+  RUN_OUTCOME_REASON_INTERNAL_FAILURE = 15;
+  RUN_OUTCOME_REASON_LEGACY_UNKNOWN = 16;
+}
+
+// The durable, self-contained answer to "what happened to this run", carried on
+// history and on every lifecycle event so a reopened session and a live stream
+// agree without replaying the timeline.
+//
+// There is deliberately no retryable field: whether the system retries is an
+// internal dispatch decision, not a promise that repeating the request is safe.
+message RunState {
+  string run_id = 1;
+  string user_message_id = 2;
+  string assistant_message_id = 3;
+  RunLifecycle lifecycle = 4;
+  RunOutcomeReason outcome_reason = 5;
+  // Per-run monotonic version, starting at 1, incremented exactly once per real
+  // public transition. Semantic no-ops do not increment it. It is the only
+  // ordering authority for reconciliation: a client keeps the higher version
+  // and drops anything older, so out-of-order or duplicate delivery cannot
+  // resurrect a stale phase. Zero means absent, never "version zero".
+  int64 state_version = 6;
+  // Required on every published snapshot: the durable, public record of when
+  // this version was recorded. A publisher that cannot vouch for this value —
+  // because it is absent or fails to parse — omits the whole snapshot rather
+  // than send a RunState without it, so a client that receives this message
+  // can always rely on this field being set.
+  google.protobuf.Timestamp state_updated_at = 7;
+  // Set only for terminal lifecycles.
+  google.protobuf.Timestamp finished_at = 8;
+  // Whether the canonical assistant message has content worth rendering, so a
+  // client can distinguish a silent success from a lost one without inspecting
+  // message bodies.
+  bool has_displayable_content = 9;
 }
 
 message RequestMetadata {
@@ -191,4 +274,8 @@ message Message {
   string content_type = 6;
   int64 sequence = 7;
   google.protobuf.Timestamp created_at = 8;
+  // The authoritative state of the run that produced this message, so reopened
+  // history needs no separate query to know the outcome. Absent when the
+  // message has no run correlation, or when legacy correlation is inconsistent.
+  RunState run_state = 9;
 }

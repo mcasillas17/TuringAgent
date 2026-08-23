@@ -1,3 +1,5 @@
+import 'run_state.dart';
+
 class TuringEvent {
   const TuringEvent({
     required this.eventId,
@@ -8,6 +10,7 @@ class TuringEvent {
     required this.type,
     required this.createdAt,
     required this.payload,
+    this.runState,
   });
 
   final String eventId;
@@ -18,6 +21,7 @@ class TuringEvent {
   final String type;
   final DateTime createdAt;
   final Map<String, dynamic> payload;
+  final RunState? runState;
 
   factory TuringEvent.fromJson(Map<String, dynamic> json) {
     return TuringEvent(
@@ -29,6 +33,7 @@ class TuringEvent {
       type: json['type'] as String,
       createdAt: DateTime.parse(json['createdAt'] as String),
       payload: Map<String, dynamic>.from(json['payload'] as Map),
+      runState: null,
     );
   }
 }

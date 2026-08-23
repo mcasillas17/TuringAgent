@@ -1262,9 +1262,24 @@ func TestSendMessageCancelsRunWhenDispatchFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = chatStream.Recv()
-	if status.Code(err) != codes.Internal {
-		t.Fatalf("Recv after dispatch failure = %v, want Internal", err)
+	receivedCancelled := false
+	for {
+		event, recvErr := chatStream.Recv()
+		if recvErr != nil {
+			if !receivedCancelled && status.Code(recvErr) != codes.Internal {
+				t.Fatalf("Recv after dispatch failure = %v, want Internal or run_cancelled event", recvErr)
+			}
+			if receivedCancelled && !errors.Is(recvErr, io.EOF) {
+				t.Fatalf("Recv after run_cancelled = %v, want EOF", recvErr)
+			}
+			break
+		}
+		if event.GetRunStarted() != nil {
+			t.Fatalf("run_started event = %+v, want dispatch failure", event.GetRunStarted())
+		}
+		if event.GetRunCancelled() != nil {
+			receivedCancelled = true
+		}
 	}
 	run, err := h.repo.GetRun(context.Background(), queued.GetRunQueued().RunId)
 	if err != nil {
@@ -1437,11 +1452,13 @@ func TestSendMessageCancellationCancelsRun(t *testing.T) {
 	}
 	for _, event := range replayed {
 		if event.Type == "agent.run.cancelled" && event.RunID.Valid && event.RunID.String == runID {
-			var payload map[string]string
+			// map[string]any: the cancellation payload now carries the
+			// nested canonical run state beside its scalar fields.
+			var payload map[string]any
 			if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload["runId"] != runID || payload["reason"] != "client_cancelled" {
+			if payload["runId"] != runID || payload["reason"] != "abandoned" {
 				t.Fatalf("cancel payload = %+v", payload)
 			}
 			return
@@ -1880,13 +1897,21 @@ func TestMapChatEventConvertsKnownEvents(t *testing.T) {
 			},
 		},
 		{
+			// The legacy code, message and retryable fields are answered with
+			// fixed generic values whatever the row holds: a new client reads
+			// RunState, and an older one must not be handed a provider's own
+			// sentence just because a stored payload still has one.
 			name:  "run failed",
 			event: events.Event{SessionID: "sess_1", RunID: "run_1", TraceID: "trace_1", Sequence: 6, Type: "agent.run.failed", PayloadJSON: `{"code":"model_error","message":"boom","retryable":true}`},
 			assertFn: func(t *testing.T, got *turingv1.ChatStreamEvent) {
 				t.Helper()
 				failed := got.GetRunFailed()
-				if failed.GetCode() != "model_error" || failed.GetMessage() != "boom" || !failed.GetRetryable() {
-					t.Fatalf("run_failed = %+v", failed)
+				retryableField := failed.ProtoReflect().Descriptor().Fields().ByNumber(4)
+				if retryableField == nil || retryableField.Name() != "retryable" {
+					t.Fatalf("run_failed retryable field descriptor = %v, want field 4 named retryable", retryableField)
+				}
+				if failed.GetCode() != legacyFailureCode || failed.GetMessage() != "" || failed.ProtoReflect().Get(retryableField).Bool() {
+					t.Fatalf("run_failed = %+v, want the fixed generic legacy values", failed)
 				}
 			},
 		},
@@ -1895,8 +1920,8 @@ func TestMapChatEventConvertsKnownEvents(t *testing.T) {
 			event: events.Event{SessionID: "sess_1", RunID: "run_1", TraceID: "trace_1", Sequence: 7, Type: "agent.run.cancelled", PayloadJSON: `{"reason":"client_cancelled"}`},
 			assertFn: func(t *testing.T, got *turingv1.ChatStreamEvent) {
 				t.Helper()
-				if got.GetRunCancelled().GetReason() != "client_cancelled" {
-					t.Fatalf("run_cancelled = %+v", got.GetRunCancelled())
+				if got.GetRunCancelled().GetReason() != legacyCancellationReason {
+					t.Fatalf("run_cancelled = %+v, want the fixed generic legacy reason", got.GetRunCancelled())
 				}
 			},
 		},
@@ -1954,13 +1979,85 @@ func TestMapChatEventMapsSessionUpdatedFallback(t *testing.T) {
 	}
 }
 
-func TestMapChatEventReturnsRunFailedWhenPayloadIsInvalid(t *testing.T) {
+// A payload this build cannot read used to be answered with the JSON parser's
+// own sentence, which is built from the bytes it failed on — so an unreadable
+// row published exactly what the read boundary exists to withhold. The event
+// keeps the type it actually is and loses only the values nobody could read.
+func TestMapChatEventDropsUnreadablePayloadWithoutParserText(t *testing.T) {
 	got := mapChatEvent(events.Event{SessionID: "sess_1", RunID: "run_1", TraceID: "trace_1", Sequence: 8, Type: "message.delta", PayloadJSON: `{`})
-	failed := got.GetRunFailed()
-	if failed == nil {
-		t.Fatalf("event = %T, want run_failed", got.Event)
+	delta := got.GetTokenDelta()
+	if delta == nil {
+		t.Fatalf("event = %T, want token_delta", got.Event)
 	}
-	if failed.RunId != "run_1" || failed.Code == "" || failed.Message == "" {
-		t.Fatalf("run_failed = %+v", failed)
+	if delta.GetDelta() != "" || delta.GetMessageId() != "" {
+		t.Fatalf("token_delta = %+v, want no values read from an unreadable payload", delta)
+	}
+	if failed := got.GetRunFailed(); failed != nil {
+		t.Fatalf("unreadable payload reported a failure: %+v", failed)
+	}
+}
+
+// The one cancellation signal this product has covers both a deliberate stop
+// and an unkeyed transport loss, and the client offers no cancel affordance. So
+// a disconnect is abandonment, and it must say so in the closed vocabulary
+// rather than storing the transport's own word for it.
+func TestChatDisconnectNormalizesToAbandonedWithoutRawReason(t *testing.T) {
+	h := newHarness(t)
+	session, err := h.repo.CreateSession(context.Background(), "Disconnect")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	enqueued, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+		SessionID:     session.SessionID,
+		Content:       "abandon me",
+		AgentID:       "general_assistant",
+		ModelProvider: "ollama",
+		Model:         "llama3.2",
+	})
+	if err != nil {
+		t.Fatalf("EnqueueUserMessage: %v", err)
+	}
+
+	h.service.cancelRun(enqueued.RunID)
+
+	state, err := h.repo.GetRunState(context.Background(), enqueued.RunID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+	if state.Lifecycle != "cancelled" {
+		t.Fatalf("lifecycle = %q, want cancelled", state.Lifecycle)
+	}
+	if state.OutcomeReason != "abandoned" {
+		t.Fatalf("outcome reason = %q, want abandoned", state.OutcomeReason)
+	}
+
+	var cancellationReason, errorMessage sql.NullString
+	if err := h.database.QueryRowContext(context.Background(),
+		`SELECT cancellation_reason, error_message FROM agent_runs WHERE id = ?`, enqueued.RunID,
+	).Scan(&cancellationReason, &errorMessage); err != nil {
+		t.Fatalf("read run diagnostics: %v", err)
+	}
+	if errorMessage.Valid {
+		t.Fatalf("cancellation persisted an error message %q", errorMessage.String)
+	}
+	if cancellationReason.Valid && cancellationReason.String != "client_cancelled" {
+		t.Fatalf("cancellation_reason = %q, want the allowlisted client_cancelled", cancellationReason.String)
+	}
+
+	var payload string
+	if err := h.database.QueryRowContext(context.Background(),
+		`SELECT payload_json FROM events WHERE run_id = ? AND type = 'agent.run.cancelled'`, enqueued.RunID,
+	).Scan(&payload); err != nil {
+		t.Fatalf("read cancellation event: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatalf("decode cancellation payload: %v", err)
+	}
+	if decoded["reason"] != "abandoned" {
+		t.Fatalf("cancellation payload reason = %#v, want abandoned", decoded["reason"])
+	}
+	if _, exists := decoded["message"]; exists {
+		t.Fatalf("cancellation payload carries a message: %#v", decoded)
 	}
 }

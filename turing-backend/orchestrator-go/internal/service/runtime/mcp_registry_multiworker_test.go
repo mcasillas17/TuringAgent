@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
@@ -32,7 +31,7 @@ func TestRegistryNotificationPrunesDisabledToolsBeforeWorkerRefreshes(t *testing
 	}
 	workers := []*worker{
 		{
-			commands: make(chan *turingv1.RuntimeCommand, 1), done: make(chan struct{}),
+			commands: make(chan workerCommand, 1), done: make(chan struct{}),
 			registrationID: "registration-one", assignments: map[string]assignment{},
 			lastHeartbeat: time.Now().UTC(),
 			capabilities: &registeredWorkerCapabilities{
@@ -40,7 +39,7 @@ func TestRegistryNotificationPrunesDisabledToolsBeforeWorkerRefreshes(t *testing
 			},
 		},
 		{
-			commands: make(chan *turingv1.RuntimeCommand, 1), done: make(chan struct{}),
+			commands: make(chan workerCommand, 1), done: make(chan struct{}),
 			registrationID: "registration-two", assignments: map[string]assignment{},
 			lastHeartbeat: time.Now().UTC(),
 			capabilities: &registeredWorkerCapabilities{

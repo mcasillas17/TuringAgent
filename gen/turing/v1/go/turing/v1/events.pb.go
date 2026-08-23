@@ -26,29 +26,30 @@ const (
 type TuringEventType int32
 
 const (
-	TuringEventType_TURING_EVENT_TYPE_UNSPECIFIED         TuringEventType = 0
-	TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED     TuringEventType = 1
-	TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA       TuringEventType = 2
-	TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED   TuringEventType = 3
-	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_QUEUED    TuringEventType = 4
-	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STARTED   TuringEventType = 5
-	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP      TuringEventType = 6
-	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_COMPLETED TuringEventType = 7
-	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_FAILED    TuringEventType = 8
-	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_CANCELLED TuringEventType = 9
-	TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED   TuringEventType = 10
-	TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED TuringEventType = 11
-	TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED    TuringEventType = 12
-	TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED    TuringEventType = 13
-	TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED  TuringEventType = 14
-	TuringEventType_TURING_EVENT_TYPE_APPROVAL_APPROVED   TuringEventType = 15
-	TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED     TuringEventType = 16
-	TuringEventType_TURING_EVENT_TYPE_APPROVAL_EXPIRED    TuringEventType = 17
-	TuringEventType_TURING_EVENT_TYPE_APPROVAL_CONSUMED   TuringEventType = 18
-	TuringEventType_TURING_EVENT_TYPE_ERROR               TuringEventType = 19
-	TuringEventType_TURING_EVENT_TYPE_SYSTEM              TuringEventType = 20
-	TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED     TuringEventType = 21
-	TuringEventType_TURING_EVENT_TYPE_SESSION_DELETED     TuringEventType = 22
+	TuringEventType_TURING_EVENT_TYPE_UNSPECIFIED             TuringEventType = 0
+	TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED         TuringEventType = 1
+	TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA           TuringEventType = 2
+	TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED       TuringEventType = 3
+	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_QUEUED        TuringEventType = 4
+	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STARTED       TuringEventType = 5
+	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP          TuringEventType = 6
+	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_COMPLETED     TuringEventType = 7
+	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_FAILED        TuringEventType = 8
+	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_CANCELLED     TuringEventType = 9
+	TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED       TuringEventType = 10
+	TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED     TuringEventType = 11
+	TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED        TuringEventType = 12
+	TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED        TuringEventType = 13
+	TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED      TuringEventType = 14
+	TuringEventType_TURING_EVENT_TYPE_APPROVAL_APPROVED       TuringEventType = 15
+	TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED         TuringEventType = 16
+	TuringEventType_TURING_EVENT_TYPE_APPROVAL_EXPIRED        TuringEventType = 17
+	TuringEventType_TURING_EVENT_TYPE_APPROVAL_CONSUMED       TuringEventType = 18
+	TuringEventType_TURING_EVENT_TYPE_ERROR                   TuringEventType = 19
+	TuringEventType_TURING_EVENT_TYPE_SYSTEM                  TuringEventType = 20
+	TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED         TuringEventType = 21
+	TuringEventType_TURING_EVENT_TYPE_SESSION_DELETED         TuringEventType = 22
+	TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED TuringEventType = 23
 )
 
 // Enum value maps for TuringEventType.
@@ -77,31 +78,33 @@ var (
 		20: "TURING_EVENT_TYPE_SYSTEM",
 		21: "TURING_EVENT_TYPE_SESSION_UPDATED",
 		22: "TURING_EVENT_TYPE_SESSION_DELETED",
+		23: "TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED",
 	}
 	TuringEventType_value = map[string]int32{
-		"TURING_EVENT_TYPE_UNSPECIFIED":         0,
-		"TURING_EVENT_TYPE_MESSAGE_STARTED":     1,
-		"TURING_EVENT_TYPE_MESSAGE_DELTA":       2,
-		"TURING_EVENT_TYPE_MESSAGE_COMPLETED":   3,
-		"TURING_EVENT_TYPE_AGENT_RUN_QUEUED":    4,
-		"TURING_EVENT_TYPE_AGENT_RUN_STARTED":   5,
-		"TURING_EVENT_TYPE_AGENT_RUN_STEP":      6,
-		"TURING_EVENT_TYPE_AGENT_RUN_COMPLETED": 7,
-		"TURING_EVENT_TYPE_AGENT_RUN_FAILED":    8,
-		"TURING_EVENT_TYPE_AGENT_RUN_CANCELLED": 9,
-		"TURING_EVENT_TYPE_TOOL_CALL_STARTED":   10,
-		"TURING_EVENT_TYPE_TOOL_CALL_COMPLETED": 11,
-		"TURING_EVENT_TYPE_TOOL_CALL_FAILED":    12,
-		"TURING_EVENT_TYPE_TOOL_CALL_DENIED":    13,
-		"TURING_EVENT_TYPE_APPROVAL_REQUESTED":  14,
-		"TURING_EVENT_TYPE_APPROVAL_APPROVED":   15,
-		"TURING_EVENT_TYPE_APPROVAL_DENIED":     16,
-		"TURING_EVENT_TYPE_APPROVAL_EXPIRED":    17,
-		"TURING_EVENT_TYPE_APPROVAL_CONSUMED":   18,
-		"TURING_EVENT_TYPE_ERROR":               19,
-		"TURING_EVENT_TYPE_SYSTEM":              20,
-		"TURING_EVENT_TYPE_SESSION_UPDATED":     21,
-		"TURING_EVENT_TYPE_SESSION_DELETED":     22,
+		"TURING_EVENT_TYPE_UNSPECIFIED":             0,
+		"TURING_EVENT_TYPE_MESSAGE_STARTED":         1,
+		"TURING_EVENT_TYPE_MESSAGE_DELTA":           2,
+		"TURING_EVENT_TYPE_MESSAGE_COMPLETED":       3,
+		"TURING_EVENT_TYPE_AGENT_RUN_QUEUED":        4,
+		"TURING_EVENT_TYPE_AGENT_RUN_STARTED":       5,
+		"TURING_EVENT_TYPE_AGENT_RUN_STEP":          6,
+		"TURING_EVENT_TYPE_AGENT_RUN_COMPLETED":     7,
+		"TURING_EVENT_TYPE_AGENT_RUN_FAILED":        8,
+		"TURING_EVENT_TYPE_AGENT_RUN_CANCELLED":     9,
+		"TURING_EVENT_TYPE_TOOL_CALL_STARTED":       10,
+		"TURING_EVENT_TYPE_TOOL_CALL_COMPLETED":     11,
+		"TURING_EVENT_TYPE_TOOL_CALL_FAILED":        12,
+		"TURING_EVENT_TYPE_TOOL_CALL_DENIED":        13,
+		"TURING_EVENT_TYPE_APPROVAL_REQUESTED":      14,
+		"TURING_EVENT_TYPE_APPROVAL_APPROVED":       15,
+		"TURING_EVENT_TYPE_APPROVAL_DENIED":         16,
+		"TURING_EVENT_TYPE_APPROVAL_EXPIRED":        17,
+		"TURING_EVENT_TYPE_APPROVAL_CONSUMED":       18,
+		"TURING_EVENT_TYPE_ERROR":                   19,
+		"TURING_EVENT_TYPE_SYSTEM":                  20,
+		"TURING_EVENT_TYPE_SESSION_UPDATED":         21,
+		"TURING_EVENT_TYPE_SESSION_DELETED":         22,
+		"TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED": 23,
 	}
 )
 
@@ -133,15 +136,25 @@ func (TuringEventType) EnumDescriptor() ([]byte, []int) {
 }
 
 type TuringEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	EventId       string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	RunId         string                 `protobuf:"bytes,3,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	TraceId       string                 `protobuf:"bytes,4,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
-	Sequence      int64                  `protobuf:"varint,5,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	Type          TuringEventType        `protobuf:"varint,6,opt,name=type,proto3,enum=turing.v1.TuringEventType" json:"type,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	Payload       *structpb.Struct       `protobuf:"bytes,8,opt,name=payload,proto3" json:"payload,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	EventId   string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	SessionId string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	RunId     string                 `protobuf:"bytes,3,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	TraceId   string                 `protobuf:"bytes,4,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	Sequence  int64                  `protobuf:"varint,5,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	Type      TuringEventType        `protobuf:"varint,6,opt,name=type,proto3,enum=turing.v1.TuringEventType" json:"type,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Payload   *structpb.Struct       `protobuf:"bytes,8,opt,name=payload,proto3" json:"payload,omitempty"`
+	// The resulting run state, so replayed history carries the same
+	// authoritative outcome the live stream did. Set only for the repository's
+	// own closed carrier set — agent.run.queued/started/state_changed/
+	// completed/failed/cancelled and the approval.requested/approval.approved
+	// carriers (approval.approved never itself moves a run's lifecycle; it
+	// still carries the run state as it stands). Absent for every other event
+	// type, including every other approval event (approval.denied/expired/
+	// consumed), even when that row's own payload contains a well-formed value
+	// under a runState key.
+	RunState      *RunState `protobuf:"bytes,9,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -228,6 +241,13 @@ func (x *TuringEvent) GetCreatedAt() *timestamppb.Timestamp {
 func (x *TuringEvent) GetPayload() *structpb.Struct {
 	if x != nil {
 		return x.Payload
+	}
+	return nil
+}
+
+func (x *TuringEvent) GetRunState() *RunState {
+	if x != nil {
+		return x.RunState
 	}
 	return nil
 }
@@ -444,7 +464,7 @@ var File_turing_v1_events_proto protoreflect.FileDescriptor
 
 const file_turing_v1_events_proto_rawDesc = "" +
 	"\n" +
-	"\x16turing/v1/events.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb3\x02\n" +
+	"\x16turing/v1/events.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16turing/v1/common.proto\"\xe5\x02\n" +
 	"\vTuringEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1d\n" +
 	"\n" +
@@ -455,7 +475,8 @@ const file_turing_v1_events_proto_rawDesc = "" +
 	"\x04type\x18\x06 \x01(\x0e2\x1a.turing.v1.TuringEventTypeR\x04type\x129\n" +
 	"\n" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x121\n" +
-	"\apayload\x18\b \x01(\v2\x17.google.protobuf.StructR\apayload\"o\n" +
+	"\apayload\x18\b \x01(\v2\x17.google.protobuf.StructR\apayload\x120\n" +
+	"\trun_state\x18\t \x01(\v2\x13.turing.v1.RunStateR\brunState\"o\n" +
 	"\x11ListEventsRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12%\n" +
@@ -469,7 +490,7 @@ const file_turing_v1_events_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12%\n" +
 	"\x0eafter_sequence\x18\x02 \x01(\x03R\rafterSequence\" \n" +
-	"\x1eSubscribeSessionUpdatesRequest*\x96\a\n" +
+	"\x1eSubscribeSessionUpdatesRequest*\xc5\a\n" +
 	"\x0fTuringEventType\x12!\n" +
 	"\x1dTURING_EVENT_TYPE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!TURING_EVENT_TYPE_MESSAGE_STARTED\x10\x01\x12#\n" +
@@ -494,7 +515,8 @@ const file_turing_v1_events_proto_rawDesc = "" +
 	"\x17TURING_EVENT_TYPE_ERROR\x10\x13\x12\x1c\n" +
 	"\x18TURING_EVENT_TYPE_SYSTEM\x10\x14\x12%\n" +
 	"!TURING_EVENT_TYPE_SESSION_UPDATED\x10\x15\x12%\n" +
-	"!TURING_EVENT_TYPE_SESSION_DELETED\x10\x162\x97\x02\n" +
+	"!TURING_EVENT_TYPE_SESSION_DELETED\x10\x16\x12-\n" +
+	")TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED\x10\x172\x97\x02\n" +
 	"\fEventService\x12I\n" +
 	"\n" +
 	"ListEvents\x12\x1c.turing.v1.ListEventsRequest\x1a\x1d.turing.v1.ListEventsResponse\x12\\\n" +
@@ -524,23 +546,25 @@ var file_turing_v1_events_proto_goTypes = []any{
 	(*SubscribeSessionUpdatesRequest)(nil), // 5: turing.v1.SubscribeSessionUpdatesRequest
 	(*timestamppb.Timestamp)(nil),          // 6: google.protobuf.Timestamp
 	(*structpb.Struct)(nil),                // 7: google.protobuf.Struct
+	(*RunState)(nil),                       // 8: turing.v1.RunState
 }
 var file_turing_v1_events_proto_depIdxs = []int32{
 	0, // 0: turing.v1.TuringEvent.type:type_name -> turing.v1.TuringEventType
 	6, // 1: turing.v1.TuringEvent.created_at:type_name -> google.protobuf.Timestamp
 	7, // 2: turing.v1.TuringEvent.payload:type_name -> google.protobuf.Struct
-	1, // 3: turing.v1.ListEventsResponse.events:type_name -> turing.v1.TuringEvent
-	2, // 4: turing.v1.EventService.ListEvents:input_type -> turing.v1.ListEventsRequest
-	4, // 5: turing.v1.EventService.SubscribeSessionEvents:input_type -> turing.v1.SubscribeSessionEventsRequest
-	5, // 6: turing.v1.EventService.SubscribeSessionUpdates:input_type -> turing.v1.SubscribeSessionUpdatesRequest
-	3, // 7: turing.v1.EventService.ListEvents:output_type -> turing.v1.ListEventsResponse
-	1, // 8: turing.v1.EventService.SubscribeSessionEvents:output_type -> turing.v1.TuringEvent
-	1, // 9: turing.v1.EventService.SubscribeSessionUpdates:output_type -> turing.v1.TuringEvent
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	8, // 3: turing.v1.TuringEvent.run_state:type_name -> turing.v1.RunState
+	1, // 4: turing.v1.ListEventsResponse.events:type_name -> turing.v1.TuringEvent
+	2, // 5: turing.v1.EventService.ListEvents:input_type -> turing.v1.ListEventsRequest
+	4, // 6: turing.v1.EventService.SubscribeSessionEvents:input_type -> turing.v1.SubscribeSessionEventsRequest
+	5, // 7: turing.v1.EventService.SubscribeSessionUpdates:input_type -> turing.v1.SubscribeSessionUpdatesRequest
+	3, // 8: turing.v1.EventService.ListEvents:output_type -> turing.v1.ListEventsResponse
+	1, // 9: turing.v1.EventService.SubscribeSessionEvents:output_type -> turing.v1.TuringEvent
+	1, // 10: turing.v1.EventService.SubscribeSessionUpdates:output_type -> turing.v1.TuringEvent
+	8, // [8:11] is the sub-list for method output_type
+	5, // [5:8] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_events_proto_init() }
@@ -548,6 +572,7 @@ func file_turing_v1_events_proto_init() {
 	if File_turing_v1_events_proto != nil {
 		return
 	}
+	file_turing_v1_common_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

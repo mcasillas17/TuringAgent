@@ -32,7 +32,7 @@ func TestGlobalCapacityRetainsTerminalExecutionUntilExitAcknowledged(t *testing.
 	if _, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-one", 1, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.CancelRunWithEvent(ctx, first.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
+	if _, err := cancelRunEvents(t, repo, first.RunID); err != nil {
 		t.Fatal(err)
 	}
 	blocked, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-two", 1, 0)

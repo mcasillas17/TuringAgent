@@ -345,7 +345,8 @@ func TestRunClassifiesMismatchedAfterDecisionID(t *testing.T) {
 						ToolCallId: id,
 					}, nil
 				},
-				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+				WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+				ResumeApproved: allowResume,
 			}
 
 			_, err := runner.Run(context.Background(), RunInput{
@@ -509,7 +510,7 @@ func TestRunApprovalGatedMCPFailurePostsFailedAfter(t *testing.T) {
 			ApprovalId: "approval_1",
 			ToolCallId: beacon.GetToolCallId(),
 		}, nil
-	}, WaitApproval: func(context.Context, string) (string, error) { return "token", nil }}
+	}, WaitApproval: func(context.Context, string) (string, error) { return "token", nil }, ResumeApproved: allowResume}
 
 	_, err := runner.Run(context.Background(), RunInput{
 		ToolName:  "system.echo",
@@ -665,7 +666,8 @@ func TestRunReturnsReportingFailureWhenFailedAfterCannotBePosted(t *testing.T) {
 						ToolCallId: beacon.GetToolCallId(),
 					}, nil
 				},
-				WaitApproval: test.wait,
+				WaitApproval:   test.wait,
+				ResumeApproved: allowResume,
 			}
 
 			_, err := runner.Run(context.Background(), RunInput{ToolName: "system.echo", MCPClient: test.client})
@@ -714,7 +716,8 @@ func TestRunMarksSuccessfulMCPCallWhenCompletedBeaconFails(t *testing.T) {
 				ToolCallId: beacon.GetToolCallId(),
 			}, nil
 		},
-		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+		WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+		ResumeApproved: allowResume,
 	}
 
 	_, err := runner.Run(context.Background(), RunInput{
@@ -788,7 +791,8 @@ func TestRunWithOutcomeDistinguishesSafeAndApprovalGatedSuccess(t *testing.T) {
 						ReadOnly:   test.readOnly,
 					}, nil
 				},
-				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+				WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+				ResumeApproved: allowResume,
 			}
 
 			outcome, err := runner.RunWithOutcome(context.Background(), RunInput{
@@ -831,7 +835,8 @@ func TestRunWithOutcomeMakesOnlyApprovalGatedMCPFailureUncertain(t *testing.T) {
 						ReadOnly:   test.readOnly,
 					}, nil
 				},
-				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+				WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+				ResumeApproved: allowResume,
 			}
 
 			_, err := runner.RunWithOutcome(context.Background(), RunInput{
@@ -937,6 +942,7 @@ func TestRunDoesNotApplyToolTimeoutToApprovalWait(t *testing.T) {
 				return "", ctx.Err()
 			}
 		},
+		ResumeApproved: allowResume,
 	}
 
 	outcome, err := runner.RunWithOutcome(context.Background(), RunInput{
@@ -1079,4 +1085,225 @@ func (f mcpClientFunc) CallTool(
 
 func (c failingMCPClient) CallTool(context.Context, string, map[string]any, ...string) (map[string]any, error) {
 	return nil, c.err
+}
+
+// The runner is the reporting site for tool infrastructure, execution, policy,
+// and approval-transport failures. Each one it reports has to name a code the
+// orchestrator's allowlist knows, because the code plus the orchestrator's own
+// typed origin is what selects the public outcome — never the wrapped error's
+// sentence.
+func TestToolRunnerTypedFailureCodesAtEveryReportingSite(t *testing.T) {
+	tests := []struct {
+		name     string
+		runner   func(reported *[]*turingv1.ToolCallBeacon) *Runner
+		client   MCPClient
+		wantCode string
+	}{
+		{
+			name: "undeliverable_before_decision_is_tool_policy_decision_failed",
+			runner: func(reported *[]*turingv1.ToolCallBeacon) *Runner {
+				return &Runner{PostBeacon: recordingBeaconPoster(reported, func(beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+						return nil, sentBeaconTestError{err: errors.New("stream lost")}
+					}
+					return allowDecision(beacon), nil
+				})}
+			},
+			wantCode: "tool_policy_decision_failed",
+		},
+		{
+			name: "mismatched_before_decision_is_tool_policy_decision_invalid",
+			runner: func(reported *[]*turingv1.ToolCallBeacon) *Runner {
+				return &Runner{PostBeacon: recordingBeaconPoster(reported, func(beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+						return &turingv1.ToolPolicyDecision{
+							Decision: turingv1.ToolPolicyDecision_DECISION_ALLOW, ToolCallId: "call_somebody_else",
+						}, nil
+					}
+					return allowDecision(beacon), nil
+				})}
+			},
+			wantCode: "tool_policy_decision_invalid",
+		},
+		{
+			name: "missing_approval_waiter_is_approval_wait_failed",
+			runner: func(reported *[]*turingv1.ToolCallBeacon) *Runner {
+				return &Runner{PostBeacon: recordingBeaconPoster(reported, func(beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+						return &turingv1.ToolPolicyDecision{
+							Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+							ToolCallId: beacon.GetToolCallId(), ApprovalId: "appr_1",
+						}, nil
+					}
+					return allowDecision(beacon), nil
+				})}
+			},
+			wantCode: "approval_wait_failed",
+		},
+		{
+			name: "failing_tool_call_is_mcp_call_failed",
+			runner: func(reported *[]*turingv1.ToolCallBeacon) *Runner {
+				return &Runner{PostBeacon: recordingBeaconPoster(reported, func(beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+					return allowDecision(beacon), nil
+				})}
+			},
+			client:   failingToolClient{err: errors.New("model_provider_unavailable")},
+			wantCode: "mcp_call_failed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var reported []*turingv1.ToolCallBeacon
+			client := test.client
+			if client == nil {
+				client = stubMCPClient{result: map[string]any{"ok": true}}
+			}
+			if _, err := test.runner(&reported).Run(context.Background(), RunInput{
+				AgentID: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, RunID: "run_1", TraceID: "trace_1",
+				ServerName: "system", ToolName: "system.time", MCPClient: client,
+			}); err == nil {
+				t.Fatal("Run reported success")
+			}
+			var after *turingv1.ToolCallBeacon
+			for _, beacon := range reported {
+				if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+					after = beacon
+				}
+			}
+			if after == nil {
+				t.Fatal("no after beacon was reported")
+			}
+			if after.GetError().GetCode() != test.wantCode {
+				t.Fatalf("reported code = %q, want %q", after.GetError().GetCode(), test.wantCode)
+			}
+			if after.GetError().GetMessage() != "" {
+				t.Fatalf("reported message %q, want none", after.GetError().GetMessage())
+			}
+		})
+	}
+}
+
+func recordingBeaconPoster(
+	reported *[]*turingv1.ToolCallBeacon,
+	respond func(*turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error),
+) func(context.Context, *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+	return func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+		*reported = append(*reported, beacon)
+		return respond(beacon)
+	}
+}
+
+type sentBeaconTestError struct{ err error }
+
+func (e sentBeaconTestError) Error() string      { return e.err.Error() }
+func (e sentBeaconTestError) Unwrap() error      { return e.err }
+func (e sentBeaconTestError) BeaconPosted() bool { return true }
+
+type failingToolClient struct{ err error }
+
+func (c failingToolClient) CallTool(context.Context, string, map[string]any, ...string) (map[string]any, error) {
+	return nil, c.err
+}
+
+type stubMCPClient struct{ result map[string]any }
+
+func (c stubMCPClient) CallTool(context.Context, string, map[string]any, ...string) (map[string]any, error) {
+	return c.result, nil
+}
+
+// allowResume is the resume every existing approval test needs now that the
+// handshake is required. It stands for an orchestrator that accepted the
+// resume; tests about the handshake itself supply their own.
+func allowResume(context.Context, ApprovalResume) error { return nil }
+
+// TestRunRequiresApprovalResumeBeforeTheApprovedCall closes the gap between "a
+// token exists" and "this run is allowed to continue". They are different
+// facts, and only the second one authorizes a side effect, so a runner with no
+// way to establish it must fail rather than call the tool anyway.
+func TestRunRequiresApprovalResumeBeforeTheApprovedCall(t *testing.T) {
+	var beacons []*turingv1.ToolCallBeacon
+	calls := 0
+	runner := &Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			beacons = append(beacons, beacon)
+			if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+				return allowDecision(beacon), nil
+			}
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_1",
+				ToolCallId: beacon.GetToolCallId(),
+			}, nil
+		},
+		WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+	}
+
+	_, err := runner.Run(context.Background(), RunInput{
+		ToolName: "files.create",
+		MCPClient: mcpClientFunc(func(context.Context, string, map[string]any, ...string) (map[string]any, error) {
+			calls++
+			return map[string]any{"ok": true}, nil
+		}),
+	})
+
+	if err == nil || !ApprovalWaitFailed(err) {
+		t.Fatalf("Run error = %T %v, want an approval wait failure", err, err)
+	}
+	if calls != 0 {
+		t.Fatalf("MCP calls = %d, want the approved call withheld", calls)
+	}
+	assertBeaconSequence(t, beacons,
+		beaconExpectation{phase: turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE},
+		beaconExpectation{
+			phase:  turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER,
+			status: turingv1.ToolCallStatus_TOOL_CALL_STATUS_FAILED,
+			code:   "approval_wait_failed",
+		},
+	)
+}
+
+// TestRunBoundsApprovalWaitAndResumeByOneDeadline pins where the resume's time
+// comes from. Both halves of waiting for an approval share the budget the
+// product already promised, so the second half cannot quietly double it.
+func TestRunBoundsApprovalWaitAndResumeByOneDeadline(t *testing.T) {
+	var waitDeadline, resumeDeadline time.Time
+	var resumeHasDeadline bool
+	runner := &Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+				return allowDecision(beacon), nil
+			}
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_1",
+				ToolCallId: beacon.GetToolCallId(),
+			}, nil
+		},
+		WaitApproval: func(ctx context.Context, _ string) (string, error) {
+			waitDeadline, _ = ctx.Deadline()
+			return "token", nil
+		},
+		ResumeApproved: func(ctx context.Context, resume ApprovalResume) error {
+			resumeDeadline = resume.Deadline
+			_, resumeHasDeadline = ctx.Deadline()
+			if resume.ApprovalID != "approval_1" || resume.RunID != "run_1" {
+				t.Errorf("resume identity = %+v, want run_1 and approval_1", resume)
+			}
+			return nil
+		},
+		ApprovalWaitTimeout: time.Hour,
+	}
+
+	if _, err := runner.Run(context.Background(), RunInput{
+		RunID: "run_1", ToolName: "files.create", MCPClient: fakeMCPClient{},
+	}); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+
+	if waitDeadline.IsZero() || !resumeDeadline.Equal(waitDeadline) {
+		t.Fatalf("resume deadline = %s, want the approval wait deadline %s", resumeDeadline, waitDeadline)
+	}
+	if !resumeHasDeadline {
+		t.Fatal("the resume context carried no deadline")
+	}
 }

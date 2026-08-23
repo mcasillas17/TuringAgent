@@ -15,6 +15,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/persisttime"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	eventsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runstate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -260,15 +261,7 @@ func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionR
 			if err != nil {
 				return nil, status.Error(codes.Internal, "read session deletion receipt")
 			}
-			if current.State == "completed" {
-				receipt = current
-			} else {
-				receipt, err = s.repo.AdvanceSessionDeletion(ctx, req.SessionId)
-				if err != nil {
-					return nil, status.Error(codes.Internal, "read session deletion receipt")
-				}
-				receipt.ErrorCode = "artifact_cleanup_failed"
-			}
+			receipt = current
 		} else {
 			if err := s.removeOwnedArtifactManifestRows(ctx, receipt.SessionID); err != nil {
 				return nil, status.Error(codes.Internal, "delete session artifacts failed")
@@ -374,6 +367,9 @@ func (s *Server) ListMessages(ctx context.Context, req *turingv1.ListMessagesReq
 	}
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			if req.BeforeMessageId == "" {
+				return nil, status.Error(codes.NotFound, "session not found")
+			}
 			return nil, status.Error(codes.NotFound, "before_message_id not found in session")
 		}
 		return nil, status.Error(codes.Internal, "list messages failed")
@@ -595,7 +591,7 @@ func mapSession(session repository.Session) (*turingv1.Session, error) {
 }
 
 func mapMessage(sessionID string, message repository.Message) *turingv1.Message {
-	return &turingv1.Message{
+	mapped := &turingv1.Message{
 		MessageId:   message.MessageID,
 		SessionId:   sessionID,
 		RunId:       message.RunID,
@@ -605,6 +601,15 @@ func mapMessage(sessionID string, message repository.Message) *turingv1.Message 
 		Sequence:    message.Sequence,
 		CreatedAt:   parseTimestamp(message.CreatedAt),
 	}
+	// Absent state stays absent. The repository returns state only for a
+	// message whose run correlation it could prove, and the projection returns
+	// none for a row it cannot vouch for; either way what is published is
+	// silence rather than an outcome nobody stands behind. Flutter renders that
+	// absence neutrally instead of inventing a terminal result.
+	if message.RunState != nil {
+		mapped.RunState = runstate.Project(*message.RunState)
+	}
+	return mapped
 }
 
 func mapRole(role string) turingv1.MessageRole {

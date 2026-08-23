@@ -99,7 +99,10 @@ Runs already queued for a remote provider before TUR-003 have no run-owned
 egress decision. Migration 0014 terminalizes them with
 `egress_decision_required` rather than leaving them stranded behind the
 egress-aware worker gate; resend them from the client to review and record a
-fresh disclosure.
+fresh disclosure. The later run-outcome migration preserves populated
+`run_egress_decisions` exactly and projects this legacy terminal code (and the
+legacy `egress_decision_invalid` code) as bounded `policy_denied`, with no raw
+diagnostic text in public history.
 
 ## Background work and audit
 

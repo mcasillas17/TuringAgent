@@ -39,7 +39,7 @@ func TestTerminalRunRevokesApprovedToolLifecycle(t *testing.T) {
 	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "issued-token", sql.NullString{}, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`); err != nil {
+	if _, err := cancelRunEvents(t, repo, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -129,7 +129,7 @@ func TestTerminalRunEmitsFailureEventForActiveSafeToolCall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	events, err := repo.CancelRunWithEvent(ctx, enqueued.RunID, "client_cancelled", `{"reason":"client_cancelled"}`)
+	events, err := cancelRunEvents(t, repo, enqueued.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,10 @@ func TestTerminalRunEmitsFailureEventForActiveSafeToolCall(t *testing.T) {
 		"toolCallId": "call_safe_active",
 		"toolName":   "system.echo",
 		"serverName": "system",
-		"error":      "client_cancelled",
+		// The cancellation's own outcome class. The transport cannot tell a
+		// deliberate stop from a dropped connection, so it says abandoned
+		// rather than claiming the user meant it.
+		"category": "abandoned",
 	}
 	if !reflect.DeepEqual(payload, want) {
 		t.Fatalf("safe tool failure payload = %#v, want %#v", payload, want)

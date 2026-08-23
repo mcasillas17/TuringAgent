@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 func TestLoadFromEnvRequiresSecretsAndDefaultsPorts(t *testing.T) {
@@ -112,6 +114,30 @@ func TestLoadFromMapValidatesMaxConcurrentRunsWithinRuntimeBound(t *testing.T) {
 				t.Fatalf("LoadFromMap max concurrent %s error = %v, want bounded validation", value, err)
 			}
 		})
+	}
+}
+
+func TestLoadFromMapValidatesJobMaxAttemptsWithinNoticeBound(t *testing.T) {
+	env := requiredEnv()
+	if _, err := LoadFromMap(env); err != nil {
+		t.Fatalf("LoadFromMap default TURING_JOB_MAX_ATTEMPTS: %v", err)
+	}
+
+	env["TURING_JOB_MAX_ATTEMPTS"] = strconv.Itoa(runoutcome.MaxNoticeAttempts)
+	if _, err := LoadFromMap(env); err != nil {
+		t.Fatalf("LoadFromMap TURING_JOB_MAX_ATTEMPTS=%d: %v", runoutcome.MaxNoticeAttempts, err)
+	}
+
+	env["TURING_JOB_MAX_ATTEMPTS"] = strconv.Itoa(runoutcome.MaxNoticeAttempts + 1)
+	_, err := LoadFromMap(env)
+	if err == nil || !strings.Contains(err.Error(), "TURING_JOB_MAX_ATTEMPTS") {
+		t.Fatalf("LoadFromMap TURING_JOB_MAX_ATTEMPTS=%d error = %v, want bounded validation", runoutcome.MaxNoticeAttempts+1, err)
+	}
+
+	env["TURING_JOB_MAX_ATTEMPTS"] = "0"
+	_, err = LoadFromMap(env)
+	if err == nil || !strings.Contains(err.Error(), "TURING_JOB_MAX_ATTEMPTS") {
+		t.Fatalf("LoadFromMap TURING_JOB_MAX_ATTEMPTS=0 error = %v, want bounded validation", err)
 	}
 }
 

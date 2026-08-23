@@ -614,7 +614,13 @@ func enqueueEgressNoticeNote(t *testing.T, repo *Repository, decision *PendingEg
 	if len(enqueued.RoutingEvents) != 1 {
 		t.Fatalf("routing events = %+v, want one", enqueued.RoutingEvents)
 	}
-	return runStepNote(t, enqueued.RoutingEvents[0])
+	var payload struct {
+		Note string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(enqueued.RoutingEvents[0].PayloadJSON), &payload); err != nil {
+		t.Fatal(err)
+	}
+	return payload.Note
 }
 
 func assertSessionRunCounts(t *testing.T, repo *Repository, ctx context.Context, sessionID string, messages, runs int) {

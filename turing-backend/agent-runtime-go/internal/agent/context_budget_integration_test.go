@@ -169,7 +169,11 @@ func (p *budgetCapturingProvider) StreamChat(_ context.Context, req llm.ChatRequ
 	index := len(p.requests) - 1
 	events := []llm.StreamEvent{{Type: "completed", FinishReason: "stop"}}
 	if index < len(p.responses) {
-		events = p.responses[index]
+		// Terminated the way the wire protocol terminates every turn, for the
+		// same reason scriptedProvider does it: a fixture that describes an
+		// ordinary tool turn must not accidentally describe a cut-off stream,
+		// which the agent now refuses to execute tools from.
+		events = withTerminalEvent(p.responses[index])
 	}
 	out := make(chan llm.StreamEvent, len(events))
 	for _, event := range events {
@@ -806,7 +810,8 @@ func TestExecuteRejectsUnfitToolProtocolBeforeSideEffect(t *testing.T) {
 				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 					return approvalToolCall(beacon), nil
 				},
-				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+				WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+				ResumeApproved: allowAgentResume,
 			},
 		},
 	)
@@ -874,7 +879,8 @@ func TestExecuteCompletesAfterEscapeHeavyResultAtPreflightBoundary(t *testing.T)
 				PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
 					return approvalToolCall(beacon), nil
 				},
-				WaitApproval: func(context.Context, string) (string, error) { return "token", nil },
+				WaitApproval:   func(context.Context, string) (string, error) { return "token", nil },
+				ResumeApproved: allowAgentResume,
 			},
 		},
 	)

@@ -2,9 +2,7 @@ package events
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
@@ -203,98 +201,49 @@ func mapEvent(event repository.Event) *turingv1.TuringEvent {
 	if event.RunID.Valid {
 		runID = event.RunID.String
 	}
+	safe := Decode(event.Type, runID, event.PayloadJSON)
 	return &turingv1.TuringEvent{
 		EventId:   event.EventID,
 		SessionId: event.SessionID,
 		RunId:     runID,
 		TraceId:   event.TraceID,
 		Sequence:  event.Sequence,
-		Type:      mapEventType(event.Type),
+		Type:      MapEventType(event.Type),
 		CreatedAt: parseEventTimestamp(event.CreatedAt),
-		Payload:   mapPayload(event.PayloadJSON),
+		Payload:   mapPayload(safe.Payload),
+		RunState:  safe.RunState,
 	}
 }
 
+// mapBusEvent is the live half of the same projection. It decodes through the
+// same function as the replay above rather than a parallel one: a client that
+// watches a run live and a client that reopens it later are looking at the same
+// durable row, and the whole point of this feature is that they agree.
 func mapBusEvent(event Event) *turingv1.TuringEvent {
+	safe := Decode(event.Type, event.RunID, event.PayloadJSON)
 	return &turingv1.TuringEvent{
 		EventId:   event.EventID,
 		SessionId: event.SessionID,
 		RunId:     event.RunID,
 		TraceId:   event.TraceID,
 		Sequence:  event.Sequence,
-		Type:      mapEventType(event.Type),
+		Type:      MapEventType(event.Type),
 		CreatedAt: parseEventTimestamp(event.CreatedAt),
-		Payload:   mapPayload(event.PayloadJSON),
+		Payload:   mapPayload(safe.Payload),
+		RunState:  safe.RunState,
 	}
 }
 
-func mapEventType(value string) turingv1.TuringEventType {
-	normalized := strings.ToLower(value)
-	normalized = strings.TrimPrefix(normalized, "turing_event_type_")
-	normalized = strings.ReplaceAll(normalized, "_", ".")
-	switch normalized {
-	case "message.started":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_STARTED
-	case "message.delta":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_DELTA
-	case "message.completed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_MESSAGE_COMPLETED
-	case "agent.run.queued":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_QUEUED
-	case "agent.run.started":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STARTED
-	case "agent.run.step":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP
-	case "agent.run.completed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_COMPLETED
-	case "agent.run.failed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_FAILED
-	case "agent.run.cancelled":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_CANCELLED
-	case "tool.call.started":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_STARTED
-	case "tool.call.completed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_COMPLETED
-	case "tool.call.failed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_FAILED
-	case "tool.call.denied":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_TOOL_CALL_DENIED
-	case "approval.requested":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_REQUESTED
-	case "approval.approved":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_APPROVED
-	case "approval.denied":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_DENIED
-	case "approval.expired":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_EXPIRED
-	case "approval.consumed":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_APPROVAL_CONSUMED
-	case "error":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_ERROR
-	case "system":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_SYSTEM
-	case "session.updated":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED
-	case "session.deleted":
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_DELETED
-	default:
-		return turingv1.TuringEventType_TURING_EVENT_TYPE_UNSPECIFIED
-	}
-}
-
-func mapPayload(payloadJSON string) *structpb.Struct {
-	if payloadJSON == "" {
-		return &structpb.Struct{Fields: map[string]*structpb.Value{}}
-	}
-	value, err := safejson.DecodeObject(json.NewDecoder(strings.NewReader(payloadJSON)))
+// mapPayload renders an already-allowlisted payload. A value that cannot be
+// converted yields an empty struct rather than an error message: by this point
+// the payload has been through the shared decoder, and there is nothing left
+// worth telling a client except what the event was.
+func mapPayload(payload map[string]any) *structpb.Struct {
+	converted, err := safejson.ToStruct(payload)
 	if err != nil {
 		return &structpb.Struct{Fields: map[string]*structpb.Value{}}
 	}
-	payload, err := safejson.ToStruct(value)
-	if err != nil {
-		return &structpb.Struct{Fields: map[string]*structpb.Value{}}
-	}
-	return payload
+	return converted
 }
 
 func parseEventTimestamp(value string) *timestamppb.Timestamp {

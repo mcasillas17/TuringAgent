@@ -456,11 +456,13 @@ class RunQueued extends $pb.GeneratedMessage {
     $core.String? runId,
     $core.String? jobId,
     $core.String? traceId,
+    $1.RunState? runState,
   }) {
     final result = create();
     if (runId != null) result.runId = runId;
     if (jobId != null) result.jobId = jobId;
     if (traceId != null) result.traceId = traceId;
+    if (runState != null) result.runState = runState;
     return result;
   }
 
@@ -480,6 +482,8 @@ class RunQueued extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'jobId')
     ..aOS(3, _omitFieldNames ? '' : 'traceId')
+    ..aOM<$1.RunState>(4, _omitFieldNames ? '' : 'runState',
+        subBuilder: $1.RunState.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -527,6 +531,17 @@ class RunQueued extends $pb.GeneratedMessage {
   $core.bool hasTraceId() => $_has(2);
   @$pb.TagNumber(3)
   void clearTraceId() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $1.RunState get runState => $_getN(3);
+  @$pb.TagNumber(4)
+  set runState($1.RunState value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasRunState() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearRunState() => $_clearField(4);
+  @$pb.TagNumber(4)
+  $1.RunState ensureRunState() => $_ensure(3);
 }
 
 class RunStarted extends $pb.GeneratedMessage {
@@ -534,11 +549,13 @@ class RunStarted extends $pb.GeneratedMessage {
     $core.String? runId,
     $core.String? jobId,
     $core.int? attempt,
+    $1.RunState? runState,
   }) {
     final result = create();
     if (runId != null) result.runId = runId;
     if (jobId != null) result.jobId = jobId;
     if (attempt != null) result.attempt = attempt;
+    if (runState != null) result.runState = runState;
     return result;
   }
 
@@ -558,6 +575,8 @@ class RunStarted extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'jobId')
     ..a<$core.int>(3, _omitFieldNames ? '' : 'attempt', $pb.PbFieldType.O3)
+    ..aOM<$1.RunState>(4, _omitFieldNames ? '' : 'runState',
+        subBuilder: $1.RunState.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -605,6 +624,17 @@ class RunStarted extends $pb.GeneratedMessage {
   $core.bool hasAttempt() => $_has(2);
   @$pb.TagNumber(3)
   void clearAttempt() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $1.RunState get runState => $_getN(3);
+  @$pb.TagNumber(4)
+  set runState($1.RunState value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasRunState() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearRunState() => $_clearField(4);
+  @$pb.TagNumber(4)
+  $1.RunState ensureRunState() => $_ensure(3);
 }
 
 class MessageStarted extends $pb.GeneratedMessage {
@@ -842,11 +872,13 @@ class ApprovalEvent extends $pb.GeneratedMessage {
     $core.String? approvalId,
     $core.String? toolName,
     $core.String? argsSummary,
+    $1.RunState? runState,
   }) {
     final result = create();
     if (approvalId != null) result.approvalId = approvalId;
     if (toolName != null) result.toolName = toolName;
     if (argsSummary != null) result.argsSummary = argsSummary;
+    if (runState != null) result.runState = runState;
     return result;
   }
 
@@ -866,6 +898,8 @@ class ApprovalEvent extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
     ..aOS(3, _omitFieldNames ? '' : 'argsSummary')
+    ..aOM<$1.RunState>(4, _omitFieldNames ? '' : 'runState',
+        subBuilder: $1.RunState.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -915,6 +949,20 @@ class ApprovalEvent extends $pb.GeneratedMessage {
   $core.bool hasArgsSummary() => $_has(2);
   @$pb.TagNumber(3)
   void clearArgsSummary() => $_clearField(3);
+
+  /// Present when this approval event is the one that moved the run's
+  /// lifecycle, so the client learns waiting-approval or resumed-running from
+  /// the same event that reports the approval.
+  @$pb.TagNumber(4)
+  $1.RunState get runState => $_getN(3);
+  @$pb.TagNumber(4)
+  set runState($1.RunState value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasRunState() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearRunState() => $_clearField(4);
+  @$pb.TagNumber(4)
+  $1.RunState ensureRunState() => $_ensure(3);
 }
 
 class MessageCompleted extends $pb.GeneratedMessage {
@@ -989,11 +1037,13 @@ class RunCompleted extends $pb.GeneratedMessage {
   factory RunCompleted({
     $core.String? runId,
     $core.String? assistantMessageId,
+    $1.RunState? runState,
   }) {
     final result = create();
     if (runId != null) result.runId = runId;
     if (assistantMessageId != null)
       result.assistantMessageId = assistantMessageId;
+    if (runState != null) result.runState = runState;
     return result;
   }
 
@@ -1012,6 +1062,8 @@ class RunCompleted extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'assistantMessageId')
+    ..aOM<$1.RunState>(3, _omitFieldNames ? '' : 'runState',
+        subBuilder: $1.RunState.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1052,6 +1104,17 @@ class RunCompleted extends $pb.GeneratedMessage {
   $core.bool hasAssistantMessageId() => $_has(1);
   @$pb.TagNumber(2)
   void clearAssistantMessageId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $1.RunState get runState => $_getN(2);
+  @$pb.TagNumber(3)
+  set runState($1.RunState value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasRunState() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearRunState() => $_clearField(3);
+  @$pb.TagNumber(3)
+  $1.RunState ensureRunState() => $_ensure(2);
 }
 
 class RunFailed extends $pb.GeneratedMessage {
@@ -1059,13 +1122,15 @@ class RunFailed extends $pb.GeneratedMessage {
     $core.String? runId,
     $core.String? code,
     $core.String? message,
-    $core.bool? retryable,
+    @$core.Deprecated('This field is deprecated.') $core.bool? retryable,
+    $1.RunState? runState,
   }) {
     final result = create();
     if (runId != null) result.runId = runId;
     if (code != null) result.code = code;
     if (message != null) result.message = message;
     if (retryable != null) result.retryable = retryable;
+    if (runState != null) result.runState = runState;
     return result;
   }
 
@@ -1086,6 +1151,8 @@ class RunFailed extends $pb.GeneratedMessage {
     ..aOS(2, _omitFieldNames ? '' : 'code')
     ..aOS(3, _omitFieldNames ? '' : 'message')
     ..aOB(4, _omitFieldNames ? '' : 'retryable')
+    ..aOM<$1.RunState>(5, _omitFieldNames ? '' : 'runState',
+        subBuilder: $1.RunState.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1134,24 +1201,44 @@ class RunFailed extends $pb.GeneratedMessage {
   @$pb.TagNumber(3)
   void clearMessage() => $_clearField(3);
 
+  /// Automatic retry is an internal dispatch decision, not a promise that
+  /// repeating the request is safe. Always serialized as false for new events
+  /// and ignored by new clients; kept at field 4 for wire compatibility.
+  @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(4)
   $core.bool get retryable => $_getBF(3);
+  @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(4)
   set retryable($core.bool value) => $_setBool(3, value);
+  @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(4)
   $core.bool hasRetryable() => $_has(3);
+  @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(4)
   void clearRetryable() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $1.RunState get runState => $_getN(4);
+  @$pb.TagNumber(5)
+  set runState($1.RunState value) => $_setField(5, value);
+  @$pb.TagNumber(5)
+  $core.bool hasRunState() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearRunState() => $_clearField(5);
+  @$pb.TagNumber(5)
+  $1.RunState ensureRunState() => $_ensure(4);
 }
 
 class RunCancelled extends $pb.GeneratedMessage {
   factory RunCancelled({
     $core.String? runId,
     $core.String? reason,
+    $1.RunState? runState,
   }) {
     final result = create();
     if (runId != null) result.runId = runId;
     if (reason != null) result.reason = reason;
+    if (runState != null) result.runState = runState;
     return result;
   }
 
@@ -1170,6 +1257,8 @@ class RunCancelled extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'reason')
+    ..aOM<$1.RunState>(3, _omitFieldNames ? '' : 'runState',
+        subBuilder: $1.RunState.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1210,6 +1299,80 @@ class RunCancelled extends $pb.GeneratedMessage {
   $core.bool hasReason() => $_has(1);
   @$pb.TagNumber(2)
   void clearReason() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $1.RunState get runState => $_getN(2);
+  @$pb.TagNumber(3)
+  set runState($1.RunState value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasRunState() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearRunState() => $_clearField(3);
+  @$pb.TagNumber(3)
+  $1.RunState ensureRunState() => $_ensure(2);
+}
+
+/// A lifecycle transition that has no existing lifecycle event of its own, such
+/// as entering recovering or returning to running. Terminal transitions keep
+/// using their existing completed/failed/cancelled events and never also emit
+/// this one, so a transition is never reported twice.
+class RunStateChanged extends $pb.GeneratedMessage {
+  factory RunStateChanged({
+    $1.RunState? runState,
+  }) {
+    final result = create();
+    if (runState != null) result.runState = runState;
+    return result;
+  }
+
+  RunStateChanged._();
+
+  factory RunStateChanged.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory RunStateChanged.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'RunStateChanged',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOM<$1.RunState>(1, _omitFieldNames ? '' : 'runState',
+        subBuilder: $1.RunState.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RunStateChanged clone() => RunStateChanged()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  RunStateChanged copyWith(void Function(RunStateChanged) updates) =>
+      super.copyWith((message) => updates(message as RunStateChanged))
+          as RunStateChanged;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static RunStateChanged create() => RunStateChanged._();
+  @$core.override
+  RunStateChanged createEmptyInstance() => create();
+  static $pb.PbList<RunStateChanged> createRepeated() =>
+      $pb.PbList<RunStateChanged>();
+  @$core.pragma('dart2js:noInline')
+  static RunStateChanged getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RunStateChanged>(create);
+  static RunStateChanged? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $1.RunState get runState => $_getN(0);
+  @$pb.TagNumber(1)
+  set runState($1.RunState value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasRunState() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearRunState() => $_clearField(1);
+  @$pb.TagNumber(1)
+  $1.RunState ensureRunState() => $_ensure(0);
 }
 
 enum ChatStreamEvent_Event {
@@ -1230,6 +1393,7 @@ enum ChatStreamEvent_Event {
   runFailed,
   runCancelled,
   persistedEvent,
+  runStateChanged,
   notSet
 }
 
@@ -1256,6 +1420,7 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
     RunFailed? runFailed,
     RunCancelled? runCancelled,
     $3.TuringEvent? persistedEvent,
+    RunStateChanged? runStateChanged,
   }) {
     final result = create();
     if (sessionId != null) result.sessionId = sessionId;
@@ -1279,6 +1444,7 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
     if (runFailed != null) result.runFailed = runFailed;
     if (runCancelled != null) result.runCancelled = runCancelled;
     if (persistedEvent != null) result.persistedEvent = persistedEvent;
+    if (runStateChanged != null) result.runStateChanged = runStateChanged;
     return result;
   }
 
@@ -1310,14 +1476,33 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
     24: ChatStreamEvent_Event.runFailed,
     25: ChatStreamEvent_Event.runCancelled,
     26: ChatStreamEvent_Event.persistedEvent,
+    27: ChatStreamEvent_Event.runStateChanged,
     0: ChatStreamEvent_Event.notSet
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ChatStreamEvent',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..oo(
-        0, [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26])
+    ..oo(0, [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27
+    ])
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..aOS(2, _omitFieldNames ? '' : 'runId')
     ..aOS(3, _omitFieldNames ? '' : 'traceId')
@@ -1356,6 +1541,8 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
         subBuilder: RunCancelled.create)
     ..aOM<$3.TuringEvent>(26, _omitFieldNames ? '' : 'persistedEvent',
         subBuilder: $3.TuringEvent.create)
+    ..aOM<RunStateChanged>(27, _omitFieldNames ? '' : 'runStateChanged',
+        subBuilder: RunStateChanged.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1605,6 +1792,17 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
   void clearPersistedEvent() => $_clearField(26);
   @$pb.TagNumber(26)
   $3.TuringEvent ensurePersistedEvent() => $_ensure(20);
+
+  @$pb.TagNumber(27)
+  RunStateChanged get runStateChanged => $_getN(21);
+  @$pb.TagNumber(27)
+  set runStateChanged(RunStateChanged value) => $_setField(27, value);
+  @$pb.TagNumber(27)
+  $core.bool hasRunStateChanged() => $_has(21);
+  @$pb.TagNumber(27)
+  void clearRunStateChanged() => $_clearField(27);
+  @$pb.TagNumber(27)
+  RunStateChanged ensureRunStateChanged() => $_ensure(21);
 }
 
 const $core.bool _omitFieldNames =

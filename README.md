@@ -13,7 +13,7 @@ The project is designed for local development first: secrets stay in your local 
 - Exposes MCP tool servers for safe system tools and approval-gated sandboxed file tools.
 - Provides a Flutter client with settings, conversation search, automatically
   named and paginated session lists, rename/archive/restore actions, chat,
-  streamed responses, and approval cards.
+  streamed responses, localized durable run-outcome cards, and approval cards.
 - Exposes a redacted, paginated audit read API (`AuditService.ListAuditEntries`), including the approval comment or denial reason a person typed; audit inspection is exposed programmatically through the authenticated API and a thin client, with no built-in viewer yet.
 - Withdraws a deleted session through a durable lifecycle: reads/search/replay
   fail closed once withdrawal starts, active work is cancelled and reconciled,
@@ -164,7 +164,7 @@ The runtime always keeps mandatory skill context (legacy attached bodies and exp
 
 Recall search runs once per agent run; each term uses separate bounded earlier-session and current-session searches so a busy current session cannot crowd earlier matches out of the result page. Earlier-session matches receive excerpt slots first, then omitted current-session history can use the remaining capacity. Cached hits are re-ranked against each dispatch's budget-admitted request rather than re-querying unchanged terms across tool iterations. The cache retains one recall-budget-bounded payload per unique message plus lightweight per-term references, so overlapping search pages do not retain duplicate full messages. Fetched history and the live user turn carry message IDs into budgeting, so current-session deduplication suppresses exact admitted rows; occurrence counts are only a defensive fallback for ID-less callers. Admitting one of two identical turns therefore does not erase an older omitted row even when the newer row is absent from the search page. If adding recall changes the admitted history suffix, the runtime allows up to three ranking/budget passes under one two-second deadline; one broad fallback then prefers a possible duplicate over silently losing a current-session turn from both history and recall.
 
-Each changed omission set is persisted as an `agent.run.step` notice and rendered inline during the live run. Historical run notices are currently suppressed by the client replay watermark, so reopening a session does not yet redisplay them. If even the current turn, skills, required schemas, tool protocol, and minimal result markers cannot fit, the run fails with `context_budget_exceeded`; for a newly requested tool chain, that feasibility check occurs before any tool side effect.
+Each changed omission set is persisted as an `agent.run.step` notice and rendered inline during the live run. Historical nonterminal run notices are currently suppressed by the client replay watermark because messages do not carry an event/message interleaving key; the run's authoritative terminal or recovery state still reopens from message history. If even the current turn, skills, required schemas, tool protocol, and minimal result markers cannot fit, the run fails with `context_budget_exceeded`; for a newly requested tool chain, that feasibility check occurs before any tool side effect.
 
 When a provider stops because it reaches the configured output reservation, the partial answer remains successful but a durable `agent.run.step` notice names the matching output setting. The notice is emitted before a final completion or before executing a complete tool call from that length-limited turn. If an OpenAI-compatible stream reaches `length` with an unfinished tool fragment, the fragment is discarded and never executed.
 
@@ -233,6 +233,7 @@ or migration.
 ## Documentation
 
 - [Tech stack and architecture](docs/architecture/tech-stack.md)
+- [Durable run outcomes](docs/architecture/run-outcomes.md)
 - [Stable session title lifecycle](docs/architecture/session-titles.md)
 - [Session lifecycle and pagination](docs/architecture/session-lifecycle.md)
 - [Audit read API](docs/architecture/audit-read-api.md)

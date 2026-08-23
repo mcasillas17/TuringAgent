@@ -639,8 +639,18 @@ func TestRoutedRunFailsWithTheResolverError(t *testing.T) {
 		t.Fatal("no run failure emitted")
 	}
 
-	if !strings.Contains(failure.GetMessage(), "TURING_AGENT_API_KEYS") {
-		t.Fatalf("message = %q, want the resolver's explanation", failure.GetMessage())
+	// The resolver's explanation — which names the environment variable an
+	// operator has to set — stays in the runtime's own error. What crosses the
+	// boundary is that this run could not reach the external provider it was
+	// routed to, which is what the orchestrator turns into a public outcome.
+	if failure.GetCode() != "external_agent_unavailable" {
+		t.Fatalf("code = %q, want external_agent_unavailable", failure.GetCode())
+	}
+	if failure.GetFailureOrigin() != turingv1.FailureOrigin_FAILURE_ORIGIN_EXTERNAL_PROVIDER {
+		t.Fatalf("origin = %v, want external provider", failure.GetFailureOrigin())
+	}
+	if failure.GetMessage() != "" {
+		t.Fatalf("resolver text crossed the runtime boundary as %q", failure.GetMessage())
 	}
 }
 

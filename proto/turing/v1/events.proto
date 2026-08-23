@@ -6,6 +6,7 @@ option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv
 
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
+import "turing/v1/common.proto";
 
 enum TuringEventType {
   TURING_EVENT_TYPE_UNSPECIFIED = 0;
@@ -31,6 +32,7 @@ enum TuringEventType {
   TURING_EVENT_TYPE_SYSTEM = 20;
   TURING_EVENT_TYPE_SESSION_UPDATED = 21;
   TURING_EVENT_TYPE_SESSION_DELETED = 22;
+  TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED = 23;
 }
 
 message TuringEvent {
@@ -42,6 +44,16 @@ message TuringEvent {
   TuringEventType type = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Struct payload = 8;
+  // The resulting run state, so replayed history carries the same
+  // authoritative outcome the live stream did. Set only for the repository's
+  // own closed carrier set — agent.run.queued/started/state_changed/
+  // completed/failed/cancelled and the approval.requested/approval.approved
+  // carriers (approval.approved never itself moves a run's lifecycle; it
+  // still carries the run state as it stands). Absent for every other event
+  // type, including every other approval event (approval.denied/expired/
+  // consumed), even when that row's own payload contains a well-formed value
+  // under a runState key.
+  RunState run_state = 9;
 }
 
 message ListEventsRequest {

@@ -59,7 +59,7 @@ func (*descriptionDrivenIntegrationProvider) EstimateRequestTokens(req llm.ChatR
 	return estimateTestProviderRequest(req)
 }
 func (p *descriptionDrivenIntegrationProvider) StreamChat(_ context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
-	out := make(chan llm.StreamEvent, 1)
+	out := make(chan llm.StreamEvent, 2)
 	p.requests = append(p.requests, req)
 	call := p.calls.Add(1)
 	if call == 1 {
@@ -77,8 +77,10 @@ func (p *descriptionDrivenIntegrationProvider) StreamChat(_ context.Context, req
 			ID: "provider_integration_call", Name: "github.list_issues",
 			Arguments: map[string]any{"connection_id": connectionID, "owner": "owner", "repo": "repo"},
 		}}}
+		out <- llm.StreamEvent{Type: "completed", FinishReason: "tool_calls"}
 	} else {
 		out <- llm.StreamEvent{Type: "delta", Text: "Issues listed."}
+		out <- llm.StreamEvent{Type: "completed", FinishReason: "stop"}
 	}
 	close(out)
 	return out, nil
@@ -106,6 +108,9 @@ func integrationExecuteJob(t *testing.T, connectionID string) *turingv1.AgentJob
 			ConnectionId: connectionID, DisplayName: "Personal GitHub", Tools: []string{"github.list_issues"},
 		}},
 	}
+	if err := validateEgressDecisionShape(job); err != nil {
+		t.Fatalf("integration job egress decision: %v", err)
+	}
 	return job
 }
 
@@ -124,6 +129,12 @@ func integrationApprovalRunner(afterErr error) *runnertools.Runner {
 			}, nil
 		},
 		WaitApproval: func(context.Context, string) (string, error) { return "approved", nil },
+		ResumeApproved: func(_ context.Context, resume runnertools.ApprovalResume) error {
+			if resume.RunID == "" || resume.ApprovalID != "approval_read" {
+				return errors.New("integration approval resume context mismatch")
+			}
+			return nil
+		},
 	}
 }
 
@@ -172,7 +183,10 @@ func TestFrozenIntegrationToolFailsWhenCurrentDiscoveryIsEmpty(t *testing.T) {
 			failure = update.GetRunFailed()
 		}
 	}
-	if failure == nil || failure.GetCode() != "egress_decision_invalid" || !strings.Contains(failure.GetMessage(), "selected tool snapshot is unavailable") {
+	if failure == nil ||
+		failure.GetCode() != "egress_decision_invalid" ||
+		failure.GetFailureOrigin() != turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_POLICY ||
+		failure.GetAutomaticRetryClass() != turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_NEVER {
 		t.Fatalf("failure=%+v, want snapshot-unavailable run failure", failure)
 	}
 }
@@ -189,7 +203,8 @@ func TestExecuteDispatchesIntegrationUsingConnectionIDFromToolDescription(t *tes
 	)
 	updates := collectUpdates(t, assistant, job)
 	if client.calls.Load() != 1 || client.connectionID != connectionID {
-		t.Fatalf("integration calls=%d connection=%q, want one call using advertised id", client.calls.Load(), client.connectionID)
+		t.Fatalf("integration calls=%d connection=%q provider calls=%d requests=%+v updates=%+v, want one call using advertised id",
+			client.calls.Load(), client.connectionID, provider.calls.Load(), provider.requests, updates)
 	}
 	if provider.calls.Load() != 2 || updates[len(updates)-1].GetRunCompleted() == nil {
 		t.Fatalf("provider calls=%d final update=%+v", provider.calls.Load(), updates[len(updates)-1])

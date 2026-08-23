@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 // ErrSessionNotFound reports a delete for a session id that does not exist, so
@@ -169,7 +171,7 @@ func cancelSessionWorkTx(ctx context.Context, tx *sql.Tx, sessionID string) erro
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id
 		FROM agent_runs
-		WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_approval')
+		WHERE session_id = ? AND status IN ('queued', 'running', 'waiting_approval', 'recovering')
 		ORDER BY created_at, id
 	`, sessionID)
 	if err != nil {
@@ -190,31 +192,12 @@ func cancelSessionWorkTx(ctx context.Context, tx *sql.Tx, sessionID string) erro
 		return err
 	}
 
-	finishedAt := now()
 	for _, runID := range runIDs {
-		if _, err := failPendingApprovalLifecycleTx(ctx, tx, runID, "session_deleting", "Session deletion is in progress", finishedAt); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE jobs
-			SET status = 'cancelled',
-				finished_at = ?,
-				error_code = 'session_deleting',
-				error_message = 'Session deletion is in progress',
-				lease_owner = NULL,
-				lease_expires_at = NULL,
-				lease_expires_at_ns = NULL
-			WHERE run_id = ? AND status IN ('pending', 'in_progress')
-		`, finishedAt, runID); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE agent_runs
-			SET status = 'cancelled',
-				cancellation_reason = 'session_deleting',
-				finished_at = ?
-			WHERE id = ? AND status IN ('queued', 'running', 'waiting_approval')
-		`, finishedAt, runID); err != nil {
+		if _, err := cancelRunTx(ctx, tx, CancelRunInput{
+			RunID:              runID,
+			Cancellation:       runoutcome.AbandonedCancellation(),
+			resolveVersionInTx: true,
+		}); err != nil {
 			return err
 		}
 	}
@@ -625,12 +608,16 @@ func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error 
 
 	// Refuse before mutating anything, so a rejected delete leaves no trace.
 	//
+	// 'recovering' counts as active for the same reason the recovery scan sees
+	// it: nobody has proven the worker is gone, so a worker may still be
+	// holding these rows.
+	//
 	// Status alone is not enough — two paths leave a run terminal-by-status with
 	// execution still live:
-	//   - CancelRun / CancelRunWithEvent set status='cancelled' and never touch
-	//     execution_active at all (runs.go). This is the user-reachable one.
-	//   - failRunWithEventTx(preserveExecution=true) keeps execution_active = 1
-	//     with execution_state = 'uncertain'.
+	//   - cancelRunTx leaves execution_active untouched. This is the
+	//     user-reachable one.
+	//   - failRunTx with PreserveExecution keeps execution_active = 1 and marks
+	//     execution_state = 'uncertain'.
 	// The recovery machinery treats both as in flight (assignments.go queries
 	// execution_active = 1 alongside terminal statuses). Deleting then cascades
 	// rows out from under a worker that has not acknowledged exit, and the
@@ -640,7 +627,7 @@ func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error 
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM agent_runs
 		WHERE session_id = ?
-			AND (status IN ('queued','running','waiting_approval') OR execution_active = 1)
+			AND (status IN ('queued','running','waiting_approval','recovering') OR execution_active = 1)
 	`, sessionID).Scan(&active); err != nil {
 		return err
 	}

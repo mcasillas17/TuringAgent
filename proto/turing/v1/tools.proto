@@ -61,4 +61,9 @@ message ToolPolicyDecision {
   // Authored by the orchestrator. Approval waiting is still policy-driven;
   // this bit only controls failure/side-effect classification.
   bool read_only = 8;
+  // The run's committed state version at the moment of this decision. A
+  // matching tool beacon can therefore prove ownership: the response carries
+  // the version forward before tool or model work continues, so a worker never
+  // advances past the state the orchestrator has committed.
+  int64 run_state_version = 9;
 }

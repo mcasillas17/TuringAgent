@@ -1,3 +1,5 @@
+import 'package:fixnum/fixnum.dart';
+
 import '../generated/google/protobuf/struct.pb.dart' as structpb;
 import '../generated/google/protobuf/timestamp.pb.dart' as timestamppb;
 
@@ -12,12 +14,15 @@ import '../generated/turing/v1/integrations.pb.dart' as integrationpb;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
+import '../utils/protobuf_enum.dart';
 import 'agent_descriptor.dart' as model_agent;
 import 'audit.dart' as model_audit;
 import 'external_agent.dart' as model_external_agent;
 import 'integration.dart' as model_integration;
 import 'automation.dart' as model_automation;
 import 'message.dart' as model_message;
+import 'run_lifecycle.dart' as model_run_lifecycle;
+import 'run_state.dart' as model_run_state;
 import 'search_hit.dart' as model_search_hit;
 import 'session.dart' as model_session;
 import 'session_page.dart' as model_session_page;
@@ -376,6 +381,9 @@ class GrpcMappers {
     return model_message.Message(
       messageId: message.messageId,
       runId: message.runId.isEmpty ? null : message.runId,
+      runState: message.hasRunState()
+          ? runStateToModel(message.runState)
+          : null,
       role: messageRoleToString(message.role),
       content: message.content,
       sequence: message.sequence.toInt(),
@@ -428,6 +436,7 @@ class GrpcMappers {
       type: eventTypeToString(event.type),
       createdAt: _timestampToDateTime(event.createdAt),
       payload: structToMap(event.payload),
+      runState: event.hasRunState() ? runStateToModel(event.runState) : null,
     );
   }
 
@@ -448,7 +457,180 @@ class GrpcMappers {
       type: type,
       createdAt: DateTime.now().toUtc(),
       payload: _chatStreamPayload(event),
+      runState: _chatStreamRunState(event),
     );
+  }
+
+  static model_run_state.RunState? runStateToModel(commonpb.RunState runState) {
+    final version = runState.stateVersion.toInt();
+    if (runState.runId.isEmpty ||
+        version < 1 ||
+        Int64(version) != runState.stateVersion) {
+      return null;
+    }
+    // state_updated_at absence is fail-closed (see the constant block
+    // below), so it is checked before conversion is even attempted.
+    if (!runState.hasStateUpdatedAt()) {
+      return null;
+    }
+    final stateUpdatedAt = _validatedTimestamp(runState.stateUpdatedAt);
+    if (stateUpdatedAt == null) {
+      return null;
+    }
+    // finished_at is optional (a still-running run has none), so absence
+    // stays null. But a *present* value that fails the same range check as
+    // state_updated_at is corrupt data, not "not yet finished" — silently
+    // dropping just this field would let a terminal run render as if it
+    // were still in flight. Reject the whole snapshot instead, matching the
+    // fail-closed handling already applied to run id, state version, and
+    // state_updated_at above.
+    DateTime? finishedAt;
+    if (runState.hasFinishedAt()) {
+      finishedAt = _validatedTimestamp(runState.finishedAt);
+      if (finishedAt == null) {
+        return null;
+      }
+    }
+    return model_run_state.RunState(
+      runId: runState.runId,
+      userMessageId: runState.userMessageId,
+      assistantMessageId: runState.assistantMessageId,
+      lifecycle: runLifecycleToModel(
+        decodeClosedEnum(
+          message: runState,
+          fieldNumber: 4,
+          readValue: () => runState.lifecycle,
+          unknownValue: commonpb.RunLifecycle.RUN_LIFECYCLE_UNKNOWN,
+        ),
+      ),
+      outcomeReason: runOutcomeReasonToModel(
+        decodeClosedEnum(
+          message: runState,
+          fieldNumber: 5,
+          readValue: () => runState.outcomeReason,
+          unknownValue: commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_UNKNOWN,
+        ),
+      ),
+      stateVersion: version,
+      stateUpdatedAt: stateUpdatedAt,
+      finishedAt: finishedAt,
+      hasDisplayableContent: runState.hasDisplayableContent,
+    );
+  }
+
+  // state_version is the sole reconciliation ordering authority: callers
+  // order snapshots by state_version, never by wall clock, and
+  // RunStateReconciler is what rejects a snapshot that is not newer.
+  // runStateToModel and _validatedTimestamp only validate that
+  // state_updated_at is present and within the protobuf Timestamp range, then
+  // convert it to DateTime at microsecond precision (Dart's DateTime
+  // resolution, coarser than the nanosecond a Timestamp can hold) — they do
+  // not decide ordering. state_updated_at instead carries the required
+  // durable, public evidence of *when* that version was recorded: it is
+  // exposed to clients and persisted, so an absent field must not silently
+  // become epoch — which is exactly the instant _timestampToDateTime returns
+  // for a genuinely-set all-zero Timestamp. hasStateUpdatedAt() distinguishes
+  // a submessage this build never populated from one that was populated with
+  // all-default values, and a populated one whose seconds or nanos escape the
+  // documented protobuf Timestamp range (seconds must be from
+  // 0001-01-01T00:00:00Z to 9999-12-31T23:59:59Z inclusive, i.e.
+  // -62135596800..253402300799, and nanos from 0 to 999999999) is rejected
+  // before conversion. Either failure omits the whole snapshot instead of
+  // fabricating a fallback field value.
+  static const int _timestampMinSeconds = -62135596800;
+  static const int _timestampMaxSeconds = 253402300799;
+  static const int _timestampMaxNanos = 999999999;
+
+  static bool _isValidTimestamp(timestamppb.Timestamp timestamp) {
+    final seconds = timestamp.seconds;
+    if (seconds < Int64(_timestampMinSeconds) ||
+        seconds > Int64(_timestampMaxSeconds)) {
+      return false;
+    }
+    final nanos = timestamp.nanos;
+    return nanos >= 0 && nanos <= _timestampMaxNanos;
+  }
+
+  // _validatedTimestamp converts one *present* Timestamp submessage to
+  // DateTime, or returns null if its seconds/nanos escape the ranges
+  // google.protobuf.Timestamp documents. It is field-agnostic: whether an
+  // absent submessage means "not yet finished" or "reject the whole
+  // snapshot" is a caller decision (see the hasStateUpdatedAt()/
+  // hasFinishedAt() presence checks above), so this helper only judges the
+  // validity of a value that is already known to be present.
+  static DateTime? _validatedTimestamp(timestamppb.Timestamp timestamp) {
+    if (!_isValidTimestamp(timestamp)) {
+      return null;
+    }
+    return _timestampToDateTime(timestamp);
+  }
+
+  static model_run_lifecycle.RunLifecycle runLifecycleToModel(
+    commonpb.RunLifecycle lifecycle,
+  ) {
+    switch (lifecycle) {
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_QUEUED:
+        return model_run_lifecycle.RunLifecycle.queued;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_RUNNING:
+        return model_run_lifecycle.RunLifecycle.running;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_WAITING_APPROVAL:
+        return model_run_lifecycle.RunLifecycle.waitingApproval;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_RECOVERING:
+        return model_run_lifecycle.RunLifecycle.recovering;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_COMPLETED:
+        return model_run_lifecycle.RunLifecycle.completed;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_FAILED:
+        return model_run_lifecycle.RunLifecycle.failed;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_CANCELLED:
+        return model_run_lifecycle.RunLifecycle.cancelled;
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_UNSPECIFIED:
+      case commonpb.RunLifecycle.RUN_LIFECYCLE_UNKNOWN:
+      default:
+        return model_run_lifecycle.RunLifecycle.unknown;
+    }
+  }
+
+  static model_run_state.RunOutcomeReason runOutcomeReasonToModel(
+    commonpb.RunOutcomeReason reason,
+  ) {
+    switch (reason) {
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_NONE:
+        return model_run_state.RunOutcomeReason.none;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_COMPLETED_NO_CONTENT:
+        return model_run_state.RunOutcomeReason.completedNoContent;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_USER_CANCELLED:
+        return model_run_state.RunOutcomeReason.userCancelled;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_ABANDONED:
+        return model_run_state.RunOutcomeReason.abandoned;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_EXPIRED:
+        return model_run_state.RunOutcomeReason.expired;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_CONTEXT_LIMIT:
+        return model_run_state.RunOutcomeReason.contextLimit;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_PROVIDER_FAILURE:
+        return model_run_state.RunOutcomeReason.providerFailure;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_TOOL_FAILURE:
+        return model_run_state.RunOutcomeReason.toolFailure;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_POLICY_DENIED:
+        return model_run_state.RunOutcomeReason.policyDenied;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_RETRIES_EXHAUSTED:
+        return model_run_state.RunOutcomeReason.retriesExhausted;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_RECOVERY_INTERRUPTED:
+        return model_run_state.RunOutcomeReason.recoveryInterrupted;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN:
+        return model_run_state.RunOutcomeReason.sideEffectUncertain;
+      case commonpb
+          .RunOutcomeReason
+          .RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED:
+        return model_run_state.RunOutcomeReason.approvalDeliveryFailed;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_INTERNAL_FAILURE:
+        return model_run_state.RunOutcomeReason.internalFailure;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_LEGACY_UNKNOWN:
+        return model_run_state.RunOutcomeReason.legacyUnknown;
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_UNSPECIFIED:
+      case commonpb.RunOutcomeReason.RUN_OUTCOME_REASON_UNKNOWN:
+      default:
+        return model_run_state.RunOutcomeReason.unknown;
+    }
   }
 
   static String modelProviderToString(commonpb.ModelProvider provider) {
@@ -532,6 +714,8 @@ class GrpcMappers {
         return 'system';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_SESSION_UPDATED:
         return 'session.updated';
+      case eventpb.TuringEventType.TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED:
+        return 'agent.run.state_changed';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_SESSION_DELETED:
         return 'session.deleted';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_UNSPECIFIED:
@@ -607,6 +791,8 @@ class GrpcMappers {
         return 'agent.run.cancelled';
       case chatpb.ChatStreamEvent_Event.persistedEvent:
         return eventTypeToString(event.persistedEvent.type);
+      case chatpb.ChatStreamEvent_Event.runStateChanged:
+        return 'agent.run.state_changed';
       case chatpb.ChatStreamEvent_Event.notSet:
         return 'system';
     }
@@ -668,6 +854,8 @@ class GrpcMappers {
           'runId': event.runFailed.runId,
           'code': event.runFailed.code,
           'message': event.runFailed.message,
+          // Deprecated on the wire but retained while older servers emit it.
+          // ignore: deprecated_member_use_from_same_package
           'retryable': event.runFailed.retryable,
         };
       case chatpb.ChatStreamEvent_Event.runCancelled:
@@ -677,6 +865,8 @@ class GrpcMappers {
         };
       case chatpb.ChatStreamEvent_Event.persistedEvent:
         return structToMap(event.persistedEvent.payload);
+      case chatpb.ChatStreamEvent_Event.runStateChanged:
+        return const {};
       case chatpb.ChatStreamEvent_Event.notSet:
         return const {};
     }
@@ -697,6 +887,64 @@ class GrpcMappers {
       'toolName': event.toolName,
       'argsSummary': event.argsSummary,
     };
+  }
+
+  static model_run_state.RunState? _chatStreamRunState(
+    chatpb.ChatStreamEvent event,
+  ) {
+    commonpb.RunState? state;
+    switch (event.whichEvent()) {
+      case chatpb.ChatStreamEvent_Event.runQueued:
+        state = event.runQueued.hasRunState() ? event.runQueued.runState : null;
+      case chatpb.ChatStreamEvent_Event.runStarted:
+        state = event.runStarted.hasRunState()
+            ? event.runStarted.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.approvalRequested:
+        state = event.approvalRequested.hasRunState()
+            ? event.approvalRequested.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.approvalApproved:
+        state = event.approvalApproved.hasRunState()
+            ? event.approvalApproved.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.approvalDenied:
+        state = event.approvalDenied.hasRunState()
+            ? event.approvalDenied.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.approvalExpired:
+        state = event.approvalExpired.hasRunState()
+            ? event.approvalExpired.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.approvalConsumed:
+        state = event.approvalConsumed.hasRunState()
+            ? event.approvalConsumed.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.runCompleted:
+        state = event.runCompleted.hasRunState()
+            ? event.runCompleted.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.runFailed:
+        state = event.runFailed.hasRunState() ? event.runFailed.runState : null;
+      case chatpb.ChatStreamEvent_Event.runCancelled:
+        state = event.runCancelled.hasRunState()
+            ? event.runCancelled.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.runStateChanged:
+        state = event.runStateChanged.hasRunState()
+            ? event.runStateChanged.runState
+            : null;
+      case chatpb.ChatStreamEvent_Event.messageStarted:
+      case chatpb.ChatStreamEvent_Event.tokenDelta:
+      case chatpb.ChatStreamEvent_Event.toolCallStarted:
+      case chatpb.ChatStreamEvent_Event.toolCallCompleted:
+      case chatpb.ChatStreamEvent_Event.toolCallFailed:
+      case chatpb.ChatStreamEvent_Event.messageCompleted:
+      case chatpb.ChatStreamEvent_Event.persistedEvent:
+      case chatpb.ChatStreamEvent_Event.notSet:
+        state = null;
+    }
+    return state == null ? null : runStateToModel(state);
   }
 
   /// Telemetry, where the interesting part of the mapping is what does NOT

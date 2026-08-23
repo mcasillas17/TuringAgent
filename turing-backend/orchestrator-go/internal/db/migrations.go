@@ -61,6 +61,12 @@ func ApplyMigrationsWithSkillsRoot(ctx context.Context, database *DB, skillsRoot
 		if err != nil {
 			return err
 		}
+		if hook, hooked := migrationHooks[version]; hooked {
+			if err := applyHookedMigration(ctx, database, version, string(sqlText), hook); err != nil {
+				return err
+			}
+			continue
+		}
 		tx, err := database.BeginTx(ctx, nil)
 		if err != nil {
 			return err

@@ -104,7 +104,7 @@ func TestRecoverStaleApprovedAuthorizationTerminalizesInsteadOfRequeueing(t *tes
 			"toolCallId": "call_stale_approved",
 			"toolName":   "files.update",
 			"serverName": "files",
-			"error":      "Stale assignment may have executed an approved tool call",
+			"category":   "side_effect_uncertain",
 		}
 		if !reflect.DeepEqual(payload, want) {
 			t.Fatalf("stale tool failure payload = %#v, want %#v", payload, want)

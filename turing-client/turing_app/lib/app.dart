@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'constants/app_colors.dart';
 import 'features/settings/settings_screen.dart';
 import 'logic/theme_logic.dart';
+import 'l10n/generated/app_localizations.dart';
 import 'networking/api_client.dart';
 import 'networking/auth_storage.dart';
 import 'networking/grpc_client.dart';
@@ -63,6 +64,8 @@ class _TuringAppState extends State<TuringApp> {
         return MaterialApp(
           title: 'Project Turing',
           debugShowCheckedModeBanner: false,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           theme: _buildTheme(Brightness.light),
           darkTheme: _buildTheme(Brightness.dark),
           themeMode: currentMode,

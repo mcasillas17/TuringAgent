@@ -8,9 +8,12 @@ import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 import '../../constants/app_colors.dart';
 import '../../models/message.dart';
 import '../../models/remote_egress.dart';
+import '../../models/run_lifecycle.dart';
+import '../../models/run_state.dart';
 import '../../models/turing_event.dart';
 import '../../networking/api_client.dart';
 import '../../networking/event_source.dart';
+import '../../utils/content_presence.dart';
 import '../approvals/approval_card.dart';
 import 'message_send_failure_card.dart';
 import 'message_send_unconfirmed_card.dart';
@@ -18,6 +21,8 @@ import 'run_cancelled_card.dart';
 import 'run_failure_card.dart';
 import 'run_notice_card.dart';
 import 'remote_egress_dialog.dart';
+import 'run_state_card.dart';
+import 'run_state_reconciler.dart';
 import 'tool_call_card.dart';
 
 final Random _sendIdempotencyRandom = Random.secure();
@@ -76,6 +81,36 @@ class _ChatScreenState extends State<ChatScreen> {
   final Map<String, _ToolCallEntry> _toolEntries = {};
   final List<_PendingApproval> _approvals = [];
   final Set<String> _completedHistoryRunIds = {};
+
+  /// One accepted [RunState] per run ID, reconciled from every message page
+  /// and every live/replayed event alike — the design's "history and live
+  /// events use this same path" requirement. See `run_state_reconciler.dart`.
+  final RunStateReconciler _runStateReconciler = RunStateReconciler();
+
+  /// The adjacent [_RunStateCardEntry] currently rendered for each run ID
+  /// that wants one, per [_wantsAdjacentCard]. Removed once a run no longer
+  /// wants a card (e.g. it completed with displayable content).
+  final Map<String, _RunStateCardEntry> _runStateEntries = {};
+
+  /// The neutral [_NoResponseCardEntry] currently rendered beside an
+  /// EMPTY, TUR-009-unaware historical assistant row (no [RunState] at
+  /// all) — keyed by that row's own message ID. Cleared the moment a delta
+  /// actually fills that row with content; see [_applyMessageDelta].
+  final Map<String, _NoResponseCardEntry> _noResponseEntries = {};
+
+  /// Bounded holding area for a [RunState] snapshot that arrives before
+  /// this screen's own startup ([_initializing]) has settled. Drained, in
+  /// one batch, the moment startup finishes.
+  final RunStateLoadBuffer _runStateLoadBuffer = RunStateLoadBuffer();
+
+  /// True while one coalesced newest-page resync pass is in flight.
+  bool _resyncScheduled = false;
+
+  /// Records that at least one unloaded snapshot arrived after the current
+  /// resync request began. Any number of such arrivals costs one follow-up
+  /// page request, so a terminal transition cannot be lost behind a stale
+  /// in-flight response without degrading into one request per event.
+  bool _resyncPending = false;
 
   /// Approval ids with an `approveApproval`/`denyApproval` RPC currently in
   /// flight — see [_approve]/[_deny]. Drives each [ApprovalCard.busy] so a
@@ -300,7 +335,48 @@ class _ChatScreenState extends State<ChatScreen> {
     // fixed, history has settled (loaded or visibly failed) so a send cannot
     // race its own prepend, and the subscription that would carry that
     // send's events is open and was not dead on arrival.
-    setState(() => _initializing = false);
+    //
+    // Drain whatever the bounded run-state buffer collected during this
+    // exact window BEFORE flipping `_initializing` — a snapshot for a run
+    // whose message this batch itself loaded reconciles and renders right
+    // now; one for a run this screen still has no local row for (or the
+    // buffer's own 65th-distinct-run overflow) is deferred to exactly one
+    // coalesced resync, requested only once startup itself is done.
+    final bufferOverflowed = _runStateLoadBuffer.resyncRequired;
+    final buffered = _runStateLoadBuffer.drainAndClear();
+    var needsResync = bufferOverflowed;
+    setState(() {
+      for (final state in buffered) {
+        final assistantIndex = _assistantEntryIndexForRun(state.runId);
+        final result = _runStateReconciler.reconcile(
+          state,
+          isLoaded: assistantIndex != null,
+        );
+        if (result.outcome == RunStateReconciliationOutcome.unloaded) {
+          needsResync = true;
+          continue;
+        }
+        if (assistantIndex == null) continue;
+        if (result.isAccepted) {
+          // By this point `_loadInitialMessages` has already fully seeded
+          // `_messages`, so this is exactly the same "reconstructing a row
+          // already placed as part of a batch" shape `_ingestMessagePage`
+          // handles — the buffered run's own row can sit anywhere in that
+          // batch, not only at its current end. `_upsertRunStateCard`
+          // itself resolves the correct position: right after every
+          // contiguous same-run tool/notice artifact this run already has
+          // on screen, which a live tool event delivered during this exact
+          // startup window (not buffered — only `RunState` is) can already
+          // have created.
+          _upsertRunStateCard(
+            result.current!,
+            _messages[assistantIndex] as _MessageEntry,
+          );
+        }
+      }
+      _initializing = false;
+    });
+    if (needsResync) _requireCoalescedResync();
   }
 
   /// Opens the live event subscription and reports whether it is actually,
@@ -391,46 +467,6 @@ class _ChatScreenState extends State<ChatScreen> {
   /// screen's own startup.
   static const _sendingNotice = 'Sending...';
 
-  /// Shown when an `agent.run.step` arrives without a usable `note`. It must
-  /// stay producer-neutral: the tool-iteration cap is no longer the only source
-  /// of this event — retries, lost workers, exhausted attempts and recall all
-  /// emit it — so naming any one of them would mislabel the others.
-  static const _runStepFallbackNotice =
-      'The run reported a step with no description';
-
-  /// Shown for an `agent.run.failed` event whose payload carries neither a
-  /// usable `message` nor a `code` to derive one from.
-  static const _runFailureFallbackNotice =
-      'The run failed with no further details';
-
-  /// Shown for an `agent.run.cancelled` event whose `reason` is not the one
-  /// known value below — missing, empty/whitespace-only, a non-string value
-  /// that [_asString] already turned into `null`, or any other string. It is
-  /// deliberately generic: `reason` is machine metadata (see
-  /// [_clientCancelledReason]), so an unrecognized value must never be
-  /// echoed to the user verbatim.
-  static const _runCancellationFallbackNotice =
-      'The run was cancelled with no further details';
-
-  /// The only `reason` value the backend currently emits with
-  /// `agent.run.cancelled` (`cancelRun`, orchestrator-go
-  /// internal/service/chat/service.go). It fires on exactly two conditions:
-  /// `SendMessage`'s own context being cancelled — checked at four
-  /// checkpoints (the initial `RunQueued` send, the dispatch loop's
-  /// teardown, a replay-events error, and a relayed event send) — or a
-  /// `DispatchPending` failure, which cancels unconditionally regardless of
-  /// context state. A bare `stream.Send` failure never triggers this by
-  /// itself; it only does at those checkpoints once the context is already
-  /// cancelled. Its human copy below must stay truthful for both
-  /// conditions, not name just one of them.
-  static const _clientCancelledReason = 'client_cancelled';
-
-  /// Shown for an `agent.run.cancelled` event whose `reason` is
-  /// [_clientCancelledReason]. `reason` itself is machine metadata, not
-  /// display copy, so the raw enum must never reach the user.
-  static const _clientCancelledNotice =
-      'The run was cancelled before it could finish';
-
   /// `GrpcError` codes CONFIRMED — by the backend's own `SendMessage`
   /// handler (orchestrator-go internal/service/chat/service.go) — to occur
   /// only before it ever reaches `EnqueueUserMessage`, never after:
@@ -494,11 +530,12 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Shown when `sendMessage` rejects with anything OTHER than
   /// [_isConfirmedPreEnqueueSendFailure]'s allowlist — see [_sendMessage]'s
   /// `catch`. Deliberately fixed and generic rather than derived from the
-  /// thrown error: unlike [_runFailureFallbackNotice]/[_runCancellationFallbackNotice],
-  /// which fall back only when a real event's own payload lacks detail, here
-  /// there is no server-authored payload to read from at all — the thrown
-  /// value is a raw `GrpcError`/[TuringApiException] never meant for display,
-  /// and may carry request ids or other diagnostic detail unsafe to echo.
+  /// thrown error: unlike [_applyRunFailed]/[_applyRunCancelled]'s own
+  /// legacy fallback, which resolves only a fixed, safe `RunOutcomeReason`
+  /// rather than any payload text, here there is no server-authored payload
+  /// to read from at all — the thrown value is a raw
+  /// `GrpcError`/[TuringApiException] never meant for display, and may
+  /// carry request ids or other diagnostic detail unsafe to echo.
   ///
   /// Deliberately does NOT say "not sent" or "failed": the backend persists
   /// the enqueued message and its run BEFORE attempting to acknowledge it
@@ -629,16 +666,140 @@ class _ChatScreenState extends State<ChatScreen> {
       sessionId: widget.sessionId,
     );
     if (!mounted || messages.isEmpty) return;
-    final entries = <_MessageEntry>[];
-    for (final message in messages) {
+    setState(() => _ingestMessagePage(messages, isInitialLoad: true));
+    _scrollToBottom();
+  }
+
+  /// Applies one page of message rows — either the very first history load
+  /// ([isInitialLoad] true, prepended above any live entries as one block)
+  /// or a later coalesced newest-page resync ([isInitialLoad] false,
+  /// appended) — as a single unit: every row's message ID is deduplicated
+  /// against what is already on screen, and every row's own [RunState] (if
+  /// any) is independently reconciled and rendered beside that row.
+  ///
+  /// Must be called from inside a `setState`.
+  void _ingestMessagePage(
+    List<Message> messages, {
+    required bool isInitialLoad,
+  }) {
+    if (messages.isEmpty) return;
+    _adoptPersistedUserMessageIdentities(messages);
+    final alreadyLoadedMessageIds = _messages
+        .whereType<_MessageEntry>()
+        .map((entry) => entry.messageId)
+        .toSet();
+    final loadedRunIds = {
+      ..._messages
+          .whereType<_MessageEntry>()
+          .where((entry) => !entry.isUser && entry.runId != null)
+          .map((entry) => entry.runId!),
+      ...messages
+          .where(
+            (message) => message.role == 'assistant' && message.runId != null,
+          )
+          .map((message) => message.runId!),
+    };
+    final pageResults = reconcilePage(
+      _runStateReconciler,
+      messages.map(
+        (message) => MessagePageEntry(
+          messageId: message.messageId,
+          runState: message.runState,
+        ),
+      ),
+      alreadyLoadedMessageIds,
+      loadedRunIds: loadedRunIds,
+    );
+    final prepend = <_MessageEntry>[];
+    final pendingNoResponse = <_MessageEntry>[];
+    for (var i = 0; i < messages.length; i++) {
+      final message = messages[i];
+      final pageResult = pageResults[i];
+      if (pageResult.isDuplicateMessage) {
+        // Already rendered by an earlier page/live delta — dedup by message
+        // ID: never a second bubble for the same row. Its own run state, if
+        // this page carries one, is still reconciled below regardless — an
+        // overlapping page load must not suppress a real state advance just
+        // because the ROW itself is a repeat. The row's CONTENT can still
+        // legitimately change across an overlapping load though: a run
+        // that was still streaming (adopted empty) on an earlier page can
+        // have finished by the time a later page reports it, with no live
+        // `message.delta` for this exact client to have caught that on its
+        // own (e.g. the run advanced entirely between page loads). Sync
+        // the authoritative text in place rather than leaving a stale
+        // empty/partial bubble beside a now-terminal card.
+        final existingEntries = _messageEntries(message.messageId);
+        final existing = existingEntries.first;
+        if (message.role == 'assistant' && message.runId != null) {
+          for (final entry in existingEntries) {
+            entry.runId ??= message.runId;
+          }
+        }
+        final stateOutcome = pageResult.stateResult?.outcome;
+        final canApplyPersistedContent =
+            stateOutcome != RunStateReconciliationOutcome.stale &&
+            stateOutcome != RunStateReconciliationOutcome.inconsistent;
+        if (!existing.isUser && canApplyPersistedContent) {
+          // Persisted assistant content is authoritative once it is
+          // displayable. Before terminalization, however, the durable row is
+          // still the empty enqueue placeholder while live deltas may already
+          // have filled the on-screen entry. Never let that stale placeholder
+          // erase partial text the user has already seen.
+          if (hasDisplayableContent(message.content)) {
+            existing.content.value = message.content;
+            for (final trailing in existingEntries.skip(1)) {
+              trailing.content.value = '';
+            }
+          } else if (!existingEntries.any(
+            (entry) => hasDisplayableContent(entry.content.value),
+          )) {
+            existing.content.value = message.content;
+          }
+          if (hasDisplayableContent(message.content)) {
+            final noResponseCard = _noResponseEntries.remove(message.messageId);
+            if (noResponseCard != null) {
+              _messages.remove(noResponseCard);
+              noResponseCard.dispose();
+            }
+            _assistantEntries.remove(message.messageId);
+            _completedHistoryMessageIds.add(message.messageId);
+            final runId = message.runId;
+            if (message.role == 'assistant' && runId != null) {
+              _completedHistoryRunIds.add(runId);
+            }
+          }
+        }
+        final runId = message.runId;
+        if (runId != null && pageResult.stateResult?.isAccepted != true) {
+          final state = _runStateReconciler.stateFor(runId);
+          if (state != null) {
+            _syncRunStateCardPresenceForContent(state);
+          }
+        }
+        continue;
+      }
       final entry = _MessageEntry.fromMessage(message);
-      entries.add(entry);
-      if (!entry.isUser && message.content.isEmpty) {
-        // An assistant row with no content is a turn that is still streaming:
-        // the row is inserted empty when the job is created. Adopt it as the
-        // live bubble so replayed and live deltas land IN it rather than
-        // opening a duplicate bubble underneath.
+      if (isInitialLoad) {
+        prepend.add(entry);
+      } else if (_historyLoadFailed) {
+        _insertRecoveredHistoryEntry(entry, messages, i);
+      } else {
+        _messages.add(entry);
+      }
+      if (!entry.isUser && !hasDisplayableContent(message.content)) {
+        // An assistant row with no content is a turn that is still
+        // streaming: the row is inserted empty when the job is created.
+        // Adopt it as the live bubble so replayed and live deltas land IN
+        // it rather than opening a duplicate bubble underneath.
         _assistantEntries[message.messageId] = entry;
+        if (message.runState == null) {
+          // No canonical state at all for this empty row: this app cannot
+          // tell running from abandoned from anything else, so it must not
+          // guess. Show the neutral, terminal-only legacy fallback instead
+          // of silence — cleared the moment real content actually arrives
+          // (see `_applyMessageDelta`).
+          pendingNoResponse.add(entry);
+        }
       } else {
         _completedHistoryMessageIds.add(message.messageId);
         final runId = message.runId;
@@ -648,11 +809,377 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     // Seed history non-destructively: prepend it above any live entries. A
-    // destructive clear+addAll here would leak their notifiers and orphan the
-    // correlation maps (`_toolEntries` / `_assistantEntries`) so later terminal
-    // events would mutate cards no widget listens to.
-    setState(() => _messages.insertAll(0, entries));
+    // destructive clear+addAll here would leak their notifiers and orphan
+    // the correlation maps (`_toolEntries` / `_assistantEntries`) so later
+    // terminal events would mutate cards no widget listens to.
+    if (prepend.isNotEmpty) _messages.insertAll(0, prepend);
+    for (final entry in pendingNoResponse) {
+      final card = _NoResponseCardEntry();
+      _noResponseEntries[entry.messageId] = card;
+      _messages.insert(_messages.indexOf(entry) + 1, card);
+    }
+    for (final result in pageResults) {
+      final stateResult = result.stateResult;
+      if (stateResult == null || !stateResult.isAccepted) continue;
+      final state = stateResult.current!;
+      final assistantIndex = _assistantEntryIndexForRun(state.runId);
+      if (assistantIndex == null) continue;
+      _upsertRunStateCard(state, _messages[assistantIndex] as _MessageEntry);
+    }
+  }
+
+  /// Inserts one newly recovered row according to the durable page order
+  /// without replacing live rows, send attempts, tool cards, or state truth.
+  ///
+  /// The next page row that is already present is a stable insertion anchor.
+  /// If none exists, this row belongs after everything currently visible.
+  void _insertRecoveredHistoryEntry(
+    _MessageEntry entry,
+    List<Message> page,
+    int pageIndex,
+  ) {
+    for (var i = pageIndex + 1; i < page.length; i++) {
+      final nextIndex = _messageEntryIndex(page[i].messageId);
+      if (nextIndex != null) {
+        _messages.insert(nextIndex, entry);
+        return;
+      }
+    }
+    _messages.add(entry);
+  }
+
+  /// Replaces a pending optimistic user's local identity with the durable
+  /// message/run identity returned by a newest-page resync.
+  ///
+  /// A queued run-state event can reach the session subscription before the
+  /// independent SendMessage RPC future resolves. That event has no loaded
+  /// assistant row yet, so it correctly triggers a resync. The page's user
+  /// row is the durable form of the optimistic bubble already on screen; it
+  /// must adopt that bubble rather than render a second copy.
+  void _adoptPersistedUserMessageIdentities(List<Message> messages) {
+    final runIdByUserMessageId = <String, String>{};
+    for (final message in messages) {
+      final state = message.runState;
+      if (state != null && state.userMessageId.isNotEmpty) {
+        runIdByUserMessageId[state.userMessageId] = state.runId;
+      }
+    }
+    for (final message in messages) {
+      final runId = runIdByUserMessageId[message.messageId];
+      if (message.role != 'user' ||
+          runId == null ||
+          _messageEntryIndex(message.messageId) != null) {
+        continue;
+      }
+      final candidates = _messages.whereType<_MessageEntry>().where(
+        (entry) =>
+            entry.isUser &&
+            entry.canAdoptPersistedIdentity &&
+            entry.content.value == message.content &&
+            (entry.runId == null || entry.runId == runId),
+      );
+      _MessageEntry? candidate;
+      for (final entry in candidates) {
+        if (entry.runId == runId) {
+          candidate = entry;
+          break;
+        }
+        candidate ??= entry;
+      }
+      if (candidate == null) continue;
+      candidate.messageId = message.messageId;
+      candidate.runId = runId;
+      candidate.canAdoptPersistedIdentity = false;
+      candidate.hasAdoptedPersistedIdentity = true;
+      // Adopting a durable row disproves this attempt's unconfirmed-send
+      // warning even if the user has since edited the retry draft (which
+      // independently clears `_retryableSend`).
+      _removeSendOutcomeAfter(candidate);
+      final retry = _retryableSend;
+      if (retry != null && identical(retry.attempt, candidate)) {
+        // The page has now supplied the durable identity/correlation that the
+        // rejected RPC could not confirm. The warning and retry draft are
+        // stale; keep only the one adopted timeline bubble.
+        _retryableSend = null;
+        if (_controller.text.trim() == retry.content) _controller.clear();
+      }
+    }
+  }
+
+  /// Handles a [RunState] snapshot from a live or replayed event —
+  /// reconciled at the very top of [_applyEvent], before its type-specific
+  /// switch. During the narrow startup window before [_initializing]
+  /// settles, snapshots are held in [_runStateLoadBuffer] instead of acted
+  /// on immediately (see [_start]'s drain).
+  void _handleIncomingRunState(RunState incoming) {
+    if (_initializing) {
+      _runStateLoadBuffer.offer(incoming);
+      return;
+    }
+    final assistantIndex = _assistantEntryIndexForRun(incoming.runId);
+    final result = _runStateReconciler.reconcile(
+      incoming,
+      isLoaded: assistantIndex != null,
+    );
+    if (result.outcome == RunStateReconciliationOutcome.unloaded) {
+      // No local row for this run at all: reconciling it now would let the
+      // reconciler accept a state this screen can never actually SHOW,
+      // silently desynchronizing it from what is on screen. Discard the
+      // event and ask for exactly one coalesced resync instead — the next
+      // newest-page load either brings this run's row along (and its
+      // state reconciles normally then) or still doesn't, in which case
+      // nothing was lost by not guessing here.
+      _requireCoalescedResync();
+      return;
+    }
+    if (assistantIndex == null) return;
+    if (!result.isAccepted) return;
+    _upsertRunStateCard(
+      result.current!,
+      _messages[assistantIndex] as _MessageEntry,
+    );
+  }
+
+  /// Requests exactly one coalesced newest-page reload if none is already
+  /// scheduled or in flight — see [_resyncScheduled]'s own doc.
+  void _requireCoalescedResync() {
+    if (_resyncScheduled) {
+      _resyncPending = true;
+      return;
+    }
+    _resyncScheduled = true;
+    unawaited(_runCoalescedResync());
+  }
+
+  Future<void> _runCoalescedResync() async {
+    try {
+      do {
+        _resyncPending = false;
+        await _reloadNewestPage();
+      } while (mounted && _resyncPending);
+    } finally {
+      _resyncScheduled = false;
+      _resyncPending = false;
+    }
+  }
+
+  /// Best-effort: reuses the same `listMessages` call [_loadInitialMessages]
+  /// makes for its own first load, rather than adding a second pagination
+  /// mechanism. A failure here is silent and non-fatal — nothing was ever
+  /// promised to the user for a run this screen could not otherwise show,
+  /// so the composer/notice state this screen already has is untouched;
+  /// a later resync attempt (or a live event that DOES have a local row)
+  /// can still succeed independently.
+  Future<void> _reloadNewestPage() async {
+    final List<Message> messages;
+    try {
+      messages = await widget.apiClient.listMessages(
+        sessionId: widget.sessionId,
+      );
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    // An empty successful response cannot prove that the failed initial
+    // projection was empty. Keep replayed content and the warning intact.
+    if (messages.isEmpty) return;
+    setState(() {
+      _ingestMessagePage(messages, isInitialLoad: false);
+      _historyLoadFailed = false;
+    });
     _scrollToBottom();
+  }
+
+  /// The index of the [_MessageEntry] for [messageId], or null if no such
+  /// row is currently on screen.
+  int? _messageEntryIndex(String messageId) {
+    for (var i = 0; i < _messages.length; i++) {
+      final entry = _messages[i];
+      if (entry is _MessageEntry && entry.messageId == messageId) return i;
+    }
+    return null;
+  }
+
+  List<_MessageEntry> _messageEntries(String messageId) => _messages
+      .whereType<_MessageEntry>()
+      .where((entry) => entry.messageId == messageId)
+      .toList(growable: false);
+
+  /// The index of the ASSISTANT [_MessageEntry] belonging to [runId], or
+  /// null if this screen has no local row for that run at all. This is the
+  /// one place a run-state card's position, and its very eligibility to be
+  /// rendered at all, is decided — never beside a user bubble, and never
+  /// detached with no row at all.
+  int? _assistantEntryIndexForRun(String runId) {
+    for (var i = _messages.length - 1; i >= 0; i--) {
+      final entry = _messages[i];
+      if (entry is _MessageEntry && !entry.isUser && entry.runId == runId) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  /// Whether [state] should show its own adjacent card right now, per the
+  /// design's timeline-rendering matrix:
+  ///
+  ///  - failed/cancelled: always — the matching card renders regardless of
+  ///    whether displayable content also survived (the bubble itself
+  ///    already renders or not, independently, via [_MessageBubble]'s own
+  ///    empty-content guard);
+  ///  - completed: when canonical content does not exist, or while content
+  ///    that canonically exists has not reached this screen yet;
+  ///  - queued/running/waiting approval/recovering/unspecified/unknown:
+  ///    only while [liveHasContent] is false — computed from what this
+  ///    screen can currently see in the row itself, since a nonterminal
+  ///    `RunState` carries no completed-message content of its own to
+  ///    trust either way.
+  bool _wantsAdjacentCard(RunState state, {required bool liveHasContent}) {
+    switch (state.lifecycle) {
+      case RunLifecycle.failed:
+      case RunLifecycle.cancelled:
+        return true;
+      case RunLifecycle.completed:
+        return !state.hasDisplayableContent || !liveHasContent;
+      case RunLifecycle.queued:
+      case RunLifecycle.running:
+      case RunLifecycle.waitingApproval:
+      case RunLifecycle.recovering:
+      case RunLifecycle.unspecified:
+      case RunLifecycle.unknown:
+        return !liveHasContent;
+    }
+  }
+
+  /// Creates, updates, or removes [state.runId]'s ONE adjacent
+  /// [_RunStateCardEntry] beside [assistantEntry] — never a second one, and
+  /// never a detached one. An update to an already-present card removes and
+  /// reinserts that same entry at [_runStateCardInsertionIndex], which
+  /// always follows the contiguous same-run tool/notice artifacts
+  /// immediately following [assistantEntry] — the run's anchor row. Those
+  /// artifacts are live-only: [_isHistoricalRunEvent] suppresses a tool
+  /// call or notice replayed from history before it ever renders, so
+  /// nothing beneath the anchor is ever a replayed artifact. The run-state
+  /// update that reaches THIS method, by contrast, may be live, replayed,
+  /// page-loaded, or startup-buffer-drained alike, so the card never lands
+  /// immediately beside the assistant row while a same-run artifact this
+  /// screen already rendered (typically live, before the reconciled state
+  /// itself arrived) sits below it. The presence-sync callers of
+  /// [_syncRunStateCardPresenceForContent] — the duplicate-row page path
+  /// and the live `message.delta` path alike — reach this method only when
+  /// a run's card-wanted presence itself flips, so either one can only
+  /// CREATE a card that did not exist or REMOVE one that no longer wants to
+  /// exist — never reinsert an already-present card purely to reposition
+  /// it. This method itself never crosses into a later turn
+  /// merely because its own state update arrived late — insertion only ever
+  /// walks over contiguous same-run tool/notice entries and stops at any
+  /// other entry, including one belonging to a different run or turn, not
+  /// merely the first different-run entry.
+  ///
+  /// Must be called from inside a `setState`.
+  void _upsertRunStateCard(RunState state, _MessageEntry assistantEntry) {
+    // A genuine, reconciled `RunState` is now known for this exact row —
+    // any neutral "no response recorded" fallback beside it (rendered
+    // because the row was originally loaded with no `RunState` at all; see
+    // `_ingestMessagePage`) would now misstate what this app actually
+    // knows, whether or not the reconciled state itself wants its own
+    // adjacent card below.
+    final staleNoResponseCard = _noResponseEntries.remove(
+      assistantEntry.messageId,
+    );
+    if (staleNoResponseCard != null) {
+      _messages.remove(staleNoResponseCard);
+      staleNoResponseCard.dispose();
+    }
+    final liveHasContent = _runHasDisplayableContent(state.runId);
+    final wantsCard = _wantsAdjacentCard(state, liveHasContent: liveHasContent);
+    final responseContentUnavailable =
+        state.lifecycle == RunLifecycle.completed &&
+        state.hasDisplayableContent &&
+        !liveHasContent;
+    if (responseContentUnavailable) {
+      // The terminal state promises durable answer bytes this screen does not
+      // have. Keep a truthful temporary completion card and coalesce a newest-
+      // page reload rather than collapsing the turn to unexplained blankness.
+      _requireCoalescedResync();
+    }
+    final existing = _runStateEntries[state.runId];
+    if (!wantsCard) {
+      if (existing != null) {
+        _messages.remove(existing);
+        _runStateEntries.remove(state.runId);
+        existing.dispose();
+      }
+      return;
+    }
+    if (existing != null) {
+      // Updated in place: the same one card tracks this run's state for as
+      // long as it wants one, rather than a new card being created per
+      // update.
+      existing.state.value = state;
+      existing.responseContentUnavailable = responseContentUnavailable;
+      _messages.remove(existing);
+      _messages.insert(
+        _runStateCardInsertionIndex(state.runId, assistantEntry),
+        existing,
+      );
+      return;
+    }
+    final entry = _RunStateCardEntry(
+      state,
+      responseContentUnavailable: responseContentUnavailable,
+    );
+    _runStateEntries[state.runId] = entry;
+    _messages.insert(
+      _runStateCardInsertionIndex(state.runId, assistantEntry),
+      entry,
+    );
+  }
+
+  /// The index right after every contiguous tool/notice artifact [runId]
+  /// already has directly beneath [assistantEntry] — or immediately beneath
+  /// [assistantEntry] itself if it has none. Stops at the first entry that
+  /// does not belong to [runId] (including one belonging to a different
+  /// run), so a run's own card can never leap past a later, unrelated
+  /// turn's artifact.
+  int _runStateCardInsertionIndex(String runId, _MessageEntry assistantEntry) {
+    var index = _messages.indexOf(assistantEntry) + 1;
+    while (index < _messages.length) {
+      final entry = _messages[index];
+      final belongsToRun =
+          entry is _ToolCallEntry && entry.runId == runId ||
+          entry is _RunNoticeEntry && entry.runId == runId;
+      if (!belongsToRun) break;
+      index++;
+    }
+    return index;
+  }
+
+  bool _runHasDisplayableContent(String runId) =>
+      _messages.whereType<_MessageEntry>().any(
+        (entry) =>
+            !entry.isUser &&
+            entry.runId == runId &&
+            hasDisplayableContent(entry.content.value),
+      );
+
+  /// Content can arrive independently of an already-reconciled state. Only
+  /// mutate the timeline when that changes whether the run needs a card;
+  /// otherwise streaming remains notifier-only and does not rebuild/reposition
+  /// the list for every token.
+  void _syncRunStateCardPresenceForContent(RunState state) {
+    if (_runStateCardPresenceMatchesContent(state)) return;
+    final assistantIndex = _assistantEntryIndexForRun(state.runId);
+    if (assistantIndex == null) return;
+    _upsertRunStateCard(state, _messages[assistantIndex] as _MessageEntry);
+  }
+
+  bool _runStateCardPresenceMatchesContent(RunState state) {
+    final wantsCard = _wantsAdjacentCard(
+      state,
+      liveHasContent: _runHasDisplayableContent(state.runId),
+    );
+    return (_runStateEntries[state.runId] != null) == wantsCard;
   }
 
   void _applyEvent(TuringEvent event) {
@@ -667,6 +1194,17 @@ class _ChatScreenState extends State<ChatScreen> {
     // not cancel the subscription (`cancelOnError` defaults to false), and the
     // stream can keep delivering after one.
     if (_streamEnded) setState(() => _streamEnded = false);
+    // Reconcile any canonical `RunState` this event carries BEFORE the
+    // type-specific switch below, regardless of the event's own type —
+    // `queued`, `started`, an approval lifecycle event, `state_changed`,
+    // `completed`, `failed`, and `cancelled` alike. A pre-TUR-009 (or
+    // otherwise malformed) event carries no `RunState` at all and is
+    // untouched by this step; its type-specific handler below falls back to
+    // its own safe legacy mapping instead.
+    final runState = event.runState;
+    if (runState != null) {
+      setState(() => _handleIncomingRunState(runState));
+    }
     switch (event.type) {
       case 'message.delta':
         _applyMessageDelta(event);
@@ -710,68 +1248,139 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'tool.call.denied':
         _applyToolCall(event, ToolCallStatus.denied);
         break;
+      case 'agent.run.state_changed':
+        // No extra effect beyond the unconditional reconciliation above:
+        // this event type carries nothing but the state snapshot itself.
+        break;
       // Everything below has no case above and so is deliberately left
       // unhandled — it falls out of this switch untouched, not implicitly
       // grouped with any handled case above (in particular, not with the
       // `agent.run.failed` / `agent.run.cancelled` handling just above):
-      //  - `agent.run.started` / `agent.run.queued`: surfacing them would
-      //    just add noise ahead of the real content.
-      //  - `agent.run.completed`: its completion is already evidenced by the
-      //    assistant's own answer arriving via `message.delta`, so a
-      //    dedicated handler would be redundant.
+      //  - `agent.run.started` / `agent.run.queued`: surfacing them beyond
+      //    the reconciliation step above would just add noise ahead of the
+      //    real content.
+      //  - `agent.run.completed`: its completion is already evidenced by
+      //    the assistant's own answer arriving via `message.delta`, and any
+      //    no-content/nonterminal-status card it needs is already handled
+      //    by the reconciliation step above.
     }
   }
+
+  /// Shown for an `agent.run.step` event whose payload carries neither a
+  /// usable `note` nor a recognized `category` — a producer-neutral
+  /// governed fallback for genuinely uninformative payloads. Kept
+  /// unchanged from before TUR-009: this is the ONE piece of `note` text
+  /// that was already fixed, safe app copy rather than backend prose.
+  static const _runStepFallbackNotice =
+      'The run reported a step with no description';
 
   void _applyRunStep(TuringEvent event) {
     if (_isHistoricalRunEvent(event)) return;
 
-    final rawNote = _asString(event.payload['note'])?.trim();
-    final note = (rawNote == null || rawNote.isEmpty)
-        ? _runStepFallbackNotice
-        : rawNote;
-    final entry = _RunNoticeEntry(note);
+    final category = _runStepNoticeCategoryFromPayload(event.payload);
+    final _ChatEntry entry;
+    if (category != null) {
+      // One of the three allowlisted failure-adjacent notice categories:
+      // localized, bounded copy only — the payload's own `note` (if any) is
+      // never read for these, so it cannot leak backend prose.
+      final attempt = _runStepAttemptValue(event.payload['attempt']);
+      final maxAttempts = _runStepAttemptValue(event.payload['maxAttempts']);
+      if (attempt == null || maxAttempts == null || attempt > maxAttempts) {
+        entry = _RunNoticeEntry.freeform(
+          _runStepFallbackNotice,
+          runId: event.runId,
+        );
+      } else {
+        entry = _RunNoticeEntry.localized(
+          category: category,
+          attempt: attempt,
+          maxAttempts: maxAttempts,
+          runId: event.runId,
+        );
+      }
+    } else {
+      // Preserved governed nonfailure notice: the backend's own `note` text
+      // for redacted egress/model-limit and similar approved payloads
+      // continues to render verbatim, exactly as before.
+      final rawNote = _asString(event.payload['note'])?.trim();
+      final note = (rawNote == null || rawNote.isEmpty)
+          ? _runStepFallbackNotice
+          : rawNote;
+      entry = _RunNoticeEntry.freeform(note, runId: event.runId);
+    }
     setState(() => _messages.add(entry));
     _scrollToBottom();
   }
 
-  /// The code `RequeueOrFailRetryableRun` writes once retries are exhausted
-  /// (`repository/jobs.go:122`). Its humanized form ("Retries exhausted")
-  /// says nothing that the paired give-up `agent.run.step` notice ("Gave up
-  /// after N attempts") has not already said, and the real cause is exactly
-  /// what is unknown when this code is the only signal left — so it is
-  /// excluded from [_humanizeFailureCode] below and treated the same as no
-  /// code at all.
-  static const _retriesExhaustedCode = 'retries_exhausted';
+  /// Safely classifies an `agent.run.step` payload's own `category`
+  /// field into one of the three allowlisted, LOCALIZED failure-adjacent
+  /// notice categories — never trusting the raw string itself as display
+  /// copy. Absent, unrecognized, or malformed values all return null,
+  /// routing to [_applyRunStep]'s governed nonfailure fallback instead.
+  static RunStepNoticeCategory? _runStepNoticeCategoryFromPayload(
+    Map<String, dynamic> payload,
+  ) {
+    switch (_asString(payload['category'])) {
+      case 'dispatch_retry':
+        return RunStepNoticeCategory.dispatchRetry;
+      case 'recovery_retry':
+        return RunStepNoticeCategory.recoveryRetry;
+      case 'recovery_exhausted':
+        return RunStepNoticeCategory.recoveryExhausted;
+      default:
+        return null;
+    }
+  }
+
+  /// Accepts only the backend notice contract's bounded positive integers.
+  /// Protobuf `Struct` numbers arrive as doubles, so exact integral doubles
+  /// are valid; fractional, non-finite, string, and out-of-range values fail
+  /// closed to the governed fallback in [_applyRunStep].
+  static int? _runStepAttemptValue(Object? raw) {
+    final int value;
+    if (raw is int) {
+      value = raw;
+    } else if (raw is double && raw.isFinite && raw == raw.truncateToDouble()) {
+      value = raw.toInt();
+    } else {
+      return null;
+    }
+    if (value < 1 || value > maxRunStepNoticeAttempts) return null;
+    return value;
+  }
 
   void _applyRunFailed(TuringEvent event) {
+    if (event.runState != null) {
+      // A canonical `RunState` already fully handled this run's outcome via
+      // the unconditional reconciliation step at the top of [_applyEvent]
+      // — its adjacent `RunStateCard` already reflects it (or the event
+      // was correctly discarded/deferred as unloaded). Nothing further to
+      // do for a modern event.
+      return;
+    }
     if (_isHistoricalRunEvent(event)) return;
 
-    final rawMessage = _asString(event.payload['message'])?.trim();
-    final rawCode = _asString(event.payload['code'])?.trim();
-    final String text;
-    if (rawMessage != null && rawMessage.isNotEmpty) {
-      text = rawMessage;
-    } else if (rawCode != null &&
-        rawCode.isNotEmpty &&
-        rawCode != _retriesExhaustedCode) {
-      text = _humanizeFailureCode(rawCode);
-    } else {
-      text = _runFailureFallbackNotice;
-    }
-    final entry = _RunFailureEntry(text);
+    // Pre-TUR-009 legacy event with no canonical state at all: the
+    // payload's own `message`/`code` are machine metadata this app must
+    // never echo, and there is no safe table mapping arbitrary legacy
+    // codes to a more specific outcome, so every legacy failure resolves
+    // to the same truthful, generic "Run failed" copy.
+    final entry = _RunFailureEntry(RunOutcomeReason.none);
     setState(() => _messages.add(entry));
     _scrollToBottom();
   }
 
-  /// Turns a machine-readable failure `code` (e.g. `tool_discovery_failed`)
-  /// into a human-readable sentence fragment (`Tool discovery failed`). Used
-  /// only when `message` is absent — the user should learn what happened,
-  /// not read an enum.
-  static String _humanizeFailureCode(String code) {
-    final spaced = code.replaceAll('_', ' ').trim();
-    if (spaced.isEmpty) return _runFailureFallbackNotice;
-    return spaced[0].toUpperCase() + spaced.substring(1);
-  }
+  /// The only `reason` value the backend currently emits with
+  /// `agent.run.cancelled` (`cancelRun`, orchestrator-go
+  /// internal/service/chat/service.go). It fires on exactly two conditions:
+  /// `SendMessage`'s own context being cancelled — checked at four
+  /// checkpoints (the initial `RunQueued` send, the dispatch loop's
+  /// teardown, a replay-events error, and a relayed event send) — or a
+  /// `DispatchPending` failure, which cancels unconditionally regardless of
+  /// context state. A bare `stream.Send` failure never triggers this by
+  /// itself; it only does at those checkpoints once the context is already
+  /// cancelled.
+  static const _clientCancelledReason = 'client_cancelled';
 
   /// The event stream is the only channel `agent.run.cancelled` arrives on,
   /// and `cancelRun` fires it on exactly two conditions (see
@@ -779,22 +1388,38 @@ class _ChatScreenState extends State<ChatScreen> {
   /// `DispatchPending` fails. Left unhandled, the event would fall through
   /// [_applyEvent]'s switch and leave a silent, unexplained turn on screen.
   void _applyRunCancelled(TuringEvent event) {
+    if (event.runState != null) {
+      // See [_applyRunFailed]'s own doc: a modern event is already fully
+      // handled by the reconciliation step at the top of [_applyEvent].
+      return;
+    }
     if (_isHistoricalRunEvent(event)) return;
 
+    // `reason` is machine metadata, not display copy (see
+    // [_clientCancelledReason]'s own doc), so it is only ever used to
+    // select a semantic `RunOutcomeReason` — never rendered verbatim. The
+    // design's own ambiguous-`client_cancelled` mapping is the one legacy
+    // reason this app can classify more specifically than "unknown";
+    // anything else (absent, unrecognized, non-string) falls back to the
+    // same generic, truthful cancellation copy.
     final rawReason = _asString(event.payload['reason'])?.trim();
-    final text = rawReason == _clientCancelledReason
-        ? _clientCancelledNotice
-        : _runCancellationFallbackNotice;
-    final entry = _RunCancelledEntry(text);
+    final reason = rawReason == _clientCancelledReason
+        ? RunOutcomeReason.abandoned
+        : RunOutcomeReason.none;
+    final entry = _RunCancelledEntry(reason);
     setState(() => _messages.add(entry));
     _scrollToBottom();
   }
 
   /// Whether an inline run artifact belongs to history that is already on
   /// screen. Approvals deliberately replay to rebuild pending state, while
-  /// tool cards, run notices, and terminal failure/cancellation cards
-  /// ([_applyRunFailed], [_applyRunCancelled]) cannot be interleaved into
-  /// message history and therefore stay hidden once that history is complete.
+  /// tool cards, run notices, and the LEGACY (no-`RunState`) terminal
+  /// failure/cancellation fallback ([_applyRunFailed], [_applyRunCancelled])
+  /// cannot be interleaved into message history and therefore stay hidden
+  /// once that history is complete. A modern, `RunState`-bearing terminal
+  /// event is unaffected by this guard — its own adjacent card is governed
+  /// entirely by [RunStateReconciler] instead, which is inherently replay-
+  /// safe (a replayed report reconciles as a duplicate/stale no-op).
   bool _isHistoricalRunEvent(TuringEvent event) {
     final watermark = _replayWatermarkSequence;
     if (watermark != null && event.sequence <= watermark) return true;
@@ -844,6 +1469,7 @@ class _ChatScreenState extends State<ChatScreen> {
       // without a prior start (e.g. an event-replay gap).
       entry = _ToolCallEntry(
         toolCallId: toolCallId,
+        runId: runId,
         toolName: (rawToolName == null || rawToolName.isEmpty)
             ? _placeholderToolName
             : rawToolName,
@@ -914,11 +1540,34 @@ class _ChatScreenState extends State<ChatScreen> {
     final delta = _asString(event.payload['delta']) ?? '';
     var entry = _assistantEntries[messageId];
     if (entry == null) {
-      entry = _MessageEntry.assistant(messageId: messageId, content: '');
+      entry = _MessageEntry.assistant(
+        messageId: messageId,
+        content: '',
+        runId: event.runId,
+      );
       _assistantEntries[messageId] = entry;
       setState(() => _messages.add(entry!));
     }
     entry.content.value = '${entry.content.value}$delta';
+    // The row was adopted (empty, no `RunState` at all) with a neutral
+    // no-response fallback beside it — see `_ingestMessagePage`. Real
+    // content arriving proves that fallback was never the truth; clear it
+    // the moment there is something displayable to show instead.
+    final noResponseCard = _noResponseEntries[messageId];
+    if (noResponseCard != null && hasDisplayableContent(entry.content.value)) {
+      _noResponseEntries.remove(messageId);
+      setState(() {
+        _messages.remove(noResponseCard);
+        noResponseCard.dispose();
+      });
+    }
+    final runId = entry.runId;
+    final state = runId == null ? null : _runStateReconciler.stateFor(runId);
+    if (state != null &&
+        hasDisplayableContent(entry.content.value) &&
+        !_runStateCardPresenceMatchesContent(state)) {
+      setState(() => _syncRunStateCardPresenceForContent(state));
+    }
     _scrollToBottom();
   }
 
@@ -1028,10 +1677,12 @@ class _ChatScreenState extends State<ChatScreen> {
         : _MessageEntry.user(
             messageId: 'local_${DateTime.now().microsecondsSinceEpoch}',
             content: text,
+            canAdoptPersistedIdentity: true,
           );
     setState(() {
       if (isMatchingRetry) {
         _removeSendOutcomeAfter(attempt);
+        attempt.canAdoptPersistedIdentity = true;
       } else {
         _messages.add(attempt);
       }
@@ -1049,26 +1700,34 @@ class _ChatScreenState extends State<ChatScreen> {
     // in this method. Left unguarded, this `await` rejecting becomes an
     // unhandled Future rejection — the bubble above is added, then silence.
     try {
-      if (remoteEgressConsent == null) {
-        await widget.apiClient.sendMessage(
-          sessionId: widget.sessionId,
-          content: text,
-          modelProvider: modelProvider,
-          idempotencyKey: idempotencyKey,
-        );
-      } else {
-        await remoteEgressApi.sendMessageWithRemoteEgressConsent(
-          sessionId: widget.sessionId,
-          content: text,
-          modelProvider: modelProvider,
-          idempotencyKey: idempotencyKey,
-          consent: remoteEgressConsent,
-        );
-      }
+      final queued = remoteEgressConsent == null
+          ? await widget.apiClient.sendMessage(
+              sessionId: widget.sessionId,
+              content: text,
+              modelProvider: modelProvider,
+              idempotencyKey: idempotencyKey,
+            )
+          : await remoteEgressApi.sendMessageWithRemoteEgressConsent(
+              sessionId: widget.sessionId,
+              content: text,
+              modelProvider: modelProvider,
+              idempotencyKey: idempotencyKey,
+              consent: remoteEgressConsent,
+            );
       if (!mounted) return;
-      setState(() => _sending = false);
+      setState(() {
+        final runId = _asString(queued['runId']);
+        if (runId != null && runId.isNotEmpty) attempt.runId = runId;
+        _sending = false;
+      });
     } on Exception catch (error) {
       if (!mounted) return;
+      // Only actually inserting a warning/failure card below (or otherwise
+      // making a new visible change) warrants forcing the viewport back to
+      // the bottom. An adopted attempt's early `return` restores nothing
+      // and adds nothing, so scrolling it would only yank a user who is
+      // reading older history for no on-screen reason.
+      var shouldScroll = false;
       setState(() {
         // Whether the composer actually re-enables still depends on
         // [_composerDisabled]'s OTHER flags: if the stream ended or startup
@@ -1077,6 +1736,24 @@ class _ChatScreenState extends State<ChatScreen> {
         // this send's own outcome must never override a startup/stream
         // state that arrived independently of it.
         _sending = false;
+        if (attempt.hasAdoptedPersistedIdentity) {
+          // A resync/live page already replaced this attempt's local
+          // identity with a durable message/run id WHILE this same RPC was
+          // still pending (see `_adoptPersistedUserMessageIdentities`).
+          // Durable identity is authoritative proof the send was accepted
+          // server-side; this rejection is just this client never seeing
+          // its own acknowledgement. Re-arming retry/warning state for an
+          // attempt already proven durable would contradict what is
+          // already correctly on screen, so this stale outcome changes
+          // nothing else.
+          return;
+        }
+        final confirmedPreEnqueue = _isConfirmedPreEnqueueSendFailure(error);
+        // An unconfirmed rejection may have persisted successfully. Keep its
+        // optimistic row eligible to adopt the durable identity if a resync
+        // proves that exact content/run correlation. A confirmed pre-enqueue
+        // failure cannot have created a row and must never adopt an older one.
+        attempt.canAdoptPersistedIdentity = !confirmedPreEnqueue;
         // The user's own text is restored either way, confirmed failure or
         // not — they can retry or edit it instead of retyping it from
         // memory. Only the CARD differs: [_isConfirmedPreEnqueueSendFailure]
@@ -1102,12 +1779,13 @@ class _ChatScreenState extends State<ChatScreen> {
         // to whatever happens to be last.
         _insertAfterEntry(
           attempt,
-          _isConfirmedPreEnqueueSendFailure(error)
+          confirmedPreEnqueue
               ? _MessageSendFailureEntry(_messageSendFailedNotice)
               : _MessageSendUnconfirmedEntry(_messageSendUnconfirmedNotice),
         );
+        shouldScroll = true;
       });
-      _scrollToBottom();
+      if (shouldScroll) _scrollToBottom();
     }
   }
 
@@ -1452,11 +2130,28 @@ class _ChatMessageTile extends StatelessWidget {
           ),
         );
       case _RunNoticeEntry notice:
-        return RunNoticeCard(note: notice.note);
+        final category = notice.category;
+        return category != null
+            ? RunNoticeCard.localized(
+                category: category,
+                attempt: notice.attempt,
+                maxAttempts: notice.maxAttempts,
+              )
+            : RunNoticeCard(note: notice.note!);
       case _RunFailureEntry failure:
-        return RunFailureCard(message: failure.message);
+        return RunFailureCard(reason: failure.reason);
       case _RunCancelledEntry cancelled:
-        return RunCancelledCard(message: cancelled.message);
+        return RunCancelledCard(reason: cancelled.reason);
+      case _RunStateCardEntry stateCard:
+        return ValueListenableBuilder<RunState>(
+          valueListenable: stateCard.state,
+          builder: (context, state, _) => RunStateCard(
+            state: state,
+            responseContentUnavailable: stateCard.responseContentUnavailable,
+          ),
+        );
+      case _NoResponseCardEntry _:
+        return const NoResponseCard();
       case _MessageSendUnconfirmedEntry sendUnconfirmed:
         return MessageSendUnconfirmedCard(message: sendUnconfirmed.message);
       case _MessageSendFailureEntry sendFailed:
@@ -1618,7 +2313,7 @@ class _MessageBubble extends StatelessWidget {
     return ValueListenableBuilder<String>(
       valueListenable: entry.content,
       builder: (context, content, _) {
-        if (content.isEmpty) return const SizedBox.shrink();
+        if (!hasDisplayableContent(content)) return const SizedBox.shrink();
         if (entry.isUser) {
           return Align(
             alignment: Alignment.centerRight,
@@ -1683,20 +2378,36 @@ class _MessageEntry extends _ChatEntry {
     required this.messageId,
     required this.isUser,
     required String content,
+    this.runId,
+    this.canAdoptPersistedIdentity = false,
   }) : content = ValueNotifier(content);
 
   factory _MessageEntry.user({
     required String messageId,
     required String content,
+    String? runId,
+    bool canAdoptPersistedIdentity = false,
   }) {
-    return _MessageEntry(messageId: messageId, isUser: true, content: content);
+    return _MessageEntry(
+      messageId: messageId,
+      isUser: true,
+      content: content,
+      runId: runId,
+      canAdoptPersistedIdentity: canAdoptPersistedIdentity,
+    );
   }
 
   factory _MessageEntry.assistant({
     required String messageId,
     required String content,
+    String? runId,
   }) {
-    return _MessageEntry(messageId: messageId, isUser: false, content: content);
+    return _MessageEntry(
+      messageId: messageId,
+      isUser: false,
+      content: content,
+      runId: runId,
+    );
   }
 
   factory _MessageEntry.fromMessage(Message message) {
@@ -1704,11 +2415,30 @@ class _MessageEntry extends _ChatEntry {
       messageId: message.messageId,
       isUser: message.role == 'user',
       content: message.content,
+      runId: message.runId,
     );
   }
 
-  final String messageId;
+  String messageId;
   final bool isUser;
+
+  /// The run this row belongs to, if any — used by
+  /// [_ChatScreenState._assistantEntryIndexForRun] to place (and find) the
+  /// one adjacent [_RunStateCardEntry] a run's reconciled state wants.
+  String? runId;
+  bool canAdoptPersistedIdentity;
+
+  /// True once [_ChatScreenState._adoptPersistedUserMessageIdentities] has
+  /// replaced this row's local identity with a durable message/run id —
+  /// distinct from [canAdoptPersistedIdentity] going `false`, which ALSO
+  /// happens for an attempt that never becomes eligible to adopt at all
+  /// (a confirmed pre-enqueue failure in [_ChatScreenState._sendMessage]'s
+  /// `catch`). That other `false` means "not eligible"; this one means
+  /// "already durably proven" — [_ChatScreenState._sendMessage]'s `catch`
+  /// needs the latter specifically to recognise its own pending RPC as
+  /// stale once a resync has adopted this row out from under it, without
+  /// being fooled by the former.
+  bool hasAdoptedPersistedIdentity = false;
   final ValueNotifier<String> content;
 
   @override
@@ -1730,6 +2460,7 @@ typedef _ToolCallState = ({
 class _ToolCallEntry extends _ChatEntry {
   _ToolCallEntry({
     required this.toolCallId,
+    required this.runId,
     required String toolName,
     required ToolCallStatus status,
     String? serverName,
@@ -1742,6 +2473,7 @@ class _ToolCallEntry extends _ChatEntry {
        ));
 
   final String toolCallId;
+  final String? runId;
   final ValueNotifier<_ToolCallState> state;
 
   @override
@@ -1749,28 +2481,78 @@ class _ToolCallEntry extends _ChatEntry {
 }
 
 class _RunNoticeEntry extends _ChatEntry {
-  _RunNoticeEntry(this.note);
+  _RunNoticeEntry.freeform(this.note, {required this.runId})
+    : category = null,
+      attempt = 0,
+      maxAttempts = 0;
 
-  final String note;
+  _RunNoticeEntry.localized({
+    required RunStepNoticeCategory this.category,
+    required this.attempt,
+    required this.maxAttempts,
+    required this.runId,
+  }) : note = null;
+
+  /// Governed nonfailure notice text, verbatim — null for a
+  /// [RunNoticeEntry.localized] entry, which never carries free text at all.
+  final String? note;
+
+  /// Set only for one of the three allowlisted failure-adjacent notice
+  /// categories; null for a governed nonfailure [note].
+  final RunStepNoticeCategory? category;
+  final int attempt;
+  final int maxAttempts;
+  final String? runId;
 
   @override
   void dispose() {}
 }
 
 class _RunFailureEntry extends _ChatEntry {
-  _RunFailureEntry(this.message);
+  _RunFailureEntry(this.reason);
 
-  final String message;
+  final RunOutcomeReason reason;
 
   @override
   void dispose() {}
 }
 
 class _RunCancelledEntry extends _ChatEntry {
-  _RunCancelledEntry(this.message);
+  _RunCancelledEntry(this.reason);
 
-  final String message;
+  final RunOutcomeReason reason;
 
+  @override
+  void dispose() {}
+}
+
+/// The one adjacent card [_ChatScreenState._upsertRunStateCard] maintains
+/// per run ID for a [RunState] that wants one — see
+/// [_ChatScreenState._wantsAdjacentCard]. A [ValueNotifier] so an in-place
+/// update (a new, still-card-worthy state for the same run) re-renders the
+/// SAME entry instance and payload rather than recreating it — but that
+/// stable identity does not mean a fixed position in the message list:
+/// [_ChatScreenState._upsertRunStateCard] may still remove and reinsert this
+/// same entry elsewhere in [_ChatScreenState._messages], to keep it
+/// positioned relative to its turn's other entries (see
+/// [_ChatScreenState._runStateCardInsertionIndex]).
+class _RunStateCardEntry extends _ChatEntry {
+  _RunStateCardEntry(RunState state, {required this.responseContentUnavailable})
+    : state = ValueNotifier(state);
+
+  final ValueNotifier<RunState> state;
+  bool responseContentUnavailable;
+
+  @override
+  void dispose() => state.dispose();
+}
+
+/// The terminal-only neutral legacy-correlation fallback beside an EMPTY
+/// historical assistant row that carries no [RunState] at all — see
+/// [_ChatScreenState._ingestMessagePage] (creation) and
+/// [_ChatScreenState._applyMessageDelta] (clearing it once real content
+/// arrives). Stateless: [NoResponseCard] itself has no parameters.
+class _NoResponseCardEntry extends _ChatEntry {
   @override
   void dispose() {}
 }
