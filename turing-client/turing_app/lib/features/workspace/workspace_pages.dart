@@ -138,6 +138,78 @@ class _McpsPageState extends State<McpsPage> {
     }
   }
 
+  Future<void> _registerServer() async {
+    final added = await showDialog<bool>(
+      context: context,
+      builder: (_) =>
+          _RegisterServerDialog(register: widget.apiClient.registerMcpServer),
+    );
+    if (added == true && mounted) _reload();
+  }
+
+  Future<void> _reimport() async {
+    try {
+      final report = await widget.apiClient.reimportMcpJson();
+      if (!mounted) return;
+      _reload();
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('mcp.json re-import'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  report.imported.isEmpty
+                      ? 'No servers imported.'
+                      : 'Imported: ${report.imported.join(', ')}. New servers '
+                            'arrive disabled; existing servers keep your '
+                            'settings.',
+                ),
+                for (final entry in report.unsupported) ...[
+                  const SizedBox(height: 8),
+                  Text('${entry.name}: ${entry.reason}'),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$error')));
+    }
+  }
+
+  Future<void> _rotateToken(McpServer server) async {
+    final rotated = await showDialog<bool>(
+      context: context,
+      builder: (_) => _RotateTokenDialog(
+        serverName: server.name,
+        rotate: (token) => widget.apiClient.rotateMcpServerToken(
+          serverId: server.serverId,
+          bearerToken: token,
+        ),
+      ),
+    );
+    if (rotated == true && mounted) {
+      _reload();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Token updated for ${server.name}')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = AppColors.of(context);
@@ -161,14 +233,37 @@ class _McpsPageState extends State<McpsPage> {
           final registry =
               snapshot.data ??
               McpRegistrySnapshot(servers: const [], unsupported: const []);
+          final actions = Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: _registerServer,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add server'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _reimport,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('Re-import mcp.json'),
+              ),
+            ],
+          );
           if (registry.servers.isEmpty && registry.unsupported.isEmpty) {
-            return WorkspaceNotice(
-              icon: Icons.hub_outlined,
-              title: 'No tools discovered',
-              body:
-                  'Add entries to the mounted mcp.json file, then restart the '
-                  'backend to import them.',
-              onRetry: _reload,
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                actions,
+                const SizedBox(height: 12),
+                WorkspaceNotice(
+                  icon: Icons.hub_outlined,
+                  title: 'No tools discovered',
+                  body:
+                      'Add a server here, or edit the mounted mcp.json and '
+                      're-import — no restart needed either way.',
+                  onRetry: _reload,
+                ),
+              ],
             );
           }
           final servers = registry.servers.toList()
@@ -176,6 +271,8 @@ class _McpsPageState extends State<McpsPage> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              actions,
+              const SizedBox(height: 12),
               for (final unsupported in registry.unsupported) ...[
                 WorkspaceNotice(
                   icon: Icons.block_outlined,
@@ -195,6 +292,9 @@ class _McpsPageState extends State<McpsPage> {
                   onDelete: server.tier == McpServerTier.bundled
                       ? null
                       : () => _deleteServer(server),
+                  onRotateToken: server.tier == McpServerTier.bundled
+                      ? null
+                      : () => _rotateToken(server),
                   onPolicyChanged: (tool, policy) =>
                       _setToolPolicy(server, tool, policy),
                   pendingToolPolicies: _pendingToolPolicies,
@@ -215,6 +315,7 @@ class _ServerCard extends StatelessWidget {
     required this.palette,
     required this.onEnabledChanged,
     required this.onDelete,
+    required this.onRotateToken,
     required this.onPolicyChanged,
     required this.pendingToolPolicies,
   });
@@ -223,6 +324,7 @@ class _ServerCard extends StatelessWidget {
   final AppPalette palette;
   final ValueChanged<bool>? onEnabledChanged;
   final VoidCallback? onDelete;
+  final VoidCallback? onRotateToken;
   final void Function(ToolDescriptor tool, ToolPolicy policy) onPolicyChanged;
   final Set<String> pendingToolPolicies;
 
@@ -267,6 +369,12 @@ class _ServerCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     Switch(value: server.enabled, onChanged: onEnabledChanged),
+                    if (onRotateToken != null)
+                      IconButton(
+                        tooltip: 'Rotate token for ${server.name}',
+                        onPressed: onRotateToken,
+                        icon: const Icon(Icons.key_outlined, size: 18),
+                      ),
                     if (onDelete != null)
                       IconButton(
                         tooltip: 'Remove ${server.name}',
@@ -539,6 +647,198 @@ class WorkspaceNotice extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// The add-server form runs the registration itself so a failure keeps what
+/// the user typed and shows the reason inline — the same shape as the
+/// integrations connect dialog, which handles a sealed secret the same way.
+class _RegisterServerDialog extends StatefulWidget {
+  const _RegisterServerDialog({required this.register});
+
+  final Future<McpServer> Function({
+    required String name,
+    required String url,
+    String bearerToken,
+  })
+  register;
+
+  @override
+  State<_RegisterServerDialog> createState() => _RegisterServerDialogState();
+}
+
+class _RegisterServerDialogState extends State<_RegisterServerDialog> {
+  final _name = TextEditingController();
+  final _url = TextEditingController();
+  final _token = TextEditingController();
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _url.dispose();
+    _token.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.register(
+        name: _name.text.trim(),
+        url: _url.text.trim(),
+        bearerToken: _token.text,
+      );
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = '$error';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add MCP server'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _name,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Name'),
+            ),
+            TextField(
+              controller: _url,
+              decoration: const InputDecoration(
+                labelText: 'URL',
+                helperText:
+                    'HTTPS endpoint, or an http:// container host on the '
+                    'internal network. The tier is derived from the URL.',
+                helperMaxLines: 3,
+              ),
+            ),
+            TextField(
+              controller: _token,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Bearer token (optional)',
+                helperText:
+                    'Stored sealed. Never shown again — rotate to replace.',
+                helperMaxLines: 2,
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _error!,
+                style: TextStyle(fontSize: 12.5, color: AppColors.danger),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _submit,
+          child: const Text('Add server'),
+        ),
+      ],
+    );
+  }
+}
+
+class _RotateTokenDialog extends StatefulWidget {
+  const _RotateTokenDialog({required this.serverName, required this.rotate});
+
+  final String serverName;
+  final Future<McpServer> Function(String token) rotate;
+
+  @override
+  State<_RotateTokenDialog> createState() => _RotateTokenDialogState();
+}
+
+class _RotateTokenDialogState extends State<_RotateTokenDialog> {
+  final _token = TextEditingController();
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _token.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.rotate(_token.text);
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = '$error';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Rotate token for ${widget.serverName}'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _token,
+            obscureText: true,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: 'New bearer token',
+              helperText:
+                  'Leave empty to clear the stored token. The current token '
+                  'is never shown.',
+              helperMaxLines: 3,
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              _error!,
+              style: TextStyle(fontSize: 12.5, color: AppColors.danger),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _submit,
+          child: const Text('Rotate'),
+        ),
+      ],
     );
   }
 }

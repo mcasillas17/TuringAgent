@@ -204,7 +204,9 @@ func New(cfg config.Config) (*App, error) {
 	mcpRegistryService.SetApprovalEnforcer(approvalService)
 	mcpRegistryService.SetRegistryChangeNotifier(runtimeService)
 	if cfg.MCPConfigRoot != "" {
-		mcpJSON, readErr := os.ReadFile(filepath.Join(cfg.MCPConfigRoot, "mcp.json"))
+		mcpConfigPath := filepath.Join(cfg.MCPConfigRoot, "mcp.json")
+		mcpRegistryService.SetMCPConfigPath(mcpConfigPath)
+		mcpJSON, readErr := os.ReadFile(mcpConfigPath)
 		if readErr == nil {
 			if _, err := mcpRegistryService.ImportJSON(context.Background(), mcpJSON); err != nil {
 				message := boundedAppDiagnostic(err.Error(), 512)

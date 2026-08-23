@@ -744,6 +744,52 @@ class TuringGrpcApi
     );
   }
 
+  @override
+  Future<McpServer> registerMcpServer({
+    required String name,
+    required String url,
+    String bearerToken = '',
+  }) async {
+    final response = await _mcpRegistry.registerMcpServer(
+      mcppb.RegisterMcpServerRequest(
+        name: name,
+        url: url,
+        bearerToken: bearerToken,
+      ),
+    );
+    return _mcpServerToModel(response);
+  }
+
+  @override
+  Future<McpReimportReport> reimportMcpJson() async {
+    final response = await _mcpRegistry.reimportMcpJson(
+      mcppb.ReimportMcpJsonRequest(),
+    );
+    return McpReimportReport(
+      imported: response.imported,
+      unsupported: response.unsupported
+          .map(
+            (entry) =>
+                UnsupportedMcpServer(name: entry.name, reason: entry.reason),
+          )
+          .toList(),
+    );
+  }
+
+  @override
+  Future<McpServer> rotateMcpServerToken({
+    required String serverId,
+    String bearerToken = '',
+  }) async {
+    final response = await _mcpRegistry.rotateMcpServerToken(
+      mcppb.RotateMcpServerTokenRequest(
+        serverId: serverId,
+        bearerToken: bearerToken,
+      ),
+    );
+    return _mcpServerToModel(response);
+  }
+
   McpServer _mcpServerToModel(mcppb.McpServerDescriptor server) {
     return McpServer(
       serverId: server.serverId,

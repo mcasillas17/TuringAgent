@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
@@ -21,6 +22,8 @@ import (
 	toolpolicy "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/tools"
 )
 
+var errImportDecode = errors.New("mcp.json is invalid")
+
 var (
 	mcpServerNamePattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	localContainerHostPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -28,17 +31,26 @@ var (
 
 type Server struct {
 	turingv1.UnimplementedMcpRegistryServiceServer
-	repo         *repository.Repository
-	sealer       *secretbox.Sealer
-	httpClient   *http.Client
-	approvals    ApprovalEnforcer
-	notifier     RegistryChangeNotifier
-	clientMu     sync.Mutex
-	localClient  *http.Client
-	remoteClient *http.Client
+	repo          *repository.Repository
+	sealer        *secretbox.Sealer
+	httpClient    *http.Client
+	approvals     ApprovalEnforcer
+	notifier      RegistryChangeNotifier
+	mcpConfigPath string
+	clientMu      sync.Mutex
+	localClient   *http.Client
+	remoteClient  *http.Client
+}
+
+// SetMCPConfigPath names the mounted mcp.json so ReimportMcpJson can re-run
+// the startup import on demand. Empty means no file is mounted and the RPC
+// refuses legibly instead of guessing a path.
+func (s *Server) SetMCPConfigPath(path string) {
+	s.mcpConfigPath = path
 }
 
 type ImportReport struct {
+	Imported    []string
 	Unsupported map[string]string
 }
 
@@ -77,13 +89,13 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	var document mcpJSON
 	if err := decoder.Decode(&document); err != nil {
-		return ImportReport{}, fmt.Errorf("decode mcp.json: %w", err)
+		return ImportReport{}, fmt.Errorf("decode mcp.json: %v: %w", err, errImportDecode)
 	}
 	if err := requireImportEOF(decoder); err != nil {
-		return ImportReport{}, fmt.Errorf("decode mcp.json: %w", err)
+		return ImportReport{}, fmt.Errorf("decode mcp.json: %v: %w", err, errImportDecode)
 	}
 	if document.Servers == nil {
-		return ImportReport{}, errors.New("decode mcp.json: mcpServers object is required")
+		return ImportReport{}, fmt.Errorf("decode mcp.json: mcpServers object is required: %w", errImportDecode)
 	}
 
 	report := ImportReport{Unsupported: make(map[string]string)}
@@ -185,6 +197,12 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			}
 		}
 	}
+	for name := range document.Servers {
+		if _, bad := report.Unsupported[name]; !bad {
+			report.Imported = append(report.Imported, name)
+		}
+	}
+	sort.Strings(report.Imported)
 	if err := s.repo.ReplaceMCPImportIssues(ctx, report.Unsupported); err != nil {
 		return ImportReport{}, fmt.Errorf("record mcp.json import issues: %w", err)
 	}
@@ -261,12 +279,13 @@ func bearerFromHeaders(headers map[string]string) (string, error) {
 			return "", fmt.Errorf("header %q is unsupported; only Authorization: Bearer is accepted", name)
 		}
 		const prefix = "Bearer "
-		if !strings.HasPrefix(value, prefix) || strings.TrimSpace(strings.TrimPrefix(value, prefix)) == "" {
+		if !strings.HasPrefix(value, prefix) {
 			return "", errors.New("authorization header must use a non-empty Bearer token")
 		}
-		token = strings.TrimSpace(strings.TrimPrefix(value, prefix))
-		if strings.ContainsAny(token, "\r\n") {
-			return "", errors.New("authorization bearer must not contain line breaks")
+		var err error
+		token, err = validateBearerToken(strings.TrimPrefix(value, prefix))
+		if err != nil {
+			return "", err
 		}
 	}
 	return token, nil
@@ -295,4 +314,20 @@ func requireImportEOF(decoder *json.Decoder) error {
 		return err
 	}
 	return nil
+}
+
+// validateBearerToken is the single token-hygiene gate for every path that
+// accepts a bearer — mcp.json import, RegisterMcpServer, and
+// RotateMcpServerToken — so a pasted trailing newline or a whitespace-only
+// token fails here, legibly, instead of surfacing later as an opaque
+// dispatch error against a sealed value nobody can inspect.
+func validateBearerToken(raw string) (string, error) {
+	token := strings.TrimSpace(raw)
+	if token == "" {
+		return "", errors.New("authorization header must use a non-empty Bearer token")
+	}
+	if strings.ContainsAny(token, "\r\n") {
+		return "", errors.New("authorization bearer must not contain line breaks")
+	}
+	return token, nil
 }

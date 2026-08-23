@@ -301,6 +301,68 @@ const DeleteMcpServerResponse$json = {
 final $typed_data.Uint8List deleteMcpServerResponseDescriptor =
     $convert.base64Decode('ChdEZWxldGVNY3BTZXJ2ZXJSZXNwb25zZQ==');
 
+@$core.Deprecated('Use registerMcpServerRequestDescriptor instead')
+const RegisterMcpServerRequest$json = {
+  '1': 'RegisterMcpServerRequest',
+  '2': [
+    {'1': 'name', '3': 1, '4': 1, '5': 9, '10': 'name'},
+    {'1': 'url', '3': 2, '4': 1, '5': 9, '10': 'url'},
+    {'1': 'bearer_token', '3': 3, '4': 1, '5': 9, '10': 'bearerToken'},
+  ],
+};
+
+/// Descriptor for `RegisterMcpServerRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List registerMcpServerRequestDescriptor =
+    $convert.base64Decode(
+        'ChhSZWdpc3Rlck1jcFNlcnZlclJlcXVlc3QSEgoEbmFtZRgBIAEoCVIEbmFtZRIQCgN1cmwYAi'
+        'ABKAlSA3VybBIhCgxiZWFyZXJfdG9rZW4YAyABKAlSC2JlYXJlclRva2Vu');
+
+@$core.Deprecated('Use reimportMcpJsonRequestDescriptor instead')
+const ReimportMcpJsonRequest$json = {
+  '1': 'ReimportMcpJsonRequest',
+};
+
+/// Descriptor for `ReimportMcpJsonRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List reimportMcpJsonRequestDescriptor =
+    $convert.base64Decode('ChZSZWltcG9ydE1jcEpzb25SZXF1ZXN0');
+
+@$core.Deprecated('Use reimportMcpJsonResponseDescriptor instead')
+const ReimportMcpJsonResponse$json = {
+  '1': 'ReimportMcpJsonResponse',
+  '2': [
+    {'1': 'imported', '3': 1, '4': 3, '5': 9, '10': 'imported'},
+    {
+      '1': 'unsupported',
+      '3': 2,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.UnsupportedMcpServer',
+      '10': 'unsupported'
+    },
+  ],
+};
+
+/// Descriptor for `ReimportMcpJsonResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List reimportMcpJsonResponseDescriptor = $convert.base64Decode(
+    'ChdSZWltcG9ydE1jcEpzb25SZXNwb25zZRIaCghpbXBvcnRlZBgBIAMoCVIIaW1wb3J0ZWQSQQ'
+    'oLdW5zdXBwb3J0ZWQYAiADKAsyHy50dXJpbmcudjEuVW5zdXBwb3J0ZWRNY3BTZXJ2ZXJSC3Vu'
+    'c3VwcG9ydGVk');
+
+@$core.Deprecated('Use rotateMcpServerTokenRequestDescriptor instead')
+const RotateMcpServerTokenRequest$json = {
+  '1': 'RotateMcpServerTokenRequest',
+  '2': [
+    {'1': 'server_id', '3': 1, '4': 1, '5': 9, '10': 'serverId'},
+    {'1': 'bearer_token', '3': 2, '4': 1, '5': 9, '10': 'bearerToken'},
+  ],
+};
+
+/// Descriptor for `RotateMcpServerTokenRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List rotateMcpServerTokenRequestDescriptor =
+    $convert.base64Decode(
+        'ChtSb3RhdGVNY3BTZXJ2ZXJUb2tlblJlcXVlc3QSGwoJc2VydmVyX2lkGAEgASgJUghzZXJ2ZX'
+        'JJZBIhCgxiZWFyZXJfdG9rZW4YAiABKAlSC2JlYXJlclRva2Vu');
+
 @$core.Deprecated('Use callRegisteredMcpToolRequestDescriptor instead')
 const CallRegisteredMcpToolRequest$json = {
   '1': 'CallRegisteredMcpToolRequest',

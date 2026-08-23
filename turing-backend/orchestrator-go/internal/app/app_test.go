@@ -363,6 +363,29 @@ func TestMCPRegistryRPCsAreSeparatedAcrossPublicAndInternalServers(t *testing.T)
 	if _, err := internalClient.ListMcpServers(internalContext, &turingv1.ListMcpServersRequest{}); err != nil {
 		t.Fatalf("internal ListMcpServers: %v", err)
 	}
+	if _, err := internalClient.RegisterMcpServer(internalContext, &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp",
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("internal RegisterMcpServer error = %v, want PermissionDenied", err)
+	}
+	if _, err := internalClient.ReimportMcpJson(internalContext, &turingv1.ReimportMcpJsonRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("internal ReimportMcpJson error = %v, want PermissionDenied", err)
+	}
+	if _, err := internalClient.RotateMcpServerToken(internalContext, &turingv1.RotateMcpServerTokenRequest{
+		ServerId: "missing",
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("internal RotateMcpServerToken error = %v, want PermissionDenied", err)
+	}
+	if _, err := publicClient.RegisterMcpServer(publicContext, &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp",
+	}); err != nil {
+		t.Fatalf("public RegisterMcpServer: %v", err)
+	}
+	if _, err := publicClient.RotateMcpServerToken(publicContext, &turingv1.RotateMcpServerTokenRequest{
+		ServerId: "missing",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("public RotateMcpServerToken error = %v, want NotFound past the facet", err)
+	}
 }
 
 // This is the real wiring in app.New — the exact allowlists a compromised

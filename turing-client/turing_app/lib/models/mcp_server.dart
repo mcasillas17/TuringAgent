@@ -37,6 +37,20 @@ class UnsupportedMcpServer {
   final String reason;
 }
 
+/// The outcome of an on-demand mcp.json re-import. Servers listed as
+/// unsupported were refused with a reason; imported servers still arrive
+/// disabled — importing is not enabling.
+class McpReimportReport {
+  McpReimportReport({
+    required List<String> imported,
+    required List<UnsupportedMcpServer> unsupported,
+  }) : imported = List.unmodifiable(imported),
+       unsupported = List.unmodifiable(unsupported);
+
+  final List<String> imported;
+  final List<UnsupportedMcpServer> unsupported;
+}
+
 class McpRegistrySnapshot {
   McpRegistrySnapshot({
     required List<McpServer> servers,
