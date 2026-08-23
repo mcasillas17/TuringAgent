@@ -188,7 +188,7 @@ func TestRegisterMcpServerClearsMatchingTombstone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.DeleteMCPServer(context.Background(), server.Server.ID); err != nil {
+	if _, err := repo.DeleteMCPServer(context.Background(), server.Server.ID); err != nil {
 		t.Fatal(err)
 	}
 	tombstoned, err := repo.MCPServerTombstoned(context.Background(), "vendor")

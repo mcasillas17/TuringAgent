@@ -15,16 +15,18 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// mcp.json must never even be opened when it is not a regular file: a
-// FIFO's read-side os.Open call blocks until a writer connects, and even
-// once one does, an unbounded read could still wait indefinitely for that
-// writer to finish (see the sibling test proving reads are bounded for a
-// *regular* file). This test deliberately never provides a writer at all
-// — if ReimportConfiguredJSON tried to open the FIFO for reading, that
-// open call itself would hang forever, so a prompt refusal here is only
-// possible if a non-regular-file check (os.Lstat) runs and refuses before
-// os.Open is ever called.
-func TestReimportConfiguredJSONRefusesFIFOBeforeEverOpeningItSoNoWriterCanHangIt(t *testing.T) {
+// mcp.json must never hang open on a FIFO: a plain, blocking os.Open on a
+// FIFO's read side waits until a writer connects, and this test
+// deliberately never provides one — if ReimportConfiguredJSON's open call
+// blocked the way a plain os.Open would, this goroutine would hang
+// forever. openRegularMCPConfigFile instead calls unix.Open with
+// O_NONBLOCK, so the open itself returns immediately regardless of
+// whether a writer is connected (rather than a separate check refusing
+// before any open is attempted); the resulting descriptor is then
+// Fstat-ed, and only a confirmed regular file is accepted — a FIFO's
+// S_IFIFO mode fails that check and is refused as
+// errMCPConfigNotRegularFile.
+func TestReimportConfiguredJSONRefusesFIFOWithoutBlockingOnAWriter(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	root := t.TempDir()
 	path := filepath.Join(root, "mcp.json")
@@ -55,7 +57,7 @@ func TestReimportConfiguredJSONRefusesFIFOBeforeEverOpeningItSoNoWriterCanHangIt
 			t.Fatalf("report = %+v, want empty on a read failure", res.report)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("ReimportConfiguredJSON did not return within 3s: it must refuse a non-regular file via Lstat before ever calling os.Open, not wait for a writer that will never come")
+		t.Fatal("ReimportConfiguredJSON did not return within 3s: opening a FIFO with O_NONBLOCK must return immediately (never block waiting for a writer that will never come), so the fstat-confirmed non-regular refusal that follows must not be delayed either")
 	}
 
 	servers, err := repo.ListMCPServers(context.Background())
@@ -105,14 +107,16 @@ func TestReimportConfiguredJSONRefusesUnixSocket(t *testing.T) {
 }
 
 // A symlink at mcp.json's path is refused the same way, even when it
-// points at an otherwise perfectly valid mcp.json elsewhere: os.Lstat
-// (unlike os.Stat) reports the link itself, never the file it points to,
-// so this is refused without ever resolving/following the link — the
-// simplest and safest choice documented in ReimportConfiguredJSON's own
-// comment, since resolving it would mean deciding how far to follow a
-// chain of links (and defending against one that never terminates, or one
-// that points back at a FIFO/socket/device) for a file this process has no
-// deployed need to read through a symlink at all.
+// points at an otherwise perfectly valid mcp.json elsewhere:
+// openRegularMCPConfigFile opens the path with O_NOFOLLOW, which makes the
+// raw open(2) syscall itself fail with ELOOP when the final path component
+// is a symlink — the link is never resolved or followed, and no separate
+// Lstat call is involved at all — the simplest and safest choice
+// documented in openRegularMCPConfigFile's own comment, since resolving it
+// would mean deciding how far to follow a chain of links (and defending
+// against one that never terminates, or one that points back at a
+// FIFO/socket/device) for a file this process has no deployed need to
+// read through a symlink at all.
 func TestReimportConfiguredJSONRefusesSymlinkEvenWhenTargetIsValid(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	root := t.TempDir()

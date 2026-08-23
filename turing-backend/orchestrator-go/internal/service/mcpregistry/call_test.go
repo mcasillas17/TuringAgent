@@ -193,7 +193,7 @@ func newRegistryCallHarness(t *testing.T) *registryCallHarness {
 			t.Errorf("decode vendor request: %v", err)
 		}
 		if h.deleteOnCall.Load() {
-			if err := h.repo.DeleteMCPServer(context.Background(), h.serverID); err != nil {
+			if _, err := h.repo.DeleteMCPServer(context.Background(), h.serverID); err != nil {
 				t.Errorf("delete server during call: %v", err)
 			}
 		}

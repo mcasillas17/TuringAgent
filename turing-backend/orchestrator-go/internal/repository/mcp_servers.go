@@ -517,8 +517,20 @@ func (r *Repository) MCPServerTombstoned(ctx context.Context, name string) (bool
 	return count != 0, err
 }
 
-func (r *Repository) ListMCPServers(ctx context.Context) ([]MCPServerRecord, error) {
-	rows, err := r.db.QueryContext(ctx, `
+// mcpRowsQuerier is satisfied by both *sql.Tx and *db.DB (via the
+// embedded *sql.DB): listMCPServersRows/listMCPServerToolsRows/
+// listMCPImportIssuesRows run against whichever one a caller has on hand
+// — a plain call outside any transaction (the public ListMCPServers/
+// ListMCPServerTools/ListMCPImportIssues methods below), or
+// MCPRegistrySnapshot's own single read transaction — sharing one
+// implementation of each query rather than two near-identical copies that
+// could silently compute the same rows differently.
+type mcpRowsQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func listMCPServersRows(ctx context.Context, q mcpRowsQuerier) ([]MCPServerRecord, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT s.id, s.name, s.transport, s.url, s.sealed_token, s.tier, s.enabled,
 			COALESCE(st.status, 'unknown'), COALESCE(st.error, ''), s.created_at
 		FROM mcp_servers s
@@ -541,6 +553,10 @@ func (r *Repository) ListMCPServers(ctx context.Context) ([]MCPServerRecord, err
 		return nil, err
 	}
 	return servers, nil
+}
+
+func (r *Repository) ListMCPServers(ctx context.Context) ([]MCPServerRecord, error) {
+	return listMCPServersRows(ctx, r.db)
 }
 
 func (r *Repository) GetMCPServer(ctx context.Context, serverID string) (MCPServerRecord, error) {
@@ -692,37 +708,54 @@ func (r *Repository) SetMCPToolPolicy(ctx context.Context, serverID string, tool
 	return nil
 }
 
-func (r *Repository) DeleteMCPServer(ctx context.Context, serverID string) error {
-	server, err := r.GetMCPServer(ctx, serverID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrMCPServerNotFound
-	}
-	if err != nil {
-		return err
-	}
-	if server.Tier == MCPServerTierBundled {
-		return ErrMCPServerBundled
-	}
+// DeleteMCPServer refuses a bundled server, tombstones the name so a
+// later mcp.json import cannot silently resurrect it, and removes the row
+// — the tier check, the tombstone insert, and the delete itself all
+// inside one transaction, so nothing between "read the row to check its
+// tier" and "actually delete it" can observe (or need to tolerate) a
+// different snapshot of that row. It returns the exact record that was
+// deleted, read from inside that same transaction, so a caller (the
+// service's DeleteMcpServer, for its post-commit notify/audit) never
+// needs a separate pre-read of a row this call is about to remove —
+// eliminating the race window a pre-read-then-delete pattern would
+// otherwise leave between that read and the transaction that actually
+// deletes it. A refusal (not found, bundled) returns the zero-value
+// record alongside the named error.
+func (r *Repository) DeleteMCPServer(ctx context.Context, serverID string) (MCPServerRecord, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return MCPServerRecord{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	server, err := mcpServerByID(ctx, tx, serverID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return MCPServerRecord{}, ErrMCPServerNotFound
+	}
+	if err != nil {
+		return MCPServerRecord{}, err
+	}
+	if server.Tier == MCPServerTierBundled {
+		return MCPServerRecord{}, ErrMCPServerBundled
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO mcp_import_tombstones (name, deleted_at)
 		VALUES (?, ?)
 		ON CONFLICT(name) DO UPDATE SET deleted_at = excluded.deleted_at
 	`, server.Name, now()); err != nil {
-		return err
+		return MCPServerRecord{}, err
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM mcp_servers WHERE id = ?`, serverID)
 	if err != nil {
-		return err
+		return MCPServerRecord{}, err
 	}
 	if err := expectOneRow(result, "MCP server not found"); err != nil {
-		return err
+		return MCPServerRecord{}, err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return MCPServerRecord{}, err
+	}
+	return server, nil
 }
 
 func (r *Repository) ReplaceMCPImportIssues(ctx context.Context, issues map[string]string) error {
@@ -746,8 +779,8 @@ func (r *Repository) ReplaceMCPImportIssues(ctx context.Context, issues map[stri
 	return tx.Commit()
 }
 
-func (r *Repository) ListMCPImportIssues(ctx context.Context) ([]MCPImportIssue, error) {
-	rows, err := r.db.QueryContext(ctx, `
+func listMCPImportIssuesRows(ctx context.Context, q mcpRowsQuerier) ([]MCPImportIssue, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT name, reason
 		FROM mcp_import_issues
 		ORDER BY name
@@ -770,6 +803,98 @@ func (r *Repository) ListMCPImportIssues(ctx context.Context) ([]MCPImportIssue,
 	return issues, nil
 }
 
+func (r *Repository) ListMCPImportIssues(ctx context.Context) ([]MCPImportIssue, error) {
+	return listMCPImportIssuesRows(ctx, r.db)
+}
+
+// MCPServerWithTools pairs a server row with every tool row
+// ListMCPServerTools would return for it (present and withdrawn alike),
+// captured together by MCPRegistrySnapshot.
+type MCPServerWithTools struct {
+	Server MCPServerRecord
+	Tools  []MCPServerTool
+}
+
+// MCPRegistrySnapshot is the complete, point-in-time registry state
+// ListMcpServers needs to build its response: every server (bundled and
+// non-bundled) paired with its own tools, and every recorded import issue.
+type MCPRegistrySnapshot struct {
+	Servers []MCPServerWithTools
+	Issues  []MCPImportIssue
+}
+
+// MCPRegistrySnapshot reads the complete server+tools+issues registry
+// state from a single SQLite read transaction, so a caller (ListMcpServers)
+// can never observe a mix of before-and-after state for a concurrent tool
+// reconciliation (replaceServerToolsTx, UpsertTools) or server
+// insert/delete. Before this, ListMcpServers read its aggregate budget
+// guard (see below), the server list, each server's own tools, and the
+// import issues as separate, independently-acquired queries: nothing held
+// the connection across them, so a write commuting between any two of
+// those queries could make the guard's decision (computed against an
+// earlier state) disagree with the rows actually returned moments later
+// (a later, larger state) — the exact "coherent snapshot" gap this method
+// closes. The database's single connection (db.Open's SetMaxOpenConns(1))
+// is what makes one transaction sufficient to close it: only one *sql.Tx
+// can be open at a time, so every read below runs against exactly the
+// same, unchanging view a concurrent writer cannot alter until this
+// transaction ends (it must wait for the very same connection).
+//
+// The registry-wide aggregate tool-byte total (see
+// aggregateAllToolBytes/MaxMCPRegistryToolBytes, which counts every row,
+// present and withdrawn) is checked first, inside this same transaction,
+// before any server or tool row is read: every tool-reconciliation write
+// path already refuses to create an aggregate over that budget, so this
+// should be unreachable in practice, but a database that somehow already
+// carries one (e.g. written by a future regression that reintroduces an
+// unguarded write path) is refused with the named
+// ErrMCPRegistryToolBudgetExceeded here — before attempting to read, let
+// alone build a response sized against, an over-budget aggregate — rather
+// than only ever checked separately from, and therefore possibly stale
+// relative to, the rows actually returned.
+func (r *Repository) MCPRegistrySnapshot(ctx context.Context) (MCPRegistrySnapshot, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return MCPRegistrySnapshot{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	totalBytes, err := aggregateAllToolBytes(ctx, tx)
+	if err != nil {
+		return MCPRegistrySnapshot{}, err
+	}
+	if totalBytes > MaxMCPRegistryToolBytes {
+		return MCPRegistrySnapshot{}, ErrMCPRegistryToolBudgetExceeded
+	}
+
+	if r.mcpRegistrySnapshotBarrier != nil {
+		r.mcpRegistrySnapshotBarrier()
+	}
+
+	servers, err := listMCPServersRows(ctx, tx)
+	if err != nil {
+		return MCPRegistrySnapshot{}, err
+	}
+	snapshot := MCPRegistrySnapshot{Servers: make([]MCPServerWithTools, 0, len(servers))}
+	for _, server := range servers {
+		tools, err := listMCPServerToolsRows(ctx, tx, server.ID)
+		if err != nil {
+			return MCPRegistrySnapshot{}, err
+		}
+		snapshot.Servers = append(snapshot.Servers, MCPServerWithTools{Server: server, Tools: tools})
+	}
+	issues, err := listMCPImportIssuesRows(ctx, tx)
+	if err != nil {
+		return MCPRegistrySnapshot{}, err
+	}
+	snapshot.Issues = issues
+
+	if err := tx.Commit(); err != nil {
+		return MCPRegistrySnapshot{}, err
+	}
+	return snapshot, nil
+}
+
 func (r *Repository) ReplaceMCPServerTools(ctx context.Context, serverID string, tools []MCPServerTool) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -790,19 +915,44 @@ func (r *Repository) ReplaceMCPServerTools(ctx context.Context, serverID string,
 }
 
 // MaxMCPRegistryToolBytes bounds the aggregate raw (tool_name +
-// schema_json byte length) total across every *present* tool in the
-// entire registry — every server combined, not any one server's own
-// snapshot — enforced transactionally inside replaceServerToolsTx: the
-// one function every tool-reconciliation path already shares (a live
-// rediscovery via ReplaceMCPServerTools, a static mcp.json snapshot via
-// ImportMCPServer, and placeholder adoption's own tool withdrawal). Before
-// this, only a single server's own tools were bounded (maxMCPToolBytes,
-// 4MiB, enforced in the mcpregistry package against both a live
-// tools/list response and a static snapshot) — but with up to
-// MaxNonBundledMCPServers (256) non-bundled servers each independently
-// allowed a nearly-4MiB snapshot, a single ListMcpServers response
-// summing all of them could vastly exceed the 4MiB gRPC message cap
-// (maxGRPCMessageSize, in internal/app) that response itself is bound by.
+// schema_json byte length) total across *every* row the `tools` table
+// holds for the entire registry — every server combined, present and
+// withdrawn (present=0) rows alike, not any one server's own snapshot and
+// not only its currently-present tools — enforced transactionally inside
+// replaceServerToolsTx: the one function every tool-reconciliation path
+// already shares (a live rediscovery via ReplaceMCPServerTools, a static
+// mcp.json snapshot via ImportMCPServer, and placeholder adoption's own
+// tool withdrawal). Before this, only a single server's own tools were
+// bounded (maxMCPToolBytes, 4MiB, enforced in the mcpregistry package
+// against both a live tools/list response and a static snapshot) — but
+// with up to MaxNonBundledMCPServers (256) non-bundled servers each
+// independently allowed a nearly-4MiB snapshot, a single ListMcpServers
+// response summing all of them could vastly exceed the 4MiB gRPC message
+// cap (maxGRPCMessageSize, in internal/app) that response itself is bound
+// by.
+//
+// Counting every row, not just present=1 ones, is deliberate and load-
+// bearing, not an overcount: ListMCPServerTools — and therefore
+// ListMcpServers' own per-server descriptor, via toolDescriptor — returns
+// every row attributed to a server regardless of its present flag, since a
+// withdrawn tool's policy is intentionally preserved (never deleted) so an
+// operator's edits survive a tool's temporary disappearance. A withdrawn
+// row's tool_name and schema_json are marshaled into the wire response
+// exactly like a present one's (only its own Present field differs), so a
+// budget that excluded those rows would silently undercount what
+// ListMcpServers actually sends: a vendor (or a malicious one) that keeps
+// rediscovering under a fresh, disjoint set of tool names every cycle would
+// leave every previous cycle's tools behind, forever withdrawn but never
+// deleted, and — counted only by present=1 — the aggregate would appear to
+// stay flat no matter how large the table, and therefore the response,
+// actually grew. Counting every row instead makes that same withdrawn
+// history spend the same budget a present tool would, so unbounded growth
+// through repeated rediscovery is refused once the real total — exactly
+// what a client's response would carry — reaches the cap, the same way a
+// single server accumulating too many present tools already was. Preserved
+// (never deleted) absent rows are exactly the point: an operator's edited
+// policy for a tool that comes and goes must survive that churn, right up
+// until the registry-wide total actually fills the budget.
 //
 // 256KiB is conservative enough that — combined with every other bounded
 // field a ListMcpServersResponse carries (up to 256 non-bundled plus a
@@ -854,55 +1004,42 @@ const MaxMCPRegistryToolBytes = 256 * 1024
 // and therefore by ReplaceMCPServerTools, ImportMCPServer, and
 // RegisterMCPServer's placeholder-adoption branch — when accepting a
 // server's replacement tool snapshot would push the registry's aggregate
-// present-tool byte total (see MaxMCPRegistryToolBytes) over budget. The
-// caller's transaction rolls back entirely — including the withdrawal
-// update replaceServerToolsTx already issued for this server — so a
-// refused reconciliation never leaves a server with no tools where it
-// used to have some, nor (for ImportMCPServer) a bare row with no tools
-// at all.
+// all-rows tool byte total (see MaxMCPRegistryToolBytes) over budget. It is
+// also returned by MCPRegistrySnapshot when that same total is already
+// over budget at read time. The caller's transaction rolls back entirely
+// — including the withdrawal update replaceServerToolsTx already issued
+// for this server — so a refused reconciliation never leaves a server
+// with no tools where it used to have some, nor (for ImportMCPServer) a
+// bare row with no tools at all.
 var ErrMCPRegistryToolBudgetExceeded = errors.New("MCP registry aggregate tool budget exceeded")
 
-// toolBudgetQueryRow is satisfied by both *sql.DB (via the embedding
-// *db.DB) and *sql.Tx: aggregatePresentToolBytes runs against whichever
-// one a caller has on hand — a live transaction mid-reconciliation
-// (replaceServerToolsTx, UpsertTools) or a plain read outside any
-// transaction (AggregateMCPToolBytes) — without needing two near-
-// identical copies of the same query.
+// toolBudgetQueryRow is satisfied by *sql.Tx: aggregateAllToolBytes always
+// runs against a live transaction mid-reconciliation (replaceServerToolsTx,
+// UpsertTools) or a snapshot read transaction (MCPRegistrySnapshot), never
+// against a bare, non-transactional connection — every caller needs the
+// count to reflect exactly the rows its own transaction just wrote, or
+// exactly the rows its own read transaction is otherwise consistently
+// observing.
 type toolBudgetQueryRow interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// aggregatePresentToolBytes returns the registry-wide total of every
-// currently-present tool's raw (tool_name + schema_json) byte length. This
-// is the one query replaceServerToolsTx, UpsertTools, and
-// AggregateMCPToolBytes all need to enforce (or, for the last, merely
-// read) MaxMCPRegistryToolBytes, so all three share this single
-// implementation rather than three copies that could silently drift from
-// computing the same total differently.
-func aggregatePresentToolBytes(ctx context.Context, q toolBudgetQueryRow) (int64, error) {
+// aggregateAllToolBytes returns the registry-wide total of every tool
+// row's raw (tool_name + schema_json) byte length — present and withdrawn
+// (present=0) rows alike. This is the one query replaceServerToolsTx,
+// UpsertTools, and MCPRegistrySnapshot all need to enforce (or, for the
+// last, merely read) MaxMCPRegistryToolBytes, so all three share this
+// single implementation rather than three copies that could silently
+// drift from computing the same total differently. See
+// MaxMCPRegistryToolBytes's own comment for why every row counts, not only
+// present=1 ones.
+func aggregateAllToolBytes(ctx context.Context, q toolBudgetQueryRow) (int64, error) {
 	var total int64
 	err := q.QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(LENGTH(CAST(tool_name AS BLOB)) + LENGTH(CAST(schema_json AS BLOB))), 0)
 		FROM tools
-		WHERE present = 1
 	`).Scan(&total)
 	return total, err
-}
-
-// AggregateMCPToolBytes returns the registry-wide total of every
-// currently-present tool's raw (tool_name + schema_json) byte length —
-// the exact same query replaceServerToolsTx and UpsertTools each run
-// against their own replacement snapshot to enforce
-// MaxMCPRegistryToolBytes. Exposed as its own read so a caller
-// (ListMcpServers) can refuse to build a response at all when the
-// aggregate is somehow already over budget, rather than only ever
-// checking it at write time: every write path now enforces the same
-// budget transactionally, so this should be unreachable in practice, but
-// ListMcpServers guards it anyway rather than trusting that invariant
-// unconditionally — see ListMcpServers' own comment for the fuller
-// reasoning.
-func (r *Repository) AggregateMCPToolBytes(ctx context.Context) (int64, error) {
-	return aggregatePresentToolBytes(ctx, r.db)
 }
 
 // replaceServerToolsTx is the one shared implementation of "withdraw every
@@ -919,33 +1056,18 @@ func (r *Repository) AggregateMCPToolBytes(ctx context.Context) (int64, error) {
 // identical collision/upsert behavior because there is exactly one
 // implementation of it — and, since the aggregate byte budget below is
 // enforced here too, identical budget enforcement as well.
+//
+// The budget is checked *after* the withdrawal and every replacement
+// upsert below have already run — not computed beforehand from a
+// present-only baseline plus the incoming tools' own Go-side byte count —
+// so the one query below measures exactly the table's real resulting
+// state, the same state a concurrent ListMcpServers read would see: every
+// row, present or withdrawn, counts (see MaxMCPRegistryToolBytes). A
+// violation rolls back the whole transaction, undoing the withdrawal and
+// every upsert together, via the caller's own deferred tx.Rollback.
 func replaceServerToolsTx(ctx context.Context, tx *sql.Tx, server MCPServerRecord, tools []MCPServerTool) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE tools SET present = 0, enabled = 0 WHERE mcp_server_id = ?`, server.ID); err != nil {
 		return err
-	}
-	// The aggregate check runs against the table's state *after* the
-	// withdrawal above: server's own previously-present tools no longer
-	// count (present = 0 now), so this naturally excludes exactly this
-	// server's prior contribution without needing an explicit server_id
-	// filter, then the replacement tools' own bytes are added on top —
-	// "excluding current server then adding replacement," computed
-	// directly from a live query rather than a separately maintained
-	// counter that could drift from the table's actual contents. This
-	// also means a bundled server's tools (populated by an entirely
-	// separate path, UpsertTools in tools.go, which never calls this
-	// function) are still counted: present=1 bundled rows are already in
-	// the table by the time this SELECT runs, regardless of how they got
-	// there.
-	existingBytes, err := aggregatePresentToolBytes(ctx, tx)
-	if err != nil {
-		return err
-	}
-	var newBytes int64
-	for _, tool := range tools {
-		newBytes += int64(len(tool.Name)) + int64(len(tool.SchemaJSON))
-	}
-	if existingBytes+newBytes > MaxMCPRegistryToolBytes {
-		return ErrMCPRegistryToolBudgetExceeded
 	}
 	discoveredAt := now()
 	for _, tool := range tools {
@@ -980,11 +1102,18 @@ func replaceServerToolsTx(ctx context.Context, tx *sql.Tx, server MCPServerRecor
 			return err
 		}
 	}
+	totalBytes, err := aggregateAllToolBytes(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if totalBytes > MaxMCPRegistryToolBytes {
+		return ErrMCPRegistryToolBudgetExceeded
+	}
 	return nil
 }
 
-func (r *Repository) ListMCPServerTools(ctx context.Context, serverID string) ([]MCPServerTool, error) {
-	rows, err := r.db.QueryContext(ctx, `
+func listMCPServerToolsRows(ctx context.Context, q mcpRowsQuerier, serverID string) ([]MCPServerTool, error) {
+	rows, err := q.QueryContext(ctx, `
 		SELECT tool_name, policy, schema_json, enabled, present
 		FROM tools
 		WHERE mcp_server_id = ?
@@ -1007,6 +1136,10 @@ func (r *Repository) ListMCPServerTools(ctx context.Context, serverID string) ([
 		return nil, err
 	}
 	return tools, nil
+}
+
+func (r *Repository) ListMCPServerTools(ctx context.Context, serverID string) ([]MCPServerTool, error) {
+	return listMCPServerToolsRows(ctx, r.db, serverID)
 }
 
 func (r *Repository) RemoteMCPServersForTools(ctx context.Context, selectedTools []string) ([]RemoteMCPServerEgress, error) {

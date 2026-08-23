@@ -52,15 +52,21 @@ names with reasons. A `command` entry is refused as an import issue
 explaining that stdio is unsupported, and no server row is created for it.
 Malformed documents and entries whose token cannot be sealed are reported the
 same way, without preventing the rest of the backend from starting.
-`mcp.json` is read only if it is a regular file: the path
-is checked with `os.Lstat` — never followed if it is a symlink, and never
-opened at all if it is a FIFO, socket, or device node — before it is ever
-opened, and the already-open file descriptor is checked again with `Fstat`
-before any read, closing the gap between those two syscalls. This is what
-actually keeps a reimport from ever hanging: a FIFO's read-side `os.Open`
-call blocks until a writer connects, so bounding the *read* alone (see
-below) would not have been enough to keep the whole call from stalling
-forever waiting for one that never comes. Every other read failure —
+`mcp.json` is read only if it is a regular file: the path is opened with
+`unix.Open` using `O_NOFOLLOW` (so a symlink as the final path component
+makes the raw `open(2)` call itself fail with `ELOOP` rather than being
+resolved and followed) and `O_NONBLOCK` (so a FIFO's read-side open
+returns immediately regardless of whether a writer is connected, rather
+than blocking the calling goroutine), and the resulting descriptor — not
+the path a second time — is checked with `Fstat`, refusing anything other
+than a confirmed regular file. There is no separate `Lstat`-then-`Open`
+pair of path-based syscalls here at all, and therefore no gap between two
+such checks for a swapped-in FIFO, symlink, socket, or device node to land
+in. This is what actually keeps a reimport from ever hanging: a *plain,
+blocking* `os.Open` on a FIFO's read side would wait until a writer
+connects, so bounding the *read* alone (see below) would not have been
+enough to keep the whole call from stalling forever waiting for one that
+never comes. Every other read failure —
 including a directory, any non-regular file, or the file having been
 replaced by one — maps to the same fixed "read mcp.json failed" message a
 client sees, never the path or the underlying OS error text. A malformed or
@@ -98,7 +104,16 @@ of this message named it directly, which meant a header deliberately (or
 accidentally) named with the entry's own bearer token value would leak that
 token straight into the refusal reason. The unsupported-header refusal always
 takes precedence over the duplicate-Authorization refusal, deterministically,
-regardless of how many of either are present. Each on-demand Reimport RPC's
+regardless of how many of either are present. Each element of an entry's own
+`tools` array is parsed exactly as strictly: only `name`, `description`, and
+`inputSchema`, spelled exactly that way (`inputSchema` is the one canonical
+spelling that is not all-lowercase), are recognized, so a case variant
+(`Name`, `INPUTSCHEMA`, ...) or an exact-or-case-insensitive duplicate of any
+of them is refused with the same fixed, generic, sentinel-free reason used
+for every other malformed tool definition — never `encoding/json`'s own
+`"unknown field %q"` wording, which would otherwise name the offending key
+verbatim (a JSON key inside a tool definition is exactly as attacker-controlled
+as its value). Each on-demand Reimport RPC's
 response is call-local and deterministic: its `Refused` list is built from
 that call's own report, sorted by name, rather than by re-reading the shared
 issues table two overlapping reimports could otherwise race and swap into
@@ -178,14 +193,29 @@ stuck skipping.
 
 `replaceServerToolsTx` also enforces one further limit, *across* every
 server in the registry rather than per server: `repository.MaxMCPRegistryToolBytes`
-(256 KiB) bounds the total encoded (name + schema) bytes of every *present*
-tool combined, checked transactionally against a fresh query of the whole
-`tools` table (after this server's own previously-present tools have
-already been withdrawn in the same transaction, so they are naturally
-excluded, and including any bundled-server tools populated by the
-entirely separate `UpsertTools` path, since the query reads the table's
-actual contents rather than a separately maintained count). Without an
-aggregate limit, up to `MaxNonBundledMCPServers` (256) servers each
+(256 KiB) bounds the total encoded (name + schema) bytes of *every* row the
+`tools` table holds combined — present **and** withdrawn (`present = 0`)
+rows alike, not only currently-present ones — checked transactionally
+against a fresh query of the whole `tools` table after this server's own
+withdrawal and every replacement upsert have already run (including any
+bundled-server tools populated by the entirely separate `UpsertTools`
+path, since the query reads the table's actual contents rather than a
+separately maintained count). Counting withdrawn rows is deliberate, not
+an overcount: `ListMCPServerTools` — and therefore `ListMcpServers`' own
+per-server descriptor — returns every row attributed to a server
+regardless of its `present` flag, since a withdrawn tool's policy is
+intentionally preserved (never deleted) so an operator's edits survive a
+tool's temporary disappearance. A budget that excluded those rows would
+silently undercount what `ListMcpServers` actually sends: a vendor that
+keeps rediscovering under a fresh, disjoint set of tool names every cycle
+would leave every previous cycle's tools behind, forever withdrawn but
+never deleted, and a present-only budget would let that grow the table —
+and the response — without limit even while appearing to stay flat.
+Counting every row instead makes that same withdrawn history spend the
+same budget a present tool would, so repeated rediscovery under
+ever-changing names is refused once the real total — exactly what a
+client's response would carry — reaches the cap. Without an aggregate
+limit at all, up to `MaxNonBundledMCPServers` (256) servers each
 independently allowed a nearly-4 MiB snapshot could together make a single
 `ListMcpServers` response exceed the 4 MiB gRPC message limit the backend
 configures for both directions. 256 KiB leaves substantial margin even in
@@ -203,7 +233,11 @@ rather than per-array-element overhead, measuring only ~1.55x expansion —
 and did not actually hold: a single tool consuming that whole 1 MiB budget
 in the number-array shape marshaled, by itself, to roughly 5.5 MiB —
 already past the cap before any server descriptor, Unsupported entry, or
-any other tool was even added.) A refusal
+any other tool was even added.) The check itself runs *after* the
+withdrawal and every replacement upsert for this reconciliation, not
+computed beforehand from a present-only baseline plus the incoming tools'
+own byte count, so it measures exactly the table's real resulting state —
+the same state a concurrent `ListMcpServers` read would see. A refusal
 here rolls back the whole transaction — the server row insert or
 placeholder adoption for a static import, or the standalone transaction a
 live rediscovery opens — so a server that already had tools is never left
@@ -215,24 +249,33 @@ worker tool capabilities (`system`, `files`, and `skills`), and the one
 path the paragraph above already notes contributes to
 `replaceServerToolsTx`'s own aggregate query — enforces the identical
 `MaxMCPRegistryToolBytes` budget against its *own* replacement snapshot,
-transactionally, the same way: computed after its own withdrawal (every
-present bundled/`NULL`-`mcp_server_id` tool set to `present = 0`) so its
-own prior contribution is naturally excluded, with a third-party server's
-present tools (populated entirely separately, via
-`replaceServerToolsTx`) still counted since both paths read the same
-table. A refusal rolls back the whole transaction, the same way, so a
-refused snapshot never leaves the tools it was about to replace withdrawn
-with nothing reconfirmed. Before this, `UpsertTools` was the one write
-path that enforced no aggregate budget of its own at all, even though its
-own writes count toward the same total every other path already bounded.
+transactionally, the same way: checked after its own withdrawal (every
+present bundled/`NULL`-`mcp_server_id` tool set to `present = 0`) and every
+replacement upsert have already run, against every row the table holds —
+present and withdrawn alike — with a third-party server's own tools
+(populated entirely separately, via `replaceServerToolsTx`) still counted
+since both paths read the same table. A refusal rolls back the whole
+transaction, the same way, so a refused snapshot never leaves the tools it
+was about to replace withdrawn with nothing reconfirmed. Before this,
+`UpsertTools` was the one write path that enforced no aggregate budget of
+its own at all, even though its own writes count toward the same total
+every other path already bounded.
 
 As defense in depth on top of every write path now sharing one enforced
-budget, `ListMcpServers` itself re-checks the current aggregate
-(`repository.AggregateMCPToolBytes`, the same query) before building any
-part of its response, and refuses with a fixed, generic
-`ResourceExhausted` status if it is somehow already over budget, or
-`Internal` if the check itself fails to run — never attempting to marshal
-and send a response sized against an unbounded aggregate. This should be
+budget, `ListMcpServers` reads the complete server+tools+issues registry
+state from a single SQLite read transaction (`repository.MCPRegistrySnapshot`)
+rather than as several separately-acquired queries: the database's single
+connection (`db.Open`'s `SetMaxOpenConns(1)`) means only one `*sql.Tx` can
+be open at a time, so a concurrent tool reconciliation cannot commit
+partway through that one read the way it could between two independently
+acquired queries, which could otherwise let an earlier guard's decision
+(computed against an earlier state) disagree with rows a later query in
+the same call actually returns. That same snapshot re-checks the current
+aggregate (the same all-rows query) before reading any server or tool row,
+and refuses with a fixed, generic `ResourceExhausted` status if it is
+somehow already over budget, or `Internal` if the check itself fails to
+run — never attempting to marshal and send a response sized against an
+unbounded aggregate. This should be
 unreachable in ordinary operation now that every write path enforces the
 same limit, but is not asserted to be *impossible* forever: it protects
 against a future regression that reintroduces an unguarded write path,
@@ -255,10 +298,16 @@ keeps refusing a tombstoned name. An explicit in-app Register of that same
 name is the user's own consent: it atomically clears the tombstone in the
 same transaction and does not require a new name. Registering over a name
 that still has a live row, or over a bundled name, is refused either way.
-Deletion itself reads the server before removing it — the delete decision
-and its atomicity stay entirely the repository's own — so the row's name and
-tier can still be recorded in a post-commit `mcp.server.deleted` audit
-entry even though the row itself is gone by the time that entry is written.
+`DeleteMCPServer` reads the row, checks its tier, writes the tombstone, and
+removes the row all inside its own single transaction, and returns the
+exact record it just deleted — read from inside that same transaction —
+rather than the service layer needing a separate pre-read of the row
+before calling it: a pre-read-then-delete pair would leave a race window
+between "read" and "the transaction that actually deletes," which
+returning the deleted record from inside that one transaction closes
+entirely. That returned record's name and tier are what the service layer
+records in a post-commit `mcp.server.deleted` audit entry, even though the
+row itself is gone by the time that entry is written.
 
 Token rotation is write-only for non-bundled servers: a new bearer replaces
 the sealed value, an empty bearer clears it, and a bundled server refuses

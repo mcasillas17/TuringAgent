@@ -205,7 +205,7 @@ func TestTombstonedNameRemainsRefusedByFileReimport(t *testing.T) {
 		t.Fatal(err)
 	}
 	vendor := findRepositoryServer(t, servers, "vendor")
-	if err := repo.DeleteMCPServer(context.Background(), vendor.ID); err != nil {
+	if _, err := repo.DeleteMCPServer(context.Background(), vendor.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -388,17 +388,18 @@ func TestImportReportSortsImportedAndSkippedDeterministically(t *testing.T) {
 
 // TestReimportOfExistingRowStillDecodesToolsShapeBeforeSkipping locks in
 // the precise claim docs/mcp-security-and-integration.md makes about an
-// existing (skip-eligible) row's own "tools" field: it is decoded as
-// part of the entry's strict JSON-shape validation — which runs before
-// the existing-row check that decides to skip — so a malformed shape
-// (here, an unrecognized key nested inside one of the tools array's own
-// elements) still produces the ordinary decode-error refusal, never a
-// silent skip that would hide it. This is deliberately unchanged,
-// pre-existing behavior (the accepted brief requires name/entry/URL/
-// header syntax to be validated before the skip decision, and that
-// ordering is not being revisited) — this test exists only to hold the
-// corrected documentation to the actual, verified behavior rather than
-// the "not even inspected" claim it replaces.
+// existing (skip-eligible) row's own "tools" field: it is decoded and
+// shape-validated (decodeMCPToolEntries/validateMCPToolFields) as part of
+// the entry's own strict JSON-shape validation — which runs before the
+// existing-row check that decides to skip — so a malformed shape (here,
+// an unrecognized key nested inside one of the tools array's own
+// elements) still produces the ordinary refusal, never a silent skip
+// that would hide it. This is deliberately unchanged, pre-existing
+// behavior (the accepted brief requires name/entry/URL/header syntax to
+// be validated before the skip decision, and that ordering is not being
+// revisited) — this test exists only to hold the corrected documentation
+// to the actual, verified behavior rather than the "not even inspected"
+// claim it replaces.
 func TestReimportOfExistingRowStillDecodesToolsShapeBeforeSkipping(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	ctx := context.Background()
@@ -426,7 +427,7 @@ func TestReimportOfExistingRowStillDecodesToolsShapeBeforeSkipping(t *testing.T)
 	if !refused {
 		t.Fatalf("Unsupported = %+v, want vendor refused for its malformed tools shape", report.Unsupported)
 	}
-	if reason != errMCPEntryFieldInvalid.Error() {
-		t.Fatalf("reason = %q, want the fixed generic decode-failure reason %q", reason, errMCPEntryFieldInvalid.Error())
+	if reason != mcpToolDefinitionRefusedMessage {
+		t.Fatalf("reason = %q, want the fixed generic tool-definition-refused reason %q", reason, mcpToolDefinitionRefusedMessage)
 	}
 }

@@ -17,22 +17,27 @@ import (
 
 // mcpNestedToolKeySentinel is a JSON *key* name (not a value) nested
 // inside an mcp.json entry's "tools" array — the one place
-// entryDecoder.Decode's DisallowUnknownFields (import.go) can fail on a
-// key that is nested, rather than top-level: mcpJSONTool only recognizes
-// "name", "description", and "inputSchema", so any other key inside one
-// of its array elements trips DisallowUnknownFields even though the
-// entry's own top-level fields (only "url" and "tools" here) are exactly
-// canonical and pass validateMCPEntryFields cleanly. An attacker who
-// controls an mcp.json entry controls every key in it exactly as much as
-// every value, so this key is chosen to look exactly like a secret an
-// error message must never echo back.
+// decodeMCPToolFields/validateMCPToolFields (import.go) can refuse a key
+// that is nested, rather than top-level: a tool object only recognizes
+// "name", "description", and "inputSchema" (see
+// canonicalMCPToolFieldNames), so any other key inside one of its array
+// elements is refused even though the entry's own top-level fields (only
+// "url" and "tools" here) are exactly canonical and pass
+// validateMCPEntryFields cleanly. An attacker who controls an mcp.json
+// entry controls every key in it exactly as much as every value, so this
+// key is chosen to look exactly like a secret an error message must never
+// echo back.
 const mcpNestedToolKeySentinel = "mcp-registry-nested-tool-key-sentinel-6f1e8a3d-do-not-leak"
 
 // TestImportNestedUnknownToolKeyNeverLeaksAcrossAllSurfaces is the
 // sentinel proof for the generic-entry-decode-error finding: an mcp.json
-// entry whose top-level shape is perfectly canonical can still fail
-// entryDecoder.Decode (DisallowUnknownFields) on a *nested* unknown key
-// inside a "tools" array element. Before this fix, that failure was
+// entry whose top-level shape is perfectly canonical can still be refused
+// on a *nested* unknown key inside a "tools" array element, now decoded
+// via decodeMCPToolEntries — captured as raw json.RawMessage rather than
+// structurally decoded by entryDecoder.Decode's own DisallowUnknownFields,
+// specifically so a case-variant or duplicate key inside a tool object is
+// caught too, not just a wholly unrecognized one (see
+// strict_tool_fields_test.go). Before any of this, that failure was
 // reported as "entry is invalid: " + err.Error(), and encoding/json's own
 // "unknown field %q" wording names the offending key verbatim — so an
 // attacker-chosen (or accidentally sensitive) nested key would flow into
@@ -110,9 +115,9 @@ func TestImportNestedUnknownToolKeyNeverLeaksAcrossAllSurfaces(t *testing.T) {
 	if refused.GetName() != "vendor-bad" {
 		t.Fatalf("Refused[0].Name = %q, want vendor-bad", refused.GetName())
 	}
-	if refused.GetReason() != errMCPEntryFieldInvalid.Error() {
-		t.Fatalf("Refused[0].Reason = %q, want the fixed generic decode-failure reason %q",
-			refused.GetReason(), errMCPEntryFieldInvalid.Error())
+	if refused.GetReason() != mcpToolDefinitionRefusedMessage {
+		t.Fatalf("Refused[0].Reason = %q, want the fixed generic tool-definition-refused reason %q",
+			refused.GetReason(), mcpToolDefinitionRefusedMessage)
 	}
 	assertStringSentinelFree(t, "RPC response", refused.GetReason(), mcpNestedToolKeySentinel)
 
@@ -137,7 +142,7 @@ func TestImportNestedUnknownToolKeyNeverLeaksAcrossAllSurfaces(t *testing.T) {
 			continue
 		}
 		found = true
-		if unsupported.GetReason() != errMCPEntryFieldInvalid.Error() {
+		if unsupported.GetReason() != mcpToolDefinitionRefusedMessage {
 			t.Fatalf("ListMcpServers Unsupported reason = %q, want the fixed reason", unsupported.GetReason())
 		}
 	}

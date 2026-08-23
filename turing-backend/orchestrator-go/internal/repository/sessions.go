@@ -17,6 +17,14 @@ import (
 type Repository struct {
 	db         *db.DB
 	skillStore *skillfiles.Store
+	// mcpRegistrySnapshotBarrier, when set (test-only; always nil in
+	// production), is invoked by MCPRegistrySnapshot once its single read
+	// transaction is open and its aggregate tool-byte budget guard has
+	// already run, immediately before it reads any server or tool row —
+	// letting a test pause a snapshot mid-flight to prove a concurrent
+	// write can never interleave with (or be interleaved by) it. See
+	// MCPRegistrySnapshot's own comment.
+	mcpRegistrySnapshotBarrier func()
 }
 
 func New(database *db.DB) *Repository {

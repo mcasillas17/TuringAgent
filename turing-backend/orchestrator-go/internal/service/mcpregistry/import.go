@@ -627,7 +627,13 @@ type mcpJSONServer struct {
 	Command string            `json:"command"`
 	Args    []string          `json:"args"`
 	Env     map[string]string `json:"env"`
-	Tools   []mcpJSONTool     `json:"tools"`
+	// Tools is captured as raw, undecoded JSON — not []mcpJSONTool — for
+	// exactly the same reason Headers is: decodeMCPToolEntries walks each
+	// array element's exact key/value tokens (via decodeMCPToolFields)
+	// before anything collapses a tool object's own case-variant or
+	// duplicate keys the way encoding/json's struct-tag decode otherwise
+	// would (see decodeMCPToolEntries' own comment).
+	Tools json.RawMessage `json:"tools"`
 }
 
 type mcpJSONTool struct {
@@ -907,29 +913,48 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			// err.Error() — for every way this decode can fail: a type
 			// mismatch (encoding/json's own message names the Go
 			// struct/field involved, not attacker input, but is still
-			// internal detail this response has no reason to expose),
-			// and, critically, an unknown field nested arbitrarily deep
-			// (e.g. inside a "tools" array element, whose own shape
-			// validateMCPEntryFields never inspects — it only checks
-			// this entry's *top-level* key names). DisallowUnknownFields'
-			// message names that offending key verbatim ("unknown field
-			// %q"), and a JSON key is exactly as attacker-controlled as
-			// any value, so echoing it back here would leak it into
-			// every place an ordinary Unsupported reason already reaches
-			// (ImportReport, mcp_import_issues, the ReimportMcpJson RPC
-			// response, ListMcpServers' own Unsupported list, and the
+			// internal detail this response has no reason to expose).
+			// This no longer needs to (and, since Headers and Tools are
+			// both captured as raw json.RawMessage rather than decoded
+			// structurally, no longer can) also catch an unknown key
+			// nested inside a "headers" object or a "tools" array
+			// element — decodeMCPHeaderEntries/bearerFromHeaders and
+			// decodeMCPToolEntries/validateMCPToolFields below each own
+			// that check for their own raw value now, with their own
+			// fixed, generic, sentinel-free reasons, the same way
+			// DisallowUnknownFields' own "unknown field %q" message
+			// would otherwise have named the offending key verbatim —
+			// and a JSON key is exactly as attacker-controlled as any
+			// value, so echoing it back would leak it into every place
+			// an ordinary Unsupported reason already reaches (ImportReport,
+			// mcp_import_issues, the ReimportMcpJson RPC response,
+			// ListMcpServers' own Unsupported list, and the
 			// audit/event/log surfaces that mirror them) — the same
 			// class of leak errMCPUnsupportedHeader already closes for
-			// an unsupported header's own name. Reusing
-			// errMCPEntryFieldInvalid's exact text — rather than a
-			// second, differently-worded fixed string — means this
-			// site says exactly the same thing
-			// validateMCPEntryFields' own top-level canonical-key
-			// check already does for a sibling class of malformed
-			// shape, never distinguishing the two to whoever reads the
-			// refusal.
+			// an unsupported header's own name.
 			recordUnsupported(report.Unsupported, name, errMCPEntryFieldInvalid.Error())
 			continue
+		}
+		// The "tools" array's own shape — every element's field names
+		// exactly canonical, no duplicates — is decoded and validated
+		// here, immediately after the entry's own top-level shape, and
+		// therefore before the existing-row skip decision below: a
+		// malformed tools shape must still be reported as a refusal even
+		// for an entry that would otherwise be silently skipped as
+		// already-registered, the same way it already was when this was
+		// still part of entryDecoder.Decode's own single monolithic
+		// struct decode above. Building the fully-validated
+		// []repository.MCPServerTool snapshot (name/token/budget/
+		// collision checks, via buildImportTools) still waits until
+		// after that skip decision, since it needs this entry's own
+		// normalized bearer token, computed below.
+		var rawTools []mcpJSONTool
+		if toolsPresent {
+			rawTools, err = decodeMCPToolEntries(entry.Tools)
+			if err != nil {
+				recordUnsupported(report.Unsupported, name, err.Error())
+				continue
+			}
 		}
 		if entry.Command != "" {
 			recordUnsupported(report.Unsupported, name, "stdio/command MCP servers are unsupported; run the server in a container or use an HTTPS URL")
@@ -994,10 +1019,11 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 		// before anything below touches the repository, so an invalid or
 		// token-bearing snapshot refuses the whole entry (Unsupported
 		// only, never also Imported) rather than leaving a partial row a
-		// corrected reimport could only skip.
+		// corrected reimport could only skip. rawTools was already
+		// decoded and shape-validated above, before the skip decision.
 		var tools []repository.MCPServerTool
 		if toolsPresent {
-			tools, err = buildImportTools(tier, name, entry.Tools, token)
+			tools, err = buildImportTools(tier, name, rawTools, token)
 			if err != nil {
 				recordUnsupported(report.Unsupported, name, err.Error())
 				continue
@@ -1299,6 +1325,187 @@ func validateMCPEntryFields(fields []mcpEntryField) error {
 	return nil
 }
 
+// mcpToolField is a single top-level key/value member of a "tools" array
+// element's raw JSON object, preserved exactly as decodeMCPToolFields
+// found it on the wire — including a name that repeats another member's,
+// whether by an exact spelling match or only a case-insensitive one. This
+// is the tool-object counterpart of mcpEntryField (an mcp.json entry's own
+// top-level fields) and mcpHeaderEntry (a "headers" object's members): a
+// map or mcpJSONTool's own former struct tags cannot represent or detect a
+// repeated or case-variant key, since encoding/json resolves a struct tag
+// case-insensitively whenever no exact-case match exists and silently
+// keeps only the last of two members that share the same key.
+type mcpToolField struct {
+	Name  string
+	Value json.RawMessage
+}
+
+// canonicalMCPToolFieldNames maps a tool object's only permitted key
+// spellings, lowercased, to their exact canonical form. Unlike
+// canonicalMCPEntryFieldNames (whose six canonical spellings are already
+// all lowercase), "inputSchema" is deliberately not: mcp.json itself, and
+// every MCP tool definition, spells it in camelCase, so
+// validateMCPToolFields must compare a field's exact Name against this
+// map's *value* (the true canonical spelling), not merely confirm its
+// lowercased form names a recognized key.
+var canonicalMCPToolFieldNames = map[string]string{
+	"name":        "name",
+	"description": "description",
+	"inputschema": "inputSchema",
+}
+
+// validateMCPToolFields requires every one of a "tools" array element's
+// top-level field names to exactly match one of canonicalMCPToolFieldNames'
+// canonical spellings — never merely case-insensitively, the way
+// mcpJSONTool's own former struct-tag decode accepted "Name" or "NAME" as
+// interchangeable with "name" via encoding/json's built-in case-insensitive
+// fallback matching. An exact-duplicate or case-insensitive duplicate of
+// any canonical name (e.g. both "inputSchema" and "InputSchema") is
+// refused the same way: JSON permits a duplicate key in one object, and
+// plain encoding/json decoding would otherwise silently keep only the last
+// one. Every failure uses the one fixed, generic
+// mcpToolDefinitionRefusedMessage — never distinguishing which of the two
+// tripped, or naming the offending key — the same reasoning
+// validateMCPEntryFields/errMCPEntryFieldInvalid already document for the
+// sibling top-level check.
+func validateMCPToolFields(fields []mcpToolField) error {
+	seenLower := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		lower := strings.ToLower(field.Name)
+		canonical, isKnown := canonicalMCPToolFieldNames[lower]
+		if !isKnown || field.Name != canonical {
+			return errors.New(mcpToolDefinitionRefusedMessage)
+		}
+		if _, duplicate := seenLower[lower]; duplicate {
+			return errors.New(mcpToolDefinitionRefusedMessage)
+		}
+		seenLower[lower] = struct{}{}
+	}
+	return nil
+}
+
+// decodeMCPToolFields parses a single "tools" array element's raw JSON
+// object with the same token-level walk (json.Decoder.Token/More)
+// decodeMCPEntryFields/decodeMCPHeaderEntries already use, and for the
+// same reason: two JSON object members that share the exact same key, or
+// differ only in case, must be preserved as separate entries rather than
+// silently collapsed — by json.Unmarshal into a map, or by mcpJSONTool's
+// own former struct tags via encoding/json's case-insensitive fallback
+// matching — before validateMCPToolFields ever sees the conflict it exists
+// to refuse. A non-object element, or malformed JSON, is refused with the
+// one fixed, generic mcpToolDefinitionRefusedMessage.
+func decodeMCPToolFields(raw json.RawMessage) ([]mcpToolField, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	open, err := decoder.Token()
+	if err != nil {
+		return nil, errors.New(mcpToolDefinitionRefusedMessage)
+	}
+	if delim, ok := open.(json.Delim); !ok || delim != '{' {
+		return nil, errors.New(mcpToolDefinitionRefusedMessage)
+	}
+	var fields []mcpToolField
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil, errors.New(mcpToolDefinitionRefusedMessage)
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, errors.New(mcpToolDefinitionRefusedMessage)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, errors.New(mcpToolDefinitionRefusedMessage)
+		}
+		fields = append(fields, mcpToolField{Name: key, Value: value})
+	}
+	if _, err := decoder.Token(); err != nil { // the closing '}'
+		return nil, errors.New(mcpToolDefinitionRefusedMessage)
+	}
+	return fields, nil
+}
+
+// mcpToolFromFields converts a validated (exact-canonical-key,
+// no-duplicate) field list into an mcpJSONTool, decoding each field's raw
+// value into the type buildImportTools expects: Name and Description as
+// strings, InputSchema as a raw JSON object (map[string]any). A field
+// whose value does not match that type (e.g. a numeric "name") is refused
+// with the one fixed mcpToolDefinitionRefusedMessage rather than echoing
+// encoding/json's own type-mismatch message. A field never present in
+// fields at all (validateMCPToolFields already guarantees at most one of
+// each) simply leaves the corresponding mcpJSONTool field at its zero
+// value — nil InputSchema, empty Description — matching exactly what an
+// absent JSON member decoded to under the former struct-tag decode.
+func mcpToolFromFields(fields []mcpToolField) (mcpJSONTool, error) {
+	var tool mcpJSONTool
+	for _, field := range fields {
+		var err error
+		switch field.Name {
+		case "name":
+			err = json.Unmarshal(field.Value, &tool.Name)
+		case "description":
+			err = json.Unmarshal(field.Value, &tool.Description)
+		case "inputSchema":
+			err = json.Unmarshal(field.Value, &tool.InputSchema)
+		}
+		if err != nil {
+			return mcpJSONTool{}, errors.New(mcpToolDefinitionRefusedMessage)
+		}
+	}
+	return tool, nil
+}
+
+// decodeMCPToolEntries parses an mcp.json entry's raw "tools" value —
+// captured as json.RawMessage (see mcpJSONServer.Tools) precisely so this
+// can inspect it before anything collapses a tool object's fields into a
+// struct — as a JSON array, validating each element's own field names
+// strictly (decodeMCPToolFields/validateMCPToolFields) before converting
+// it to an mcpJSONTool. A missing or JSON-null "tools" value is not an
+// error — both mean "no tools" — matching what an absent or null
+// []mcpJSONTool field decoded to under the former struct-tag decode;
+// ImportJSON's own independent toolsPresent flag (derived from the
+// entry's validated top-level field list, not from this function) is what
+// actually decides whether buildImportTools runs at all. Any other
+// non-array value, or any non-object element, is refused with the one
+// fixed, generic mcpToolDefinitionRefusedMessage.
+func decodeMCPToolEntries(raw json.RawMessage) ([]mcpJSONTool, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	open, err := decoder.Token()
+	if err != nil {
+		return nil, errors.New(mcpToolDefinitionRefusedMessage)
+	}
+	if delim, ok := open.(json.Delim); !ok || delim != '[' {
+		return nil, errors.New(mcpToolDefinitionRefusedMessage)
+	}
+	var tools []mcpJSONTool
+	for decoder.More() {
+		var element json.RawMessage
+		if err := decoder.Decode(&element); err != nil {
+			return nil, errors.New(mcpToolDefinitionRefusedMessage)
+		}
+		fields, err := decodeMCPToolFields(element)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateMCPToolFields(fields); err != nil {
+			return nil, err
+		}
+		tool, err := mcpToolFromFields(fields)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, tool)
+	}
+	if _, err := decoder.Token(); err != nil { // the closing ']'
+		return nil, errors.New(mcpToolDefinitionRefusedMessage)
+	}
+	return tools, nil
+}
+
 // errMultipleAuthorizationHeaders is the fixed reason bearerFromHeaders
 // returns when an mcp.json entry's headers object carries more than one
 // case-insensitive "authorization" key (e.g. both "Authorization" and
@@ -1429,17 +1636,45 @@ func bearerFromHeaders(headers []mcpHeaderEntry) (string, error) {
 	}
 	const prefix = "Bearer "
 	if !strings.HasPrefix(authValue, prefix) {
-		return "", errors.New("authorization header must use a non-empty ******")
+		return "", errMCPAuthorizationHeaderMalformed
 	}
 	normalized, err := normalizeBearerToken(strings.TrimPrefix(authValue, prefix))
 	if err != nil {
 		return "", err
 	}
 	if normalized == "" {
-		return "", errors.New("authorization header must use a non-empty ******")
+		return "", errMCPAuthorizationHeaderMalformed
 	}
 	return normalized, nil
 }
+
+// errMCPAuthorizationHeaderMalformed is the fixed reason bearerFromHeaders
+// returns when an mcp.json entry's single Authorization header is present
+// but does not carry a usable bearer credential: missing the required
+// "Bearer " prefix entirely, or carrying nothing but whitespace after it.
+// The wording names what an operator must fix (a non-empty bearer
+// credential) in plain, operator-meaningful language — never the header's
+// own value, and never anything that could be mistaken for a redaction
+// artifact or a content-filter placeholder.
+var errMCPAuthorizationHeaderMalformed = errors.New("authorization header must contain a non-empty bearer credential")
+
+// maxMCPBearerTokenBytes bounds a bearer token's raw byte length —
+// checked in normalizeBearerToken, so it applies identically regardless
+// of whether the token arrived as an mcp.json Authorization header or a
+// RegisterMcpServer/RotateMcpServerToken bearer_token field. 4096 matches
+// maxCredentialBytes in internal/service/integrations: long enough for
+// anything a real MCP server issues, short enough that neither an
+// mcp.json entry nor a direct registration/rotation request can use the
+// sealed_token column (or the request itself) to smuggle in an
+// arbitrarily large blob under the guise of a credential.
+const maxMCPBearerTokenBytes = 4096
+
+// errMCPBearerTokenTooLong is the fixed, generic reason normalizeBearerToken
+// returns when a token's raw byte length exceeds maxMCPBearerTokenBytes.
+// It deliberately never states the token's own (attacker-controlled)
+// length, only the fixed limit — consistent with never echoing any part
+// of the token itself.
+var errMCPBearerTokenTooLong = fmt.Errorf("authorization bearer must not exceed %d bytes", maxMCPBearerTokenBytes)
 
 // normalizeBearerToken applies the one set of rules a bearer token must
 // satisfy regardless of whether it arrived as an mcp.json Authorization
@@ -1448,6 +1683,11 @@ func bearerFromHeaders(headers []mcpHeaderEntry) (string, error) {
 // rather than an error. A token that would corrupt the line-based MCP
 // Authorization header it is eventually sent in — a line break or any other
 // control character — is refused instead of silently truncated or escaped.
+// The length check uses Go's len() on the string directly — real UTF-8
+// byte count, not a rune count that would undercount a multibyte token
+// relative to what actually gets sealed and stored — so a token built
+// entirely from multibyte characters cannot slip past the cap by having
+// fewer runes than bytes.
 func normalizeBearerToken(raw string) (string, error) {
 	token := strings.TrimSpace(raw)
 	if token == "" {
@@ -1460,6 +1700,9 @@ func normalizeBearerToken(raw string) (string, error) {
 		if unicode.IsControl(r) {
 			return "", errors.New("authorization bearer must not contain control characters")
 		}
+	}
+	if len(token) > maxMCPBearerTokenBytes {
+		return "", errMCPBearerTokenTooLong
 	}
 	return token, nil
 }

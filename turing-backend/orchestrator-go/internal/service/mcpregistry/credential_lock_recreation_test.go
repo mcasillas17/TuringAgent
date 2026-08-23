@@ -85,7 +85,7 @@ func TestRotateMcpServerTokenCleansUpCredentialLockWhenServerDeletedMidRotation(
 		t.Fatal("test setup is broken: rotation must have created a lock entry by the time it reaches its barrier")
 	}
 
-	if err := repo.DeleteMCPServer(ctx, server.Server.ID); err != nil {
+	if _, err := repo.DeleteMCPServer(ctx, server.Server.ID); err != nil {
 		t.Fatal(err)
 	}
 	close(proceed)

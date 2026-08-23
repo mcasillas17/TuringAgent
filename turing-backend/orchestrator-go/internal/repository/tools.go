@@ -35,41 +35,6 @@ func (r *Repository) UpsertTools(ctx context.Context, tools []DiscoveredTool) er
 	`); err != nil {
 		return err
 	}
-	// The same registry-wide aggregate budget replaceServerToolsTx
-	// enforces for every other tool-reconciliation path (ImportMCPServer,
-	// RegisterMCPServer's placeholder adoption, ReplaceMCPServerTools)
-	// applies here too: before this check, UpsertTools — the
-	// bundled/skills/legacy path the runtime uses to publish worker tool
-	// capabilities — was the one write path that could grow the
-	// registry's aggregate present-tool byte total (see
-	// MaxMCPRegistryToolBytes) without limit, even though a
-	// ListMcpServers response sums every server's tools together
-	// regardless of which path populated them. Computed against the
-	// table's state *after* the withdrawal above, the same way
-	// replaceServerToolsTx computes it after its own per-server
-	// withdrawal: this call's own prior bundled/skills/legacy
-	// contribution no longer counts (present = 0 now) without needing an
-	// explicit filter, then the replacement tools' own bytes are added on
-	// top. A third-party server's own present tools (populated entirely
-	// separately, via replaceServerToolsTx) are unaffected by the
-	// withdrawal above and so are still counted here — the two paths
-	// share one registry-wide budget, not two independently-budgeted
-	// halves. A refusal returns before any replacement row is written and
-	// before tx.Commit, so the deferred Rollback above discards the
-	// withdrawal too: a refused snapshot never leaves the
-	// bundled/skills/legacy tools it was about to replace withdrawn with
-	// nothing reconfirmed.
-	existingBytes, err := aggregatePresentToolBytes(ctx, tx)
-	if err != nil {
-		return err
-	}
-	var newBytes int64
-	for _, tool := range tools {
-		newBytes += int64(len(tool.ToolName)) + int64(len(tool.SchemaJSON))
-	}
-	if existingBytes+newBytes > MaxMCPRegistryToolBytes {
-		return ErrMCPRegistryToolBudgetExceeded
-	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE mcp_server_status
 		SET status = 'down', error = '', checked_at = ?
@@ -130,6 +95,35 @@ func (r *Repository) UpsertTools(ctx context.Context, tools []DiscoveredTool) er
 		`, discoveredAt, tool.ServerName); err != nil {
 			return err
 		}
+	}
+	// The same registry-wide aggregate budget replaceServerToolsTx
+	// enforces for every other tool-reconciliation path (ImportMCPServer,
+	// RegisterMCPServer's placeholder adoption, ReplaceMCPServerTools)
+	// applies here too: before this check, UpsertTools — the
+	// bundled/skills/legacy path the runtime uses to publish worker tool
+	// capabilities — was the one write path that could grow the
+	// registry's aggregate tool byte total (see MaxMCPRegistryToolBytes)
+	// without limit, even though a ListMcpServers response sums every
+	// server's tools together regardless of which path populated them,
+	// present or withdrawn. Checked after the withdrawal and every
+	// replacement row above have already run — not computed beforehand
+	// from a present-only baseline plus the incoming tools' own Go-side
+	// byte count — so this one query measures exactly the table's real
+	// resulting state, the same way replaceServerToolsTx's own budget
+	// check does. A third-party server's own tools (populated entirely
+	// separately, via replaceServerToolsTx) are unaffected by the
+	// withdrawal above and so are still counted here — the two paths
+	// share one registry-wide budget, not two independently-budgeted
+	// halves. A refusal returns before tx.Commit, so the deferred
+	// Rollback above discards the withdrawal and every replacement row
+	// together: a refused snapshot never leaves the bundled/skills/legacy
+	// tools it was about to replace withdrawn with nothing reconfirmed.
+	totalBytes, err := aggregateAllToolBytes(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if totalBytes > MaxMCPRegistryToolBytes {
+		return ErrMCPRegistryToolBudgetExceeded
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO settings (key, value_json, updated_at)

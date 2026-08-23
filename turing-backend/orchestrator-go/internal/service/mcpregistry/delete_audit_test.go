@@ -119,10 +119,10 @@ func TestDeleteMcpServerPersistsRealAuditRow(t *testing.T) {
 	}
 }
 
-// A server_id naming nothing at all must map to NotFound exactly as it did
-// before this change, and — since the pre-read that captures name/tier for
-// the audit payload fails before the delete itself is ever attempted — no
-// audit row may be produced for a delete that never happened.
+// A server_id naming nothing at all must map to NotFound: DeleteMCPServer
+// itself refuses inside its own transaction (no row to read, tombstone,
+// or delete), returning the zero-value record alongside the named error,
+// so no audit row may be produced for a delete that never happened.
 func TestDeleteMcpServerMissingServerIsNotFoundWithoutAudit(t *testing.T) {
 	service, _ := newRegistryTestService(t)
 	recorder := &recordingAuditRecorder{}
@@ -139,10 +139,11 @@ func TestDeleteMcpServerMissingServerIsNotFoundWithoutAudit(t *testing.T) {
 	}
 }
 
-// A bundled server still refuses deletion with the same FailedPrecondition it
-// always has (repository.ErrMCPServerBundled), and — because that refusal is
-// still decided entirely by the repository's own DeleteMCPServer call, not by
-// the new pre-read — no audit row is produced for it either.
+// A bundled server still refuses deletion with the same FailedPrecondition
+// it always has (repository.ErrMCPServerBundled) — decided by
+// DeleteMCPServer's own tier check inside its single transaction, which
+// also means the tombstone insert and delete never even run — so no audit
+// row is produced for it either.
 func TestDeleteMcpServerBundledRefusesWithoutAudit(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	bundled, err := repo.ImportMCPServer(context.Background(), repository.ImportedMCPServer{

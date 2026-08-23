@@ -23,7 +23,8 @@ const maxMCPStatusMessageBytes = 512
 
 // mcpRegistryAggregateBudgetExceededMessage is the fixed, generic reason
 // ListMcpServers refuses to build its response at all when
-// repository.AggregateMCPToolBytes already exceeds
+// repository.MCPRegistrySnapshot's own aggregate-budget guard finds the
+// registry-wide tool-byte total already exceeds
 // repository.MaxMCPRegistryToolBytes — a state every tool-reconciliation
 // write path (replaceServerToolsTx, and, since this fix, UpsertTools too)
 // now refuses to create. This is a defense-in-depth guard, not a state
@@ -138,40 +139,41 @@ func (s *InternalServer) CallRegisteredMcpTool(ctx context.Context, req *turingv
 }
 
 func (s *Server) ListMcpServers(ctx context.Context, _ *turingv1.ListMcpServersRequest) (*turingv1.ListMcpServersResponse, error) {
-	// A conservative defense-in-depth guard, checked before any of the
-	// (potentially large) per-server tool descriptors below are even
-	// read: every tool-reconciliation write path already refuses to push
-	// the registry-wide aggregate over repository.MaxMCPRegistryToolBytes
-	// (see replaceServerToolsTx and, since this fix, UpsertTools), so this
-	// should never actually trip — but if it somehow did, this refuses
-	// with a fixed, generic ResourceExhausted status before ever
-	// attempting to build (let alone marshal and send) a response sized
-	// against an unbounded aggregate, rather than silently trusting that
-	// invariant unconditionally.
-	aggregateBytes, err := s.repo.AggregateMCPToolBytes(ctx)
+	// MCPRegistrySnapshot reads every server, its own tools, and every
+	// import issue from a single SQLite read transaction, so this can
+	// never observe a mix of before-and-after state for a concurrent tool
+	// reconciliation (replaceServerToolsTx, UpsertTools) or server
+	// insert/delete — unlike three-plus separately-acquired queries
+	// (an aggregate-budget read, then the server list, then each server's
+	// own tools, then the issue list), where a write landing between any
+	// two of them could make an earlier guard's decision disagree with
+	// the rows a later query in the same call actually returns. The same
+	// aggregate present-and-absent tool-byte budget guard (see
+	// repository.MaxMCPRegistryToolBytes) still runs first, inside that
+	// same transaction, before any server or tool row is read: every
+	// tool-reconciliation write path already refuses to push the
+	// registry-wide aggregate over that budget, so this should never
+	// actually trip — but if it somehow did, this refuses with a fixed,
+	// generic ResourceExhausted status before ever attempting to build
+	// (let alone marshal and send) a response sized against an unbounded
+	// aggregate, rather than silently trusting that invariant
+	// unconditionally.
+	snapshot, err := s.repo.MCPRegistrySnapshot(ctx)
 	if err != nil {
+		if errors.Is(err, repository.ErrMCPRegistryToolBudgetExceeded) {
+			return nil, status.Error(codes.ResourceExhausted, mcpRegistryAggregateBudgetExceededMessage)
+		}
 		return nil, status.Error(codes.Internal, "list MCP servers failed")
 	}
-	if aggregateBytes > repository.MaxMCPRegistryToolBytes {
-		return nil, status.Error(codes.ResourceExhausted, mcpRegistryAggregateBudgetExceededMessage)
-	}
-	servers, err := s.repo.ListMCPServers(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "list MCP servers failed")
-	}
-	response := &turingv1.ListMcpServersResponse{Servers: make([]*turingv1.McpServerDescriptor, 0, len(servers))}
-	for _, server := range servers {
-		descriptor, err := s.serverDescriptor(ctx, server)
+	response := &turingv1.ListMcpServersResponse{Servers: make([]*turingv1.McpServerDescriptor, 0, len(snapshot.Servers))}
+	for _, entry := range snapshot.Servers {
+		descriptor, err := buildServerDescriptor(entry.Server, entry.Tools)
 		if err != nil {
 			return nil, status.Error(codes.Internal, "list MCP servers failed")
 		}
 		response.Servers = append(response.Servers, descriptor)
 	}
-	issues, err := s.repo.ListMCPImportIssues(ctx)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "list MCP import issues failed")
-	}
-	for _, issue := range issues {
+	for _, issue := range snapshot.Issues {
 		response.Unsupported = append(response.Unsupported, &turingv1.UnsupportedMcpServer{
 			Name: issue.Name, Reason: issue.Reason,
 		})
@@ -381,23 +383,18 @@ func (s *Server) DeleteMcpServer(ctx context.Context, req *turingv1.DeleteMcpSer
 	if req == nil || req.GetServerId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "server_id is required")
 	}
-	// Read the server before deleting it: DeleteMCPServer's own error
-	// mapping below (NotFound/Bundled/Internal) remains the sole authority
-	// over whether the delete actually happens, so this pre-read changes
-	// nothing about atomicity — it exists only to capture the name/tier a
-	// deleted row can no longer be read back from, for the audit payload
-	// below. A missing server fails here first, mapped to the same NotFound
-	// DeleteMCPServer would have returned anyway; a bundled server still
-	// passes this read (GetMCPServer does not consider tier) and is refused,
-	// as always, by the delete call itself.
-	server, err := s.repo.GetMCPServer(ctx, req.GetServerId())
+	// DeleteMCPServer performs the tier check, the tombstone insert, and
+	// the delete itself all inside its own single transaction, and
+	// returns the exact record it deleted — read from inside that same
+	// transaction — so this needs no separate pre-read of the row before
+	// calling it: an outer GetMCPServer followed by a second, independent
+	// DeleteMCPServer call would leave a race window between the two
+	// (nothing tying the row this reads to the row that transaction
+	// actually deletes), which returning the deleted record here closes
+	// entirely. A missing server or a bundled one still map to the same
+	// NotFound/FailedPrecondition statuses as before.
+	server, err := s.repo.DeleteMCPServer(ctx, req.GetServerId())
 	if err != nil {
-		if errors.Is(err, repository.ErrMCPServerNotFound) {
-			return nil, status.Error(codes.NotFound, "MCP server not found")
-		}
-		return nil, status.Error(codes.Internal, "read MCP server failed")
-	}
-	if err := s.repo.DeleteMCPServer(ctx, req.GetServerId()); err != nil {
 		switch {
 		case errors.Is(err, repository.ErrMCPServerNotFound):
 			return nil, status.Error(codes.NotFound, "MCP server not found")
@@ -416,9 +413,10 @@ func (s *Server) DeleteMcpServer(ctx context.Context, req *turingv1.DeleteMcpSer
 	// Notify and audit immediately once the delete above has committed —
 	// the same reasoning every other mutation in this file already
 	// applies to its own post-commit notify/audit. The payload carries
-	// only the name and tier captured by the pre-read above: no URL, no
-	// token-related key — narrower than RegisterMcpServer's own payload,
-	// matching the reviewed policy in audit/service.go.
+	// only the name and tier from the record DeleteMCPServer itself just
+	// returned: no URL, no token-related key — narrower than
+	// RegisterMcpServer's own payload, matching the reviewed policy in
+	// audit/service.go.
 	s.notifyRegistryChanged()
 	s.auditMCPEvent(ctx, "mcp.server.deleted", server.ID, map[string]any{
 		"name": server.Name,
@@ -858,11 +856,27 @@ func (s *Server) discover(ctx context.Context, serverID string) (err error) {
 	return s.repo.SetMCPServerStatus(ctx, server.ID, "up", "")
 }
 
+// serverDescriptor builds a single server's descriptor via its own,
+// independent repository read of that server's tools — used by every
+// single-server RPC (SetMcpServerEnabled, RegisterMcpServer,
+// RotateMcpServerToken, UpdateMcpToolPolicy) where one extra query for one
+// server's own tools carries none of the cross-server coherence risk a
+// whole-registry listing does. ListMcpServers does not use this: it reads
+// every server's tools from its own single snapshot transaction (see
+// repository.MCPRegistrySnapshot) and calls buildServerDescriptor directly
+// with tools already in hand, rather than one more per-server query each.
 func (s *Server) serverDescriptor(ctx context.Context, server repository.MCPServerRecord) (*turingv1.McpServerDescriptor, error) {
 	tools, err := s.repo.ListMCPServerTools(ctx, server.ID)
 	if err != nil {
 		return nil, err
 	}
+	return buildServerDescriptor(server, tools)
+}
+
+// buildServerDescriptor is the pure conversion serverDescriptor and
+// ListMcpServers both need: a server record plus the tools already read
+// for it, with no repository access of its own.
+func buildServerDescriptor(server repository.MCPServerRecord, tools []repository.MCPServerTool) (*turingv1.McpServerDescriptor, error) {
 	descriptors := make([]*turingv1.McpToolDescriptor, 0, len(tools))
 	for _, tool := range tools {
 		descriptor, err := toolDescriptor(tool)

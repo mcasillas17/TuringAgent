@@ -99,7 +99,7 @@ func TestImportMCPServerRefusesTombstonedName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.DeleteMCPServer(ctx, created.Server.ID); err != nil {
+	if _, err := repo.DeleteMCPServer(ctx, created.Server.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, err = repo.ImportMCPServer(ctx, ImportedMCPServer{
@@ -119,7 +119,7 @@ func TestRegisterMCPServerClearsTombstoneAndCreatesDisabledServer(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.DeleteMCPServer(ctx, created.Server.ID); err != nil {
+	if _, err := repo.DeleteMCPServer(ctx, created.Server.ID); err != nil {
 		t.Fatal(err)
 	}
 
