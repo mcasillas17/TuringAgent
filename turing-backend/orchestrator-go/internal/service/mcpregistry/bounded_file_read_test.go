@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,45 +15,23 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// This is the decisive proof that the file read itself — not merely
-// ImportJSON's own in-memory size check running on whatever already got
-// read — is bounded. mcp.json is opened as a FIFO whose writer supplies
-// more than maxMCPImportDocumentBytes and then deliberately keeps the
-// pipe open (no EOF, no error) for longer than any reasonable bound: an
-// unbounded read (os.ReadFile's own semantics — call Read until a real
-// io.EOF or error) would block waiting for the writer to either close or
-// send more, exactly as it would for a slow or hostile/unbounded real
-// source. A read bounded via io.LimitReader(file, cap+1) stops issuing
-// further Read calls once it has consumed cap+1 bytes — synthesizing its
-// own io.EOF at that point — regardless of whether the underlying FIFO
-// itself has anything left to say, so ReimportConfiguredJSON must return
-// promptly either way.
-func TestReimportConfiguredJSONReadIsBoundedEvenWhenTheSourceNeverEnds(t *testing.T) {
-	service, _ := newRegistryTestService(t)
+// mcp.json must never even be opened when it is not a regular file: a
+// FIFO's read-side os.Open call blocks until a writer connects, and even
+// once one does, an unbounded read could still wait indefinitely for that
+// writer to finish (see the sibling test proving reads are bounded for a
+// *regular* file). This test deliberately never provides a writer at all
+// — if ReimportConfiguredJSON tried to open the FIFO for reading, that
+// open call itself would hang forever, so a prompt refusal here is only
+// possible if a non-regular-file check (os.Lstat) runs and refuses before
+// os.Open is ever called.
+func TestReimportConfiguredJSONRefusesFIFOBeforeEverOpeningItSoNoWriterCanHangIt(t *testing.T) {
+	service, repo := newRegistryTestService(t)
 	root := t.TempDir()
 	path := filepath.Join(root, "mcp.json")
 	if err := unix.Mkfifo(path, 0o600); err != nil {
 		t.Skipf("FIFOs are unavailable in this environment: %v", err)
 	}
 	service.SetMCPConfigRoot(root)
-
-	writerDone := make(chan struct{})
-	go func() {
-		defer close(writerDone)
-		writer, err := os.OpenFile(path, os.O_WRONLY, 0o600)
-		if err != nil {
-			return
-		}
-		defer func() { _ = writer.Close() }()
-		payload := bytes.Repeat([]byte(" "), maxMCPImportDocumentBytes+1)
-		_, _ = writer.Write(payload)
-		// Keep the pipe open well past any reasonable bound on the read
-		// side, without ever closing or writing a real terminator: from
-		// an unbounded reader's perspective, the stream simply has not
-		// ended yet.
-		time.Sleep(5 * time.Second)
-	}()
-	t.Cleanup(func() { <-writerDone })
 
 	type result struct {
 		report ImportReport
@@ -66,14 +45,105 @@ func TestReimportConfiguredJSONReadIsBoundedEvenWhenTheSourceNeverEnds(t *testin
 
 	select {
 	case res := <-done:
-		if res.err != nil {
-			t.Fatalf("an oversized document must be reported, not returned as an error: %v", res.err)
+		if res.err == nil {
+			t.Fatal("a FIFO in place of mcp.json must be reported as a read failure, not silently succeed")
 		}
-		if _, refused := res.report.Unsupported["_document"]; !refused {
-			t.Fatalf("Unsupported = %v, want a _document refusal", res.report.Unsupported)
+		if res.err.Error() != "read mcp.json failed" {
+			t.Fatalf("error = %q, want the fixed read-failure message", res.err.Error())
+		}
+		if len(res.report.Imported) != 0 || len(res.report.Skipped) != 0 || len(res.report.Unsupported) != 0 {
+			t.Fatalf("report = %+v, want empty on a read failure", res.report)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("ReimportConfiguredJSON did not return within 3s: the file read is not bounded and is waiting for the source to end")
+		t.Fatal("ReimportConfiguredJSON did not return within 3s: it must refuse a non-regular file via Lstat before ever calling os.Open, not wait for a writer that will never come")
+	}
+
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, server := range servers {
+		if server.Tier != repository.MCPServerTierBundled {
+			t.Fatalf("servers = %+v, want none created from a refused FIFO", servers)
+		}
+	}
+}
+
+// A Unix domain socket at mcp.json's path must be refused the same fixed
+// way as a FIFO or a directory: it is exactly as non-regular, and opening
+// it for a read (rather than connecting to it) is meaningless.
+func TestReimportConfiguredJSONRefusesUnixSocket(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "mcp.json")
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Skipf("Unix domain sockets are unavailable in this environment: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	service.SetMCPConfigRoot(root)
+
+	report, err := service.ReimportConfiguredJSON(context.Background())
+	if err == nil {
+		t.Fatal("a socket in place of mcp.json must be reported as a read failure, not silently succeed")
+	}
+	if err.Error() != "read mcp.json failed" {
+		t.Fatalf("error = %q, want the fixed read-failure message", err.Error())
+	}
+	if len(report.Imported) != 0 || len(report.Skipped) != 0 || len(report.Unsupported) != 0 {
+		t.Fatalf("report = %+v, want empty on a read failure", report)
+	}
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, server := range servers {
+		if server.Tier != repository.MCPServerTierBundled {
+			t.Fatalf("servers = %+v, want none created from a refused socket", servers)
+		}
+	}
+}
+
+// A symlink at mcp.json's path is refused the same way, even when it
+// points at an otherwise perfectly valid mcp.json elsewhere: os.Lstat
+// (unlike os.Stat) reports the link itself, never the file it points to,
+// so this is refused without ever resolving/following the link — the
+// simplest and safest choice documented in ReimportConfiguredJSON's own
+// comment, since resolving it would mean deciding how far to follow a
+// chain of links (and defending against one that never terminates, or one
+// that points back at a FIFO/socket/device) for a file this process has no
+// deployed need to read through a symlink at all.
+func TestReimportConfiguredJSONRefusesSymlinkEvenWhenTargetIsValid(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	root := t.TempDir()
+	target := filepath.Join(root, "real-mcp.json")
+	if err := os.WriteFile(target, []byte(`{"mcpServers": {"vendor": {"url": "https://vendor.example/mcp"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "mcp.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks are unavailable in this environment: %v", err)
+	}
+	service.SetMCPConfigRoot(root)
+
+	report, err := service.ReimportConfiguredJSON(context.Background())
+	if err == nil {
+		t.Fatal("a symlink in place of mcp.json must be reported as a read failure, not silently succeed")
+	}
+	if err.Error() != "read mcp.json failed" {
+		t.Fatalf("error = %q, want the fixed read-failure message", err.Error())
+	}
+	if len(report.Imported) != 0 || len(report.Skipped) != 0 || len(report.Unsupported) != 0 {
+		t.Fatalf("report = %+v, want empty on a read failure", report)
+	}
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, server := range servers {
+		if server.Name == "vendor" {
+			t.Fatal("a symlinked mcp.json must never be followed/imported")
+		}
 	}
 }
 

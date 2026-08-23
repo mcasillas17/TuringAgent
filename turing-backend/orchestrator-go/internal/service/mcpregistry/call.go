@@ -115,18 +115,22 @@ func (s *Server) CallTool(ctx context.Context, input CallInput) (map[string]any,
 	// after every step above that either does not touch the server's
 	// token at all or can legitimately block for an unbounded time
 	// (caller-side approval enforcement): RotateMcpServerToken excludes
-	// every credentialMu reader for its own repo read/seal/atomic-replace/
-	// status-reset (see rotateServerTokenLocked), so from this point
-	// through the network call and either outcome of recording this
-	// call's own liveness status below, no concurrent rotation can be
-	// silently finishing underneath it. The sealed token is re-read here
+	// every reader of this same server's credential lock for its own repo
+	// read/seal/atomic-replace/status-reset (see rotateServerTokenLocked),
+	// so from this point through the network call and either outcome of
+	// recording this call's own liveness status below, no concurrent
+	// rotation of *this* server can be silently finishing underneath it
+	// — a rotation of any other server is entirely unaffected, since the
+	// lock is keyed by server id (see credentialLock). The server row is
+	// re-read here — token, url, and tier alike, not just the token —
 	// rather than reused from the server fetched at the top of this
-	// function so that a rotation completing during the (possibly long)
-	// approval wait above is never missed: this always decrypts whatever
-	// RotateMcpServerToken most recently committed, never a copy
+	// function, so that a rotation completing during the (possibly long)
+	// approval wait above is never missed: this always uses whatever
+	// RotateMcpServerToken most recently committed, never a value
 	// captured before that wait started.
-	s.credentialMu.RLock()
-	defer s.credentialMu.RUnlock()
+	lock := s.credentialLock(server.ID)
+	lock.RLock()
+	defer lock.RUnlock()
 	current, err := s.repo.GetMCPServer(ctx, server.ID)
 	if err != nil {
 		return nil, err
@@ -139,7 +143,7 @@ func (s *Server) CallTool(ctx context.Context, input CallInput) (map[string]any,
 		}
 		token = string(opened)
 	}
-	result, err := newMCPClient(server.URL, token, s.clientFor(server)).callTool(ctx, input.ToolName, input.Args)
+	result, err := newMCPClient(current.URL, token, s.clientFor(current)).callTool(ctx, input.ToolName, input.Args)
 	if err != nil {
 		_ = s.repo.SetMCPServerStatus(ctx, server.ID, "down", boundedStatusMessage(err.Error()))
 		return nil, err

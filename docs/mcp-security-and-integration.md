@@ -51,20 +51,58 @@ mcp.json on the MCPs page; both runs report imported, skipped, and refused
 names with reasons. A `command` entry is refused as an import issue
 explaining that stdio is unsupported, and no server row is created for it.
 Malformed documents and entries whose token cannot be sealed are reported the
-same way, without preventing the rest of the backend from starting. An
-entry's `headers` object may carry at most one case-insensitive
-`Authorization` key: a second one (for example both `Authorization` and
-`authorization`, which decode into distinct map entries) is refused
-deterministically with a fixed, generic reason, never a value that depends on
-Go's randomized map iteration order; header names are sorted first, so an
-unsupported header name, if one is also present, is always the
-lexicographically first one reported and always takes precedence over the
-duplicate-Authorization refusal, regardless of how many of either are
-present. Each on-demand Reimport RPC's response is call-local and
-deterministic: its `Refused` list is built from that call's own report,
-sorted by name, rather than by re-reading the shared issues table two
-overlapping reimports could otherwise race and swap into each other's
-response. Skipped names in that response mean the row already had a real,
+same way, without preventing the rest of the backend from starting.
+`mcp.json` is read only if it is a regular file: the path
+is checked with `os.Lstat` — never followed if it is a symlink, and never
+opened at all if it is a FIFO, socket, or device node — before it is ever
+opened, and the already-open file descriptor is checked again with `Fstat`
+before any read, closing the gap between those two syscalls. This is what
+actually keeps a reimport from ever hanging: a FIFO's read-side `os.Open`
+call blocks until a writer connects, so bounding the *read* alone (see
+below) would not have been enough to keep the whole call from stalling
+forever waiting for one that never comes. Every other read failure —
+including a directory, any non-regular file, or the file having been
+replaced by one — maps to the same fixed "read mcp.json failed" message a
+client sees, never the path or the underlying OS error text. A malformed or
+oversized document is refused as one bounded `_document` reason rather than
+failing the whole call outright, so a client can still be told why nothing
+imported; a missing file is not a failure at all and instead clears any
+previously recorded import issues, so reimporting after deleting `mcp.json`
+shows a clean slate. Once confirmed regular, `mcp.json` is read through a
+size-bounded reader (`io.LimitReader`, capped one byte past the maximum
+supported document size) rather than `os.ReadFile`, so a huge or sparse file
+cannot force an unbounded read either.
+
+The root JSON object must declare the key `mcpServers` exactly once, spelled
+exactly that way: a case variant (`McpServers`, `MCPSERVERS`, ...) is refused,
+and so is an exact or case-insensitive duplicate of it (two roots both
+spelled `mcpServers`, or one `mcpServers` alongside one `MCPSERVERS`) —
+`encoding/json`'s own case-insensitive field-name fallback and its
+last-key-wins handling of a duplicate object key would otherwise silently
+accept either shape instead of refusing the ambiguity. The `mcpServers`
+object's own entries are parsed the same deliberate way: two entries sharing
+the exact same server name are refused as one whole-document failure — never
+silently resolved to whichever definition a plain map decode would have kept
+last, which could otherwise let a second, differently-configured definition
+(a different url, a different bearer) quietly win. The entry count itself is
+bounded during that same parse, the instant it would exceed the supported
+limit, rather than only after a same-sized map of every entry has already
+been built in memory — a document packed with far more (tiny) entries than
+could ever actually register is refused without first materializing all of
+them. An entry's `headers` object may carry at most one case-insensitive
+`Authorization` key and nothing else: a second, case-insensitive-duplicate
+Authorization key, or any other header name whatsoever, is refused with one
+fixed, generic reason that never names the offending header — because a
+header's own *key* is exactly as untrusted as its value, an earlier version
+of this message named it directly, which meant a header deliberately (or
+accidentally) named with the entry's own bearer token value would leak that
+token straight into the refusal reason. The unsupported-header refusal always
+takes precedence over the duplicate-Authorization refusal, deterministically,
+regardless of how many of either are present. Each on-demand Reimport RPC's
+response is call-local and deterministic: its `Refused` list is built from
+that call's own report, sorted by name, rather than by re-reading the shared
+issues table two overlapping reimports could otherwise race and swap into
+each other's response. Skipped names in that response mean the row already had a real,
 non-empty endpoint and mcp.json's current url/token/policy for it was
 **not** applied — the MCPs page's reimport dialog states this explicitly per
 skipped name ("already registered; existing settings were kept") so an edit
@@ -129,6 +167,40 @@ that never echoes the token, the offending name/schema, or which check
 tripped, and leaves no partial row behind for a corrected reimport to get
 stuck skipping.
 
+`replaceServerToolsTx` also enforces one further limit, *across* every
+server in the registry rather than per server: `repository.MaxMCPRegistryToolBytes`
+(256 KiB) bounds the total encoded (name + schema) bytes of every *present*
+tool combined, checked transactionally against a fresh query of the whole
+`tools` table (after this server's own previously-present tools have
+already been withdrawn in the same transaction, so they are naturally
+excluded, and including any bundled-server tools populated by the
+entirely separate `UpsertTools` path, since the query reads the table's
+actual contents rather than a separately maintained count). Without an
+aggregate limit, up to `MaxNonBundledMCPServers` (256) servers each
+independently allowed a nearly-4 MiB snapshot could together make a single
+`ListMcpServers` response exceed the 4 MiB gRPC message limit the backend
+configures for both directions. 256 KiB leaves substantial margin even in
+the worst measured case — a single tool whose schema is one large array of
+minimal JSON scalars (`{"type":"object","x":[0,0,0,...]}`), which converts
+far less efficiently than spreading the same bytes across many small
+tools: each array element becomes a `google.protobuf.Value` carrying a
+fixed 8-byte double, costing roughly 9-11 wire bytes against as few as 2
+raw JSON bytes, an empirically measured ~5.5x expansion — spread across
+the maximum server/URL/status/issue counts, that shape marshals to about
+2.17 MiB, roughly 46% of margin under the 4 MiB cap. (An earlier version
+of this budget, 1 MiB, was sized only against a weaker shape — many small,
+distinct tools, which maximizes protobuf's fixed *per-message* overhead
+rather than per-array-element overhead, measuring only ~1.55x expansion —
+and did not actually hold: a single tool consuming that whole 1 MiB budget
+in the number-array shape marshaled, by itself, to roughly 5.5 MiB —
+already past the cap before any server descriptor, Unsupported entry, or
+any other tool was even added.) A refusal
+here rolls back the whole transaction — the server row insert or
+placeholder adoption for a static import, or the standalone transaction a
+live rediscovery opens — so a server that already had tools is never left
+with none, and a brand-new import that would have exceeded the budget
+creates no row at all.
+
 Deleting a server writes a local import tombstone, so an unchanged
 `mcp.json` cannot silently recreate it on the next reimport; the file path
 keeps refusing a tombstoned name. An explicit in-app Register of that same
@@ -149,9 +221,41 @@ registry-change event, or audit row ever carries the plaintext token or its
 ciphertext; audit rows record only the server name and whether a token is
 now configured.
 
+A per-server credential lock — one `sync.RWMutex` per server id, created on
+first use and keyed by that id — fences a rotation against a concurrent call
+or discovery for the *same* server: `CallTool` and enable-time discovery hold
+it for reading from immediately before they (re-)read the server's current
+sealed token through their own network call and liveness/tool-status
+recording (deliberately never across an unbounded wait such as caller-side
+approval enforcement, which always runs first), and a rotation holds it for
+writing across its own read/seal/atomic-replace/liveness-reset. This is
+scoped per server, not a single lock shared by the whole registry: an
+in-flight call or discovery against one server never blocks a rotation, or a
+call, against a completely different one. A server's lock entry is removed
+once that server is deleted, so the map's steady-state size tracks the
+registry's own row count rather than growing across register/delete cycles
+over a long-running process's lifetime; a rotation request naming a server id
+that was never real does not create an entry for it either; a lock object a
+goroutine already obtained keeps working safely even if its map entry is
+removed moments later, since a deleted server's id is never reused.
+
 Enabling any non-bundled server — local-container or remote-URL — performs a
-bounded `tools/list` liveness discovery as part of that call. For a
-remote-URL server this is a real, explicit enable-time network request to
+bounded `tools/list` liveness discovery as part of that call. A server with
+no configured endpoint (`url == ""` — the shape a legacy migration-0016
+placeholder starts in, and stays in until an operator supplies a real one via
+import or explicit registration) can never be enabled at all: the call
+refuses with `FailedPrecondition` before it mutates anything, so nothing is
+notified, audited, or contacted over the network. Before this check existed,
+enabling such a placeholder would flip its enabled bit first and only then
+fail discovery against the empty URL, leaving a server that was enabled —
+and so whose stale, pre-registry tool snapshot could look available to a
+client — despite never having a real endpoint. The Flutter MCPs page mirrors
+this: a non-bundled server's enable switch is itself disabled while its `url`
+is empty, with a tooltip explaining that an endpoint must be configured
+first; adding or registering a server directly remains the one path a mobile
+operator (who cannot edit `mcp.json`) uses to give a placeholder a real
+endpoint. For a remote-URL server this is a real, explicit enable-time
+network request to
 the configured endpoint, sending the configured bearer if one is set. That
 is separate from per-run consent: invoking a remote tool during a run still
 requires the caller to prepare, and the run to acknowledge, a signed

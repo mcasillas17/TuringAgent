@@ -738,3 +738,67 @@ complete diff, none of which change the shape of what shipped above:
 
 `docs/mcp-security-and-integration.md` remains the authoritative description
 of this final behavior.
+
+## Addendum: round-four boundary/security hardening pass
+
+A fourth round ("fix: harden MCP registry boundaries") closed a further set
+of accepted boundary and security findings. One earlier claim above is now
+superseded: **"Header parsing sorts names before deciding, so ... an
+unsupported header name is refused the same way regardless of Go's map
+iteration order"** — `bearerFromHeaders` no longer names the unsupported
+header at all (sorting is therefore unnecessary), because a header's key is
+exactly as untrusted as its value and could itself equal a bearer token used
+elsewhere in the same entry; the refusal is now one fixed, generic reason
+regardless of which (or how many) unsupported headers are present. The rest
+of that bullet — a duplicate case-insensitive `Authorization` key refused the
+same deterministic way — is unchanged.
+
+Otherwise, none of this changes the shape of what shipped above:
+
+- **Regular-file-only `mcp.json`.** `ReimportConfiguredJSON` now checks
+  `os.Lstat` before ever calling `os.Open`, refusing a FIFO, socket, device
+  node, or symlink the same fixed way a directory already was — closing a
+  real hang: a FIFO's read-side open blocks until a writer connects, so
+  bounding only the *read* (as before) could never have prevented that.  A
+  second check via `Fstat` on the already-open file guards the gap between
+  those two syscalls.
+- **Strict root/server keys.** The root object must declare `mcpServers`
+  exactly once, spelled exactly that way (a case variant or an exact/
+  case-insensitive duplicate is refused); the `mcpServers` object's own
+  entries are parsed preserving an exact-duplicate server name rather than
+  collapsing it, and a document declaring one is refused as a single
+  whole-document failure, deterministically, with no partial writes. The
+  entry-count cap is now enforced the instant it would be exceeded during
+  that same streaming parse, not only after a same-sized map has already
+  been built.
+- **Aggregate registry tool-byte budget.** `repository.MaxMCPRegistryToolBytes`
+  (256 KiB) now bounds every present tool's encoded bytes *across the whole
+  registry*, enforced transactionally in the one shared
+  `replaceServerToolsTx`, so up to 256 servers each independently within the
+  older per-server 4 MiB cap can no longer together push a single
+  `ListMcpServers` response past the 4 MiB gRPC message limit. (An initial
+  1 MiB budget, sized only against a "many small tools" adversarial shape,
+  turned out not to hold against a worse one — a single large array of
+  minimal JSON numbers, which structpb converts far less efficiently; the
+  budget was corrected to 256 KiB against the true worst-measured shape
+  before this round shipped.)
+- **Blank-URL placeholders cannot be enabled.** `SetMcpServerEnabled` now
+  refuses `FailedPrecondition` for any non-bundled server whose `url` is
+  still empty, before any mutation, notification, audit, or network
+  contact — closing a path where enabling a legacy placeholder used to
+  commit `enabled=1` and only then fail discovery, leaving an enabled
+  server whose stale, pre-registry tool snapshot could look available. The
+  MCPs page disables that server's enable switch to match, with a tooltip
+  explaining an endpoint must be configured first.
+- **Per-server credential fence.** The single process-wide credential lock
+  is now one `sync.RWMutex` per server id: an in-flight call, discovery, or
+  rotation for one server no longer blocks any of the same operations
+  against a different one, while the same-server fence guarantee is
+  unchanged. A server's lock entry is removed on that server's own delete.
+- **Fixed enable descriptor error.** `SetMcpServerEnabled`'s final
+  descriptor-build step now maps a failure (e.g. a corrupted stored tool
+  schema) to a fixed `Internal` status instead of returning it as-is,
+  matching `UpdateMcpToolPolicy`'s existing pattern.
+
+`docs/mcp-security-and-integration.md` remains the authoritative description
+of this final behavior.

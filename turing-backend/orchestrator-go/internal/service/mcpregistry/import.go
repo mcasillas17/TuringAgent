@@ -126,32 +126,85 @@ type Server struct {
 	// whatever the other call did to the shared mcp_import_issues table
 	// in the meantime.
 	reimportBarrier func()
-	// credentialMu is the server-level (not per-MCP-server) fence between
-	// reading/using a server's bearer token and RotateMcpServerToken
-	// replacing it. CallTool and SetMcpServerEnabled's discovery branch
-	// (see discover) hold this for reading from immediately before they
-	// (re-)read the server's current sealed token through their own
-	// network call and liveness/tool-status recording — deliberately
-	// never across an unbounded wait such as caller-side approval
-	// enforcement, which runs before this lock is taken. Rotate holds it
-	// for writing across its own repo read, sealing, atomic sealed-token
-	// replace, and liveness-status reset (see rotateServerTokenLocked).
-	// Go's sync.RWMutex already blocks new readers once a writer is
-	// waiting, so a rotation can never be starved by a steady stream of
-	// calls/discoveries, and every reader started after a rotation
-	// commits is guaranteed to observe the new token rather than one
-	// captured before the rotation began.
-	credentialMu sync.RWMutex
+	// credentialLocksMu guards credentialLocks, the lazily-populated map
+	// of per-server credential fences (see credentialLock). It is held
+	// only for the map lookup/insert itself, never across any I/O or the
+	// per-server lock it returns, so it is never a source of contention
+	// between unrelated servers.
+	credentialLocksMu sync.Mutex
+	// credentialLocks is keyed by MCP server id, one *sync.RWMutex per
+	// server that has ever needed one (see credentialLock). This replaces
+	// an earlier single, process-global sync.RWMutex that fenced every
+	// server's CallTool/discover/RotateMcpServerToken against every
+	// other's: under that design, an in-flight call or discovery against
+	// server A held the *same* lock a concurrent rotation for completely
+	// unrelated server B needed, so B's rotation (and any call to B)
+	// waited on A's traffic for no correctness reason — the fence only
+	// ever needs to be per-server. A map entry is removed on that
+	// server's successful DeleteMcpServer (see forgetCredentialLock), so
+	// steady-state size tracks the registry's own row count — bounded by
+	// repository.MaxNonBundledMCPServers plus the fixed, small number of
+	// bundled servers — rather than growing without bound across
+	// register/delete cycles over a long-running process's lifetime. A
+	// goroutine that obtained a server's lock object just before its
+	// entry was removed keeps operating on that same object safely: Go's
+	// sync.RWMutex does not need to remain reachable from any particular
+	// map to function, and a deleted server's id is never reused by a
+	// later registration, so no future caller can ever be handed that
+	// same object again once forgotten.
+	credentialLocks map[string]*sync.RWMutex
 	// rotateBarrier, when set (test-only, nil/unused in production), is
-	// invoked by rotateServerTokenLocked while credentialMu's write lock
-	// is held, immediately before the rotation reads/reseals/replaces
-	// the server's token. It lets a test prove the reverse direction of
-	// the fence — that a rotation genuinely mid-flight blocks a
-	// concurrent CallTool/discover from proceeding — the same way
-	// reimportBarrier proves ReimportMcpJson's own interleaving, since
+	// invoked by rotateServerTokenLocked while the target server's
+	// credential lock is held for writing, immediately before the
+	// rotation reads/reseals/replaces the server's token. It lets a test
+	// prove the reverse direction of the fence — that a rotation
+	// genuinely mid-flight blocks a concurrent CallTool/discover for the
+	// *same* server from proceeding — the same way reimportBarrier
+	// proves ReimportMcpJson's own interleaving, since
 	// RotateMcpServerToken's real repository work is otherwise too fast
 	// to reliably race against.
 	rotateBarrier func()
+}
+
+// credentialLock returns the one *sync.RWMutex that fences reading/using
+// serverID's bearer token against RotateMcpServerToken replacing it —
+// creating it on first use. CallTool and discoverLocked hold it for
+// reading immediately before they (re-)read the server's current sealed
+// token through their own network call and liveness/tool-status
+// recording — deliberately never across an unbounded wait such as
+// caller-side approval enforcement, which runs before this lock is taken.
+// rotateServerTokenLocked holds it for writing across its own repo read,
+// sealing, atomic sealed-token replace, and liveness-status reset. Go's
+// sync.RWMutex already blocks new readers once a writer is waiting, so a
+// rotation can never be starved by a steady stream of calls/discoveries
+// against the same server, and every reader started after a rotation
+// commits is guaranteed to observe the new token rather than one captured
+// before the rotation began. Because the lock is keyed by server id,
+// none of this ever blocks a concurrent call, discovery, or rotation
+// against a *different* server.
+func (s *Server) credentialLock(serverID string) *sync.RWMutex {
+	s.credentialLocksMu.Lock()
+	defer s.credentialLocksMu.Unlock()
+	if lock, ok := s.credentialLocks[serverID]; ok {
+		return lock
+	}
+	lock := &sync.RWMutex{}
+	if s.credentialLocks == nil {
+		s.credentialLocks = make(map[string]*sync.RWMutex)
+	}
+	s.credentialLocks[serverID] = lock
+	return lock
+}
+
+// forgetCredentialLock removes serverID's entry from credentialLocks,
+// called after DeleteMcpServer successfully deletes that server's row.
+// See credentialLocks' own comment for why this is safe even if another
+// goroutine is, at that moment, still using the same lock object it
+// obtained just before this call.
+func (s *Server) forgetCredentialLock(serverID string) {
+	s.credentialLocksMu.Lock()
+	defer s.credentialLocksMu.Unlock()
+	delete(s.credentialLocks, serverID)
 }
 
 // AuditRecorder is the audit service, narrowed to the one method this
@@ -314,8 +367,167 @@ type DiscoveredTool struct {
 	SchemaJSON string
 }
 
-type mcpJSON struct {
-	Servers map[string]json.RawMessage `json:"mcpServers"`
+// errMCPRootKeyInvalid is the one fixed, generic reason ImportJSON refuses
+// a document whose root object does not declare the "mcpServers" key
+// exactly once, spelled exactly that way. encoding/json's own built-in
+// case-insensitive field-name fallback would otherwise accept a
+// differently-cased key (e.g. "McpServers"/"MCPSERVERS") as if it were
+// correctly spelled, and its map/struct decoding keeps only the last of
+// two same- or differently-cased duplicate keys silently — either would
+// let an attacker- or tooling-introduced second "mcpServers" object
+// quietly win instead of the ambiguity being refused outright. This is
+// deliberately scoped to the one root key ImportJSON reads: an unrelated
+// sibling key (anything that is not itself a case-insensitive match for
+// "mcpServers") is left alone.
+var errMCPRootKeyInvalid = errors.New(`mcp.json must declare exactly one "mcpServers" object`)
+
+// errMCPRootServersRequired is the fixed reason returned when the root
+// object never declares a canonical "mcpServers" key at all (or declares
+// it as an explicit JSON null, treated identically to absent) — distinct
+// from errMCPRootKeyInvalid, which covers a case-variant or duplicate key
+// actually being present.
+var errMCPRootServersRequired = errors.New(`decode mcp.json: "mcpServers" object is required`)
+
+// decodeMCPRootServers stream-parses mcp.json's root object with a
+// token-level walk (mirroring decodeMCPEntryFields/decodeMCPHeaderEntries
+// one level up) rather than json.Decoder.Decode into a struct, so this
+// package — not encoding/json's own case-insensitive-fallback,
+// last-key-wins struct/map decoding — decides what the root object's one
+// significant key may look like. The canonical, exactly-cased
+// "mcpServers" key must appear exactly once among the root object's
+// members; every other member's value is still fully consumed (so the
+// decoder's position stays correct) but otherwise ignored. Returns the raw,
+// not-yet-decoded value of "mcpServers" for decodeMCPServerEntries to
+// parse next.
+func decodeMCPRootServers(data []byte) (json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	open, err := decoder.Token()
+	if err != nil {
+		return nil, fmt.Errorf("decode mcp.json: %w", err)
+	}
+	if delim, ok := open.(json.Delim); !ok || delim != '{' {
+		return nil, errors.New("decode mcp.json: root value must be an object")
+	}
+	var servers json.RawMessage
+	seenMcpServersKey := false
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil, fmt.Errorf("decode mcp.json: %w", err)
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, errors.New("decode mcp.json: root object key must be a string")
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, fmt.Errorf("decode mcp.json: %w", err)
+		}
+		if !strings.EqualFold(key, "mcpServers") {
+			continue
+		}
+		if key != "mcpServers" || seenMcpServersKey {
+			return nil, errMCPRootKeyInvalid
+		}
+		seenMcpServersKey = true
+		servers = value
+	}
+	if _, err := decoder.Token(); err != nil { // the closing '}'
+		return nil, fmt.Errorf("decode mcp.json: %w", err)
+	}
+	if err := requireImportEOF(decoder); err != nil {
+		return nil, fmt.Errorf("decode mcp.json: %w", err)
+	}
+	if !seenMcpServersKey || string(bytes.TrimSpace(servers)) == "null" {
+		return nil, errMCPRootServersRequired
+	}
+	return servers, nil
+}
+
+// mcpServerEntry is one member of mcp.json's "mcpServers" object, captured
+// exactly as decodeMCPServerEntries found it on the wire — including a
+// name that repeats another entry's name exactly. A
+// map[string]json.RawMessage (what this package used to decode
+// "mcpServers" into) cannot represent that: two JSON object members that
+// share the exact same key decode into one map entry, last-value-wins,
+// which would let requireUniqueMCPServerNames below never even see the
+// duplicate it exists to refuse.
+type mcpServerEntry struct {
+	Name string
+	Body json.RawMessage
+}
+
+// errMCPImportDuplicateServerName is the one fixed, generic reason
+// ImportJSON refuses a whole mcp.json document that declares the exact
+// same server name more than once. Plain map-based decoding would
+// otherwise silently keep only the last of the two (or more) definitions
+// — possibly with a different url or bearer token than an operator
+// intended for the name — rather than the ambiguity being refused
+// outright. This refuses the *whole document*, the same way
+// errMCPImportTooManyEntries and errMCPImportDocumentTooLarge already do,
+// rather than only one of the colliding entries: there is no principled
+// way to pick a "winner" to still import, and refusing everything means
+// neither definition can ever partly register.
+var errMCPImportDuplicateServerName = errors.New("mcp.json declares the same server name more than once")
+
+// decodeMCPServerEntries stream-parses the raw "mcpServers" object value
+// with a token-level walk, preserving every member — including an exact
+// name repeat — rather than collapsing into a map (see mcpServerEntry).
+// The entry count is enforced the instant it would exceed
+// maxMCPImportEntries, before that (maxMCPImportEntries+1)-th entry's key
+// or body is even decoded: a document packed with far more (tiny) entries
+// than could ever actually register is refused without first building a
+// same-sized slice of them all in memory, the same way this package
+// already bounds the whole document's raw byte size before decoding
+// anything at all.
+func decodeMCPServerEntries(raw json.RawMessage) ([]mcpServerEntry, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	open, err := decoder.Token()
+	if err != nil {
+		return nil, errors.New(`decode mcp.json: "mcpServers" must be an object`)
+	}
+	if delim, ok := open.(json.Delim); !ok || delim != '{' {
+		return nil, errors.New(`decode mcp.json: "mcpServers" must be an object`)
+	}
+	var entries []mcpServerEntry
+	for decoder.More() {
+		if len(entries) >= maxMCPImportEntries {
+			return nil, errMCPImportTooManyEntries
+		}
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil, errors.New(`decode mcp.json: "mcpServers" must be an object`)
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, errors.New(`decode mcp.json: "mcpServers" must be an object`)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, errors.New(`decode mcp.json: "mcpServers" must be an object`)
+		}
+		entries = append(entries, mcpServerEntry{Name: key, Body: value})
+	}
+	if _, err := decoder.Token(); err != nil { // the closing '}'
+		return nil, errors.New(`decode mcp.json: "mcpServers" must be an object`)
+	}
+	return entries, nil
+}
+
+// requireUniqueMCPServerNames refuses the whole document (see
+// errMCPImportDuplicateServerName) the moment any two entries share the
+// exact same name. Bounded the same way decodeMCPServerEntries itself is:
+// entries is already capped at maxMCPImportEntries by that call, so the
+// map built here to detect a repeat is bounded too.
+func requireUniqueMCPServerNames(entries []mcpServerEntry) error {
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if _, duplicate := seen[entry.Name]; duplicate {
+			return errMCPImportDuplicateServerName
+		}
+		seen[entry.Name] = struct{}{}
+	}
+	return nil
 }
 
 type mcpJSONServer struct {
@@ -519,50 +731,49 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 	if len(data) > maxMCPImportDocumentBytes {
 		return ImportReport{}, errMCPImportDocumentTooLarge
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	var document mcpJSON
-	if err := decoder.Decode(&document); err != nil {
-		return ImportReport{}, fmt.Errorf("decode mcp.json: %w", err)
+	rawServers, err := decodeMCPRootServers(data)
+	if err != nil {
+		return ImportReport{}, err
 	}
-	if err := requireImportEOF(decoder); err != nil {
-		return ImportReport{}, fmt.Errorf("decode mcp.json: %w", err)
+	// The entry count itself is bounded during the streaming parse below
+	// (see decodeMCPServerEntries) — the same repository.MaxNonBundledMCPServers
+	// limit the registry itself enforces per non-bundled row (see
+	// nonBundledMCPServerRegistryFullTx) — rather than only after a
+	// full-sized map/slice of every entry has already been built: a
+	// document naming more entries than could ever actually register
+	// would otherwise still cost the memory and CPU to fully parse them
+	// all first, and (absent any cap at all) would eventually be refused
+	// one entry at a time only once the registry's own count cap is
+	// reached — scattering what is really a single, document-level
+	// problem across many per-entry Unsupported rows instead of the one
+	// bounded refusal every other whole-document problem (size,
+	// malformed JSON) already gets.
+	entries, err := decodeMCPServerEntries(rawServers)
+	if err != nil {
+		return ImportReport{}, err
 	}
-	if document.Servers == nil {
-		return ImportReport{}, errors.New("decode mcp.json: mcpServers object is required")
-	}
-	// The entry count itself is bounded before any entry is processed —
-	// the same repository.MaxNonBundledMCPServers limit the registry
-	// itself enforces per non-bundled row (see nonBundledMCPServerRegistryFullTx).
-	// A document naming more entries than could ever actually register
-	// would otherwise still cost one repository lookup per name for no
-	// possible benefit, and (absent this) would eventually be refused one
-	// entry at a time only once the registry's own count cap is reached —
-	// scattering what is really a single, document-level problem across
-	// many per-entry Unsupported rows instead of the one bounded refusal
-	// every other whole-document problem (size, malformed JSON) already
-	// gets.
-	if len(document.Servers) > maxMCPImportEntries {
-		return ImportReport{}, errMCPImportTooManyEntries
+	if err := requireUniqueMCPServerNames(entries); err != nil {
+		return ImportReport{}, err
 	}
 
 	report := ImportReport{Unsupported: make(map[string]string)}
 	imported := make([]string, 0)
 	skipped := make([]string, 0)
-	// Entries are processed in sorted name order, never Go's randomized
-	// map iteration order: when two entries in the same document claim
-	// the same tool name, whichever is processed first wins the
-	// repository's inter-server collision check (see
-	// replaceServerToolsTx) and the other is refused. Sorting first
-	// makes that winner the lexicographically first server name, every
-	// time, rather than a randomized one that could differ between two
-	// imports of the identical file.
-	names := make([]string, 0, len(document.Servers))
-	for name := range document.Servers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		raw := document.Servers[name]
+	// Entries are processed in sorted name order, never the order they
+	// happened to appear in the document (already deterministic here,
+	// since decodeMCPServerEntries preserves wire order rather than a
+	// map's own randomized iteration — but sorting explicitly still
+	// matters for the reason below): when two entries in the same
+	// document claim the same tool name, whichever is processed first
+	// wins the repository's inter-server collision check (see
+	// replaceServerToolsTx) and the other is refused. Sorting first makes
+	// that winner the lexicographically first server name, every time,
+	// rather than one that could differ depending on the order the two
+	// entries happened to be written in.
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	for _, entry := range entries {
+		name := entry.Name
+		raw := entry.Body
 		// The name check runs before the entry's body is even decoded:
 		// a reserved or pattern-invalid name is refused for that reason
 		// regardless of whether its body would otherwise fail strict
@@ -974,6 +1185,22 @@ func validateMCPEntryFields(fields []mcpEntryField) error {
 // outright instead means the result can never depend on that order.
 var errMultipleAuthorizationHeaders = errors.New("only a single authorization header is accepted")
 
+// errMCPUnsupportedHeader is the one fixed, generic reason bearerFromHeaders
+// refuses any header other than a single case-insensitive Authorization
+// key. It deliberately never includes the offending header's own name (an
+// earlier version of this message did, via fmt.Errorf("header %q is
+// unsupported...", name)): a JSON object's key is exactly as
+// attacker-controlled as its value, so a header could be named with the
+// literal value of a bearer token used elsewhere in the very same entry —
+// whether by an operator's templating mistake or a deliberate attempt to
+// exploit an error message that echoes it back — and that name would then
+// flow into every place an ordinary Unsupported reason already reaches:
+// the in-memory ImportReport, the mcp_import_issues table, the
+// ReimportMcpJson RPC response, and any client/UI display built from it.
+// A fixed, bounded message closes that regardless of what the header is
+// named.
+var errMCPUnsupportedHeader = errors.New("only a single Authorization bearer header is supported")
+
 // mcpHeaderEntry is a single key/value pair from an mcp.json entry's raw
 // "headers" JSON object, preserved exactly as decodeMCPHeaderEntries found
 // it on the wire — including a name that repeats another entry's, whether
@@ -1035,44 +1262,39 @@ func decodeMCPHeaderEntries(raw json.RawMessage) ([]mcpHeaderEntry, error) {
 	return entries, nil
 }
 
-// bearerFromHeaders never lets Go's randomized map iteration influence its
-// outcome: it sorts the header entries by name first, so which unsupported
-// header is named in the error (when more than one is present) is always
-// the lexicographically first one, not whichever one iteration happened to
-// visit first, and the fixed precedence between the two possible refusals
-// — an unsupported header name versus more than one case-insensitive
-// Authorization key — is the same regardless of how many of either are
-// present: an unsupported header, if any, is always reported first, the
-// same way the original single-pass loop always failed on the first
-// non-Authorization key it happened to visit before it could ever reach
-// the duplicate-Authorization check below. Neither the chosen unsupported
-// name nor errMultipleAuthorizationHeaders' fixed message ever includes a
-// header's value. Taking entries (preserving every occurrence, including
+// bearerFromHeaders enforces the one shape an mcp.json entry's headers may
+// take: at most a single case-insensitive Authorization key, and nothing
+// else. Any other header name is refused with the one fixed, content-free
+// errMCPUnsupportedHeader reason — deliberately never echoing that
+// header's own name back (see errMCPUnsupportedHeader's own comment for
+// why: a header's key is exactly as untrusted as its value, and could
+// itself be set to the entry's own bearer token or any other secret) —
+// and always takes precedence over the separate
+// errMultipleAuthorizationHeaders refusal below. Neither outcome depends
+// on Go's randomized map iteration order: "does an unsupported header
+// exist at all" and "is there more than one case-insensitive Authorization
+// key" are both yes/no facts about the whole set, unlike the discarded
+// "which one gets named", so no sorting is needed to make either
+// deterministic. Taking entries (preserving every occurrence, including
 // an exact-spelling repeat of the same name) rather than a
 // map[string]string is what lets the duplicate-Authorization check below
 // ever see two entries both literally named "Authorization" in the first
 // place — decodeMCPHeaderEntries is what makes that possible; a map could
 // never have held them both.
 func bearerFromHeaders(headers []mcpHeaderEntry) (string, error) {
-	sorted := make([]mcpHeaderEntry, len(headers))
-	copy(sorted, headers)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-
-	var unsupportedName string
+	hasUnsupported := false
 	var authValue string
 	authCount := 0
-	for _, entry := range sorted {
+	for _, entry := range headers {
 		if !strings.EqualFold(entry.Name, "authorization") {
-			if unsupportedName == "" {
-				unsupportedName = entry.Name
-			}
+			hasUnsupported = true
 			continue
 		}
 		authCount++
 		authValue = entry.Value
 	}
-	if unsupportedName != "" {
-		return "", fmt.Errorf("header %q is unsupported; only Authorization: ****** accepted", unsupportedName)
+	if hasUnsupported {
+		return "", errMCPUnsupportedHeader
 	}
 	if authCount > 1 {
 		return "", errMultipleAuthorizationHeaders
@@ -1212,21 +1434,46 @@ var errMCPConfigRootNotConfigured = errors.New("MCP config root is not configure
 // other refused entry. Any other failure to read the file is returned as
 // a fixed error that never repeats the file's contents or path.
 //
-// The file is opened and read through io.LimitReader(maxMCPImportDocumentBytes+1),
-// the same bounded-read shape mcpClient.request already applies to a live
-// HTTP response body: os.ReadFile has no size bound of its own and would
-// buffer the entire file — however large, and regardless of whether it
-// is a huge file, a sparse one, or a slow/unbounded source such as a
-// FIFO — before ImportJSON's own in-memory size check ever got a chance
-// to run. Reading through a bounded LimitReader instead means at most
-// maxMCPImportDocumentBytes+1 bytes are ever allocated, and the read
-// completes (with its own synthesized io.EOF) without waiting for the
-// underlying source to actually end.
+// mcp.json must be a regular file, checked with os.Lstat *before* it is
+// ever opened: a FIFO's read-side os.Open call blocks until a writer
+// connects to the other end — which, unlike a slow or hostile regular
+// file, an io.LimitReader-bounded read below can do nothing about, since
+// the read never even starts — so refusing on Lstat's reported mode is
+// what actually keeps this call from hanging, not merely a bounded read
+// that would follow. A socket or device node is refused the same way:
+// opening either for an ordinary read is meaningless. A symlink is
+// refused without ever being resolved: os.Lstat (unlike os.Stat, which
+// this function deliberately does not use here) reports the link itself,
+// never whatever it points to, so this never has to decide how far to
+// follow a chain of links or defend against one that never terminates or
+// ultimately points at a FIFO/socket/device. A directory is refused the
+// same way too — previously that surfaced as a failing read one layer
+// later (os.Open succeeds on a directory; the subsequent Read does not),
+// producing the identical fixed message, so this is not a behavior change
+// for that case. Once past this check, the file is opened and re-checked
+// with Fstat before any read: the Lstat above and the Open below are two
+// separate syscalls, so the path could in principle have been replaced
+// with something non-regular in between; Fstat closes that gap by
+// checking the same open file description a read would actually use, not
+// the path again.
+//
+// Only once both checks agree the target is a regular file is it read,
+// through io.LimitReader(maxMCPImportDocumentBytes+1) — the same
+// bounded-read shape mcpClient.request already applies to a live HTTP
+// response body: os.ReadFile has no size bound of its own and would
+// buffer the entire file — however large, or however slow a legitimate
+// regular file might be to fully materialize — before ImportJSON's own
+// in-memory size check ever got a chance to run. Reading through a
+// bounded LimitReader instead means at most maxMCPImportDocumentBytes+1
+// bytes are ever allocated, and the read completes (with its own
+// synthesized io.EOF) without waiting for the underlying source to
+// actually end.
 func (s *Server) ReimportConfiguredJSON(ctx context.Context) (ImportReport, error) {
 	if s.configRoot == "" {
 		return ImportReport{}, errMCPConfigRootNotConfigured
 	}
-	file, err := os.Open(filepath.Join(s.configRoot, "mcp.json"))
+	path := filepath.Join(s.configRoot, "mcp.json")
+	info, err := os.Lstat(path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		if clearErr := s.repo.ReplaceMCPImportIssues(ctx, map[string]string{}); clearErr != nil {
@@ -1234,7 +1481,26 @@ func (s *Server) ReimportConfiguredJSON(ctx context.Context) (ImportReport, erro
 		}
 		return ImportReport{}, nil
 	case err != nil:
+		log.Printf("stat mcp.json: %v", err)
+		return ImportReport{}, errors.New("read mcp.json failed")
+	case !info.Mode().IsRegular():
+		log.Printf("mcp.json is not a regular file (mode %s)", info.Mode())
+		return ImportReport{}, errors.New("read mcp.json failed")
+	}
+	file, err := os.Open(path)
+	if err != nil {
 		log.Printf("open mcp.json: %v", err)
+		return ImportReport{}, errors.New("read mcp.json failed")
+	}
+	fileInfo, statErr := file.Stat()
+	if statErr != nil {
+		_ = file.Close()
+		log.Printf("fstat mcp.json: %v", statErr)
+		return ImportReport{}, errors.New("read mcp.json failed")
+	}
+	if !fileInfo.Mode().IsRegular() {
+		_ = file.Close()
+		log.Printf("mcp.json is not a regular file after open (mode %s)", fileInfo.Mode())
 		return ImportReport{}, errors.New("read mcp.json failed")
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxMCPImportDocumentBytes+1))

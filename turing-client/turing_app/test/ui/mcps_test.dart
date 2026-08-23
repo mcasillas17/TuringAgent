@@ -634,6 +634,76 @@ void main() {
     );
 
     testWidgets(
+      'the enable switch is disabled for a non-bundled server with no '
+      'configured endpoint, and never calls setMcpServerEnabled if tapped',
+      (tester) async {
+        final api = _McpApi()..servers.add(_localServer(url: ''));
+        await _pumpMcps(tester, api);
+
+        final toggle = tester.widget<Switch>(find.byType(Switch));
+        expect(
+          toggle.onChanged,
+          isNull,
+          reason:
+              'a placeholder with no endpoint must never be enable-able',
+        );
+
+        await tester.tap(find.byType(Switch), warnIfMissed: false);
+        await tester.pumpAndSettle();
+        expect(api.enabledCalls, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'the disabled switch for an endpoint-less placeholder explains why '
+      'via tooltip/semantics',
+      (tester) async {
+        final api = _McpApi()..servers.add(_localServer(url: ''));
+        await _pumpMcps(tester, api);
+
+        final tooltip = tester.widget<Tooltip>(
+          find.ancestor(
+            of: find.byType(Switch),
+            matching: find.byType(Tooltip),
+          ),
+        );
+        expect(tooltip.message, isNotNull);
+        expect(tooltip.message!.toLowerCase(), contains('endpoint'));
+      },
+    );
+
+    testWidgets(
+      'a bundled server (which also has no url in this model) is disabled '
+      'for the bundled reason, not rendered with the placeholder tooltip',
+      (tester) async {
+        final api = _McpApi()..servers.add(_bundledServer());
+        await _pumpMcps(tester, api);
+
+        final toggle = tester.widget<Switch>(find.byType(Switch));
+        expect(toggle.onChanged, isNull);
+        expect(
+          find.ancestor(of: find.byType(Switch), matching: find.byType(Tooltip)),
+          findsNothing,
+          reason:
+              'the placeholder-specific tooltip must be scoped to '
+              'non-bundled servers only',
+        );
+      },
+    );
+
+    testWidgets(
+      'once a placeholder is registered with a real endpoint, its switch '
+      'becomes enable-able again',
+      (tester) async {
+        final api = _McpApi()..servers.add(_localServer());
+        await _pumpMcps(tester, api);
+
+        final toggle = tester.widget<Switch>(find.byType(Switch));
+        expect(toggle.onChanged, isNotNull);
+      },
+    );
+
+    testWidgets(
       'a busy enable/disable toggle disables the switch and cannot be '
       'duplicated by rapid taps',
       (tester) async {

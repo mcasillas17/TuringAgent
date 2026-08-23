@@ -159,6 +159,26 @@ func (s *Server) SetMcpServerEnabled(ctx context.Context, req *turingv1.SetMcpSe
 	if server.Tier == repository.MCPServerTierBundled && !req.GetEnabled() {
 		return nil, status.Error(codes.FailedPrecondition, "bundled MCP servers remain enabled; disable individual tools instead")
 	}
+	// A non-bundled server with no configured endpoint (the shape a
+	// legacy migration-0016 placeholder starts in, and stays in until an
+	// operator supplies a real one via import or explicit registration)
+	// can never be enabled: refused here, before the repository mutation
+	// below and therefore before notify/audit/discovery ever run, so a
+	// refused attempt leaves no trace at all — no repository mutation, no
+	// registry-change notification, no audit record, and (since enabling
+	// a local-container or remote-url server would otherwise attempt live
+	// discovery) no network contact. Without this, the enable mutation
+	// would commit first and only then fail discovery against an empty
+	// URL, leaving the server enabled with whatever stale tool snapshot
+	// it happened to carry looking available to a client despite never
+	// having a real endpoint. Explicitly scoped to non-bundled (matching
+	// the Flutter MCPs page's own switch-disabling condition): a bundled
+	// server's url is never empty in practice (seeded by migration 0016),
+	// so this is currently only a clarity/defense-in-depth distinction,
+	// not an active behavior change for any reachable bundled state.
+	if server.Tier != repository.MCPServerTierBundled && server.URL == "" {
+		return nil, status.Error(codes.FailedPrecondition, "MCP server has no endpoint configured; register or import one before enabling it")
+	}
 	if err := s.repo.SetMCPServerEnabled(ctx, server.ID, req.GetEnabled()); err != nil {
 		return nil, status.Error(codes.Internal, "update MCP server failed")
 	}
@@ -197,32 +217,15 @@ func (s *Server) SetMcpServerEnabled(ctx context.Context, req *turingv1.SetMcpSe
 		// enableDiscoveryTimeout so a vendor cannot force up to
 		// maxMCPToolPages x the HTTP client's own timeout.
 		//
-		// credentialMu's read lock spans discover's own read/decrypt of
-		// the server's current token through its network call and (on
-		// success) its own liveness/tool-status recording, and also this
-		// call's fallback "down" write on failure just below: a
-		// concurrent RotateMcpServerToken must never be able to reset
-		// this server's liveness status while a discovery still using
-		// the pre-rotation token could still overwrite that reset with
-		// either outcome (see rotateServerTokenLocked). discover itself
-		// takes no lock of its own — it relies entirely on this, its one
-		// call site, holding one for its whole call — so it must never
-		// be invoked without this held.
+		// discoverLocked holds this server's own credential lock for
+		// reading across discover's read/decrypt-token-through-network-
+		// call-and-status-recording and its own fallback "down" write on
+		// failure — see its own comment for why both need to share one
+		// lock acquisition. Because the lock is keyed by server id, none
+		// of this can ever block (or be blocked by) a concurrent call,
+		// discovery, or rotation against a *different* server.
 		discoverCtx, cancel := context.WithTimeout(ctx, s.discoveryTimeout())
-		s.credentialMu.RLock()
-		discoverErr := s.discover(discoverCtx, server.ID)
-		if discoverErr != nil {
-			// Detached from ctx for the same reason as the disable case
-			// above: discovery failing (including via context
-			// cancellation) must not suppress recording that the server
-			// is now down.
-			statusCtx, statusCancel := detachedBoundedContext(ctx, postCommitStatusTimeout)
-			statusErr = s.repo.SetMCPServerStatus(statusCtx, server.ID, "down", boundedStatusMessage(discoverErr.Error()))
-			statusCancel()
-		} else {
-			discoverySucceeded = true
-		}
-		s.credentialMu.RUnlock()
+		discoverySucceeded, statusErr = s.discoverLocked(discoverCtx, server.ID)
 		cancel()
 	}
 	// Notify and audit immediately once every repository mutation above
@@ -260,7 +263,16 @@ func (s *Server) SetMcpServerEnabled(ctx context.Context, req *turingv1.SetMcpSe
 	}
 	descriptor, err := s.serverDescriptor(ctx, updated)
 	if err != nil {
-		return nil, err
+		// serverDescriptor/toolDescriptor's own error (e.g. a stored
+		// schema that fails to unmarshal) is never returned as-is: it is
+		// neither a gRPC status (so it would surface as the unhelpful
+		// default codes.Unknown) nor safe to assume is free of anything
+		// sensitive, so it is mapped to the same fixed, generic Internal
+		// status the read failure just above already uses — matching
+		// UpdateMcpToolPolicy's own descriptor-failure handling. Notify
+		// and audit have already run (see above), so this only affects
+		// what the caller sees from this one response.
+		return nil, status.Error(codes.Internal, "read MCP server failed")
 	}
 	return descriptor, nil
 }
@@ -337,6 +349,12 @@ func (s *Server) DeleteMcpServer(ctx context.Context, req *turingv1.DeleteMcpSer
 			return nil, status.Error(codes.Internal, "delete MCP server failed")
 		}
 	}
+	// Forgets this server's credential lock entry (see credentialLocks'
+	// own comment on why this is what keeps that map's steady-state size
+	// bounded by the registry's own row count): only reached once the
+	// delete above has actually succeeded, so this never removes an entry
+	// for an id that still names a live server.
+	s.forgetCredentialLock(req.GetServerId())
 	s.notifyRegistryChanged()
 	return &turingv1.DeleteMcpServerResponse{}, nil
 }
@@ -474,10 +492,11 @@ func (s *Server) RotateMcpServerToken(ctx context.Context, req *turingv1.RotateM
 	// committed — before building the response descriptor — so an
 	// unexpected descriptor/schema failure below can never leave a real,
 	// already-persisted rotation unannounced or unaudited. Both run after
-	// credentialMu's write lock (held only across the mutation itself,
-	// inside rotateServerTokenLocked) has already been released, so a
-	// slow notifier/audit sink/descriptor build never extends how long a
-	// concurrent CallTool/discover is blocked.
+	// this server's own credential lock (held only across the mutation
+	// itself, inside rotateServerTokenLocked) has already been released,
+	// so a slow notifier/audit sink/descriptor build never extends how
+	// long a concurrent CallTool/discover for this server (or, since the
+	// lock is keyed by server id, any other server entirely) is blocked.
 	s.notifyRegistryChanged()
 	action := "mcp.server.token_cleared"
 	if token != "" {
@@ -497,20 +516,41 @@ func (s *Server) RotateMcpServerToken(ctx context.Context, req *turingv1.RotateM
 // rotateServerTokenLocked performs every credential-sensitive step of a
 // rotation — reading the current server row, sealing the new token, and
 // atomically replacing it (with its liveness status reset) in the
-// repository — entirely under credentialMu's write lock, so it can never
-// interleave with a CallTool or discover critical section that reads the
+// repository — entirely under the target server's own credential lock
+// (see credentialLock), so it can never interleave with a CallTool or
+// discoverLocked critical section for the *same* server that reads the
 // prior token, performs its own network operation, and records its own
-// liveness/tool status under the read lock (see CallTool and
-// SetMcpServerEnabled's discover call). The lock is released as soon as
-// this returns: notify/audit/descriptor-building happen in the caller
-// afterward, so a slow audit sink or descriptor build never extends how
-// long every other in-flight or future CallTool/discover is blocked.
+// liveness/tool status under that lock — a rotation of any other server
+// is entirely unaffected. The lock is released as soon as this returns:
+// notify/audit/descriptor-building happen in the caller afterward, so a
+// slow audit sink or descriptor build never extends how long every other
+// in-flight or future CallTool/discoverLocked for this server is blocked.
 // rotateBarrier (test-only, nil in production) runs first, while the lock
 // is already held, letting a test prove a concurrent CallTool/discover
 // genuinely blocks on a rotation that is itself mid-flight.
+//
+// serverID's existence is checked once, unlocked, before the lock is even
+// requested: credentialLock lazily creates a map entry for any id it is
+// asked about, and this RPC's serverID is raw caller input, never
+// pre-validated by anything upstream (unlike CallTool's and
+// discoverLocked's own serverID, both of which are only ever called with
+// an id a prior repository read in the same call has already confirmed
+// exists). Without this pre-check, a caller could grow credentialLocks
+// without the bound its own comment documents simply by rotating a long
+// stream of distinct server ids that were never real. The authoritative
+// existence/bundled check that actually decides whether the rotation
+// proceeds still happens again below, under the lock — this pre-check
+// only decides whether creating a lock entry is worth doing at all.
 func (s *Server) rotateServerTokenLocked(ctx context.Context, serverID, token string) (repository.MCPServerRecord, error) {
-	s.credentialMu.Lock()
-	defer s.credentialMu.Unlock()
+	if _, err := s.repo.GetMCPServer(ctx, serverID); err != nil {
+		if errors.Is(err, repository.ErrMCPServerNotFound) {
+			return repository.MCPServerRecord{}, status.Error(codes.NotFound, "MCP server not found")
+		}
+		return repository.MCPServerRecord{}, status.Error(codes.Internal, "read MCP server failed")
+	}
+	lock := s.credentialLock(serverID)
+	lock.Lock()
+	defer lock.Unlock()
 	if s.rotateBarrier != nil {
 		s.rotateBarrier()
 	}
@@ -621,15 +661,46 @@ func (s *Server) CallRegisteredMcpTool(ctx context.Context, req *turingv1.CallRe
 	return &turingv1.CallRegisteredMcpToolResponse{Result: value}, nil
 }
 
+// discoverLocked runs discover for serverID while holding that server's
+// credential lock for reading (see credentialLock), released via defer so
+// it can never be leaked if discover — or the repository call below —
+// panics, unlike a bare Lock/Unlock pair around the single call site this
+// replaces. The lock spans not just discover's own read/decrypt-token-
+// through-network-call-and-status-recording, but also this function's own
+// fallback "down" write on failure: a concurrent RotateMcpServerToken for
+// the *same* server must never be able to reset its liveness status while
+// a discovery still using the pre-rotation token could still overwrite
+// that reset with either outcome (see rotateServerTokenLocked and the
+// fence tests in rotation_fence_test.go). It returns whether discovery
+// itself succeeded and, if it failed, whether recording that failure as
+// "down" also failed — SetMcpServerEnabled needs both to decide its own
+// audit payload and final response.
+func (s *Server) discoverLocked(ctx context.Context, serverID string) (discoverySucceeded bool, statusErr error) {
+	lock := s.credentialLock(serverID)
+	lock.RLock()
+	defer lock.RUnlock()
+	discoverErr := s.discover(ctx, serverID)
+	if discoverErr != nil {
+		// Detached from ctx for the same reason SetMcpServerEnabled's
+		// disable branch already is: discovery failing (including via
+		// context cancellation) must not suppress recording that the
+		// server is now down.
+		statusCtx, statusCancel := detachedBoundedContext(ctx, postCommitStatusTimeout)
+		statusErr = s.repo.SetMCPServerStatus(statusCtx, serverID, "down", boundedStatusMessage(discoverErr.Error()))
+		statusCancel()
+		return false, statusErr
+	}
+	return true, nil
+}
+
 // discover reads the server's current token, lists its tools over the
 // network, and records the result (tools and, on success, "up" liveness).
-// Its sole caller, SetMcpServerEnabled, must hold s.credentialMu for
-// reading across this entire call (and its own fallback "down" write on
-// failure): discover takes no lock of its own so that a single RLock
-// covers both what happens inside here and what its caller still needs to
-// do with the outcome, without a second, nested RLock acquisition by the
-// same goroutine ever risking a self-deadlock against a pending
-// RotateMcpServerToken writer.
+// Its sole caller, discoverLocked, must hold that server's credential lock
+// for reading across this entire call: discover takes no lock of its own
+// so that a single RLock covers both what happens inside here and what
+// the caller still needs to do with the outcome, without a second, nested
+// RLock acquisition by the same goroutine ever risking a self-deadlock
+// against a pending RotateMcpServerToken writer for the same server.
 func (s *Server) discover(ctx context.Context, serverID string) (err error) {
 	server, err := s.repo.GetMCPServer(ctx, serverID)
 	if err != nil {

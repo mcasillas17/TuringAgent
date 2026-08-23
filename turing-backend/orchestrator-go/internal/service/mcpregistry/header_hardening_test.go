@@ -90,6 +90,11 @@ func TestBearerFromHeadersNoHeadersMeansNoToken(t *testing.T) {
 // "unsupported header vs. duplicate Authorization" that would depend on
 // Go's randomized map iteration order. This runs many trials specifically
 // because that randomization would otherwise only show up intermittently.
+// The unsupported-header refusal must never name the offending header at
+// all (see errMCPUnsupportedHeader): a header's own *key* can be set to
+// the exact value of a bearer token used elsewhere (or any other secret),
+// so echoing it back — as this package used to — would leak that secret
+// through the very reason meant to explain the refusal.
 func TestBearerFromHeadersDeterministicWithUnsupportedAndDuplicateAuthorizationHeaders(t *testing.T) {
 	headers := []mcpHeaderEntry{
 		{Name: "Authorization", Value: "Bearer first-header-value"},
@@ -102,24 +107,24 @@ func TestBearerFromHeadersDeterministicWithUnsupportedAndDuplicateAuthorizationH
 		if token != "" {
 			t.Fatalf("trial %d: token = %q, want empty on any refusal", i, token)
 		}
-		if err == nil {
-			t.Fatalf("trial %d: want an error", i)
+		if err != errMCPUnsupportedHeader {
+			t.Fatalf("trial %d: err = %v, want the fixed, deterministic errMCPUnsupportedHeader reason every time", i, err)
 		}
-		if err.Error() != `header "X-Api-Key" is unsupported; only Authorization: ****** accepted` {
-			t.Fatalf("trial %d: err = %q, want the fixed, deterministic unsupported-header reason naming X-Api-Key every time", i, err.Error())
-		}
-		for _, sentinel := range []string{"first-header-value", "second-header-value", "attacker-controlled-key-value"} {
+		for _, sentinel := range []string{"first-header-value", "second-header-value", "attacker-controlled-key-value", "X-Api-Key"} {
 			if strings.Contains(err.Error(), sentinel) {
-				t.Fatalf("trial %d: err = %q, must not leak a header value", i, err.Error())
+				t.Fatalf("trial %d: err = %q, must not leak a header name or value", i, err.Error())
 			}
 		}
 	}
 }
 
 // With two distinct unsupported header names present (and no Authorization
-// header at all), the one named in the error must always be the
-// lexicographically first — sorted, not whichever one iteration happens to
-// visit first — on every trial.
+// header at all), the outcome must always be the exact same fixed,
+// content-free reason — never one naming whichever header iteration
+// happened to visit, sorted or otherwise: unlike the old
+// lexicographically-first-name behavior, which of the unsupported headers
+// exists is no longer part of the outcome at all, so there is nothing left
+// for randomized map iteration to make non-deterministic.
 func TestBearerFromHeadersUnsupportedHeaderSelectionIsSortedNotRandom(t *testing.T) {
 	headers := []mcpHeaderEntry{
 		{Name: "X-Zebra-Header", Value: "1"},
@@ -129,11 +134,13 @@ func TestBearerFromHeadersUnsupportedHeaderSelectionIsSortedNotRandom(t *testing
 	const trials = 200
 	for i := 0; i < trials; i++ {
 		_, err := bearerFromHeaders(headers)
-		if err == nil {
-			t.Fatalf("trial %d: want an error", i)
+		if err != errMCPUnsupportedHeader {
+			t.Fatalf("trial %d: err = %v, want the fixed errMCPUnsupportedHeader reason every time", i, err)
 		}
-		if err.Error() != `header "X-Alpha-Header" is unsupported; only Authorization: ****** accepted` {
-			t.Fatalf("trial %d: err = %q, want the lexicographically first unsupported header named every time", i, err.Error())
+		for _, sentinel := range []string{"X-Zebra-Header", "X-Alpha-Header", "X-Mid-Header"} {
+			if strings.Contains(err.Error(), sentinel) {
+				t.Fatalf("trial %d: err = %q, must not name any unsupported header", i, err.Error())
+			}
 		}
 	}
 }
@@ -243,7 +250,9 @@ func TestImportJSONRefusesExactDuplicateAuthorizationSpellingNotJustCaseVariants
 
 // Mixed unsupported-header-name and exact-duplicate-Authorization-spelling
 // must resolve the same fixed, deterministic way the case-variant mix
-// already does: the unsupported header name wins.
+// already does: the unsupported-header refusal wins, and — like every
+// unsupported-header refusal — never names the offending header, since
+// its key could itself be an attacker-chosen copy of a secret.
 func TestImportJSONMixedUnsupportedAndExactDuplicateAuthorizationIsDeterministic(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	report, err := service.ImportJSON(context.Background(), []byte(`{
@@ -261,8 +270,11 @@ func TestImportJSONMixedUnsupportedAndExactDuplicateAuthorizationIsDeterministic
 	if !refused {
 		t.Fatalf("Unsupported = %+v, want vendor refused", report.Unsupported)
 	}
-	if !strings.Contains(reason, "X-Api-Key") || !strings.Contains(reason, "unsupported") {
-		t.Fatalf("reason = %q, want the fixed, deterministic unsupported-header reason naming X-Api-Key", reason)
+	if reason != errMCPUnsupportedHeader.Error() {
+		t.Fatalf("reason = %q, want the fixed errMCPUnsupportedHeader reason", reason)
+	}
+	if strings.Contains(reason, "X-Api-Key") {
+		t.Fatalf("reason = %q, must not name the unsupported header", reason)
 	}
 	if _, err := repo.GetMCPServerByName(context.Background(), "vendor"); err == nil {
 		t.Fatal("a refused entry must not create a server row")

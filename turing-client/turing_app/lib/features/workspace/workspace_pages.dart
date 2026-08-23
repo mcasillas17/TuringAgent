@@ -366,6 +366,32 @@ class _ServerCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final tools = server.tools.toList()
       ..sort((a, b) => a.toolName.compareTo(b.toolName));
+    // A non-bundled server with no configured endpoint (a migration-0016
+    // legacy placeholder, or any other server that has not yet been
+    // pointed at a real url) can never be enabled — the backend itself
+    // refuses SetMcpServerEnabled with FailedPrecondition for one — so the
+    // switch is disabled here too, rather than only surfacing that
+    // refusal after a round trip. Bundled servers are excluded: their url
+    // is never empty in practice, and their switch is already disabled
+    // for the separate bundled reason (see onEnabledChanged below), which
+    // gets its own semantics rather than this placeholder-specific one.
+    final bool isUnconfiguredPlaceholder =
+        server.tier != McpServerTier.bundled && server.url.isEmpty;
+    final ValueChanged<bool>? effectiveOnEnabledChanged = isUnconfiguredPlaceholder
+        ? null
+        : onEnabledChanged;
+    Widget enableSwitch = Switch(
+      value: server.enabled,
+      onChanged: busy ? null : effectiveOnEnabledChanged,
+    );
+    if (isUnconfiguredPlaceholder) {
+      enableSwitch = Tooltip(
+        message:
+            'This server has no endpoint configured yet; register or '
+            'import one before enabling it',
+        child: enableSwitch,
+      );
+    }
     return Container(
       decoration: BoxDecoration(
         color: palette.surface,
@@ -497,10 +523,7 @@ class _ServerCard extends StatelessWidget {
                               ),
                             ),
                           ),
-                        Switch(
-                          value: server.enabled,
-                          onChanged: busy ? null : onEnabledChanged,
-                        ),
+                        enableSwitch,
                         if (onRotateToken != null || onDelete != null)
                           PopupMenuButton<String>(
                             enabled: !busy,

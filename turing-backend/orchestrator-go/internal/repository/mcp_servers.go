@@ -789,6 +789,79 @@ func (r *Repository) ReplaceMCPServerTools(ctx context.Context, serverID string,
 	return tx.Commit()
 }
 
+// MaxMCPRegistryToolBytes bounds the aggregate raw (tool_name +
+// schema_json byte length) total across every *present* tool in the
+// entire registry — every server combined, not any one server's own
+// snapshot — enforced transactionally inside replaceServerToolsTx: the
+// one function every tool-reconciliation path already shares (a live
+// rediscovery via ReplaceMCPServerTools, a static mcp.json snapshot via
+// ImportMCPServer, and placeholder adoption's own tool withdrawal). Before
+// this, only a single server's own tools were bounded (maxMCPToolBytes,
+// 4MiB, enforced in the mcpregistry package against both a live
+// tools/list response and a static snapshot) — but with up to
+// MaxNonBundledMCPServers (256) non-bundled servers each independently
+// allowed a nearly-4MiB snapshot, a single ListMcpServers response
+// summing all of them could vastly exceed the 4MiB gRPC message cap
+// (maxGRPCMessageSize, in internal/app) that response itself is bound by.
+//
+// 256KiB is conservative enough that — combined with every other bounded
+// field a ListMcpServersResponse carries (up to 256 non-bundled plus a
+// handful of bundled server descriptors, each capped at
+// maxMCPServerURLBytes=2048 for its own url and 512 bytes for its status
+// message, plus up to 256 Unsupported entries at similar per-field caps)
+// — the real marshaled response stays comfortably under
+// maxGRPCMessageSize even in the worst case. That worst case was measured
+// directly (not merely estimated), and the margin below reflects a
+// correction: an earlier version of this budget (1MiB) was sized against
+// "many minimal tools" — many small, distinct McpToolDescriptor messages,
+// which maximizes protobuf's fixed *per-message* framing overhead
+// relative to each tool's own tiny payload, and measured to about a 1.55x
+// expansion on the wire. That is not the true worst case. A single tool
+// whose schema is one large array of minimal JSON scalars — e.g.
+// `{"type":"object","x":[0,0,0,...]}` — is worse: each array element
+// converts to a google.protobuf.Value carrying a fixed 8-byte double
+// (via structpb.NewStruct), which costs roughly 9-11 wire bytes per
+// element against as few as 2 raw JSON bytes ("0,"), measuring to about a
+// 5.5x expansion — enough that a single tool consuming the *original*
+// 1MiB budget alone, in that one adversarial shape, marshaled to about
+// 5.5MiB by *itself* — already past the 4MiB cap before any server
+// descriptor, Unsupported entry, or any other tool was even added. (A
+// full worst-case response built around that same 1MiB-budget tool —
+// 259 server descriptors each at their own per-field caps, plus 256
+// maximally-sized Unsupported entries — marshaled to about 6.3MiB
+// overall.) 256KiB against that same worst-measured (number-array) shape
+// marshals a full worst-case
+// ListMcpServersResponse (259 server descriptors each at their own
+// per-field caps, with the entire tool budget dumped onto one server in
+// that shape, plus 256 maximally-sized Unsupported entries) to about
+// 2.16MiB — leaving roughly 46% margin under the 4MiB cap, deliberately
+// wider than the original (and mistaken) 39% margin given this constant's
+// history of a missed worst case. See docs/mcp-security-and-integration.md
+// for the fuller accounting and
+// TestReplaceServerToolsTxAggregateBudgetExactBoundaryAcrossMultipleServers
+// and the mcpregistry package's own worst-case marshal-size test for the
+// boundary and wire-size proofs, respectively.
+//
+// The count is computed with LENGTH(CAST(... AS BLOB)), not plain
+// LENGTH(...): SQLite's LENGTH() on a TEXT value counts *characters*, not
+// bytes, so a multi-byte UTF-8 tool name or schema would otherwise be
+// undercounted relative to Go's own len() (which this same budget check
+// also applies to the replacement tools passed in), silently allowing more
+// real bytes through the cap than intended.
+const MaxMCPRegistryToolBytes = 256 * 1024
+
+// ErrMCPRegistryToolBudgetExceeded is returned by replaceServerToolsTx —
+// and therefore by ReplaceMCPServerTools, ImportMCPServer, and
+// RegisterMCPServer's placeholder-adoption branch — when accepting a
+// server's replacement tool snapshot would push the registry's aggregate
+// present-tool byte total (see MaxMCPRegistryToolBytes) over budget. The
+// caller's transaction rolls back entirely — including the withdrawal
+// update replaceServerToolsTx already issued for this server — so a
+// refused reconciliation never leaves a server with no tools where it
+// used to have some, nor (for ImportMCPServer) a bare row with no tools
+// at all.
+var ErrMCPRegistryToolBudgetExceeded = errors.New("MCP registry aggregate tool budget exceeded")
+
 // replaceServerToolsTx is the one shared implementation of "withdraw every
 // tool currently attributed to server, then reconfirm exactly the tools
 // supplied, refusing a name collision with another server's present tool":
@@ -801,10 +874,39 @@ func (r *Repository) ReplaceMCPServerTools(ctx context.Context, serverID string,
 // legacy placeholder's carried tools are withdrawn (not reconfirmed) in the
 // same transaction as the row it withdraws them from. All three callers see
 // identical collision/upsert behavior because there is exactly one
-// implementation of it.
+// implementation of it — and, since the aggregate byte budget below is
+// enforced here too, identical budget enforcement as well.
 func replaceServerToolsTx(ctx context.Context, tx *sql.Tx, server MCPServerRecord, tools []MCPServerTool) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE tools SET present = 0, enabled = 0 WHERE mcp_server_id = ?`, server.ID); err != nil {
 		return err
+	}
+	// The aggregate check runs against the table's state *after* the
+	// withdrawal above: server's own previously-present tools no longer
+	// count (present = 0 now), so this naturally excludes exactly this
+	// server's prior contribution without needing an explicit server_id
+	// filter, then the replacement tools' own bytes are added on top —
+	// "excluding current server then adding replacement," computed
+	// directly from a live query rather than a separately maintained
+	// counter that could drift from the table's actual contents. This
+	// also means a bundled server's tools (populated by an entirely
+	// separate path, UpsertTools in tools.go, which never calls this
+	// function) are still counted: present=1 bundled rows are already in
+	// the table by the time this SELECT runs, regardless of how they got
+	// there.
+	var existingBytes int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(LENGTH(CAST(tool_name AS BLOB)) + LENGTH(CAST(schema_json AS BLOB))), 0)
+		FROM tools
+		WHERE present = 1
+	`).Scan(&existingBytes); err != nil {
+		return err
+	}
+	var newBytes int64
+	for _, tool := range tools {
+		newBytes += int64(len(tool.Name)) + int64(len(tool.SchemaJSON))
+	}
+	if existingBytes+newBytes > MaxMCPRegistryToolBytes {
+		return ErrMCPRegistryToolBudgetExceeded
 	}
 	discoveredAt := now()
 	for _, tool := range tools {
