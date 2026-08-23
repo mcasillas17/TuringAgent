@@ -851,17 +851,23 @@ func (s *Server) rotateServerTokenLocked(ctx context.Context, serverID, token st
 // ReimportMcpJson re-reads and imports mcp.json from the configured config
 // root on demand, the same way app startup does via ReimportConfiguredJSON.
 // notify and audit both run immediately once that mutation has already
-// committed — before anything below could still fail — and exactly once
+// committed — before anything below could still fail — and at most once
 // per call, so a later Internal mapping (see below) is never a second,
 // separate audit of the same run. notify is conditional: it only fires
 // when this reimport actually imported something, since nothing else about
 // the registry changed for a run that only skipped or refused entries.
-// audit always runs, unconditionally, recording only counts; unlike notify
-// it is never skipped by a later failure, and two overlapping
-// ReimportMcpJson calls can never suppress or delay each other's audit
-// record. The one exception is errMCPConfigRootNotConfigured: that
-// precondition failure means no work was even attempted (the report is
-// always empty), so neither notify nor audit fires for it.
+// audit is conditional too, on exactly the same "did anything actually
+// commit" question notify already answers, but only when err is also
+// non-nil: a run whose err is nil always audits (see below), but a run
+// that both committed nothing at all AND ends in err — an unreadable
+// mcp.json, or any other whole-run failure ReimportConfiguredJSON cannot
+// attribute to a single entry before it ever reaches ImportJSON — must
+// never audit at all, since doing so would write a success-looking,
+// zero-count mcp.server.reimported row for a run that, from the
+// registry's own perspective, never actually happened. The one other
+// exception is errMCPConfigRootNotConfigured: that precondition failure
+// means no work was even attempted (the report is always empty), so
+// neither notify nor audit fires for it either.
 //
 // ReimportConfiguredJSON's own named-report contract (see ImportJSON and
 // recordDocumentRefusal) means report.Imported/Skipped/Unsupported are
@@ -872,7 +878,13 @@ func (s *Server) rotateServerTokenLocked(ctx context.Context, serverID, token st
 // from whatever ImportReport was returned before this ever maps that err
 // to a final Internal status below — not only on the success path — so a
 // partially-completed run's real, already-committed effect is never
-// silently unreported.
+// silently unreported. The audit payload's "status" field distinguishes
+// the two ways a real, non-empty run can end: "completed" for a nil err
+// (including a malformed document recorded as a bounded, already-persisted
+// "_document" refusal — see ReimportConfiguredJSON's own doc comment on
+// why that still resolves with a nil err), and "partial" for a run that
+// committed at least one import before a later, whole-run failure struck
+// and is about to be mapped to Internal below.
 //
 // The response's Unsupported list is built directly from this call's own
 // report.Unsupported, sorted by name, rather than by re-reading the shared
@@ -885,14 +897,36 @@ func (s *Server) ReimportMcpJson(ctx context.Context, _ *turingv1.ReimportMcpJso
 	if err != nil && errors.Is(err, errMCPConfigRootNotConfigured) {
 		return nil, status.Error(codes.FailedPrecondition, "MCP config root is not configured")
 	}
+	// A whole-run failure that committed no import at all — an
+	// unreadable mcp.json, or any other failure ReimportConfiguredJSON
+	// cannot attribute to a single entry before ImportJSON ever ran —
+	// must return Internal without ever notifying or auditing: this run
+	// never actually did anything, so recording it would be a
+	// success-looking, zero-count mcp.server.reimported row for a run
+	// that, from the registry's own perspective, never happened.
+	if err != nil && len(report.Imported) == 0 {
+		return nil, status.Error(codes.Internal, "reimport mcp.json failed")
+	}
 	if len(report.Imported) > 0 {
 		s.notifyRegistryChanged()
 	}
-	// Only counts are recorded — never names or reasons.
+	// Only counts (and this run's own completion status) are recorded —
+	// never names or reasons. status is "partial" only when err is
+	// non-nil here: by this point that can only mean at least one import
+	// already committed (the len(report.Imported) == 0 case above always
+	// returns before reaching this line), and this run is about to be
+	// mapped to Internal below despite that real, already-committed
+	// effect. Every other run reaching this line has a nil err and
+	// audits "completed".
+	auditStatus := "completed"
+	if err != nil {
+		auditStatus = "partial"
+	}
 	s.auditMCPEvent(ctx, "mcp.server.reimported", "mcp.json", map[string]any{
 		"imported": len(report.Imported),
 		"skipped":  len(report.Skipped),
 		"refused":  len(report.Unsupported),
+		"status":   auditStatus,
 	})
 	if err != nil {
 		return nil, status.Error(codes.Internal, "reimport mcp.json failed")

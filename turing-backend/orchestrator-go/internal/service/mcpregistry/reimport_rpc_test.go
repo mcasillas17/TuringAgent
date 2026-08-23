@@ -108,9 +108,17 @@ func TestReimportConfiguredJSONValidFileGoesThroughImportJSON(t *testing.T) {
 // above). ReimportConfiguredJSON must return the one fixed message rather
 // than the underlying *PathError, which would otherwise repeat the config
 // root's filesystem path; the public RPC must map that to Internal without
-// leaking the path either.
+// leaking the path either. Because nothing at all committed during this
+// run — report is the empty zero value, never even reaching ImportJSON —
+// ReimportMcpJson must not audit or notify it either: doing so would write
+// a success-looking, zero-count mcp.server.reimported row for a run that,
+// from the registry's own perspective, never actually happened.
 func TestReimportConfiguredJSONOtherReadFailureReturnsFixedMessageAndMapsToInternal(t *testing.T) {
 	service, _ := newRegistryTestService(t)
+	recorder := &recordingAuditRecorder{}
+	service.SetAuditRecorder(recorder)
+	notifier := &countingRegistryChangeNotifier{}
+	service.SetRegistryChangeNotifier(notifier)
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "mcp.json"), 0o700); err != nil {
 		t.Fatal(err)
@@ -141,6 +149,12 @@ func TestReimportConfiguredJSONOtherReadFailureReturnsFixedMessageAndMapsToInter
 	const wantRPCMessage = "reimport mcp.json failed"
 	if !strings.Contains(rpcErr.Error(), wantRPCMessage) {
 		t.Fatalf("rpc error = %q, want it to contain %q", rpcErr.Error(), wantRPCMessage)
+	}
+	if len(recorder.records) != 0 {
+		t.Fatalf("audit records = %+v, want none: a run with no committed imports must never audit a success-looking zero-count row", recorder.records)
+	}
+	if notifier.calls != 0 {
+		t.Fatalf("notify calls = %d, want 0: nothing committed for this run", notifier.calls)
 	}
 }
 
@@ -263,12 +277,16 @@ func (n *countingRegistryChangeNotifier) NotifyMCPRegistryChanged(context.Contex
 	return nil
 }
 
-// Every successful ReimportMcpJson RPC is audited — including a run that
+// Every ReimportMcpJson RPC that reaches ReimportConfiguredJSON with no
+// committed imports and a nil error is audited — including a run that
 // imports nothing (an absent mcp.json) and a run that is refused-only (a
-// malformed document) — with counts alone: imported, skipped, refused.
-// Never the names or reasons that would identify what happened, which is
-// exactly the information ListMcpServers/ReimportMcpJson's own response
-// already carries in full.
+// malformed document) — with counts and a "completed" status, never the
+// names or reasons that would identify what happened (that is exactly
+// the information ListMcpServers/ReimportMcpJson's own response already
+// carries in full). A run this package cannot even attempt — no
+// committed imports and a non-nil error, e.g. an unreadable mcp.json —
+// is a different case entirely and must never audit at all; see
+// TestReimportConfiguredJSONOtherReadFailureReturnsFixedMessageAndMapsToInternal.
 func TestReimportMcpJsonAuditsEveryRunIncludingEmptyAndMalformedOnly(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	recorder := &recordingAuditRecorder{}
@@ -320,9 +338,21 @@ func TestReimportMcpJsonAuditsEveryRunIncludingEmptyAndMalformedOnly(t *testing.
 			t.Fatalf("records[%d].target = %q, want mcp.json", i, record.target)
 		}
 		for key := range record.payload {
-			if key != "imported" && key != "skipped" && key != "refused" {
+			if key != "imported" && key != "skipped" && key != "refused" && key != "status" {
 				t.Fatalf("records[%d] payload has unexpected key %q: %+v", i, key, record.payload)
 			}
+		}
+		// Every run here reaches ReimportMcpJson with a nil error (an
+		// absent file, a malformed document recorded via
+		// recordDocumentRefusal's own successful persist, and an
+		// ordinary mixed run all resolve that way — see
+		// ReimportConfiguredJSON's own doc comment) — so every one of
+		// these three audits "completed", never "partial", which is
+		// reserved for a run ReimportMcpJson itself maps to Internal
+		// after some entries already committed (see
+		// TestReimportMcpJsonRepositoryFailureAfterFirstEntryStillAuditsBeforeInternal).
+		if record.payload["status"] != "completed" {
+			t.Fatalf("records[%d].payload[status] = %v, want completed", i, record.payload["status"])
 		}
 	}
 	if recorder.records[0].payload["imported"] != 0 || recorder.records[0].payload["skipped"] != 0 || recorder.records[0].payload["refused"] != 0 {
@@ -431,7 +461,7 @@ func TestReimportMcpJsonBearerSentinelRunStaysSentinelFree(t *testing.T) {
 		t.Fatalf("records = %+v, want one audit row", recorder.records)
 	}
 	for key, value := range recorder.records[0].payload {
-		if key != "imported" && key != "skipped" && key != "refused" {
+		if key != "imported" && key != "skipped" && key != "refused" && key != "status" {
 			t.Fatalf("payload has unexpected key %q=%v", key, value)
 		}
 		if s, ok := value.(string); ok {

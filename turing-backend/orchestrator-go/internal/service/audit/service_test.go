@@ -300,7 +300,7 @@ func TestListAuditEntriesReturnsEveryCurrentActionUnderExplicitPolicy(t *testing
 		{"a_mcpdis", "mcp.server.disabled", `{"name":"vendor","tier":"local_container","remoteDiscoveryAttempted":false,"discoverySucceeded":false,"token":"SENTINEL_MCP_TOKEN"}`},
 		{"a_mcprot", "mcp.server.token_rotated", `{"name":"vendor","tokenConfigured":true,"token":"SENTINEL_MCP_TOKEN","sealedToken":"SENTINEL_MCP_TOKEN"}`},
 		{"a_mcpclr", "mcp.server.token_cleared", `{"name":"vendor","tokenConfigured":false,"token":"SENTINEL_MCP_TOKEN"}`},
-		{"a_mcpreimp", "mcp.server.reimported", `{"imported":2,"skipped":1,"refused":3,"names":["SENTINEL_MCP_TOKEN"]}`},
+		{"a_mcpreimp", "mcp.server.reimported", `{"imported":2,"skipped":1,"refused":3,"status":"completed","names":["SENTINEL_MCP_TOKEN"]}`},
 		{"a_mcpdel", "mcp.server.deleted", `{"name":"vendor","tier":"remote_url","token":"SENTINEL_MCP_TOKEN","url":"https://vendor.example/mcp"}`},
 		{"a_mcppol", "mcp.server.tool_policy_changed", `{"name":"vendor","toolName":"vendor.write","toolPolicy":"approval_required","schema":{"type":"SENTINEL_MCP_SCHEMA"},"args":{"path":"SENTINEL_MCP_ARGS"}}`},
 		// session.routed / session.unrouted are direct recordAuditTx writes with
@@ -436,9 +436,9 @@ func TestListAuditEntriesReturnsEveryCurrentActionUnderExplicitPolicy(t *testing
 		}
 	})
 	check("mcp.server.reimported", []string{
-		"imported_servers", "skipped_servers", "refused_servers",
+		"imported_servers", "skipped_servers", "refused_servers", "status",
 	}, func(p *turingv1.AuditPayload) {
-		if p.GetImportedServers() != 2 || p.GetSkippedServers() != 1 || p.GetRefusedServers() != 3 {
+		if p.GetImportedServers() != 2 || p.GetSkippedServers() != 1 || p.GetRefusedServers() != 3 || p.GetStatus() != "completed" {
 			t.Fatalf("mcp.server.reimported values wrong: %+v", p)
 		}
 	})

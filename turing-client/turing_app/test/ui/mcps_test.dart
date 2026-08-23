@@ -216,6 +216,109 @@ void main() {
     );
 
     testWidgets(
+      'a URL with leading/trailing whitespace and an uppercase HTTPS '
+      'scheme still auto-selects Remote URL, so a first submission '
+      'succeeds without a manual tier correction',
+      (tester) async {
+        final api = _McpApi();
+        await _pumpMcps(tester, api);
+
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddName')),
+          'Vendor',
+        );
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddUrl')),
+          '  HTTPS://vendor.example/mcp  ',
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Remote URL'), findsOneWidget);
+        expect(find.text('Local container'), findsNothing);
+
+        await tester.tap(find.byKey(const Key('mcpsAddSubmit')));
+        await tester.pumpAndSettle();
+
+        expect(api.registerCalls, hasLength(1));
+        expect(api.registerCalls.single['tier'], McpServerTier.remoteUrl);
+      },
+    );
+
+    testWidgets(
+      'a URL with leading/trailing whitespace and an uppercase HTTP '
+      'scheme still auto-selects Local container, so a first submission '
+      'succeeds without a manual tier correction',
+      (tester) async {
+        final api = _McpApi();
+        await _pumpMcps(tester, api);
+
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddName')),
+          'Vendor',
+        );
+        // Start from an auto-selected Remote URL (via typing, not a
+        // manual dropdown pick), so this proves the whitespace/uppercase
+        // http:// URL below actively re-selects Local container, not
+        // merely that the field already defaulted there.
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddUrl')),
+          'https://vendor.example/mcp',
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Remote URL'), findsOneWidget);
+
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddUrl')),
+          '\tHTTP://vendor.internal:9000/mcp\n',
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Local container'), findsOneWidget);
+        expect(find.text('Remote URL'), findsNothing);
+
+        await tester.tap(find.byKey(const Key('mcpsAddSubmit')));
+        await tester.pumpAndSettle();
+
+        expect(api.registerCalls, hasLength(1));
+        expect(api.registerCalls.single['tier'], McpServerTier.localContainer);
+      },
+    );
+
+    testWidgets(
+      'a manually chosen tier stays sticky even against a whitespace/'
+      'uppercase URL that would otherwise auto-select a different one',
+      (tester) async {
+        final api = _McpApi();
+        await _pumpMcps(tester, api);
+
+        // The user explicitly picks Remote URL themselves...
+        await _selectTier(tester, 'Remote URL');
+        // ...then types a whitespace-padded, uppercase http:// URL, which
+        // (per the two tests above) would otherwise auto-select Local
+        // container.
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddName')),
+          'Vendor',
+        );
+        await tester.enterText(
+          find.byKey(const Key('mcpsAddUrl')),
+          '  HTTP://vendor.internal:9000/mcp  ',
+        );
+        await tester.pumpAndSettle();
+
+        // The user's explicit choice survives.
+        expect(find.text('Remote URL'), findsOneWidget);
+        expect(find.text('Local container'), findsNothing);
+
+        await tester.tap(find.byKey(const Key('mcpsAddSubmit')));
+        await tester.pumpAndSettle();
+
+        expect(api.registerCalls, hasLength(1));
+        expect(api.registerCalls.single['tier'], McpServerTier.remoteUrl);
+      },
+    );
+
+    testWidgets(
       'manually choosing a tier stops the URL field from overriding it',
       (tester) async {
         final api = _McpApi();

@@ -814,6 +814,7 @@ func applyAuditActionPolicy(payload *turingv1.AuditPayload, action string, objec
 		payload.ImportedServers = auditInt64(object, "imported")
 		payload.SkippedServers = auditInt64(object, "skipped")
 		payload.RefusedServers = auditInt64(object, "refused")
+		payload.Status = auditString(object, "status", maxAuditStatusBytes)
 	case "mcp.server.deleted":
 		payload.ServerName = auditString(object, "name", maxAuditServerNameBytes)
 		payload.McpServerTier = auditString(object, "tier", maxAuditMCPServerTierBytes)

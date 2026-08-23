@@ -582,3 +582,61 @@ func TestMCPRegistrySnapshotIssuesOneOverCapIsDegradedAndBoundedToExactlyCap(t *
 		t.Fatalf("len(Issues) = %d, want exactly MaxMCPImportIssues (%d), not MaxMCPImportIssues+1 or any other count", len(snapshot.Issues), MaxMCPImportIssues)
 	}
 }
+
+// TestMCPRegistrySnapshotAccommodatesMaxNamedEntriesPlusOneDocumentIssueWithoutDegrading
+// proves the exact real-world shape a single interrupted reimport can
+// legitimately persist through ReplaceMCPImportIssues — MaxNonBundledMCPServers
+// (256) ordinary per-entry refusals, the most an mcp.json document can
+// ever name at once (see the mcpregistry package's own maxMCPImportEntries),
+// plus exactly one additional "_document" entry recordDocumentRefusal
+// folds in on top of them when a later, whole-run failure interrupts an
+// otherwise fully-processed document — never trips IssuesOverCap.
+// MaxMCPImportIssues must therefore reserve headroom for that one
+// document-level entry above MaxNonBundledMCPServers, not merely equal
+// it: before that reservation, this exact 257-row write (256 legitimate
+// per-entry issues the registry itself would have produced, plus the one
+// "_document" entry) would have been misread as an over-cap, "somehow
+// already exceeds it" condition indistinguishable from actual corruption
+// — degrading the entire registry (blanking every server's own Tools,
+// per MCPRegistrySnapshot's own doc comment) for an entirely ordinary,
+// bounded outcome.
+func TestMCPRegistrySnapshotAccommodatesMaxNamedEntriesPlusOneDocumentIssueWithoutDegrading(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+
+	issues := make(map[string]string, MaxNonBundledMCPServers+1)
+	for i := 0; i < MaxNonBundledMCPServers; i++ {
+		issues[fmt.Sprintf("vendor-%03d", i)] = "stdio/command MCP servers are unsupported; run the server in a container or use an HTTPS URL"
+	}
+	issues["_document"] = "reimport mcp.json failed"
+	if len(issues) != MaxNonBundledMCPServers+1 {
+		t.Fatalf("test setup built %d issues, want exactly %d (%d named entries + one _document entry)", len(issues), MaxNonBundledMCPServers+1, MaxNonBundledMCPServers)
+	}
+
+	if err := repo.ReplaceMCPImportIssues(ctx, issues); err != nil {
+		t.Fatalf("persisting the maximum legitimate issue set must succeed: %v", err)
+	}
+
+	snapshot, err := repo.MCPRegistrySnapshot(ctx)
+	if err != nil {
+		t.Fatalf("MCPRegistrySnapshot must succeed for the maximum legitimate issue set: %v", err)
+	}
+	if snapshot.IssuesOverCap {
+		t.Fatal("IssuesOverCap = true, want false: 256 named entries plus one _document entry is a normal, bounded outcome, not a degraded one")
+	}
+	if snapshot.OverBudget || snapshot.ServersOverCap {
+		t.Fatalf("OverBudget = %v, ServersOverCap = %v, want both false: only the issue count is exercised here", snapshot.OverBudget, snapshot.ServersOverCap)
+	}
+	if len(snapshot.Issues) != MaxNonBundledMCPServers+1 {
+		t.Fatalf("len(Issues) = %d, want all %d persisted issues returned, none truncated", len(snapshot.Issues), MaxNonBundledMCPServers+1)
+	}
+	found := false
+	for _, issue := range snapshot.Issues {
+		if issue.Name == "_document" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the _document issue is missing from the snapshot")
+	}
+}

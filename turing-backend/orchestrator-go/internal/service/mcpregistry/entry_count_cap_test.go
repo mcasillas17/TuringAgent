@@ -3,12 +3,14 @@ package mcpregistry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
@@ -116,6 +118,84 @@ func TestReimportConfiguredJSONCollapsesTooManyEntriesToOneDocumentRefusal(t *te
 	}
 	if len(issues) != 1 || issues[0].Name != "_document" {
 		t.Fatalf("issues = %+v, want exactly one bounded _document issue", issues)
+	}
+}
+
+// TestRecordDocumentRefusalAtMaxNamedEntryCountPersistsWithoutDegradingRegistry
+// proves recordDocumentRefusal — the function that folds a whole-run
+// failure into a bounded "_document" entry alongside whatever named
+// entries a document already produced (see its own doc comment) — can
+// persist the maximum legitimate shape a single run can ever produce:
+// exactly maxMCPImportEntries (== repository.MaxNonBundledMCPServers)
+// ordinary per-entry refusals, the most a document can ever name at
+// once, plus the one additional "_document" entry this function itself
+// adds. Before repository.MaxMCPImportIssues reserved headroom for that
+// one extra entry, this exact, entirely ordinary 257-issue outcome would
+// have tripped IssuesOverCap and degraded the whole registry (blanking
+// every server's own Tools) for a run that did nothing wrong at all.
+func TestRecordDocumentRefusalAtMaxNamedEntryCountPersistsWithoutDegradingRegistry(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx := context.Background()
+
+	report := ImportReport{Unsupported: make(map[string]string, maxMCPImportEntries)}
+	for i := 0; i < maxMCPImportEntries; i++ {
+		report.Unsupported[fmt.Sprintf("vendor-%03d", i)] = "stdio/command MCP servers are unsupported; run the server in a container or use an HTTPS URL"
+	}
+
+	finalReport, err := service.recordDocumentRefusal(ctx, report, errors.New("simulated whole-run failure"))
+	if err != nil {
+		t.Fatalf("persisting the maximum legitimate per-entry count plus one _document entry must succeed: %v", err)
+	}
+	if len(finalReport.Unsupported) != maxMCPImportEntries+1 {
+		t.Fatalf("Unsupported = %d entries, want exactly %d (the %d named entries plus _document)",
+			len(finalReport.Unsupported), maxMCPImportEntries+1, maxMCPImportEntries)
+	}
+	if _, present := finalReport.Unsupported["_document"]; !present {
+		t.Fatalf("Unsupported = %+v, want the _document key", finalReport.Unsupported)
+	}
+
+	issues, err := repo.ListMCPImportIssues(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != maxMCPImportEntries+1 {
+		t.Fatalf("persisted issues = %d, want exactly %d, none dropped", len(issues), maxMCPImportEntries+1)
+	}
+
+	response, err := service.ListMcpServers(ctx, &turingv1.ListMcpServersRequest{})
+	if err != nil {
+		t.Fatalf("ListMcpServers must remain usable for the maximum legitimate issue count: %v", err)
+	}
+	if response.GetRegistryDegraded() {
+		t.Fatalf("RegistryDegraded = true, want false: %d named entries plus one _document entry is the maximum ordinary outcome, not a degraded one (reason: %q)",
+			maxMCPImportEntries, response.GetRegistryDegradationReason())
+	}
+	if len(response.GetUnsupported()) != maxMCPImportEntries+1 {
+		t.Fatalf("len(Unsupported) = %d, want all %d issues reported, none truncated", len(response.GetUnsupported()), maxMCPImportEntries+1)
+	}
+}
+
+// TestMaxMCPImportIssuesReservesExactlyOneDocumentSlotAboveTheEntryCap
+// locks the exact relationship the fix above depends on:
+// repository.MaxMCPImportIssues must equal maxMCPImportEntries + 1, never
+// merely maxMCPImportEntries (too little headroom — the off-by-one this
+// finding fixes) and never more (an unbounded amount of slack this
+// package could never actually use, since a single run can never produce
+// more named entries than maxMCPImportEntries — see
+// TestImportJSONRefusesTooManyEntriesBeforeProcessing, which refuses a
+// document naming even one more than that wholesale, before any entry is
+// processed at all — plus recordDocumentRefusal ever adds at most one
+// "_document" entry on top). Together with that existing entry-count
+// cap, this proves a single run can never legitimately produce more than
+// maxMCPImportEntries+1 issues in the first place, so this exact
+// reservation is both necessary and sufficient — never a number picked
+// to merely "probably" be enough.
+func TestMaxMCPImportIssuesReservesExactlyOneDocumentSlotAboveTheEntryCap(t *testing.T) {
+	if repository.MaxMCPImportIssues != maxMCPImportEntries+1 {
+		t.Fatalf("repository.MaxMCPImportIssues = %d, want maxMCPImportEntries+1 (%d): "+
+			"exactly enough headroom for the one _document entry recordDocumentRefusal "+
+			"can add on top of the maximum number of named per-entry issues a single run can ever produce",
+			repository.MaxMCPImportIssues, maxMCPImportEntries+1)
 	}
 }
 

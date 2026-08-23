@@ -60,6 +60,17 @@ const maxMCPImportEntries = repository.MaxNonBundledMCPServers
 // claims.
 var errMCPImportTooManyEntries = fmt.Errorf("mcp.json declares more servers than the maximum supported entry count of %d", maxMCPImportEntries)
 
+// errMCPResultCannotBeRedacted is the one fixed, generic reason
+// c.request refuses a vendor's result outright, after redaction, rather
+// than ever returning it: redactMCPSecret's per-scalar substitution
+// cannot remove a token that is itself a piece of JSON syntax (e.g. the
+// quote-colon-quote between an object's key and its value) — no matter
+// what any single scalar's value is replaced with, that structural text
+// survives around it. The safety-net scan below is what still finds
+// such a token in the fully-redacted result; this is the fixed message
+// it is refused with, never any part of the vendor's own response.
+var errMCPResultCannotBeRedacted = errors.New("MCP response result could not be safely redacted")
+
 type mcpClient struct {
 	endpoint   string
 	token      string
@@ -225,6 +236,30 @@ func (c *mcpClient) request(ctx context.Context, method string, params map[strin
 	if !ok {
 		return nil, errors.New("MCP response result must be an object")
 	}
+	// A final, whole-result safety net: redactMCPSecret's per-scalar
+	// substitution above surgically replaces each string/number/bool/null
+	// value that itself matched, but it cannot remove a token that is a
+	// piece of JSON syntax rather than any single value's own content —
+	// the quote-colon-quote between a key and its value exists
+	// regardless of what that value is redacted to. Re-encoding the
+	// already-redacted result and checking it one more time catches
+	// exactly that residue; if the token is still there, the whole
+	// result is refused with the one fixed, generic reason rather than
+	// ever returned still carrying it. This never fires for an ordinary
+	// string echo (already fully substituted above) or for the numeric/
+	// bool/null cases (whose one matching scalar is now the fixed marker
+	// string, not the original token). This scans the same
+	// encoding/json text CallRegisteredMcpTool's eventual
+	// structpb.NewStruct conversion is built from field-by-field — not
+	// the wire bytes of any later protobuf or protojson re-encoding of
+	// that Struct — so it is a check against the shape this function
+	// itself is about to hand back, not a guarantee about every possible
+	// downstream re-serialization.
+	if c.token != "" {
+		if encoded, err := json.Marshal(redacted); err == nil && strings.Contains(string(encoded), c.token) {
+			return nil, errMCPResultCannotBeRedacted
+		}
+	}
 	return redacted, nil
 }
 
@@ -247,6 +282,20 @@ func (c *mcpClient) nextRequestID() int64 {
 	return id
 }
 
+// mcpRedactedMarker is the one fixed, generic replacement text every
+// redaction in this file uses in place of a secret it finds: a
+// substring occurrence inside a string (redactMCPSecretString), or the
+// entire value of a scalar whose canonical JSON text contains the secret
+// (redactMCPSecretScalar). Sharing one constant means a caller can never
+// see two different placeholder spellings depending on which of the two
+// paths happened to redact a given value.
+const mcpRedactedMarker = "[redacted]"
+
+// redactMCPSecret recursively redacts secret out of value, which is
+// whatever a vendor's JSON-RPC result decoded into: a string, a
+// []any/map[string]any (walked recursively, map keys included), or any
+// other JSON scalar (redactMCPSecretScalar — a number, a bool, or JSON
+// null, none of which json.Unmarshal ever decodes into a Go string).
 func redactMCPSecret(value any, secret string) any {
 	if secret == "" {
 		return value
@@ -267,7 +316,7 @@ func redactMCPSecret(value any, secret string) any {
 		}
 		return result
 	default:
-		return value
+		return redactMCPSecretScalar(typed, secret)
 	}
 }
 
@@ -275,5 +324,30 @@ func redactMCPSecretString(value string, secret string) string {
 	if secret == "" {
 		return value
 	}
-	return strings.ReplaceAll(value, secret, "[redacted]")
+	return strings.ReplaceAll(value, secret, mcpRedactedMarker)
+}
+
+// redactMCPSecretScalar handles every JSON scalar redactMCPSecret's own
+// switch does not already: a number (decoded as float64), a bool, or
+// JSON null (decoded as an untyped nil interface — value == nil here).
+// None of these has a substring of its own a partial, in-place
+// replacement could target the way redactMCPSecretString's
+// strings.ReplaceAll does for a string: encoding/json never re-quotes a
+// number, a bool, or null, so there is no way to redact only part of
+// one. Its own canonical JSON wire text is instead checked for secret as
+// a substring — exactly the text json.Marshal would otherwise still be
+// about to emit for it, once whatever holds it is finally serialized —
+// and a match replaces the whole scalar with the fixed redaction
+// marker, changing its wire type (e.g. a number becomes a string)
+// rather than ever letting a secret-bearing number, boolean, or null
+// reach a caller.
+func redactMCPSecretScalar(value any, secret string) any {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	if !strings.Contains(string(encoded), secret) {
+		return value
+	}
+	return mcpRedactedMarker
 }

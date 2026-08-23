@@ -385,7 +385,21 @@ row count against `MaxMCPRegistryServers` (`ServersOverCap`), and the total
 `mcp_import_issues` row count against `MaxMCPImportIssues`
 (`IssuesOverCap`) — bounding the *server* and *issue* reads themselves to
 one row past each cap (`LIMIT cap+1`) so detecting an over-cap condition
-never itself requires reading an unbounded number of rows. All three
+never itself requires reading an unbounded number of rows.
+`MaxMCPImportIssues` is `MaxNonBundledMCPServers + 1`, not merely
+`MaxNonBundledMCPServers`: the latter already bounds the most named,
+ordinary per-entry refusals a single `mcp.json` document can ever name at
+once (`ImportJSON`'s own `maxMCPImportEntries` refuses a document naming
+more than that, wholesale, before any entry is processed at all — see
+above), but `ReimportConfiguredJSON` can still fold in one *more* row on
+top of every one of those — the bounded `"_document"` entry
+`recordDocumentRefusal` adds when a later, whole-run failure interrupts an
+otherwise fully-processed document (see above). Without the `+ 1`, a
+single, entirely legitimate run that both names the maximum number of
+entries and is later interrupted this way — 256 ordinary refusals plus one
+`_document` entry, 257 rows from one honest `ReplaceMCPImportIssues`
+write — would have tripped `IssuesOverCap` and degraded the whole registry
+for an outcome that did nothing wrong at all. All three
 should be unreachable in ordinary operation now that every write path
 enforces the matching limit, but none is asserted to be *impossible*
 forever: they protect against a future regression that reintroduces an

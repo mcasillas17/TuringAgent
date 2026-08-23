@@ -721,13 +721,23 @@ class _AddServerCardState extends State<_AddServerCard> {
   // dropdown themselves — so a first submission of either shape succeeds
   // without a manual correction. This only ever runs before the user has
   // manually chosen a tier (_tierManuallySet); once they have, typing in
-  // the URL field never silently changes their choice back.
+  // the URL field never silently changes their choice back. The field's
+  // raw text is trimmed (matching what _submit already does to the URL
+  // it actually sends) and lower-cased (matching classifyImportedURL's
+  // own case-insensitive strings.ToLower(parsed.Scheme) check) before the
+  // scheme comparison, so a pasted URL with leading/trailing whitespace
+  // or an upper/mixed-case scheme (e.g. "HTTPS://…", common from a
+  // browser's address bar or a copy-pasted curl command) still
+  // auto-selects the correct tier on the very first submission, rather
+  // than silently falling through to whatever tier the field already
+  // happened to show.
   void _autoSelectTierFromUrl() {
     if (_tierManuallySet) return;
+    final normalized = _url.text.trim().toLowerCase();
     final McpServerTier? detected;
-    if (_url.text.startsWith('https://')) {
+    if (normalized.startsWith('https://')) {
       detected = McpServerTier.remoteUrl;
-    } else if (_url.text.startsWith('http://')) {
+    } else if (normalized.startsWith('http://')) {
       detected = McpServerTier.localContainer;
     } else {
       detected = null;

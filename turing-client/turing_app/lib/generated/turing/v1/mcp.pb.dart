@@ -483,9 +483,16 @@ class ListMcpServersResponse extends $pb.GeneratedMessage {
   /// tool-byte total than the registry's own operating bounds allow (see
   /// repository.MaxMCPRegistryServers/MaxMCPRegistryToolBytes) — and
   /// returned a safe, bounded, degraded view instead: every server
-  /// descriptor is still listed (an operator retains enough identity —
-  /// id, name, endpoint — to find and delete whichever one is
-  /// responsible), but with its own `tools` left empty. This is an
+  /// descriptor this response does return has its own `tools` left empty,
+  /// regardless of which of those three bounds was the one exceeded. When
+  /// the server *count* itself is over repository.MaxMCPRegistryServers,
+  /// `servers` is additionally truncated to exactly that many
+  /// descriptors, in name order, rather than every server being listed
+  /// (an operator still retains enough identity — id, name, endpoint — to
+  /// find and delete whichever one is responsible, from among that
+  /// bounded set); for the other two over-cap reasons (too many import
+  /// issues, or too large an aggregate tool-byte total), every server
+  /// descriptor is listed, just with `tools` empty as above. This is an
   /// explicit, structured signal, never a synthetic entry appended to
   /// `unsupported` (which continues to describe only ordinary per-entry
   /// import refusals).

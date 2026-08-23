@@ -126,6 +126,16 @@ func TestReimportMcpJsonCancellationAfterFirstEntryStillSucceedsWithPartialRepor
 	if recorder.records[0].payload["imported"] != 1 {
 		t.Fatalf("audit payload = %+v, want imported=1", recorder.records[0].payload)
 	}
+	// ReimportMcpJson itself sees a nil error here (recordDocumentRefusal's
+	// own detached-context persist succeeded despite the earlier
+	// cancellation — see this test's own doc comment), so this audits as
+	// an ordinary "completed" run, never "partial": that status is
+	// reserved for a run ReimportMcpJson maps to Internal after some
+	// entries already committed (see
+	// TestReimportMcpJsonRepositoryFailureAfterFirstEntryStillAuditsBeforeInternal).
+	if recorder.records[0].payload["status"] != "completed" {
+		t.Fatalf("audit payload[status] = %v, want completed", recorder.records[0].payload["status"])
+	}
 
 	// The registry's own persisted issues reflect the same merged state
 	// the response does — never silently stale from a previous run.
@@ -335,5 +345,12 @@ func TestReimportMcpJsonRepositoryFailureAfterFirstEntryStillAuditsBeforeInterna
 	}
 	if recorder.records[0].payload["imported"] != 1 {
 		t.Fatalf("audit payload = %+v, want imported=1: aaa-vendor really committed before the database closed", recorder.records[0].payload)
+	}
+	// This run committed at least one import before the later, fatal
+	// failure struck — the "partial" status, never "completed" (a run
+	// with no later error) — distinguishes it from an ordinary
+	// successful reimport for anything that reads this audit trail.
+	if recorder.records[0].payload["status"] != "partial" {
+		t.Fatalf("audit payload[status] = %v, want partial", recorder.records[0].payload["status"])
 	}
 }

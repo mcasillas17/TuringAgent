@@ -51,14 +51,26 @@ const MaxNonBundledMCPServers = 256
 const MaxMCPRegistryServers = MaxNonBundledMCPServers + 16
 
 // MaxMCPImportIssues bounds how many mcp_import_issues rows
-// MCPRegistrySnapshot ever treats as a normal, healthy read. It equals
-// MaxNonBundledMCPServers, the same bound a single ImportJSON call can
-// itself ever persist in one write (see the mcpregistry package's own
-// maxMCPImportEntries and recordUnsupported's defensive count bound), so
-// a healthy database populated only through ReplaceMCPImportIssues can
-// never actually exceed it; see MCPRegistrySnapshot's own IssuesOverCap
-// field for what happens if some other write somehow already has.
-const MaxMCPImportIssues = MaxNonBundledMCPServers
+// MCPRegistrySnapshot ever treats as a normal, healthy read. It is
+// MaxNonBundledMCPServers + 1: MaxNonBundledMCPServers is the most named,
+// ordinary per-entry refusals a single mcp.json document can ever
+// persist in one ReplaceMCPImportIssues write (the same bound the
+// mcpregistry package's own maxMCPImportEntries enforces before any
+// entry is even processed, and recordUnsupported's defensive count bound
+// reinforces), but that is not the most rows such a write can ever
+// contain: a whole-run failure discovered only after some or all of
+// those named entries already committed (a canceled context, or another
+// repository failure ImportJSON cannot attribute to a single entry) is
+// folded in as one additional, bounded "_document" entry alongside them
+// (see the mcpregistry package's own recordDocumentRefusal) — never
+// replacing them. The +1 reserves exactly that one extra slot, so a
+// single legitimate run that both names the maximum number of entries
+// and is later interrupted this way can still persist and read back all
+// of its own issues without ever being misread as an over-cap,
+// "somehow already exceeds it" condition; see MCPRegistrySnapshot's own
+// IssuesOverCap field for what happens if some other write somehow
+// exceeds even this already-reserved bound.
+const MaxMCPImportIssues = MaxNonBundledMCPServers + 1
 
 var (
 	ErrMCPServerNotFound         = errors.New("MCP server not found")

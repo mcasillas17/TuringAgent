@@ -546,6 +546,199 @@ func TestImportJSONTokenSentinelWithBackslashAsSchemaMapKeyStillRefusesEntryFail
 	assertDatabaseSentinelFreeExceptSealedToken(t, database, sentinel)
 }
 
+// buildImportTools' token-leak scan must also catch a configured bearer
+// token whose matching representation inside a tool's schema is not a
+// JSON string at all: here, a JSON *number*. mcpRawMetadataContainsToken
+// only ever inspects strings — a map key, or a string value nested
+// anywhere inside the decoded schema — so a schema value that decodes to
+// a Go float64 (never a string) passed through that scan silently, even
+// though json.Marshal renders it, verbatim, as the token's own digits
+// once the schema is serialized into the schemaJSON this package actually
+// stores. The token is chosen to look exactly like a JSON number so it
+// can be embedded unquoted in the schema below.
+func TestImportJSONTokenSentinelAsNumericSchemaValueRefusesEntryFailClosedAndSentinelFree(t *testing.T) {
+	const sentinel = "48217395104"
+	database, service, repo := newSentinelSweepableRegistryService(t)
+
+	document, err := json.Marshal(map[string]any{
+		"mcpServers": map[string]any{
+			"vendor": map[string]any{
+				"url":     "https://vendor.example/mcp",
+				"headers": map[string]string{"Authorization": "Bearer " + sentinel},
+				"tools": []map[string]any{
+					{
+						"name": "vendor.lookup",
+						"inputSchema": map[string]any{
+							"type":    "object",
+							"minimum": json.Number(sentinel),
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.ImportJSON(context.Background(), document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Imported) != 0 {
+		t.Fatalf("Imported = %v, want none: a schema carrying the configured token as a numeric value must refuse the whole entry", report.Imported)
+	}
+	reason, refused := report.Unsupported["vendor"]
+	if !refused {
+		t.Fatalf("Unsupported = %+v, want vendor refused", report.Unsupported)
+	}
+	if reason != mcpToolDefinitionRefusedMessage {
+		t.Fatalf("reason = %q, want the fixed generic %q", reason, mcpToolDefinitionRefusedMessage)
+	}
+	assertStringSentinelFree(t, "unsupported reason", reason, sentinel)
+	if _, err := repo.GetMCPServerByName(context.Background(), "vendor"); err != repository.ErrMCPServerNotFound {
+		t.Fatalf("err = %v, want ErrMCPServerNotFound: no row may remain after a fail-closed refusal", err)
+	}
+	assertDatabaseSentinelFreeExceptSealedToken(t, database, sentinel)
+}
+
+// The boolean counterpart: a token equal to the literal text "true" or
+// "false" is exactly as findable in a schema's JSON boolean value once
+// serialized as it would be in a string value — but, like the numeric
+// case above, a Go bool never passes through mcpRawMetadataContainsToken's
+// string-only scan.
+func TestImportJSONTokenSentinelAsBooleanSchemaValueRefusesEntryFailClosedAndSentinelFree(t *testing.T) {
+	const sentinel = "true"
+	database, service, repo := newSentinelSweepableRegistryService(t)
+
+	document, err := json.Marshal(map[string]any{
+		"mcpServers": map[string]any{
+			"vendor": map[string]any{
+				"url":     "https://vendor.example/mcp",
+				"headers": map[string]string{"Authorization": "Bearer " + sentinel},
+				"tools": []map[string]any{
+					{
+						"name": "vendor.lookup",
+						"inputSchema": map[string]any{
+							"type":     "object",
+							"readOnly": true,
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.ImportJSON(context.Background(), document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Imported) != 0 {
+		t.Fatalf("Imported = %v, want none: a schema carrying the configured token as a boolean value must refuse the whole entry", report.Imported)
+	}
+	reason, refused := report.Unsupported["vendor"]
+	if !refused {
+		t.Fatalf("Unsupported = %+v, want vendor refused", report.Unsupported)
+	}
+	if reason != mcpToolDefinitionRefusedMessage {
+		t.Fatalf("reason = %q, want the fixed generic %q", reason, mcpToolDefinitionRefusedMessage)
+	}
+	if _, err := repo.GetMCPServerByName(context.Background(), "vendor"); err != repository.ErrMCPServerNotFound {
+		t.Fatalf("err = %v, want ErrMCPServerNotFound: no row may remain after a fail-closed refusal", err)
+	}
+	assertDatabaseSentinelFreeExceptSealedToken(t, database, sentinel)
+}
+
+// The JSON-null counterpart: a token equal to the literal text "null" —
+// json.Unmarshal decodes a JSON null into an untyped nil interface, which
+// (like the float64 and bool cases above) is not a string
+// mcpRawMetadataContainsToken's recursive scan ever inspects, even though
+// json.Marshal renders it back out as the literal text "null" once the
+// schema is serialized.
+func TestImportJSONTokenSentinelAsNullSchemaValueRefusesEntryFailClosedAndSentinelFree(t *testing.T) {
+	const sentinel = "null"
+	database, service, repo := newSentinelSweepableRegistryService(t)
+
+	document, err := json.Marshal(map[string]any{
+		"mcpServers": map[string]any{
+			"vendor": map[string]any{
+				"url":     "https://vendor.example/mcp",
+				"headers": map[string]string{"Authorization": "Bearer " + sentinel},
+				"tools": []map[string]any{
+					{
+						"name": "vendor.lookup",
+						"inputSchema": map[string]any{
+							"type":    "object",
+							"default": nil,
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := service.ImportJSON(context.Background(), document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Imported) != 0 {
+		t.Fatalf("Imported = %v, want none: a schema carrying the configured token as a null value must refuse the whole entry", report.Imported)
+	}
+	reason, refused := report.Unsupported["vendor"]
+	if !refused {
+		t.Fatalf("Unsupported = %+v, want vendor refused", report.Unsupported)
+	}
+	if reason != mcpToolDefinitionRefusedMessage {
+		t.Fatalf("reason = %q, want the fixed generic %q", reason, mcpToolDefinitionRefusedMessage)
+	}
+	if _, err := repo.GetMCPServerByName(context.Background(), "vendor"); err != repository.ErrMCPServerNotFound {
+		t.Fatalf("err = %v, want ErrMCPServerNotFound: no row may remain after a fail-closed refusal", err)
+	}
+	assertDatabaseSentinelFreeExceptSealedToken(t, database, sentinel)
+}
+
+// TestBuildImportToolsRefusesStructuralSpanningToken proves the schema
+// scan catches a token that never exists as a substring of any single
+// decoded string, number, bool, or null value at all — only across the
+// structural JSON syntax json.Marshal emits around them (here, the
+// quote-colon-quote between every object key and its value). This is
+// exercised as a direct, unexported-call unit test of buildImportTools —
+// not through the full ImportJSON pipeline the tests above use — because
+// a token this short and this structural can never be registered as a
+// real bearer token in the first place: every canonical http(s) URL
+// itself contains "://", so tokenAppearsInPublicMetadata
+// (validateServerDefinition, checked before buildImportTools ever runs)
+// would refuse it as matching the server's own public URL regardless of
+// its schema. Calling buildImportTools directly isolates exactly the
+// schema-scan behavior this finding is about, independent of that
+// unrelated, already-covered collision.
+func TestBuildImportToolsRefusesStructuralSpanningToken(t *testing.T) {
+	const token = `":"`
+	// No explicit schema properties at all: buildImportTools always
+	// injects "type":"object" into the schema it serializes (see its own
+	// schema["type"] = "object" assignment), so the mere act of
+	// serializing *any* schema — even an empty one — already produces
+	// {"type":"object"}, which contains the token structurally. Before
+	// this fix, buildImportTools never re-scanned that final serialized
+	// text, so this exact case silently built and returned a
+	// repository.MCPServerTool.
+	_, err := buildImportTools(repository.MCPServerTierRemoteURL, "vendor", []mcpJSONTool{
+		{Name: "vendor.lookup"},
+	}, token)
+	if err == nil {
+		t.Fatal("a schema whose only serialized text contains the token structurally must refuse the tool snapshot")
+	}
+	if err.Error() != mcpToolDefinitionRefusedMessage {
+		t.Fatalf("err = %q, want the fixed generic %q", err.Error(), mcpToolDefinitionRefusedMessage)
+	}
+}
+
 // A tool's "description" is never stored or returned (repository.MCPServerTool
 // has no field for it), but a configured bearer token appearing verbatim in
 // one must still refuse the whole entry the same way a token in the name

@@ -797,7 +797,16 @@ func mcpRawMetadataContainsToken(value any, token string) bool {
 // decoded schema value via mcpRawMetadataContainsToken — before
 // json.Marshal below ever serializes it — precisely so a token containing
 // a quote or backslash cannot hide behind whatever escaping that encoding
-// step would apply to it.
+// step would apply to it. A second scan runs after that same
+// json.Marshal, over the exact schemaJSON text this function is about to
+// store: mcpRawMetadataContainsToken only ever inspects strings (a map
+// key, or a string value), so a token equal to the literal text of a
+// JSON number, boolean, or null schema value — none of which decode to a
+// Go string — would otherwise pass it silently, and a token that only
+// ever exists across a structural boundary json.Marshal itself
+// introduces (the quote-colon-quote between a key and its value, for
+// instance) can never be found by a scan of decoded values at all,
+// regardless of type. Neither scan replaces the other.
 //
 // A static snapshot is bounded by the exact same maxMCPTools/
 // maxMCPToolBytes limits mcpClient.listTools applies to a live
@@ -861,6 +870,22 @@ func buildImportTools(tier repository.MCPServerTier, serverName string, rawTools
 			return nil, fmt.Errorf("tool %q inputSchema is invalid", tool.Name)
 		}
 		schemaJSON := string(encoded)
+		// A second, post-marshal scan of the exact schemaJSON text this
+		// package is about to store — never a replacement for the
+		// decoded scan above, which remains the only way to catch a
+		// token containing a quote or backslash (see
+		// mcpRawMetadataContainsToken's own doc comment). This one
+		// catches what that recursive, strings-only walk structurally
+		// cannot: a token equal to the literal serialized text of a JSON
+		// number, boolean, or null schema value (none of those decode to
+		// a Go string, so the scan above never inspects them), and a
+		// token that only ever exists across a structural boundary
+		// json.Marshal introduces — such as the quote-colon-quote
+		// between a key and its value — that no single decoded string,
+		// number, bool, or null value ever contains on its own.
+		if token != "" && strings.Contains(schemaJSON, token) {
+			return nil, errors.New(mcpToolDefinitionRefusedMessage)
+		}
 		size := len(tool.Name) + len(schemaJSON) + len(tool.Description)
 		if size > maxMCPToolBytes-encodedBytes {
 			return nil, fmt.Errorf("static tools snapshot exceeds encoded descriptor limit of %d bytes", maxMCPToolBytes)
