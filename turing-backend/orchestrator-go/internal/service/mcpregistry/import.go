@@ -1174,13 +1174,21 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (report ImportRepo
 			// doc comment. No row mutation, no sealed token, and the
 			// refusal is recorded exactly like any other Unsupported
 			// entry: a corrected reimport with an unrelated token still
-			// adopts/withdraws/reconciles as before.
+			// adopts/withdraws/reconciles as before. The reason recorded
+			// is the one fixed, generic mcpToolDefinitionRefusedMessage
+			// every other malformed/refused mcp.json entry already uses
+			// — not the explicit errMCPTokenMatchesRetainedToolMetadata
+			// reason RegisterMcpServer returns for the identical
+			// collision — since a file import's refusal must never
+			// confirm to whoever controls that file that a token/tool
+			// metadata comparison is what tripped (see
+			// placeholderAdoptionTokenCollision's own doc comment).
 			collides, cerr := placeholderAdoptionTokenCollision(ctx, s.repo, existing.ID, token)
 			if cerr != nil {
 				return report, fmt.Errorf("list MCP server %q tools: %w", name, cerr)
 			}
 			if collides {
-				recordUnsupported(report.Unsupported, name, errMCPTokenMatchesRetainedToolMetadata.Error())
+				recordUnsupported(report.Unsupported, name, mcpToolDefinitionRefusedMessage)
 				continue
 			}
 		case errors.Is(err, repository.ErrMCPServerNotFound):
@@ -2151,12 +2159,20 @@ func tokenAppearsInRetainedToolMetadata(token string, tools []repository.MCPServ
 // candidate, it calls this with that row's id and the new (already
 // normalized) token, before ever calling sealServerToken or the
 // repository's own Register/ImportMCPServer. A true result must refuse the
-// whole call the same generic, sentinel-free way rotation does — via the
-// package's one shared errMCPTokenMatchesRetainedToolMetadata reason —
-// leaving the placeholder's row, and its retained tools, completely
-// untouched: without this, a chosen token could round-trip straight back
-// out through the very register/import response (or a later List) whose
-// descriptor still carries the adopted placeholder's own retained tool.
+// whole call, leaving the placeholder's row, and its retained tools,
+// completely untouched: without this, a chosen token could round-trip
+// straight back out through the very register/import response (or a
+// later List) whose descriptor still carries the adopted placeholder's
+// own retained tool. The two callers differ in exactly what they say
+// about the refusal, though: RegisterMcpServer is an authenticated RPC,
+// so it returns the explicit, package-shared
+// errMCPTokenMatchesRetainedToolMetadata reason, the same one rotation
+// uses. ImportJSON instead folds the identical refusal into the one
+// fixed, generic mcpToolDefinitionRefusedMessage every other malformed or
+// refused mcp.json entry already uses — never naming the token, the
+// tool, or the word "metadata" — so an mcp.json entry (or whoever
+// controls it) cannot distinguish this collision from any other reason
+// that same file's entry might be refused.
 //
 // Skipped entirely for an empty token, mirroring
 // rotateServerTokenLocked's own optimization for the identical reason:
@@ -2186,11 +2202,29 @@ func placeholderAdoptionTokenCollision(ctx context.Context, repo *repository.Rep
 // normalized the same way for both callers, and — once normalized — must
 // not appear verbatim in the name or canonical URL it is about to be
 // paired with (see tokenAppearsInPublicMetadata).
+//
+// rawURL is trimmed of leading/trailing whitespace before it ever reaches
+// classifyImportedURL, matching what the Flutter client's own registration
+// form already does to the URL text field before submitting it
+// (`_url.text.trim()` in workspace_pages.dart). Without this, the two
+// callers would disagree in ways url.Parse itself makes worse, not just
+// cosmetically different: trailing whitespace survives as part of
+// url.Parse's Path and comes back out percent-encoded (a trailing space
+// becomes a literal "%20" in the stored/returned canonical URL) rather
+// than being classified the same as the same URL with no trailing space,
+// and leading whitespace makes url.Parse fail outright ("first path
+// segment in URL cannot contain colon") for an otherwise well-formed
+// https://... value — refusing an entry a client that trims first would
+// have accepted. Trimming once, here, before either tier's own checks
+// run, keeps a direct RegisterMcpServer/RotateMcpServerToken call and an
+// mcp.json import in exact agreement with each other and with the
+// client's own pre-trimmed input, for both the remote-URL and
+// local-container tiers.
 func validateServerDefinition(name, rawURL string, requestedTier *repository.MCPServerTier, token string) (validatedMCPServer, error) {
 	if err := validateMCPServerName(name); err != nil {
 		return validatedMCPServer{}, err
 	}
-	tier, canonicalURL, err := classifyImportedURL(rawURL)
+	tier, canonicalURL, err := classifyImportedURL(strings.TrimSpace(rawURL))
 	if err != nil {
 		return validatedMCPServer{}, err
 	}

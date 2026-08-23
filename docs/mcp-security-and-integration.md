@@ -504,26 +504,45 @@ This intentionally may refuse a short, coincidentally-ambiguous token
 that happens to share characters with an unrelated name/URL substring —
 the secrecy invariant wins over that inconvenience.
 
-Rotation runs one further check the shared registration/import path has no
-equivalent for, because only rotation can ever reach it: before a new,
-nonempty token is sealed or persisted, still under that server's own
-credential lock, it loads every tool retained for the server — present
-*and* withdrawn alike (`ListMCPServerTools` never filters by `present`) —
-and refuses the same generic, sentinel-free way if the token appears
-verbatim in any one tool's own name or its exact stored `schema_json`
-representation. A tool descriptor is exactly as public as a server's own
-name/url: every list/get/rotate response returns it, withdrawn tools
-included, so a token recoverable from one can never actually be secret
-either. The comparison reuses the same two-scan pairing the mcp.json
-token-in-tool-metadata check above runs at import time — a decoded-value
-walk (catching a token containing a quote or backslash, which the stored
-text escapes) plus a raw-text scan of the stored JSON itself (catching a
-token equal to the literal serialized text of a JSON number, boolean, or
-null value, or one that only spans a structural boundary `json.Marshal`
-introduced) — just applied to already-*stored* schema text instead of
-freshly-decoded caller input, since that is all rotation ever has to
-compare against. Skipped entirely when the bearer is being cleared (an
-empty token can never collide with anything).
+Rotation runs one further check: before a new, nonempty token is sealed or
+persisted, still under that server's own credential lock, it loads every
+tool retained for the server — present *and* withdrawn alike
+(`ListMCPServerTools` never filters by `present`) — and refuses the same
+generic, sentinel-free way if the token appears verbatim in any one tool's
+own name or its exact stored `schema_json` representation. A tool
+descriptor is exactly as public as a server's own name/url: every
+list/get/rotate response returns it, withdrawn tools included, so a token
+recoverable from one can never actually be secret either. The comparison
+reuses the same two-scan pairing the mcp.json token-in-tool-metadata check
+above runs at import time — a decoded-value walk (catching a token
+containing a quote or backslash, which the stored text escapes) plus a
+raw-text scan of the stored JSON itself (catching a token equal to the
+literal serialized text of a JSON number, boolean, or null value, or one
+that only spans a structural boundary `json.Marshal` introduced) — just
+applied to already-*stored* schema text instead of freshly-decoded caller
+input, since that is all rotation ever has to compare against. Skipped
+entirely when the bearer is being cleared (an empty token can never
+collide with anything).
+
+Rotation is not the only path that reaches this guard. `RegisterMcpServer`
+and file import (`ImportJSON`) reach it too, specifically when the name
+being registered/imported names an existing legacy migration-0016
+placeholder (`url == ""`, disabled, non-bundled — see below): before that
+placeholder's row is adopted, sealed, or touched in any way, both paths
+load its retained tools — present and withdrawn alike, exactly as rotation
+does — and refuse the adoption if the new token appears verbatim in any
+one of them, the same guard rotation runs. A fresh registration/import (no
+existing placeholder of that name) never runs this extra read at all; only
+adoption of a url-empty placeholder can. How that shared refusal surfaces,
+however, differs by path: `RegisterMcpServer`, an authenticated RPC,
+returns the explicit `errMCPTokenMatchesRetainedToolMetadata` reason as its
+`InvalidArgument` status, same as rotation does. File import instead folds
+the identical refusal into the one fixed, generic `server entry is
+invalid` message every other malformed or refused mcp.json entry already
+uses (see above) — deliberately never naming the token, the tool, or the
+word "metadata" — so an mcp.json entry (or whoever controls it) cannot
+distinguish a retained-tool-token collision from any other reason that
+same file's entry might be refused.
 
 A per-server credential lock — one `sync.RWMutex` per server id, created on
 first use and keyed by that id — fences a rotation against a concurrent call

@@ -3,6 +3,7 @@ package mcpregistry
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
@@ -251,8 +252,18 @@ func TestImportJSONRefusesTokenMatchingRetainedPlaceholderToolName(t *testing.T)
 	if !ok {
 		t.Fatalf("Unsupported = %+v, want an entry for vendor", report.Unsupported)
 	}
-	if reason != errMCPTokenMatchesRetainedToolMetadata.Error() {
-		t.Fatalf("reason = %q, want the fixed reason %q", reason, errMCPTokenMatchesRetainedToolMetadata.Error())
+	// Unlike RegisterMcpServer's identical collision (see
+	// TestRegisterMcpServerRefusesTokenMatchingRetainedPlaceholderToolName
+	// above), a file import's refusal must never say why: it uses the
+	// one fixed, generic mcpToolDefinitionRefusedMessage every other
+	// malformed/refused mcp.json entry already uses, not the explicit
+	// errMCPTokenMatchesRetainedToolMetadata reason, so an mcp.json entry
+	// can never distinguish this collision from any other refusal.
+	if reason != mcpToolDefinitionRefusedMessage {
+		t.Fatalf("reason = %q, want the fixed generic reason %q", reason, mcpToolDefinitionRefusedMessage)
+	}
+	if strings.Contains(strings.ToLower(reason), "token") || strings.Contains(strings.ToLower(reason), "metadata") {
+		t.Fatalf("reason = %q, must not name token/metadata", reason)
 	}
 	current, getErr := repo.GetMCPServer(ctx, placeholder.Server.ID)
 	if getErr != nil {
@@ -287,8 +298,11 @@ func TestImportJSONRefusesTokenMatchingRetainedPlaceholderToolSchema(t *testing.
 	if !ok {
 		t.Fatalf("Unsupported = %+v, want an entry for vendor", report.Unsupported)
 	}
-	if reason != errMCPTokenMatchesRetainedToolMetadata.Error() {
-		t.Fatalf("reason = %q, want the fixed reason %q", reason, errMCPTokenMatchesRetainedToolMetadata.Error())
+	if reason != mcpToolDefinitionRefusedMessage {
+		t.Fatalf("reason = %q, want the fixed generic reason %q", reason, mcpToolDefinitionRefusedMessage)
+	}
+	if strings.Contains(strings.ToLower(reason), "token") || strings.Contains(strings.ToLower(reason), "metadata") {
+		t.Fatalf("reason = %q, must not name token/metadata", reason)
 	}
 	current, getErr := repo.GetMCPServer(ctx, placeholder.Server.ID)
 	if getErr != nil {
@@ -343,8 +357,11 @@ func TestImportJSONRefusesTokenMatchingWithdrawnPlaceholderToolNameAndSchema(t *
 			if !ok {
 				t.Fatalf("Unsupported = %+v, want an entry for vendor", report.Unsupported)
 			}
-			if reason != errMCPTokenMatchesRetainedToolMetadata.Error() {
-				t.Fatalf("reason = %q, want the fixed reason %q", reason, errMCPTokenMatchesRetainedToolMetadata.Error())
+			if reason != mcpToolDefinitionRefusedMessage {
+				t.Fatalf("reason = %q, want the fixed generic reason %q", reason, mcpToolDefinitionRefusedMessage)
+			}
+			if strings.Contains(strings.ToLower(reason), "token") || strings.Contains(strings.ToLower(reason), "metadata") {
+				t.Fatalf("reason = %q, must not name token/metadata", reason)
 			}
 			current, getErr := repo.GetMCPServer(ctx, placeholder.Server.ID)
 			if getErr != nil {

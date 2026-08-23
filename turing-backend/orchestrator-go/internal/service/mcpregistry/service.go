@@ -538,7 +538,15 @@ func (s *Server) ListPseudoServerTools(ctx context.Context, req *turingv1.ListPs
 	for _, tool := range tools {
 		descriptor, err := toolDescriptor(tool)
 		if err != nil {
-			return nil, err
+			// toolDescriptor's own error (e.g. a stored schema that
+			// fails to unmarshal) is never returned as-is: it is
+			// neither a gRPC status (so it would surface as the
+			// unhelpful default codes.Unknown) nor safe to assume is
+			// free of anything sensitive — a raw json.Unmarshal error
+			// can repeat part of the offending stored text — so it is
+			// mapped to the same fixed, generic Internal status every
+			// other toolDescriptor call site in this file already uses.
+			return nil, status.Error(codes.Internal, "list pseudo-server tools failed")
 		}
 		response.Tools = append(response.Tools, descriptor)
 	}
