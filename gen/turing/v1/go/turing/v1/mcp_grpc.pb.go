@@ -25,6 +25,9 @@ const (
 	McpRegistryService_UpdateToolPolicyByName_FullMethodName = "/turing.v1.McpRegistryService/UpdateToolPolicyByName"
 	McpRegistryService_ListPseudoServerTools_FullMethodName  = "/turing.v1.McpRegistryService/ListPseudoServerTools"
 	McpRegistryService_DeleteMcpServer_FullMethodName        = "/turing.v1.McpRegistryService/DeleteMcpServer"
+	McpRegistryService_RegisterMcpServer_FullMethodName      = "/turing.v1.McpRegistryService/RegisterMcpServer"
+	McpRegistryService_ReimportMcpJson_FullMethodName        = "/turing.v1.McpRegistryService/ReimportMcpJson"
+	McpRegistryService_RotateMcpServerToken_FullMethodName   = "/turing.v1.McpRegistryService/RotateMcpServerToken"
 	McpRegistryService_CallRegisteredMcpTool_FullMethodName  = "/turing.v1.McpRegistryService/CallRegisteredMcpTool"
 )
 
@@ -38,6 +41,9 @@ type McpRegistryServiceClient interface {
 	UpdateToolPolicyByName(ctx context.Context, in *UpdateToolPolicyByNameRequest, opts ...grpc.CallOption) (*McpToolDescriptor, error)
 	ListPseudoServerTools(ctx context.Context, in *ListPseudoServerToolsRequest, opts ...grpc.CallOption) (*ListPseudoServerToolsResponse, error)
 	DeleteMcpServer(ctx context.Context, in *DeleteMcpServerRequest, opts ...grpc.CallOption) (*DeleteMcpServerResponse, error)
+	RegisterMcpServer(ctx context.Context, in *RegisterMcpServerRequest, opts ...grpc.CallOption) (*McpServerDescriptor, error)
+	ReimportMcpJson(ctx context.Context, in *ReimportMcpJsonRequest, opts ...grpc.CallOption) (*ReimportMcpJsonResponse, error)
+	RotateMcpServerToken(ctx context.Context, in *RotateMcpServerTokenRequest, opts ...grpc.CallOption) (*McpServerDescriptor, error)
 	CallRegisteredMcpTool(ctx context.Context, in *CallRegisteredMcpToolRequest, opts ...grpc.CallOption) (*CallRegisteredMcpToolResponse, error)
 }
 
@@ -109,6 +115,36 @@ func (c *mcpRegistryServiceClient) DeleteMcpServer(ctx context.Context, in *Dele
 	return out, nil
 }
 
+func (c *mcpRegistryServiceClient) RegisterMcpServer(ctx context.Context, in *RegisterMcpServerRequest, opts ...grpc.CallOption) (*McpServerDescriptor, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(McpServerDescriptor)
+	err := c.cc.Invoke(ctx, McpRegistryService_RegisterMcpServer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *mcpRegistryServiceClient) ReimportMcpJson(ctx context.Context, in *ReimportMcpJsonRequest, opts ...grpc.CallOption) (*ReimportMcpJsonResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReimportMcpJsonResponse)
+	err := c.cc.Invoke(ctx, McpRegistryService_ReimportMcpJson_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *mcpRegistryServiceClient) RotateMcpServerToken(ctx context.Context, in *RotateMcpServerTokenRequest, opts ...grpc.CallOption) (*McpServerDescriptor, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(McpServerDescriptor)
+	err := c.cc.Invoke(ctx, McpRegistryService_RotateMcpServerToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *mcpRegistryServiceClient) CallRegisteredMcpTool(ctx context.Context, in *CallRegisteredMcpToolRequest, opts ...grpc.CallOption) (*CallRegisteredMcpToolResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CallRegisteredMcpToolResponse)
@@ -129,6 +165,9 @@ type McpRegistryServiceServer interface {
 	UpdateToolPolicyByName(context.Context, *UpdateToolPolicyByNameRequest) (*McpToolDescriptor, error)
 	ListPseudoServerTools(context.Context, *ListPseudoServerToolsRequest) (*ListPseudoServerToolsResponse, error)
 	DeleteMcpServer(context.Context, *DeleteMcpServerRequest) (*DeleteMcpServerResponse, error)
+	RegisterMcpServer(context.Context, *RegisterMcpServerRequest) (*McpServerDescriptor, error)
+	ReimportMcpJson(context.Context, *ReimportMcpJsonRequest) (*ReimportMcpJsonResponse, error)
+	RotateMcpServerToken(context.Context, *RotateMcpServerTokenRequest) (*McpServerDescriptor, error)
 	CallRegisteredMcpTool(context.Context, *CallRegisteredMcpToolRequest) (*CallRegisteredMcpToolResponse, error)
 	mustEmbedUnimplementedMcpRegistryServiceServer()
 }
@@ -157,6 +196,15 @@ func (UnimplementedMcpRegistryServiceServer) ListPseudoServerTools(context.Conte
 }
 func (UnimplementedMcpRegistryServiceServer) DeleteMcpServer(context.Context, *DeleteMcpServerRequest) (*DeleteMcpServerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteMcpServer not implemented")
+}
+func (UnimplementedMcpRegistryServiceServer) RegisterMcpServer(context.Context, *RegisterMcpServerRequest) (*McpServerDescriptor, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterMcpServer not implemented")
+}
+func (UnimplementedMcpRegistryServiceServer) ReimportMcpJson(context.Context, *ReimportMcpJsonRequest) (*ReimportMcpJsonResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReimportMcpJson not implemented")
+}
+func (UnimplementedMcpRegistryServiceServer) RotateMcpServerToken(context.Context, *RotateMcpServerTokenRequest) (*McpServerDescriptor, error) {
+	return nil, status.Error(codes.Unimplemented, "method RotateMcpServerToken not implemented")
 }
 func (UnimplementedMcpRegistryServiceServer) CallRegisteredMcpTool(context.Context, *CallRegisteredMcpToolRequest) (*CallRegisteredMcpToolResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CallRegisteredMcpTool not implemented")
@@ -290,6 +338,60 @@ func _McpRegistryService_DeleteMcpServer_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _McpRegistryService_RegisterMcpServer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterMcpServerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(McpRegistryServiceServer).RegisterMcpServer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: McpRegistryService_RegisterMcpServer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(McpRegistryServiceServer).RegisterMcpServer(ctx, req.(*RegisterMcpServerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _McpRegistryService_ReimportMcpJson_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReimportMcpJsonRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(McpRegistryServiceServer).ReimportMcpJson(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: McpRegistryService_ReimportMcpJson_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(McpRegistryServiceServer).ReimportMcpJson(ctx, req.(*ReimportMcpJsonRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _McpRegistryService_RotateMcpServerToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RotateMcpServerTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(McpRegistryServiceServer).RotateMcpServerToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: McpRegistryService_RotateMcpServerToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(McpRegistryServiceServer).RotateMcpServerToken(ctx, req.(*RotateMcpServerTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _McpRegistryService_CallRegisteredMcpTool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CallRegisteredMcpToolRequest)
 	if err := dec(in); err != nil {
@@ -338,6 +440,18 @@ var McpRegistryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteMcpServer",
 			Handler:    _McpRegistryService_DeleteMcpServer_Handler,
+		},
+		{
+			MethodName: "RegisterMcpServer",
+			Handler:    _McpRegistryService_RegisterMcpServer_Handler,
+		},
+		{
+			MethodName: "ReimportMcpJson",
+			Handler:    _McpRegistryService_ReimportMcpJson_Handler,
+		},
+		{
+			MethodName: "RotateMcpServerToken",
+			Handler:    _McpRegistryService_RotateMcpServerToken_Handler,
 		},
 		{
 			MethodName: "CallRegisteredMcpTool",

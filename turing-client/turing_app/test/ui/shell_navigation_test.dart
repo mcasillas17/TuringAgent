@@ -192,6 +192,135 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('adding a server sends the form and keeps the token obscured', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..mcpRegistry = McpRegistrySnapshot(
+          servers: const [],
+          unsupported: const [],
+        );
+      await _pumpShell(tester, api: api, size: _desktop);
+      await tester.tap(find.text('MCPs'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Add server'));
+      await tester.pumpAndSettle();
+      final dialog = find.byType(AlertDialog);
+      final fields = find.descendant(
+        of: dialog,
+        matching: find.byType(TextField),
+      );
+      await tester.enterText(fields.at(0), 'vendor');
+      await tester.enterText(fields.at(1), 'https://vendor.example/mcp');
+      await tester.enterText(fields.at(2), 'sekrit-token');
+      // The token never renders: the field is obscured, so the glyphs on
+      // screen are bullets, not the secret.
+      expect(tester.widget<TextField>(fields.at(2)).obscureText, isTrue);
+      await tester.tap(
+        find.descendant(of: dialog, matching: find.text('Add server')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(api.registeredMcpServers, [
+        (
+          name: 'vendor',
+          url: 'https://vendor.example/mcp',
+          bearerToken: 'sekrit-token',
+        ),
+      ]);
+    });
+
+    testWidgets('re-import shows the report, refusals included', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..mcpRegistry = McpRegistrySnapshot(
+          servers: const [],
+          unsupported: const [],
+        )
+        ..reimportReport = McpReimportReport(
+          imported: const ['vendor'],
+          unsupported: const [
+            UnsupportedMcpServer(
+              name: 'runner',
+              reason: 'stdio/command MCP servers are unsupported',
+            ),
+          ],
+        );
+      await _pumpShell(tester, api: api, size: _desktop);
+      await tester.tap(find.text('MCPs'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Re-import mcp.json'));
+      await tester.pumpAndSettle();
+
+      expect(api.reimportCalls, 1);
+      expect(find.textContaining('vendor'), findsWidgets);
+      expect(find.textContaining('still disabled'), findsOneWidget);
+      expect(
+        find.textContaining('runner: stdio/command MCP servers'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('token rotation is offered per non-bundled server only', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..mcpRegistry = McpRegistrySnapshot(
+          servers: [
+            McpServer(
+              serverId: 'mcp_bundled_files',
+              name: 'files',
+              transport: 'http',
+              url: 'http://turing-mcp-files:7110/mcp',
+              tier: McpServerTier.bundled,
+              enabled: true,
+              liveness: McpServerLiveness.up,
+              statusMessage: '',
+              sandboxConfined: true,
+              tools: const [],
+            ),
+            McpServer(
+              serverId: 'mcp_vendor',
+              name: 'vendor',
+              transport: 'http',
+              url: 'https://vendor.example/mcp',
+              tier: McpServerTier.remoteUrl,
+              enabled: false,
+              liveness: McpServerLiveness.unknown,
+              statusMessage: '',
+              sandboxConfined: false,
+              tools: const [],
+            ),
+          ],
+          unsupported: const [],
+        );
+      await _pumpShell(tester, api: api, size: _desktop);
+      await tester.tap(find.text('MCPs'));
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Rotate token for files'), findsNothing);
+      await tester.tap(find.byTooltip('Rotate token for vendor'));
+      await tester.pumpAndSettle();
+      final dialog = find.byType(AlertDialog);
+      final field = find.descendant(
+        of: dialog,
+        matching: find.byType(TextField),
+      );
+      expect(tester.widget<TextField>(field).obscureText, isTrue);
+      await tester.enterText(field, 'rotated-token');
+      await tester.tap(
+        find.descendant(of: dialog, matching: find.text('Rotate')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(api.rotatedMcpTokens, [
+        (serverId: 'mcp_vendor', bearerToken: 'rotated-token'),
+      ]);
+    });
+
     testWidgets('Agents lists the local assistant and what you added', (
       tester,
     ) async {
@@ -2487,6 +2616,51 @@ class _FakeApi extends TuringApi
     required ToolPolicy policy,
   }) async {
     return ToolDescriptor(serverName: '', toolName: toolName, policy: policy);
+  }
+
+  final List<({String name, String url, String bearerToken})>
+  registeredMcpServers = [];
+  final List<({String serverId, String bearerToken})> rotatedMcpTokens = [];
+  McpReimportReport? reimportReport;
+  int reimportCalls = 0;
+
+  @override
+  Future<McpServer> registerMcpServer({
+    required String name,
+    required String url,
+    String bearerToken = '',
+  }) async {
+    registeredMcpServers.add((name: name, url: url, bearerToken: bearerToken));
+    return McpServer(
+      serverId: 'mcp_$name',
+      name: name,
+      transport: 'http',
+      url: url,
+      tier: McpServerTier.remoteUrl,
+      enabled: false,
+      liveness: McpServerLiveness.unknown,
+      statusMessage: '',
+      sandboxConfined: false,
+      tools: const [],
+    );
+  }
+
+  @override
+  Future<McpReimportReport> reimportMcpJson() async {
+    reimportCalls++;
+    return reimportReport ??
+        McpReimportReport(imported: const [], unsupported: const []);
+  }
+
+  @override
+  Future<McpServer> rotateMcpServerToken({
+    required String serverId,
+    String bearerToken = '',
+  }) async {
+    rotatedMcpTokens.add((serverId: serverId, bearerToken: bearerToken));
+    return mcpRegistry!.servers.firstWhere(
+      (server) => server.serverId == serverId,
+    );
   }
 
   /// A working in-memory automation library, so the Automations UI is tested

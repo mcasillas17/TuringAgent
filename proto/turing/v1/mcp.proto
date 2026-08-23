@@ -85,6 +85,30 @@ message DeleteMcpServerRequest {
 
 message DeleteMcpServerResponse {}
 
+message RegisterMcpServerRequest {
+  string name = 1;
+  // Absolute HTTP(S) endpoint; the tier is derived from the URL exactly as
+  // mcp.json import derives it, not chosen by the caller.
+  string url = 2;
+  // Optional bearer token. Write-only: sealed at rest, never echoed by any
+  // response, and absent from McpServerDescriptor by construction.
+  string bearer_token = 3;
+}
+
+message ReimportMcpJsonRequest {}
+
+message ReimportMcpJsonResponse {
+  repeated string imported = 1;
+  repeated UnsupportedMcpServer unsupported = 2;
+}
+
+message RotateMcpServerTokenRequest {
+  string server_id = 1;
+  // The replacement bearer token. Empty clears the stored token. Write-only,
+  // like RegisterMcpServerRequest.bearer_token.
+  string bearer_token = 2;
+}
+
 message CallRegisteredMcpToolRequest {
   string server_id = 1;
   string run_id = 2;
@@ -114,5 +138,8 @@ service McpRegistryService {
   rpc UpdateToolPolicyByName(UpdateToolPolicyByNameRequest) returns (McpToolDescriptor);
   rpc ListPseudoServerTools(ListPseudoServerToolsRequest) returns (ListPseudoServerToolsResponse);
   rpc DeleteMcpServer(DeleteMcpServerRequest) returns (DeleteMcpServerResponse);
+  rpc RegisterMcpServer(RegisterMcpServerRequest) returns (McpServerDescriptor);
+  rpc ReimportMcpJson(ReimportMcpJsonRequest) returns (ReimportMcpJsonResponse);
+  rpc RotateMcpServerToken(RotateMcpServerTokenRequest) returns (McpServerDescriptor);
   rpc CallRegisteredMcpTool(CallRegisteredMcpToolRequest) returns (CallRegisteredMcpToolResponse);
 }

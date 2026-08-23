@@ -138,6 +138,160 @@ class _McpsPageState extends State<McpsPage> {
     }
   }
 
+  Future<void> _registerServer() async {
+    final nameController = TextEditingController();
+    final urlController = TextEditingController();
+    final tokenController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Add MCP server'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(labelText: 'Name'),
+              autofocus: true,
+            ),
+            TextField(
+              controller: urlController,
+              decoration: const InputDecoration(
+                labelText: 'URL',
+                helperText:
+                    'HTTPS endpoint, or an http:// container host on the '
+                    'internal network. The tier is derived from the URL.',
+                helperMaxLines: 3,
+              ),
+            ),
+            TextField(
+              controller: tokenController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Bearer token (optional)',
+                helperText:
+                    'Stored sealed. Never shown again — rotate to replace.',
+                helperMaxLines: 2,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Add server'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await widget.apiClient.registerMcpServer(
+        name: nameController.text.trim(),
+        url: urlController.text.trim(),
+        bearerToken: tokenController.text,
+      );
+      if (mounted) _reload();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$error')));
+    }
+  }
+
+  Future<void> _reimport() async {
+    try {
+      final report = await widget.apiClient.reimportMcpJson();
+      if (!mounted) return;
+      _reload();
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('mcp.json re-import'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  report.imported.isEmpty
+                      ? 'No servers imported.'
+                      : 'Imported (still disabled until you enable them): '
+                            '${report.imported.join(', ')}',
+                ),
+                for (final entry in report.unsupported) ...[
+                  const SizedBox(height: 8),
+                  Text('${entry.name}: ${entry.reason}'),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$error')));
+    }
+  }
+
+  Future<void> _rotateToken(McpServer server) async {
+    final tokenController = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Rotate token for ${server.name}'),
+        content: TextField(
+          controller: tokenController,
+          obscureText: true,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'New bearer token',
+            helperText:
+                'Leave empty to clear the stored token. The current token '
+                'is never shown.',
+            helperMaxLines: 3,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Rotate'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await widget.apiClient.rotateMcpServerToken(
+        serverId: server.serverId,
+        bearerToken: tokenController.text,
+      );
+      if (mounted) _reload();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$error')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = AppColors.of(context);
@@ -161,14 +315,37 @@ class _McpsPageState extends State<McpsPage> {
           final registry =
               snapshot.data ??
               McpRegistrySnapshot(servers: const [], unsupported: const []);
+          final actions = Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: _registerServer,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add server'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _reimport,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('Re-import mcp.json'),
+              ),
+            ],
+          );
           if (registry.servers.isEmpty && registry.unsupported.isEmpty) {
-            return WorkspaceNotice(
-              icon: Icons.hub_outlined,
-              title: 'No tools discovered',
-              body:
-                  'Add entries to the mounted mcp.json file, then restart the '
-                  'backend to import them.',
-              onRetry: _reload,
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                actions,
+                const SizedBox(height: 12),
+                WorkspaceNotice(
+                  icon: Icons.hub_outlined,
+                  title: 'No tools discovered',
+                  body:
+                      'Add a server here, or edit the mounted mcp.json and '
+                      're-import — no restart needed either way.',
+                  onRetry: _reload,
+                ),
+              ],
             );
           }
           final servers = registry.servers.toList()
@@ -176,6 +353,8 @@ class _McpsPageState extends State<McpsPage> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              actions,
+              const SizedBox(height: 12),
               for (final unsupported in registry.unsupported) ...[
                 WorkspaceNotice(
                   icon: Icons.block_outlined,
@@ -195,6 +374,9 @@ class _McpsPageState extends State<McpsPage> {
                   onDelete: server.tier == McpServerTier.bundled
                       ? null
                       : () => _deleteServer(server),
+                  onRotateToken: server.tier == McpServerTier.bundled
+                      ? null
+                      : () => _rotateToken(server),
                   onPolicyChanged: (tool, policy) =>
                       _setToolPolicy(server, tool, policy),
                   pendingToolPolicies: _pendingToolPolicies,
@@ -215,6 +397,7 @@ class _ServerCard extends StatelessWidget {
     required this.palette,
     required this.onEnabledChanged,
     required this.onDelete,
+    required this.onRotateToken,
     required this.onPolicyChanged,
     required this.pendingToolPolicies,
   });
@@ -223,6 +406,7 @@ class _ServerCard extends StatelessWidget {
   final AppPalette palette;
   final ValueChanged<bool>? onEnabledChanged;
   final VoidCallback? onDelete;
+  final VoidCallback? onRotateToken;
   final void Function(ToolDescriptor tool, ToolPolicy policy) onPolicyChanged;
   final Set<String> pendingToolPolicies;
 
@@ -267,6 +451,12 @@ class _ServerCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     Switch(value: server.enabled, onChanged: onEnabledChanged),
+                    if (onRotateToken != null)
+                      IconButton(
+                        tooltip: 'Rotate token for ${server.name}',
+                        onPressed: onRotateToken,
+                        icon: const Icon(Icons.key_outlined, size: 18),
+                      ),
                     if (onDelete != null)
                       IconButton(
                         tooltip: 'Remove ${server.name}',

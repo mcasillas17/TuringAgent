@@ -24,4 +24,22 @@ mixin NoMcpRegistryApi {
       throw UnimplementedError(
         'this test does not exercise MCP server deletion',
       );
+
+  Future<McpServer> registerMcpServer({
+    required String name,
+    required String url,
+    String bearerToken = '',
+  }) async => throw UnimplementedError(
+    'this test does not exercise MCP server registration',
+  );
+
+  Future<McpReimportReport> reimportMcpJson() async =>
+      throw UnimplementedError('this test does not exercise mcp.json import');
+
+  Future<McpServer> rotateMcpServerToken({
+    required String serverId,
+    String bearerToken = '',
+  }) async => throw UnimplementedError(
+    'this test does not exercise MCP token rotation',
+  );
 }

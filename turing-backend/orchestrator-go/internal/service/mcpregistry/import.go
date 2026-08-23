@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
@@ -28,17 +29,26 @@ var (
 
 type Server struct {
 	turingv1.UnimplementedMcpRegistryServiceServer
-	repo         *repository.Repository
-	sealer       *secretbox.Sealer
-	httpClient   *http.Client
-	approvals    ApprovalEnforcer
-	notifier     RegistryChangeNotifier
-	clientMu     sync.Mutex
-	localClient  *http.Client
-	remoteClient *http.Client
+	repo          *repository.Repository
+	sealer        *secretbox.Sealer
+	httpClient    *http.Client
+	approvals     ApprovalEnforcer
+	notifier      RegistryChangeNotifier
+	mcpConfigPath string
+	clientMu      sync.Mutex
+	localClient   *http.Client
+	remoteClient  *http.Client
+}
+
+// SetMCPConfigPath names the mounted mcp.json so ReimportMcpJson can re-run
+// the startup import on demand. Empty means no file is mounted and the RPC
+// refuses legibly instead of guessing a path.
+func (s *Server) SetMCPConfigPath(path string) {
+	s.mcpConfigPath = path
 }
 
 type ImportReport struct {
+	Imported    []string
 	Unsupported map[string]string
 }
 
@@ -185,6 +195,12 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 			}
 		}
 	}
+	for name := range document.Servers {
+		if _, bad := report.Unsupported[name]; !bad {
+			report.Imported = append(report.Imported, name)
+		}
+	}
+	sort.Strings(report.Imported)
 	if err := s.repo.ReplaceMCPImportIssues(ctx, report.Unsupported); err != nil {
 		return ImportReport{}, fmt.Errorf("record mcp.json import issues: %w", err)
 	}

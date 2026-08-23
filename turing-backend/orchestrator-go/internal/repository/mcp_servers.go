@@ -569,3 +569,38 @@ func nullableBytes(value []byte) any {
 	}
 	return value
 }
+
+// ClearMCPImportTombstone lifts the import suppression for a name. Only the
+// explicit RegisterMcpServer path calls this: the user asking for the name by
+// hand is exactly the consent the tombstone was waiting for. File re-import
+// never clears a tombstone — a deletion must not be resurrected by a file.
+func (r *Repository) ClearMCPImportTombstone(ctx context.Context, name string) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM mcp_import_tombstones WHERE name = ?`, name)
+	return err
+}
+
+// SetMCPServerSealedToken replaces the stored sealed bearer token; nil clears
+// it. Bundled servers carry no caller-managed token and are refused. Tokens
+// are read fresh from this column at every dispatch, so there is no cached
+// client to invalidate on rotation.
+func (r *Repository) SetMCPServerSealedToken(ctx context.Context, serverID string, sealed []byte) error {
+	server, err := r.GetMCPServer(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	if server.Tier == MCPServerTierBundled {
+		return ErrMCPServerBundled
+	}
+	result, err := r.db.ExecContext(ctx, `UPDATE mcp_servers SET sealed_token = ? WHERE id = ?`, nullableBytes(sealed), serverID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ErrMCPServerNotFound
+	}
+	return nil
+}

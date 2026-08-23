@@ -21,7 +21,18 @@ subnet. An empty
 configured bundled bearer token denies every request rather than opening the
 service.
 
-The orchestrator imports `mcp/mcp.json` into SQLite. Import preserves a
+The orchestrator imports `mcp/mcp.json` into SQLite at startup, and the same
+import can be re-run on demand from the MCPs page (`ReimportMcpJson`) — no
+restart is required to pick up file edits. Servers can also be registered
+one at a time from the app (`RegisterMcpServer`), through the identical
+validation path: same name and reserved-name rules, same URL classification
+(the tier is derived from the URL, never chosen by the caller), same token
+sealing, same disabled-by-default arrival. The one deliberate difference:
+an explicit register clears the deletion tombstone for that name — the user
+asking for the name by hand is the consent the tombstone was waiting for —
+while file re-import never does. A stored bearer token can be replaced or
+cleared (`RotateMcpServerToken`); the token is write-only end to end, and no
+response, event, or audit row ever carries it back. Import preserves a
 previous user enablement decision only while the endpoint and tier are
 unchanged; repointing a server disables it and withdraws the old tool snapshot.
 An explicit empty `tools` snapshot withdraws prior tools, and policy edits
@@ -34,8 +45,9 @@ created for it. Malformed documents and entries whose token cannot be sealed
 are reported on the MCPs page without preventing the rest of the backend from
 starting. Imported servers can also be removed through the registry API.
 Removal writes a local import tombstone, so an unchanged `mcp.json` cannot
-silently recreate the server at the next restart; importing it again requires a
-new name.
+silently recreate the server at the next restart or re-import; bringing it
+back requires either a new name in the file or an explicit in-app
+registration of the old one.
 
 Local-container enablement performs bounded `tools/list` discovery. Remote
 enablement performs no network request: remote entries can carry an optional
