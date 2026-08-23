@@ -54,6 +54,12 @@ type ImportedMCPServer struct {
 	URL         string
 	SealedToken []byte
 	Tier        MCPServerTier
+	// ClearTombstone lifts the deletion suppression for this name inside the
+	// SAME transaction as the upsert, so a failed register cannot leave the
+	// name un-suppressed with no server created — the window in which a later
+	// file re-import would silently resurrect the deletion. Only the explicit
+	// RegisterMcpServer path sets this; file import never does.
+	ClearTombstone bool
 }
 
 type RemoteMCPServerEgress struct {
@@ -73,6 +79,13 @@ func (r *Repository) UpsertImportedMCPServer(ctx context.Context, input Imported
 		return MCPServerRecord{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if input.ClearTombstone {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM mcp_import_tombstones WHERE name = ?
+		`, input.Name); err != nil {
+			return MCPServerRecord{}, err
+		}
+	}
 	var suppressed int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM mcp_import_tombstones WHERE name = ?
@@ -570,19 +583,26 @@ func nullableBytes(value []byte) any {
 	return value
 }
 
-// ClearMCPImportTombstone lifts the import suppression for a name. Only the
-// explicit RegisterMcpServer path calls this: the user asking for the name by
-// hand is exactly the consent the tombstone was waiting for. File re-import
-// never clears a tombstone — a deletion must not be resurrected by a file.
-func (r *Repository) ClearMCPImportTombstone(ctx context.Context, name string) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM mcp_import_tombstones WHERE name = ?`, name)
-	return err
+// MCPServerNameInUse reports whether a server row already claims the name.
+// RegisterMcpServer refuses an existing name instead of upserting over it:
+// a silent upsert would re-point the URL and wipe or replace a stored token
+// nothing in the UI ever showed existed.
+func (r *Repository) MCPServerNameInUse(ctx context.Context, name string) (bool, error) {
+	var count int
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM mcp_servers WHERE name = ?
+	`, name).Scan(&count); err != nil {
+		return false, err
+	}
+	return count != 0, nil
 }
 
 // SetMCPServerSealedToken replaces the stored sealed bearer token; nil clears
 // it. Bundled servers carry no caller-managed token and are refused. Tokens
 // are read fresh from this column at every dispatch, so there is no cached
-// client to invalidate on rotation.
+// client to invalidate on rotation — but a stale liveness message ("down",
+// a 401) would outlive the fix, so the status resets to unknown in the same
+// transaction.
 func (r *Repository) SetMCPServerSealedToken(ctx context.Context, serverID string, sealed []byte) error {
 	server, err := r.GetMCPServer(ctx, serverID)
 	if err != nil {
@@ -591,7 +611,12 @@ func (r *Repository) SetMCPServerSealedToken(ctx context.Context, serverID strin
 	if server.Tier == MCPServerTierBundled {
 		return ErrMCPServerBundled
 	}
-	result, err := r.db.ExecContext(ctx, `UPDATE mcp_servers SET sealed_token = ? WHERE id = ?`, nullableBytes(sealed), serverID)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `UPDATE mcp_servers SET sealed_token = ? WHERE id = ?`, nullableBytes(sealed), serverID)
 	if err != nil {
 		return err
 	}
@@ -602,5 +627,12 @@ func (r *Repository) SetMCPServerSealedToken(ctx context.Context, serverID strin
 	if affected != 1 {
 		return ErrMCPServerNotFound
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE mcp_server_status
+		SET status = 'unknown', error = '', checked_at = NULL
+		WHERE mcp_server_id = ?
+	`, serverID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

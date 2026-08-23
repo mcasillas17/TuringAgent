@@ -34,8 +34,22 @@ func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMc
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	inUse, err := s.repo.MCPServerNameInUse(ctx, name)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "register MCP server failed")
+	}
+	if inUse {
+		// A silent upsert over an existing name would re-point its URL and
+		// wipe or replace a stored token nothing in the UI ever showed
+		// existed. Point at the explicit controls instead.
+		return nil, status.Error(codes.AlreadyExists, "a server with this name already exists; rotate its token or delete it first")
+	}
 	var sealed []byte
-	if token := req.GetBearerToken(); token != "" {
+	if raw := req.GetBearerToken(); raw != "" {
+		token, tokenErr := validateBearerToken(raw)
+		if tokenErr != nil {
+			return nil, status.Error(codes.InvalidArgument, tokenErr.Error())
+		}
 		sealed, err = s.sealer.Seal([]byte(token), []byte(name))
 		if err != nil {
 			if errors.Is(err, secretbox.ErrNoKey) {
@@ -44,14 +58,14 @@ func (s *Server) RegisterMcpServer(ctx context.Context, req *turingv1.RegisterMc
 			return nil, status.Error(codes.Internal, "seal MCP server token")
 		}
 	}
-	if err := s.repo.ClearMCPImportTombstone(ctx, name); err != nil {
-		return nil, status.Error(codes.Internal, "register MCP server failed")
-	}
 	server, err := s.repo.UpsertImportedMCPServer(ctx, repository.ImportedMCPServer{
 		Name:        name,
 		URL:         canonicalURL,
 		SealedToken: sealed,
 		Tier:        tier,
+		// Inside the upsert transaction, so a failed register cannot leave
+		// the name un-suppressed with no server created.
+		ClearTombstone: true,
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrMCPServerBundled) {
@@ -80,7 +94,18 @@ func (s *Server) ReimportMcpJson(ctx context.Context, _ *turingv1.ReimportMcpJso
 	}
 	report, err := s.ImportJSON(ctx, data)
 	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, boundedStatusMessage(err.Error()))
+		if errors.Is(err, errImportDecode) {
+			// Mirror the startup path: surface the decode failure on the
+			// MCPs page too, replacing any stale issues from the previous
+			// import rather than leaving them standing.
+			if recordErr := s.repo.ReplaceMCPImportIssues(ctx, map[string]string{
+				"_document": boundedStatusMessage(err.Error()),
+			}); recordErr != nil {
+				return nil, status.Error(codes.Internal, "re-import mcp.json failed")
+			}
+			return nil, status.Error(codes.FailedPrecondition, boundedStatusMessage(err.Error()))
+		}
+		return nil, status.Error(codes.Internal, "re-import mcp.json failed")
 	}
 	s.notifyRegistryChanged()
 	response := &turingv1.ReimportMcpJsonResponse{Imported: report.Imported}
@@ -103,6 +128,9 @@ func (s *Server) ReimportMcpJson(ctx context.Context, _ *turingv1.ReimportMcpJso
 // notification: the toolset is unchanged, and the next dispatch reads the
 // sealed token fresh (tokens are never cached with a client).
 func (s *Server) RotateMcpServerToken(ctx context.Context, req *turingv1.RotateMcpServerTokenRequest) (*turingv1.McpServerDescriptor, error) {
+	if req.GetServerId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "server_id is required")
+	}
 	server, err := s.repo.GetMCPServer(ctx, req.GetServerId())
 	if err != nil {
 		if errors.Is(err, repository.ErrMCPServerNotFound) {
@@ -114,7 +142,11 @@ func (s *Server) RotateMcpServerToken(ctx context.Context, req *turingv1.RotateM
 		return nil, status.Error(codes.FailedPrecondition, "bundled servers do not use caller-managed tokens")
 	}
 	var sealed []byte
-	if token := req.GetBearerToken(); token != "" {
+	if raw := req.GetBearerToken(); raw != "" {
+		token, tokenErr := validateBearerToken(raw)
+		if tokenErr != nil {
+			return nil, status.Error(codes.InvalidArgument, tokenErr.Error())
+		}
 		sealed, err = s.sealer.Seal([]byte(token), []byte(server.Name))
 		if err != nil {
 			if errors.Is(err, secretbox.ErrNoKey) {
@@ -124,6 +156,12 @@ func (s *Server) RotateMcpServerToken(ctx context.Context, req *turingv1.RotateM
 		}
 	}
 	if err := s.repo.SetMCPServerSealedToken(ctx, server.ID, sealed); err != nil {
+		if errors.Is(err, repository.ErrMCPServerNotFound) {
+			return nil, status.Error(codes.NotFound, "MCP server not found")
+		}
+		if errors.Is(err, repository.ErrMCPServerBundled) {
+			return nil, status.Error(codes.FailedPrecondition, "bundled servers do not use caller-managed tokens")
+		}
 		return nil, status.Error(codes.Internal, "rotate MCP server token failed")
 	}
 	refreshed, err := s.repo.GetMCPServer(ctx, server.ID)

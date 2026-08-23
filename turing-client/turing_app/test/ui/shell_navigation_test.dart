@@ -204,6 +204,18 @@ void main() {
       await tester.tap(find.text('MCPs'));
       await tester.pumpAndSettle();
 
+      // Cancel first: closing the dialog must make no API call.
+      await tester.tap(find.text('Add server'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text('Cancel'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(api.registeredMcpServers, isEmpty);
+
       await tester.tap(find.text('Add server'));
       await tester.pumpAndSettle();
       final dialog = find.byType(AlertDialog);
@@ -257,7 +269,11 @@ void main() {
 
       expect(api.reimportCalls, 1);
       expect(find.textContaining('vendor'), findsWidgets);
-      expect(find.textContaining('still disabled'), findsOneWidget);
+      expect(find.textContaining('New servers arrive disabled'), findsOneWidget);
+      expect(
+        find.textContaining('existing servers keep your settings'),
+        findsOneWidget,
+      );
       expect(
         find.textContaining('runner: stdio/command MCP servers'),
         findsOneWidget,

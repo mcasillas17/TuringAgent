@@ -261,3 +261,109 @@ func currentSealedToken(t *testing.T, repo *repository.Repository, name string) 
 	}
 	return findRepositoryServer(t, servers, name).SealedToken
 }
+
+func TestRegisterMcpServerRefusesAnExistingName(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	request := &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp", BearerToken: "first-token",
+	}
+	if _, err := service.RegisterMcpServer(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	// Re-adding must not silently re-point the URL or wipe the stored token.
+	again := &turingv1.RegisterMcpServerRequest{Name: "vendor", Url: "https://other.example/mcp"}
+	if _, err := service.RegisterMcpServer(context.Background(), again); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("err = %v, want AlreadyExists", err)
+	}
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	vendor := findRepositoryServer(t, servers, "vendor")
+	if vendor.URL != "https://vendor.example/mcp" || len(vendor.SealedToken) == 0 {
+		t.Fatalf("existing server mutated by refused register: url=%q sealedLen=%d", vendor.URL, len(vendor.SealedToken))
+	}
+}
+
+func TestRegisterAndRotateApplyImportTokenHygiene(t *testing.T) {
+	service, _ := newRegistryTestService(t)
+	if _, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp", BearerToken: "tok\nen",
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("register with line break err = %v, want InvalidArgument", err)
+	}
+	registered, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: registered.GetServerId(), BearerToken: "   ",
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("whitespace-only rotation err = %v, want InvalidArgument (empty means clear, blanks mean mistake)", err)
+	}
+	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: "", BearerToken: "x",
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty server_id err = %v, want InvalidArgument", err)
+	}
+}
+
+func TestRotatedTokenOpensUnderTheServerNameBinding(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	registered, err := service.RegisterMcpServer(context.Background(), &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp", BearerToken: "old-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetMCPServerStatus(context.Background(), registered.GetServerId(), "down", "401 unauthorized"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RotateMcpServerToken(context.Background(), &turingv1.RotateMcpServerTokenRequest{
+		ServerId: registered.GetServerId(), BearerToken: "  new-secret  ",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The rotated token must be openable under the same associated data the
+	// dispatch path uses — the server NAME — or every later call would fail
+	// with an unreadable-token error. Trimming is part of the contract too.
+	opened, err := service.sealer.Open(currentSealedToken(t, repo, "vendor"), []byte("vendor"))
+	if err != nil || string(opened) != "new-secret" {
+		t.Fatalf("opened=%q err=%v, want the trimmed rotated secret under the name binding", opened, err)
+	}
+	servers, err := repo.ListMCPServers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findRepositoryServer(t, servers, "vendor").Status; got != "unknown" {
+		t.Fatalf("status after rotation = %q, want the stale 401 reset to unknown", got)
+	}
+}
+
+func TestReimportMalformedDocumentReplacesStaleIssues(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(path, []byte(`{"mcpServers": {"runner": {"command": "npx"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service.SetMCPConfigPath(path)
+	if _, err := service.ReimportMcpJson(context.Background(), &turingv1.ReimportMcpJsonRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{not json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := service.ReimportMcpJson(context.Background(), &turingv1.ReimportMcpJsonRequest{})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("malformed re-import err = %v, want FailedPrecondition", err)
+	}
+	issues, err := repo.ListMCPImportIssues(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || issues[0].Name != "_document" {
+		t.Fatalf("issues after malformed re-import = %+v, want only the _document decode issue replacing the stale runner row", issues)
+	}
+}

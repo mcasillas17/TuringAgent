@@ -22,6 +22,8 @@ import (
 	toolpolicy "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/tools"
 )
 
+var errImportDecode = errors.New("mcp.json is invalid")
+
 var (
 	mcpServerNamePattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	localContainerHostPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -87,13 +89,13 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (ImportReport, err
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	var document mcpJSON
 	if err := decoder.Decode(&document); err != nil {
-		return ImportReport{}, fmt.Errorf("decode mcp.json: %w", err)
+		return ImportReport{}, fmt.Errorf("decode mcp.json: %v: %w", err, errImportDecode)
 	}
 	if err := requireImportEOF(decoder); err != nil {
-		return ImportReport{}, fmt.Errorf("decode mcp.json: %w", err)
+		return ImportReport{}, fmt.Errorf("decode mcp.json: %v: %w", err, errImportDecode)
 	}
 	if document.Servers == nil {
-		return ImportReport{}, errors.New("decode mcp.json: mcpServers object is required")
+		return ImportReport{}, fmt.Errorf("decode mcp.json: mcpServers object is required: %w", errImportDecode)
 	}
 
 	report := ImportReport{Unsupported: make(map[string]string)}
@@ -277,12 +279,13 @@ func bearerFromHeaders(headers map[string]string) (string, error) {
 			return "", fmt.Errorf("header %q is unsupported; only Authorization: Bearer is accepted", name)
 		}
 		const prefix = "Bearer "
-		if !strings.HasPrefix(value, prefix) || strings.TrimSpace(strings.TrimPrefix(value, prefix)) == "" {
+		if !strings.HasPrefix(value, prefix) {
 			return "", errors.New("authorization header must use a non-empty Bearer token")
 		}
-		token = strings.TrimSpace(strings.TrimPrefix(value, prefix))
-		if strings.ContainsAny(token, "\r\n") {
-			return "", errors.New("authorization bearer must not contain line breaks")
+		var err error
+		token, err = validateBearerToken(strings.TrimPrefix(value, prefix))
+		if err != nil {
+			return "", err
 		}
 	}
 	return token, nil
@@ -311,4 +314,20 @@ func requireImportEOF(decoder *json.Decoder) error {
 		return err
 	}
 	return nil
+}
+
+// validateBearerToken is the single token-hygiene gate for every path that
+// accepts a bearer — mcp.json import, RegisterMcpServer, and
+// RotateMcpServerToken — so a pasted trailing newline or a whitespace-only
+// token fails here, legibly, instead of surfacing later as an opaque
+// dispatch error against a sealed value nobody can inspect.
+func validateBearerToken(raw string) (string, error) {
+	token := strings.TrimSpace(raw)
+	if token == "" {
+		return "", errors.New("authorization header must use a non-empty Bearer token")
+	}
+	if strings.ContainsAny(token, "\r\n") {
+		return "", errors.New("authorization bearer must not contain line breaks")
+	}
+	return token, nil
 }
