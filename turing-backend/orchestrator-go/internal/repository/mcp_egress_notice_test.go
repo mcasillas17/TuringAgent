@@ -25,7 +25,7 @@ func TestLocalRemoteMCPConsentNoticeAndAuditNameDestination(t *testing.T) {
 		ModelProvider: "ollama", Model: "local",
 		SelectedTools: []string{"vendor/vendor.lookup"},
 		EgressDecision: &PendingEgressDecision{
-			Version: 1, ChallengeNonce: "nonce_notice", ChallengeFingerprint: "fingerprint_notice",
+			Version: RunEgressDecisionVersion, ChallengeNonce: "nonce_notice", ChallengeFingerprint: "fingerprint_notice",
 			RequestDigest: "digest_notice", Provider: "ollama", Model: "local",
 			DataCategories: []string{
 				"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS",
@@ -77,7 +77,7 @@ func TestLocalIntegrationConsentNoticeAndAuditNameDestination(t *testing.T) {
 		SessionID: session.SessionID, Content: "list issues", AgentID: "general_assistant",
 		ModelProvider: "ollama", Model: "local", SelectedTools: []string{"integrations/github.list_issues"},
 		EgressDecision: &PendingEgressDecision{
-			Version: 1, ChallengeNonce: "nonce_integration_notice", ChallengeFingerprint: "fingerprint_integration_notice",
+			Version: RunEgressDecisionVersion, ChallengeNonce: "nonce_integration_notice", ChallengeFingerprint: "fingerprint_integration_notice",
 			RequestDigest: "digest_integration_notice", Provider: "ollama", Model: "local",
 			DataCategories: []string{"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS", "EGRESS_DATA_CATEGORY_TOOL_RESULTS"},
 			SelectedTools:  []string{"integrations/github.list_issues"}, SkillSnapshotFingerprint: skillFingerprint,

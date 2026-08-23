@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -17,7 +18,7 @@ import (
 func remoteDecision() *PendingEgressDecision {
 	skillFingerprint, _ := backendegress.SkillSnapshotFingerprint(nil)
 	return &PendingEgressDecision{
-		Version:              1,
+		Version:              RunEgressDecisionVersion,
 		ChallengeNonce:       "nonce_remote_1",
 		ChallengeFingerprint: "fingerprint_remote_1",
 		RequestDigest:        "request_digest_remote_1",
@@ -156,7 +157,7 @@ func TestRemoteEnqueuePersistsAndFreezesEgressDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	if audit["provider"] != "openai_compatible" || audit["endpointHost"] != "api.example.com" ||
-		audit["decisionVersion"] != float64(1) ||
+		audit["decisionVersion"] != float64(RunEgressDecisionVersion) ||
 		audit["consentGrantedAt"] != "2026-08-20T01:02:03.000000000Z" {
 		t.Fatalf("audit payload = %+v", audit)
 	}
@@ -327,7 +328,7 @@ func TestEgressSkillFingerprintMatchesEnqueueAfterSkillEditWithoutPrepareWrites(
 		`SELECT COUNT(*) FROM skill_capability_grants WHERE skill_id = 'writing/tone'`).Scan(&grantsBefore); err != nil {
 		t.Fatal(err)
 	}
-	fingerprint, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+	fingerprint, _, err := repo.EgressSkillSnapshotFingerprint(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,10 +356,112 @@ func TestEgressSkillFingerprintMatchesEnqueueAfterSkillEditWithoutPrepareWrites(
 	}
 }
 
+func TestEgressSkillSnapshotFingerprintReturnsBoundDisclosureInfoFromOneRead(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief prose", nil, "Be brief.")
+	enableRepositorySkill(t, repo, "writing/tone")
+
+	firstFingerprint, firstInfo, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(firstInfo, []SkillEgressInfo{{
+		SkillID: "writing/tone", DisplayName: "Tone", BodyMayBeSent: true,
+	}}) {
+		t.Fatalf("first disclosure info = %+v", firstInfo)
+	}
+
+	writeRepositorySkill(t, root, "writing/tone", "Clear Tone", "Brief prose", nil, "Be clearer.")
+	secondFingerprint, secondInfo, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondFingerprint == firstFingerprint {
+		t.Fatal("edited skill did not change fingerprint")
+	}
+	if !reflect.DeepEqual(secondInfo, []SkillEgressInfo{{
+		SkillID: "writing/tone", DisplayName: "Clear Tone", BodyMayBeSent: true,
+	}}) {
+		t.Fatalf("second disclosure info = %+v", secondInfo)
+	}
+}
+
+func TestEgressSkillDisclosureBodyMayBeSentUsesSnapshotWithheldBit(t *testing.T) {
+	t.Run("all declared capabilities granted", func(t *testing.T) {
+		repo, root := newSkillRepository(t)
+		writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief", []string{"files.update"}, "Body.")
+		grantRepositoryCapability(t, repo, "writing/tone", "files.update")
+		enableRepositorySkill(t, repo, "writing/tone")
+		_, info, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(info) != 1 || !info[0].BodyMayBeSent {
+			t.Fatalf("disclosure info = %+v, want body may be sent", info)
+		}
+	})
+
+	t.Run("revoked grant withholds body", func(t *testing.T) {
+		repo, root := newSkillRepository(t)
+		writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief", []string{"files.update"}, "Body.")
+		grantRepositoryCapability(t, repo, "writing/tone", "files.update")
+		enableRepositorySkill(t, repo, "writing/tone")
+		if _, err := repo.SetSkillGrant(context.Background(), "writing/tone", "files.update", false); err != nil {
+			t.Fatal(err)
+		}
+		_, info, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(info) != 1 || info[0].BodyMayBeSent {
+			t.Fatalf("disclosure info = %+v, want metadata only", info)
+		}
+	})
+
+	t.Run("zero capabilities permits body", func(t *testing.T) {
+		repo, root := newSkillRepository(t)
+		writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief", nil, "Body.")
+		enableRepositorySkill(t, repo, "writing/tone")
+		_, info, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(info) != 1 || !info[0].BodyMayBeSent {
+			t.Fatalf("disclosure info = %+v, want body may be sent", info)
+		}
+	})
+
+	t.Run("stale grant scope after body edit with unchanged requires withholds body", func(t *testing.T) {
+		repo, root := newSkillRepository(t)
+		writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief", []string{"files.update"}, "Original body.")
+		grantRepositoryCapability(t, repo, "writing/tone", "files.update")
+		enableRepositorySkill(t, repo, "writing/tone")
+		writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief", []string{"files.update"}, "Edited body.")
+
+		var storedGrantCount int
+		if err := repo.db.QueryRowContext(context.Background(), `
+			SELECT COUNT(*) FROM skill_capability_grants
+			WHERE skill_id = 'writing/tone' AND capability = 'files.update'
+		`).Scan(&storedGrantCount); err != nil {
+			t.Fatal(err)
+		}
+		if storedGrantCount != 1 {
+			t.Fatalf("stored grant count = %d, want 1 to preserve the divergence", storedGrantCount)
+		}
+		_, info, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(info) != 1 || info[0].BodyMayBeSent {
+			t.Fatalf("disclosure info = %+v, want stale snapshot metadata only", info)
+		}
+	})
+}
+
 func TestEgressSkillFingerprintTreatsNewUnreconciledSkillAsDisabled(t *testing.T) {
 	repo, root := newSkillRepository(t)
 	writeRepositorySkill(t, root, "writing/new", "New", "Not reconciled", nil, "Body.")
-	fingerprint, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+	fingerprint, _, err := repo.EgressSkillSnapshotFingerprint(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,6 +480,141 @@ func TestEgressSkillFingerprintTreatsNewUnreconciledSkillAsDisabled(t *testing.T
 	if settings != 0 {
 		t.Fatal("prepare reconciled a new skill")
 	}
+}
+
+func TestEnqueueReturnsSpecificWrappedSentinelWhenSkillSnapshotChanged(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief", nil, "Original body.")
+	enableRepositorySkill(t, repo, "writing/tone")
+	fingerprint, _, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRepositorySkill(t, root, "writing/tone", "Tone", "Brief", nil, "Edited body.")
+	session, err := repo.CreateSession(context.Background(), "Skill enqueue race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := remoteDecision()
+	decision.SkillSnapshotFingerprint = fingerprint
+	_, err = repo.EnqueueUserMessage(context.Background(), EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "remote", ContentType: "text",
+		AgentID: "general_assistant", ModelProvider: "openai_compatible", Model: decision.Model,
+		EgressDecision: decision, SelectedTools: decision.SelectedTools,
+	})
+	if !errors.Is(err, ErrEgressSkillSnapshotChanged) {
+		t.Fatalf("enqueue error = %v, want ErrEgressSkillSnapshotChanged", err)
+	}
+	if !errors.Is(err, ErrEgressDecisionInvalid) {
+		t.Fatalf("enqueue error = %v, want wrapped ErrEgressDecisionInvalid", err)
+	}
+}
+
+func TestRemoteEgressNoticeNamesOnlyCategoryDisclosedSkills(t *testing.T) {
+	t.Run("remote skill category names skills", func(t *testing.T) {
+		repo, root := newSkillRepository(t)
+		writeRepositorySkill(t, root, "writing/tone", "Tone Guide", "Brief", nil, "Body.")
+		enableRepositorySkill(t, repo, "writing/tone")
+		fingerprint, _, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision := remoteDecision()
+		decision.SkillSnapshotFingerprint = fingerprint
+		decision.DataCategories = append(
+			append([]string(nil), decision.DataCategories[:2]...),
+			append([]string{"EGRESS_DATA_CATEGORY_SKILL_CONTENT"}, decision.DataCategories[2:]...)...,
+		)
+		note := enqueueEgressNoticeNote(t, repo, decision, "openai_compatible")
+		if !strings.Contains(note, "Skills that may be sent: Tone Guide") {
+			t.Fatalf("notice = %q, want skill name", note)
+		}
+	})
+
+	t.Run("remote without skill category has no skill line", func(t *testing.T) {
+		repo, _ := newSkillRepository(t)
+		note := enqueueEgressNoticeNote(t, repo, remoteDecision(), "openai_compatible")
+		if strings.Contains(note, "Skills that may be sent:") {
+			t.Fatalf("notice = %q, want no skill line", note)
+		}
+	})
+
+	t.Run("local remote MCP with enabled skill has no skill line", func(t *testing.T) {
+		repo, root := newSkillRepository(t)
+		writeRepositorySkill(t, root, "writing/tone", "Tone Guide", "Brief", nil, "Body.")
+		enableRepositorySkill(t, repo, "writing/tone")
+		fingerprint, _, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision := remoteDecision()
+		decision.Provider = "ollama"
+		decision.Model = "local"
+		decision.Endpoint = ""
+		decision.EndpointHost = ""
+		decision.RecallApplicable = false
+		decision.DataCategories = []string{
+			"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS",
+			"EGRESS_DATA_CATEGORY_TOOL_RESULTS",
+		}
+		decision.SkillSnapshotFingerprint = fingerprint
+		decision.RemoteMCPServers = []RemoteMCPServerEgress{{
+			ServerName: "vendor", Endpoint: "https://vendor.example/mcp", EndpointHost: "vendor.example",
+		}}
+		note := enqueueEgressNoticeNote(t, repo, decision, "ollama")
+		if strings.Contains(note, "Skills that may be sent:") || strings.Contains(note, "Tone Guide") {
+			t.Fatalf("notice = %q, want no skill line", note)
+		}
+	})
+}
+
+func TestRemoteEgressNoticeTruncatesSkillNamesAtEight(t *testing.T) {
+	repo, root := newSkillRepository(t)
+	for index := 1; index <= 12; index++ {
+		id := fmt.Sprintf("skills/s%02d", index)
+		name := fmt.Sprintf("Skill %02d", index)
+		writeRepositorySkill(t, root, id, name, "Brief", nil, "Body.")
+		enableRepositorySkill(t, repo, id)
+	}
+	fingerprint, _, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := remoteDecision()
+	decision.SkillSnapshotFingerprint = fingerprint
+	decision.DataCategories = append(
+		append([]string(nil), decision.DataCategories[:2]...),
+		append([]string{"EGRESS_DATA_CATEGORY_SKILL_CONTENT"}, decision.DataCategories[2:]...)...,
+	)
+	note := enqueueEgressNoticeNote(t, repo, decision, "openai_compatible")
+	for index := 1; index <= 8; index++ {
+		if !strings.Contains(note, fmt.Sprintf("Skill %02d", index)) {
+			t.Fatalf("notice = %q, missing Skill %02d", note, index)
+		}
+	}
+	if strings.Contains(note, "Skill 09") || !strings.Contains(note, "+4 more") {
+		t.Fatalf("notice = %q, want eight names and +4 more", note)
+	}
+}
+
+func enqueueEgressNoticeNote(t *testing.T, repo *Repository, decision *PendingEgressDecision, provider string) string {
+	t.Helper()
+	session, err := repo.CreateSession(context.Background(), "Egress notice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(context.Background(), EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "notice", ContentType: "text",
+		AgentID: "general_assistant", ModelProvider: provider, Model: decision.Model,
+		EgressDecision: decision, SelectedTools: decision.SelectedTools,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(enqueued.RoutingEvents) != 1 {
+		t.Fatalf("routing events = %+v, want one", enqueued.RoutingEvents)
+	}
+	return runStepNote(t, enqueued.RoutingEvents[0])
 }
 
 func assertSessionRunCounts(t *testing.T, repo *Repository, ctx context.Context, sessionID string, messages, runs int) {

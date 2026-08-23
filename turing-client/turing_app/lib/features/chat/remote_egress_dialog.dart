@@ -89,6 +89,32 @@ Future<bool> showRemoteEgressDialog(
                         ],
                       ),
                     ),
+                  if (disclosure.dataCategories.contains(
+                    EgressDataCategory.skillContent,
+                  )) ...[
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Skills that may be sent:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 6),
+                    for (final skill in disclosure.skills)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(skill.displayName),
+                            Text(
+                              skill.bodyMayBeSent
+                                  ? 'full content may be sent'
+                                  : 'name and description only',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
                   const SizedBox(height: 8),
                   const Text('This consent applies only to this exact run.'),
                   const SizedBox(height: 4),

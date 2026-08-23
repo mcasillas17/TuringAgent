@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -30,6 +31,12 @@ type IntegrationEndpointEgress struct {
 	Tools        []string `json:"tools"`
 }
 
+type SkillEgressInfo struct {
+	SkillID       string
+	DisplayName   string
+	BodyMayBeSent bool
+}
+
 func IntegrationEndpointEntrySize(entry IntegrationEndpointEgress) (int, error) {
 	encoded, err := json.Marshal(entry)
 	return len(encoded), err
@@ -42,6 +49,7 @@ var (
 	ErrLocalEgressDecisionForbidden = errors.New("local run must not carry an egress decision")
 	ErrEgressChallengeAlreadyUsed   = errors.New("egress challenge was already used")
 	ErrEgressDecisionInvalid        = errors.New("egress decision is invalid")
+	ErrEgressSkillSnapshotChanged   = fmt.Errorf("egress skill snapshot changed: %w", ErrEgressDecisionInvalid)
 )
 
 var validEgressDataCategories = map[string]int{
@@ -239,26 +247,34 @@ func skillSnapshotFingerprint(snapshots []SkillSnapshot) (string, error) {
 	return backendegress.SkillSnapshotFingerprint(canonical)
 }
 
-func (r *Repository) EgressSkillSnapshotFingerprint(ctx context.Context) (string, error) {
+func (r *Repository) EgressSkillSnapshotFingerprint(ctx context.Context) (string, []SkillEgressInfo, error) {
 	// go-sqlite3 does not enforce TxOptions.ReadOnly; the no-write guarantee is
 	// provided by enabledSkillSnapshotsReadOnlyTx and its regression tests.
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	snapshots, err := r.enabledSkillSnapshotsReadOnlyTx(ctx, tx)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	fingerprint, err := skillSnapshotFingerprint(snapshots)
 	if err != nil {
-		return "", err
+		return "", nil, err
+	}
+	info := make([]SkillEgressInfo, len(snapshots))
+	for index, snapshot := range snapshots {
+		info[index] = SkillEgressInfo{
+			SkillID:       snapshot.SkillID,
+			DisplayName:   backendegress.SanitizeSkillDisplayName(snapshot.Name, snapshot.SkillID),
+			BodyMayBeSent: !snapshot.Withheld,
+		}
 	}
 	if err := tx.Commit(); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return fingerprint, nil
+	return fingerprint, info, nil
 }
 
 func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pending *PendingEgressDecision) (RunEgressDecision, error) {

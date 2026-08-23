@@ -123,6 +123,13 @@ message RemoteEgressDisclosure {
   repeated RemoteMcpEgressDestination remote_mcp_servers = 9;
   repeated string selected_tools = 10;
   repeated IntegrationEgressDestination integration_endpoints = 11;
+  repeated SkillEgressDisclosure skills = 12;
+}
+
+message SkillEgressDisclosure {
+  string skill_id = 1;
+  string display_name = 2;
+  bool body_may_be_sent = 3;
 }
 
 message RemoteMcpEgressDestination {

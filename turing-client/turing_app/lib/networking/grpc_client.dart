@@ -437,6 +437,15 @@ class TuringGrpcApi
             ),
           )
           .toList(growable: false),
+      skills: disclosure.skills
+          .map(
+            (skill) => SkillEgressDisclosure(
+              skillId: skill.skillId,
+              displayName: skill.displayName,
+              bodyMayBeSent: skill.bodyMayBeSent,
+            ),
+          )
+          .toList(growable: false),
       selectedTools: List.unmodifiable(disclosure.selectedTools),
       expiresAt: disclosure.expiresAt.toDateTime().toUtc(),
     );

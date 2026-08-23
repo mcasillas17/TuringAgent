@@ -593,6 +593,7 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     $core.Iterable<RemoteMcpEgressDestination>? remoteMcpServers,
     $core.Iterable<$core.String>? selectedTools,
     $core.Iterable<IntegrationEgressDestination>? integrationEndpoints,
+    $core.Iterable<SkillEgressDisclosure>? skills,
   }) {
     final result = create();
     if (challenge != null) result.challenge = challenge;
@@ -608,6 +609,7 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     if (selectedTools != null) result.selectedTools.addAll(selectedTools);
     if (integrationEndpoints != null)
       result.integrationEndpoints.addAll(integrationEndpoints);
+    if (skills != null) result.skills.addAll(skills);
     return result;
   }
 
@@ -647,6 +649,9 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     ..pc<IntegrationEgressDestination>(
         11, _omitFieldNames ? '' : 'integrationEndpoints', $pb.PbFieldType.PM,
         subBuilder: IntegrationEgressDestination.create)
+    ..pc<SkillEgressDisclosure>(
+        12, _omitFieldNames ? '' : 'skills', $pb.PbFieldType.PM,
+        subBuilder: SkillEgressDisclosure.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -749,6 +754,91 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
   @$pb.TagNumber(11)
   $pb.PbList<IntegrationEgressDestination> get integrationEndpoints =>
       $_getList(10);
+
+  @$pb.TagNumber(12)
+  $pb.PbList<SkillEgressDisclosure> get skills => $_getList(11);
+}
+
+class SkillEgressDisclosure extends $pb.GeneratedMessage {
+  factory SkillEgressDisclosure({
+    $core.String? skillId,
+    $core.String? displayName,
+    $core.bool? bodyMayBeSent,
+  }) {
+    final result = create();
+    if (skillId != null) result.skillId = skillId;
+    if (displayName != null) result.displayName = displayName;
+    if (bodyMayBeSent != null) result.bodyMayBeSent = bodyMayBeSent;
+    return result;
+  }
+
+  SkillEgressDisclosure._();
+
+  factory SkillEgressDisclosure.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory SkillEgressDisclosure.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SkillEgressDisclosure',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'skillId')
+    ..aOS(2, _omitFieldNames ? '' : 'displayName')
+    ..aOB(3, _omitFieldNames ? '' : 'bodyMayBeSent')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SkillEgressDisclosure clone() =>
+      SkillEgressDisclosure()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SkillEgressDisclosure copyWith(
+          void Function(SkillEgressDisclosure) updates) =>
+      super.copyWith((message) => updates(message as SkillEgressDisclosure))
+          as SkillEgressDisclosure;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SkillEgressDisclosure create() => SkillEgressDisclosure._();
+  @$core.override
+  SkillEgressDisclosure createEmptyInstance() => create();
+  static $pb.PbList<SkillEgressDisclosure> createRepeated() =>
+      $pb.PbList<SkillEgressDisclosure>();
+  @$core.pragma('dart2js:noInline')
+  static SkillEgressDisclosure getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SkillEgressDisclosure>(create);
+  static SkillEgressDisclosure? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get skillId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set skillId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSkillId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSkillId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get displayName => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set displayName($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasDisplayName() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearDisplayName() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.bool get bodyMayBeSent => $_getBF(2);
+  @$pb.TagNumber(3)
+  set bodyMayBeSent($core.bool value) => $_setBool(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasBodyMayBeSent() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearBodyMayBeSent() => $_clearField(3);
 }
 
 class RemoteMcpEgressDestination extends $pb.GeneratedMessage {

@@ -44,6 +44,16 @@ runtime use may be smaller, never larger. Memory/profile and attachments are
 currently unsupported and therefore absent. Routed external agents also omit
 cross-session recall. Direct OpenAI-compatible runs may include recall.
 
+Skill content appears only when the model provider is remote and the frozen,
+parseable enabled-skill snapshot is non-empty. The disclosure names every
+skill in that snapshot and distinguishes skills whose full content may be sent
+from those limited to name and description. This is a ceiling: the runtime
+always injects the skill index, while a permitted body and its references are
+sent only when the user invokes the skill or the model calls `skill_view`.
+The existing skill-snapshot fingerprint binds each displayed skill id, name,
+and content ceiling; the names are the legible face of that signed binding,
+not a second signature surface.
+
 A local-model run that may call a remote MCP server discloses only the
 categories that can cross that boundary: tool arguments and tool results. A
 mixed run takes the conservative union. Enabling a remote server is not consent

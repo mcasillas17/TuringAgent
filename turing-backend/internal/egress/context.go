@@ -5,9 +5,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"slices"
+	"strings"
+	"unicode"
 )
 
-const DecisionVersion = 1
+const (
+	DecisionVersion          = 2
+	maxSkillDisplayNameRunes = 80
+)
 
 type SkillSnapshot struct {
 	SkillID             string            `json:"skill_id"`
@@ -37,6 +42,40 @@ func SkillSnapshotFingerprint(snapshots []SkillSnapshot) (string, error) {
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func SanitizeSkillDisplayName(displayName, skillID string) string {
+	sanitized := sanitizeSkillDisplayText(displayName)
+	if isEmptySkillDisplayName(sanitized) {
+		sanitized = sanitizeSkillDisplayText(skillID)
+	}
+	if isEmptySkillDisplayName(sanitized) {
+		sanitized = "(unnamed)"
+	}
+	runes := []rune(sanitized)
+	if len(runes) > maxSkillDisplayNameRunes {
+		return string(runes[:maxSkillDisplayNameRunes-1]) + "…"
+	}
+	return sanitized
+}
+
+func isEmptySkillDisplayName(value string) bool {
+	return value == "" || strings.Trim(value, `/\`) == ""
+}
+
+func sanitizeSkillDisplayText(value string) string {
+	var flattened strings.Builder
+	for _, current := range value {
+		switch {
+		case unicode.IsSpace(current):
+			flattened.WriteRune(' ')
+		case unicode.IsControl(current), unicode.In(current, unicode.Cf):
+			continue
+		default:
+			flattened.WriteRune(current)
+		}
+	}
+	return strings.Join(strings.Fields(flattened.String()), " ")
 }
 
 func HashCredentialReference(reference string) string {

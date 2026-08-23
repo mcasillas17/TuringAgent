@@ -7,7 +7,7 @@ func TestEnqueueFingerprintChangesWithRemoteMCPDestination(t *testing.T) {
 		SessionID: "session", Content: "hello", AgentID: "general_assistant",
 		ModelProvider: "ollama", Model: "local", IdempotencyKey: "same-key",
 		EgressDecision: &PendingEgressDecision{
-			Version: 1, Provider: "ollama", Model: "local",
+			Version: RunEgressDecisionVersion, Provider: "ollama", Model: "local",
 			RequestDigest: "digest", DataCategories: []string{"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS"},
 			SelectedTools: []string{"vendor/vendor.lookup"},
 			RemoteMCPServers: []RemoteMCPServerEgress{{
@@ -32,7 +32,7 @@ func TestEnqueueFingerprintChangesWithRemoteMCPDestination(t *testing.T) {
 }
 
 func TestEnqueueFingerprintChangesWithIntegrationConnectionSet(t *testing.T) {
-	input := EnqueueUserMessageInput{SessionID: "session", Content: "hello", AgentID: "general_assistant", ModelProvider: "ollama", Model: "local", IdempotencyKey: "same-key", EgressDecision: &PendingEgressDecision{Version: 1, Provider: "ollama", Model: "local", RequestDigest: "digest", DataCategories: []string{"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS", "EGRESS_DATA_CATEGORY_TOOL_RESULTS"}, SelectedTools: []string{"integrations/github.list_issues"}, IntegrationEndpoints: []IntegrationEndpointEgress{{Endpoint: GitHubIntegrationEndpoint, EndpointHost: GitHubIntegrationEndpointHost, ConnectionID: "conn_a", DisplayName: "A", Tools: []string{"github.list_issues"}}}}}
+	input := EnqueueUserMessageInput{SessionID: "session", Content: "hello", AgentID: "general_assistant", ModelProvider: "ollama", Model: "local", IdempotencyKey: "same-key", EgressDecision: &PendingEgressDecision{Version: RunEgressDecisionVersion, Provider: "ollama", Model: "local", RequestDigest: "digest", DataCategories: []string{"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS", "EGRESS_DATA_CATEGORY_TOOL_RESULTS"}, SelectedTools: []string{"integrations/github.list_issues"}, IntegrationEndpoints: []IntegrationEndpointEgress{{Endpoint: GitHubIntegrationEndpoint, EndpointHost: GitHubIntegrationEndpointHost, ConnectionID: "conn_a", DisplayName: "A", Tools: []string{"github.list_issues"}}}}}
 	first, err := EnqueueRequestFingerprint(input)
 	if err != nil {
 		t.Fatal(err)

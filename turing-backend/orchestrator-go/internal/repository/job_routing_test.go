@@ -137,6 +137,41 @@ func TestIncompatibleRemoteJobDoesNotStarveLaterLocalJob(t *testing.T) {
 	}
 }
 
+func TestWorkerAdvertisingLiteralV1CannotClaimPostBumpRemoteDecision(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "Post-bump remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := remoteDecision()
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "remote", AgentID: "general_assistant",
+		ModelProvider: "openai_compatible", Model: decision.Model,
+		EgressDecision: decision, SelectedTools: decision.SelectedTools,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(
+		ctx, "general_assistant", "stale-v1-worker", 0, time.Hour,
+		&WorkerRoutingCapabilities{
+			Models: []RoutingModelCapability{{
+				Provider: "openai_compatible", Model: decision.Model, MaxContextTokens: 8192,
+			}},
+			Tools: decision.SelectedTools, MaxConcurrentRuns: 1,
+			RemoteEgressDecisionVersion: 1,
+		},
+		func(RoutingRequirements) bool { return true },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.JobID != "" {
+		t.Fatalf("literal-v1 worker claimed post-bump job %q; queued %q", claimed.JobID, enqueued.JobID)
+	}
+}
+
 func TestListPendingRoutingWorkPageUsesStableKeyset(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
@@ -201,7 +236,7 @@ func TestClaimExternalAgentJobRejectsPositiveContextWithoutGuarantee(t *testing.
 		time.Hour,
 		&WorkerRoutingCapabilities{
 			ExternalAgentCredentialRefs: []string{"claude"}, MaxConcurrentRuns: 1,
-			RemoteEgressDecisionVersion: 1,
+			RemoteEgressDecisionVersion: RunEgressDecisionVersion,
 		},
 		func(RoutingRequirements) bool { return true },
 	)
@@ -262,7 +297,7 @@ func TestClaimExternalAgentJobRequiresExactCredentialRef(t *testing.T) {
 		time.Hour,
 		&WorkerRoutingCapabilities{
 			ExternalAgentCredentialRefs: []string{"openai"}, MaxConcurrentRuns: 1,
-			RemoteEgressDecisionVersion: 1,
+			RemoteEgressDecisionVersion: RunEgressDecisionVersion,
 			Tools:                       []string{"files/files.read", "system/system.time"},
 		},
 		func(route RoutingRequirements) bool {
