@@ -17,12 +17,13 @@ import (
 )
 
 type Client struct {
-	conn      *grpc.ClientConn
-	token     string
-	runtime   turingv1.RuntimeServiceClient
-	sessions  turingv1.SessionServiceClient
-	approvals turingv1.ApprovalServiceClient
-	mcp       turingv1.McpRegistryServiceClient
+	conn         *grpc.ClientConn
+	token        string
+	runtime      turingv1.RuntimeServiceClient
+	sessions     turingv1.SessionServiceClient
+	approvals    turingv1.ApprovalServiceClient
+	mcp          turingv1.McpRegistryServiceClient
+	integrations turingv1.IntegrationServiceClient
 }
 
 const defaultApprovalWaitTimeout = 71 * time.Second
@@ -48,12 +49,13 @@ func Dial(_ context.Context, addr string, token string) (*Client, error) {
 
 func New(conn *grpc.ClientConn, token string) *Client {
 	return &Client{
-		conn:      conn,
-		token:     token,
-		runtime:   turingv1.NewRuntimeServiceClient(conn),
-		sessions:  turingv1.NewSessionServiceClient(conn),
-		approvals: turingv1.NewApprovalServiceClient(conn),
-		mcp:       turingv1.NewMcpRegistryServiceClient(conn),
+		conn:         conn,
+		token:        token,
+		runtime:      turingv1.NewRuntimeServiceClient(conn),
+		sessions:     turingv1.NewSessionServiceClient(conn),
+		approvals:    turingv1.NewApprovalServiceClient(conn),
+		mcp:          turingv1.NewMcpRegistryServiceClient(conn),
+		integrations: turingv1.NewIntegrationServiceClient(conn),
 	}
 }
 
@@ -228,6 +230,14 @@ func (c *Client) CallRegisteredMCPTool(
 	request *turingv1.CallRegisteredMcpToolRequest,
 ) (*turingv1.CallRegisteredMcpToolResponse, error) {
 	return c.mcp.CallRegisteredMcpTool(c.withAuth(ctx), request)
+}
+
+func (c *Client) ListIntegrationTools(ctx context.Context) (*turingv1.ListIntegrationToolsResponse, error) {
+	return c.integrations.ListIntegrationTools(c.withAuth(ctx), &turingv1.ListIntegrationToolsRequest{})
+}
+
+func (c *Client) CallIntegrationTool(ctx context.Context, request *turingv1.CallIntegrationToolRequest) (*turingv1.CallIntegrationToolResponse, error) {
+	return c.integrations.CallIntegrationTool(c.withAuth(ctx), request)
 }
 
 func (c *Client) withAuth(ctx context.Context) context.Context {

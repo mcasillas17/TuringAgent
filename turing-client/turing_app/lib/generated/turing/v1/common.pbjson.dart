@@ -483,6 +483,22 @@ const RemoteEgressDisclosure$json = {
       '10': 'remoteMcpServers'
     },
     {'1': 'selected_tools', '3': 10, '4': 3, '5': 9, '10': 'selectedTools'},
+    {
+      '1': 'integration_endpoints',
+      '3': 11,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.IntegrationEgressDestination',
+      '10': 'integrationEndpoints'
+    },
+    {
+      '1': 'skills',
+      '3': 12,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.SkillEgressDisclosure',
+      '10': 'skills'
+    },
   ],
 };
 
@@ -496,7 +512,26 @@ final $typed_data.Uint8List remoteEgressDisclosureDescriptor = $convert.base64De
     'VncmVzc0RhdGFDYXRlZ29yeVIOZGF0YUNhdGVnb3JpZXMSOQoKZXhwaXJlc19hdBgIIAEoCzIa'
     'Lmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXBSCWV4cGlyZXNBdBJTChJyZW1vdGVfbWNwX3Nlcn'
     'ZlcnMYCSADKAsyJS50dXJpbmcudjEuUmVtb3RlTWNwRWdyZXNzRGVzdGluYXRpb25SEHJlbW90'
-    'ZU1jcFNlcnZlcnMSJQoOc2VsZWN0ZWRfdG9vbHMYCiADKAlSDXNlbGVjdGVkVG9vbHM=');
+    'ZU1jcFNlcnZlcnMSJQoOc2VsZWN0ZWRfdG9vbHMYCiADKAlSDXNlbGVjdGVkVG9vbHMSXAoVaW'
+    '50ZWdyYXRpb25fZW5kcG9pbnRzGAsgAygLMicudHVyaW5nLnYxLkludGVncmF0aW9uRWdyZXNz'
+    'RGVzdGluYXRpb25SFGludGVncmF0aW9uRW5kcG9pbnRzEjgKBnNraWxscxgMIAMoCzIgLnR1cm'
+    'luZy52MS5Ta2lsbEVncmVzc0Rpc2Nsb3N1cmVSBnNraWxscw==');
+
+@$core.Deprecated('Use skillEgressDisclosureDescriptor instead')
+const SkillEgressDisclosure$json = {
+  '1': 'SkillEgressDisclosure',
+  '2': [
+    {'1': 'skill_id', '3': 1, '4': 1, '5': 9, '10': 'skillId'},
+    {'1': 'display_name', '3': 2, '4': 1, '5': 9, '10': 'displayName'},
+    {'1': 'body_may_be_sent', '3': 3, '4': 1, '5': 8, '10': 'bodyMayBeSent'},
+  ],
+};
+
+/// Descriptor for `SkillEgressDisclosure`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List skillEgressDisclosureDescriptor = $convert.base64Decode(
+    'ChVTa2lsbEVncmVzc0Rpc2Nsb3N1cmUSGQoIc2tpbGxfaWQYASABKAlSB3NraWxsSWQSIQoMZG'
+    'lzcGxheV9uYW1lGAIgASgJUgtkaXNwbGF5TmFtZRInChBib2R5X21heV9iZV9zZW50GAMgASgI'
+    'Ug1ib2R5TWF5QmVTZW50');
 
 @$core.Deprecated('Use remoteMcpEgressDestinationDescriptor instead')
 const RemoteMcpEgressDestination$json = {
@@ -514,6 +549,25 @@ final $typed_data.Uint8List remoteMcpEgressDestinationDescriptor =
         'ChpSZW1vdGVNY3BFZ3Jlc3NEZXN0aW5hdGlvbhIfCgtzZXJ2ZXJfbmFtZRgBIAEoCVIKc2Vydm'
         'VyTmFtZRIaCghlbmRwb2ludBgCIAEoCVIIZW5kcG9pbnQSIwoNZW5kcG9pbnRfaG9zdBgDIAEo'
         'CVIMZW5kcG9pbnRIb3N0');
+
+@$core.Deprecated('Use integrationEgressDestinationDescriptor instead')
+const IntegrationEgressDestination$json = {
+  '1': 'IntegrationEgressDestination',
+  '2': [
+    {'1': 'endpoint', '3': 1, '4': 1, '5': 9, '10': 'endpoint'},
+    {'1': 'endpoint_host', '3': 2, '4': 1, '5': 9, '10': 'endpointHost'},
+    {'1': 'connection_id', '3': 3, '4': 1, '5': 9, '10': 'connectionId'},
+    {'1': 'display_name', '3': 4, '4': 1, '5': 9, '10': 'displayName'},
+    {'1': 'tools', '3': 5, '4': 3, '5': 9, '10': 'tools'},
+  ],
+};
+
+/// Descriptor for `IntegrationEgressDestination`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List integrationEgressDestinationDescriptor = $convert.base64Decode(
+    'ChxJbnRlZ3JhdGlvbkVncmVzc0Rlc3RpbmF0aW9uEhoKCGVuZHBvaW50GAEgASgJUghlbmRwb2'
+    'ludBIjCg1lbmRwb2ludF9ob3N0GAIgASgJUgxlbmRwb2ludEhvc3QSIwoNY29ubmVjdGlvbl9p'
+    'ZBgDIAEoCVIMY29ubmVjdGlvbklkEiEKDGRpc3BsYXlfbmFtZRgEIAEoCVILZGlzcGxheU5hbW'
+    'USFAoFdG9vbHMYBSADKAlSBXRvb2xz');
 
 @$core.Deprecated('Use remoteEgressConsentDescriptor instead')
 const RemoteEgressConsent$json = {
@@ -618,6 +672,14 @@ const RunEgressDecision$json = {
       '6': '.turing.v1.RemoteMcpEgressDestination',
       '10': 'remoteMcpServers'
     },
+    {
+      '1': 'integration_endpoints',
+      '3': 18,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.IntegrationEgressDestination',
+      '10': 'integrationEndpoints'
+    },
   ],
 };
 
@@ -638,7 +700,9 @@ final $typed_data.Uint8List runEgressDecisionDescriptor = $convert.base64Decode(
     'bGUSPwocZXh0ZXJuYWxfY3JlZGVudGlhbF9yZWZfaGFzaBgPIAEoCVIZZXh0ZXJuYWxDcmVkZW'
     '50aWFsUmVmSGFzaBIlCg5yZXF1ZXN0X2RpZ2VzdBgQIAEoCVINcmVxdWVzdERpZ2VzdBJTChJy'
     'ZW1vdGVfbWNwX3NlcnZlcnMYESADKAsyJS50dXJpbmcudjEuUmVtb3RlTWNwRWdyZXNzRGVzdG'
-    'luYXRpb25SEHJlbW90ZU1jcFNlcnZlcnM=');
+    'luYXRpb25SEHJlbW90ZU1jcFNlcnZlcnMSXAoVaW50ZWdyYXRpb25fZW5kcG9pbnRzGBIgAygL'
+    'MicudHVyaW5nLnYxLkludGVncmF0aW9uRWdyZXNzRGVzdGluYXRpb25SFGludGVncmF0aW9uRW'
+    '5kcG9pbnRz');
 
 @$core.Deprecated('Use agentDescriptorDescriptor instead')
 const AgentDescriptor$json = {

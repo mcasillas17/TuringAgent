@@ -84,6 +84,20 @@ class IntegrationServiceClient extends $grpc.Client {
     return $createUnaryCall(_$deleteConnection, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.ListIntegrationToolsResponse> listIntegrationTools(
+    $0.ListIntegrationToolsRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$listIntegrationTools, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.CallIntegrationToolResponse> callIntegrationTool(
+    $0.CallIntegrationToolRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$callIntegrationTool, request, options: options);
+  }
+
   // method descriptors
 
   static final _$listProviders =
@@ -116,6 +130,16 @@ class IntegrationServiceClient extends $grpc.Client {
       '/turing.v1.IntegrationService/DeleteConnection',
       ($0.DeleteConnectionRequest value) => value.writeToBuffer(),
       $0.DeleteConnectionResponse.fromBuffer);
+  static final _$listIntegrationTools = $grpc.ClientMethod<
+          $0.ListIntegrationToolsRequest, $0.ListIntegrationToolsResponse>(
+      '/turing.v1.IntegrationService/ListIntegrationTools',
+      ($0.ListIntegrationToolsRequest value) => value.writeToBuffer(),
+      $0.ListIntegrationToolsResponse.fromBuffer);
+  static final _$callIntegrationTool = $grpc.ClientMethod<
+          $0.CallIntegrationToolRequest, $0.CallIntegrationToolResponse>(
+      '/turing.v1.IntegrationService/CallIntegrationTool',
+      ($0.CallIntegrationToolRequest value) => value.writeToBuffer(),
+      $0.CallIntegrationToolResponse.fromBuffer);
 }
 
 @$pb.GrpcServiceName('turing.v1.IntegrationService')
@@ -174,6 +198,24 @@ abstract class IntegrationServiceBase extends $grpc.Service {
         ($core.List<$core.int> value) =>
             $0.DeleteConnectionRequest.fromBuffer(value),
         ($0.DeleteConnectionResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.ListIntegrationToolsRequest,
+            $0.ListIntegrationToolsResponse>(
+        'ListIntegrationTools',
+        listIntegrationTools_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.ListIntegrationToolsRequest.fromBuffer(value),
+        ($0.ListIntegrationToolsResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.CallIntegrationToolRequest,
+            $0.CallIntegrationToolResponse>(
+        'CallIntegrationTool',
+        callIntegrationTool_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.CallIntegrationToolRequest.fromBuffer(value),
+        ($0.CallIntegrationToolResponse value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.ListProvidersResponse> listProviders_Pre(
@@ -226,4 +268,22 @@ abstract class IntegrationServiceBase extends $grpc.Service {
 
   $async.Future<$0.DeleteConnectionResponse> deleteConnection(
       $grpc.ServiceCall call, $0.DeleteConnectionRequest request);
+
+  $async.Future<$0.ListIntegrationToolsResponse> listIntegrationTools_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.ListIntegrationToolsRequest> $request) async {
+    return listIntegrationTools($call, await $request);
+  }
+
+  $async.Future<$0.ListIntegrationToolsResponse> listIntegrationTools(
+      $grpc.ServiceCall call, $0.ListIntegrationToolsRequest request);
+
+  $async.Future<$0.CallIntegrationToolResponse> callIntegrationTool_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.CallIntegrationToolRequest> $request) async {
+    return callIntegrationTool($call, await $request);
+  }
+
+  $async.Future<$0.CallIntegrationToolResponse> callIntegrationTool(
+      $grpc.ServiceCall call, $0.CallIntegrationToolRequest request);
 }

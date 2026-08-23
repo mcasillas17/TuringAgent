@@ -201,6 +201,7 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0014_session_deletion_withdrawal",
 		"0015_session_lifecycle",
 		"0016_mcp_registry",
+		"0017_integrations_consumer",
 		"0017_run_outcomes",
 	}
 	if !reflect.DeepEqual(got, want) {

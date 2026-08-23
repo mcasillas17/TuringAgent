@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
+
+const MaxIntegrationApprovalRenderBytes = 32 * 1024
 
 var (
 	ErrApprovalExpired         = errors.New("approval expired")
@@ -156,8 +159,12 @@ func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, 
 	if err := tx.QueryRowContext(ctx, `SELECT trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&requestTraceID); err != nil {
 		return ApprovalRecord{}, Event{}, err
 	}
+	requestPayload, err := approvalLifecyclePayloadTx(ctx, tx, record, requestTraceID, "approval.requested")
+	if err != nil {
+		return ApprovalRecord{}, Event{}, err
+	}
 	transition, err := awaitApprovalTransitionTx(ctx, tx, runID, record.ApprovalID,
-		approvalLifecyclePayload(record, requestTraceID, "approval.requested"))
+		requestPayload)
 	if err != nil {
 		return ApprovalRecord{}, Event{}, err
 	}
@@ -780,6 +787,30 @@ func approvalLifecyclePayload(approval ApprovalRecord, traceID string, eventType
 	return payload
 }
 
+func approvalLifecyclePayloadTx(ctx context.Context, tx *sql.Tx, approval ApprovalRecord, traceID string, eventType string) (map[string]any, error) {
+	payload := approvalLifecyclePayload(approval, traceID, eventType)
+	if eventType != "approval.requested" {
+		return payload, nil
+	}
+	var serverName string
+	if approval.ToolCallID != "" {
+		_ = tx.QueryRowContext(ctx, `SELECT server_name FROM tool_calls WHERE id = ?`, approval.ToolCallID).Scan(&serverName)
+	}
+	if serverName != "integrations" || approval.ToolName != "github.create_comment" {
+		return payload, nil
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(approval.ArgsJSON), &args); err != nil {
+		return nil, err
+	}
+	render, err := buildIntegrationApprovalRender(ctx, tx, approval.ToolName, args)
+	if err != nil {
+		return nil, err
+	}
+	payload["fullArguments"] = render
+	return payload, nil
+}
+
 // terminalApproval is the identity of one approval that a run-level cleanup is
 // ending. The two cleanups that revoke approvals in bulk — a run reaching a
 // terminal state, and a recovery discarding an authorization it can no longer
@@ -836,7 +867,11 @@ func appendApprovalLifecycleEventTx(ctx context.Context, tx *sql.Tx, approval Ap
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, approval.RunID).Scan(&sessionID, &traceID); err != nil {
 		return Event{}, err
 	}
-	payloadJSON, err := marshalEventPayload(approvalLifecyclePayload(approval, traceID, eventType))
+	payload, err := approvalLifecyclePayloadTx(ctx, tx, approval, traceID, eventType)
+	if err != nil {
+		return Event{}, err
+	}
+	payloadJSON, err := marshalEventPayload(payload)
 	if err != nil {
 		return Event{}, err
 	}
@@ -861,11 +896,48 @@ func appendApprovalRunStateEventTx(ctx context.Context, tx *sql.Tx, approval App
 	if err := tx.QueryRowContext(ctx, `SELECT session_id, trace_id FROM agent_runs WHERE id = ?`, approval.RunID).Scan(&sessionID, &traceID); err != nil {
 		return Event{}, err
 	}
-	payloadJSON, err := marshalRunStatePayload(approvalLifecyclePayload(approval, traceID, eventType), state)
+	payload, err := approvalLifecyclePayloadTx(ctx, tx, approval, traceID, eventType)
+	if err != nil {
+		return Event{}, err
+	}
+	payloadJSON, err := marshalRunStatePayload(payload, state)
 	if err != nil {
 		return Event{}, err
 	}
 	return appendRunEventTx(ctx, tx, sessionID, approval.RunID, traceID, eventType, payloadJSON, createdAt)
+}
+
+type approvalRenderQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (r *Repository) IntegrationApprovalRender(ctx context.Context, toolName string, args map[string]any) (string, error) {
+	return buildIntegrationApprovalRender(ctx, r.db, toolName, args)
+}
+
+func buildIntegrationApprovalRender(ctx context.Context, queryer approvalRenderQueryer, toolName string, args map[string]any) (string, error) {
+	if toolName != "github.create_comment" {
+		return "", errors.New("integration approval render is not defined for this tool")
+	}
+	connectionID, ok := args["connection_id"].(string)
+	if !ok || connectionID == "" {
+		return "", errors.New("connection_id is required")
+	}
+	owner, ownerOK := args["owner"].(string)
+	repo, repoOK := args["repo"].(string)
+	body, bodyOK := args["body"].(string)
+	number, numberOK := args["issue_number"].(float64)
+	if !ownerOK || !repoOK || !bodyOK || !numberOK || owner == "" || repo == "" || number < 1 || number != float64(int(number)) {
+		return "", errors.New("GitHub comment approval arguments are invalid")
+	}
+	if owner != strings.TrimSpace(owner) || repo != strings.TrimSpace(repo) {
+		return "", errors.New("GitHub comment approval destination is not normalized")
+	}
+	var displayName string
+	if err := queryer.QueryRowContext(ctx, `SELECT display_name FROM integration_connections WHERE id = ? AND provider = 'github' AND status = 'connected'`, connectionID).Scan(&displayName); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Connection: %s (%s)\nDestination: api.github.com/%s/%s/issues/%d\nAction: create issue comment\n\nFull comment body:\n%s", displayName, connectionID, owner, repo, int(number), body), nil
 }
 
 func approvalArgsSummary(argsJSON string) string {

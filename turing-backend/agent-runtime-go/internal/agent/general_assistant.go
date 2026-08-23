@@ -48,6 +48,7 @@ type GeneralAssistantTools struct {
 	ToolTimeout          time.Duration
 	TotalToolTimeout     time.Duration
 	RegisteredMCPServers func(context.Context) (map[string]ToolLister, error)
+	IntegrationTools     func(context.Context) (ToolLister, error)
 }
 
 const (
@@ -863,6 +864,19 @@ discoveryLoop:
 					}
 					servers[serverName] = client
 				}
+			}
+			if a.tools.IntegrationTools != nil {
+				integrationClient, loadErr := a.tools.IntegrationTools(ctx)
+				if loadErr != nil {
+					a.registryMu.Lock()
+					discovery.err = loadErr
+					discovery.retryAfterLeaderCancel = discovery.generation != a.registryGeneration || parentCtx.Err() != nil
+					a.discovery = nil
+					close(discovery.done)
+					a.registryMu.Unlock()
+					return nil, loadErr
+				}
+				servers["integrations"] = integrationClient
 			}
 		}
 		registry, err := BuildToolRegistry(ctx, servers)

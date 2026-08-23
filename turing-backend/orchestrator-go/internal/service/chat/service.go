@@ -37,10 +37,11 @@ type Server struct {
 	// cannot leak into an unrelated test. Written by the test that owns this
 	// server before it triggers the path, and read from whatever goroutine runs
 	// it — an ordering the test establishes, not one this field enforces.
-	afterRunStateReadForCancel func(runID string)
-	egress                     EgressConfig
-	now                        func() time.Time
-	nonce                      func() (string, error)
+	afterRunStateReadForCancel  func(runID string)
+	egress                      EgressConfig
+	now                         func() time.Time
+	nonce                       func() (string, error)
+	integrationEndpointResolver func(context.Context, []string) ([]repository.IntegrationEndpointEgress, error)
 }
 
 type runtimeDispatcher interface {
@@ -60,6 +61,7 @@ func NewWithEgressConfig(repo *repository.Repository, bus *events.Bus, runtimeSe
 		repo: repo, bus: bus, runtime: runtimeServer,
 		ollamaModel: ollamaModel, openAIModel: openAIModel,
 		egress: egressConfig, now: time.Now, nonce: newEgressNonce,
+		integrationEndpointResolver: repo.IntegrationEndpointsForTools,
 	}
 }
 
@@ -429,6 +431,9 @@ func mapEnqueueError(ctx context.Context, err error) error {
 	}
 	if errors.Is(err, repository.ErrEgressChallengeAlreadyUsed) {
 		return status.Error(codes.AlreadyExists, "remote egress challenge was already used")
+	}
+	if errors.Is(err, repository.ErrEgressSkillSnapshotChanged) {
+		return status.Error(codes.FailedPrecondition, "the skill snapshot changed since consent was prepared; prepare the send again")
 	}
 	if errors.Is(err, repository.ErrRemoteEgressConsentRequired) ||
 		errors.Is(err, repository.ErrLocalEgressDecisionForbidden) ||

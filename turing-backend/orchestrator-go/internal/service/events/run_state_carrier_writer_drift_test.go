@@ -105,7 +105,7 @@ func startDriftGuardRunWithRoutingNotice(t *testing.T, repo *repository.Reposito
 		ModelProvider: "ollama", Model: "local",
 		SelectedTools: []string{"vendor/vendor.lookup"},
 		EgressDecision: &repository.PendingEgressDecision{
-			Version: 1, ChallengeNonce: "nonce_" + title, ChallengeFingerprint: "fingerprint_" + title,
+			Version: repository.RunEgressDecisionVersion, ChallengeNonce: "nonce_" + title, ChallengeFingerprint: "fingerprint_" + title,
 			RequestDigest: "digest_" + title, Provider: "ollama", Model: "local",
 			DataCategories: []string{
 				"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS",

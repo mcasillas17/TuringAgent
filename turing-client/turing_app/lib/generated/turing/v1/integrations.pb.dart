@@ -14,7 +14,9 @@ import 'dart:core' as $core;
 
 import 'package:protobuf/protobuf.dart' as $pb;
 
+import '../../google/protobuf/struct.pb.dart' as $2;
 import '../../google/protobuf/timestamp.pb.dart' as $1;
+import 'common.pbenum.dart' as $3;
 import 'integrations.pbenum.dart';
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
@@ -1003,6 +1005,379 @@ class DeleteConnectionResponse extends $pb.GeneratedMessage {
   static DeleteConnectionResponse getDefault() => _defaultInstance ??=
       $pb.GeneratedMessage.$_defaultFor<DeleteConnectionResponse>(create);
   static DeleteConnectionResponse? _defaultInstance;
+}
+
+class IntegrationToolDescriptor extends $pb.GeneratedMessage {
+  factory IntegrationToolDescriptor({
+    $core.String? toolName,
+    $core.String? description,
+    $2.Struct? schema,
+    $core.bool? readOnly,
+    $3.ToolPolicy? policy,
+  }) {
+    final result = create();
+    if (toolName != null) result.toolName = toolName;
+    if (description != null) result.description = description;
+    if (schema != null) result.schema = schema;
+    if (readOnly != null) result.readOnly = readOnly;
+    if (policy != null) result.policy = policy;
+    return result;
+  }
+
+  IntegrationToolDescriptor._();
+
+  factory IntegrationToolDescriptor.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory IntegrationToolDescriptor.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'IntegrationToolDescriptor',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'toolName')
+    ..aOS(2, _omitFieldNames ? '' : 'description')
+    ..aOM<$2.Struct>(3, _omitFieldNames ? '' : 'schema',
+        subBuilder: $2.Struct.create)
+    ..aOB(4, _omitFieldNames ? '' : 'readOnly')
+    ..e<$3.ToolPolicy>(5, _omitFieldNames ? '' : 'policy', $pb.PbFieldType.OE,
+        defaultOrMaker: $3.ToolPolicy.TOOL_POLICY_UNSPECIFIED,
+        valueOf: $3.ToolPolicy.valueOf,
+        enumValues: $3.ToolPolicy.values)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  IntegrationToolDescriptor clone() =>
+      IntegrationToolDescriptor()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  IntegrationToolDescriptor copyWith(
+          void Function(IntegrationToolDescriptor) updates) =>
+      super.copyWith((message) => updates(message as IntegrationToolDescriptor))
+          as IntegrationToolDescriptor;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static IntegrationToolDescriptor create() => IntegrationToolDescriptor._();
+  @$core.override
+  IntegrationToolDescriptor createEmptyInstance() => create();
+  static $pb.PbList<IntegrationToolDescriptor> createRepeated() =>
+      $pb.PbList<IntegrationToolDescriptor>();
+  @$core.pragma('dart2js:noInline')
+  static IntegrationToolDescriptor getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<IntegrationToolDescriptor>(create);
+  static IntegrationToolDescriptor? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get toolName => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set toolName($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasToolName() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearToolName() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get description => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set description($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasDescription() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearDescription() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $2.Struct get schema => $_getN(2);
+  @$pb.TagNumber(3)
+  set schema($2.Struct value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasSchema() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearSchema() => $_clearField(3);
+  @$pb.TagNumber(3)
+  $2.Struct ensureSchema() => $_ensure(2);
+
+  @$pb.TagNumber(4)
+  $core.bool get readOnly => $_getBF(3);
+  @$pb.TagNumber(4)
+  set readOnly($core.bool value) => $_setBool(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasReadOnly() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearReadOnly() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $3.ToolPolicy get policy => $_getN(4);
+  @$pb.TagNumber(5)
+  set policy($3.ToolPolicy value) => $_setField(5, value);
+  @$pb.TagNumber(5)
+  $core.bool hasPolicy() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearPolicy() => $_clearField(5);
+}
+
+class ListIntegrationToolsRequest extends $pb.GeneratedMessage {
+  factory ListIntegrationToolsRequest() => create();
+
+  ListIntegrationToolsRequest._();
+
+  factory ListIntegrationToolsRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ListIntegrationToolsRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ListIntegrationToolsRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListIntegrationToolsRequest clone() =>
+      ListIntegrationToolsRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListIntegrationToolsRequest copyWith(
+          void Function(ListIntegrationToolsRequest) updates) =>
+      super.copyWith(
+              (message) => updates(message as ListIntegrationToolsRequest))
+          as ListIntegrationToolsRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ListIntegrationToolsRequest create() =>
+      ListIntegrationToolsRequest._();
+  @$core.override
+  ListIntegrationToolsRequest createEmptyInstance() => create();
+  static $pb.PbList<ListIntegrationToolsRequest> createRepeated() =>
+      $pb.PbList<ListIntegrationToolsRequest>();
+  @$core.pragma('dart2js:noInline')
+  static ListIntegrationToolsRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ListIntegrationToolsRequest>(create);
+  static ListIntegrationToolsRequest? _defaultInstance;
+}
+
+class ListIntegrationToolsResponse extends $pb.GeneratedMessage {
+  factory ListIntegrationToolsResponse({
+    $core.Iterable<IntegrationToolDescriptor>? tools,
+  }) {
+    final result = create();
+    if (tools != null) result.tools.addAll(tools);
+    return result;
+  }
+
+  ListIntegrationToolsResponse._();
+
+  factory ListIntegrationToolsResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ListIntegrationToolsResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ListIntegrationToolsResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..pc<IntegrationToolDescriptor>(
+        1, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
+        subBuilder: IntegrationToolDescriptor.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListIntegrationToolsResponse clone() =>
+      ListIntegrationToolsResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListIntegrationToolsResponse copyWith(
+          void Function(ListIntegrationToolsResponse) updates) =>
+      super.copyWith(
+              (message) => updates(message as ListIntegrationToolsResponse))
+          as ListIntegrationToolsResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ListIntegrationToolsResponse create() =>
+      ListIntegrationToolsResponse._();
+  @$core.override
+  ListIntegrationToolsResponse createEmptyInstance() => create();
+  static $pb.PbList<ListIntegrationToolsResponse> createRepeated() =>
+      $pb.PbList<ListIntegrationToolsResponse>();
+  @$core.pragma('dart2js:noInline')
+  static ListIntegrationToolsResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ListIntegrationToolsResponse>(create);
+  static ListIntegrationToolsResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $pb.PbList<IntegrationToolDescriptor> get tools => $_getList(0);
+}
+
+class CallIntegrationToolRequest extends $pb.GeneratedMessage {
+  factory CallIntegrationToolRequest({
+    $core.String? runId,
+    $core.String? approvalId,
+    $core.String? toolName,
+    $2.Struct? args,
+  }) {
+    final result = create();
+    if (runId != null) result.runId = runId;
+    if (approvalId != null) result.approvalId = approvalId;
+    if (toolName != null) result.toolName = toolName;
+    if (args != null) result.args = args;
+    return result;
+  }
+
+  CallIntegrationToolRequest._();
+
+  factory CallIntegrationToolRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory CallIntegrationToolRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'CallIntegrationToolRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'runId')
+    ..aOS(2, _omitFieldNames ? '' : 'approvalId')
+    ..aOS(3, _omitFieldNames ? '' : 'toolName')
+    ..aOM<$2.Struct>(4, _omitFieldNames ? '' : 'args',
+        subBuilder: $2.Struct.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CallIntegrationToolRequest clone() =>
+      CallIntegrationToolRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CallIntegrationToolRequest copyWith(
+          void Function(CallIntegrationToolRequest) updates) =>
+      super.copyWith(
+              (message) => updates(message as CallIntegrationToolRequest))
+          as CallIntegrationToolRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static CallIntegrationToolRequest create() => CallIntegrationToolRequest._();
+  @$core.override
+  CallIntegrationToolRequest createEmptyInstance() => create();
+  static $pb.PbList<CallIntegrationToolRequest> createRepeated() =>
+      $pb.PbList<CallIntegrationToolRequest>();
+  @$core.pragma('dart2js:noInline')
+  static CallIntegrationToolRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<CallIntegrationToolRequest>(create);
+  static CallIntegrationToolRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get runId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set runId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasRunId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearRunId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get approvalId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set approvalId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasApprovalId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearApprovalId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get toolName => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set toolName($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasToolName() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearToolName() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $2.Struct get args => $_getN(3);
+  @$pb.TagNumber(4)
+  set args($2.Struct value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasArgs() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearArgs() => $_clearField(4);
+  @$pb.TagNumber(4)
+  $2.Struct ensureArgs() => $_ensure(3);
+}
+
+class CallIntegrationToolResponse extends $pb.GeneratedMessage {
+  factory CallIntegrationToolResponse({
+    $2.Struct? result,
+  }) {
+    final result$ = create();
+    if (result != null) result$.result = result;
+    return result$;
+  }
+
+  CallIntegrationToolResponse._();
+
+  factory CallIntegrationToolResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory CallIntegrationToolResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'CallIntegrationToolResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOM<$2.Struct>(1, _omitFieldNames ? '' : 'result',
+        subBuilder: $2.Struct.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CallIntegrationToolResponse clone() =>
+      CallIntegrationToolResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CallIntegrationToolResponse copyWith(
+          void Function(CallIntegrationToolResponse) updates) =>
+      super.copyWith(
+              (message) => updates(message as CallIntegrationToolResponse))
+          as CallIntegrationToolResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static CallIntegrationToolResponse create() =>
+      CallIntegrationToolResponse._();
+  @$core.override
+  CallIntegrationToolResponse createEmptyInstance() => create();
+  static $pb.PbList<CallIntegrationToolResponse> createRepeated() =>
+      $pb.PbList<CallIntegrationToolResponse>();
+  @$core.pragma('dart2js:noInline')
+  static CallIntegrationToolResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<CallIntegrationToolResponse>(create);
+  static CallIntegrationToolResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $2.Struct get result => $_getN(0);
+  @$pb.TagNumber(1)
+  set result($2.Struct value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasResult() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearResult() => $_clearField(1);
+  @$pb.TagNumber(1)
+  $2.Struct ensureResult() => $_ensure(0);
 }
 
 const $core.bool _omitFieldNames =

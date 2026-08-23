@@ -68,6 +68,17 @@ func TestCreateAutomationRejectsDuplicateNamesRegardlessOfCase(t *testing.T) {
 	}
 }
 
+func TestAutomationAllowlistRefusesIntegrationTools(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	_, err := repo.CreateAutomation(ctx, AutomationInput{
+		Name: "GitHub digest", Prompt: "List issues", Schedule: everyFiveMinutes(),
+		AllowedTools: []AutomationTool{{ServerName: "integrations", ToolName: "github.list_issues"}},
+	})
+	if !errors.Is(err, ErrAutomationIntegrationToolUnsupported) {
+		t.Fatalf("error = %v, want ErrAutomationIntegrationToolUnsupported", err)
+	}
+}
+
 func TestCreateAutomationRejectsUnusableSchedules(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 

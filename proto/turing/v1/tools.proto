@@ -63,4 +63,7 @@ message ToolPolicyDecision {
   // the version forward before tool or model work continues, so a worker never
   // advances past the state the orchestrator has committed.
   int64 run_state_version = 8;
+  // Authored by the orchestrator. Approval waiting is still policy-driven;
+  // this bit only controls failure/side-effect classification.
+  bool read_only = 9;
 }

@@ -1582,6 +1582,7 @@ class _ChatScreenState extends State<ChatScreen> {
           approvalId: approvalId,
           toolName: toolName,
           argsSummary: _asString(event.payload['argsSummary']) ?? '',
+          fullArguments: _asString(event.payload['fullArguments']) ?? '',
         ),
       );
     });
@@ -1914,6 +1915,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ApprovalCard(
             toolName: approval.toolName,
             argsSummary: approval.argsSummary,
+            fullArguments: approval.fullArguments,
             onApprove: () => _approve(approval),
             onDeny: () => _deny(approval),
             busy: _approvalsInFlight.contains(approval.approvalId),
@@ -2600,9 +2602,11 @@ class _PendingApproval {
     required this.approvalId,
     required this.toolName,
     required this.argsSummary,
+    required this.fullArguments,
   });
 
   final String approvalId;
   final String toolName;
   final String argsSummary;
+  final String fullArguments;
 }

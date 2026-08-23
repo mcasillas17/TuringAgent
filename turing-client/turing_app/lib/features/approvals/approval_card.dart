@@ -5,6 +5,7 @@ class ApprovalCard extends StatelessWidget {
     super.key,
     required this.toolName,
     required this.argsSummary,
+    this.fullArguments = '',
     required this.onApprove,
     required this.onDeny,
     this.busy = false,
@@ -12,6 +13,7 @@ class ApprovalCard extends StatelessWidget {
 
   final String toolName;
   final String argsSummary;
+  final String fullArguments;
   final VoidCallback onApprove;
   final VoidCallback onDeny;
 
@@ -42,6 +44,13 @@ class ApprovalCard extends StatelessWidget {
             if (argsSummary.isNotEmpty) ...[
               const SizedBox(height: 8),
               Text(argsSummary),
+            ],
+            if (fullArguments.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              SelectableText(
+                fullArguments,
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
             ],
             const SizedBox(height: 12),
             Wrap(

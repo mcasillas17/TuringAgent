@@ -316,6 +316,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     ToolCallPhase? phase,
     $core.String? provenanceToken,
     $fixnum.Int64? runStateVersion,
+    $core.bool? readOnly,
   }) {
     final result = create();
     if (decision != null) result.decision = decision;
@@ -326,6 +327,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     if (phase != null) result.phase = phase;
     if (provenanceToken != null) result.provenanceToken = provenanceToken;
     if (runStateVersion != null) result.runStateVersion = runStateVersion;
+    if (readOnly != null) result.readOnly = readOnly;
     return result;
   }
 
@@ -357,6 +359,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
         enumValues: ToolCallPhase.values)
     ..aOS(7, _omitFieldNames ? '' : 'provenanceToken')
     ..aInt64(8, _omitFieldNames ? '' : 'runStateVersion')
+    ..aOB(9, _omitFieldNames ? '' : 'readOnly')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -458,6 +461,17 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   $core.bool hasRunStateVersion() => $_has(7);
   @$pb.TagNumber(8)
   void clearRunStateVersion() => $_clearField(8);
+
+  /// Authored by the orchestrator. Approval waiting is still policy-driven;
+  /// this bit only controls failure/side-effect classification.
+  @$pb.TagNumber(9)
+  $core.bool get readOnly => $_getBF(8);
+  @$pb.TagNumber(9)
+  set readOnly($core.bool value) => $_setBool(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasReadOnly() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearReadOnly() => $_clearField(9);
 }
 
 const $core.bool _omitFieldNames =

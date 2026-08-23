@@ -99,6 +99,9 @@ func run() error {
 			}
 			return servers, nil
 		},
+		IntegrationTools: func(context.Context) (agent.ToolLister, error) {
+			return mcp.NewIntegrationClient(client), nil
+		},
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
 	// The only place a third-party API key exists at runtime. It is read from

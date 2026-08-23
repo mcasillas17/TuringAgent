@@ -391,9 +391,10 @@ func TestRunOutcomeProtoContractUsesApprovedAllocations(t *testing.T) {
 		"created_at": 7, "payload": 8, "run_state": 9,
 	})
 	assertProtoField(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), "run_state_version", 8, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), "read_only", 9, protoreflect.BoolKind, false, "")
 	assertProtoFieldMembers(t, turingv1.File_turing_v1_tools_proto.Messages().ByName("ToolPolicyDecision"), map[protoreflect.Name]protoreflect.FieldNumber{
 		"decision": 1, "tool_call_id": 2, "approval_id": 3, "reason": 4, "terminal_run": 5, "phase": 6,
-		"provenance_token": 7, "run_state_version": 8,
+		"provenance_token": 7, "run_state_version": 8, "read_only": 9,
 	})
 }
 
@@ -642,6 +643,13 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	assertProtoField(t, disclosure, "expires_at", 8, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
 	assertProtoField(t, disclosure, "remote_mcp_servers", 9, protoreflect.MessageKind, true, "turing.v1.RemoteMcpEgressDestination")
 	assertProtoField(t, disclosure, "selected_tools", 10, protoreflect.StringKind, true, "")
+	assertProtoField(t, disclosure, "integration_endpoints", 11, protoreflect.MessageKind, true, "turing.v1.IntegrationEgressDestination")
+	assertProtoField(t, disclosure, "skills", 12, protoreflect.MessageKind, true, "turing.v1.SkillEgressDisclosure")
+
+	skill := common.Messages().ByName("SkillEgressDisclosure")
+	assertProtoField(t, skill, "skill_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, skill, "display_name", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, skill, "body_may_be_sent", 3, protoreflect.BoolKind, false, "")
 
 	remoteMCP := common.Messages().ByName("RemoteMcpEgressDestination")
 	assertProtoField(t, remoteMCP, "server_name", 1, protoreflect.StringKind, false, "")

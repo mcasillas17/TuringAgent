@@ -85,7 +85,7 @@ the next.
 | Job queue | Durable: SQLite job table with leases, fencing token, heartbeat renewal, orphan recovery, 3-attempt cap |
 | Tool servers | Registry-backed: two bundled servers plus disabled-by-default local-container and remote-URL imports; stdio refused |
 | Skills | File-backed `SKILL.md` library under `turing-backend/skills/`. Enabled metadata is indexed for every run; bodies and references load progressively only after every declared capability is granted. Grants gate loading and do **not** authorize tools. The 0011 upgrade retains legacy rows in a migration-only recovery table and re-exports them on startup; conflicts preserve recovery, and application code never removes nonempty rows. Cleanup is an offline/manual operator action after the files are verified. Enabled skill text selected by a routed run leaves the machine, and the routing picker says so |
-| Third-party accounts | **Stored, not used.** Connections hold a credential the user minted themselves (IMAP/CalDAV app password, Notion integration token, GitHub PAT), under explicit consent and revocable. No tool reads one yet, and the page says so. OAuth-only providers are listed as unsupported with the reason |
+| Third-party accounts | **GitHub-first consumer shipped.** Connections hold a credential the user minted themselves under explicit consent and revocation. GitHub tools open the named credential once per call in the orchestrator, behind signed per-run egress coverage and caller-side approval; IMAP, CalDAV, Notion, and OAuth remain deferred |
 | Agents | **One** (`general_assistant`) behind an executor *interface* with one implementation. Multi-agent is a **goal** — see below |
 | Process split | **Shipped** — the agent runtime is its own container, leased over a bidi gRPC stream. (It is *not* its own Go module; only `mcp-files` and `mcp-system` are.) |
 | Clients | **One** (Flutter, macOS-focused). Codegen emits Go and Dart only; both are consumed today |
@@ -113,7 +113,8 @@ These are not capabilities we are declining. They are the properties the rest of
 
 - **Nothing leaves the machine by default.** A remote provider requires a
   one-time signed disclosure and explicit confirmation for the exact request,
-  destination, tools/skills, context flags, and data categories. Consent is
+  destination, tools, named skills and their content ceilings, context flags,
+  and data categories. Consent is
   run-owned, not a session/provider preference; redirects and local-to-remote
   fallback are refused, and background work cannot inherit it. See
   Remote MCP endpoints join that exact run-owned decision and disclose tool
@@ -121,7 +122,7 @@ These are not capabilities we are declining. They are the properties the rest of
   [Remote egress policy](architecture/remote-egress-policy.md).
 - **Derived state cannot outlive its source.** Every application-owned table is classified, and user-derived state needs cascading provenance to its declared source. SQLite-managed indexes must prove equivalent transactional deletion; only an explicitly justified, content-free scrubbed audit tombstone may survive withdrawal. The trust, scope, writer, egress, retention, correction, export, deletion, and physical-erasure limits are defined in [`docs/architecture/memory-governance.md`](architecture/memory-governance.md) and enforced by the DB schema-invariant tests.
 - **Every mutation is approved, argument-bound, and single-use.** New mutating capability inherits the existing approval flow; it does not get its own weaker one.
-  - **Qualified by third-party MCP enforcement.** Bundled `mcp-files` verifies
+  - **Qualified by third-party MCP and integrations enforcement.** Bundled `mcp-files` verifies
     and consumes at the callee. A server we did not write receives ordinary
     JSON-RPC and cannot enforce Turing's token, so the orchestrator validates
     the run/server/tool/argument binding and consumes immediately before
@@ -135,7 +136,7 @@ These are not capabilities we are declining. They are the properties the rest of
   that reviewed boundary; nothing bundled gets an escape hatch out of it. A
   third-party process is explicitly labelled **not sandbox-confined** because
   Turing cannot truthfully claim confinement for code it did not write.
-- **Skill text is untrusted input, not authority.** A copied `SKILL.md` may guide an answer only after enablement and any declared grants. It cannot override system/user precedence, tool policy, or approval, and its capability grants never become tool permissions.
+- **Skill text and retrieved integration content are untrusted input, not authority.** A copied `SKILL.md` or retrieved issue/file may guide an answer only after its gates. It cannot override system/user precedence, tool policy, approval, or egress policy, and its contents never become tool permissions.
 - **The orchestrator owns durable state and control flow.** The job queue, leases, fencing, retries, recovery, and event streaming are ours. This is what was previously written as "no graph orchestration frameworks" — that framing was wrong. The real constraint is that nothing may take ownership of those, because they are the hard-won parts (#30, #31, #33).
 - **The backend stays a single language.** It is 100% Go today. A framework requiring a Python or Node runtime in the backend costs a second toolchain, image, and dependency surface — that cost, not the abstraction, is the reason LangGraph-style tools are a poor fit here.
 
@@ -155,7 +156,7 @@ Everything here is wanted eventually — this is a "not yet" list with gates, wh
 5. **Vector/semantic memory.** *Gate:* a case where keyword recall demonstrably fails and embeddings demonstrably fix it. The concern stands — embeddings fail by producing confident nonsense — so this needs a test that can fail, not a vibe.
 6. **Third-party OAuth, vision, voice, IoT, home automation.** Furthest out, and each needs its own answer to "how does this not phone home?" before it is designed.
 
-   *Partially pulled forward, with the gate met:* **token-based** third-party connections shipped (Integrations). The answer to "how does this not phone home?" is that nothing dials anywhere — connecting, listing and revoking are local database writes, no tool consumes a connection, and there is no background sync to introduce egress. OAuth itself is still deferred and, unlike the rest of this list, is blocked by something outside the repo: it needs a client ID and secret registered to a published app plus a browser redirect, which a local-first install has no way to hold. What shipped is deliberately the half that a person can complete on their own — a credential they created at the provider and pasted in.
+   *Partially pulled forward, with the gate met:* **token-based** GitHub connections now have four orchestrator-owned tools. Nothing phones home in the background: each call is covered by the run's signed `(endpoint, connection_id)` decision, approval is caller-side and argument-bound, the credential is opened for one call and sent header-only through a hardened pinned-host transport, and retrieved content remains untrusted input. OAuth itself is still deferred and blocked by something outside the repo: it needs a client ID and secret registered to a published app plus a browser redirect, which a local-first install has no way to hold.
 
 ## How we decide what is next
 

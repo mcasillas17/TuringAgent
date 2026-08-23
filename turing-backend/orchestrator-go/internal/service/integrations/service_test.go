@@ -74,6 +74,43 @@ func TestConnectionErrorHidesUnrecognisedFailures(t *testing.T) {
 	}
 }
 
+func TestIntegrationFacetsRefuseInBothDirections(t *testing.T) {
+	service, _, ctx := newIntegrationServer(t)
+	public := NewPublicServer(service)
+	internal := NewInternalServer(service)
+
+	management := []struct {
+		name string
+		call func() error
+	}{
+		{"list providers", func() error { _, err := internal.ListProviders(ctx, &turingv1.ListProvidersRequest{}); return err }},
+		{"connect", func() error { _, err := internal.ConnectAccount(ctx, imapRequest()); return err }},
+		{"list", func() error { _, err := internal.ListConnections(ctx, &turingv1.ListConnectionsRequest{}); return err }},
+		{"get", func() error { _, err := internal.GetConnection(ctx, &turingv1.GetConnectionRequest{}); return err }},
+		{"revoke", func() error {
+			_, err := internal.RevokeConnection(ctx, &turingv1.RevokeConnectionRequest{})
+			return err
+		}},
+		{"delete", func() error {
+			_, err := internal.DeleteConnection(ctx, &turingv1.DeleteConnectionRequest{})
+			return err
+		}},
+	}
+	for _, test := range management {
+		t.Run("internal "+test.name, func(t *testing.T) {
+			if got := status.Code(test.call()); got != codes.PermissionDenied {
+				t.Fatalf("code = %v, want PermissionDenied", got)
+			}
+		})
+	}
+	if _, err := public.ListIntegrationTools(ctx, &turingv1.ListIntegrationToolsRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("public list tools code = %v, want PermissionDenied", status.Code(err))
+	}
+	if _, err := public.CallIntegrationTool(ctx, &turingv1.CallIntegrationToolRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("public call code = %v, want PermissionDenied", status.Code(err))
+	}
+}
+
 func TestConnectAccountRoundTripsWithoutTheCredential(t *testing.T) {
 	server, _, ctx := newIntegrationServer(t)
 

@@ -25,6 +25,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	runtimetestkit "github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/testkit"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	orchestratortestkit "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/testkit"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -1380,7 +1381,7 @@ func TestApprovalPersistenceFailureFencesRealWorkerUntilExecutorExit(t *testing.
 				TotalToolTimeout:            time.Second,
 				MaxToolCallsPerRun:          1,
 				OpenAIModel:                 "fake-model",
-				RemoteEgressDecisionVersion: 1,
+				RemoteEgressDecisionVersion: int32(backendegress.DecisionVersion),
 				DiscoveredTools:             discoveredTools,
 			}, executor)
 		}()

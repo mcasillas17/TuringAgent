@@ -26,7 +26,7 @@ func TestMapJobCarriesTheRoutedAgentToTheWorker(t *testing.T) {
 			CredentialRef: "claude",
 		},
 		EgressDecision: &repository.RunEgressDecision{
-			DecisionID: "egress_1", Version: 1, Provider: "openai_compatible",
+			DecisionID: "egress_1", Version: repository.RunEgressDecisionVersion, Provider: "openai_compatible",
 			Model: "claude-sonnet-4", Endpoint: "https://api.anthropic.com/v1",
 			EndpointHost: "api.anthropic.com",
 			DataCategories: []string{

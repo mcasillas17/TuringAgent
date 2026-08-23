@@ -20,6 +20,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	runtimesvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runtime"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/skillfiles"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -37,6 +38,7 @@ type harness struct {
 	chatClient turingv1.ChatServiceClient
 	conn       *grpc.ClientConn
 	ctx        context.Context
+	skillRoot  string
 }
 
 func newHarness(t *testing.T) *harness {
@@ -48,6 +50,8 @@ func newHarness(t *testing.T) *harness {
 func newHarnessWithDatabase(t *testing.T, database *db.DB) *harness {
 	t.Helper()
 	repo := repository.New(database)
+	skillRoot := t.TempDir()
+	repo.SetSkillStore(skillfiles.New(skillRoot))
 	bus := events.NewBus(8)
 	runtimeServer := runtimesvc.NewWithConfig(repo, bus, runtimesvc.DispatchConfig{
 		LegacyCapabilities: &runtimesvc.LegacyCapabilityProfile{
@@ -99,7 +103,7 @@ func newHarnessWithDatabase(t *testing.T, database *db.DB) *harness {
 		runtimeServer.WaitForWorkerStreams()
 		_ = conn.Close()
 	})
-	return &harness{repo: repo, database: database, bus: bus, runtime: runtimeServer, service: chatServer, chatClient: turingv1.NewChatServiceClient(conn), conn: conn, ctx: ctx}
+	return &harness{repo: repo, database: database, bus: bus, runtime: runtimeServer, service: chatServer, chatClient: turingv1.NewChatServiceClient(conn), conn: conn, ctx: ctx, skillRoot: skillRoot}
 }
 
 func openChatTestDB(t *testing.T) *db.DB {
@@ -1007,7 +1011,7 @@ func defaultChatWorkerCapabilities(supportsExternalAgents bool) *turingv1.Worker
 		Tools:                       []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{}}},
 		MaxConcurrentRuns:           2,
 		SupportsExternalAgents:      supportsExternalAgents,
-		RemoteEgressDecisionVersion: 1,
+		RemoteEgressDecisionVersion: int32(repository.RunEgressDecisionVersion),
 	}
 	if supportsExternalAgents {
 		capabilities.ExternalAgentCredentialRefs = []string{"claude", "external"}

@@ -220,6 +220,65 @@ final $typed_data.Uint8List updateMcpToolPolicyRequestDescriptor =
         'lkEhsKCXRvb2xfbmFtZRgCIAEoCVIIdG9vbE5hbWUSLQoGcG9saWN5GAMgASgOMhUudHVyaW5n'
         'LnYxLlRvb2xQb2xpY3lSBnBvbGljeQ==');
 
+@$core.Deprecated('Use updateToolPolicyByNameRequestDescriptor instead')
+const UpdateToolPolicyByNameRequest$json = {
+  '1': 'UpdateToolPolicyByNameRequest',
+  '2': [
+    {'1': 'server_name', '3': 1, '4': 1, '5': 9, '10': 'serverName'},
+    {'1': 'tool_name', '3': 2, '4': 1, '5': 9, '10': 'toolName'},
+    {
+      '1': 'policy',
+      '3': 3,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.ToolPolicy',
+      '10': 'policy'
+    },
+  ],
+};
+
+/// Descriptor for `UpdateToolPolicyByNameRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List updateToolPolicyByNameRequestDescriptor =
+    $convert.base64Decode(
+        'Ch1VcGRhdGVUb29sUG9saWN5QnlOYW1lUmVxdWVzdBIfCgtzZXJ2ZXJfbmFtZRgBIAEoCVIKc2'
+        'VydmVyTmFtZRIbCgl0b29sX25hbWUYAiABKAlSCHRvb2xOYW1lEi0KBnBvbGljeRgDIAEoDjIV'
+        'LnR1cmluZy52MS5Ub29sUG9saWN5UgZwb2xpY3k=');
+
+@$core.Deprecated('Use listPseudoServerToolsRequestDescriptor instead')
+const ListPseudoServerToolsRequest$json = {
+  '1': 'ListPseudoServerToolsRequest',
+  '2': [
+    {'1': 'server_name', '3': 1, '4': 1, '5': 9, '10': 'serverName'},
+  ],
+};
+
+/// Descriptor for `ListPseudoServerToolsRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List listPseudoServerToolsRequestDescriptor =
+    $convert.base64Decode(
+        'ChxMaXN0UHNldWRvU2VydmVyVG9vbHNSZXF1ZXN0Eh8KC3NlcnZlcl9uYW1lGAEgASgJUgpzZX'
+        'J2ZXJOYW1l');
+
+@$core.Deprecated('Use listPseudoServerToolsResponseDescriptor instead')
+const ListPseudoServerToolsResponse$json = {
+  '1': 'ListPseudoServerToolsResponse',
+  '2': [
+    {
+      '1': 'tools',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.McpToolDescriptor',
+      '10': 'tools'
+    },
+  ],
+};
+
+/// Descriptor for `ListPseudoServerToolsResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List listPseudoServerToolsResponseDescriptor =
+    $convert.base64Decode(
+        'Ch1MaXN0UHNldWRvU2VydmVyVG9vbHNSZXNwb25zZRIyCgV0b29scxgBIAMoCzIcLnR1cmluZy'
+        '52MS5NY3BUb29sRGVzY3JpcHRvclIFdG9vbHM=');
+
 @$core.Deprecated('Use deleteMcpServerRequestDescriptor instead')
 const DeleteMcpServerRequest$json = {
   '1': 'DeleteMcpServerRequest',

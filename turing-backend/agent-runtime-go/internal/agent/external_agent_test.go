@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -28,7 +29,7 @@ func routedJob() *turingv1.AgentJob {
 	job.SelectedTools = []string{"skills/skill_view", "skills/skills_list"}
 	skillFingerprint, _ := backendegress.SkillSnapshotFingerprint(nil)
 	job.EgressDecision = &turingv1.RunEgressDecision{
-		DecisionId: "egress_test", Version: 1,
+		DecisionId: "egress_test", Version: int32(backendegress.DecisionVersion),
 		Provider: turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
 		Model:    "claude-sonnet-4-5", Endpoint: "https://api.anthropic.com/v1",
 		EndpointHost:              "api.anthropic.com",
@@ -37,7 +38,6 @@ func routedJob() *turingv1.AgentJob {
 		DataCategories: []turingv1.EgressDataCategory{
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
-			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_SCHEMAS,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_TOOL_RESULTS,
@@ -55,7 +55,7 @@ func routedJob() *turingv1.AgentJob {
 func authorizeDirectRemoteJob(job *turingv1.AgentJob, endpoint string) {
 	skillFingerprint, _ := runtimeSkillSnapshotFingerprint(job.GetSkills())
 	job.EgressDecision = &turingv1.RunEgressDecision{
-		DecisionId: "egress_direct_test", Version: 1,
+		DecisionId: "egress_direct_test", Version: int32(backendegress.DecisionVersion),
 		Provider: job.GetModelProvider(), Model: job.GetModel(),
 		Endpoint: endpoint, ChallengeFingerprint: "fingerprint_direct_test",
 		RequestDigest: "request_digest_direct_test",
@@ -63,7 +63,6 @@ func authorizeDirectRemoteJob(job *turingv1.AgentJob, endpoint string) {
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL,
-			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
 		},
 		ConsentGrantedAt:         timestamppb.Now(),
 		SkillSnapshotFingerprint: skillFingerprint,
@@ -71,6 +70,67 @@ func authorizeDirectRemoteJob(job *turingv1.AgentJob, endpoint string) {
 	}
 	parsed, _ := backendegress.ParseKeyedEndpoint(endpoint)
 	job.EgressDecision.EndpointHost = parsed.Host
+}
+
+func addDisclosedSkill(job *turingv1.AgentJob) {
+	job.Skills = []*turingv1.SkillSnapshot{{
+		SkillId: "writing/tone", Name: "Tone", Instructions: "Be concise.",
+	}}
+	fingerprint, _ := runtimeSkillSnapshotFingerprint(job.GetSkills())
+	job.EgressDecision.SkillSnapshotFingerprint = fingerprint
+	job.EgressDecision.DataCategories = append(
+		job.EgressDecision.DataCategories,
+		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
+	)
+	slices.Sort(job.EgressDecision.DataCategories)
+}
+
+func TestRemoteRunWithDisclosedSkillExecutes(t *testing.T) {
+	remote := &scriptedProvider{
+		endpoint: "https://api.anthropic.com/v1",
+		events:   []llm.StreamEvent{{Type: "completed", FinishReason: "stop"}},
+	}
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
+	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+		return remote, nil
+	})
+	job := routedJob()
+	addDisclosedSkill(job)
+
+	updates := collectUpdates(t, assistant, job)
+	if failure := findRunFailed(updates); failure != nil {
+		t.Fatalf("remote run failed: %+v", failure)
+	}
+	if len(remote.requests) != 1 {
+		t.Fatalf("remote requests = %d, want 1", len(remote.requests))
+	}
+}
+
+func TestRemoteRunRejectsSkillCategoryWithEmptySnapshot(t *testing.T) {
+	job := routedJob()
+	job.EgressDecision.DataCategories = append(
+		job.EgressDecision.DataCategories,
+		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
+	)
+	slices.Sort(job.EgressDecision.DataCategories)
+	if err := validateEgressDecisionShape(job); err == nil {
+		t.Fatal("decision disclosed skill content for an empty snapshot")
+	}
+}
+
+func TestRemoteRunRejectsUndisclosedNonEmptySkillSnapshot(t *testing.T) {
+	job := routedJob()
+	job.Skills = []*turingv1.SkillSnapshot{{
+		SkillId: "writing/tone", Name: "Tone", Instructions: "Be concise.",
+	}}
+	fingerprint, err := runtimeSkillSnapshotFingerprint(job.GetSkills())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.EgressDecision.SkillSnapshotFingerprint = fingerprint
+	if err := validateEgressDecisionShape(job); err == nil {
+		t.Fatal("decision omitted skill content for a non-empty snapshot")
+	}
 }
 
 func TestRoutedRunRejectsMissingEgressDecisionBeforeProviderIO(t *testing.T) {
@@ -270,7 +330,6 @@ func TestRemoteRunWithoutToolResultConsentDoesNotSendUnknownToolResult(t *testin
 	job.EgressDecision.DataCategories = []turingv1.EgressDataCategory{
 		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
 		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
-		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
 	}
 
 	updates := collectUpdates(t, assistant, job)
