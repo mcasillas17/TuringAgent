@@ -7,6 +7,9 @@ import 'package:turing_flutter_app/generated/turing/v1/audit.pb.dart'
     as auditpb;
 import 'package:turing_flutter_app/generated/turing/v1/audit.pbgrpc.dart'
     as auditgrpc;
+import 'package:turing_flutter_app/generated/turing/v1/chat.pb.dart' as chatpb;
+import 'package:turing_flutter_app/generated/turing/v1/chat.pbgrpc.dart'
+    as chatgrpc;
 import 'package:turing_flutter_app/generated/turing/v1/common.pb.dart'
     as commonpb;
 import 'package:turing_flutter_app/generated/turing/v1/events.pb.dart'
@@ -27,6 +30,43 @@ void main() {
     final metadata = GrpcAuthMetadata(apiKey: 'client-key').headers();
 
     expect(metadata['authorization'], 'Bearer client-key');
+  });
+
+  test('prepareRemoteEgress maps every disclosed skill field', () async {
+    final service = _RemoteEgressChatService();
+    final server = grpc.Server.create(services: [service]);
+    await server.serve(address: '127.0.0.1', port: 0);
+    final channel = grpc.ClientChannel(
+      '127.0.0.1',
+      port: server.port!,
+      options: const grpc.ChannelOptions(
+        credentials: grpc.ChannelCredentials.insecure(),
+      ),
+    );
+    addTearDown(() async {
+      await channel.shutdown();
+      await server.shutdown();
+    });
+    final api = TuringGrpcApi(
+      baseUrl: 'http://127.0.0.1:${server.port}',
+      apiKey: 'client-key',
+      channel: channel,
+    );
+
+    final disclosure = await api.prepareRemoteEgress(
+      sessionId: 'session-1',
+      content: 'hello',
+      idempotencyKey: 'idem-1',
+    );
+
+    expect(disclosure, isNotNull);
+    expect(disclosure!.skills, hasLength(2));
+    expect(disclosure.skills[0].skillId, 'writing/brief');
+    expect(disclosure.skills[0].displayName, 'Brief Writer');
+    expect(disclosure.skills[0].bodyMayBeSent, isTrue);
+    expect(disclosure.skills[1].skillId, 'ops/locked');
+    expect(disclosure.skills[1].displayName, 'Locked Skill');
+    expect(disclosure.skills[1].bodyMayBeSent, isFalse);
   });
 
   test(
@@ -1267,6 +1307,45 @@ class _CapturingAuditService extends auditgrpc.AuditServiceBase {
     this.request = request;
     deadline = call.deadline;
     return response;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _RemoteEgressChatService extends chatgrpc.ChatServiceBase {
+  @override
+  Future<chatpb.PrepareRemoteEgressResponse> prepareRemoteEgress(
+    grpc.ServiceCall call,
+    chatpb.PrepareRemoteEgressRequest request,
+  ) async {
+    return chatpb.PrepareRemoteEgressResponse(
+      disclosure: commonpb.RemoteEgressDisclosure(
+        challenge: 'challenge',
+        provider: commonpb.ModelProvider.MODEL_PROVIDER_OPENAI_COMPATIBLE,
+        model: 'remote-model',
+        endpoint: 'https://models.example/v1',
+        endpointHost: 'models.example',
+        dataCategories: [
+          commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_SKILL_CONTENT,
+        ],
+        expiresAt: timestamppb.Timestamp.fromDateTime(
+          DateTime.utc(2026, 8, 22, 12),
+        ),
+        skills: [
+          commonpb.SkillEgressDisclosure(
+            skillId: 'writing/brief',
+            displayName: 'Brief Writer',
+            bodyMayBeSent: true,
+          ),
+          commonpb.SkillEgressDisclosure(
+            skillId: 'ops/locked',
+            displayName: 'Locked Skill',
+            bodyMayBeSent: false,
+          ),
+        ],
+      ),
+    );
   }
 
   @override

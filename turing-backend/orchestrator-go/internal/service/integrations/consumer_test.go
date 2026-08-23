@@ -524,7 +524,7 @@ func integrationCallHarness(t *testing.T, credential string) (*Server, *reposito
 	if err != nil {
 		t.Fatal(err)
 	}
-	fingerprint, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+	fingerprint, _, err := repo.EgressSkillSnapshotFingerprint(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -673,7 +673,7 @@ func TestProviderReflectedCredentialCannotReachRuntimeEventOrAudit(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fingerprint, err := repo.EgressSkillSnapshotFingerprint(ctx)
+	fingerprint, _, err := repo.EgressSkillSnapshotFingerprint(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

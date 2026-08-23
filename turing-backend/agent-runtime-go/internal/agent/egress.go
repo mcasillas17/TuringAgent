@@ -118,8 +118,11 @@ func validateEgressDecisionShape(job *turingv1.AgentJob) error {
 	if providerRemote {
 		required = append(required,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
-			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
-			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT)
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY)
+		if len(job.GetSkills()) > 0 {
+			required = append(required,
+				turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT)
+		}
 		if job.GetExternalAgent() == nil {
 			required = append(required, turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL)
 		}

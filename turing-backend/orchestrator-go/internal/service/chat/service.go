@@ -382,6 +382,9 @@ func mapEnqueueError(ctx context.Context, err error) error {
 	if errors.Is(err, repository.ErrEgressChallengeAlreadyUsed) {
 		return status.Error(codes.AlreadyExists, "remote egress challenge was already used")
 	}
+	if errors.Is(err, repository.ErrEgressSkillSnapshotChanged) {
+		return status.Error(codes.FailedPrecondition, "the skill snapshot changed since consent was prepared; prepare the send again")
+	}
 	if errors.Is(err, repository.ErrRemoteEgressConsentRequired) ||
 		errors.Is(err, repository.ErrLocalEgressDecisionForbidden) ||
 		errors.Is(err, repository.ErrEgressDecisionInvalid) ||

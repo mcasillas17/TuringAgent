@@ -729,7 +729,7 @@ func (s *Server) ValidateRouting(ctx context.Context, route repository.RoutingRe
 		if len(candidates) == 0 {
 			return routingUnavailable(
 				turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_PROVIDER,
-				"remote egress decision v1",
+				fmt.Sprintf("remote egress decision v%d", repository.RunEgressDecisionVersion),
 				nil,
 			)
 		}

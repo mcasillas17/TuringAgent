@@ -1077,7 +1077,7 @@ func modelCapabilities(
 		}},
 		AgentIds:                    []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
 		MaxConcurrentRuns:           maxConcurrentRuns,
-		RemoteEgressDecisionVersion: 1,
+		RemoteEgressDecisionVersion: int32(repository.RunEgressDecisionVersion),
 	}
 }
 

@@ -17,6 +17,8 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
 
+const maxEgressSkillNamesInNotice = 8
+
 type EnqueueUserMessageInput struct {
 	SessionID                      string
 	Content                        string
@@ -706,7 +708,7 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 			return EnqueueUserMessageResult{}, fingerprintErr
 		}
 		if actualSkillFingerprint != egressDecision.SkillSnapshotFingerprint {
-			return EnqueueUserMessageResult{}, ErrEgressDecisionInvalid
+			return EnqueueUserMessageResult{}, ErrEgressSkillSnapshotChanged
 		}
 	}
 	jobPayload, err := json.Marshal(map[string]any{
@@ -783,9 +785,21 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 		for index, category := range storedEgressDecision.DataCategories {
 			displayCategories[index] = egressCategoryLabel(category)
 		}
+		skillNotice := ""
+		if slices.Contains(storedEgressDecision.DataCategories, "EGRESS_DATA_CATEGORY_SKILL_CONTENT") {
+			visibleCount := min(len(skillSnapshots), maxEgressSkillNamesInNotice)
+			names := make([]string, visibleCount)
+			for index := range visibleCount {
+				names[index] = backendegress.SanitizeSkillDisplayName(skillSnapshots[index].Name, skillSnapshots[index].SkillID)
+			}
+			skillNotice = ". Skills that may be sent: " + strings.Join(names, ", ")
+			if remaining := len(skillSnapshots) - visibleCount; remaining > 0 {
+				skillNotice += fmt.Sprintf(" (+%d more)", remaining)
+			}
+		}
 		notice, err := appendRunNoticeTx(ctx, tx, input.SessionID, runID, traceID,
 			"Sending to "+destination+" — disclosed data categories: "+
-				strings.Join(displayCategories, ", ")+
+				strings.Join(displayCategories, ", ")+skillNotice+
 				". Data leaves your machine if this run reaches a remote destination",
 			map[string]any{
 				"provider":        storedEgressDecision.Provider,

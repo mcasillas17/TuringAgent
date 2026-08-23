@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	egressChallengeVersion     = 1
+	egressChallengeVersion     = 2
 	egressChallengeDomain      = "turing.remote-egress.challenge.v1"
 	defaultEgressChallengeTTL  = 5 * time.Minute
 	maxEgressChallengeBytes    = 32 * 1024
@@ -32,6 +32,7 @@ const (
 	maxEgressIDBytes           = 512
 	maxEgressModelBytes        = 512
 	maxEgressTools             = 256
+	maxEgressSkills            = 256
 	maxEgressToolNameBytes     = 512
 	maxEgressSelectedToolBytes = 16 * 1024
 )
@@ -60,6 +61,7 @@ type egressContext struct {
 	DataCategories            []turingv1.EgressDataCategory
 	SelectedTools             []string
 	SkillSnapshotFingerprint  string
+	SkillInfo                 []repository.SkillEgressInfo
 	RecallApplicable          bool
 	MemoryProfileApplicable   bool
 	RemoteMCPServers          []repository.RemoteMCPServerEgress
@@ -156,6 +158,10 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 	if err != nil {
 		return nil, status.Error(codes.Internal, "create remote egress disclosure failed")
 	}
+	disclosedSkills := []*turingv1.SkillEgressDisclosure(nil)
+	if slices.Contains(resolved.DataCategories, turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT) {
+		disclosedSkills = toProtoSkillEgressDisclosures(resolved.SkillInfo)
+	}
 	return &turingv1.PrepareRemoteEgressResponse{
 		Disclosure: &turingv1.RemoteEgressDisclosure{
 			Challenge:            challenge,
@@ -169,6 +175,7 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 			RemoteMcpServers:     toProtoRemoteMCPServers(resolved.RemoteMCPServers),
 			IntegrationEndpoints: toProtoIntegrationEndpoints(resolved.IntegrationEndpoints),
 			SelectedTools:        append([]string(nil), resolved.SelectedTools...),
+			Skills:               disclosedSkills,
 		},
 	}, nil
 }
@@ -286,6 +293,10 @@ func (s *Server) applyRemoteEgress(
 		return repository.EnqueueUserMessageResult{}, false, err
 	}
 	if resolved == nil || !payloadMatchesEgressContext(payload, *resolved) {
+		if resolved != nil && payload.SkillSnapshotFingerprint != resolved.SkillSnapshotFingerprint {
+			return repository.EnqueueUserMessageResult{}, false,
+				status.Error(codes.FailedPrecondition, "the skill snapshot changed since consent was prepared; prepare the send again")
+		}
 		return repository.EnqueueUserMessageResult{}, false,
 			status.Error(codes.FailedPrecondition, "remote egress context changed; prepare the send again")
 	}
@@ -493,15 +504,21 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 		resolved.Endpoint = endpoint.Canonical
 		resolved.EndpointHost = endpoint.Host
 	}
-	resolved.SkillSnapshotFingerprint, err = s.repo.EgressSkillSnapshotFingerprint(ctx)
+	resolved.SkillSnapshotFingerprint, resolved.SkillInfo, err = s.repo.EgressSkillSnapshotFingerprint(ctx)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "resolve remote egress skill context failed")
+	}
+	if providerEgress && len(resolved.SkillInfo) > maxEgressSkills {
+		return nil, status.Error(codes.FailedPrecondition, "too many enabled skills for remote egress disclosure; disable skills and try again")
 	}
 	if providerEgress {
 		resolved.DataCategories = []turingv1.EgressDataCategory{
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CONVERSATION_HISTORY,
-			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
+		}
+		if len(resolved.SkillInfo) > 0 {
+			resolved.DataCategories = append(resolved.DataCategories,
+				turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT)
 		}
 	}
 	if resolved.RecallApplicable {
@@ -793,6 +810,17 @@ func toProtoRemoteMCPServers(destinations []repository.RemoteMCPServerEgress) []
 			ServerName:   destination.ServerName,
 			Endpoint:     destination.Endpoint,
 			EndpointHost: destination.EndpointHost,
+		}
+	}
+	return result
+}
+
+func toProtoSkillEgressDisclosures(skills []repository.SkillEgressInfo) []*turingv1.SkillEgressDisclosure {
+	result := make([]*turingv1.SkillEgressDisclosure, len(skills))
+	for index, skill := range skills {
+		result[index] = &turingv1.SkillEgressDisclosure{
+			SkillId: skill.SkillID, DisplayName: skill.DisplayName,
+			BodyMayBeSent: skill.BodyMayBeSent,
 		}
 	}
 	return result

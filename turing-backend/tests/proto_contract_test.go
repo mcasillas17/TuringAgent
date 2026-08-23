@@ -333,6 +333,13 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	assertProtoField(t, disclosure, "expires_at", 8, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
 	assertProtoField(t, disclosure, "remote_mcp_servers", 9, protoreflect.MessageKind, true, "turing.v1.RemoteMcpEgressDestination")
 	assertProtoField(t, disclosure, "selected_tools", 10, protoreflect.StringKind, true, "")
+	assertProtoField(t, disclosure, "integration_endpoints", 11, protoreflect.MessageKind, true, "turing.v1.IntegrationEgressDestination")
+	assertProtoField(t, disclosure, "skills", 12, protoreflect.MessageKind, true, "turing.v1.SkillEgressDisclosure")
+
+	skill := common.Messages().ByName("SkillEgressDisclosure")
+	assertProtoField(t, skill, "skill_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, skill, "display_name", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, skill, "body_may_be_sent", 3, protoreflect.BoolKind, false, "")
 
 	remoteMCP := common.Messages().ByName("RemoteMcpEgressDestination")
 	assertProtoField(t, remoteMCP, "server_name", 1, protoreflect.StringKind, false, "")

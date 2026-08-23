@@ -332,7 +332,7 @@ func TestProviderAndAgentAvailabilityReflectLiveWorkerUnion(t *testing.T) {
 			{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, Model: "gpt-4o-mini", MaxContextTokens: 16384},
 		},
 		AgentIds: []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT}, MaxConcurrentRuns: 1,
-		RemoteEgressDecisionVersion: 1,
+		RemoteEgressDecisionVersion: int32(repository.RunEgressDecisionVersion),
 	})
 	defer func() { _ = second.CloseSend() }()
 
@@ -371,7 +371,7 @@ func TestExternalAgentRouteRejectsPositiveContextRequirement(t *testing.T) {
 		MaxConcurrentRuns:           1,
 		SupportsExternalAgents:      true,
 		ExternalAgentCredentialRefs: []string{"claude"},
-		RemoteEgressDecisionVersion: 1,
+		RemoteEgressDecisionVersion: int32(repository.RunEgressDecisionVersion),
 	})
 	defer func() { _ = stream.CloseSend() }()
 	route := repository.RoutingRequirements{
@@ -403,7 +403,7 @@ func TestExternalAgentRouteRequiresExactCredentialRef(t *testing.T) {
 		MaxConcurrentRuns:           1,
 		SupportsExternalAgents:      true,
 		ExternalAgentCredentialRefs: []string{"claude"},
-		RemoteEgressDecisionVersion: 1,
+		RemoteEgressDecisionVersion: int32(repository.RunEgressDecisionVersion),
 	})
 	defer func() { _ = stream.CloseSend() }()
 

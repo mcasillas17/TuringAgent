@@ -27,10 +27,12 @@ class RemoteEgressDisclosure {
     List<RemoteMcpDestination> remoteMcpServers = const [],
     List<String> selectedTools = const [],
     List<IntegrationEgressDestination> integrationEndpoints = const [],
+    List<SkillEgressDisclosure> skills = const [],
   }) : dataCategories = List.unmodifiable(dataCategories),
        remoteMcpServers = List.unmodifiable(remoteMcpServers),
        selectedTools = List.unmodifiable(selectedTools),
-       integrationEndpoints = List.unmodifiable(integrationEndpoints);
+       integrationEndpoints = List.unmodifiable(integrationEndpoints),
+       skills = List.unmodifiable(skills);
 
   final String challenge;
   final String provider;
@@ -42,7 +44,20 @@ class RemoteEgressDisclosure {
   final List<RemoteMcpDestination> remoteMcpServers;
   final List<String> selectedTools;
   final List<IntegrationEgressDestination> integrationEndpoints;
+  final List<SkillEgressDisclosure> skills;
   final DateTime expiresAt;
+}
+
+class SkillEgressDisclosure {
+  const SkillEgressDisclosure({
+    required this.skillId,
+    required this.displayName,
+    required this.bodyMayBeSent,
+  });
+
+  final String skillId;
+  final String displayName;
+  final bool bodyMayBeSent;
 }
 
 class IntegrationEgressDestination {

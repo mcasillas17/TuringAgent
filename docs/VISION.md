@@ -112,7 +112,8 @@ These are not capabilities we are declining. They are the properties the rest of
 
 - **Nothing leaves the machine by default.** A remote provider requires a
   one-time signed disclosure and explicit confirmation for the exact request,
-  destination, tools/skills, context flags, and data categories. Consent is
+  destination, tools, named skills and their content ceilings, context flags,
+  and data categories. Consent is
   run-owned, not a session/provider preference; redirects and local-to-remote
   fallback are refused, and background work cannot inherit it. See
   Remote MCP endpoints join that exact run-owned decision and disclose tool

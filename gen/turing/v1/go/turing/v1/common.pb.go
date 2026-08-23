@@ -848,6 +848,7 @@ type RemoteEgressDisclosure struct {
 	RemoteMcpServers     []*RemoteMcpEgressDestination   `protobuf:"bytes,9,rep,name=remote_mcp_servers,json=remoteMcpServers,proto3" json:"remote_mcp_servers,omitempty"`
 	SelectedTools        []string                        `protobuf:"bytes,10,rep,name=selected_tools,json=selectedTools,proto3" json:"selected_tools,omitempty"`
 	IntegrationEndpoints []*IntegrationEgressDestination `protobuf:"bytes,11,rep,name=integration_endpoints,json=integrationEndpoints,proto3" json:"integration_endpoints,omitempty"`
+	Skills               []*SkillEgressDisclosure        `protobuf:"bytes,12,rep,name=skills,proto3" json:"skills,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -959,6 +960,73 @@ func (x *RemoteEgressDisclosure) GetIntegrationEndpoints() []*IntegrationEgressD
 	return nil
 }
 
+func (x *RemoteEgressDisclosure) GetSkills() []*SkillEgressDisclosure {
+	if x != nil {
+		return x.Skills
+	}
+	return nil
+}
+
+type SkillEgressDisclosure struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SkillId       string                 `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
+	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	BodyMayBeSent bool                   `protobuf:"varint,3,opt,name=body_may_be_sent,json=bodyMayBeSent,proto3" json:"body_may_be_sent,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SkillEgressDisclosure) Reset() {
+	*x = SkillEgressDisclosure{}
+	mi := &file_turing_v1_common_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SkillEgressDisclosure) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SkillEgressDisclosure) ProtoMessage() {}
+
+func (x *SkillEgressDisclosure) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_common_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SkillEgressDisclosure.ProtoReflect.Descriptor instead.
+func (*SkillEgressDisclosure) Descriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *SkillEgressDisclosure) GetSkillId() string {
+	if x != nil {
+		return x.SkillId
+	}
+	return ""
+}
+
+func (x *SkillEgressDisclosure) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *SkillEgressDisclosure) GetBodyMayBeSent() bool {
+	if x != nil {
+		return x.BodyMayBeSent
+	}
+	return false
+}
+
 type RemoteMcpEgressDestination struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ServerName    string                 `protobuf:"bytes,1,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
@@ -970,7 +1038,7 @@ type RemoteMcpEgressDestination struct {
 
 func (x *RemoteMcpEgressDestination) Reset() {
 	*x = RemoteMcpEgressDestination{}
-	mi := &file_turing_v1_common_proto_msgTypes[8]
+	mi := &file_turing_v1_common_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -982,7 +1050,7 @@ func (x *RemoteMcpEgressDestination) String() string {
 func (*RemoteMcpEgressDestination) ProtoMessage() {}
 
 func (x *RemoteMcpEgressDestination) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[8]
+	mi := &file_turing_v1_common_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -995,7 +1063,7 @@ func (x *RemoteMcpEgressDestination) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoteMcpEgressDestination.ProtoReflect.Descriptor instead.
 func (*RemoteMcpEgressDestination) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{8}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RemoteMcpEgressDestination) GetServerName() string {
@@ -1032,7 +1100,7 @@ type IntegrationEgressDestination struct {
 
 func (x *IntegrationEgressDestination) Reset() {
 	*x = IntegrationEgressDestination{}
-	mi := &file_turing_v1_common_proto_msgTypes[9]
+	mi := &file_turing_v1_common_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1044,7 +1112,7 @@ func (x *IntegrationEgressDestination) String() string {
 func (*IntegrationEgressDestination) ProtoMessage() {}
 
 func (x *IntegrationEgressDestination) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[9]
+	mi := &file_turing_v1_common_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1057,7 +1125,7 @@ func (x *IntegrationEgressDestination) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IntegrationEgressDestination.ProtoReflect.Descriptor instead.
 func (*IntegrationEgressDestination) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{9}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *IntegrationEgressDestination) GetEndpoint() string {
@@ -1106,7 +1174,7 @@ type RemoteEgressConsent struct {
 
 func (x *RemoteEgressConsent) Reset() {
 	*x = RemoteEgressConsent{}
-	mi := &file_turing_v1_common_proto_msgTypes[10]
+	mi := &file_turing_v1_common_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1118,7 +1186,7 @@ func (x *RemoteEgressConsent) String() string {
 func (*RemoteEgressConsent) ProtoMessage() {}
 
 func (x *RemoteEgressConsent) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[10]
+	mi := &file_turing_v1_common_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1131,7 +1199,7 @@ func (x *RemoteEgressConsent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoteEgressConsent.ProtoReflect.Descriptor instead.
 func (*RemoteEgressConsent) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{10}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RemoteEgressConsent) GetChallenge() string {
@@ -1184,7 +1252,7 @@ type RunEgressDecision struct {
 
 func (x *RunEgressDecision) Reset() {
 	*x = RunEgressDecision{}
-	mi := &file_turing_v1_common_proto_msgTypes[11]
+	mi := &file_turing_v1_common_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1196,7 +1264,7 @@ func (x *RunEgressDecision) String() string {
 func (*RunEgressDecision) ProtoMessage() {}
 
 func (x *RunEgressDecision) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[11]
+	mi := &file_turing_v1_common_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1209,7 +1277,7 @@ func (x *RunEgressDecision) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunEgressDecision.ProtoReflect.Descriptor instead.
 func (*RunEgressDecision) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{11}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RunEgressDecision) GetDecisionId() string {
@@ -1349,7 +1417,7 @@ type AgentDescriptor struct {
 
 func (x *AgentDescriptor) Reset() {
 	*x = AgentDescriptor{}
-	mi := &file_turing_v1_common_proto_msgTypes[12]
+	mi := &file_turing_v1_common_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1361,7 +1429,7 @@ func (x *AgentDescriptor) String() string {
 func (*AgentDescriptor) ProtoMessage() {}
 
 func (x *AgentDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[12]
+	mi := &file_turing_v1_common_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1374,7 +1442,7 @@ func (x *AgentDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDescriptor.ProtoReflect.Descriptor instead.
 func (*AgentDescriptor) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{12}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *AgentDescriptor) GetId() AgentId {
@@ -1414,7 +1482,7 @@ type Message struct {
 
 func (x *Message) Reset() {
 	*x = Message{}
-	mi := &file_turing_v1_common_proto_msgTypes[13]
+	mi := &file_turing_v1_common_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1426,7 +1494,7 @@ func (x *Message) String() string {
 func (*Message) ProtoMessage() {}
 
 func (x *Message) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_common_proto_msgTypes[13]
+	mi := &file_turing_v1_common_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1439,7 +1507,7 @@ func (x *Message) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Message.ProtoReflect.Descriptor instead.
 func (*Message) Descriptor() ([]byte, []int) {
-	return file_turing_v1_common_proto_rawDescGZIP(), []int{13}
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Message) GetMessageId() string {
@@ -1532,7 +1600,7 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"\rdefault_model\x18\x03 \x01(\tR\fdefaultModel\x122\n" +
 	"\x06models\x18\x04 \x03(\v2\x1a.turing.v1.ModelCapabilityR\x06models\x12'\n" +
 	"\x0fremote_endpoint\x18\x05 \x01(\tR\x0eremoteEndpoint\x127\n" +
-	"\x18requires_per_run_consent\x18\x06 \x01(\bR\x15requiresPerRunConsent\"\xcc\x04\n" +
+	"\x18requires_per_run_consent\x18\x06 \x01(\bR\x15requiresPerRunConsent\"\x86\x05\n" +
 	"\x16RemoteEgressDisclosure\x12\x1c\n" +
 	"\tchallenge\x18\x01 \x01(\tR\tchallenge\x124\n" +
 	"\bprovider\x18\x02 \x01(\x0e2\x18.turing.v1.ModelProviderR\bprovider\x12\x14\n" +
@@ -1546,7 +1614,12 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"\x12remote_mcp_servers\x18\t \x03(\v2%.turing.v1.RemoteMcpEgressDestinationR\x10remoteMcpServers\x12%\n" +
 	"\x0eselected_tools\x18\n" +
 	" \x03(\tR\rselectedTools\x12\\\n" +
-	"\x15integration_endpoints\x18\v \x03(\v2'.turing.v1.IntegrationEgressDestinationR\x14integrationEndpoints\"~\n" +
+	"\x15integration_endpoints\x18\v \x03(\v2'.turing.v1.IntegrationEgressDestinationR\x14integrationEndpoints\x128\n" +
+	"\x06skills\x18\f \x03(\v2 .turing.v1.SkillEgressDisclosureR\x06skills\"~\n" +
+	"\x15SkillEgressDisclosure\x12\x19\n" +
+	"\bskill_id\x18\x01 \x01(\tR\askillId\x12!\n" +
+	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12'\n" +
+	"\x10body_may_be_sent\x18\x03 \x01(\bR\rbodyMayBeSent\"~\n" +
 	"\x1aRemoteMcpEgressDestination\x12\x1f\n" +
 	"\vserver_name\x18\x01 \x01(\tR\n" +
 	"serverName\x12\x1a\n" +
@@ -1660,7 +1733,7 @@ func file_turing_v1_common_proto_rawDescGZIP() []byte {
 }
 
 var file_turing_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_turing_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_turing_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_turing_v1_common_proto_goTypes = []any{
 	(AgentId)(0),                         // 0: turing.v1.AgentId
 	(ModelProvider)(0),                   // 1: turing.v1.ModelProvider
@@ -1677,40 +1750,42 @@ var file_turing_v1_common_proto_goTypes = []any{
 	(*ModelCapability)(nil),              // 12: turing.v1.ModelCapability
 	(*ProviderConfig)(nil),               // 13: turing.v1.ProviderConfig
 	(*RemoteEgressDisclosure)(nil),       // 14: turing.v1.RemoteEgressDisclosure
-	(*RemoteMcpEgressDestination)(nil),   // 15: turing.v1.RemoteMcpEgressDestination
-	(*IntegrationEgressDestination)(nil), // 16: turing.v1.IntegrationEgressDestination
-	(*RemoteEgressConsent)(nil),          // 17: turing.v1.RemoteEgressConsent
-	(*RunEgressDecision)(nil),            // 18: turing.v1.RunEgressDecision
-	(*AgentDescriptor)(nil),              // 19: turing.v1.AgentDescriptor
-	(*Message)(nil),                      // 20: turing.v1.Message
-	(*structpb.Struct)(nil),              // 21: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),        // 22: google.protobuf.Timestamp
+	(*SkillEgressDisclosure)(nil),        // 15: turing.v1.SkillEgressDisclosure
+	(*RemoteMcpEgressDestination)(nil),   // 16: turing.v1.RemoteMcpEgressDestination
+	(*IntegrationEgressDestination)(nil), // 17: turing.v1.IntegrationEgressDestination
+	(*RemoteEgressConsent)(nil),          // 18: turing.v1.RemoteEgressConsent
+	(*RunEgressDecision)(nil),            // 19: turing.v1.RunEgressDecision
+	(*AgentDescriptor)(nil),              // 20: turing.v1.AgentDescriptor
+	(*Message)(nil),                      // 21: turing.v1.Message
+	(*structpb.Struct)(nil),              // 22: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),        // 23: google.protobuf.Timestamp
 }
 var file_turing_v1_common_proto_depIdxs = []int32{
-	21, // 0: turing.v1.ErrorDetail.details:type_name -> google.protobuf.Struct
+	22, // 0: turing.v1.ErrorDetail.details:type_name -> google.protobuf.Struct
 	3,  // 1: turing.v1.RoutingUnavailableDetail.kind:type_name -> turing.v1.RoutingRequirementKind
 	1,  // 2: turing.v1.ModelCapability.provider:type_name -> turing.v1.ModelProvider
 	1,  // 3: turing.v1.ProviderConfig.provider:type_name -> turing.v1.ModelProvider
 	12, // 4: turing.v1.ProviderConfig.models:type_name -> turing.v1.ModelCapability
 	1,  // 5: turing.v1.RemoteEgressDisclosure.provider:type_name -> turing.v1.ModelProvider
 	2,  // 6: turing.v1.RemoteEgressDisclosure.data_categories:type_name -> turing.v1.EgressDataCategory
-	22, // 7: turing.v1.RemoteEgressDisclosure.expires_at:type_name -> google.protobuf.Timestamp
-	15, // 8: turing.v1.RemoteEgressDisclosure.remote_mcp_servers:type_name -> turing.v1.RemoteMcpEgressDestination
-	16, // 9: turing.v1.RemoteEgressDisclosure.integration_endpoints:type_name -> turing.v1.IntegrationEgressDestination
-	2,  // 10: turing.v1.RemoteEgressConsent.acknowledged_data_categories:type_name -> turing.v1.EgressDataCategory
-	1,  // 11: turing.v1.RunEgressDecision.provider:type_name -> turing.v1.ModelProvider
-	2,  // 12: turing.v1.RunEgressDecision.data_categories:type_name -> turing.v1.EgressDataCategory
-	22, // 13: turing.v1.RunEgressDecision.consent_granted_at:type_name -> google.protobuf.Timestamp
-	15, // 14: turing.v1.RunEgressDecision.remote_mcp_servers:type_name -> turing.v1.RemoteMcpEgressDestination
-	16, // 15: turing.v1.RunEgressDecision.integration_endpoints:type_name -> turing.v1.IntegrationEgressDestination
-	0,  // 16: turing.v1.AgentDescriptor.id:type_name -> turing.v1.AgentId
-	4,  // 17: turing.v1.Message.role:type_name -> turing.v1.MessageRole
-	22, // 18: turing.v1.Message.created_at:type_name -> google.protobuf.Timestamp
-	19, // [19:19] is the sub-list for method output_type
-	19, // [19:19] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	23, // 7: turing.v1.RemoteEgressDisclosure.expires_at:type_name -> google.protobuf.Timestamp
+	16, // 8: turing.v1.RemoteEgressDisclosure.remote_mcp_servers:type_name -> turing.v1.RemoteMcpEgressDestination
+	17, // 9: turing.v1.RemoteEgressDisclosure.integration_endpoints:type_name -> turing.v1.IntegrationEgressDestination
+	15, // 10: turing.v1.RemoteEgressDisclosure.skills:type_name -> turing.v1.SkillEgressDisclosure
+	2,  // 11: turing.v1.RemoteEgressConsent.acknowledged_data_categories:type_name -> turing.v1.EgressDataCategory
+	1,  // 12: turing.v1.RunEgressDecision.provider:type_name -> turing.v1.ModelProvider
+	2,  // 13: turing.v1.RunEgressDecision.data_categories:type_name -> turing.v1.EgressDataCategory
+	23, // 14: turing.v1.RunEgressDecision.consent_granted_at:type_name -> google.protobuf.Timestamp
+	16, // 15: turing.v1.RunEgressDecision.remote_mcp_servers:type_name -> turing.v1.RemoteMcpEgressDestination
+	17, // 16: turing.v1.RunEgressDecision.integration_endpoints:type_name -> turing.v1.IntegrationEgressDestination
+	0,  // 17: turing.v1.AgentDescriptor.id:type_name -> turing.v1.AgentId
+	4,  // 18: turing.v1.Message.role:type_name -> turing.v1.MessageRole
+	23, // 19: turing.v1.Message.created_at:type_name -> google.protobuf.Timestamp
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_common_proto_init() }
@@ -1724,7 +1799,7 @@ func file_turing_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_common_proto_rawDesc), len(file_turing_v1_common_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

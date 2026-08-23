@@ -359,6 +359,14 @@ const RemoteEgressDisclosure$json = {
       '6': '.turing.v1.IntegrationEgressDestination',
       '10': 'integrationEndpoints'
     },
+    {
+      '1': 'skills',
+      '3': 12,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.SkillEgressDisclosure',
+      '10': 'skills'
+    },
   ],
 };
 
@@ -374,7 +382,24 @@ final $typed_data.Uint8List remoteEgressDisclosureDescriptor = $convert.base64De
     'ZlcnMYCSADKAsyJS50dXJpbmcudjEuUmVtb3RlTWNwRWdyZXNzRGVzdGluYXRpb25SEHJlbW90'
     'ZU1jcFNlcnZlcnMSJQoOc2VsZWN0ZWRfdG9vbHMYCiADKAlSDXNlbGVjdGVkVG9vbHMSXAoVaW'
     '50ZWdyYXRpb25fZW5kcG9pbnRzGAsgAygLMicudHVyaW5nLnYxLkludGVncmF0aW9uRWdyZXNz'
-    'RGVzdGluYXRpb25SFGludGVncmF0aW9uRW5kcG9pbnRz');
+    'RGVzdGluYXRpb25SFGludGVncmF0aW9uRW5kcG9pbnRzEjgKBnNraWxscxgMIAMoCzIgLnR1cm'
+    'luZy52MS5Ta2lsbEVncmVzc0Rpc2Nsb3N1cmVSBnNraWxscw==');
+
+@$core.Deprecated('Use skillEgressDisclosureDescriptor instead')
+const SkillEgressDisclosure$json = {
+  '1': 'SkillEgressDisclosure',
+  '2': [
+    {'1': 'skill_id', '3': 1, '4': 1, '5': 9, '10': 'skillId'},
+    {'1': 'display_name', '3': 2, '4': 1, '5': 9, '10': 'displayName'},
+    {'1': 'body_may_be_sent', '3': 3, '4': 1, '5': 8, '10': 'bodyMayBeSent'},
+  ],
+};
+
+/// Descriptor for `SkillEgressDisclosure`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List skillEgressDisclosureDescriptor = $convert.base64Decode(
+    'ChVTa2lsbEVncmVzc0Rpc2Nsb3N1cmUSGQoIc2tpbGxfaWQYASABKAlSB3NraWxsSWQSIQoMZG'
+    'lzcGxheV9uYW1lGAIgASgJUgtkaXNwbGF5TmFtZRInChBib2R5X21heV9iZV9zZW50GAMgASgI'
+    'Ug1ib2R5TWF5QmVTZW50');
 
 @$core.Deprecated('Use remoteMcpEgressDestinationDescriptor instead')
 const RemoteMcpEgressDestination$json = {
