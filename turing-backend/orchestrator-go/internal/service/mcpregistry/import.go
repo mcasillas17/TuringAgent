@@ -2038,6 +2038,90 @@ func tokenAppearsInPublicMetadata(token, name, canonicalURL string) bool {
 	return false
 }
 
+// errMCPTokenMatchesRetainedToolMetadata is the one fixed, generic reason
+// rotateServerTokenLocked refuses a new bearer token that appears,
+// verbatim, in this server's own retained tool metadata — any present or
+// withdrawn tool's name, or its exact stored schema_json representation
+// (including a numeric/structural case only a raw-text scan of that stored
+// text, not a decoded-value walk, can catch — see
+// tokenAppearsInRetainedToolMetadata's own doc comment). A tool descriptor
+// is exactly as public as a server's own name/url (returned in every
+// list/register/rotate response and recorded in every audit row for that
+// server — see tokenAppearsInPublicMetadata for the identical reasoning
+// applied there), so a token recoverable from one can never actually be
+// secret. The message never says which tool, or which of name/schema
+// matched, the same reasoning errMCPTokenMatchesPublicMetadata and
+// mcpToolDefinitionRefusedMessage already document for their own,
+// structurally identical checks.
+var errMCPTokenMatchesRetainedToolMetadata = errors.New("server token must not appear in this server's own retained tool metadata")
+
+// tokenAppearsInRetainedToolMetadata reports whether the non-empty token
+// appears, verbatim, in the name or stored schema_json of any tool in
+// tools — present or withdrawn alike. Retained (present = false) rows
+// matter here, not just a documentation nuance: serverDescriptor/
+// buildServerDescriptor read every tool ListMCPServerTools returns, with
+// no present filter, so a withdrawn tool's own name/schema is returned in
+// every List/Get server descriptor exactly as a present tool's is.
+//
+// Two independent scans run against each tool's schema — the same pairing
+// buildImportTools' own token check runs at import time (see
+// mcpRawMetadataContainsToken's own doc comment), just applied to an
+// already-*stored* schema_json string instead of freshly-decoded caller
+// input, since that is all rotation ever has to compare against:
+//
+//   - The raw scan (strings.Contains against the exact stored text) catches
+//     a token equal to the literal serialized text of a JSON number,
+//     boolean, or null value, or one that only spans a structural boundary
+//     json.Marshal itself introduced (a quote, a colon) — cases the decoded
+//     scan below structurally cannot see, since none of those decode to a
+//     Go string.
+//   - The decoded scan (mcpRawMetadataContainsToken, run against
+//     schema_json re-parsed back into map[string]any/[]any/string) catches
+//     the opposite case: a token containing a quote or backslash character,
+//     escaped in the stored text in a way a plain substring search of that
+//     raw text alone would never find, but visible again once the text is
+//     unmarshaled back into its original runtime value.
+//
+// Neither scan replaces the other. A schema_json that fails to unmarshal
+// (never expected in practice — every stored row was itself produced by a
+// json.Marshal call before being stored) is treated as no additional
+// decoded match, exactly like tokenAppearsInPublicMetadata's own
+// url.Parse failure path: the raw scan above still runs regardless and is
+// never skipped.
+//
+// Both scans compare against schema_json's own stored text, not against
+// whatever a later McpToolDescriptor.Schema (structpb.NewStruct, then
+// protojson) would re-serialize it as: a number's stored text and its
+// canonicalized wire form can differ (json.Marshal never re-emits
+// "1e2" as "100" the way structpb/protojson's own numeric formatting
+// might). A token equal only to that re-canonicalized form and absent
+// from the stored text this function actually inspects would not be
+// caught here — but the secrecy invariant this check exists for still
+// holds regardless: a token that already equals part of a tool's own
+// schema, in any of its representations, was never actually secret to
+// begin with, the same reasoning tokenAppearsInPublicMetadata's own
+// short-token-collision tradeoff documents.
+func tokenAppearsInRetainedToolMetadata(token string, tools []repository.MCPServerTool) bool {
+	if token == "" {
+		return false
+	}
+	for _, tool := range tools {
+		if strings.Contains(tool.Name, token) {
+			return true
+		}
+		if strings.Contains(tool.SchemaJSON, token) {
+			return true
+		}
+		var decoded any
+		if err := json.Unmarshal([]byte(tool.SchemaJSON), &decoded); err == nil {
+			if mcpRawMetadataContainsToken(decoded, token) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // validateServerDefinition applies the one set of rules a server definition
 // must satisfy regardless of whether it arrived through an mcp.json import
 // or a direct RegisterMcpServer call: the name must match

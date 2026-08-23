@@ -479,6 +479,30 @@ func (s *Server) UpdateToolPolicyByName(ctx context.Context, req *turingv1.Updat
 		}
 		return nil, status.Error(codes.Internal, "update MCP tool policy failed")
 	}
+	// Notify and audit immediately once the policy mutation above has
+	// committed — before the fallible tool-read/descriptor mapping below
+	// — the same reasoning UpdateMcpToolPolicy's own post-commit
+	// notify/audit already documents, so a read/descriptor failure below
+	// can never leave an already-persisted policy change unannounced or
+	// unaudited. This is the one compatibility RPC that also reaches the
+	// orchestrator-owned pseudo-servers ("skills"/"integrations", neither
+	// of which has an mcp_servers row an id could be read from — see
+	// SetToolPolicyByName's own name-only WHERE clause), so target is
+	// this request's own server_name, never an id: unlike
+	// UpdateMcpToolPolicy, this RPC is addressed by name alone end to end
+	// and never reads the mcp_servers row at all, even for a real,
+	// registered third-party or bundled server. The payload uses the
+	// exact same "name"/"toolName"/"toolPolicy" keys and the same
+	// mcp.server.tool_policy_changed action UpdateMcpToolPolicy already
+	// writes, so both RPCs project through the one shared typed
+	// audit-read rule (service/audit/service.go) identically, regardless
+	// of which of the two actually wrote a given row.
+	s.notifyRegistryChanged()
+	s.auditMCPEvent(ctx, "mcp.server.tool_policy_changed", req.GetServerName(), map[string]any{
+		"name":       req.GetServerName(),
+		"toolName":   req.GetToolName(),
+		"toolPolicy": policy,
+	})
 	tool, err := s.repo.GetToolByName(ctx, req.GetServerName(), req.GetToolName())
 	if err != nil {
 		if errors.Is(err, repository.ErrMCPToolNotFound) {
@@ -487,10 +511,19 @@ func (s *Server) UpdateToolPolicyByName(ctx context.Context, req *turingv1.Updat
 		return nil, status.Error(codes.Internal, "read MCP tool failed")
 	}
 	descriptor, err := toolDescriptor(tool)
-	if err == nil {
-		s.notifyRegistryChanged()
+	if err != nil {
+		// toolDescriptor's own error (e.g. a schema that fails to
+		// unmarshal) is never returned as-is: it is neither a gRPC
+		// status (so it would surface as the unhelpful default
+		// codes.Unknown) nor safe to assume is free of anything
+		// sensitive, so it is mapped to the same fixed, generic Internal
+		// status read failures above use, matching UpdateMcpToolPolicy's
+		// own descriptor-failure handling. Notify and audit have already
+		// run (see above), so this only affects what the caller sees
+		// from this one response.
+		return nil, status.Error(codes.Internal, "read MCP tool failed")
 	}
-	return descriptor, err
+	return descriptor, nil
 }
 
 func (s *Server) ListPseudoServerTools(ctx context.Context, req *turingv1.ListPseudoServerToolsRequest) (*turingv1.ListPseudoServerToolsResponse, error) {
@@ -829,6 +862,28 @@ func (s *Server) rotateServerTokenLocked(ctx context.Context, serverID, token st
 	// makes the token unable to be secret).
 	if tokenAppearsInPublicMetadata(token, server.Name, server.URL) {
 		return repository.MCPServerRecord{}, status.Error(codes.InvalidArgument, errMCPTokenMatchesPublicMetadata.Error())
+	}
+	// Still under this server's own credential lock, and still before the
+	// new token is ever sealed or persisted: load every tool retained for
+	// this server — present and withdrawn alike (ListMCPServerTools never
+	// filters by present) — and refuse the same generic, sentinel-free way
+	// if the new token appears verbatim in any one tool's own name or its
+	// exact stored schema_json representation. Without this, a chosen
+	// token could round-trip straight back out through this very Rotate
+	// response (or a later List), whose descriptor still carries the
+	// colliding tool. Skipped entirely for an empty token (clearing a
+	// server's credential): tokenAppearsInRetainedToolMetadata already
+	// returns false for one, so the extra repository read below would be
+	// pure overhead for the one rotation shape that can never collide with
+	// anything.
+	if token != "" {
+		retainedTools, err := s.repo.ListMCPServerTools(ctx, server.ID)
+		if err != nil {
+			return repository.MCPServerRecord{}, status.Error(codes.Internal, "read MCP server failed")
+		}
+		if tokenAppearsInRetainedToolMetadata(token, retainedTools) {
+			return repository.MCPServerRecord{}, status.Error(codes.InvalidArgument, errMCPTokenMatchesRetainedToolMetadata.Error())
+		}
 	}
 	sealed, err := s.sealServerToken(server.Name, token)
 	if err != nil {

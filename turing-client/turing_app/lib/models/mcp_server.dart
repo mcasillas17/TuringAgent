@@ -51,10 +51,16 @@ class McpRegistrySnapshot {
   // True when the backend could not safely return complete, healthy
   // registry state (more servers, more import issues, or a larger
   // aggregate tool-byte total than its own operating bounds allow) and
-  // returned a safe, bounded, degraded view instead: every server is
-  // still listed, but with its own tools omitted. This is a distinct,
-  // structured signal from `unsupported`, which only ever describes
-  // ordinary per-entry mcp.json import refusals.
+  // returned a safe, bounded, degraded view instead. When the server
+  // *count* itself is the bound exceeded, [servers] is additionally
+  // truncated to that operating cap rather than every server being
+  // listed (an operator still retains enough identity — id, name,
+  // endpoint — to find and delete whichever one is responsible, from
+  // among that bounded subset); for the other two over-cap reasons (too
+  // many import issues, or too large an aggregate tool-byte total),
+  // every server is still listed, just with its own tools omitted. This
+  // is a distinct, structured signal from `unsupported`, which only ever
+  // describes ordinary per-entry mcp.json import refusals.
   final bool registryDegraded;
   // Set only when [registryDegraded] is true: a fixed, non-sensitive
   // explanation of which bound was exceeded.

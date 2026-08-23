@@ -348,28 +348,57 @@ func TestMCPApprovalIdentityMigrationAddsNullableForeignKeyColumn(t *testing.T) 
 	}
 }
 
-// TestMCPApprovalIdentityMigrationBackfillsFromCurrentServerNameAndFailsClosedOtherwise
-// proves the migration's one-time backfill: an existing tool_calls row
-// whose server_name currently resolves to a real mcp_servers row is bound
-// to that row's id; a pseudo-server row ("skills", which never has an
-// mcp_servers row at all) and a row whose server_name no longer resolves
-// to any current row (the server was since renamed or deleted — there is
-// no way to recover a historical binding a from-scratch column never
-// recorded) are both left NULL, the identical fail-closed state
-// ON DELETE SET NULL leaves a genuinely-deleted server's own rows in
-// going forward. The run_id these tool_calls rows reference is left
-// dangling (foreign_keys is toggled off only for that one setup
-// statement): this test is about the mcp_server_id column specifically,
-// not a real agent_runs/messages/sessions chain, which the repository
-// package's own TestRecordToolCallBeforePopulatesMCPServerIDFromCurrentRegistry
-// already exercises end to end with one.
-func TestMCPApprovalIdentityMigrationBackfillsFromCurrentServerNameAndFailsClosedOtherwise(t *testing.T) {
+// TestMCPApprovalIdentityMigrationNeverBackfillsPreMigrationToolCalls proves
+// finding #1 of the post-merge round-3 review: this migration's ALTER TABLE
+// adds tool_calls.mcp_server_id as a nullable column with no backfill at
+// all. An earlier version of this migration backfilled by matching each
+// existing row's own server_name against whichever mcp_servers row
+// currently carries that name — unsafe, because a server name can be freely
+// reused after its original row is deleted (DeleteMcpServer) and a
+// different, unrelated server explicitly registered under that exact same
+// name *before* an operator ever applies this migration. Backfilling by
+// name in that case would silently rebind a historical tool_calls row — and
+// any approval created and approved against it — from the server it was
+// actually dispatched against to the id of a completely unrelated server
+// that merely happens to share its name now, exactly the gap
+// ConsumeApprovalForThirdParty's own immutable-id comparison exists to close
+// (approvals/service.go) and exactly what that comparison's own NULL/empty
+// fail-closed branch depends on this migration never silently defeating.
+// Every pre-0018 row is therefore left NULL unconditionally — the identical
+// fail-closed state a genuinely deleted server's own rows are left in going
+// forward by ON DELETE SET NULL — regardless of whether its server_name
+// currently resolves to the still-original server, an unrelated server that
+// reused the name, or nothing at all.
+//
+// See TestConsumeApprovalForThirdPartyRefusesLegacyPreMigrationApprovalAfterNameReregistered
+// (mcpregistry package) for the service-layer proof that this NULL binding
+// actually refuses a third-party dispatch to a same-named replacement
+// server, and repository's own
+// TestRecordToolCallBeforePopulatesMCPServerIDFromCurrentRegistry for proof
+// that every *new*, post-migration tool call still persists its own
+// current, correctly-resolved id at insert time (recordToolCallBeforeTx),
+// entirely unaffected by this migration carrying no backfill of its own.
+func TestMCPApprovalIdentityMigrationNeverBackfillsPreMigrationToolCalls(t *testing.T) {
 	ctx := context.Background()
 	database := databaseBeforeMigration(t, ctx, "0018_mcp_approval_identity.sql")
 
+	// Server A: registered before the migration ever runs — the real row
+	// a pre-migration tool call (and its approval) was actually
+	// dispatched against.
 	if _, err := database.ExecContext(ctx, `
 		INSERT INTO mcp_servers (id, name, transport, url, tier, enabled, created_at)
-		VALUES ('mcp_vendor', 'vendor', 'http', 'http://vendor:9000/mcp', 'local_container', 0, datetime('now'))
+		VALUES ('mcp_vendor_a', 'vendor', 'http', 'http://vendor-a:9000/mcp', 'local_container', 0, datetime('now'))
+	`); err != nil {
+		t.Fatal(err)
+	}
+	// Server C: registered before the migration too, and never touched
+	// again afterward — the "obviously safe" case a smarter, conditional
+	// backfill might be tempted to still special-case. It must be left
+	// NULL just the same: this migration adds no backfill of any kind,
+	// not even for a server whose identity never changed.
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO mcp_servers (id, name, transport, url, tier, enabled, created_at)
+		VALUES ('mcp_unchanged', 'unchanged-vendor', 'http', 'http://unchanged:9000/mcp', 'local_container', 0, datetime('now'))
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -381,8 +410,18 @@ func TestMCPApprovalIdentityMigrationBackfillsFromCurrentServerNameAndFailsClose
 		INSERT INTO tool_calls (id, run_id, agent_id, server_name, tool_name, args_json, args_hash, status, created_at)
 		VALUES
 			('call_vendor', 'run_missing', 'general_assistant', 'vendor', 'vendor.write', '{}', 'sha256:x', 'completed', datetime('now')),
+			('call_unchanged', 'run_missing', 'general_assistant', 'unchanged-vendor', 'unchanged-vendor.write', '{}', 'sha256:x', 'completed', datetime('now')),
 			('call_skills', 'run_missing', 'general_assistant', 'skills', 'skills.search', '{}', 'sha256:x', 'completed', datetime('now')),
 			('call_gone', 'run_missing', 'general_assistant', 'deleted-vendor', 'deleted-vendor.write', '{}', 'sha256:x', 'completed', datetime('now'))
+	`); err != nil {
+		t.Fatal(err)
+	}
+	// A pre-0018 approval for call_vendor, already approved — the exact
+	// state a legacy, not-yet-consumed third-party approval is left in
+	// across this upgrade.
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO approvals (id, run_id, tool_call_id, agent_id, tool_name, args_json, args_hash, status, expires_at, created_at)
+		VALUES ('appr_vendor', 'run_missing', 'call_vendor', 'general_assistant', 'vendor.write', '{}', 'sha256:x', 'approved', datetime('now', '+1 hour'), datetime('now'))
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -390,46 +429,46 @@ func TestMCPApprovalIdentityMigrationBackfillsFromCurrentServerNameAndFailsClose
 		t.Fatal(err)
 	}
 
+	// Before the migration ever runs: server A is deleted and a
+	// brand-new, otherwise-unrelated server B is explicitly registered
+	// under A's exact former name "vendor" — the collision a name-based
+	// backfill would get wrong.
+	if _, err := database.ExecContext(ctx, `DELETE FROM mcp_servers WHERE id = 'mcp_vendor_a'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO mcp_servers (id, name, transport, url, tier, enabled, created_at)
+		VALUES ('mcp_vendor_b', 'vendor', 'http', 'http://vendor-b:9000/mcp', 'local_container', 0, datetime('now'))
+	`); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := ApplyMigrations(ctx, database); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, testCase := range []struct {
-		id   string
-		want sql.NullString
-	}{
-		{id: "call_vendor", want: sql.NullString{String: "mcp_vendor", Valid: true}},
-		{id: "call_skills", want: sql.NullString{}},
-		{id: "call_gone", want: sql.NullString{}},
-	} {
+	for _, id := range []string{"call_vendor", "call_unchanged", "call_skills", "call_gone"} {
 		var got sql.NullString
-		if err := database.QueryRowContext(ctx, `SELECT mcp_server_id FROM tool_calls WHERE id = ?`, testCase.id).Scan(&got); err != nil {
-			t.Fatalf("%s: %v", testCase.id, err)
+		if err := database.QueryRowContext(ctx, `SELECT mcp_server_id FROM tool_calls WHERE id = ?`, id).Scan(&got); err != nil {
+			t.Fatalf("%s: %v", id, err)
 		}
-		if got != testCase.want {
-			t.Fatalf("%s mcp_server_id = %+v, want %+v", testCase.id, got, testCase.want)
+		if got.Valid {
+			t.Fatalf("%s mcp_server_id = %+v, want NULL: migration 0018 must never backfill any pre-existing row", id, got)
 		}
 	}
 
-	// ON DELETE SET NULL: deleting vendor clears the binding on its
-	// already-backfilled tool_calls row, rather than either deleting or
-	// refusing to delete the row itself.
-	if _, err := database.ExecContext(ctx, `DELETE FROM mcp_servers WHERE id = 'mcp_vendor'`); err != nil {
+	// The migration itself never touches approvals: appr_vendor survives
+	// untouched, still "approved" — it is ConsumeApprovalForThirdParty's
+	// own NULL-binding comparison (proven at the service layer by
+	// TestConsumeApprovalForThirdPartyRefusesLegacyPreMigrationApprovalAfterNameReregistered)
+	// that refuses to let it authorise a call to B, not this schema
+	// migration marking it consumed, denied, or expired.
+	var approvalStatus string
+	if err := database.QueryRowContext(ctx, `SELECT status FROM approvals WHERE id = 'appr_vendor'`).Scan(&approvalStatus); err != nil {
 		t.Fatal(err)
 	}
-	var afterDelete sql.NullString
-	if err := database.QueryRowContext(ctx, `SELECT mcp_server_id FROM tool_calls WHERE id = 'call_vendor'`).Scan(&afterDelete); err != nil {
-		t.Fatal(err)
-	}
-	if afterDelete.Valid {
-		t.Fatalf("mcp_server_id after deleting its server = %+v, want NULL (ON DELETE SET NULL)", afterDelete)
-	}
-	var stillPresent int
-	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM tool_calls WHERE id = 'call_vendor'`).Scan(&stillPresent); err != nil {
-		t.Fatal(err)
-	}
-	if stillPresent != 1 {
-		t.Fatal("tool_calls row was deleted along with its server; want it preserved with mcp_server_id cleared")
+	if approvalStatus != "approved" {
+		t.Fatalf("appr_vendor status = %q, want still approved", approvalStatus)
 	}
 }
 

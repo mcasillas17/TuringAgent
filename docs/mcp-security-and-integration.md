@@ -504,6 +504,27 @@ This intentionally may refuse a short, coincidentally-ambiguous token
 that happens to share characters with an unrelated name/URL substring —
 the secrecy invariant wins over that inconvenience.
 
+Rotation runs one further check the shared registration/import path has no
+equivalent for, because only rotation can ever reach it: before a new,
+nonempty token is sealed or persisted, still under that server's own
+credential lock, it loads every tool retained for the server — present
+*and* withdrawn alike (`ListMCPServerTools` never filters by `present`) —
+and refuses the same generic, sentinel-free way if the token appears
+verbatim in any one tool's own name or its exact stored `schema_json`
+representation. A tool descriptor is exactly as public as a server's own
+name/url: every list/get/rotate response returns it, withdrawn tools
+included, so a token recoverable from one can never actually be secret
+either. The comparison reuses the same two-scan pairing the mcp.json
+token-in-tool-metadata check above runs at import time — a decoded-value
+walk (catching a token containing a quote or backslash, which the stored
+text escapes) plus a raw-text scan of the stored JSON itself (catching a
+token equal to the literal serialized text of a JSON number, boolean, or
+null value, or one that only spans a structural boundary `json.Marshal`
+introduced) — just applied to already-*stored* schema text instead of
+freshly-decoded caller input, since that is all rotation ever has to
+compare against. Skipped entirely when the bearer is being cleared (an
+empty token can never collide with anything).
+
 A per-server credential lock — one `sync.RWMutex` per server id, created on
 first use and keyed by that id — fences a rotation against a concurrent call
 or discovery for the *same* server: `CallTool` and enable-time discovery hold
@@ -571,8 +592,22 @@ marks the server down with a bounded, bearer-redacted status message, and
 preserves whatever tool snapshot the last successful discovery produced.
 Enable/disable, discovery outcome, registration (including whether it
 adopted a placeholder), token rotation, deletion, and a tool policy change are
-all audited; the audit payload and any status text never carry a token. Each
-of these actions is also readable back through the audit read API
+all audited; the audit payload and any status text never carry a token. A
+tool policy change is audited identically regardless of which of the two RPCs
+committed it — `UpdateMcpToolPolicy` (id-addressed, for a real, registered
+server) or `UpdateToolPolicyByName` (name-addressed, the compatibility path
+that also reaches the orchestrator-owned "skills"/"integrations"
+pseudo-servers, neither of which has an `mcp_servers` row an id could be read
+from) — both write the same `mcp.server.tool_policy_changed` action with the
+same server-name/tool-name/policy payload shape, immediately after the policy
+mutation commits and before either RPC's own fallible descriptor-mapping step,
+so a read/descriptor failure afterward can never leave an already-persisted
+policy change unaudited. The audit *target* (the row identifier the audit
+API returns alongside the action) still differs between the two — the real
+server id for `UpdateMcpToolPolicy`, the request's own server name for
+`UpdateToolPolicyByName`, since a pseudo-server has no id to use — only the
+action and payload are identical. Each of these actions is also readable back
+through the audit read API
 ([Action allowlist](architecture/audit-read-api.md#action-allowlist)): that
 API is itself default-deny, so these records only surface at all because each
 action has an explicit, reviewed, typed field rule — `mcp.server.registered`
@@ -587,7 +622,16 @@ sealed/ciphertext form.
 
 Peer-controlled MCP errors and results are scrubbed of the registered bearer
 before they can cross the internal RPC boundary or reach liveness state, tool
-events, audit, or persisted result summaries.
+events, audit, or persisted result summaries. This holds even for a bearer
+that is itself short or unlucky enough to be a substring of (or equal to) the
+fixed `[redacted]` marker text redaction substitutes in its place: rather than
+let that marker's own fixed characters reintroduce the very bearer it just
+removed, every redaction path falls back to an empty string — a value that
+can never contain a non-empty secret — whenever its own ordinary substitution
+would otherwise still carry the bearer. An ordinary, non-colliding value still
+redacts exactly as before; only this narrow, pathological overlap changes
+behavior, and only ever toward emptying rather than ever leaking or refusing
+an otherwise-redactable result outright.
 
 All four bundled backend services run as explicit non-root users. Compose makes every
 root filesystem read-only, drops all Linux capabilities without adding any
@@ -852,11 +896,31 @@ the new one merely because the two happen to share a name. The foreign key
 is `ON DELETE SET NULL`, not `ON DELETE CASCADE` — deleting a server severs
 this binding without deleting the tool-call history of a run that already
 called it — and a `NULL` binding (whether from that deletion, or from a
-legacy `tool_calls` row the 0018 migration's one-time backfill could not
-resolve to any then-current server) fails closed: it can only ever match a
-caller-supplied id that is itself empty, the permanent state of the two
-orchestrator-owned pseudo-servers ("skills", "integrations", neither of
-which is ever backed by a real `mcp_servers` row).
+legacy `tool_calls` row that predates this column) fails closed: it can only
+ever match a caller-supplied id that is itself empty, the permanent state of
+the two orchestrator-owned pseudo-servers ("skills", "integrations", neither
+of which is ever backed by a real `mcp_servers` row).
+
+Migration `0018_mcp_approval_identity.sql` adds `mcp_server_id` as a nullable
+column and an index — nothing else. It deliberately carries no backfill: every
+`tool_calls` row that predates this column is left `NULL` unconditionally,
+never populated by matching that row's own `server_name` against whichever
+`mcp_servers` row happens to carry that name at the moment the migration runs.
+A name-based backfill would be unsafe rather than merely approximate: a
+server's name can be freely reused after its original row is deleted and a
+different, unrelated server explicitly registered under that exact same name
+*before* an operator ever applies this migration, and backfilling by name in
+that case would silently rebind a historical tool call — and any approval
+created and approved against it — from the server it was actually dispatched
+against to the id of a completely unrelated server that merely happens to
+share its name now, defeating the very immutable-id comparison above. Leaving
+every pre-existing row `NULL` is the only safe outcome, and it is intentional:
+any legacy, not-yet-consumed third-party approval that predates this
+migration is invalidated by the upgrade — refused rather than silently
+rebound, consumable only by denial or expiry, never by
+`ConsumeApprovalForThirdParty` again. A brand-new tool call recorded after the
+upgrade is unaffected: it still gets its own, correctly-resolved id at insert
+time (`recordToolCallBeforeTx`/`lookupMCPServerIDByNameTx`), exactly as before.
 
 The same caller-side rule covers the orchestrator-owned `integrations`
 pseudo-server. `github.create_comment` cannot be made safe, and every

@@ -331,7 +331,7 @@ else in the JSON object is silently ignored, whatever the action:
 | `mcp.server.registered` | server name, MCP server tier, MCP server URL, adopted (bool) |
 | `mcp.server.enabled`, `mcp.server.disabled` | server name, MCP server tier, remote discovery attempted (bool), discovery succeeded (bool) |
 | `mcp.server.token_rotated`, `mcp.server.token_cleared` | server name, token configured (bool) — never the token or its sealed form |
-| `mcp.server.reimported` | imported/skipped/refused server counts — never the server names or refusal reasons |
+| `mcp.server.reimported` | imported/skipped/refused server counts, status (`completed` or `partial`) — never the server names or refusal reasons |
 | `mcp.server.deleted` | server name, MCP server tier |
 | `mcp.server.tool_policy_changed` | server name, tool name, tool policy (the canonical `safe` / `approval_required` / `disabled` string) |
 | `session.routed`, `session.unrouted`, and any unknown or future action | metadata only — no payload fields at all |

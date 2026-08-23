@@ -320,11 +320,37 @@ func redactMCPSecret(value any, secret string) any {
 	}
 }
 
+// mcpSecretFreeOrEmpty is the one proven-safe fallback every redaction
+// primitive in this file falls back to when its own ordinary substitution
+// cannot guarantee secret is actually gone: it returns candidate unchanged
+// if candidate no longer contains secret, or "" otherwise. Empty is a
+// universal safe answer — an empty string can never contain a non-empty
+// secret — chosen deliberately over any other fixed placeholder, because
+// mcpRedactedMarker itself is exactly the kind of candidate this guards
+// against: a short or unlucky secret (equal to, or a substring of, "e",
+// "red", "ed]", or the whole marker "[redacted]") can survive inside the
+// very text meant to redact it, since strings.ReplaceAll only ever
+// replaces the *matched* occurrence(s) of secret with mcpRedactedMarker
+// and has no way to know that its own replacement text might reintroduce
+// the exact thing it just removed. Without this guard, a result or error
+// containing such a secret would either keep leaking it (a single-letter
+// secret like "e" appears twice inside "[redacted]" alone) or, at the
+// whole-result safety net in request() below, be refused outright with
+// errMCPResultCannotBeRedacted even for an ordinary, otherwise perfectly
+// redactable echo — a false availability refusal this function is what
+// prevents.
+func mcpSecretFreeOrEmpty(candidate, secret string) string {
+	if secret != "" && strings.Contains(candidate, secret) {
+		return ""
+	}
+	return candidate
+}
+
 func redactMCPSecretString(value string, secret string) string {
 	if secret == "" {
 		return value
 	}
-	return strings.ReplaceAll(value, secret, mcpRedactedMarker)
+	return mcpSecretFreeOrEmpty(strings.ReplaceAll(value, secret, mcpRedactedMarker), secret)
 }
 
 // redactMCPSecretScalar handles every JSON scalar redactMCPSecret's own
@@ -340,7 +366,11 @@ func redactMCPSecretString(value string, secret string) string {
 // and a match replaces the whole scalar with the fixed redaction
 // marker, changing its wire type (e.g. a number becomes a string)
 // rather than ever letting a secret-bearing number, boolean, or null
-// reach a caller.
+// reach a caller. That replacement marker itself goes through
+// mcpSecretFreeOrEmpty too, for the identical reason redactMCPSecretString
+// does: a short or unlucky secret occurring only in "1e10"-shaped
+// scientific notation, or in "true"/"false", can still be a substring of
+// "[redacted]" itself, and no wire-type change can fix that on its own.
 func redactMCPSecretScalar(value any, secret string) any {
 	encoded, err := json.Marshal(value)
 	if err != nil {
@@ -349,5 +379,5 @@ func redactMCPSecretScalar(value any, secret string) any {
 	if !strings.Contains(string(encoded), secret) {
 		return value
 	}
-	return mcpRedactedMarker
+	return mcpSecretFreeOrEmpty(mcpRedactedMarker, secret)
 }

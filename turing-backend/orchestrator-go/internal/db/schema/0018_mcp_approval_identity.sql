@@ -18,21 +18,30 @@
 ALTER TABLE tool_calls
   ADD COLUMN mcp_server_id TEXT REFERENCES mcp_servers(id) ON DELETE SET NULL;
 
--- Backfill from every existing tool_calls row's own server_name, resolved
--- against whichever mcp_servers row currently carries that name. This is
--- necessarily a one-time, current-state approximation: a row whose
--- server_name no longer matches any current mcp_servers row (the server
--- was since renamed or deleted) is left NULL, the same fail-closed state
--- a genuinely deleted server's rows are left in going forward (see
--- ON DELETE SET NULL above) — there is no way to recover a historical
--- binding a from-scratch column never recorded. "skills" and
--- "integrations" (pseudo-servers with no mcp_servers row at all — see
--- schema/0016_mcp_registry.sql/0017_integrations_consumer.sql) resolve to
--- NULL here too, which is their permanent, correct state: they are never
--- bound to a real mcp_servers row at all, at insert time or otherwise.
-UPDATE tool_calls
-SET mcp_server_id = (
-  SELECT id FROM mcp_servers WHERE mcp_servers.name = tool_calls.server_name
-);
-
+-- Deliberately no backfill: every tool_calls row that predates this column
+-- is left NULL, unconditionally — never populated by matching its own
+-- server_name against whichever mcp_servers row happens to carry that name
+-- at the moment this migration runs. A name-based backfill would be unsafe
+-- rather than merely approximate: a server name can be freely reused after
+-- its original row is deleted (DeleteMcpServer) and a different, unrelated
+-- server explicitly registered under that exact same name before an
+-- operator ever applies this migration, and backfilling by name in that
+-- case would silently rebind a historical tool_calls row — and any
+-- approval created and approved against it — from the server it was
+-- actually dispatched against to the id of a completely unrelated server
+-- that merely happens to share its name now. That is exactly the gap
+-- ConsumeApprovalForThirdParty's own immutable-id comparison exists to
+-- close, and exactly what that comparison's own NULL/empty fail-closed
+-- branch depends on this migration never silently defeating. Leaving every
+-- pre-existing row NULL is therefore the only safe outcome: it fails closed
+-- the identical way ON DELETE SET NULL already leaves a genuinely deleted
+-- server's own rows in going forward (see above), regardless of whether a
+-- row's server_name currently resolves to the still-original server, an
+-- unrelated server that reused the name, a pseudo-server ("skills",
+-- "integrations" — neither of which is ever backed by a real mcp_servers
+-- row), or nothing at all. One consequence is intentional: any legacy,
+-- not-yet-consumed third-party approval that predates this migration is
+-- invalidated by the upgrade — it can never again be consumed, only denied
+-- or left to expire — rather than risk it being silently rebound to the
+-- wrong server.
 CREATE INDEX idx_tool_calls_mcp_server_id ON tool_calls(mcp_server_id);

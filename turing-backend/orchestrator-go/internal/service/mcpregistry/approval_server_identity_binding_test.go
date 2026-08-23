@@ -137,3 +137,88 @@ func TestConsumeApprovalForThirdPartyRefusesAfterServerIsDeletedAndNameReregiste
 		t.Fatalf("approvalB status = %q, want consumed", approvalBAfter.Status)
 	}
 }
+
+// TestConsumeApprovalForThirdPartyRefusesLegacyPreMigrationApprovalAfterNameReregistered
+// is the service-layer determining test for finding #1 (migration 0018
+// removes its name-based backfill entirely — see
+// schema/0018_mcp_approval_identity.sql and the db package's own
+// TestMCPApprovalIdentityMigrationNeverBackfillsPreMigrationToolCalls for
+// the migration-level proof). A tool_calls row whose mcp_server_id is NULL
+// because it predates that column — exactly the state the fixed migration
+// leaves *every* pre-0018 row in, never backfilled by matching server_name
+// against whichever server currently owns that name — must not be treated
+// as bound to whichever server currently owns it. This is simulated
+// directly (clearing mcp_server_id after the harness's own, normally
+// correctly-bound insert) rather than by rolling the schema back to
+// pre-0018, since that is the identical NULL state the fixed migration
+// itself produces for every such row, and simulating it here keeps this
+// test in the same package as ConsumeApprovalForThirdParty/CallTool
+// without reaching into the db package's own unexported migration-stepping
+// helpers.
+func TestConsumeApprovalForThirdPartyRefusesLegacyPreMigrationApprovalAfterNameReregistered(t *testing.T) {
+	h := newRegistryCallHarness(t)
+	ctx := context.Background()
+	args := map[string]any{"path": "x"}
+
+	runID := h.runningToolCall(t, "call_legacy", args)
+	if _, err := h.database.ExecContext(ctx, `UPDATE tool_calls SET mcp_server_id = NULL WHERE id = ?`, "call_legacy"); err != nil {
+		t.Fatal(err)
+	}
+	approvalID, err := h.approvals.CreateApprovalForTool(ctx, runID, "call_legacy", "general_assistant", "vendor.write", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.approvals.ApproveApproval(ctx, &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+		t.Fatal(err)
+	}
+	h.resumeApprovedRun(t, runID, approvalID)
+
+	legacyApproval, err := h.repo.GetApproval(ctx, approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyApproval.MCPServerID != "" {
+		t.Fatalf("legacy approval MCPServerID = %q, want empty (simulating a never-backfilled pre-0018 row)", legacyApproval.MCPServerID)
+	}
+
+	// Delete the harness's original "vendor" server and register a
+	// brand-new one under the exact same name — the scenario a real
+	// deployment could reach across the 0018 upgrade: a server deleted
+	// and its name reused before the operator ever applied the migration.
+	if _, err := h.repo.DeleteMCPServer(ctx, h.serverID); err != nil {
+		t.Fatal(err)
+	}
+	serverB, err := h.repo.RegisterMCPServer(ctx, repository.ImportedMCPServer{
+		Name: "vendor", URL: h.vendor.URL, Tier: repository.MCPServerTierLocalContainer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.SetMCPServerEnabled(ctx, serverB.Server.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.registry.RecordDiscovery(ctx, serverB.Server.ID, []DiscoveredTool{{
+		Name: "vendor.write", SchemaJSON: `{"type":"object"}`,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The legacy (NULL-bound) approval must not authorise a dispatch to
+	// B: CallTool re-resolves ServerID to the live server.ID (B's), which
+	// cannot equal a NULL binding.
+	if _, err := h.registry.CallTool(ctx, CallInput{
+		ServerID: serverB.Server.ID, RunID: runID, ApprovalID: approvalID, ToolName: "vendor.write", Args: args,
+	}); err == nil {
+		t.Fatal("a legacy pre-migration approval (NULL mcp_server_id) must not authorise a call to a newly-registered, same-named server B")
+	}
+	if got := h.reached.Load(); got != 0 {
+		t.Fatalf("vendor requests = %d, want 0: the refused call must never reach the network", got)
+	}
+	afterAttempt, err := h.repo.GetApproval(ctx, approvalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterAttempt.Status != "approved" {
+		t.Fatalf("approval status after the refused attempt = %q, want still approved (never consumed)", afterAttempt.Status)
+	}
+}
