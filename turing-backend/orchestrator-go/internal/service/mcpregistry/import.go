@@ -2088,11 +2088,11 @@ var errMCPTokenMatchesRetainedToolMetadata = errors.New("server token must not a
 // no present filter, so a withdrawn tool's own name/schema is returned in
 // every List/Get server descriptor exactly as a present tool's is.
 //
-// Two independent scans run against each tool's schema — the same pairing
-// buildImportTools' own token check runs at import time (see
-// mcpRawMetadataContainsToken's own doc comment), just applied to an
-// already-*stored* schema_json string instead of freshly-decoded caller
-// input, since that is all rotation ever has to compare against:
+// Three independent scans run against each tool's schema — the first two
+// are the same pairing buildImportTools' own token check runs at import
+// time (see mcpRawMetadataContainsToken's own doc comment), just applied
+// to an already-*stored* schema_json string instead of freshly-decoded
+// caller input:
 //
 //   - The raw scan (strings.Contains against the exact stored text) catches
 //     a token equal to the literal serialized text of a JSON number,
@@ -2106,26 +2106,33 @@ var errMCPTokenMatchesRetainedToolMetadata = errors.New("server token must not a
 //     escaped in the stored text in a way a plain substring search of that
 //     raw text alone would never find, but visible again once the text is
 //     unmarshaled back into its original runtime value.
+//   - The canonical scan re-marshals that same decoded value with
+//     json.Marshal and scans the resulting bytes too. A number's stored
+//     literal text and its canonical re-serialization can differ —
+//     json.Unmarshal-then-Marshal renders a stored "1e2" as "100", a
+//     stored "1e-2" as "0.01", and so on for any scientific-notation or
+//     otherwise non-minimal numeric literal — and a caller comparing
+//     against a tool's descriptor built via structpb.NewStruct/protojson
+//     (or any other canonicalizing re-serialization) sees exactly that
+//     canonical form, never the original stored literal. Without this
+//     third scan, a token equal only to a schema's canonical numeric
+//     rendering, and absent from both the stored text and every decoded
+//     string, would pass through unrefused even though it is already
+//     recoverable from every descriptor this server's own tool is
+//     returned in — an outright secrecy gap, not a tolerable tradeoff.
 //
-// Neither scan replaces the other. A schema_json that fails to unmarshal
-// (never expected in practice — every stored row was itself produced by a
-// json.Marshal call before being stored) is treated as no additional
-// decoded match, exactly like tokenAppearsInPublicMetadata's own
-// url.Parse failure path: the raw scan above still runs regardless and is
-// never skipped.
-//
-// Both scans compare against schema_json's own stored text, not against
-// whatever a later McpToolDescriptor.Schema (structpb.NewStruct, then
-// protojson) would re-serialize it as: a number's stored text and its
-// canonicalized wire form can differ (json.Marshal never re-emits
-// "1e2" as "100" the way structpb/protojson's own numeric formatting
-// might). A token equal only to that re-canonicalized form and absent
-// from the stored text this function actually inspects would not be
-// caught here — but the secrecy invariant this check exists for still
-// holds regardless: a token that already equals part of a tool's own
-// schema, in any of its representations, was never actually secret to
-// begin with, the same reasoning tokenAppearsInPublicMetadata's own
-// short-token-collision tradeoff documents.
+// None of the three scans replaces another. A schema_json that fails to
+// unmarshal (never expected in practice — every stored row was itself
+// produced by a json.Marshal call before being stored) is treated as no
+// additional decoded/canonical match, exactly like
+// tokenAppearsInPublicMetadata's own url.Parse failure path: the raw scan
+// above still runs regardless and is never skipped. A successful decode
+// whose canonical re-marshal itself fails (not expected either — the
+// decoded value is a plain map[string]any/[]any/string/number/bool/nil
+// tree, which json.Marshal never rejects) is instead treated as a match
+// and refused: canonical safety could not be verified, so this fails
+// closed rather than silently falling back to the weaker raw/decoded
+// scans alone.
 func tokenAppearsInRetainedToolMetadata(token string, tools []repository.MCPServerTool) bool {
 	if token == "" {
 		return false
@@ -2140,6 +2147,14 @@ func tokenAppearsInRetainedToolMetadata(token string, tools []repository.MCPServ
 		var decoded any
 		if err := json.Unmarshal([]byte(tool.SchemaJSON), &decoded); err == nil {
 			if mcpRawMetadataContainsToken(decoded, token) {
+				return true
+			}
+			canonical, err := json.Marshal(decoded)
+			if err != nil {
+				// Fail closed: canonical safety could not be verified.
+				return true
+			}
+			if bytes.Contains(canonical, []byte(token)) {
 				return true
 			}
 		}

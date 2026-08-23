@@ -421,6 +421,206 @@ func TestImportJSONAcceptsCorrectedUnrelatedTokenAndAdoptsPlaceholder(t *testing
 	}
 }
 
+// TestRegisterMcpServerRefusesTokenMatchingCanonicalizedPlaceholderToolSchema
+// proves the direct-registration adoption path reaches
+// tokenAppearsInRetainedToolMetadata's new third (canonical-re-marshal)
+// scan too, not only rotation (see
+// TestRotateMcpServerTokenRefusesNewTokenMatchingCanonicalizedSchemaNumericLiteral
+// in token_metadata_collision_test.go): a retained placeholder tool's
+// schema stored in scientific notation ("1e2") whose canonical
+// re-serialization renders as "100" must refuse a new token equal to
+// that canonical form — present or withdrawn — leaving the placeholder
+// completely untouched: no adoption (url stays empty), no sealed token,
+// no audit row, no notification.
+func TestRegisterMcpServerRefusesTokenMatchingCanonicalizedPlaceholderToolSchema(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		withdrawn bool
+	}{
+		{name: "present tool", withdrawn: false},
+		{name: "withdrawn tool", withdrawn: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, repo, database := newRegistryTestServiceWithRealAudit(t)
+			notifier := &countingRegistryChangeNotifier{}
+			service.SetRegistryChangeNotifier(notifier)
+			ctx := context.Background()
+			placeholder := seedPlaceholderWithTool(t, repo, "vendor", "vendor.write",
+				`{"type":"object","minimum":1e2}`, test.withdrawn)
+
+			_, err := service.RegisterMcpServer(ctx, &turingv1.RegisterMcpServerRequest{
+				Name: "vendor", Url: "https://vendor.example/mcp",
+				Tier:        turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL,
+				BearerToken: "100",
+			})
+			if err == nil {
+				t.Fatal("a token matching only the retained tool schema's canonical re-serialization must be refused")
+			}
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("code = %v, want InvalidArgument", status.Code(err))
+			}
+			if got := status.Convert(err).Message(); got != errMCPTokenMatchesRetainedToolMetadata.Error() {
+				t.Fatalf("message = %q, want the fixed reason %q", got, errMCPTokenMatchesRetainedToolMetadata.Error())
+			}
+			current, getErr := repo.GetMCPServer(ctx, placeholder.Server.ID)
+			if getErr != nil {
+				t.Fatal(getErr)
+			}
+			if current.URL != "" {
+				t.Fatal("a refused registration must not adopt the placeholder's row (url must stay empty)")
+			}
+			if len(current.SealedToken) != 0 {
+				t.Fatal("a refused registration must not persist any sealed token onto the placeholder")
+			}
+			if notifier.calls != 0 {
+				t.Fatalf("notify calls = %d, want 0: a refused registration must not notify", notifier.calls)
+			}
+			if payloads := auditPayloadsForAction(t, database, "mcp.server.registered"); len(payloads) != 0 {
+				t.Fatalf("audit payloads = %+v, want none for a refused registration", payloads)
+			}
+		})
+	}
+}
+
+// TestRegisterMcpServerAcceptsUnrelatedTokenDespiteCanonicalizedPlaceholderToolSchema
+// is the non-regression case: a token unrelated to the placeholder's
+// retained tool must still adopt the placeholder successfully even
+// though that tool's schema contains a scientific-notation numeric
+// literal the new canonical scan now also compares against.
+func TestRegisterMcpServerAcceptsUnrelatedTokenDespiteCanonicalizedPlaceholderToolSchema(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx := context.Background()
+	placeholder := seedPlaceholderWithTool(t, repo, "vendor", "vendor.write", `{"type":"object","minimum":1e2}`, false)
+
+	descriptor, err := service.RegisterMcpServer(ctx, &turingv1.RegisterMcpServerRequest{
+		Name: "vendor", Url: "https://vendor.example/mcp",
+		Tier:        turingv1.McpServerTier_MCP_SERVER_TIER_REMOTE_URL,
+		BearerToken: "totally-unrelated-token",
+	})
+	if err != nil {
+		t.Fatalf("an unrelated token must still adopt the placeholder: %v", err)
+	}
+	if descriptor.GetServerId() != placeholder.Server.ID {
+		t.Fatalf("Id = %q, want the placeholder %q adopted in place", descriptor.GetServerId(), placeholder.Server.ID)
+	}
+	current, getErr := repo.GetMCPServer(ctx, placeholder.Server.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if current.URL != "https://vendor.example/mcp" {
+		t.Fatalf("URL = %q, want the registered endpoint adopted", current.URL)
+	}
+}
+
+// TestImportJSONRefusesTokenMatchingCanonicalizedPlaceholderToolSchema is
+// TestRegisterMcpServerRefusesTokenMatchingCanonicalizedPlaceholderToolSchema's
+// file-import counterpart (see
+// TestImportJSONRefusesTokenMatchingRetainedPlaceholderToolSchema above
+// for why the refusal reason differs from the direct-registration path).
+func TestImportJSONRefusesTokenMatchingCanonicalizedPlaceholderToolSchema(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		withdrawn bool
+	}{
+		{name: "present tool", withdrawn: false},
+		{name: "withdrawn tool", withdrawn: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, repo, database := newRegistryTestServiceWithRealAudit(t)
+			notifier := &countingRegistryChangeNotifier{}
+			service.SetRegistryChangeNotifier(notifier)
+			ctx := context.Background()
+			placeholder := seedPlaceholderWithTool(t, repo, "vendor", "vendor.write",
+				`{"type":"object","minimum":1e2}`, test.withdrawn)
+
+			bearerHeader, err := json.Marshal("Bearer 100")
+			if err != nil {
+				t.Fatal(err)
+			}
+			report, err := service.ImportJSON(ctx, []byte(`{
+				"mcpServers": {
+					"vendor": {
+						"url": "https://vendor.example/mcp",
+						"headers": {"Authorization": `+string(bearerHeader)+`}
+					}
+				}
+			}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(report.Imported) != 0 {
+				t.Fatalf("Imported = %v, want none: a colliding token must refuse the whole entry", report.Imported)
+			}
+			reason, ok := report.Unsupported["vendor"]
+			if !ok {
+				t.Fatalf("Unsupported = %+v, want an entry for vendor", report.Unsupported)
+			}
+			if reason != mcpToolDefinitionRefusedMessage {
+				t.Fatalf("reason = %q, want the fixed generic reason %q", reason, mcpToolDefinitionRefusedMessage)
+			}
+			if strings.Contains(strings.ToLower(reason), "token") || strings.Contains(strings.ToLower(reason), "metadata") {
+				t.Fatalf("reason = %q, must not name token/metadata", reason)
+			}
+			current, getErr := repo.GetMCPServer(ctx, placeholder.Server.ID)
+			if getErr != nil {
+				t.Fatal(getErr)
+			}
+			if current.URL != "" {
+				t.Fatal("a refused import must not adopt the placeholder's row (url must stay empty)")
+			}
+			if len(current.SealedToken) != 0 {
+				t.Fatal("a refused import must not persist any sealed token onto the placeholder")
+			}
+			if notifier.calls != 0 {
+				t.Fatalf("notify calls = %d, want 0: a refused import must not notify", notifier.calls)
+			}
+			if payloads := auditPayloadsForAction(t, database, "mcp.server.registered"); len(payloads) != 0 {
+				t.Fatalf("audit payloads = %+v, want none for a refused import", payloads)
+			}
+		})
+	}
+}
+
+// TestImportJSONAcceptsUnrelatedTokenDespiteCanonicalizedPlaceholderToolSchema
+// is the file-import non-regression case: a token unrelated to the
+// placeholder's retained tool must still import and adopt the
+// placeholder successfully despite that tool's schema containing a
+// scientific-notation numeric literal.
+func TestImportJSONAcceptsUnrelatedTokenDespiteCanonicalizedPlaceholderToolSchema(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx := context.Background()
+	placeholder := seedPlaceholderWithTool(t, repo, "vendor", "vendor.lookup", `{"type":"object","minimum":1e2}`, false)
+
+	report, err := service.ImportJSON(ctx, []byte(`{
+		"mcpServers": {
+			"vendor": {
+				"url": "https://vendor.example/mcp",
+				"headers": {"Authorization": "Bearer totally-unrelated-token"},
+				"tools": [{"name": "vendor.lookup", "inputSchema": {"type": "object", "minimum": 100}}]
+			}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Imported) != 1 || report.Imported[0] != "vendor" {
+		t.Fatalf("Imported = %v, want [vendor]", report.Imported)
+	}
+	if _, present := report.Unsupported["vendor"]; present {
+		t.Fatalf("Unsupported = %+v, want vendor absent", report.Unsupported)
+	}
+	current, getErr := repo.GetMCPServer(ctx, placeholder.Server.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if current.URL != "https://vendor.example/mcp" {
+		t.Fatalf("URL = %q, want the imported endpoint adopted", current.URL)
+	}
+	if len(current.SealedToken) == 0 {
+		t.Fatal("SealedToken is empty, want the corrected token sealed and stored")
+	}
+}
+
 // TestRegisterMcpServerRetainedToolLookupFailureReturnsInternal proves the
 // placeholder pre-check's own repository read failure — distinct from the
 // token collision it normally detects — is mapped to the same generic

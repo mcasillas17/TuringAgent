@@ -402,6 +402,117 @@ func TestRotateMcpServerTokenRefusesNewTokenMatchingNumericSchemaLiteral(t *test
 	}
 }
 
+// TestRotateMcpServerTokenRefusesNewTokenMatchingCanonicalizedSchemaNumericLiteral
+// proves tokenAppearsInRetainedToolMetadata's third scan: re-marshaling
+// the decoded schema_json back into canonical JSON and scanning those
+// bytes too, not just the stored raw text and the decoded-string walk.
+// A schema_json literal stored in scientific notation (json.Marshal's own
+// canonical re-serialization of the *decoded* float64 renders "1e2" as
+// "100", "1e-2" as "0.01", "1.5e2" as "150" — Go's shortest-round-trip
+// float formatting, not the original literal text) never appears
+// character-for-character in the stored text, and it never decodes to a
+// Go string (it is a JSON number, invisible to the map/slice/string walk
+// mcpRawMetadataContainsToken performs). Only comparing against the
+// canonical re-marshal catches it. This is exactly the gap the previous
+// version of tokenAppearsInRetainedToolMetadata's own doc comment
+// acknowledged and dismissed ("the secrecy invariant... still holds
+// regardless") — this test proves that dismissal is no longer the
+// behavior: the collision is now refused, not waved through.
+func TestRotateMcpServerTokenRefusesNewTokenMatchingCanonicalizedSchemaNumericLiteral(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		schemaJSON string
+		token      string
+	}{
+		{name: "positive exponent collapses to plain integer", schemaJSON: `{"type":"object","minimum":1e2}`, token: "100"},
+		{name: "negative exponent collapses to decimal", schemaJSON: `{"type":"object","minimum":1e-2}`, token: "0.01"},
+		{name: "decimal mantissa with exponent collapses", schemaJSON: `{"type":"object","minimum":1.5e2}`, token: "150"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, repo, database := newRegistryTestServiceWithRealAudit(t)
+			notifier := &countingRegistryChangeNotifier{}
+			service.SetRegistryChangeNotifier(notifier)
+			ctx := context.Background()
+			server, err := repo.RegisterMCPServer(ctx, repository.ImportedMCPServer{
+				Name: "vendor", URL: "https://vendor.example/mcp", Tier: repository.MCPServerTierRemoteURL,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := service.RecordDiscovery(ctx, server.Server.ID, []DiscoveredTool{
+				{Name: "vendor.write", SchemaJSON: test.schemaJSON},
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = service.RotateMcpServerToken(ctx, &turingv1.RotateMcpServerTokenRequest{
+				ServerId: server.Server.ID, BearerToken: test.token,
+			})
+			if err == nil {
+				t.Fatal("a new token matching only the schema's canonical re-serialization must be refused")
+			}
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("code = %v, want InvalidArgument", status.Code(err))
+			}
+			if got := status.Convert(err).Message(); got != errMCPTokenMatchesRetainedToolMetadata.Error() {
+				t.Fatalf("message = %q, want the fixed reason %q", got, errMCPTokenMatchesRetainedToolMetadata.Error())
+			}
+			current, getErr := repo.GetMCPServer(ctx, server.Server.ID)
+			if getErr != nil {
+				t.Fatal(getErr)
+			}
+			if len(current.SealedToken) != 0 {
+				t.Fatal("a refused rotation must not replace the server's sealed token")
+			}
+			if notifier.calls != 0 {
+				t.Fatalf("notify calls = %d, want 0: a refused rotation must not notify", notifier.calls)
+			}
+			if payloads := auditPayloadsForAction(t, database, "mcp.server.token_rotated"); len(payloads) != 0 {
+				t.Fatalf("audit payloads = %+v, want none for a refused rotation", payloads)
+			}
+		})
+	}
+}
+
+// TestRotateMcpServerTokenAcceptsUnrelatedTokenDespiteCanonicalizedSchemaNumericLiteral
+// is the non-regression case for the new canonical scan: a token wholly
+// unrelated to a retained tool's schema must still rotate successfully
+// even though that schema contains a scientific-notation numeric literal
+// whose canonical re-serialization the new third scan now compares
+// against.
+func TestRotateMcpServerTokenAcceptsUnrelatedTokenDespiteCanonicalizedSchemaNumericLiteral(t *testing.T) {
+	service, repo := newRegistryTestService(t)
+	ctx := context.Background()
+	server, err := repo.RegisterMCPServer(ctx, repository.ImportedMCPServer{
+		Name: "vendor", URL: "https://vendor.example/mcp", Tier: repository.MCPServerTierRemoteURL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RecordDiscovery(ctx, server.Server.ID, []DiscoveredTool{
+		{Name: "vendor.write", SchemaJSON: `{"type":"object","minimum":1e2}`},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	descriptor, err := service.RotateMcpServerToken(ctx, &turingv1.RotateMcpServerTokenRequest{
+		ServerId: server.Server.ID, BearerToken: "completely-unrelated-bearer-value",
+	})
+	if err != nil {
+		t.Fatalf("an unrelated token must still rotate successfully: %v", err)
+	}
+	if descriptor.GetName() != "vendor" {
+		t.Fatalf("descriptor = %+v, want the server actually rotated", descriptor)
+	}
+	current, err := repo.GetMCPServer(ctx, server.Server.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current.SealedToken) == 0 {
+		t.Fatal("an accepted rotation must have replaced the server's sealed token")
+	}
+}
+
 // TestRotateMcpServerTokenRefusesNewTokenRequiringDecodedToolSchemaComparison
 // proves the opposite half of the same two-scan requirement: a token
 // containing a quote or backslash, stored escaped inside schema_json's own

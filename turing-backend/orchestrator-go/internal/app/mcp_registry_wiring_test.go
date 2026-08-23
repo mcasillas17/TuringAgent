@@ -242,11 +242,19 @@ func TestReimportMcpJsonThroughPublicRPCPreservesOperatorState(t *testing.T) {
 	}
 
 	// The operator explicitly enables the server (the default from import
-	// is disabled, so this is a real, observable operator choice).
-	if _, err := client.SetMcpServerEnabled(ctx, &turingv1.SetMcpServerEnabledRequest{
-		ServerId: vendor.ID, Enabled: true,
-	}); err != nil {
-		t.Fatalf("SetMcpServerEnabled: %v", err)
+	// is disabled, so this is a real, observable operator choice). Set
+	// directly through the repository rather than the public
+	// SetMcpServerEnabled RPC: enabling a remote-url server through that
+	// RPC triggers live discovery — a real HTTP request (DNS lookup,
+	// dial, TLS) against the server's own URL (see Server.discoverLocked)
+	// — and this test's vendor.example URL is not a server this test
+	// hermetically controls. What this test actually exercises is
+	// reimport preservation of the operator's enabled choice, not
+	// SetMcpServerEnabled's own discovery behavior (already covered
+	// elsewhere), so flipping the repository column directly gets the
+	// same observable precondition with no network dependency at all.
+	if err := app.Repository.SetMCPServerEnabled(context.Background(), vendor.ID, true); err != nil {
+		t.Fatalf("SetMCPServerEnabled: %v", err)
 	}
 	// The operator edits the imported tool's policy.
 	if _, err := client.UpdateMcpToolPolicy(ctx, &turingv1.UpdateMcpToolPolicyRequest{
