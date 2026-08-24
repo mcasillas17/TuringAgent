@@ -498,7 +498,7 @@ provenance coloring later.
 
 ## What gets built (Phase 1)
 
-- **Migration (`0018` as of this writing; both `migrations_test.go` pins
+- **Migration (`0019` as of this writing; both `migrations_test.go` pins
   move)** — triggers from 0017's text + `memory`; `memory_candidates`
   (cascade_owned), `memory_notes` (independent, `content` column),
   `memory_notes_fts` (three triggers), `memory_evidence` (double
