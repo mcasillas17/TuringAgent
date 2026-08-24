@@ -84,8 +84,10 @@ dependencies to annotations. Consequences, honestly:
 - **User-adopted content survives source deletion** — as a note the user
   typed by hand would — with evidence annotations withdrawn (rows removed
   in the deleting transaction; frontmatter refs rewritten to `withdrawn`
-  on the next reconcile) so a belief can never *cite* deleted evidence,
-  and the UI shows it as unevidenced. The *content* persists. That is the
+  by a reconcile the deletion flow itself triggers as its vault cleaner
+  completes — not left waiting for the next restart) so a belief never
+  *cites* deleted evidence for longer than the deletion takes, and the
+  UI shows it as unevidenced. The *content* persists. That is the
   relaxation.
 
 **Relaxation 2 — vault beliefs defer the revision chain.** §Correction
@@ -263,16 +265,22 @@ classifies per table, not per row:**
   in the `validateMessagesFTSDeleteBehavior` mold, not just a map entry.
 - **`memory_notes_fts`** (FTS5 external-content over `memory_notes`) with
   **all three triggers** (`_ai`, `_ad`, `_au` — the `messages_fts`
-  precedent; the guard checks only the delete trigger, so a
-  delete-only implementation passes the invariant while never indexing:
-  the *edit-becomes-searchable* test leg exists because of that gap),
+  precedent; the guard's probe inserts-then-matches, so a missing insert trigger
+  already fails it — the genuinely uncaught gap is the **update**
+  trigger (stale index on edit), which is why the
+  *edit-becomes-searchable* test leg exists),
   and the `ftsProjectionDeleteChecks` entry.
 - **`memory_evidence`** (`cascade_owned`, double FK): annotation rows for
   promoted beliefs, keyed to `memory_notes.id` and to sessions with
   `ON DELETE CASCADE`.
 - Promotion is: file move (confined primitive), then one transaction —
   insert `memory_notes`, copy annotations to `memory_evidence`, delete
-  the `memory_candidates` row. A crash between file move and transaction
+  the `memory_candidates` row, **and release the `vault_artifacts`
+  reservation** (likewise when `applyProfileEdit` consumes a
+  `profile_edit` candidate): a surviving reservation would hand the
+  session-deletion cleaner a promoted belief — the exact content
+  Relaxation 1 protects. Crash-heal reconcile clears reservations whose
+  file no longer sits under `inbox/`. A crash between file move and transaction
   leaves a belief file without rows; reconcile heals it (creates the
   note row, re-links evidence from frontmatter, and **removes the
   orphaned candidate row whose inbox file no longer exists** — no
@@ -306,11 +314,12 @@ model distillation the cleaner never learns about while the deletion
 reports complete. The six sites: (1) the manifest (its own schema
 classification); (2) a second pending-count arm in
 `AdvanceSessionDeletion`'s hardwired
-`SELECT COUNT(*) FROM sandbox_artifacts …` gate; (3) failure scoping —
-`MarkSessionDeletionExternalFailure` is per-row-blind within the
-session's owned artifacts (the cleaner interface returns a bare error
-with no artifact identity) and must not mark sandbox rows failed for a
-vault-cleaner failure; (4) the removal loop beside
+`SELECT COUNT(*) FROM sandbox_artifacts …` gate; (3) failure semantics — the receipt carries **one** `error_code` for
+two cleaners (`MarkSessionDeletionExternalFailure` writes only
+`session_deletions`; the per-artifact
+`MarkSandboxArtifactDeleteFailed` has no production caller today), so
+per-cleaner attribution is by message, and the removal loop is
+per-cleaner-scoped; (4) the removal loop beside
 `removeOwnedArtifactManifestRows`; (5) `SetArtifactCleaner` becoming a
 cleaner list; (6) **the cleaner-dispatch gate itself** —
 `DeleteSession`'s retry path invokes cleaners only when
@@ -330,7 +339,9 @@ results return through the per-call nonce framing — extracted first into
 production caller, which moves to the shared one). Bounds: `maxMemoryResultBytes = 16 KiB`,
 rune-safe, truncation announced. `memory.search` has **no
 model-controllable scope parameter**; default and only scope is
-`beliefs/`. `memory.read` targets belief ids only. Neither can touch
+`beliefs/`. `memory.read` targets belief ids only and serves the **file**, freshly
+read through the confined opener — the (mtime, size) staleness residual
+applies to search's projection, never to read. Neither can touch
 `inbox/`, `persona.md`, or `profile.md` — the pinned tiers are readable
 only as their fingerprinted, truncated pinned selves.
 
@@ -343,24 +354,35 @@ the runner's `sideEffecting` is already false; the `read_only` bit is
 what keeps a *raised* policy from turning a failed search into
 `SideEffectUnknownError`, and the test sets the raised policy so the
 entry is load-bearing, not decorative). `memory.remember` takes the
-unknown-tool fallback. **The whole `memory` server is refused on
-automation allowlists at save** — the integrations shape exactly (a
-whole-server check in `normalizeAllowedTools`, its own sentinel and
-gRPC mapping; client-side this means *editing* the existing
-unconditional integrations sentence above the picker, not adding a
-parallel one): an unattended run that searches the belief
-graph on a remote-provider automation would be memory egress with no
-human at prepare time, and an unattended `remember` is the hole through
-which non-user-authored text becomes candidates before MEM-009's
-extraction gate exists.
+unknown-tool fallback. **Unattended runs cannot touch memory, enforced
+at dispatch, not at the allowlist** — because the allowlist is consulted
+only for `approval_required` tools (`GetAutomationRunGrant` sits inside
+that policy branch; the picker's own comment says safe tools never
+appear), a save-time refusal cannot stop a `safe`-seeded search or a
+downgraded `remember`: the memory service **refuses all three tools on
+automation runs regardless of policy**, in the same dispatch check that
+enforces the toggle. The save-time allowlist refusal exists too (a
+whole-server check in `normalizeAllowedTools`, its own sentinel and gRPC
+mapping; client-side, *editing* the existing integrations sentence above
+the picker) — but as legibility and pre-grant prevention, not as the
+enforcement, and the plan says which is which. Rationale stated with its
+own moot point: a remote-provider automation cannot even enqueue today
+(`ErrRemoteEgressConsentRequired` with no decision), so the live risk is
+the unattended local `remember` — the hole through which
+non-user-authored text becomes candidates before MEM-009's extraction
+gate exists — and unattended belief reads feeding later egress.
 
 **Pinned tiers: budgets, snapshot, ladder seat, binding.**
 `maxPersonaBytes = 4096`, `maxProfileBytes = 4096`, rune-safe truncation
-with an in-context notice. Snapshotted at enqueue **in the same read
+with an in-context notice; "non-empty" is measured on the
+whitespace-trimmed post-truncation bytes, so a whitespace-only file
+attaches no category. Snapshotted at enqueue **in the same read
 that computes the fingerprint**, and — the skills precedent at its
 strongest — **recomputed inside the enqueue transaction** against the
 frozen decision (`ErrEgressMemorySnapshotChanged`, a wrapped sentinel
-beside the skills one, mapped in `mapEnqueueError`): without the
+beside the skills one, mapped in `mapEnqueueError` — distinguishable by
+message text within `FailedPrecondition`, exactly as the skills sentinel
+is): without the
 in-enqueue recompute, an Obsidian autosave between consent and enqueue
 ships a job the runtime will hard-reject at `Execute` instead of a
 legible re-prepare. Ladder seat: the pinned pair is an **upstream
@@ -410,8 +432,10 @@ absence) returns empty; **and the memory service refuses tool calls at
 dispatch when off** — not because rows stay enabled (they don't:
 `UpsertTools`' zero-then-restore lowers un-reported pseudo rows), but
 because `PseudoServerToolAvailable` is deliberately policy-only and a
-direct tool-RPC call bypasses registry state entirely, exactly as
-`CallIntegrationTool` does.
+direct tool-RPC call bypasses registry *availability* state, as
+`CallIntegrationTool` does (which still re-checks the policy column —
+the toggle is a settings key orthogonal to policy, hence its own
+check).
 Registry-change notification fires on toggle; no restart. Queued and
 in-flight jobs keep their snapshots and consented decisions —
 consent-at-prepare semantics, asserted, not apologized for.
@@ -447,7 +471,9 @@ provenance coloring later.
   move)** — triggers from 0017's text + `memory`; `memory_candidates`
   (cascade_owned), `memory_notes` (independent, `content` column),
   `memory_notes_fts` (three triggers), `memory_evidence` (double
-  cascade); `vault_artifacts` (or kind column) with classification; the
+  cascade); `vault_artifacts` (a separate table — a kind column on
+  `sandbox_artifacts` would collapse the six-site budget and inherit
+  sandbox-shaped validation) with classification; the
   `run_egress_decisions` rebuild; every table classified in
   `schema_invariants_test.go` in the same change.
 - **`internal/memoryfiles`** — vault layout, lenient frontmatter, ULID
@@ -484,9 +510,16 @@ provenance coloring later.
 - **Client** — Memory page (tiers, inbox review with full content,
   persona/profile editors with autosave-mismatch UX, toggle, provenance
   incl. withdrawn and parse-error rows); egress dialog memory line.
-- **`scripts/init.sh` + compose + `.gitignore` + `CLAUDE.md`** — the
-  `/memory` mount, default `persona.md`, `memory/*` gitignore +
-  `.gitkeep`, the doc line.
+- **`scripts/init.sh` + compose + `.gitignore` + `.dockerignore` +
+  `CLAUDE.md`** — the `/memory` mount, default `persona.md`, `memory/*`
+  gitignore + `.gitkeep`, the doc line — plus the two CI/build guards
+  the mount trips: `docker_compose_security_test.go` pins the
+  orchestrator's volume list by **exact equality** (add
+  `../memory:/memory` to the fixture), and `.dockerignore` needs a
+  **repo-scoped** `turing-backend/memory` entry — `**/memory` would hide
+  the new Go package `internal/service/memory`, the identical trap the
+  file's own skills comment records; the ignore-assertion list and
+  overbroad-pattern guard in the same test pin it.
 
 ## The tests that gate the merge
 
@@ -500,9 +533,10 @@ Break each production gate, watch the right test fail, restore.
    calls below the tool layer**: `createInboxNote` refuses a `beliefs/`
    target, `applyProfileEdit` refuses `persona.md` (Tier 1's headline
    invariant is one confused caller away without this leg),
-   `promoteToBeliefs` refuses a source outside `inbox/` and a
-   destination outside `beliefs/`, and `rewriteFrontmatterRefs` refuses
-   paths outside its scope — the suite that kills a single generic
+   `promoteToBeliefs` refuses a source outside `inbox/`, a destination
+   outside `beliefs/`, **and a `profile_edit`-kind candidate**;
+   `applyProfileEdit` likewise refuses a `belief`-kind one; and
+   `rewriteFrontmatterRefs` refuses paths outside its scope — the suite that kills a single generic
    `writeConfined` with checks hoisted into handlers. Same suite for `memory.read`: `../`, absolute
    paths, `/skills`, the database file, symlinks. Over-limit
    `memory.remember` is **refused legibly, not truncated**.
@@ -515,14 +549,18 @@ Break each production gate, watch the right test fail, restore.
    candidates** (a session-less hand-dropped inbox file is an unmanaged
    draft: visible row, file-move promotion only — asserted); a rename inside
    `beliefs/` keeps id, provenance, and index; a crash between file
-   move and transaction heals on reconcile; the profile CAS refuses on
-   fd-verified hash mismatch with the re-read wording, and a concurrent
-   Obsidian edit racing the apply loses no user text.
+   move and transaction heals on reconcile **including removal of the
+   orphaned candidate row** (no phantom inbox entries); the profile CAS
+   refuses on fd-verified hash mismatch with the re-read wording, and an
+   Obsidian edit that **completes before** the apply loses no user text
+   (that is the window the CAS covers — an edit landing *mid-write* is
+   the named torn-file residual, recovered through the parse-error row,
+   and the test says which window it exercises).
 4. **Budgets, framing, and the omission path hold.** Pinned over-budget
    truncates rune-safe with notices; **over-context omission emits the
    `MemoryOmitted` notice and payload key** (the existing omission
    guards cover only 3 of 5 fields, so this leg cannot be inherited —
-   and the exhaustiveness guard is extended to cover every
+   and an exhaustiveness guard is **built** (none exists today) covering every
    `contextOmissions` field while the file is open); search AND read
    results are nonce-framed (distinct per call), bounded,
    spoof-resistant, valid-UTF-8 at a computed mid-rune boundary;
@@ -537,9 +575,13 @@ Break each production gate, watch the right test fail, restore.
    forbid it. Delete a session:
    evidence and candidate rows gone in the deleting transaction; candidate
    files removed via the cleaner; **one cleaner succeeding while the
-   other fails** yields `failed_external` + retryable with sandbox rows
-   unmarked by the vault failure, the session not reported deleted, and
-   a retry (re-running both, idempotent) completing; promoted beliefs
+   other fails** yields `failed_external` + retryable, the session not
+   reported deleted, and a retry (re-running both, idempotent)
+   completing; **a session with zero sandbox artifacts and only pending
+   vault artifacts still enters the pending gate** (the second
+   pending-count arm's own leg — without it, wiring the cleaner but
+   forgetting the arm passes every other test while vault-only deletions
+   report complete with files on disk); promoted beliefs
    survive with evidence withdrawn in sidecar and, on next reconcile,
    frontmatter; **a reconcile after a crash cannot resurrect withdrawn
    evidence from stale frontmatter** (sidecar wins for evidence state).
@@ -573,16 +615,25 @@ Break each production gate, watch the right test fail, restore.
     indexed; **a symlink inside `beliefs/` pointing outside the vault is
     never ingested** (walk-level `Lstat` leg); a note deleted in
     Obsidian leaves the index on next reconcile; **an edited note's new
-    text becomes searchable** (the insert/update-trigger leg the schema
-    guard cannot check); the 4096 bound refuses legibly and blocks
-    neither pinned tiers nor enqueue.
+    text becomes searchable** (the update-trigger leg the schema guard
+    cannot check); **duplicate frontmatter ids flag both copies and
+    index neither; malformed frontmatter is a per-note error row, never
+    fatal to the vault**; **two concurrent searches and a concurrent
+    reconcile run under the race detector** (the leg that makes the
+    mutex/singleflight claim falsifiable — remove the guard, `-race`
+    fails); the 4096 bound refuses legibly and blocks neither pinned
+    tiers nor enqueue.
 12. **Policy classes are right, tested at the policy that matters.**
     `memory.search`/`read` arrive `safe`; **raised to
     `approval_required`, a failed search is still a recoverable tool
     error** (the leg that makes the `readOnlyTools` entry load-bearing)
     and `ToolPolicyDecision.ReadOnly` is asserted on the wire;
     `memory.remember` arrives `approval_required`; the whole `memory`
-    server is refused on an automation allowlist at save.
+    server is refused on an automation allowlist at save; **and every
+    memory tool is refused at dispatch on an automation run regardless
+    of policy — including `memory.remember` deliberately set `safe`**
+    (the leg that kills allowlist-only enforcement, which safe tools
+    never reach).
 
 ## Deferred, deliberately (named MEM rungs, not loose ends)
 
