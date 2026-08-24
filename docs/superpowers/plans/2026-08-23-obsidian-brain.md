@@ -641,13 +641,13 @@ Break each production gate, watch the right test fail, restore.
    cleaner runs, the deletion completes (asserting the pending status
    alone passes with any other literal while the ticker loops forever);
    **a belief crash-healed by reconcile survives a subsequent session
-   deletion**, and in the reverse order (**session deleted before the
-   heal runs**) the heal completes with the gone session's refs written
-   `withdrawn` instead of failing on the evidence FK (the composite leg: crash between move and transaction →
+   deletion** (the composite leg: crash between move and transaction →
    reconcile → delete session → the belief file is untouched — an
    implementation releasing reservations only inside the promotion
    transaction deletes crash-healed beliefs and passes everything
-   else); promoted beliefs
+   else), and in the reverse order (**session deleted before the
+   heal runs**) the heal completes with the gone session's refs written
+   `withdrawn` instead of failing on the evidence FK; promoted beliefs
    survive with evidence withdrawn in sidecar and, on next reconcile,
    frontmatter; **a reconcile after a crash cannot resurrect withdrawn
    evidence from stale frontmatter** (sidecar wins for evidence state).
