@@ -54,6 +54,10 @@ type Server struct {
 	toolsets           map[string]workerToolset
 	registryMu         sync.RWMutex
 	dispatch           DispatchConfig
+	// afterAssignmentSend is a test seam fired between a successful RunAssigned
+	// send and its delivered bookkeeping. The window between the two is where a
+	// concurrent fence lands, and nothing else can hold a test open inside it.
+	afterAssignmentSend func(repository.Assignment)
 }
 
 type approvalCreator interface {
@@ -1249,13 +1253,36 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 		}
 		return errors.Join(err, s.repo.MarkAssignmentDeliveryUncertain(recoveryCtx, repositoryAssignment))
 	}
-	if err := s.repo.MarkAssignmentDelivered(ctx, repositoryAssignment); err != nil {
-		recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.repo.MarkAssignmentDeliveryUncertain(recoveryCtx, repositoryAssignment)
-		return err
+	if s.afterAssignmentSend != nil {
+		s.afterAssignmentSend(repositoryAssignment)
 	}
-	return nil
+	return s.finishAssignmentDelivery(ctx, repositoryAssignment)
+}
+
+// finishAssignmentDelivery commits the delivered bookkeeping for an assignment
+// whose send already succeeded.
+//
+// A fence here is not a stream error. The run can be fenced into recovering
+// between the send and this write — a reconciliation that lost this worker's
+// heartbeat, or anything else that put its ownership in doubt — and the guarded
+// UPDATE losing its row is that fence working. The worker holds the job it was
+// just sent, and that job is exactly the proof vehicle: its next heartbeat or
+// beacon resolves the doubt through the ordinary ownership-proof path — and
+// ResumeRecoveringRun performs the very write skipped here, committing
+// execution_state = 'delivered' as part of the proof. Tearing
+// the stream down instead cost the worker every other assignment it was
+// holding, for a write whose only claim was bookkeeping — the same defect the
+// dropped-command comment in sendCommand records for a release that landed
+// mid-dispatch.
+func (s *Server) finishAssignmentDelivery(ctx context.Context, repositoryAssignment repository.Assignment) error {
+	err := s.repo.MarkAssignmentDelivered(ctx, repositoryAssignment)
+	if err == nil || errors.Is(err, repository.ErrAssignmentFenced) {
+		return nil
+	}
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.repo.MarkAssignmentDeliveryUncertain(recoveryCtx, repositoryAssignment)
+	return err
 }
 
 func (s *Server) acknowledgeFencedExecutionExit(runID string) error {
