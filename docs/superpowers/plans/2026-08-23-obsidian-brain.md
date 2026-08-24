@@ -226,7 +226,9 @@ a surprise.
 
 **Path confinement: reimplement `safe_fs.go`'s opener, don't invent.**
 The one in-repo model that already does confined *writes* is
-`turing-backend/mcp-files/internal/tools/safe_fs.go` — root resolved
+`turing-backend/mcp-files/internal/tools` (`safe_fs.go` for the opener
+and `processPathLocks`; `files.go` for `syncFile`/`syncDirectory` and
+the link-staging create) — root resolved
 once, then a descriptor-relative `openat` walk with
 `O_CLOEXEC|O_NOFOLLOW` ending in `O_CREAT|O_EXCL` for creates — but it
 lives in a separate Go module the orchestrator cannot import.
@@ -296,9 +298,19 @@ classifies per table, not per row:**
 database wins for **evidence state**. A reconcile after a crash must not
 resurrect withdrawn evidence from stale frontmatter — withdrawal marks
 live in the sidecar and frontmatter is rewritten *from* the sidecar,
-never the reverse. Reconcile's file-writing half (id assignment,
-`withdrawn` rewrites) runs only on RPC-driven paths and startup, under a
-vault-wide singleflight; **`memory.search`'s pre-query reconcile is
+never the reverse. The heal trigger is named: a belief
+file **without a `memory_notes` row** is what reconcile heals — that
+discriminator is what lets "files win for content, sidecar wins for
+evidence state" and "crash-heal re-links from frontmatter" coexist. And
+heal is withdrawal-aware: a frontmatter ref naming a session that no
+longer exists (deleted before the heal ran — the candidate row cascaded
+away) is written as `withdrawn`, never re-inserted, because
+`memory_evidence`'s `NOT NULL` session FK would refuse it and the heal
+must not fail permanently over evidence the contract says is gone.
+Reconcile's file-writing half (id assignment,
+`withdrawn` rewrites) runs on RPC-driven paths, startup, and the
+deletion flow's cleaner-completion trigger, under a vault-wide
+singleflight; **`memory.search`'s pre-query reconcile is
 read-only** (index refresh, no file writes) — a `safe`, read-only tool
 must not write files, and two concurrent searches must not race
 frontmatter rewrites under `-race`; the read half's index writes and
@@ -329,7 +341,10 @@ cleaner gets its **own scoped failure marking against
 per-cleaner attribution is by message), and the removal loop is
 per-cleaner-scoped; (4) the removal loop beside
 `removeOwnedArtifactManifestRows`; (5) `SetArtifactCleaner` becoming a
-cleaner list; (6) **the cleaner-dispatch gate itself** —
+cleaner list whose pass is **continue-on-error — every cleaner is
+attempted independently within a pass, never short-circuited on the
+first failure** (otherwise the partial-failure outcome is an accident
+of registration order, and the second cleaner silently never runs); (6) **the cleaner-dispatch gate itself** —
 `DeleteSession`'s retry path invokes cleaners only when
 `receipt.ErrorCode == "artifact_cleanup_pending"`, a single literal the
 second pending arm must also satisfy or vault-only pending states loop
@@ -496,8 +511,16 @@ provenance coloring later.
   identity + duplicate handling, Obsidian-aware symlink-refusing bounded
   walk with (mtime,size) cache, the primitive set
   (`createInboxNote`/`promoteToBeliefs`/`applyProfileEdit`/
-  `rewriteFrontmatterRefs`) reimplementing `safe_fs.go`'s opener with
-  per-path locks and fsync discipline; fd-verified profile CAS.
+  `rewriteFrontmatterRefs`/**`removeInboxNote`** — the rejection RPC
+  and the vault cleaner both delete files, and both delete **through
+  this primitive**, which refuses any target outside `inbox/`: a
+  cleaner deleting by manifest-row path with no confinement is exactly
+  how a stale reservation would reach a promoted belief, and the
+  primitive makes that impossible by construction) reimplementing the
+  mcp-files opener (`safe_fs.go` for the walk and `processPathLocks`;
+  `files.go` for `syncFile`/`syncDirectory` and the link-staging
+  create) with per-path locks and fsync discipline; fd-verified
+  profile CAS.
 - **`turing-backend/internal/egress`** — the extracted parameterized
   framing helper (integrations moves onto it); the memory preimage
   struct + fingerprint; the version-bump pair.
@@ -562,15 +585,18 @@ Break each production gate, watch the right test fail, restore.
    invariant is one confused caller away without this leg),
    `promoteToBeliefs` refuses a source outside `inbox/`, a destination
    outside `beliefs/`, **and a `profile_edit`-kind candidate**;
-   `applyProfileEdit` likewise refuses a `belief`-kind one; and
-   `rewriteFrontmatterRefs` refuses paths outside its scope — the suite that kills a single generic
+   `applyProfileEdit` likewise refuses a `belief`-kind one; `rewriteFrontmatterRefs` refuses paths outside its scope, and
+   `removeInboxNote` refuses any target outside `inbox/` — the suite that kills a single generic
    `writeConfined` with checks hoisted into handlers. Same suite for `memory.read`: `../`, absolute
    paths, `/skills`, the database file, symlinks. Over-limit
    `memory.remember` is **refused legibly, not truncated**.
 2. **Candidates are never active.** Pinned loading reads only
    persona+profile; search and read cannot reach `inbox/` by any
    argument (no scope parameter exists); an inbox note influences
-   nothing until promoted; `memory_candidates` rows are unsearchable.
+   nothing until promoted; `memory_candidates` rows are unsearchable;
+   **rejection removes the row AND the file through `removeInboxNote`**
+   — a rejection that drops the row and leaves the file resurrects a
+   user-refused candidate as a promotable unmanaged draft.
 3. **Promotion converges and survives Obsidian.** RPC-promotion and
    file-move promotion produce identical state **for managed
    candidates** (a session-less hand-dropped inbox file is an unmanaged
@@ -615,7 +641,9 @@ Break each production gate, watch the right test fail, restore.
    cleaner runs, the deletion completes (asserting the pending status
    alone passes with any other literal while the ticker loops forever);
    **a belief crash-healed by reconcile survives a subsequent session
-   deletion** (the composite leg: crash between move and transaction →
+   deletion**, and in the reverse order (**session deleted before the
+   heal runs**) the heal completes with the gone session's refs written
+   `withdrawn` instead of failing on the evidence FK (the composite leg: crash between move and transaction →
    reconcile → delete session → the belief file is untouched — an
    implementation releasing reservations only inside the promotion
    transaction deletes crash-healed beliefs and passes everything
