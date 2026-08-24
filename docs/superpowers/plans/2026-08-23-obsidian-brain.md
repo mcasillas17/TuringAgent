@@ -181,7 +181,7 @@ summaries are Phase 2.
 `memoryfiles` write layer is a named set of purpose-scoped primitives —
 `createInboxNote` (confined to `inbox/`, refuses any other target *when
 called directly, below the tool layer*), `promoteToBeliefs`,
-`applyProfileEdit`, `rewriteFrontmatterRefs` — each carrying its own
+`applyProfileEdit`, `rewriteFrontmatterRefs`, `removeInboxNote` — each carrying its own
 confinement, so no single generic `writeConfined(root, rel)` with the
 check hoisted into a handler can satisfy the tests. The server names
 inbox files (ULID + sanitized slug of a model-supplied title — the model
