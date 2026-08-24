@@ -172,12 +172,13 @@ abstract class TuringApi implements RemoteEgressApi {
     );
   }
 
-  /// Registers one server directly, without editing mcp.json or restarting.
-  /// The tier is derived from the URL by the backend; the bearer token is
-  /// write-only and never comes back in any response.
+  /// Registers a new MCP server. [bearerToken] is sent to the backend as
+  /// plaintext for this one call only: it is never echoed back, stored on
+  /// [McpServer], or otherwise retained by the client.
   Future<McpServer> registerMcpServer({
     required String name,
     required String url,
+    required McpServerTier tier,
     String bearerToken = '',
   }) {
     throw const TuringApiException(
@@ -186,20 +187,21 @@ abstract class TuringApi implements RemoteEgressApi {
     );
   }
 
-  /// Re-runs the mcp.json import on demand. Deliberately cannot flip a user
-  /// decision: enablement, tool policies and deletions all survive.
-  Future<McpReimportReport> reimportMcpJson() {
+  /// Reimports the backend's mcp.json configuration, registering any server
+  /// not already known to it.
+  Future<McpImportReport> reimportMcpJson() {
     throw const TuringApiException(
       code: 'mcp_registry_unsupported',
-      message: 'This client cannot re-import mcp.json',
+      message: 'This client cannot reimport MCP JSON configuration',
     );
   }
 
-  /// Replaces the stored bearer token; an empty token clears it. Write-only,
-  /// like [registerMcpServer].
+  /// Replaces the bearer token stored for an existing MCP server.
+  /// [bearerToken] is sent as plaintext for this one call only and is never
+  /// retained by the client.
   Future<McpServer> rotateMcpServerToken({
     required String serverId,
-    String bearerToken = '',
+    required String bearerToken,
   }) {
     throw const TuringApiException(
       code: 'mcp_registry_unsupported',

@@ -1149,6 +1149,28 @@ class GrpcMappers {
       egressConsentGrantedAt: payload.hasEgressConsentGrantedAt()
           ? payload.egressConsentGrantedAt.toDateTime().toUtc()
           : null,
+      mcpServerTier: payload.hasMcpServerTier() ? payload.mcpServerTier : null,
+      mcpServerUrl: payload.hasMcpServerUrl() ? payload.mcpServerUrl : null,
+      adopted: payload.hasAdopted() ? payload.adopted : null,
+      tokenConfigured: payload.hasTokenConfigured()
+          ? payload.tokenConfigured
+          : null,
+      remoteDiscoveryAttempted: payload.hasRemoteDiscoveryAttempted()
+          ? payload.remoteDiscoveryAttempted
+          : null,
+      discoverySucceeded: payload.hasDiscoverySucceeded()
+          ? payload.discoverySucceeded
+          : null,
+      importedServers: payload.hasImportedServers()
+          ? payload.importedServers.toInt()
+          : null,
+      skippedServers: payload.hasSkippedServers()
+          ? payload.skippedServers.toInt()
+          : null,
+      refusedServers: payload.hasRefusedServers()
+          ? payload.refusedServers.toInt()
+          : null,
+      toolPolicy: payload.hasToolPolicy() ? payload.toolPolicy : null,
     );
   }
 

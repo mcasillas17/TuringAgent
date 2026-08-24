@@ -250,6 +250,96 @@ const AuditPayload$json = {
       '10': 'egressConsentGrantedAt',
       '17': true
     },
+    {
+      '1': 'mcp_server_tier',
+      '3': 26,
+      '4': 1,
+      '5': 9,
+      '9': 23,
+      '10': 'mcpServerTier',
+      '17': true
+    },
+    {
+      '1': 'mcp_server_url',
+      '3': 27,
+      '4': 1,
+      '5': 9,
+      '9': 24,
+      '10': 'mcpServerUrl',
+      '17': true
+    },
+    {
+      '1': 'adopted',
+      '3': 28,
+      '4': 1,
+      '5': 8,
+      '9': 25,
+      '10': 'adopted',
+      '17': true
+    },
+    {
+      '1': 'token_configured',
+      '3': 29,
+      '4': 1,
+      '5': 8,
+      '9': 26,
+      '10': 'tokenConfigured',
+      '17': true
+    },
+    {
+      '1': 'remote_discovery_attempted',
+      '3': 30,
+      '4': 1,
+      '5': 8,
+      '9': 27,
+      '10': 'remoteDiscoveryAttempted',
+      '17': true
+    },
+    {
+      '1': 'discovery_succeeded',
+      '3': 31,
+      '4': 1,
+      '5': 8,
+      '9': 28,
+      '10': 'discoverySucceeded',
+      '17': true
+    },
+    {
+      '1': 'imported_servers',
+      '3': 32,
+      '4': 1,
+      '5': 3,
+      '9': 29,
+      '10': 'importedServers',
+      '17': true
+    },
+    {
+      '1': 'skipped_servers',
+      '3': 33,
+      '4': 1,
+      '5': 3,
+      '9': 30,
+      '10': 'skippedServers',
+      '17': true
+    },
+    {
+      '1': 'refused_servers',
+      '3': 34,
+      '4': 1,
+      '5': 3,
+      '9': 31,
+      '10': 'refusedServers',
+      '17': true
+    },
+    {
+      '1': 'tool_policy',
+      '3': 35,
+      '4': 1,
+      '5': 9,
+      '9': 32,
+      '10': 'toolPolicy',
+      '17': true
+    },
   ],
   '8': [
     {'1': '_tool_name'},
@@ -275,6 +365,16 @@ const AuditPayload$json = {
     {'1': '_endpoint_host'},
     {'1': '_egress_decision_version'},
     {'1': '_egress_consent_granted_at'},
+    {'1': '_mcp_server_tier'},
+    {'1': '_mcp_server_url'},
+    {'1': '_adopted'},
+    {'1': '_token_configured'},
+    {'1': '_remote_discovery_attempted'},
+    {'1': '_discovery_succeeded'},
+    {'1': '_imported_servers'},
+    {'1': '_skipped_servers'},
+    {'1': '_refused_servers'},
+    {'1': '_tool_policy'},
   ],
 };
 
@@ -300,15 +400,27 @@ final $typed_data.Uint8List auditPayloadDescriptor = $convert.base64Decode(
     'R1cmluZy52MS5FZ3Jlc3NEYXRhQ2F0ZWdvcnlSFGVncmVzc0RhdGFDYXRlZ29yaWVzEjsKF2Vn'
     'cmVzc19kZWNpc2lvbl92ZXJzaW9uGBggASgFSBVSFWVncmVzc0RlY2lzaW9uVmVyc2lvbogBAR'
     'JaChllZ3Jlc3NfY29uc2VudF9ncmFudGVkX2F0GBkgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRp'
-    'bWVzdGFtcEgWUhZlZ3Jlc3NDb25zZW50R3JhbnRlZEF0iAEBQgwKCl90b29sX25hbWVCDgoMX3'
-    'NlcnZlcl9uYW1lQggKBl9waGFzZUIJCgdfc3RhdHVzQgkKB19yZWFzb25CDgoMX2R1cmF0aW9u'
-    'X21zQg0KC19lcnJvcl9jb2RlQgsKCV9wcm92aWRlckIPCg1fZGlzcGxheV9uYW1lQg0KC191bm'
-    'F0dGVuZGVkQhAKDl9hdXRvbWF0aW9uX2lkQhIKEF9hdXRvbWF0aW9uX25hbWVCCQoHX21ldGhv'
-    'ZEINCgtfcmVxdWVzdF9pZEIPCg1fZGVsZXRlZF9ydW5zQhMKEV9kZWxldGVkX21lc3NhZ2VzQh'
-    'MKEV9kZWNpc2lvbl9jb21tZW50Qh0KG19kZWNpc2lvbl9jb21tZW50X3RydW5jYXRlZEIQCg5f'
-    'ZGVuaWFsX3JlYXNvbkIaChhfZGVuaWFsX3JlYXNvbl90cnVuY2F0ZWRCEAoOX2VuZHBvaW50X2'
-    'hvc3RCGgoYX2VncmVzc19kZWNpc2lvbl92ZXJzaW9uQhwKGl9lZ3Jlc3NfY29uc2VudF9ncmFu'
-    'dGVkX2F0');
+    'bWVzdGFtcEgWUhZlZ3Jlc3NDb25zZW50R3JhbnRlZEF0iAEBEisKD21jcF9zZXJ2ZXJfdGllch'
+    'gaIAEoCUgXUg1tY3BTZXJ2ZXJUaWVyiAEBEikKDm1jcF9zZXJ2ZXJfdXJsGBsgASgJSBhSDG1j'
+    'cFNlcnZlclVybIgBARIdCgdhZG9wdGVkGBwgASgISBlSB2Fkb3B0ZWSIAQESLgoQdG9rZW5fY2'
+    '9uZmlndXJlZBgdIAEoCEgaUg90b2tlbkNvbmZpZ3VyZWSIAQESQQoacmVtb3RlX2Rpc2NvdmVy'
+    'eV9hdHRlbXB0ZWQYHiABKAhIG1IYcmVtb3RlRGlzY292ZXJ5QXR0ZW1wdGVkiAEBEjQKE2Rpc2'
+    'NvdmVyeV9zdWNjZWVkZWQYHyABKAhIHFISZGlzY292ZXJ5U3VjY2VlZGVkiAEBEi4KEGltcG9y'
+    'dGVkX3NlcnZlcnMYICABKANIHVIPaW1wb3J0ZWRTZXJ2ZXJziAEBEiwKD3NraXBwZWRfc2Vydm'
+    'VycxghIAEoA0geUg5za2lwcGVkU2VydmVyc4gBARIsCg9yZWZ1c2VkX3NlcnZlcnMYIiABKANI'
+    'H1IOcmVmdXNlZFNlcnZlcnOIAQESJAoLdG9vbF9wb2xpY3kYIyABKAlIIFIKdG9vbFBvbGljeY'
+    'gBAUIMCgpfdG9vbF9uYW1lQg4KDF9zZXJ2ZXJfbmFtZUIICgZfcGhhc2VCCQoHX3N0YXR1c0IJ'
+    'CgdfcmVhc29uQg4KDF9kdXJhdGlvbl9tc0INCgtfZXJyb3JfY29kZUILCglfcHJvdmlkZXJCDw'
+    'oNX2Rpc3BsYXlfbmFtZUINCgtfdW5hdHRlbmRlZEIQCg5fYXV0b21hdGlvbl9pZEISChBfYXV0'
+    'b21hdGlvbl9uYW1lQgkKB19tZXRob2RCDQoLX3JlcXVlc3RfaWRCDwoNX2RlbGV0ZWRfcnVuc0'
+    'ITChFfZGVsZXRlZF9tZXNzYWdlc0ITChFfZGVjaXNpb25fY29tbWVudEIdChtfZGVjaXNpb25f'
+    'Y29tbWVudF90cnVuY2F0ZWRCEAoOX2RlbmlhbF9yZWFzb25CGgoYX2RlbmlhbF9yZWFzb25fdH'
+    'J1bmNhdGVkQhAKDl9lbmRwb2ludF9ob3N0QhoKGF9lZ3Jlc3NfZGVjaXNpb25fdmVyc2lvbkIc'
+    'ChpfZWdyZXNzX2NvbnNlbnRfZ3JhbnRlZF9hdEISChBfbWNwX3NlcnZlcl90aWVyQhEKD19tY3'
+    'Bfc2VydmVyX3VybEIKCghfYWRvcHRlZEITChFfdG9rZW5fY29uZmlndXJlZEIdChtfcmVtb3Rl'
+    'X2Rpc2NvdmVyeV9hdHRlbXB0ZWRCFgoUX2Rpc2NvdmVyeV9zdWNjZWVkZWRCEwoRX2ltcG9ydG'
+    'VkX3NlcnZlcnNCEgoQX3NraXBwZWRfc2VydmVyc0ISChBfcmVmdXNlZF9zZXJ2ZXJzQg4KDF90'
+    'b29sX3BvbGljeQ==');
 
 @$core.Deprecated('Use auditEntryDescriptor instead')
 const AuditEntry$json = {

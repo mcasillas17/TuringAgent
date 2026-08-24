@@ -127,11 +127,41 @@ func recordToolCallBeforeTx(ctx context.Context, tx *sql.Tx, record ToolCallReco
 	if record.ApprovalID != "" {
 		approvalID = record.ApprovalID
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO tool_calls (id, run_id, agent_id, server_name, tool_name, model_tool_call_id, args_json, args_hash, status, approval_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ToolCallID, record.RunID, agentID, serverName, toolName, nullableText(record.ModelToolCallID), argsJSON, argsHash, status, approvalID, now()); err != nil {
+	mcpServerID, err := lookupMCPServerIDByNameTx(ctx, tx, serverName)
+	if err != nil {
+		return ToolCallBeforeResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO tool_calls (id, run_id, agent_id, server_name, tool_name, model_tool_call_id, args_json, args_hash, status, approval_id, mcp_server_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ToolCallID, record.RunID, agentID, serverName, toolName, nullableText(record.ModelToolCallID), argsJSON, argsHash, status, approvalID, mcpServerID, now()); err != nil {
 		return ToolCallBeforeResult{}, err
 	}
 	record.Status = status
 	return ToolCallBeforeResult{Record: record, Inserted: true}, nil
+}
+
+// lookupMCPServerIDByNameTx resolves serverName to its *current*
+// mcp_servers row id, at the exact moment a tool_calls row is inserted —
+// never reused from an earlier read, and never simply the name itself.
+// This is the immutable identity binding a later approval for this call
+// relies on (see ApprovalRecord.MCPServerID/approvalByID and
+// ApprovalEnforcer.ConsumeApprovalForThirdParty): a server name can be
+// freely reused after its original row is deleted and a new, unrelated
+// server registered under that same name, but this column, once written,
+// never silently repoints to the new one — DeleteMcpServer's own
+// ON DELETE SET NULL only ever clears it. Returns nil (SQL NULL) for a
+// pseudo-server name ("skills", "integrations" — neither ever has an
+// mcp_servers row at all) or any other name that does not currently
+// resolve to one, exactly the same fail-closed state a genuinely deleted
+// server's future tool calls are left in.
+func lookupMCPServerIDByNameTx(ctx context.Context, tx *sql.Tx, serverName string) (any, error) {
+	var id string
+	err := tx.QueryRowContext(ctx, `SELECT id FROM mcp_servers WHERE name = ?`, serverName).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return id, nil
 }
 
 func toolCallEventExistsTx(ctx context.Context, tx *sql.Tx, runID string, eventType string, toolCallID string) (bool, error) {

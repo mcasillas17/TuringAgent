@@ -95,6 +95,16 @@ class AuditPayload {
     this.egressDataCategories = const [],
     this.egressDecisionVersion,
     this.egressConsentGrantedAt,
+    this.mcpServerTier,
+    this.mcpServerUrl,
+    this.adopted,
+    this.tokenConfigured,
+    this.remoteDiscoveryAttempted,
+    this.discoverySucceeded,
+    this.importedServers,
+    this.skippedServers,
+    this.refusedServers,
+    this.toolPolicy,
   });
 
   final AuditPayloadState state;
@@ -142,4 +152,48 @@ class AuditPayload {
   /// True when the backend had to shorten [denialReason]; see
   /// [decisionCommentTruncated].
   final bool? denialReasonTruncated;
+
+  /// The MCP server's tier (`bundled` / `local_container` / `remote_url`) on
+  /// `mcp.server.registered`, `.enabled`, `.disabled`, and `.deleted`.
+  final String? mcpServerTier;
+
+  /// The MCP server's canonicalized URL. Disclosed only on
+  /// `mcp.server.registered` — never on `.enabled`/`.disabled`/`.deleted`,
+  /// and never a bearer token or its sealed form.
+  final String? mcpServerUrl;
+
+  /// True when `mcp.server.registered` adopted a pre-existing placeholder
+  /// row rather than inserting a brand-new one.
+  final bool? adopted;
+
+  /// Whether a bearer token is now configured, on `mcp.server.token_rotated`
+  /// / `.token_cleared` — never the token itself.
+  final bool? tokenConfigured;
+
+  /// Whether `mcp.server.enabled` attempted *remote* live discovery
+  /// against the server: true only when enabling a `remote_url`-tier
+  /// server. Enabling a `local_container`-tier server also performs
+  /// discovery, but reaches it over the sandboxed internal network
+  /// rather than an external request, so this stays false for that
+  /// tier; disabling never contacts the server at all, so this is also
+  /// always false on `.disabled`.
+  final bool? remoteDiscoveryAttempted;
+
+  /// Whether discovery actually succeeded. Recorded whenever
+  /// `mcp.server.enabled` performs discovery — for either
+  /// `local_container` or `remote_url` tier, not only when
+  /// [remoteDiscoveryAttempted] is true — and always false on
+  /// `.disabled`, which never attempts discovery at all.
+  final bool? discoverySucceeded;
+
+  /// Counts from `mcp.server.reimported` — never the imported/skipped/
+  /// refused server names themselves.
+  final int? importedServers;
+  final int? skippedServers;
+  final int? refusedServers;
+
+  /// The canonical tool policy string (`safe` / `approval_required` /
+  /// `disabled`) on `mcp.server.tool_policy_changed` — never the tool's
+  /// schema or call arguments.
+  final String? toolPolicy;
 }

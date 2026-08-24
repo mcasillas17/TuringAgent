@@ -66,6 +66,21 @@ message AuditPayload {
   repeated EgressDataCategory egress_data_categories = 23;
   optional int32 egress_decision_version = 24;
   optional google.protobuf.Timestamp egress_consent_granted_at = 25;
+
+  // MCP registry fields. server_name (3) and tool_name (2) above are reused
+  // rather than duplicated; provider (9) and display_name (10) are the
+  // integration.* fields and are deliberately not reused here since an MCP
+  // server is not an integration.
+  optional string mcp_server_tier = 26;
+  optional string mcp_server_url = 27;
+  optional bool adopted = 28;
+  optional bool token_configured = 29;
+  optional bool remote_discovery_attempted = 30;
+  optional bool discovery_succeeded = 31;
+  optional int64 imported_servers = 32;
+  optional int64 skipped_servers = 33;
+  optional int64 refused_servers = 34;
+  optional string tool_policy = 35;
 }
 
 message AuditEntry {

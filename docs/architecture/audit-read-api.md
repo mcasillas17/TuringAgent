@@ -328,7 +328,21 @@ else in the JSON object is silently ignored, whatever the action:
 | `session.deleted` | deleted run count, deleted message count |
 | `egress.consent.recorded` | provider, endpoint host, typed data categories, decision version, consent timestamp |
 | `automation.remote_egress_blocked` | error code, provider |
+| `mcp.server.registered` | server name, MCP server tier, MCP server URL, adopted (bool) |
+| `mcp.server.enabled`, `mcp.server.disabled` | server name, MCP server tier, remote discovery attempted (bool), discovery succeeded (bool) |
+| `mcp.server.token_rotated`, `mcp.server.token_cleared` | server name, token configured (bool) — never the token or its sealed form |
+| `mcp.server.reimported` | imported/skipped/refused server counts, status (`completed` or `partial`) — never the server names or refusal reasons |
+| `mcp.server.deleted` | server name, MCP server tier |
+| `mcp.server.tool_policy_changed` | server name, tool name, tool policy (the canonical `safe` / `approval_required` / `disabled` string) |
 | `session.routed`, `session.unrouted`, and any unknown or future action | metadata only — no payload fields at all |
+
+MCP server tier, MCP server URL, and tool policy are their own typed fields
+(`mcp_server_tier`, `mcp_server_url`, `tool_policy`) rather than reuses of
+`provider`/`display_name` — an MCP server registration is not an
+`integration.*` row and is disclosed under its own name. `tool_name` and
+`server_name` are reused as-is: the MCP registry actions above are simply
+another writer of those two existing fields, the same way `tool.call.*` and
+`automation.tool.blocked` already are.
 
 ### Approval decision rationale
 
@@ -422,16 +436,19 @@ Every value copied out is additionally type- and shape-guarded, never
 truncated or coerced:
 
 - String fields must be an actual JSON string, non-empty, within their
-  service-side byte bound (512, 256, or 128 depending on field — see
-  `service.go`'s bound constants), and free of NUL/control characters. Any
-  violation omits the field; it is never shortened to fit.
+  service-side byte bound (512, 256, 128, or — for `mcp_server_url` only,
+  matching the registry's own stored-URL bound — 2048 bytes, depending on
+  field; see `service.go`'s bound constants), and free of NUL/control
+  characters. Any violation omits the field; it is never shortened to fit.
 - The two approval rationale strings are the documented exception to the
   "non-empty" and "no control characters" halves of that rule — see
   [Approval decision rationale](#approval-decision-rationale). They are still
   bounded, still type-guarded, and still never truncated here.
-- The boolean fields (`unattended`, and the two rationale `*_truncated` flags)
-  must be an exact JSON `bool`.
-- Integer fields (`duration_ms`, `deleted_runs`, `deleted_messages`) must be
+- The boolean fields (`unattended`, the two rationale `*_truncated` flags,
+  `adopted`, `token_configured`, `remote_discovery_attempted`, and
+  `discovery_succeeded`) must be an exact JSON `bool`.
+- Integer fields (`duration_ms`, `deleted_runs`, `deleted_messages`,
+  `imported_servers`, `skipped_servers`, `refused_servers`) must be
   an exact, non-negative integer that parses cleanly as `int64` — decoded via
   `encoding/json`'s `UseNumber()` so `1.5`, `1e3`, and `" 1"` are all rejected
   rather than coerced into a number.
@@ -444,12 +461,15 @@ truncated or coerced:
 Regardless of action, state, or filters, the response can never carry: raw
 payload JSON, tool call arguments or results, human-readable error messages
 (only a bounded `error_code`, and only for `tool.call.*`), approval tokens or
-JTIs, bearer tokens or any `authorization` header value, API keys or other
-credentials/passwords/secrets, the recorded user agent or peer address (even
-though `auth.failed` payloads carry them today), or the routing endpoint,
-model, or agent-display-name fields recorded on `session.routed`. Unknown JSON
-fields on any payload — including fields not listed in the action's row above
-— are always ignored, never passed through.
+JTIs, bearer tokens or any `authorization` header value (including an MCP
+server's bearer token or its sealed/ciphertext form — `mcp.server.registered`
+discloses the server's URL but never its token, and `.token_rotated` /
+`.token_cleared` disclose only whether a token is now configured), API keys or
+other credentials/passwords/secrets, the recorded user agent or peer address
+(even though `auth.failed` payloads carry them today), or the routing
+endpoint, model, or agent-display-name fields recorded on `session.routed`.
+Unknown JSON fields on any payload — including fields not listed in the
+action's row above — are always ignored, never passed through.
 
 ### What that guarantee is, and what it is not
 

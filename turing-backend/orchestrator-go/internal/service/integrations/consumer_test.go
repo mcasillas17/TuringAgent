@@ -121,18 +121,18 @@ type singleUseApproval struct {
 	toolName     string
 }
 
-type approvalEnforcerFunc func(context.Context, string, string, string, string, map[string]any) error
+type approvalEnforcerFunc func(context.Context, string, string, string, string, string, map[string]any) error
 
-func (f approvalEnforcerFunc) ConsumeApprovalForThirdParty(ctx context.Context, approvalID, runID, serverName, toolName string, args map[string]any) error {
-	return f(ctx, approvalID, runID, serverName, toolName, args)
+func (f approvalEnforcerFunc) ConsumeApprovalForThirdParty(ctx context.Context, approvalID, runID, serverName, serverID, toolName string, args map[string]any) error {
+	return f(ctx, approvalID, runID, serverName, serverID, toolName, args)
 }
 
-func (a *singleUseApproval) ConsumeApprovalForThirdParty(_ context.Context, approvalID, _ string, serverName, toolName string, args map[string]any) error {
+func (a *singleUseApproval) ConsumeApprovalForThirdParty(_ context.Context, approvalID, _ string, serverName, serverID, toolName string, args map[string]any) error {
 	expectedTool := a.toolName
 	if expectedTool == "" {
 		expectedTool = "github.list_issues"
 	}
-	if approvalID != "approval_once" || serverName != "integrations" || toolName != expectedTool || args["connection_id"] != a.connectionID {
+	if approvalID != "approval_once" || serverName != "integrations" || serverID != "" || toolName != expectedTool || args["connection_id"] != a.connectionID {
 		return errors.New("approval context mismatch")
 	}
 	if a.consumed.Add(1) != 1 {
@@ -444,7 +444,7 @@ func TestIntegrationDispatchRevalidatesChangesMadeDuringApprovalWait(t *testing.
 			if err := repo.SetToolPolicyByName(context.Background(), "integrations", "github.list_issues", "approval_required"); err != nil {
 				t.Fatal(err)
 			}
-			server.SetApprovalEnforcer(approvalEnforcerFunc(func(ctx context.Context, _, gotRunID, _, _ string, _ map[string]any) error {
+			server.SetApprovalEnforcer(approvalEnforcerFunc(func(ctx context.Context, _, gotRunID, _, _, _ string, _ map[string]any) error {
 				return test.mutate(ctx, repo, database, gotRunID)
 			}))
 			var network atomic.Int32

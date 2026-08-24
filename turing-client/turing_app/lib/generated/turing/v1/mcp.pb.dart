@@ -414,10 +414,15 @@ class ListMcpServersResponse extends $pb.GeneratedMessage {
   factory ListMcpServersResponse({
     $core.Iterable<McpServerDescriptor>? servers,
     $core.Iterable<UnsupportedMcpServer>? unsupported,
+    $core.bool? registryDegraded,
+    $core.String? registryDegradationReason,
   }) {
     final result = create();
     if (servers != null) result.servers.addAll(servers);
     if (unsupported != null) result.unsupported.addAll(unsupported);
+    if (registryDegraded != null) result.registryDegraded = registryDegraded;
+    if (registryDegradationReason != null)
+      result.registryDegradationReason = registryDegradationReason;
     return result;
   }
 
@@ -440,6 +445,8 @@ class ListMcpServersResponse extends $pb.GeneratedMessage {
     ..pc<UnsupportedMcpServer>(
         2, _omitFieldNames ? '' : 'unsupported', $pb.PbFieldType.PM,
         subBuilder: UnsupportedMcpServer.create)
+    ..aOB(3, _omitFieldNames ? '' : 'registryDegraded')
+    ..aOS(4, _omitFieldNames ? '' : 'registryDegradationReason')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -470,6 +477,44 @@ class ListMcpServersResponse extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(2)
   $pb.PbList<UnsupportedMcpServer> get unsupported => $_getList(1);
+
+  /// True when the registry could not safely return complete, healthy
+  /// state — more servers, more import issues, or a larger aggregate
+  /// tool-byte total than the registry's own operating bounds allow (see
+  /// repository.MaxMCPRegistryServers/MaxMCPRegistryToolBytes) — and
+  /// returned a safe, bounded, degraded view instead: every server
+  /// descriptor this response does return has its own `tools` left empty,
+  /// regardless of which of those three bounds was the one exceeded. When
+  /// the server *count* itself is over repository.MaxMCPRegistryServers,
+  /// `servers` is additionally truncated to exactly that many
+  /// descriptors, in name order, rather than every server being listed
+  /// (an operator still retains enough identity — id, name, endpoint — to
+  /// find and delete whichever one is responsible, from among that
+  /// bounded set); for the other two over-cap reasons (too many import
+  /// issues, or too large an aggregate tool-byte total), every server
+  /// descriptor is listed, just with `tools` empty as above. This is an
+  /// explicit, structured signal, never a synthetic entry appended to
+  /// `unsupported` (which continues to describe only ordinary per-entry
+  /// import refusals).
+  @$pb.TagNumber(3)
+  $core.bool get registryDegraded => $_getBF(2);
+  @$pb.TagNumber(3)
+  set registryDegraded($core.bool value) => $_setBool(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasRegistryDegraded() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearRegistryDegraded() => $_clearField(3);
+
+  /// Set only when registry_degraded is true: a fixed, non-sensitive
+  /// explanation of which bound was exceeded.
+  @$pb.TagNumber(4)
+  $core.String get registryDegradationReason => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set registryDegradationReason($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasRegistryDegradationReason() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearRegistryDegradationReason() => $_clearField(4);
 }
 
 class SetMcpServerEnabledRequest extends $pb.GeneratedMessage {
@@ -937,11 +982,13 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
     $core.String? name,
     $core.String? url,
     $core.String? bearerToken,
+    McpServerTier? tier,
   }) {
     final result = create();
     if (name != null) result.name = name;
     if (url != null) result.url = url;
     if (bearerToken != null) result.bearerToken = bearerToken;
+    if (tier != null) result.tier = tier;
     return result;
   }
 
@@ -961,6 +1008,10 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'name')
     ..aOS(2, _omitFieldNames ? '' : 'url')
     ..aOS(3, _omitFieldNames ? '' : 'bearerToken')
+    ..e<McpServerTier>(4, _omitFieldNames ? '' : 'tier', $pb.PbFieldType.OE,
+        defaultOrMaker: McpServerTier.MCP_SERVER_TIER_UNSPECIFIED,
+        valueOf: McpServerTier.valueOf,
+        enumValues: McpServerTier.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -995,8 +1046,9 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearName() => $_clearField(1);
 
-  /// Absolute HTTP(S) endpoint; the tier is derived from the URL exactly as
-  /// mcp.json import derives it, not chosen by the caller.
+  /// Absolute HTTP(S) endpoint. The tier is always derived from the hardened
+  /// URL exactly as mcp.json import derives it; `tier` below is only a caller
+  /// assertion that must agree with that derivation.
   @$pb.TagNumber(2)
   $core.String get url => $_getSZ(1);
   @$pb.TagNumber(2)
@@ -1016,6 +1068,18 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
   $core.bool hasBearerToken() => $_has(2);
   @$pb.TagNumber(3)
   void clearBearerToken() => $_clearField(3);
+
+  /// Optional caller-declared tier. MCP_SERVER_TIER_UNSPECIFIED accepts the
+  /// tier derived from `url`; any other value must match that derivation or the
+  /// request is refused. MCP_SERVER_TIER_BUNDLED is never accepted.
+  @$pb.TagNumber(4)
+  McpServerTier get tier => $_getN(3);
+  @$pb.TagNumber(4)
+  set tier(McpServerTier value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasTier() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearTier() => $_clearField(4);
 }
 
 class ReimportMcpJsonRequest extends $pb.GeneratedMessage {
@@ -1064,10 +1128,12 @@ class ReimportMcpJsonResponse extends $pb.GeneratedMessage {
   factory ReimportMcpJsonResponse({
     $core.Iterable<$core.String>? imported,
     $core.Iterable<UnsupportedMcpServer>? unsupported,
+    $core.Iterable<$core.String>? skipped,
   }) {
     final result = create();
     if (imported != null) result.imported.addAll(imported);
     if (unsupported != null) result.unsupported.addAll(unsupported);
+    if (skipped != null) result.skipped.addAll(skipped);
     return result;
   }
 
@@ -1088,6 +1154,7 @@ class ReimportMcpJsonResponse extends $pb.GeneratedMessage {
     ..pc<UnsupportedMcpServer>(
         2, _omitFieldNames ? '' : 'unsupported', $pb.PbFieldType.PM,
         subBuilder: UnsupportedMcpServer.create)
+    ..pPS(3, _omitFieldNames ? '' : 'skipped')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1116,8 +1183,13 @@ class ReimportMcpJsonResponse extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   $pb.PbList<$core.String> get imported => $_getList(0);
 
+  /// Entries the registry refused to import, with a redacted reason.
   @$pb.TagNumber(2)
   $pb.PbList<UnsupportedMcpServer> get unsupported => $_getList(1);
+
+  /// Entries left untouched because a server with that identity already exists.
+  @$pb.TagNumber(3)
+  $pb.PbList<$core.String> get skipped => $_getList(2);
 }
 
 class RotateMcpServerTokenRequest extends $pb.GeneratedMessage {

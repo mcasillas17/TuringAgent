@@ -407,11 +407,33 @@ func (*ListMcpServersRequest) Descriptor() ([]byte, []int) {
 }
 
 type ListMcpServersResponse struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
-	Servers       []*McpServerDescriptor  `protobuf:"bytes,1,rep,name=servers,proto3" json:"servers,omitempty"`
-	Unsupported   []*UnsupportedMcpServer `protobuf:"bytes,2,rep,name=unsupported,proto3" json:"unsupported,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState  `protogen:"open.v1"`
+	Servers     []*McpServerDescriptor  `protobuf:"bytes,1,rep,name=servers,proto3" json:"servers,omitempty"`
+	Unsupported []*UnsupportedMcpServer `protobuf:"bytes,2,rep,name=unsupported,proto3" json:"unsupported,omitempty"`
+	// True when the registry could not safely return complete, healthy
+	// state — more servers, more import issues, or a larger aggregate
+	// tool-byte total than the registry's own operating bounds allow (see
+	// repository.MaxMCPRegistryServers/MaxMCPRegistryToolBytes) — and
+	// returned a safe, bounded, degraded view instead: every server
+	// descriptor this response does return has its own `tools` left empty,
+	// regardless of which of those three bounds was the one exceeded. When
+	// the server *count* itself is over repository.MaxMCPRegistryServers,
+	// `servers` is additionally truncated to exactly that many
+	// descriptors, in name order, rather than every server being listed
+	// (an operator still retains enough identity — id, name, endpoint — to
+	// find and delete whichever one is responsible, from among that
+	// bounded set); for the other two over-cap reasons (too many import
+	// issues, or too large an aggregate tool-byte total), every server
+	// descriptor is listed, just with `tools` empty as above. This is an
+	// explicit, structured signal, never a synthetic entry appended to
+	// `unsupported` (which continues to describe only ordinary per-entry
+	// import refusals).
+	RegistryDegraded bool `protobuf:"varint,3,opt,name=registry_degraded,json=registryDegraded,proto3" json:"registry_degraded,omitempty"`
+	// Set only when registry_degraded is true: a fixed, non-sensitive
+	// explanation of which bound was exceeded.
+	RegistryDegradationReason string `protobuf:"bytes,4,opt,name=registry_degradation_reason,json=registryDegradationReason,proto3" json:"registry_degradation_reason,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *ListMcpServersResponse) Reset() {
@@ -456,6 +478,20 @@ func (x *ListMcpServersResponse) GetUnsupported() []*UnsupportedMcpServer {
 		return x.Unsupported
 	}
 	return nil
+}
+
+func (x *ListMcpServersResponse) GetRegistryDegraded() bool {
+	if x != nil {
+		return x.RegistryDegraded
+	}
+	return false
+}
+
+func (x *ListMcpServersResponse) GetRegistryDegradationReason() string {
+	if x != nil {
+		return x.RegistryDegradationReason
+	}
+	return ""
 }
 
 type SetMcpServerEnabledRequest struct {
@@ -801,12 +837,17 @@ func (*DeleteMcpServerResponse) Descriptor() ([]byte, []int) {
 type RegisterMcpServerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Absolute HTTP(S) endpoint; the tier is derived from the URL exactly as
-	// mcp.json import derives it, not chosen by the caller.
+	// Absolute HTTP(S) endpoint. The tier is always derived from the hardened
+	// URL exactly as mcp.json import derives it; `tier` below is only a caller
+	// assertion that must agree with that derivation.
 	Url string `protobuf:"bytes,2,opt,name=url,proto3" json:"url,omitempty"`
 	// Optional bearer token. Write-only: sealed at rest, never echoed by any
 	// response, and absent from McpServerDescriptor by construction.
-	BearerToken   string `protobuf:"bytes,3,opt,name=bearer_token,json=bearerToken,proto3" json:"bearer_token,omitempty"`
+	BearerToken string `protobuf:"bytes,3,opt,name=bearer_token,json=bearerToken,proto3" json:"bearer_token,omitempty"`
+	// Optional caller-declared tier. MCP_SERVER_TIER_UNSPECIFIED accepts the
+	// tier derived from `url`; any other value must match that derivation or the
+	// request is refused. MCP_SERVER_TIER_BUNDLED is never accepted.
+	Tier          McpServerTier `protobuf:"varint,4,opt,name=tier,proto3,enum=turing.v1.McpServerTier" json:"tier,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -862,6 +903,13 @@ func (x *RegisterMcpServerRequest) GetBearerToken() string {
 	return ""
 }
 
+func (x *RegisterMcpServerRequest) GetTier() McpServerTier {
+	if x != nil {
+		return x.Tier
+	}
+	return McpServerTier_MCP_SERVER_TIER_UNSPECIFIED
+}
+
 type ReimportMcpJsonRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -899,9 +947,12 @@ func (*ReimportMcpJsonRequest) Descriptor() ([]byte, []int) {
 }
 
 type ReimportMcpJsonResponse struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
-	Imported      []string                `protobuf:"bytes,1,rep,name=imported,proto3" json:"imported,omitempty"`
-	Unsupported   []*UnsupportedMcpServer `protobuf:"bytes,2,rep,name=unsupported,proto3" json:"unsupported,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Imported []string               `protobuf:"bytes,1,rep,name=imported,proto3" json:"imported,omitempty"`
+	// Entries the registry refused to import, with a redacted reason.
+	Unsupported []*UnsupportedMcpServer `protobuf:"bytes,2,rep,name=unsupported,proto3" json:"unsupported,omitempty"`
+	// Entries left untouched because a server with that identity already exists.
+	Skipped       []string `protobuf:"bytes,3,rep,name=skipped,proto3" json:"skipped,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -946,6 +997,13 @@ func (x *ReimportMcpJsonResponse) GetImported() []string {
 func (x *ReimportMcpJsonResponse) GetUnsupported() []*UnsupportedMcpServer {
 	if x != nil {
 		return x.Unsupported
+	}
+	return nil
+}
+
+func (x *ReimportMcpJsonResponse) GetSkipped() []string {
+	if x != nil {
+		return x.Skipped
 	}
 	return nil
 }
@@ -1254,10 +1312,12 @@ const file_turing_v1_mcp_proto_rawDesc = "" +
 	"\x14UnsupportedMcpServer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x17\n" +
-	"\x15ListMcpServersRequest\"\x95\x01\n" +
+	"\x15ListMcpServersRequest\"\x82\x02\n" +
 	"\x16ListMcpServersResponse\x128\n" +
 	"\aservers\x18\x01 \x03(\v2\x1e.turing.v1.McpServerDescriptorR\aservers\x12A\n" +
-	"\vunsupported\x18\x02 \x03(\v2\x1f.turing.v1.UnsupportedMcpServerR\vunsupported\"S\n" +
+	"\vunsupported\x18\x02 \x03(\v2\x1f.turing.v1.UnsupportedMcpServerR\vunsupported\x12+\n" +
+	"\x11registry_degraded\x18\x03 \x01(\bR\x10registryDegraded\x12>\n" +
+	"\x1bregistry_degradation_reason\x18\x04 \x01(\tR\x19registryDegradationReason\"S\n" +
 	"\x1aSetMcpServerEnabledRequest\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12\x18\n" +
 	"\aenabled\x18\x02 \x01(\bR\aenabled\"\x85\x01\n" +
@@ -1277,15 +1337,17 @@ const file_turing_v1_mcp_proto_rawDesc = "" +
 	"\x05tools\x18\x01 \x03(\v2\x1c.turing.v1.McpToolDescriptorR\x05tools\"5\n" +
 	"\x16DeleteMcpServerRequest\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\"\x19\n" +
-	"\x17DeleteMcpServerResponse\"c\n" +
+	"\x17DeleteMcpServerResponse\"\x91\x01\n" +
 	"\x18RegisterMcpServerRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\x12!\n" +
-	"\fbearer_token\x18\x03 \x01(\tR\vbearerToken\"\x18\n" +
-	"\x16ReimportMcpJsonRequest\"x\n" +
+	"\fbearer_token\x18\x03 \x01(\tR\vbearerToken\x12,\n" +
+	"\x04tier\x18\x04 \x01(\x0e2\x18.turing.v1.McpServerTierR\x04tier\"\x18\n" +
+	"\x16ReimportMcpJsonRequest\"\x92\x01\n" +
 	"\x17ReimportMcpJsonResponse\x12\x1a\n" +
 	"\bimported\x18\x01 \x03(\tR\bimported\x12A\n" +
-	"\vunsupported\x18\x02 \x03(\v2\x1f.turing.v1.UnsupportedMcpServerR\vunsupported\"]\n" +
+	"\vunsupported\x18\x02 \x03(\v2\x1f.turing.v1.UnsupportedMcpServerR\vunsupported\x12\x18\n" +
+	"\askipped\x18\x03 \x03(\tR\askipped\"]\n" +
 	"\x1bRotateMcpServerTokenRequest\x12\x1b\n" +
 	"\tserver_id\x18\x01 \x01(\tR\bserverId\x12!\n" +
 	"\fbearer_token\x18\x02 \x01(\tR\vbearerToken\"\xbd\x01\n" +
@@ -1379,36 +1441,37 @@ var file_turing_v1_mcp_proto_depIdxs = []int32{
 	22, // 7: turing.v1.UpdateMcpToolPolicyRequest.policy:type_name -> turing.v1.ToolPolicy
 	22, // 8: turing.v1.UpdateToolPolicyByNameRequest.policy:type_name -> turing.v1.ToolPolicy
 	2,  // 9: turing.v1.ListPseudoServerToolsResponse.tools:type_name -> turing.v1.McpToolDescriptor
-	4,  // 10: turing.v1.ReimportMcpJsonResponse.unsupported:type_name -> turing.v1.UnsupportedMcpServer
-	23, // 11: turing.v1.CallRegisteredMcpToolRequest.args:type_name -> google.protobuf.Struct
-	23, // 12: turing.v1.CallRegisteredMcpToolResponse.result:type_name -> google.protobuf.Struct
-	23, // 13: turing.v1.McpRequest.params:type_name -> google.protobuf.Struct
-	23, // 14: turing.v1.McpResult.result:type_name -> google.protobuf.Struct
-	5,  // 15: turing.v1.McpRegistryService.ListMcpServers:input_type -> turing.v1.ListMcpServersRequest
-	7,  // 16: turing.v1.McpRegistryService.SetMcpServerEnabled:input_type -> turing.v1.SetMcpServerEnabledRequest
-	8,  // 17: turing.v1.McpRegistryService.UpdateMcpToolPolicy:input_type -> turing.v1.UpdateMcpToolPolicyRequest
-	9,  // 18: turing.v1.McpRegistryService.UpdateToolPolicyByName:input_type -> turing.v1.UpdateToolPolicyByNameRequest
-	10, // 19: turing.v1.McpRegistryService.ListPseudoServerTools:input_type -> turing.v1.ListPseudoServerToolsRequest
-	12, // 20: turing.v1.McpRegistryService.DeleteMcpServer:input_type -> turing.v1.DeleteMcpServerRequest
-	14, // 21: turing.v1.McpRegistryService.RegisterMcpServer:input_type -> turing.v1.RegisterMcpServerRequest
-	15, // 22: turing.v1.McpRegistryService.ReimportMcpJson:input_type -> turing.v1.ReimportMcpJsonRequest
-	17, // 23: turing.v1.McpRegistryService.RotateMcpServerToken:input_type -> turing.v1.RotateMcpServerTokenRequest
-	18, // 24: turing.v1.McpRegistryService.CallRegisteredMcpTool:input_type -> turing.v1.CallRegisteredMcpToolRequest
-	6,  // 25: turing.v1.McpRegistryService.ListMcpServers:output_type -> turing.v1.ListMcpServersResponse
-	3,  // 26: turing.v1.McpRegistryService.SetMcpServerEnabled:output_type -> turing.v1.McpServerDescriptor
-	2,  // 27: turing.v1.McpRegistryService.UpdateMcpToolPolicy:output_type -> turing.v1.McpToolDescriptor
-	2,  // 28: turing.v1.McpRegistryService.UpdateToolPolicyByName:output_type -> turing.v1.McpToolDescriptor
-	11, // 29: turing.v1.McpRegistryService.ListPseudoServerTools:output_type -> turing.v1.ListPseudoServerToolsResponse
-	13, // 30: turing.v1.McpRegistryService.DeleteMcpServer:output_type -> turing.v1.DeleteMcpServerResponse
-	3,  // 31: turing.v1.McpRegistryService.RegisterMcpServer:output_type -> turing.v1.McpServerDescriptor
-	16, // 32: turing.v1.McpRegistryService.ReimportMcpJson:output_type -> turing.v1.ReimportMcpJsonResponse
-	3,  // 33: turing.v1.McpRegistryService.RotateMcpServerToken:output_type -> turing.v1.McpServerDescriptor
-	19, // 34: turing.v1.McpRegistryService.CallRegisteredMcpTool:output_type -> turing.v1.CallRegisteredMcpToolResponse
-	25, // [25:35] is the sub-list for method output_type
-	15, // [15:25] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	0,  // 10: turing.v1.RegisterMcpServerRequest.tier:type_name -> turing.v1.McpServerTier
+	4,  // 11: turing.v1.ReimportMcpJsonResponse.unsupported:type_name -> turing.v1.UnsupportedMcpServer
+	23, // 12: turing.v1.CallRegisteredMcpToolRequest.args:type_name -> google.protobuf.Struct
+	23, // 13: turing.v1.CallRegisteredMcpToolResponse.result:type_name -> google.protobuf.Struct
+	23, // 14: turing.v1.McpRequest.params:type_name -> google.protobuf.Struct
+	23, // 15: turing.v1.McpResult.result:type_name -> google.protobuf.Struct
+	5,  // 16: turing.v1.McpRegistryService.ListMcpServers:input_type -> turing.v1.ListMcpServersRequest
+	7,  // 17: turing.v1.McpRegistryService.SetMcpServerEnabled:input_type -> turing.v1.SetMcpServerEnabledRequest
+	8,  // 18: turing.v1.McpRegistryService.UpdateMcpToolPolicy:input_type -> turing.v1.UpdateMcpToolPolicyRequest
+	9,  // 19: turing.v1.McpRegistryService.UpdateToolPolicyByName:input_type -> turing.v1.UpdateToolPolicyByNameRequest
+	10, // 20: turing.v1.McpRegistryService.ListPseudoServerTools:input_type -> turing.v1.ListPseudoServerToolsRequest
+	12, // 21: turing.v1.McpRegistryService.DeleteMcpServer:input_type -> turing.v1.DeleteMcpServerRequest
+	14, // 22: turing.v1.McpRegistryService.RegisterMcpServer:input_type -> turing.v1.RegisterMcpServerRequest
+	15, // 23: turing.v1.McpRegistryService.ReimportMcpJson:input_type -> turing.v1.ReimportMcpJsonRequest
+	17, // 24: turing.v1.McpRegistryService.RotateMcpServerToken:input_type -> turing.v1.RotateMcpServerTokenRequest
+	18, // 25: turing.v1.McpRegistryService.CallRegisteredMcpTool:input_type -> turing.v1.CallRegisteredMcpToolRequest
+	6,  // 26: turing.v1.McpRegistryService.ListMcpServers:output_type -> turing.v1.ListMcpServersResponse
+	3,  // 27: turing.v1.McpRegistryService.SetMcpServerEnabled:output_type -> turing.v1.McpServerDescriptor
+	2,  // 28: turing.v1.McpRegistryService.UpdateMcpToolPolicy:output_type -> turing.v1.McpToolDescriptor
+	2,  // 29: turing.v1.McpRegistryService.UpdateToolPolicyByName:output_type -> turing.v1.McpToolDescriptor
+	11, // 30: turing.v1.McpRegistryService.ListPseudoServerTools:output_type -> turing.v1.ListPseudoServerToolsResponse
+	13, // 31: turing.v1.McpRegistryService.DeleteMcpServer:output_type -> turing.v1.DeleteMcpServerResponse
+	3,  // 32: turing.v1.McpRegistryService.RegisterMcpServer:output_type -> turing.v1.McpServerDescriptor
+	16, // 33: turing.v1.McpRegistryService.ReimportMcpJson:output_type -> turing.v1.ReimportMcpJsonResponse
+	3,  // 34: turing.v1.McpRegistryService.RotateMcpServerToken:output_type -> turing.v1.McpServerDescriptor
+	19, // 35: turing.v1.McpRegistryService.CallRegisteredMcpTool:output_type -> turing.v1.CallRegisteredMcpToolResponse
+	26, // [26:36] is the sub-list for method output_type
+	16, // [16:26] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_mcp_proto_init() }

@@ -1,0 +1,47 @@
+-- TUR: immutable MCP approval server-identity binding.
+--
+-- tool_calls.mcp_server_id records which mcp_servers row a tool call was
+-- actually dispatched against, at insert time, so an approval joined to
+-- that tool call (see repository.ApprovalRecord.MCPServerID/approvalByID)
+-- can be bound to a specific server identity rather than only its
+-- server_name. A server name can be freely reused after its original row
+-- is deleted (DeleteMcpServer) and a new, unrelated server registered
+-- under that same name; before this column existed, an approval created
+-- and approved against the original server could still be consumed
+-- against the new one, since ConsumeApprovalForThirdParty only ever
+-- compared server *names*. ON DELETE SET NULL (not CASCADE): deleting a
+-- server must never delete the tool_calls history of a run that already
+-- called it, only sever this specific binding — see
+-- ApprovalEnforcer.ConsumeApprovalForThirdParty, which fails closed
+-- (refuses third-party consumption) whenever this is NULL, exactly the
+-- state a deleted server's tool calls are left in.
+ALTER TABLE tool_calls
+  ADD COLUMN mcp_server_id TEXT REFERENCES mcp_servers(id) ON DELETE SET NULL;
+
+-- Deliberately no backfill: every tool_calls row that predates this column
+-- is left NULL, unconditionally — never populated by matching its own
+-- server_name against whichever mcp_servers row happens to carry that name
+-- at the moment this migration runs. A name-based backfill would be unsafe
+-- rather than merely approximate: a server name can be freely reused after
+-- its original row is deleted (DeleteMcpServer) and a different, unrelated
+-- server explicitly registered under that exact same name before an
+-- operator ever applies this migration, and backfilling by name in that
+-- case would silently rebind a historical tool_calls row — and any
+-- approval created and approved against it — from the server it was
+-- actually dispatched against to the id of a completely unrelated server
+-- that merely happens to share its name now. That is exactly the gap
+-- ConsumeApprovalForThirdParty's own immutable-id comparison exists to
+-- close, and exactly what that comparison's own NULL/empty fail-closed
+-- branch depends on this migration never silently defeating. Leaving every
+-- pre-existing row NULL is therefore the only safe outcome: it fails closed
+-- the identical way ON DELETE SET NULL already leaves a genuinely deleted
+-- server's own rows in going forward (see above), regardless of whether a
+-- row's server_name currently resolves to the still-original server, an
+-- unrelated server that reused the name, a pseudo-server ("skills",
+-- "integrations" — neither of which is ever backed by a real mcp_servers
+-- row), or nothing at all. One consequence is intentional: any legacy,
+-- not-yet-consumed third-party approval that predates this migration is
+-- invalidated by the upgrade — it can never again be consumed, only denied
+-- or left to expire — rather than risk it being silently rebound to the
+-- wrong server.
+CREATE INDEX idx_tool_calls_mcp_server_id ON tool_calls(mcp_server_id);

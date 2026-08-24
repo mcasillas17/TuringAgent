@@ -221,6 +221,17 @@ type registryCallHarness struct {
 	reached       atomic.Int32
 	authorization atomic.Value
 	deleteOnCall  atomic.Bool
+	// result, when set (see setResult), overrides the vendor's default
+	// {"content": []any{}} JSON-RPC result for every subsequent call.
+	result atomic.Value
+}
+
+// setResult overrides the vendor's JSON-RPC "result" for every call made
+// after this returns, letting a test control exactly what CallTool's own
+// redaction sees on its way back, independent of the harness's own fixed
+// default.
+func (h *registryCallHarness) setResult(result map[string]any) {
+	h.result.Store(any(result))
 }
 
 func newRegistryCallHarness(t *testing.T) *registryCallHarness {
@@ -249,15 +260,23 @@ func newRegistryCallHarness(t *testing.T) *registryCallHarness {
 			t.Errorf("decode vendor request: %v", err)
 		}
 		if h.deleteOnCall.Load() {
-			if err := h.repo.DeleteMCPServer(context.Background(), h.serverID); err != nil {
+			if _, err := h.repo.DeleteMCPServer(context.Background(), h.serverID); err != nil {
 				t.Errorf("delete server during call: %v", err)
 			}
+		}
+		// result defaults to the fixed, empty content every existing
+		// test in this file relies on; setResult lets a test (e.g. a
+		// redaction test that needs the vendor to echo a specific,
+		// token-bearing value back) override it before calling CallTool.
+		result := any(map[string]any{"content": []any{}})
+		if stored := h.result.Load(); stored != nil {
+			result = stored
 		}
 		w.Header().Set("content-type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      request.ID,
-			"result":  map[string]any{"content": []any{}},
+			"result":  result,
 		})
 	}))
 	t.Cleanup(vendor.Close)
@@ -266,7 +285,7 @@ func newRegistryCallHarness(t *testing.T) *registryCallHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := repo.UpsertImportedMCPServer(context.Background(), repository.ImportedMCPServer{
+	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name:        "vendor",
 		URL:         vendor.URL,
 		SealedToken: sealed,
@@ -275,15 +294,15 @@ func newRegistryCallHarness(t *testing.T) *registryCallHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPServerEnabled(context.Background(), server.ID, true); err != nil {
+	if err := repo.SetMCPServerEnabled(context.Background(), server.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	h.serverID = server.ID
+	h.serverID = server.Server.ID
 	bus := events.NewBus(8)
 	h.approvals = approvalsvc.New(repo, bus, "approval-secret")
 	h.registry = New(repo, sealer, vendor.Client())
 	h.registry.SetApprovalEnforcer(h.approvals)
-	if err := h.registry.RecordDiscovery(context.Background(), server.ID, []DiscoveredTool{{
+	if err := h.registry.RecordDiscovery(context.Background(), server.Server.ID, []DiscoveredTool{{
 		Name:       "vendor.write",
 		SchemaJSON: `{"type":"object"}`,
 	}}); err != nil {

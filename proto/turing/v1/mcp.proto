@@ -52,6 +52,28 @@ message ListMcpServersRequest {}
 message ListMcpServersResponse {
   repeated McpServerDescriptor servers = 1;
   repeated UnsupportedMcpServer unsupported = 2;
+  // True when the registry could not safely return complete, healthy
+  // state — more servers, more import issues, or a larger aggregate
+  // tool-byte total than the registry's own operating bounds allow (see
+  // repository.MaxMCPRegistryServers/MaxMCPRegistryToolBytes) — and
+  // returned a safe, bounded, degraded view instead: every server
+  // descriptor this response does return has its own `tools` left empty,
+  // regardless of which of those three bounds was the one exceeded. When
+  // the server *count* itself is over repository.MaxMCPRegistryServers,
+  // `servers` is additionally truncated to exactly that many
+  // descriptors, in name order, rather than every server being listed
+  // (an operator still retains enough identity — id, name, endpoint — to
+  // find and delete whichever one is responsible, from among that
+  // bounded set); for the other two over-cap reasons (too many import
+  // issues, or too large an aggregate tool-byte total), every server
+  // descriptor is listed, just with `tools` empty as above. This is an
+  // explicit, structured signal, never a synthetic entry appended to
+  // `unsupported` (which continues to describe only ordinary per-entry
+  // import refusals).
+  bool registry_degraded = 3;
+  // Set only when registry_degraded is true: a fixed, non-sensitive
+  // explanation of which bound was exceeded.
+  string registry_degradation_reason = 4;
 }
 
 message SetMcpServerEnabledRequest {
@@ -87,19 +109,27 @@ message DeleteMcpServerResponse {}
 
 message RegisterMcpServerRequest {
   string name = 1;
-  // Absolute HTTP(S) endpoint; the tier is derived from the URL exactly as
-  // mcp.json import derives it, not chosen by the caller.
+  // Absolute HTTP(S) endpoint. The tier is always derived from the hardened
+  // URL exactly as mcp.json import derives it; `tier` below is only a caller
+  // assertion that must agree with that derivation.
   string url = 2;
   // Optional bearer token. Write-only: sealed at rest, never echoed by any
   // response, and absent from McpServerDescriptor by construction.
   string bearer_token = 3;
+  // Optional caller-declared tier. MCP_SERVER_TIER_UNSPECIFIED accepts the
+  // tier derived from `url`; any other value must match that derivation or the
+  // request is refused. MCP_SERVER_TIER_BUNDLED is never accepted.
+  McpServerTier tier = 4;
 }
 
 message ReimportMcpJsonRequest {}
 
 message ReimportMcpJsonResponse {
   repeated string imported = 1;
+  // Entries the registry refused to import, with a redacted reason.
   repeated UnsupportedMcpServer unsupported = 2;
+  // Entries left untouched because a server with that identity already exists.
+  repeated string skipped = 3;
 }
 
 message RotateMcpServerTokenRequest {

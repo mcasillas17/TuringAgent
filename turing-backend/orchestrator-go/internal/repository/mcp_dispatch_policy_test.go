@@ -8,16 +8,16 @@ import (
 func TestMCPDispatchActiveRequiresUnchangedPolicy(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()
-	server, err := repo.UpsertImportedMCPServer(ctx, ImportedMCPServer{
+	server, err := repo.RegisterMCPServer(ctx, ImportedMCPServer{
 		Name: "vendor", URL: "http://vendor:9000/mcp", Tier: MCPServerTierLocalContainer,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPServerEnabled(ctx, server.ID, true); err != nil {
+	if err := repo.SetMCPServerEnabled(ctx, server.Server.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplaceMCPServerTools(ctx, server.ID, []MCPServerTool{{
+	if err := repo.ReplaceMCPServerTools(ctx, server.Server.ID, []MCPServerTool{{
 		Name: "vendor.lookup", Policy: "safe", SchemaJSON: `{"type":"object"}`,
 	}}); err != nil {
 		t.Fatal(err)
@@ -39,10 +39,10 @@ func TestMCPDispatchActiveRequiresUnchangedPolicy(t *testing.T) {
 	if _, err := repo.db.ExecContext(ctx, `UPDATE agent_runs SET execution_active = 1 WHERE id = ?`, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.SetMCPToolPolicy(ctx, server.ID, "vendor.lookup", "approval_required"); err != nil {
+	if err := repo.SetMCPToolPolicy(ctx, server.Server.ID, "vendor.lookup", "approval_required"); err != nil {
 		t.Fatal(err)
 	}
-	active, err := repo.MCPDispatchActive(ctx, server.ID, enqueued.RunID, "vendor.lookup", "safe")
+	active, err := repo.MCPDispatchActive(ctx, server.Server.ID, enqueued.RunID, "vendor.lookup", "safe")
 	if err != nil {
 		t.Fatal(err)
 	}

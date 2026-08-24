@@ -71,6 +71,10 @@ class McpsPage extends StatefulWidget {
 class _McpsPageState extends State<McpsPage> {
   late Future<McpRegistrySnapshot> _registry;
   final Set<String> _pendingToolPolicies = {};
+  // Keyed by serverId so a pending enable/disable or delete for one server
+  // disables only that server's Switch/popup, never a different server's.
+  final Set<String> _pendingServerMutations = {};
+  bool _reimporting = false;
 
   @override
   void initState() {
@@ -79,12 +83,83 @@ class _McpsPageState extends State<McpsPage> {
   }
 
   void _reload() {
+    // Guards every caller uniformly — including the rotate dialog's own
+    // catch path, which can only check its own (the dialog's) `mounted`
+    // before invoking this callback, not this page's. Without this guard,
+    // a rotation erroring out after this page has already been disposed
+    // (e.g. navigation away while the modal rotation was in flight) would
+    // call setState on a disposed State.
+    if (!mounted) return;
     setState(() {
       _registry = widget.apiClient.listMcpServers();
     });
   }
 
+  Future<void> _reimport() async {
+    if (_reimporting) return;
+    setState(() => _reimporting = true);
+    try {
+      final report = await widget.apiClient.reimportMcpJson();
+      if (!mounted) return;
+      _reload();
+      await showDialog<void>(
+        context: context,
+        builder: (_) => _ImportReportDialog(report: report),
+      );
+    } catch (error) {
+      // A reimport can commit some entries on the backend and still have
+      // the RPC response itself fail (e.g. a post-commit audit write
+      // erroring out), so the displayed state can no longer be trusted
+      // as-is: reload before showing the error, the same way
+      // _setServerEnabled's catch already does.
+      if (mounted) _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$error')));
+    } finally {
+      if (mounted) setState(() => _reimporting = false);
+    }
+  }
+
+  Future<void> _rotateToken(McpServer server) async {
+    final rotated = await showDialog<bool>(
+      context: context,
+      // The dialog manages its own dismissal via PopScope so it cannot be
+      // dismissed by the barrier while a rotation is in flight.
+      barrierDismissible: false,
+      builder: (_) => _RotateTokenDialog(
+        apiClient: widget.apiClient,
+        server: server,
+        onReloadRequested: _reload,
+      ),
+    );
+    if (rotated == true && mounted) _reload();
+  }
+
+  // Confirms before turning ON a remote-url server specifically: unlike
+  // every other enable/disable transition (disabling any server, or
+  // enabling a local-container/bundled one), flipping a remote server on
+  // makes this app contact an endpoint outside this machine immediately
+  // — to discover its tools — and sends that server's own stored bearer
+  // token along, if one is configured. Dismissing the dialog any way
+  // other than the explicit "Enable and discover" confirm — Cancel, the
+  // barrier, or the platform back gesture — is equally safe: none of
+  // them call _setServerEnabled, since only `confirmed == true` does.
+  Future<void> _handleEnabledChanged(McpServer server, bool enabled) async {
+    if (enabled && server.tier == McpServerTier.remoteUrl) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (_) => _EnableRemoteServerConfirmationDialog(server: server),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    await _setServerEnabled(server, enabled);
+  }
+
   Future<void> _setServerEnabled(McpServer server, bool enabled) async {
+    if (_pendingServerMutations.contains(server.serverId)) return;
+    setState(() => _pendingServerMutations.add(server.serverId));
     try {
       await widget.apiClient.setMcpServerEnabled(
         serverId: server.serverId,
@@ -92,10 +167,20 @@ class _McpsPageState extends State<McpsPage> {
       );
       if (mounted) _reload();
     } catch (error) {
+      // A mutation can commit on the backend and still have its RPC
+      // response fail (e.g. a post-commit audit write erroring out), so
+      // the displayed state can no longer be trusted as-is: reload before
+      // showing the error, so the registry — and this server's Switch —
+      // reflect whatever actually happened, not the pre-mutation snapshot.
+      if (mounted) _reload();
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('$error')));
+    } finally {
+      if (mounted) {
+        setState(() => _pendingServerMutations.remove(server.serverId));
+      }
     }
   }
 
@@ -115,6 +200,13 @@ class _McpsPageState extends State<McpsPage> {
       );
       if (mounted) _reload();
     } catch (error) {
+      // Same reasoning as _setServerEnabled's catch: a policy update can
+      // commit on the backend and still have its RPC response fail (e.g. a
+      // post-commit audit write erroring out), so the displayed state can
+      // no longer be trusted as-is. Reload before showing the error so the
+      // registry — and this tool's picker — reflect whatever actually
+      // happened, not the pre-mutation snapshot.
+      if (mounted) _reload();
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -126,87 +218,45 @@ class _McpsPageState extends State<McpsPage> {
     }
   }
 
+  // Shows a confirmation dialog naming the server and what removing it
+  // does before ever dispatching the destructive call: a stray or
+  // mis-tapped popup-menu selection must not be enough on its own to
+  // delete a server's stored token, its per-tool policies, and (if
+  // mcp.json still declares it) suppress it against reimport until it is
+  // explicitly added again. Dismissing this dialog any way other than the
+  // explicit "Remove server" confirm — Cancel, the barrier, or the
+  // platform back gesture — is equally safe: none of them call
+  // _deleteServer, since only `confirmed == true` does.
+  Future<void> _confirmAndDeleteServer(McpServer server) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => _RemoveServerConfirmationDialog(server: server),
+    );
+    if (confirmed != true || !mounted) return;
+    await _deleteServer(server);
+  }
+
   Future<void> _deleteServer(McpServer server) async {
+    if (_pendingServerMutations.contains(server.serverId)) return;
+    setState(() => _pendingServerMutations.add(server.serverId));
     try {
       await widget.apiClient.deleteMcpServer(serverId: server.serverId);
       if (mounted) _reload();
     } catch (error) {
+      // A delete can commit on the backend and still have its RPC response
+      // fail (e.g. a post-commit audit write erroring out), so the
+      // displayed state can no longer be trusted as-is: reload before
+      // showing the error, the same way _setServerEnabled's catch already
+      // does.
+      if (mounted) _reload();
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('$error')));
-    }
-  }
-
-  Future<void> _registerServer() async {
-    final added = await showDialog<bool>(
-      context: context,
-      builder: (_) =>
-          _RegisterServerDialog(register: widget.apiClient.registerMcpServer),
-    );
-    if (added == true && mounted) _reload();
-  }
-
-  Future<void> _reimport() async {
-    try {
-      final report = await widget.apiClient.reimportMcpJson();
-      if (!mounted) return;
-      _reload();
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('mcp.json re-import'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  report.imported.isEmpty
-                      ? 'No servers imported.'
-                      : 'Imported: ${report.imported.join(', ')}. New servers '
-                            'arrive disabled; existing servers keep your '
-                            'settings.',
-                ),
-                for (final entry in report.unsupported) ...[
-                  const SizedBox(height: 8),
-                  Text('${entry.name}: ${entry.reason}'),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Close'),
-            ),
-          ],
-        ),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('$error')));
-    }
-  }
-
-  Future<void> _rotateToken(McpServer server) async {
-    final rotated = await showDialog<bool>(
-      context: context,
-      builder: (_) => _RotateTokenDialog(
-        serverName: server.name,
-        rotate: (token) => widget.apiClient.rotateMcpServerToken(
-          serverId: server.serverId,
-          bearerToken: token,
-        ),
-      ),
-    );
-    if (rotated == true && mounted) {
-      _reload();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Token updated for ${server.name}')),
-      );
+    } finally {
+      if (mounted) {
+        setState(() => _pendingServerMutations.remove(server.serverId));
+      }
     }
   }
 
@@ -216,94 +266,116 @@ class _McpsPageState extends State<McpsPage> {
     return WorkspacePage(
       title: 'MCPs',
       subtitle:
-          'Registered tool servers and their policies. Imported servers stay '
-          'off until you enable them. Remote tools require the same per-run '
-          'egress confirmation as any other destination off this machine; '
-          'while a remote tool is enabled and offered to the model, every run '
-          'asks before sending.',
-      child: FutureBuilder<McpRegistrySnapshot>(
-        future: _registry,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const WorkspaceLoading();
-          }
-          if (snapshot.hasError) {
-            return _PageError(message: '${snapshot.error}', onRetry: _reload);
-          }
-          final registry =
-              snapshot.data ??
-              McpRegistrySnapshot(servers: const [], unsupported: const []);
-          final actions = Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton.icon(
-                onPressed: _registerServer,
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add server'),
-              ),
-              OutlinedButton.icon(
-                onPressed: _reimport,
-                icon: const Icon(Icons.refresh, size: 18),
-                label: const Text('Re-import mcp.json'),
-              ),
-            ],
-          );
-          if (registry.servers.isEmpty && registry.unsupported.isEmpty) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                actions,
-                const SizedBox(height: 12),
-                WorkspaceNotice(
-                  icon: Icons.hub_outlined,
-                  title: 'No tools discovered',
-                  body:
-                      'Add a server here, or edit the mounted mcp.json and '
-                      're-import — no restart needed either way.',
+          'Registered tool servers and their policies. Registering a server '
+          'here does not turn it on — every server, added or imported, stays '
+          'disabled until you enable it. Enabling a remote server contacts '
+          'its endpoint to discover its tools; every run still asks before '
+          'sending a tool call\'s arguments/results, the same per-run '
+          'egress confirmation as any other destination off this machine.',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _AddServerCard(apiClient: widget.apiClient, onRegistered: _reload),
+          const SizedBox(height: 16),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const Key('mcpsReimportButton'),
+              onPressed: _reimporting ? null : _reimport,
+              icon: const Icon(Icons.sync, size: 16),
+              label: Text(_reimporting ? 'Reimporting…' : 'Re-import mcp.json'),
+            ),
+          ),
+          const SizedBox(height: 12),
+          FutureBuilder<McpRegistrySnapshot>(
+            future: _registry,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const WorkspaceLoading();
+              }
+              if (snapshot.hasError) {
+                return _PageError(
+                  message: '${snapshot.error}',
                   onRetry: _reload,
-                ),
-              ],
-            );
-          }
-          final servers = registry.servers.toList()
-            ..sort((a, b) => a.name.compareTo(b.name));
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              actions,
-              const SizedBox(height: 12),
-              for (final unsupported in registry.unsupported) ...[
-                WorkspaceNotice(
-                  icon: Icons.block_outlined,
-                  title: '${unsupported.name} was not imported',
-                  body: unsupported.reason,
-                  tone: AppColors.warning,
-                ),
-                const SizedBox(height: 12),
-              ],
-              for (final server in servers) ...[
-                _ServerCard(
-                  server: server,
-                  palette: palette,
-                  onEnabledChanged: server.tier == McpServerTier.bundled
-                      ? null
-                      : (enabled) => _setServerEnabled(server, enabled),
-                  onDelete: server.tier == McpServerTier.bundled
-                      ? null
-                      : () => _deleteServer(server),
-                  onRotateToken: server.tier == McpServerTier.bundled
-                      ? null
-                      : () => _rotateToken(server),
-                  onPolicyChanged: (tool, policy) =>
-                      _setToolPolicy(server, tool, policy),
-                  pendingToolPolicies: _pendingToolPolicies,
-                ),
-                const SizedBox(height: 12),
-              ],
-            ],
-          );
-        },
+                );
+              }
+              final registry =
+                  snapshot.data ??
+                  McpRegistrySnapshot(servers: const [], unsupported: const []);
+              if (registry.servers.isEmpty &&
+                  registry.unsupported.isEmpty &&
+                  !registry.registryDegraded) {
+                return WorkspaceNotice(
+                  icon: Icons.hub_outlined,
+                  title: 'No MCP servers registered',
+                  body:
+                      'Add a server here to register it immediately. For '
+                      'bulk setup, edit the mounted mcp.json file and choose '
+                      'Re-import mcp.json. Neither path needs a backend '
+                      'restart.',
+                  onRetry: _reload,
+                );
+              }
+              final servers = registry.servers.toList()
+                ..sort((a, b) => a.name.compareTo(b.name));
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // A systemic, registry-wide degraded condition (see
+                  // ListMcpServersResponse.registry_degraded/
+                  // registry_degradation_reason) is an explicit, structured
+                  // signal — never a synthetic entry mixed into
+                  // `unsupported` below, which describes only ordinary
+                  // per-entry mcp.json import refusals. Rendered once,
+                  // outside that loop, with its own key so it can never
+                  // collide with (or be confused for) any entry's own
+                  // per-name key.
+                  if (registry.registryDegraded) ...[
+                    WorkspaceNotice(
+                      key: const Key('mcpRegistryDegradedNotice'),
+                      icon: Icons.warning_amber_outlined,
+                      title: 'MCP registry is running in a degraded state',
+                      body: registry.registryDegradationReason,
+                      tone: AppColors.warning,
+                      compact: true,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  for (final unsupported in registry.unsupported) ...[
+                    WorkspaceNotice(
+                      key: Key('mcpUnsupportedNotice-${unsupported.name}'),
+                      icon: Icons.block_outlined,
+                      title: '${unsupported.name} was not imported',
+                      body: unsupported.reason,
+                      tone: AppColors.warning,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  for (final server in servers) ...[
+                    _ServerCard(
+                      server: server,
+                      palette: palette,
+                      onEnabledChanged: server.tier == McpServerTier.bundled
+                          ? null
+                          : (enabled) => _handleEnabledChanged(server, enabled),
+                      onDelete: server.tier == McpServerTier.bundled
+                          ? null
+                          : () => _confirmAndDeleteServer(server),
+                      onRotateToken: server.tier == McpServerTier.bundled
+                          ? null
+                          : () => _rotateToken(server),
+                      onPolicyChanged: (tool, policy) =>
+                          _setToolPolicy(server, tool, policy),
+                      pendingToolPolicies: _pendingToolPolicies,
+                      busy: _pendingServerMutations.contains(server.serverId),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                ],
+              );
+            },
+          ),
+        ],
       ),
     );
   }
@@ -318,6 +390,7 @@ class _ServerCard extends StatelessWidget {
     required this.onRotateToken,
     required this.onPolicyChanged,
     required this.pendingToolPolicies,
+    required this.busy,
   });
 
   final McpServer server;
@@ -327,11 +400,40 @@ class _ServerCard extends StatelessWidget {
   final VoidCallback? onRotateToken;
   final void Function(ToolDescriptor tool, ToolPolicy policy) onPolicyChanged;
   final Set<String> pendingToolPolicies;
+  // True while an enable/disable or delete for this server is in flight, so
+  // the Switch and popup can be disabled and a rapid second tap cannot
+  // submit a duplicate write.
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
     final tools = server.tools.toList()
       ..sort((a, b) => a.toolName.compareTo(b.toolName));
+    // A non-bundled server with no configured endpoint (a migration-0016
+    // legacy placeholder, or any other server that has not yet been
+    // pointed at a real url) can never be enabled — the backend itself
+    // refuses SetMcpServerEnabled with FailedPrecondition for one — so the
+    // switch is disabled here too, rather than only surfacing that
+    // refusal after a round trip. Bundled servers are excluded: their url
+    // is never empty in practice, and their switch is already disabled
+    // for the separate bundled reason (see onEnabledChanged below), which
+    // gets its own semantics rather than this placeholder-specific one.
+    final bool isUnconfiguredPlaceholder =
+        server.tier != McpServerTier.bundled && server.url.isEmpty;
+    final ValueChanged<bool>? effectiveOnEnabledChanged =
+        isUnconfiguredPlaceholder ? null : onEnabledChanged;
+    Widget enableSwitch = Switch(
+      value: server.enabled,
+      onChanged: busy ? null : effectiveOnEnabledChanged,
+    );
+    if (isUnconfiguredPlaceholder) {
+      enableSwitch = Tooltip(
+        message:
+            'This server has no endpoint configured yet; register or '
+            'import one before enabling it',
+        child: enableSwitch,
+      );
+    }
     return Container(
       decoration: BoxDecoration(
         color: palette.surface,
@@ -346,6 +448,11 @@ class _ServerCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Split across two lines rather than one crowded Row: the
+                // name needs to be able to take all available width and
+                // ellipsize on its own line, while the trailing controls
+                // (count/switch/menu) wrap onto a new line instead of
+                // overflowing at compact widths.
                 Row(
                   children: [
                     Icon(Icons.dns_outlined, size: 16, color: AppColors.brand),
@@ -353,6 +460,8 @@ class _ServerCard extends StatelessWidget {
                     Expanded(
                       child: Text(
                         server.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 14.5,
                           fontWeight: FontWeight.w600,
@@ -360,6 +469,70 @@ class _ServerCard extends StatelessWidget {
                         ),
                       ),
                     ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                // The canonical, already-registered endpoint — never the
+                // token, which this model never carries — so an operator
+                // can verify the exact destination they registered. A
+                // migration-0016 (or otherwise legacy) placeholder never
+                // had a real url, so an empty one is rendered as an honest
+                // warning rather than silently as blank space.
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      server.url.isEmpty ? Icons.link_off : Icons.link,
+                      size: 13,
+                      color: server.url.isEmpty
+                          ? AppColors.warning
+                          : palette.textMuted,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: server.url.isEmpty
+                          ? Text(
+                              'Endpoint not configured',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: AppColors.warning,
+                              ),
+                            )
+                          : Tooltip(
+                              message: server.url,
+                              // A SelectionArea makes the Text selectable
+                              // (so the endpoint can still be copied)
+                              // without SelectableText's lack of an
+                              // `overflow` param, which let a long
+                              // endpoint clip raw instead of ellipsizing;
+                              // the Tooltip above still surfaces the full
+                              // value on hover/long-press regardless of
+                              // how much is visually truncated.
+                              child: SelectionArea(
+                                child: Text(
+                                  server.url,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontFamily: 'monospace',
+                                    color: palette.textMuted,
+                                  ),
+                                ),
+                              ),
+                            ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
                     Text(
                       tools.length == 1 ? '1 tool' : '${tools.length} tools',
                       style: TextStyle(
@@ -367,20 +540,54 @@ class _ServerCard extends StatelessWidget {
                         color: palette.textMuted,
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Switch(value: server.enabled, onChanged: onEnabledChanged),
-                    if (onRotateToken != null)
-                      IconButton(
-                        tooltip: 'Rotate token for ${server.name}',
-                        onPressed: onRotateToken,
-                        icon: const Icon(Icons.key_outlined, size: 18),
-                      ),
-                    if (onDelete != null)
-                      IconButton(
-                        tooltip: 'Remove ${server.name}',
-                        onPressed: onDelete,
-                        icon: const Icon(Icons.delete_outline, size: 18),
-                      ),
+                    Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        if (busy)
+                          // A remote enable/disable can involve a
+                          // tools/list round trip; without this, the
+                          // disabled Switch alone can look like the tap
+                          // was simply ignored.
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 2),
+                            child: Semantics(
+                              label: 'Updating ${server.name}',
+                              child: const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            ),
+                          ),
+                        enableSwitch,
+                        if (onRotateToken != null || onDelete != null)
+                          PopupMenuButton<String>(
+                            enabled: !busy,
+                            tooltip: 'Actions for ${server.name}',
+                            icon: const Icon(Icons.more_vert, size: 18),
+                            onSelected: (value) {
+                              if (value == 'rotate') onRotateToken?.call();
+                              if (value == 'delete') onDelete?.call();
+                            },
+                            itemBuilder: (context) => [
+                              if (onRotateToken != null)
+                                const PopupMenuItem(
+                                  value: 'rotate',
+                                  child: Text('Rotate token'),
+                                ),
+                              if (onDelete != null)
+                                const PopupMenuItem(
+                                  value: 'delete',
+                                  child: Text('Remove'),
+                                ),
+                            ],
+                          ),
+                      ],
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -425,12 +632,20 @@ class _ServerCard extends StatelessWidget {
                 alignment: WrapAlignment.spaceBetween,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  Text(
-                    tool.toolName,
-                    style: TextStyle(
-                      fontSize: 13.5,
-                      fontFamily: 'monospace',
-                      color: palette.text,
+                  ConstrainedBox(
+                    // Bounded so a long tool name ellipsizes instead of
+                    // pushing the policy picker off the card at compact
+                    // widths, matching the name treatment in the header.
+                    constraints: const BoxConstraints(maxWidth: 150),
+                    child: Text(
+                      tool.toolName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontFamily: 'monospace',
+                        color: palette.text,
+                      ),
                     ),
                   ),
                   _PolicyPicker(
@@ -453,6 +668,672 @@ class _ServerCard extends StatelessWidget {
   }
 }
 
+/// Lets a server be registered directly from the page — no file edit or
+/// restart needed. Kept as a single vertically stacked card (rather than a
+/// row of fields) so it cannot overflow even at very narrow widths.
+class _AddServerCard extends StatefulWidget {
+  const _AddServerCard({required this.apiClient, required this.onRegistered});
+
+  final TuringApi apiClient;
+  final VoidCallback onRegistered;
+
+  @override
+  State<_AddServerCard> createState() => _AddServerCardState();
+}
+
+class _AddServerCardState extends State<_AddServerCard> {
+  final _name = TextEditingController();
+  final _url = TextEditingController();
+  final _token = TextEditingController();
+  McpServerTier _tier = McpServerTier.localContainer;
+  // True once the user has explicitly picked a tier from the dropdown
+  // themselves. Until then, typing in the URL field auto-selects the
+  // tier its own scheme implies (see _autoSelectTierFromUrl) — but never
+  // overrides an explicit choice the user already made, and the backend
+  // still independently validates whatever tier is finally submitted
+  // against the URL regardless of how it got selected (see
+  // classifyImportedURL/validateServerDefinition), so this is purely a
+  // convenience default, never a trust boundary.
+  bool _tierManuallySet = false;
+  bool _submitting = false;
+  String? _error;
+  String? _status;
+
+  @override
+  void initState() {
+    super.initState();
+    _url.addListener(_autoSelectTierFromUrl);
+  }
+
+  @override
+  void dispose() {
+    _url.removeListener(_autoSelectTierFromUrl);
+    _name.dispose();
+    _url.dispose();
+    _token.dispose();
+    super.dispose();
+  }
+
+  // Mirrors the backend's own URL-scheme tier derivation (see
+  // classifyImportedURL) closely enough that a first-time `https://`
+  // paste selects "Remote URL" and a first-time `http://` paste selects
+  // "Local container" without the user needing to also open the tier
+  // dropdown themselves — so a first submission of either shape succeeds
+  // without a manual correction. This only ever runs before the user has
+  // manually chosen a tier (_tierManuallySet); once they have, typing in
+  // the URL field never silently changes their choice back. The field's
+  // raw text is trimmed (matching what _submit already does to the URL
+  // it actually sends) and lower-cased (matching classifyImportedURL's
+  // own case-insensitive strings.ToLower(parsed.Scheme) check) before the
+  // scheme comparison, so a pasted URL with leading/trailing whitespace
+  // or an upper/mixed-case scheme (e.g. "HTTPS://…", common from a
+  // browser's address bar or a copy-pasted curl command) still
+  // auto-selects the correct tier on the very first submission, rather
+  // than silently falling through to whatever tier the field already
+  // happened to show.
+  void _autoSelectTierFromUrl() {
+    if (_tierManuallySet) return;
+    final normalized = _url.text.trim().toLowerCase();
+    final McpServerTier? detected;
+    if (normalized.startsWith('https://')) {
+      detected = McpServerTier.remoteUrl;
+    } else if (normalized.startsWith('http://')) {
+      detected = McpServerTier.localContainer;
+    } else {
+      detected = null;
+    }
+    if (detected != null && detected != _tier) {
+      setState(() => _tier = detected!);
+    }
+  }
+
+  Future<void> _submit() async {
+    if (_submitting) return;
+    final name = _name.text.trim();
+    final url = _url.text.trim();
+    // Checked here so the reason appears next to the fields instead of a
+    // failed round trip, and so the token is never sent for an otherwise
+    // invalid submission.
+    if (name.isEmpty || url.isEmpty) {
+      setState(() {
+        _error = 'Name and URL are required.';
+        _status = null;
+      });
+      return;
+    }
+    setState(() {
+      _submitting = true;
+      _error = null;
+      _status = null;
+    });
+    try {
+      await widget.apiClient.registerMcpServer(
+        name: name,
+        url: url,
+        tier: _tier,
+        bearerToken: _token.text,
+      );
+      if (!mounted) return;
+      // Cleared on success — especially the token, which this app never
+      // shows again once it has been sent.
+      _name.clear();
+      _url.clear();
+      _token.clear();
+      setState(() {
+        _submitting = false;
+        _tier = McpServerTier.localContainer;
+        _tierManuallySet = false;
+        _status = '"$name" added. It stays disabled until you turn it on.';
+      });
+      widget.onRegistered();
+    } catch (error) {
+      if (!mounted) return;
+      // The token is cleared even on failure: once it has been sent for an
+      // attempt, this app does not hold onto it or offer it back — the user
+      // retypes it if they retry, rather than it sitting in memory or being
+      // resubmitted silently.
+      _token.clear();
+      setState(() {
+        _submitting = false;
+        _error = '$error';
+      });
+      // A registration can commit on the backend and still have its RPC
+      // response fail (e.g. a post-commit audit write erroring out), so
+      // the displayed state can no longer be trusted as-is: reload through
+      // the same callback the success path uses, the same way
+      // _setServerEnabled's catch already reloads before showing its own
+      // error.
+      widget.onRegistered();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppColors.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: palette.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: palette.border),
+      ),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.add_circle_outline, size: 18, color: AppColors.brand),
+              const SizedBox(width: 8),
+              Text(
+                'Add server',
+                style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w600,
+                  color: palette.text,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Registers immediately — no file edit or restart needed. It '
+            'stays disabled until you turn it on.',
+            style: TextStyle(fontSize: 12.5, color: palette.textMuted),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('mcpsAddName'),
+            controller: _name,
+            decoration: const InputDecoration(
+              labelText: 'Name',
+              isDense: true,
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            key: const Key('mcpsAddUrl'),
+            controller: _url,
+            decoration: const InputDecoration(
+              labelText: 'URL',
+              isDense: true,
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<McpServerTier>(
+            key: const Key('mcpsAddTier'),
+            initialValue: _tier,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Server type',
+              isDense: true,
+              border: OutlineInputBorder(),
+            ),
+            // Bundled servers ship with the backend and are never offered
+            // here — only tiers a user can actually register are listed.
+            items: const [
+              DropdownMenuItem(
+                value: McpServerTier.localContainer,
+                child: Text('Local container'),
+              ),
+              DropdownMenuItem(
+                value: McpServerTier.remoteUrl,
+                child: Text('Remote URL'),
+              ),
+            ],
+            onChanged: _submitting
+                ? null
+                : (value) {
+                    if (value != null) {
+                      setState(() {
+                        _tier = value;
+                        _tierManuallySet = true;
+                      });
+                    }
+                  },
+          ),
+          const SizedBox(height: 10),
+          _ObscuredTokenField(
+            fieldKey: const Key('mcpsAddToken'),
+            controller: _token,
+            labelText: 'Bearer token (optional)',
+            helperText:
+                'Stored sealed. Never shown again \u2014 rotate to replace.',
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton(
+              key: const Key('mcpsAddSubmit'),
+              onPressed: _submitting ? null : _submit,
+              child: Text(_submitting ? 'Adding…' : 'Add server'),
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                _error!,
+                style: TextStyle(fontSize: 12.5, color: AppColors.danger),
+              ),
+            ),
+          ],
+          if (_status != null) ...[
+            const SizedBox(height: 10),
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                _status!,
+                style: TextStyle(fontSize: 12.5, color: AppColors.success),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Bounds dialog content to a sane width on desktop while staying scrollable
+/// and shrinking down safely on compact/mobile viewports.
+///
+/// The subtracted amount is derived from what [AlertDialog] itself actually
+/// reserves outside the content area — its `insetPadding` (dialog margin
+/// from the screen edges) plus the default `contentPadding` it applies
+/// around content (see `AlertDialog`'s defaults in the Flutter SDK) — rather
+/// than a single opaque constant, so it tracks the dialog's real chrome
+/// instead of an estimate that can drift out of sync with it.
+double _dialogWidth(BuildContext context, double preferred) {
+  final theme = Theme.of(context);
+  final insetPadding =
+      theme.dialogTheme.insetPadding ??
+      const EdgeInsets.symmetric(horizontal: 40, vertical: 24);
+  final contentPadding = EdgeInsets.only(
+    left: 24,
+    top: theme.useMaterial3 ? 16 : 20,
+    right: 24,
+    bottom: 24,
+  );
+  final horizontalChrome = insetPadding.horizontal + contentPadding.horizontal;
+  final available = MediaQuery.of(context).size.width - horizontalChrome;
+  final width = available < 0 ? 0.0 : available;
+  return width < preferred ? width : preferred;
+}
+
+/// A token entry field with the security-sensitive configuration — obscured,
+/// no autocorrect, no suggestions — kept in one place so the add-server form
+/// and the rotate-token dialog can't drift out of sync with each other.
+class _ObscuredTokenField extends StatelessWidget {
+  const _ObscuredTokenField({
+    required this.fieldKey,
+    required this.controller,
+    required this.labelText,
+    this.helperText,
+  });
+
+  final Key fieldKey;
+  final TextEditingController controller;
+  final String labelText;
+  // Optional explanatory text shown under the field — used by the
+  // add-server form to make explicit what "sealed" means for a token
+  // that, once sent, this app never reads back or displays again.
+  final String? helperText;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      key: fieldKey,
+      controller: controller,
+      obscureText: true,
+      autocorrect: false,
+      enableSuggestions: false,
+      decoration: InputDecoration(
+        labelText: labelText,
+        helperText: helperText,
+        helperMaxLines: 2,
+        isDense: true,
+        border: const OutlineInputBorder(),
+      ),
+    );
+  }
+}
+
+class _ImportReportDialog extends StatelessWidget {
+  const _ImportReportDialog({required this.report});
+
+  final McpImportReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppColors.of(context);
+    return AlertDialog(
+      title: const Text('mcp.json re-imported'),
+      content: SizedBox(
+        width: _dialogWidth(context, 420),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _ReportSection(title: 'Imported', entries: report.imported),
+              const SizedBox(height: 12),
+              _ReportSection(
+                title: 'Skipped',
+                // A bare name here could be mistaken for "nothing changed,
+                // safe to ignore" — but this server was already registered
+                // under that exact name, and whatever mcp.json currently
+                // says about its url/token/policy was NOT applied: the
+                // previously registered settings were kept as-is. Naming
+                // that explicitly guards against an operator assuming an
+                // mcp.json edit took effect just because the name shows up
+                // here.
+                entries: report.skipped.map(
+                  (name) =>
+                      '$name — already registered; existing settings '
+                      'were kept',
+                ),
+              ),
+              if (report.skipped.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'To point a skipped server at a new endpoint: remove it, '
+                  'then add it again with the new URL.',
+                  style: TextStyle(fontSize: 12, color: palette.textMuted),
+                ),
+              ],
+              const SizedBox(height: 12),
+              _ReportSection(
+                title: 'Refused',
+                entries: report.refused.map((r) => '${r.name} — ${r.reason}'),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReportSection extends StatelessWidget {
+  const _ReportSection({required this.title, required this.entries});
+
+  final String title;
+  final Iterable<String> entries;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppColors.of(context);
+    final list = entries.toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          title,
+          style: TextStyle(fontWeight: FontWeight.w600, color: palette.text),
+        ),
+        const SizedBox(height: 4),
+        if (list.isEmpty)
+          Text('None', style: TextStyle(color: palette.textMuted))
+        else
+          for (final entry in list)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Text(entry, style: TextStyle(color: palette.text)),
+            ),
+      ],
+    );
+  }
+}
+
+/// Confirms a destructive Remove before _McpsPageState._confirmAndDeleteServer
+/// ever calls _deleteServer: names the server and states exactly what
+/// removing it does, so a single popup-menu tap is never enough on its own
+/// to delete a server's stored token and per-tool policies. Stateless: the
+/// only work here is choosing which boolean to pop with, so — unlike
+/// _RotateTokenDialog, which has an in-flight network call to guard against
+/// early dismissal — there is no in-flight state to protect, and the
+/// barrier/platform-back gesture are left free to dismiss it (equivalent to
+/// Cancel: only an explicit "Remove server" tap ever pops `true`).
+class _RemoveServerConfirmationDialog extends StatelessWidget {
+  const _RemoveServerConfirmationDialog({required this.server});
+
+  final McpServer server;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Remove ${server.name}?'),
+      content: SizedBox(
+        width: _dialogWidth(context, 420),
+        child: SingleChildScrollView(
+          child: Text(
+            'Removing "${server.name}" deletes its stored token and '
+            'per-tool policies. If mcp.json still declares it, that entry '
+            'stays suppressed on reimport — add it again from this page to '
+            'restore it.',
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const Key('mcpsConfirmRemove'),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Remove server'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Confirms before a remote server's Switch flips from off to on: unlike
+/// a local-container or bundled server (never confirmed) or turning any
+/// server off (never confirmed either), this is the one transition that
+/// makes the app contact a destination outside this machine immediately
+/// — to discover its tools — and, if a bearer token is stored for it,
+/// send that token along with the request. Naming the exact endpoint and
+/// host lets an operator double check they mean to enable *this*
+/// server, specifically, before that happens. Every run still asks
+/// separately, afterward, before sending any one tool call's own
+/// arguments or results — this dialog is only about the immediate
+/// discovery contact enabling itself makes.
+class _EnableRemoteServerConfirmationDialog extends StatelessWidget {
+  const _EnableRemoteServerConfirmationDialog({required this.server});
+
+  final McpServer server;
+
+  @override
+  Widget build(BuildContext context) {
+    final host = Uri.tryParse(server.url)?.host ?? '';
+    return AlertDialog(
+      title: Text('Enable ${server.name}?'),
+      content: SizedBox(
+        // Compact: this dialog's own content is short (endpoint, host,
+        // and one explanatory paragraph), so it does not need as wide a
+        // dialog as the longer prose the remove/rotate dialogs show.
+        width: _dialogWidth(context, 300),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Enabling "${server.name}" contacts its endpoint '
+                'immediately to discover its tools:',
+              ),
+              const SizedBox(height: 8),
+              SelectionArea(
+                child: Text(
+                  server.url,
+                  style: const TextStyle(fontFamily: 'monospace'),
+                ),
+              ),
+              if (host.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text('Host: $host'),
+              ],
+              const SizedBox(height: 12),
+              Text(
+                'If a token is stored for this server, it is sent with '
+                'that request. Each run still asks separately before '
+                'sending any tool call\'s own arguments or results.',
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const Key('mcpsConfirmEnableRemote'),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Enable and discover'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Always opens with a fresh, empty, obscured token field — never
+/// pre-filled with the current token, which this app never reads back.
+class _RotateTokenDialog extends StatefulWidget {
+  const _RotateTokenDialog({
+    required this.apiClient,
+    required this.server,
+    required this.onReloadRequested,
+  });
+
+  final TuringApi apiClient;
+  final McpServer server;
+  // Invoked from the catch path only — a rotation can commit on the
+  // backend and still have its RPC response fail, so the parent's
+  // registry can no longer be trusted as-is even while this dialog stays
+  // open with the error. The success path pops with `true` instead, and
+  // the parent (_McpsPageState._rotateToken) reloads from that result, so
+  // the two paths never both trigger a reload for the same attempt.
+  final VoidCallback onReloadRequested;
+
+  @override
+  State<_RotateTokenDialog> createState() => _RotateTokenDialogState();
+}
+
+class _RotateTokenDialogState extends State<_RotateTokenDialog> {
+  final _token = TextEditingController();
+  bool _submitting = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _token.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_submitting) return;
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      await widget.apiClient.rotateMcpServerToken(
+        serverId: widget.server.serverId,
+        bearerToken: _token.text,
+      );
+      if (!mounted) return;
+      _token.clear();
+      Navigator.of(context).pop(true);
+    } catch (error) {
+      if (!mounted) return;
+      // Cleared even on failure, matching the add-server form: once a
+      // token has been sent for an attempt, this app does not hold onto it
+      // or offer it back — the user retypes it if they retry.
+      _token.clear();
+      // A rotation can commit on the backend and still have its RPC
+      // response fail (e.g. a post-commit audit write erroring out), so
+      // the parent's displayed state can no longer be trusted as-is: ask
+      // it to reload while this dialog stays open with the error, the
+      // same way _setServerEnabled's catch already reloads before showing
+      // its own error.
+      widget.onReloadRequested();
+      setState(() {
+        _submitting = false;
+        _error = '$error';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      // Blocks the platform back gesture/button while a rotation is in
+      // flight, matching the barrier (`barrierDismissible: false`, set by
+      // the caller) and the disabled Cancel button below — the only way
+      // out while pending is for the request to finish.
+      canPop: !_submitting,
+      child: AlertDialog(
+        title: Text('Rotate token for ${widget.server.name}'),
+        content: SizedBox(
+          width: _dialogWidth(context, 420),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Enter a new bearer token, or leave it empty to clear the '
+                  'token for this server.',
+                ),
+                const SizedBox(height: 12),
+                _ObscuredTokenField(
+                  fieldKey: const Key('mcpsRotateToken'),
+                  controller: _token,
+                  labelText: 'New bearer token',
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 10),
+                  Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      _error!,
+                      style: TextStyle(fontSize: 12.5, color: AppColors.danger),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _submitting
+                ? null
+                : () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('mcpsRotateSubmit'),
+            onPressed: _submitting ? null : _submit,
+            child: Text(_submitting ? 'Rotating…' : 'Rotate token'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _PolicyPicker extends StatelessWidget {
   const _PolicyPicker({
     required this.policy,
@@ -466,37 +1347,48 @@ class _PolicyPicker extends StatelessWidget {
   final bool busy;
   final ValueChanged<ToolPolicy?> onChanged;
 
+  // A bounded max width so the dropdown row (item text + arrow icon) never
+  // has to size itself to more than this, even at very narrow card widths.
+  // `isExpanded` then lets the selected/hint text shrink to whatever's left
+  // and ellipsize instead of overflowing the row.
+  static const double _maxWidth = 168;
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9),
-      decoration: BoxDecoration(
-        color: _policyColor(policy).withValues(alpha: 0.13),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<ToolPolicy>(
-          value: !present || policy == ToolPolicy.unspecified ? null : policy,
-          hint: Text(
-            present ? 'Unknown policy' : 'Unavailable',
-            style: TextStyle(color: AppColors.warning, fontSize: 11.5),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: _maxWidth),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9),
+        decoration: BoxDecoration(
+          color: _policyColor(policy).withValues(alpha: 0.13),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: DropdownButtonHideUnderline(
+          child: DropdownButton<ToolPolicy>(
+            value: !present || policy == ToolPolicy.unspecified ? null : policy,
+            hint: Text(
+              present ? 'Unknown policy' : 'Unavailable',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: AppColors.warning, fontSize: 11.5),
+            ),
+            isDense: true,
+            isExpanded: true,
+            onChanged: present && !busy ? onChanged : null,
+            items: const [
+              DropdownMenuItem(
+                value: ToolPolicy.safe,
+                child: Text('Runs freely', overflow: TextOverflow.ellipsis),
+              ),
+              DropdownMenuItem(
+                value: ToolPolicy.approvalRequired,
+                child: Text('Asks first', overflow: TextOverflow.ellipsis),
+              ),
+              DropdownMenuItem(
+                value: ToolPolicy.disabled,
+                child: Text('Disabled', overflow: TextOverflow.ellipsis),
+              ),
+            ],
           ),
-          isDense: true,
-          onChanged: present && !busy ? onChanged : null,
-          items: const [
-            DropdownMenuItem(
-              value: ToolPolicy.safe,
-              child: Text('Runs freely'),
-            ),
-            DropdownMenuItem(
-              value: ToolPolicy.approvalRequired,
-              child: Text('Asks first'),
-            ),
-            DropdownMenuItem(
-              value: ToolPolicy.disabled,
-              child: Text('Disabled'),
-            ),
-          ],
         ),
       ),
     );
@@ -533,7 +1425,7 @@ Color _policyColor(ToolPolicy policy) => switch (policy) {
 String _tierLabel(McpServerTier tier) => switch (tier) {
   McpServerTier.bundled => 'Bundled',
   McpServerTier.localContainer => 'Local third-party',
-  McpServerTier.remoteUrl => 'Remote · per-run consent',
+  McpServerTier.remoteUrl => 'Remote · enable + per-run egress',
   McpServerTier.unspecified => 'Unknown tier',
 };
 
@@ -587,6 +1479,7 @@ class WorkspaceNotice extends StatelessWidget {
     required this.body,
     this.onRetry,
     this.tone,
+    this.compact = false,
   });
 
   final IconData icon;
@@ -594,13 +1487,18 @@ class WorkspaceNotice extends StatelessWidget {
   final String body;
   final VoidCallback? onRetry;
   final Color? tone;
+  // A tighter, lower-emphasis rendering — smaller padding and spacing —
+  // for a notice that reports ambient/systemic status (e.g. the MCP
+  // registry's own over-budget notice) rather than one specific failure
+  // an operator needs to visually stop on.
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final palette = AppColors.of(context);
     final color = tone ?? palette.textMuted;
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.all(compact ? 12 : 18),
       decoration: BoxDecoration(
         color: palette.raised,
         borderRadius: BorderRadius.circular(12),
@@ -611,7 +1509,7 @@ class WorkspaceNotice extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(icon, size: 17, color: color),
+              Icon(icon, size: compact ? 15 : 17, color: color),
               const SizedBox(width: 9),
               Expanded(
                 child: Text(
@@ -625,7 +1523,7 @@ class WorkspaceNotice extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 11),
+          SizedBox(height: compact ? 6 : 11),
           Text(
             body,
             style: TextStyle(
@@ -647,198 +1545,6 @@ class WorkspaceNotice extends StatelessWidget {
           ],
         ],
       ),
-    );
-  }
-}
-
-/// The add-server form runs the registration itself so a failure keeps what
-/// the user typed and shows the reason inline — the same shape as the
-/// integrations connect dialog, which handles a sealed secret the same way.
-class _RegisterServerDialog extends StatefulWidget {
-  const _RegisterServerDialog({required this.register});
-
-  final Future<McpServer> Function({
-    required String name,
-    required String url,
-    String bearerToken,
-  })
-  register;
-
-  @override
-  State<_RegisterServerDialog> createState() => _RegisterServerDialogState();
-}
-
-class _RegisterServerDialogState extends State<_RegisterServerDialog> {
-  final _name = TextEditingController();
-  final _url = TextEditingController();
-  final _token = TextEditingController();
-  String? _error;
-  bool _saving = false;
-
-  @override
-  void dispose() {
-    _name.dispose();
-    _url.dispose();
-    _token.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (_saving) return;
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
-    try {
-      await widget.register(
-        name: _name.text.trim(),
-        url: _url.text.trim(),
-        bearerToken: _token.text,
-      );
-      if (mounted) Navigator.of(context).pop(true);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _error = '$error';
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Add MCP server'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _name,
-              autofocus: true,
-              decoration: const InputDecoration(labelText: 'Name'),
-            ),
-            TextField(
-              controller: _url,
-              decoration: const InputDecoration(
-                labelText: 'URL',
-                helperText:
-                    'HTTPS endpoint, or an http:// container host on the '
-                    'internal network. The tier is derived from the URL.',
-                helperMaxLines: 3,
-              ),
-            ),
-            TextField(
-              controller: _token,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'Bearer token (optional)',
-                helperText:
-                    'Stored sealed. Never shown again — rotate to replace.',
-                helperMaxLines: 2,
-              ),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 10),
-              Text(
-                _error!,
-                style: TextStyle(fontSize: 12.5, color: AppColors.danger),
-              ),
-            ],
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _saving ? null : _submit,
-          child: const Text('Add server'),
-        ),
-      ],
-    );
-  }
-}
-
-class _RotateTokenDialog extends StatefulWidget {
-  const _RotateTokenDialog({required this.serverName, required this.rotate});
-
-  final String serverName;
-  final Future<McpServer> Function(String token) rotate;
-
-  @override
-  State<_RotateTokenDialog> createState() => _RotateTokenDialogState();
-}
-
-class _RotateTokenDialogState extends State<_RotateTokenDialog> {
-  final _token = TextEditingController();
-  String? _error;
-  bool _saving = false;
-
-  @override
-  void dispose() {
-    _token.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (_saving) return;
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
-    try {
-      await widget.rotate(_token.text);
-      if (mounted) Navigator.of(context).pop(true);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _saving = false;
-        _error = '$error';
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text('Rotate token for ${widget.serverName}'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _token,
-            obscureText: true,
-            autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'New bearer token',
-              helperText:
-                  'Leave empty to clear the stored token. The current token '
-                  'is never shown.',
-              helperMaxLines: 3,
-            ),
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 10),
-            Text(
-              _error!,
-              style: TextStyle(fontSize: 12.5, color: AppColors.danger),
-            ),
-          ],
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _saving ? null : _submit,
-          child: const Text('Rotate'),
-        ),
-      ],
     );
   }
 }

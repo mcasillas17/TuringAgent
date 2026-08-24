@@ -10,7 +10,7 @@ orchestrator.
 |---|---|---|---|---|
 | Bundled | `mcp-system`, `mcp-files` | No | Yes | Cooperating MCP server |
 | Local container, third-party | `http://vendor-mcp:9000/mcp` | No | No | Orchestrator caller |
-| Remote URL | `https://vendor.example/mcp` | Yes, per run | No | Orchestrator caller |
+| Remote URL | `https://vendor.example/mcp` | Yes, at enable (discovery) and per run (calls) | No | Orchestrator caller |
 | stdio / `command` / `npx` | `command: "npx"` | Refused | Refused | Not registered |
 
 The two bundled servers remain on private Docker networks; Compose does not
@@ -21,44 +21,675 @@ subnet. An empty
 configured bundled bearer token denies every request rather than opening the
 service.
 
-The orchestrator imports `mcp/mcp.json` into SQLite at startup, and the same
-import can be re-run on demand from the MCPs page (`ReimportMcpJson`) — no
-restart is required to pick up file edits. Servers can also be registered
-one at a time from the app (`RegisterMcpServer`), through the identical
-validation path: same name and reserved-name rules, same URL classification
-(the tier is derived from the URL, never chosen by the caller), same token
-sealing, same disabled-by-default arrival. The one deliberate difference:
-an explicit register clears the deletion tombstone for that name — the user
-asking for the name by hand is the consent the tombstone was waiting for —
-while file re-import never does. A stored bearer token can be replaced or
-cleared (`RotateMcpServerToken`); the token is write-only end to end, and no
-response, event, or audit row ever carries it back. Import preserves a
-previous user enablement decision only while the endpoint and tier are
-unchanged; repointing a server disables it and withdraws the old tool snapshot.
-An explicit empty `tools` snapshot withdraws prior tools, and policy edits
-cannot reactivate a tool the current snapshot no longer contains. New servers
-never arrive enabled. Bearers are
-sealed with `internal/secretbox` under `TURING_INTEGRATION_KEY`; no public or
-internal response contains a token or ciphertext. A `command` entry is retained
-as an import issue explaining that stdio is unsupported, and no server row is
-created for it. Malformed documents and entries whose token cannot be sealed
-are reported on the MCPs page without preventing the rest of the backend from
-starting. Imported servers can also be removed through the registry API.
-Removal writes a local import tombstone, so an unchanged `mcp.json` cannot
-silently recreate the server at the next restart or re-import; bringing it
-back requires either a new name in the file or an explicit in-app
-registration of the old one.
+Servers can be registered directly from the Flutter MCPs page — a name, a
+hardened URL, a local-container or remote-URL tier (the in-app form always
+states one), and an optional write-only bearer — with no file edit and no
+backend restart. In-app
+registration runs the same validation an `mcp.json` import runs: name-pattern
+and bundled-name refusal, stdio refusal, URL canonicalization/hardening, and
+bearer-token normalization, then seals the token with the same
+`internal/secretbox` sealer (the server name as AAD) under
+`TURING_INTEGRATION_KEY`; no public or internal response contains a token or
+ciphertext. Naming an existing non-bundled, url-empty legacy migration-0016
+placeholder is the one existing name this call does not refuse — it is
+treated as the operator's own consent to adopt that row in place (see below),
+which lets a mobile operator who cannot edit `mcp.json` register a server the
+backend already knows about by name. Any other existing name, or a bundled
+name, is still refused. Every genuinely new registration still arrives
+disabled, and registration itself never contacts the server's endpoint. The
+`mcp.server.registered` audit record distinguishes which branch ran via an
+`adopted: bool` field alongside the existing token-free name/tier/url keys —
+computed inside the same transaction that decided which happened, so it can
+never diverge from, or race, what was actually committed. The MCPs page
+renders each server's canonical `url` (selectable, ellipsized, with a tooltip
+for the full value) so an operator can verify the destination they
+registered; an unadopted placeholder with no URL renders an explicit
+"Endpoint not configured" warning instead of blank space.
 
-Local-container enablement performs bounded `tools/list` discovery. Remote
-enablement performs no network request: remote entries can carry an optional
-`tools` snapshot in `mcp.json`, and otherwise remain visible with no callable
-tools. This is deliberate;
-contacting a remote server merely to discover it would make enablement an
-undeclared egress consent.
+The tier is always derived from the hardened URL, exactly as an `mcp.json`
+import derives it. `RegisterMcpServerRequest.tier` is only a caller
+assertion: an unspecified tier accepts whatever the URL classifies to (which
+is what a client built against the tier-less form of this RPC sends), a
+local-container or remote-url tier must match that classification or the
+request is refused, and `MCP_SERVER_TIER_BUNDLED` is never accepted. An
+explicit registration also clears the deletion tombstone for that name — the
+user asking for the name by hand is the consent the tombstone was waiting for
+— while file re-import never does. A stored bearer token can be replaced or
+cleared afterwards (`RotateMcpServerToken`); a token that is present but only
+whitespace is refused rather than silently treated as "clear it". The token
+is write-only end to end, and no response, event, or audit row ever carries
+it back.
+
+Import is create-only: an existing row for a name that already has a real,
+non-empty endpoint is skipped, not repointed. Its enabled state, endpoint,
+tier, liveness, rotated token, tool snapshot, and policies are all left
+completely untouched, and the reimport response names that entry explicitly
+("already registered; existing settings were kept") rather than silently
+treating a changed endpoint/token/tools in the file as having taken effect.
+There is no in-place "change this server's endpoint" operation: repointing
+one requires removing it first, then registering it again at the new
+endpoint (see below) — which starts every policy/tools snapshot over from a
+fail-closed (disabled, no tools) state, rather than mutating a live row's
+endpoint out from under whatever the operator or a running session
+currently trusts it to be. An explicit empty `tools` snapshot withdraws
+whatever tools a *new* registration or a *legacy placeholder being adopted
+in place* previously carried; it never applies to an already-registered,
+skipped row, whose tools — like every other field of it — reimport leaves
+alone. New servers never arrive enabled. Removal writes a local import
+tombstone, so an unchanged `mcp.json` cannot silently recreate the server at
+the next restart or re-import; bringing it back requires either a new name
+in the file or an explicit in-app registration of the old one.
+
+**Design note: reimport never overwrites an existing row's endpoint, even
+when `mcp.json`'s own entry for that name has changed.** An earlier,
+parallel implementation of this same MCP registry feature (developed on
+`main` while this branch's own hardened version was in progress, and
+reconciled into this one implementation once both landed) instead let a
+reimport detect a changed `url`/`bearer_token` for an already-registered
+name and repoint the live row in place. That behavior is deliberately *not*
+carried forward here. The original brief for this feature is that editing
+the mounted `mcp.json` file must be idempotent from the user's own point of
+view: an operator can safely re-run Re-import mcp.json at any time, and it
+either creates rows for genuinely new entries or leaves every already-
+registered one exactly as it was — never silently reinterpreting an edited
+file as explicit consent to change a live server's endpoint, sealed token,
+enablement, or tool policies out from under whatever the operator (or a
+running session) currently trusts them to be. Repointing a server is only
+ever the explicit, in-app Remove-then-Register sequence described above,
+which is unambiguously a deliberate user action rather than an inference
+from a file edit. This is a considered product decision, not an oversight
+left over from reconciling the two implementations.
+
+`mcp.json` remains the bulk/config-file path. The orchestrator imports it at
+startup and, without a restart, whenever an operator chooses Re-import
+mcp.json on the MCPs page; both runs report imported, skipped, and refused
+names with reasons. A `command` entry is refused as an import issue
+explaining that stdio is unsupported, and no server row is created for it.
+Malformed documents and entries whose token cannot be sealed are reported the
+same way, without preventing the rest of the backend from starting.
+`mcp.json` is read only if it is a regular file: the path is opened with
+`unix.Open` using `O_NOFOLLOW` (so a symlink as the final path component
+makes the raw `open(2)` call itself fail with `ELOOP` rather than being
+resolved and followed) and `O_NONBLOCK` (so a FIFO's read-side open
+returns immediately regardless of whether a writer is connected, rather
+than blocking the calling goroutine), and the resulting descriptor — not
+the path a second time — is checked with `Fstat`, refusing anything other
+than a confirmed regular file. There is no separate `Lstat`-then-`Open`
+pair of path-based syscalls here at all, and therefore no gap between two
+such checks for a swapped-in FIFO, symlink, socket, or device node to land
+in. This is what actually keeps a reimport from ever hanging: a *plain,
+blocking* `os.Open` on a FIFO's read side would wait until a writer
+connects, so bounding the *read* alone (see below) would not have been
+enough to keep the whole call from stalling forever waiting for one that
+never comes. Every other read failure —
+including a directory, any non-regular file, or the file having been
+replaced by one — maps to the same fixed "read mcp.json failed" message a
+client sees, never the path or the underlying OS error text. A malformed or
+oversized document is refused as one bounded `_document` reason rather than
+failing the whole call outright, so a client can still be told why nothing
+imported; a missing file is not a failure at all and instead clears any
+previously recorded import issues, so reimporting after deleting `mcp.json`
+shows a clean slate. Once confirmed regular, `mcp.json` is read through a
+size-bounded reader (`io.LimitReader`, capped one byte past the maximum
+supported document size) rather than `os.ReadFile`, so a huge or sparse file
+cannot force an unbounded read either.
+
+`ImportJSON` processes each `mcpServers` entry through its own,
+independent repository transaction, in sorted-name order, so an earlier
+entry's server row is already durably committed by the time a later one
+is even attempted. A fatal error `ImportJSON` cannot attribute to a
+single entry — a canceled request context, or some other repository
+failure between two entries — no longer discards that already-committed
+work: the returned report still carries every name already imported or
+skipped, and every reason already recorded, exactly as if the run had
+kept going. `ReimportConfiguredJSON` folds that failure into the same
+report as one more bounded `"_document"` entry (mirroring the malformed/
+oversized-document case above) and persists the merged issues through a
+context detached from the caller's own cancellation — the same pattern
+`auditMCPEvent` already uses for post-commit bookkeeping — so a client
+that cancels mid-run does not also erase the record of what already
+happened. That persistence itself failing too (a genuine, independent
+repository problem, not merely the caller's own cancellation) is the one
+case this still surfaces as `Internal` — but only after `ReimportMcpJson`
+has already notified the runtime (if anything was imported) and recorded
+exactly one audit row with the real, already-committed counts; a later
+`Internal` mapping is never a second, separate audit of the same run, and
+audit/notify are never skipped merely because the run did not fully
+complete.
+
+The root JSON object must declare the key `mcpServers` exactly once, spelled
+exactly that way: a case variant (`McpServers`, `MCPSERVERS`, ...) is refused,
+and so is an exact or case-insensitive duplicate of it (two roots both
+spelled `mcpServers`, or one `mcpServers` alongside one `MCPSERVERS`) —
+`encoding/json`'s own case-insensitive field-name fallback and its
+last-key-wins handling of a duplicate object key would otherwise silently
+accept either shape instead of refusing the ambiguity. The `mcpServers`
+object's own entries are parsed the same deliberate way: two entries sharing
+the exact same server name are refused as one whole-document failure — never
+silently resolved to whichever definition a plain map decode would have kept
+last, which could otherwise let a second, differently-configured definition
+(a different url, a different bearer) quietly win. The entry count itself is
+bounded during that same parse, the instant it would exceed the supported
+limit, rather than only after a same-sized map of every entry has already
+been built in memory — a document packed with far more (tiny) entries than
+could ever actually register is refused without first materializing all of
+them. An entry's `headers` object may carry at most one case-insensitive
+`Authorization` key and nothing else: a second, case-insensitive-duplicate
+Authorization key, or any other header name whatsoever, is refused with one
+fixed, generic reason that never names the offending header — because a
+header's own *key* is exactly as untrusted as its value, an earlier version
+of this message named it directly, which meant a header deliberately (or
+accidentally) named with the entry's own bearer token value would leak that
+token straight into the refusal reason. The unsupported-header refusal always
+takes precedence over the duplicate-Authorization refusal, deterministically,
+regardless of how many of either are present. Each element of an entry's own
+`tools` array is parsed exactly as strictly: only `name`, `description`, and
+`inputSchema`, spelled exactly that way (`inputSchema` is the one canonical
+spelling that is not all-lowercase), are recognized, so a case variant
+(`Name`, `INPUTSCHEMA`, ...) or an exact-or-case-insensitive duplicate of any
+of them is refused with the same fixed, generic, sentinel-free reason used
+for every other malformed tool definition — never `encoding/json`'s own
+`"unknown field %q"` wording, which would otherwise name the offending key
+verbatim (a JSON key inside a tool definition is exactly as attacker-controlled
+as its value). Each on-demand Reimport RPC's
+response is call-local and deterministic: its `unsupported` list is built from
+that call's own report, sorted by name, rather than by re-reading the shared
+issues table two overlapping reimports could otherwise race and swap into
+each other's response. Skipped names in that response mean the row already had a real,
+non-empty endpoint and mcp.json's current url/token/policy for it was
+**not** applied — the MCPs page's reimport dialog states this explicitly per
+skipped name ("already registered; existing settings were kept") so an edit
+to an already-registered entry is never mistaken for having taken effect.
+The dialog also states how to actually repoint one: remove the existing
+server, then add it again at the new endpoint. That is not merely a UI
+convenience path — deleting first writes an import tombstone, and only an
+explicit in-app registration naming that exact server clears the tombstone
+and creates a genuinely new, disabled row rather than colliding with a live
+one. A later `mcp.json` reimport naming that same server does **not** clear
+it: `ImportMCPServer` checks the tombstone table first and refuses with the
+same fixed "server was removed locally and remains suppressed" reason for as
+long as it stands (see below), regardless of how many times mcp.json is
+reimported in the meantime — repointing a deleted server by file alone is
+not possible. There is no in-place "edit the endpoint of an existing server"
+operation, by design, because create-only reimport and explicit-consent
+registration are the only two paths that ever set url/sealed_token/tier, and
+both start every policy/tools snapshot over from a fail-closed (disabled, no
+tools) state rather than mutating a live row's endpoint out from under
+whatever the operator or a running session currently trusts it to be.
+
+Reimport is create-only: an existing row for a name that already has a real,
+non-empty endpoint is left completely untouched — its enabled state,
+endpoint, tier, liveness, rotated token, tool snapshot, and policies never
+change. That entry's own `Tools` is decoded as part of the entry's strict
+JSON-shape validation, which runs before the existing-row check (so a
+malformed `tools` array — an unknown key nested inside one of its
+elements, say, or a field of the wrong JSON type — still produces the
+same decode-error refusal it would for a brand-new name, rather than a
+silent skip that would hide the malformed shape), but it is never validated
+against buildImportTools' own deeper rules (duplicate names, per-tool
+schema/size limits, a token appearing in a tool's own metadata), never
+reconciled through replaceServerToolsTx, and never persisted for that row.
+The one exception
+is a legacy migration-0016 placeholder: a non-bundled row seeded with
+`url == ""` solely to carry a pre-registry tool policy forward until an
+operator supplies a real endpoint. A file reimport or an explicit in-app
+Register naming that exact server both adopt the row in place (same id) and
+are fail-closed about it: url, sealed token, and tier update to the newly
+supplied values; the row is forced disabled regardless of what it carried;
+liveness resets to unknown/empty, because whatever status the placeholder's
+`url == ""` row happened to carry says nothing about the endpoint now
+replacing it; and every tool the placeholder carried is withdrawn
+(present=0, enabled=0) before this call's own tools, if any, are considered.
+A withdrawn tool is not gone for good — a valid static `tools` snapshot
+supplied by that same reimport, or a later live discovery once the adopted
+server is enabled, reconfirms any tool by matching name, and reconfirmation
+preserves whatever policy an operator had already migrated/edited onto it
+rather than resetting it to a default; only the tool's presence/enabled state
+was ever touched by the withdrawal. Every genuinely new entry, whether from a
+file import or in-app registration, still arrives disabled.
+
+An mcp.json entry's optional static `tools` snapshot is fully validated
+before the repository is ever touched — well-formed name/schema shape, no
+bundled-namespace collision, and the entry's own configured bearer token
+never appearing verbatim in a tool's name, its description, or its
+serialized schema — and bounded by the exact same tool-count and
+encoded-byte limits live `tools/list` discovery enforces, counted the same
+way. A tool's optional `description` is scanned for the token and its bytes
+count toward that same per-snapshot encoded-byte limit exactly like the
+name and schema do, so it cannot hide a token or inflate the entry's real
+footprint past the limit unnoticed — but the description itself is never
+persisted or returned: only the tool's name and schema reach the repository
+and every subsequent descriptor response. It is then handed to the same
+repository helper (`replaceServerToolsTx`) live discovery's `RecordDiscovery`
+also uses, inside the very same transaction as the server row insert or
+placeholder adoption: an inter-server tool-name collision there rolls back
+that whole transaction too. Either way, an invalid, colliding, token-bearing,
+or oversized snapshot refuses the whole entry with a fixed, generic reason
+that never echoes the token, the offending name/schema, or which check
+tripped, and leaves no partial row behind for a corrected reimport to get
+stuck skipping.
+
+`replaceServerToolsTx` also enforces one further limit, *across* every
+server in the registry rather than per server: `repository.MaxMCPRegistryToolBytes`
+(256 KiB) bounds the total encoded (name + schema) bytes of *every* row the
+`tools` table holds combined — present **and** withdrawn (`present = 0`)
+rows alike, not only currently-present ones — checked transactionally
+against a fresh query of the whole `tools` table after this server's own
+withdrawal and every replacement upsert have already run (including any
+bundled-server tools populated by the entirely separate `UpsertTools`
+path, since the query reads the table's actual contents rather than a
+separately maintained count). Counting withdrawn rows is deliberate, not
+an overcount: `ListMCPServerTools` — and therefore `ListMcpServers`' own
+per-server descriptor — returns every row attributed to a server
+regardless of its `present` flag, since a withdrawn tool's policy is
+intentionally preserved (never deleted) so an operator's edits survive a
+tool's temporary disappearance. A budget that excluded those rows would
+silently undercount what `ListMcpServers` actually sends: a vendor that
+keeps rediscovering under a fresh, disjoint set of tool names every cycle
+would leave every previous cycle's tools behind, forever withdrawn but
+never deleted, and a present-only budget would let that grow the table —
+and the response — without limit even while appearing to stay flat.
+Counting every row instead makes that same withdrawn history spend the
+same budget a present tool would, so repeated rediscovery under
+ever-changing names is refused once the real total — exactly what a
+client's response would carry — reaches the cap. Without an aggregate
+limit at all, up to `MaxNonBundledMCPServers` (256) servers each
+independently allowed a nearly-4 MiB snapshot could together make a single
+`ListMcpServers` response exceed the 4 MiB gRPC message limit the backend
+configures for both directions. 256 KiB leaves substantial margin even in
+the worst measured case — a single tool whose schema is one large array of
+minimal JSON scalars (`{"type":"object","x":[0,0,0,...]}`), which converts
+far less efficiently than spreading the same bytes across many small
+tools: each array element becomes a `google.protobuf.Value` carrying a
+fixed 8-byte double, costing roughly 9-11 wire bytes against as few as 2
+raw JSON bytes, an empirically measured ~5.5x expansion — spread across
+the maximum server/URL/status/issue counts, that shape marshals to about
+2.17 MiB, roughly 46% of margin under the 4 MiB cap. (An earlier version
+of this budget, 1 MiB, was sized only against a weaker shape — many small,
+distinct tools, which maximizes protobuf's fixed *per-message* overhead
+rather than per-array-element overhead, measuring only ~1.55x expansion —
+and did not actually hold: a single tool consuming that whole 1 MiB budget
+in the number-array shape marshaled, by itself, to roughly 5.5 MiB —
+already past the cap before any server descriptor, Unsupported entry, or
+any other tool was even added.) The check itself runs *after* the
+withdrawal and every replacement upsert for this reconciliation, not
+computed beforehand from a present-only baseline plus the incoming tools'
+own byte count, so it measures exactly the table's real resulting state —
+the same state a concurrent `ListMcpServers` read would see. A refusal
+here rolls back the whole transaction — the server row insert or
+placeholder adoption for a static import, or the standalone transaction a
+live rediscovery opens — so a server that already had tools is never left
+with none, and a brand-new import that would have exceeded the budget
+creates no row at all.
+
+`UpsertTools` — the bundled/skills/legacy path the runtime uses to publish
+worker tool capabilities (`system`, `files`, and `skills`), and the one
+path the paragraph above already notes contributes to
+`replaceServerToolsTx`'s own aggregate query — enforces the identical
+`MaxMCPRegistryToolBytes` budget against its *own* replacement snapshot,
+transactionally, the same way: checked after its own withdrawal (every
+present bundled/`NULL`-`mcp_server_id` tool set to `present = 0`) and every
+replacement upsert have already run, against every row the table holds —
+present and withdrawn alike — with a third-party server's own tools
+(populated entirely separately, via `replaceServerToolsTx`) still counted
+since both paths read the same table. A refusal rolls back the whole
+transaction, the same way, so a refused snapshot never leaves the tools it
+was about to replace withdrawn with nothing reconfirmed. Before this,
+`UpsertTools` was the one write path that enforced no aggregate budget of
+its own at all, even though its own writes count toward the same total
+every other path already bounded.
+
+On top of that shared full aggregate, `replaceServerToolsTx` enforces one
+further, narrower budget of its own whenever the server being reconciled
+is non-bundled ("third-party"):
+`repository.MaxThirdPartyMCPRegistryToolBytes` (128 KiB, exactly half of
+`MaxMCPRegistryToolBytes`) caps how much of the full aggregate every
+third-party server *combined* may ever occupy, checked (and, if both would
+otherwise apply, preferred over the full-aggregate reason) before the
+unchanged full-aggregate check. `UpsertTools` enforces no such sub-cap —
+only the same full aggregate as always. Without this, a sequence of
+third-party imports or live rediscoveries could grow their own share of
+the aggregate arbitrarily close to the full 256 KiB cap, leaving little or
+no headroom for a worker's own, entirely separate, next `ConnectWorker`
+call to publish (or grow) `system`/`files`/`skills`' own tool schemas via
+`UpsertTools`: a worker connecting after third-party servers had already
+filled the aggregate would have its own registration — and therefore
+every bundled tool the runtime depends on — refused by the same aggregate
+guard, through no fault of its own. Reserving half the aggregate
+exclusively for third-party servers guarantees the other half is always
+available for `UpsertTools`, regardless of how many third-party servers
+exist or how large their own snapshots are. 128 KiB is not merely assumed:
+`internal/service/runtime`'s own
+`TestFirstPartyBundledToolSchemasFitWithinReservedHeadroom` measures the
+real, combined byte total of every tool `system`/`files`/`skills`
+register today (about 3.2 KiB) against this reservation and asserts at
+least 90% of it stays free, and
+`TestConnectWorkerSucceedsWhenThirdPartyToolsFillExactlyTheReservedSubBudget`
+proves a worker still connects successfully — through the real
+`ConnectWorker` path, not merely at the repository layer — even when
+third-party servers already occupy their sub-budget's own exact cap.
+
+As defense in depth on top of every write path now sharing these budgets,
+`ListMcpServers` reads the complete server+tools+issues registry state
+from a single SQLite read transaction (`repository.MCPRegistrySnapshot`)
+rather than as several separately-acquired queries: the database's single
+connection (`db.Open`'s `SetMaxOpenConns(1)`) means only one `*sql.Tx` can
+be open at a time, so a concurrent tool reconciliation cannot commit
+partway through that one read the way it could between two independently
+acquired queries, which could otherwise let an earlier guard's decision
+(computed against an earlier state) disagree with rows a later query in
+the same call actually returns. That same snapshot re-checks three
+independent bounds before reading any tool row: the current full tool-byte
+aggregate (the same all-rows query, `OverBudget`), the total `mcp_servers`
+row count against `MaxMCPRegistryServers` (`ServersOverCap`), and the total
+`mcp_import_issues` row count against `MaxMCPImportIssues`
+(`IssuesOverCap`) — bounding the *server* and *issue* reads themselves to
+one row past each cap (`LIMIT cap+1`) so detecting an over-cap condition
+never itself requires reading an unbounded number of rows.
+`MaxMCPImportIssues` is `MaxNonBundledMCPServers + 1`, not merely
+`MaxNonBundledMCPServers`: the latter already bounds the most named,
+ordinary per-entry refusals a single `mcp.json` document can ever name at
+once (`ImportJSON`'s own `maxMCPImportEntries` refuses a document naming
+more than that, wholesale, before any entry is processed at all — see
+above), but `ReimportConfiguredJSON` can still fold in one *more* row on
+top of every one of those — the bounded `"_document"` entry
+`recordDocumentRefusal` adds when a later, whole-run failure interrupts an
+otherwise fully-processed document (see above). Without the `+ 1`, a
+single, entirely legitimate run that both names the maximum number of
+entries and is later interrupted this way — 256 ordinary refusals plus one
+`_document` entry, 257 rows from one honest `ReplaceMCPImportIssues`
+write — would have tripped `IssuesOverCap` and degraded the whole registry
+for an outcome that did nothing wrong at all. All three
+should be unreachable in ordinary operation now that every write path
+enforces the matching limit, but none is asserted to be *impossible*
+forever: they protect against a future regression that reintroduces an
+unguarded write path, and against upgrading a database that predates one
+of these limits being universally enforced. Rather than refuse the whole
+call, `ListMcpServers` keeps the registry *manageable* whenever any one of
+the three trips: every server row (bundled and non-bundled alike) is still
+returned — bounded to `MaxMCPRegistryServers` entries when the row count
+itself is what is over cap, in full otherwise — an operator retains
+enough to identify and delete whichever server is responsible, but every
+server's own `Tools` list is left completely empty, and the response's
+explicit `registry_degraded`/`registry_degradation_reason` fields explain
+why, rather than either attempting to read, let alone marshal and send, a
+schema-heavy result sized against an unbounded aggregate, or overloading
+the per-entry `Unsupported` list with a systemic, non-per-entry notice
+(there is deliberately no reserved `"_registry"` (or similarly special)
+name in `Unsupported` for this: a real mcp.json entry named `"_registry"`
+is refused through the ordinary synthetic-invalid-entry-name path — see
+"Invalid or reserved mcp.json entry names" below — so it can never collide
+with this systemic signal). `DeleteMcpServer` itself never reads
+`MCPRegistrySnapshot` at all, so it keeps working normally even while any
+of the three is set; deleting the offending server cascade-deletes its
+tool rows (`tools.mcp_server_id` is declared `ON DELETE CASCADE`) or its
+own row (for `ServersOverCap`), which is normally enough to bring the
+aggregate/count back under budget, at which point the very next
+`ListMcpServers` call recovers full, non-degraded listing automatically —
+no separate "clear the flag" operation, migration, or restart is needed.
+Because the MCP registry feature this whole document describes has not
+shipped in a release yet, no real deployment's database can already carry
+rows written by the since-fixed, unbounded `UpsertTools` path or by a
+write path that predates the server-count/issue-count caps, so no
+destructive migration to truncate or reconcile a pre-existing oversized
+aggregate or row count was required here — an operator upgrading a
+database that somehow does carry one instead sees the degraded-but-usable
+listing above and can recover from it entirely through the ordinary
+list/delete/reimport UI, rather than needing direct database access.
+
+Invalid or reserved mcp.json entry names: an entry whose own key fails
+`validateMCPServerName` — either because it does not match the name
+pattern, or because it names one of TuringAgent's reserved bundled/pseudo
+servers — is never recorded, persisted, or returned under that raw
+key/name at all. The key an mcp.json entry is filed under is exactly as
+untrusted as any other value in the document — it might not even have
+been intended as a name (a bearer token or other secret pasted into the
+wrong JSON slot, for instance) — so `ImportJSON` records the refusal under
+a bounded, synthetic, per-document-deterministic label instead
+(`"_invalid_server_1"`, `"_invalid_server_2"`, ... in the same sorted-by-
+name order entries are already processed in) with one fixed, generic
+reason that never distinguishes "invalid" from "reserved" and never
+echoes the entry's own name. This is the one place a raw rejected key
+could otherwise have reached the in-memory report, `mcp_import_issues`,
+the `ReimportMcpJson`/`ListMcpServers` RPC responses, and the Flutter UI.
+
+Deleting a server writes a local import tombstone, so an unchanged
+`mcp.json` cannot silently recreate it on the next reimport; the file path
+keeps refusing a tombstoned name. An explicit in-app Register of that same
+name is the user's own consent: it atomically clears the tombstone in the
+same transaction and does not require a new name. Registering over a name
+that still has a live row, or over a bundled name, is refused either way.
+`DeleteMCPServer` reads the row, checks its tier, writes the tombstone, and
+removes the row all inside its own single transaction, and returns the
+exact record it just deleted — read from inside that same transaction —
+rather than the service layer needing a separate pre-read of the row
+before calling it: a pre-read-then-delete pair would leave a race window
+between "read" and "the transaction that actually deletes," which
+returning the deleted record from inside that one transaction closes
+entirely. That returned record's name and tier are what the service layer
+records in a post-commit `mcp.server.deleted` audit entry, even though the
+row itself is gone by the time that entry is written.
+
+Token rotation is write-only for non-bundled servers: a new bearer replaces
+the sealed value, an empty bearer clears it, and a bundled server refuses
+rotation outright. A nonempty token still requires `TURING_INTEGRATION_KEY`
+to seal. Because a prior Up/Down liveness observation was made under the
+credential rotation is replacing or clearing, rotation atomically resets
+liveness to unknown/empty in the same transaction as the sealed-token
+update — a status-write failure rolls back the token change too, so a
+rotated (or cleared) token can never be left paired with a stale liveness
+reading taken under the credential it just replaced. No response, log line,
+registry-change event, or audit row ever carries the plaintext token or its
+ciphertext; audit rows record only the server name and whether a token is
+now configured.
+
+A nonempty token is also refused outright — before it is ever sealed,
+persisted, or audited — if it appears verbatim anywhere in the server's
+own name or canonical URL, including that URL's independently re-decoded
+path (catching a token containing a character `url.URL.String()` would
+otherwise percent-encode, such as a quote or backslash, differently from
+how the token itself reads). A name and a canonical URL are both public:
+returned in every list/register/rotate response and recorded in every
+audit row for that server, so a token equal to (or contained in) either
+one can never actually be secret regardless of how carefully it is
+sealed — anyone who can see the server's name or URL already has it. This
+one check is shared by registration and file import (both funnel through
+`validateServerDefinition`) and mirrored, separately, by rotation
+(`RotateMcpServerToken` compares the *new* token against the *existing*
+row's own name/url, since a rotation never sets a new name or URL of its
+own); every path refuses with the same fixed, generic reason, naming
+neither which of the two matched nor how, the same way this document's
+own token-in-tool-metadata and unsupported-header-name checks already do.
+This intentionally may refuse a short, coincidentally-ambiguous token
+that happens to share characters with an unrelated name/URL substring —
+the secrecy invariant wins over that inconvenience.
+
+Rotation runs one further check: before a new, nonempty token is sealed or
+persisted, still under that server's own credential lock, it loads every
+tool retained for the server — present *and* withdrawn alike
+(`ListMCPServerTools` never filters by `present`) — and refuses the same
+generic, sentinel-free way if the token appears verbatim in any one tool's
+own name or its exact stored `schema_json` representation. A tool
+descriptor is exactly as public as a server's own name/url: every
+list/get/rotate response returns it, withdrawn tools included, so a token
+recoverable from one can never actually be secret either. The comparison
+reuses the same two-scan pairing the mcp.json token-in-tool-metadata check
+above runs at import time — a decoded-value walk (catching a token
+containing a quote or backslash, which the stored text escapes) plus a
+raw-text scan of the stored JSON itself (catching a token equal to the
+literal serialized text of a JSON number, boolean, or null value, or one
+that only spans a structural boundary `json.Marshal` introduced) — just
+applied to already-*stored* schema text instead of freshly-decoded caller
+input, since that is all rotation ever has to compare against. Skipped
+entirely when the bearer is being cleared (an empty token can never
+collide with anything).
+
+Rotation is not the only path that reaches this guard. `RegisterMcpServer`
+and file import (`ImportJSON`) reach it too, specifically when the name
+being registered/imported names an existing legacy migration-0016
+placeholder (`url == ""`, disabled, non-bundled — see below): before that
+placeholder's row is adopted, sealed, or touched in any way, both paths
+load its retained tools — present and withdrawn alike, exactly as rotation
+does — and refuse the adoption if the new token appears verbatim in any
+one of them, the same guard rotation runs. A fresh registration/import (no
+existing placeholder of that name) never runs this extra read at all; only
+adoption of a url-empty placeholder can. How that shared refusal surfaces,
+however, differs by path: `RegisterMcpServer`, an authenticated RPC,
+returns the explicit `errMCPTokenMatchesRetainedToolMetadata` reason as its
+`InvalidArgument` status, same as rotation does. File import instead folds
+the identical refusal into the one fixed, generic `server entry is
+invalid` message every other malformed or refused mcp.json entry already
+uses (see above) — deliberately never naming the token, the tool, or the
+word "metadata" — so an mcp.json entry (or whoever controls it) cannot
+distinguish a retained-tool-token collision from any other reason that
+same file's entry might be refused.
+
+A per-server credential lock — one `sync.RWMutex` per server id, created on
+first use and keyed by that id — fences a rotation against a concurrent call
+or discovery for the *same* server: `CallTool` and enable-time discovery hold
+it for reading from immediately before they (re-)read the server's current
+sealed token through their own network call and liveness/tool-status
+recording (deliberately never across an unbounded wait such as caller-side
+approval enforcement, which always runs first), and a rotation holds it for
+writing across its own read/seal/atomic-replace/liveness-reset. This is
+scoped per server, not a single lock shared by the whole registry: an
+in-flight call or discovery against one server never blocks a rotation, or a
+call, against a completely different one. A server's lock entry is removed
+once that server is deleted, so the map's steady-state size tracks the
+registry's own row count rather than growing across register/delete cycles
+over a long-running process's lifetime; a rotation request naming a server id
+that was never real does not create an entry for it either; a lock object a
+goroutine already obtained keeps working safely even if its map entry is
+removed moments later, since a deleted server's id is never reused.
+
+That last guarantee has one more edge DeleteMcpServer's own cleanup alone
+cannot close: DeleteMcpServer forgets a server's entry the instant its own
+delete commits, but `CallTool`, enable-time discovery, and
+`RotateMcpServerToken` may each not call into the lazily-creating lock
+lookup for that same server until sometime *after* that — if any of them
+does, the lookup reinstates a brand-new entry for an id DeleteMcpServer
+will never forget again, which would otherwise leak permanently rather
+than the map's size actually tracking the registry's own row count the
+way the paragraph above describes. All three close this the same way:
+once their own post-lock re-read of the server discovers it no longer
+exists, each removes its own lock entry itself — but only if it is still
+the exact object that call installed or found, never a different one
+some other goroutine has since installed for the same id, so this can
+never race away a lock a concurrent, legitimate use still holds.
+
+Enabling any non-bundled server — local-container or remote-URL — performs a
+bounded `tools/list` liveness discovery as part of that call. A server with
+no configured endpoint (`url == ""` — the shape a legacy migration-0016
+placeholder starts in, and stays in until an operator supplies a real one via
+import or explicit registration) can never be enabled at all: the call
+refuses with `FailedPrecondition` before it mutates anything, so nothing is
+notified, audited, or contacted over the network. Before this check existed,
+enabling such a placeholder would flip its enabled bit first and only then
+fail discovery against the empty URL, leaving a server that was enabled —
+and so whose stale, pre-registry tool snapshot could look available to a
+client — despite never having a real endpoint. The Flutter MCPs page mirrors
+this: a non-bundled server's enable switch is itself disabled while its `url`
+is empty, with a tooltip explaining that an endpoint must be configured
+first; adding or registering a server directly remains the one path a mobile
+operator (who cannot edit `mcp.json`) uses to give a placeholder a real
+endpoint. For a remote-URL server this is a real, explicit enable-time
+network request to
+the configured endpoint, sending the configured bearer if one is set. That
+is separate from per-run consent: invoking a remote tool during a run still
+requires the caller to prepare, and the run to acknowledge, a signed
+per-run egress decision naming the endpoint and the tool-argument and
+tool-result categories, before any call is dispatched. Registration and
+`mcp.json` import never contact an endpoint on their own while a server
+stays disabled — only an explicit enable does, and only at that moment.
+
+Live discovery's own `tools/list` call goes through `requestRaw`, not the
+`request` an ordinary generic caller (`callTool`) uses: `requestRaw` hands
+back each tool exactly as the peer sent it, before `request`'s own
+marker-substitution redaction could otherwise replace an echoed bearer
+with the fixed `[redacted]` text and let discovery persist that still
+attacker-shaped metadata anyway. Before any tool's own name is ever
+extracted or interpolated into an "invalid name"/"duplicated" error, and
+before `RecordDiscovery` ever runs, `discover` scans each tool's whole
+raw, decoded map — not merely the fields `DiscoveredTool` stores, so an
+unstored field such as `description` cannot smuggle a token past the
+check — for the configured bearer token (`mcpRawMetadataContainsToken`);
+a second scan then checks the tool's own canonical, serialized
+`inputSchema` JSON text, which catches what the recursive, strings-only
+raw scan structurally cannot: a token equal to a JSON number/boolean/
+null's literal wire text, or a token that only ever exists across a
+structural boundary (for example the quote-colon-quote `json.Marshal`
+introduces around a key and its value). Either scan matching refuses the
+whole discovery attempt outright with the one fixed, generic,
+sentinel-free `mcpToolDefinitionRefusedMessage` — never a message built
+from the tool's own name or schema — and leaves the prior tool snapshot
+and any operator-edited policy exactly as they were, the same way any
+other failed discovery does (see below). This fail-closed treatment
+applies identically to both non-bundled tiers a live endpoint can have —
+`remote_url` and `local_container` — since both reach `discover` through
+the identical code path. Pagination is guarded the same way: a `nextCursor`
+value is never interpolated into a repeated-cursor or invalid-cursor
+error, only a fixed, generic, cursor-free message is — a peer chooses its
+own cursor freely, including a value equal to (or containing) the
+configured bearer, and formatting that value with Go's `%q` would escape
+any quote or backslash it contains into a still fully reconstructible,
+merely non-contiguous form that plain substring redaction can no longer
+find and remove. `callTool`, unlike `discover`'s `listTools` call, still
+goes through `request` and its ordinary redact-or-refuse handling: a tool
+call's arbitrary result must still be returned to the caller in some
+form, so a matched bearer echo there is redacted in place, or — when
+redaction alone cannot remove it (the JSON-syntax case above) — the whole
+result is refused, rather than ever persisting discovery's outright,
+pre-`RecordDiscovery` refusal.
+
+A successful discovery reconciles the server's live tools and schemas: tools
+no longer reported are marked absent, newly reported tools are seeded through
+`DefaultPolicyFor` (`approval_required` unless already known safe), and an
+operator's edited policy on a tool that is still present is left untouched. A
+failed discovery leaves the enabled state exactly as the operator set it,
+marks the server down with a bounded, bearer-redacted status message, and
+preserves whatever tool snapshot the last successful discovery produced.
+Enable/disable, discovery outcome, registration (including whether it
+adopted a placeholder), token rotation, deletion, and a tool policy change are
+all audited; the audit payload and any status text never carry a token. A
+tool policy change is audited identically regardless of which of the two RPCs
+committed it — `UpdateMcpToolPolicy` (id-addressed, for a real, registered
+server) or `UpdateToolPolicyByName` (name-addressed, the compatibility path
+that also reaches the orchestrator-owned "skills"/"integrations"
+pseudo-servers, neither of which has an `mcp_servers` row an id could be read
+from) — both write the same `mcp.server.tool_policy_changed` action with the
+same server-name/tool-name/policy payload shape, immediately after the policy
+mutation commits and before either RPC's own fallible descriptor-mapping step,
+so a read/descriptor failure afterward can never leave an already-persisted
+policy change unaudited. The audit *target* (the row identifier the audit
+API returns alongside the action) still differs between the two — the real
+server id for `UpdateMcpToolPolicy`, the request's own server name for
+`UpdateToolPolicyByName`, since a pseudo-server has no id to use — only the
+action and payload are identical. Each of these actions is also readable back
+through the audit read API
+([Action allowlist](architecture/audit-read-api.md#action-allowlist)): that
+API is itself default-deny, so these records only surface at all because each
+action has an explicit, reviewed, typed field rule — `mcp.server.registered`
+discloses the server name, tier, and URL and whether it adopted a placeholder;
+`.enabled`/`.disabled` disclose the name, tier, and whether/whether-succeeded
+discovery was attempted; `.token_rotated`/`.token_cleared` disclose the name
+and whether a token is now configured (never the token); `.deleted` discloses
+the name and tier; and `.tool_policy_changed` discloses the server name, tool
+name, and the new canonical policy string. No MCP audit record — through this
+API or otherwise — ever exposes a raw stored payload, a bearer token, or its
+sealed/ciphertext form.
 
 Peer-controlled MCP errors and results are scrubbed of the registered bearer
 before they can cross the internal RPC boundary or reach liveness state, tool
-events, audit, or persisted result summaries.
+events, audit, or persisted result summaries. This holds even for a bearer
+that is itself short or unlucky enough to be a substring of (or equal to) the
+fixed `[redacted]` marker text redaction substitutes in its place: rather than
+let that marker's own fixed characters reintroduce the very bearer it just
+removed, every redaction path falls back to an empty string — a value that
+can never contain a non-empty secret — whenever its own ordinary substitution
+would otherwise still carry the bearer. An ordinary, non-colliding value still
+redacts exactly as before; only this narrow, pathological overlap changes
+behavior, and only ever toward emptying rather than ever leaking or refusing
+an otherwise-redactable result outright.
 
 All four bundled backend services run as explicit non-root users. Compose makes every
 root filesystem read-only, drops all Linux capabilities without adding any
@@ -308,6 +939,47 @@ because its registered endpoint and sealed bearer are usable only through the
 orchestrator proxy. A process that can reach or authenticate to that server by
 some other route is outside this guarantee.
 
+The orchestrator's own "server" check above compares more than the server's
+name. `tool_calls.mcp_server_id` (`schema/0018_mcp_approval_identity.sql`)
+records, at the moment a tool call is first recorded, the *id* of whichever
+`mcp_servers` row currently owns that call's server name — never the name
+alone — and `ConsumeApprovalForThirdParty` requires the caller's live-resolved
+server id (`CallTool` passes the id it just re-read the server row by) to
+equal that stored binding exactly, in addition to run/name/tool/args. This
+closes a gap a name-only check would leave open: a server name can be freely
+reused after its original row is deleted (`DeleteMcpServer`) and a different
+server explicitly registered under that same name, and an approval created
+and approved against the original server must not stay consumable against
+the new one merely because the two happen to share a name. The foreign key
+is `ON DELETE SET NULL`, not `ON DELETE CASCADE` — deleting a server severs
+this binding without deleting the tool-call history of a run that already
+called it — and a `NULL` binding (whether from that deletion, or from a
+legacy `tool_calls` row that predates this column) fails closed: it can only
+ever match a caller-supplied id that is itself empty, the permanent state of
+the two orchestrator-owned pseudo-servers ("skills", "integrations", neither
+of which is ever backed by a real `mcp_servers` row).
+
+Migration `0018_mcp_approval_identity.sql` adds `mcp_server_id` as a nullable
+column and an index — nothing else. It deliberately carries no backfill: every
+`tool_calls` row that predates this column is left `NULL` unconditionally,
+never populated by matching that row's own `server_name` against whichever
+`mcp_servers` row happens to carry that name at the moment the migration runs.
+A name-based backfill would be unsafe rather than merely approximate: a
+server's name can be freely reused after its original row is deleted and a
+different, unrelated server explicitly registered under that exact same name
+*before* an operator ever applies this migration, and backfilling by name in
+that case would silently rebind a historical tool call — and any approval
+created and approved against it — from the server it was actually dispatched
+against to the id of a completely unrelated server that merely happens to
+share its name now, defeating the very immutable-id comparison above. Leaving
+every pre-existing row `NULL` is the only safe outcome, and it is intentional:
+any legacy, not-yet-consumed third-party approval that predates this
+migration is invalidated by the upgrade — refused rather than silently
+rebound, consumable only by denial or expiry, never by
+`ConsumeApprovalForThirdParty` again. A brand-new tool call recorded after the
+upgrade is unaffected: it still gets its own, correctly-resolved id at insert
+time (`recordToolCallBeforeTx`/`lookupMCPServerIDByNameTx`), exactly as before.
+
 The same caller-side rule covers the orchestrator-owned `integrations`
 pseudo-server. `github.create_comment` cannot be made safe, and every
 `approval_required` integration call—including reads—consumes the
@@ -331,6 +1003,34 @@ the run-owned egress decision. That final check is the dispatch linearization
 point. A cancellation committed after it observes an already in-flight call;
 as with a bundled write after approval consumption, it does not retroactively
 restore the consumed approval.
+
+`CallRegisteredMcpTool` — the gRPC-facing wrapper around `CallTool`'s own
+internal `map[string]any` result — checks the fully-built response against
+`maxMCPToolResultWireBytes` (4 MiB, mirroring `internal/app`'s own
+`maxGRPCMessageSize`) using `proto.Size`, before ever returning it. A
+vendor's raw `tools/call` JSON-RPC result is already bounded at the HTTP
+layer (`maxMCPResponseBytes`, 1 MiB) before this package ever sees it, but
+that bound is on the raw JSON text, not on what `structpb.NewStruct`
+converts it into: a JSON number array converts to a repeated
+`google.protobuf.Value`, each carrying a fixed 8-byte double plus its own
+framing, the same ~5.5x adversarial expansion already measured for a tool
+*schema* (see the aggregate-budget accounting above) — enough that a
+`maxMCPResponseBytes`-sized result, comfortably within the 1 MiB HTTP
+bound, can still convert to a protobuf message well past the 4 MiB gRPC
+send cap by itself. A result whose converted size exceeds the cap is
+refused with a fixed, generic `ResourceExhausted` status that never
+echoes the result's own content or the server's bearer token, before
+gRPC's own send path would otherwise refuse it. `CallRegisteredMcpTool` is
+`CallTool`'s only direct, in-process caller — the agent runtime never
+calls `CallTool` itself for a registered (third-party) server; it always
+dispatches through `CallRegisteredMcpTool` over gRPC
+(`RegistryClient.CallToolWithCallerApproval` in `agent-runtime-go`, whose
+own unguarded `CallTool` method unconditionally refuses with "registered
+MCP server requires orchestrator caller-side enforcement" instead of ever
+reaching a registered server directly). So this guard covers the actual
+runtime path end to end; there is no separate, unguarded route through
+which a registered server's result reaches tool-call/message history
+without first passing through this check.
 
 Human approval comments and denial reasons are durable decision evidence. The
 orchestrator stores them in separate nullable columns in the same transaction as
