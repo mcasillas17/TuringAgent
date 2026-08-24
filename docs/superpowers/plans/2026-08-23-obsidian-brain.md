@@ -7,99 +7,110 @@ and proposals as files the user owns, edits, links, and can watch as a graph
 search, and the erasure contract. This plan implements the audit's MEM
 ladder rungs 005/006/007 in reshaped form, **under the governance contract
 `docs/architecture/memory-governance.md` (MEM-001), which it amends in one
-named place and otherwise obeys to the letter** — the audit calls that
-contract the blocker for every derived-memory task, and this plan treats it
-that way.
+numbered section containing two named relaxations, and otherwise obeys to
+the letter** — the audit calls that contract the blocker for every
+derived-memory task, and this plan treats it that way.
 
 Prior art (researched 2026-08-23): files-as-memory is mature
 (basic-memory's frontmatter + typed wikilinks; obsidian-second-brain's tiny
-pinned identity file and scheduled consolidation; Letta's pinned core
-blocks + searched archival tiers) — but every one of those systems lets the
-agent write memory directly, and the poisoning literature (MINJA's >95%
-query-only injection, MemoryGraft's implanted experiences) shows what that
-costs. This plan takes the sources' shapes and the papers' defenses —
-write-time gating, provenance binding, retrieval-time framing — on
-machinery Turing already has.
+pinned identity file; Letta's pinned core blocks + searched archival tiers)
+— but every one of those systems lets the agent write memory directly, and
+the poisoning literature (MINJA's >95% query-only injection, MemoryGraft's
+implanted experiences) shows what that costs. This plan takes the sources'
+shapes and the papers' defenses — write-time gating, provenance binding,
+retrieval-time framing — on machinery Turing already has.
 
 ## The problem, stated precisely
 
 Turing has episodic recall (FTS over raw messages, MEM-002) and nothing
 else: no persona, no user profile, no curated beliefs, no "remember this."
 The egress plumbing already reserves the entire consent surface this needs:
-`MEMORY_PROFILE` is a defined category (allowlisted in
-`repository/egress.go`, labelled in the notice map, mirrored in Dart —
-exhaustiveness-forced by `TestEgressCategoryPolicyCoversProtoEnum`), and
-`MemoryProfileApplicable` rides the full path — context, signed challenge,
-frozen decision (`0014`'s column), enqueue fingerprint, job proto, runtime
-validation — **and nothing ever sets it true**. One wrinkle, load-bearing:
-the runtime today *hard-refuses* any decision claiming it —
+`MEMORY_PROFILE` is a defined category (allowlisted, labelled, mirrored in
+Dart — exhaustiveness-forced by `TestEgressCategoryPolicyCoversProtoEnum`),
+and `MemoryProfileApplicable` rides the full path — context, signed
+challenge, frozen decision (`0014`'s column), enqueue fingerprint, job
+proto, runtime validation — **and nothing ever sets it true**. One wrinkle,
+load-bearing: the runtime today *hard-refuses* any decision claiming it —
 `agent-runtime-go/internal/agent/egress.go` checks
 `decision.GetMemoryProfileApplicable()` as a bare must-be-false, unlike
-`RecallApplicable` which is recomputed and compared. Turning this feature
-on means rewriting that line into an equality mirror, which means the
-pinned-memory snapshot must live on the job proto and be re-derivable by
-the runtime. Also: `TestRemoteRunRejectsUnsupportedDisclosureCategories`
-uses `MEMORY_PROFILE` as its unsupported example and must be re-pointed at
-`ATTACHMENTS` — the last remaining append-site-free value.
+`RecallApplicable` which is recomputed and compared. Turning this on means
+rewriting that line into an equality mirror, which means the pinned-memory
+snapshot must live on the job proto and be re-derivable by the runtime.
+Also: `TestRemoteRunRejectsUnsupportedDisclosureCategories` uses
+`MEMORY_PROFILE` as its unsupported example and must be re-pointed at
+`ATTACHMENTS` — the last append-site-free value.
 
 Three stakes: memory writes are the most dangerous mutation in the system
 (durable state steering every future run, writable by a model that ingests
 untrusted content — MEM-009's line is the north star: *"Turing can learn
 without silently rewriting its beliefs"*); memory reads are untrusted
 prompt material (the invariant VISION applies to skill text); memory
-leaving the machine is egress (category, flag, and fingerprint, as #80 did
+leaving the machine is egress (category, flag, fingerprint — as #80 did
 for skills).
 
-## The governance amendment (one, explicit)
+## The governance amendment (one section, two named relaxations)
 
-The contract's withdrawal rule: *"every fact, candidate, revision, …
-derived from that source is removed in the same transaction or through a
-database-enforced cascade"* and *"no derived row may outlive the source it
-depends on."* Applied naively to a vault, deleting a session would delete
-user-curated notes — files the user may have edited, linked, and built on.
+The contract's taxonomy opens the door — it classes *"explicit profile
+edits, a deliberate 'remember this' action"* as **user-authored evidence**
+that *"may become active memory through an explicit user action"*
+(principle 1) — but the door is not already open: three passages currently
+foreclose what this plan does, and the amendment must rewrite all three,
+not reinterpret around them:
 
-The contract itself supplies the resolution: its evidence taxonomy already
-classes *"explicit profile edits, a deliberate 'remember this' action"* as
-**user-authored evidence** that *"may become active memory through an
-explicit user action"* (its principle 1). This plan's amendment makes one
-thing explicit: **promotion is authorship.** When the user promotes an
-inbox candidate — with its full content displayed, editable before
-acceptance — the promotion is itself the explicit user action; the item's
-*source becomes that action*, and its links to the originating session
-demote from load-bearing dependencies to annotations. Consequences,
-honestly:
+- §Ownership and scope's final paragraph (*"deleting the source withdraws
+  the derived fact even though its recall scope was wider"*),
+- §Retention (*"Explicit active memory remains until the user supersedes,
+  retracts, deletes, or withdraws one of its sources"*),
+- the **Active user-controlled memory** taxonomy row (*"an accepted
+  candidate with immutable provenance"* — acceptance today preserves
+  source dependency rather than reclassifying authorship).
 
-- **Machine-owned rows obey the contract unamended.** Inbox candidates,
-  their sidecar rows, and evidence annotations are derived state: source
-  deletion removes them via database-enforced cascade plus the external
-  file-cleanup mechanism below. A failed cleanup fails the withdrawal.
-- **User-adopted content survives source deletion** — the same way a note
-  the user typed by hand about a conversation would — with its evidence
-  annotations withdrawn (removed rows; frontmatter refs rewritten to
-  `withdrawn` on the next reconcile), so a belief can never *cite*
-  evidence that no longer exists, and the UI shows it as unevidenced.
-  Stated plainly: the *content* of an adopted belief persists after its
-  originating session is deleted. That is the amendment.
-- **The vault is not a second copy of conversation content** (the
-  contract's §Boundary). `memory.remember` writes bounded distillations
-  (`maxMemoryNoteBytes = 16 KiB`), never transcripts; the promotion UI is
-  where a human confirms that. Verbatim-copy prevention is review-gated
-  in Phase 1 and linted in Phase 2, and the plan says so rather than
-  claiming enforcement it doesn't have.
-- The erasure claim **stops at the vault directory**: the contract's
-  §Backup already scopes deletion against user-made copies, and a vault
-  is designed to be synced. Restated here so nobody reads more into it.
+**Relaxation 1 — promotion is authorship.** When the user promotes a
+candidate — full content displayed, editable before acceptance — the
+promotion is the explicit user action; the item's source becomes that
+action, and links to the originating session demote from load-bearing
+dependencies to annotations. Consequences, honestly:
+
+- **Machine-owned state obeys the contract unamended.** Candidates and
+  evidence annotations are derived state with **database-enforced cascade**
+  (their own table, below) plus the external file-cleanup mechanism; a
+  failed cleanup fails the withdrawal.
+- **User-adopted content survives source deletion** — as a note the user
+  typed by hand would — with evidence annotations withdrawn (rows removed
+  in the deleting transaction; frontmatter refs rewritten to `withdrawn`
+  on the next reconcile) so a belief can never *cite* deleted evidence,
+  and the UI shows it as unevidenced. The *content* persists. That is the
+  relaxation.
+
+**Relaxation 2 — vault beliefs defer the revision chain.** §Correction
+requires immutable revisions and supersession; §Writers requires
+authenticated operations for every mutation. A vault the user edits in
+Obsidian has neither — file-edit and RPC converge in reconcile, which
+emits audit events for detected changes but cannot reconstruct a revision
+history the file never carried. Phase 1 defers the belief revision chain
+to MEM-010 explicitly (candidates, being machine-owned rows, do get
+lifecycle-validated transitions and audit events from day one). Named
+here, in the amendment, and in the deferred list — not discovered.
+
+Two more honest boundaries: `memory.remember` writes bounded distillations
+(`maxMemoryNoteBytes = 16 KiB`, **over-limit refused legibly, never
+truncated** — a truncated memory silently changes meaning), never
+transcripts; candidate bodies live in a cascade-owned table so even before
+promotion they are never "a second, less-governed copy" (§Boundary is
+satisfied by governance, not just by the bound). And the erasure claim
+stops at the vault directory — a vault is designed to be synced, and
+§Backup already scopes deletion against user-made copies.
 
 The implementation PR updates `docs/architecture/memory-governance.md`
-with this amendment as a numbered section — the contract is code review
-for memory changes, and this plan refuses to route around it.
+with this amendment as a numbered section touching the three passages.
 
 ## The brain's anatomy (locked)
 
 The vault mounts like skills: `cfg.MemoryRoot` (`MEMORY_ROOT`, default
-`/memory`, clean-absolute-validated like `SKILLS_ROOT`), compose-mounted
-read/write, provisioned by `init.sh` in the `provision_skills` mold
-(symlink checks, `0700`, ownership), openable directly in Obsidian.
+`/memory`, clean-absolute-validated), compose-mounted read/write,
+provisioned by `init.sh` in the `provision_skills` mold, gitignored
+(`memory/*` + `!memory/.gitkeep` — the profile is personal prose by
+design), openable directly in Obsidian.
 
 ```
 memory/
@@ -109,389 +120,410 @@ memory/
   beliefs/          # promoted notes: people/, projects/, decisions/, ...
 ```
 
-**Tier 1 — `persona.md`: user-owned configuration, not memory.** Voice,
-values, standing disposition; pinned into every run. The agent reads it
-and can never write it — a deliberate divergence from Letta's
-self-editing persona, because persona drift via accumulated model writes
-is the self-reinforcing compromise the literature describes. Shipped as a
-commented default by `init.sh`. The **only instruction-bearing memory
-file**, permitted to be one only because a human is its sole author.
+**Tier 1 — `persona.md`**: user-owned configuration, not memory; pinned
+into every run; the agent can never write it (deliberate divergence from
+Letta's self-editing persona — drift via accumulated model writes is the
+self-reinforcing compromise the literature describes). Shipped as a
+commented default by `init.sh`. The only instruction-bearing memory file,
+permitted because a human is its sole author.
 
-**Tier 2 — `profile.md`: user-authored prose about the user.** Pinned
-beside the persona. It carries **no sidecar evidence and no per-statement
-provenance** — it is tier-1-like user-owned text. The agent contributes
-by writing a *proposed edit* into the inbox (a candidate carrying the
-suggested new text and its evidence); applying it — in the app or by
-hand — is authorship under the amendment. This dissolves the otherwise
-unsolvable problem of withdrawing one session's contribution from a
-freely-edited prose file: unapplied proposals die with their source;
-applied text is the user's.
+**Tier 2 — `profile.md`**: user-authored prose about the user, pinned
+beside the persona, carrying **no sidecar evidence and no per-statement
+provenance**. The agent contributes by writing a *proposed edit* into the
+inbox; applying it is authorship under Relaxation 1. Unapplied proposals
+die with their source; applied text is the user's.
 
-**Tier 3 — `beliefs/`: the wiki-linked note graph.** Facts, projects,
-people, decisions — basic-memory's conventions (frontmatter, short
-observation bullets, typed `[[wikilinks]]`), because those conventions
-are what make Obsidian's graph and the 3D galaxy plugins render the brain
-for free: folders are colored clusters, links are edges, hubs are stars.
-Never pinned; reached through `memory.search`/`memory.read`, returned as
-framed evidence.
+**Tier 3 — `beliefs/`**: the wiki-linked note graph — frontmatter, short
+observation bullets, typed `[[wikilinks]]` (basic-memory's conventions,
+which are what make Obsidian's graph and the 3D plugins render the brain
+for free). Never pinned; reached through `memory.search`/`memory.read`,
+returned as framed evidence.
 
-**Tier 4 — `inbox/`: thoughts not yet believed.** Every agent-originated
-write lands here and nowhere else — its own colored region in the graph,
-proposals visually distinct from beliefs, promotion physically moving the
-file between regions.
+**Tier 4 — `inbox/`**: thoughts not yet believed — every agent-originated
+write lands here and nowhere else; its own colored region in the graph;
+promotion physically moves the file between regions.
 
-**Episodic memory stays where it is** (FTS recall over transcripts,
-MEM-002). The vault distills it, never duplicates it. Episode summaries
-are Phase 2.
+**Pinned-file failure posture, stated:** a missing, unreadable,
+over-limit, or symlinked `persona.md`/`profile.md` is treated as **empty
+for pinning** (no silent partial load), surfaces as a visible
+unavailable/parse-error row on the Memory page, and — because the pinned
+snapshot is empty — attaches no `MEMORY_PROFILE` claim it cannot honor.
+The negative leg is tested; silence is the one behavior forbidden.
+
+**Episodic memory stays where it is** (FTS recall, MEM-002). Episode
+summaries are Phase 2.
 
 ## Design decisions (locked)
 
 **Candidates never become beliefs by the agent's hand.**
 `memory.remember` writes **only** into `inbox/`, whatever its policy. The
-confinement lives in the `memoryfiles` write primitive itself — not in
-any RPC- or approval-adjacent layer — so relaxing the tool's policy to
-`safe` changes proposal friction, never the target. The server names the
-file (ULID plus a sanitized slug of a model-supplied title — the model
-never controls the path), and the note body is bounded
-(`maxMemoryNoteBytes`). Promotion — moving a note to `beliefs/` or
-applying a profile proposal — is a user action, via RPC or by moving the
-file in Obsidian; both converge in reconcile. Direct agent-writes to
-`beliefs/` are deferred to MEM-010's reversibility design, not designed
-here.
+`memoryfiles` write layer is a named set of purpose-scoped primitives —
+`createInboxNote` (confined to `inbox/`, refuses any other target *when
+called directly, below the tool layer*), `promoteToBeliefs`,
+`applyProfileEdit`, `rewriteFrontmatterRefs` — each carrying its own
+confinement, so no single generic `writeConfined(root, rel)` with the
+check hoisted into a handler can satisfy the tests. The server names
+inbox files (ULID + sanitized slug of a model-supplied title — the model
+never controls a path). `memory.remember` deliberately stays
+**downgradeable** to `safe` by the by-name policy RPC — unlike
+`files.create`, whose seed feeds `BundledToolRequiresApproval` — because
+the invariant is the confinement, not the friction; stated so a reviewer
+reads intent, not oversight. Promotion is a user action via RPC or file
+move; both converge in reconcile. Direct agent-writes to `beliefs/` wait
+for MEM-010.
 
-**Note identity is a frontmatter id, not a path.** Obsidian's most common
-operation is rename, and renames rewrite wikilinks. Each note carries
-`id` (ULID) in frontmatter — assigned by `memory.remember`, or by
-reconcile for user-created notes lacking one. The sidecar keys on id;
-renames re-link by id (content hash as fallback), so provenance survives
-the thing vaults do daily. Frontmatter parsing is **lenient** — unknown
-fields are preserved-and-ignored (the user is invited to annotate; strict
-`KnownFields` is the wrong loader posture here, unlike SKILL.md), and
-malformed frontmatter surfaces as a per-note parse-error row, skills
-style: fail-soft, visible, never fatal to the vault.
+**Note identity is a frontmatter ULID, not a path.** Assigned by
+`memory.remember`, or by reconcile for user-created notes. The sidecar
+keys on id; renames re-link by id (content hash as fallback). **Duplicate
+ids** — Obsidian's duplicate-note command copies frontmatter verbatim —
+are surfaced as per-note error rows (both copies flagged, neither indexed)
+until the user resolves; deterministic and safe beats guessing.
+Frontmatter parsing is **lenient** (unknown fields preserved-and-ignored;
+the user is invited to annotate) and malformed frontmatter is a per-note
+parse-error row: fail-soft, visible, never fatal.
 
-**The vault walk is Obsidian-aware and bounded.** The scan indexes
-`*.md` only, skips every dot-directory (`.obsidian/` holds plugin
-JavaScript; `.trash/` holds Obsidian's soft-deletes — indexing either is
-untrusted-content ingestion), skips `*.canvas` and sync
-`conflicted copy` artifacts, and enforces `maxVaultIndexedFiles = 4096`
-with a legible refusal naming the remedy. The scan runs **outside** any
-write transaction (skills' `scanSkills` precedent, with the transaction
-budget stated per MEM-009/010's own acceptance discipline) with an
-mtime/size cache so reconcile cost is proportional to churn, not vault
-size.
+**The vault walk is Obsidian-aware, symlink-refusing, and bounded.** The
+scan indexes `*.md` only; **refuses symlinks at every component and every
+entry (`Lstat`, never `Stat` — the skillfiles posture), including inside
+`beliefs/`**, so a planted link cannot pull out-of-vault content into the
+index; skips every dot-directory (`.obsidian/` holds plugin JavaScript,
+`.trash/` holds soft-deletes), `*.canvas`, and sync `conflicted copy`
+artifacts; and enforces `maxVaultIndexedFiles = 4096` with a legible
+refusal that **degrades search and reconcile only — pinned tiers and
+enqueue are never blocked by vault size**. The scan runs outside any
+write transaction (transaction budget stated per MEM-009/010's own
+discipline) with an (mtime, size) cache; a same-second, same-length edit
+may serve stale index text until the next change — a named residual, not
+a surprise.
 
-**Path confinement follows skillfiles, not mcp-files — refuse symlinks,
-never resolve them** (the two in-repo precedents genuinely differ:
-`mcp-files` `EvalSymlinks`-resolves; `skillfiles` walks with
-`openat`+`O_NOFOLLOW` and refuses). `memoryfiles` needs what no module
-currently has and cannot import across module boundaries: a
-**write-capable** confined opener — the component-wise `openat` walk
-terminating in `O_CREAT|O_EXCL|O_NOFOLLOW` for creates, and a
-compare-and-swap variant (content-hash-conditioned rename-into-place) for
-the promotion RPC's updates, because the vault has a second concurrent
-writer named Obsidian and a lost profile update is a real bug, not a
-theory. Reads get the same confinement — `memory.read` is an escape
-surface exactly as large as the write one.
+**Path confinement: reimplement `safe_fs.go`'s opener, don't invent.**
+The one in-repo model that already does confined *writes* is
+`turing-backend/mcp-files/internal/tools/safe_fs.go` — root resolved
+once, then a descriptor-relative `openat` walk with
+`O_CLOEXEC|O_NOFOLLOW` ending in `O_CREAT|O_EXCL` for creates — but it
+lives in a separate Go module the orchestrator cannot import.
+`memoryfiles` reimplements that opener (cited as the model, including
+its `processPathLocks` per-path locking and `syncFile`/`syncDirectory`
+fsync discipline) under `orchestrator-go/internal/memoryfiles`.
+**Profile updates are fd-verified, not rename-replaced**: open the target
+`O_NOFOLLOW|O_RDWR` under the path lock, verify the content hash *via
+the fd*, write through the same fd, fsync file and parent — because
+read-hash-then-rename is itself the TOCTOU it claims to close, and
+rename swaps the inode out from under an Obsidian editor holding the
+file open. On mismatch: refuse with "the file changed — re-read and
+retry", the same legible surface as the egress drift wording.
 
-**Search has a real substrate, and it is an index of the vault, not a
-copy of conversations.** The sidecar splits in two, each classified in
-`schema_invariants_test.go`'s manifest in the same migration that creates
-it (the contract's own rule):
-- `memory_notes` (independent): id, path, content hash, status,
-  timestamps, **and a body projection** — the note text, mirrored from
-  the file by reconcile. This is an index projection *of the vault*
-  (whose primary is the files), not a second copy of conversation
-  content; the §Boundary sentence targets transcripts, and
-  `memory.remember`'s bounded-distillation rule is what keeps transcripts
-  out of the vault in the first place.
-- `memory_notes_fts` (FTS5 external-content over `memory_notes`, with the
-  `AFTER DELETE` trigger and an entry in `ftsProjectionDeleteChecks` —
-  the guard's probe row works because deletes flow through the table,
-  driven by reconcile when a file vanishes; a note the user deletes or
-  trashes in Obsidian leaves the index on the next reconcile, and
-  `memory.search` reconciles before querying).
-- `memory_evidence` (cascade-owned twice over): candidate/annotation rows
-  keyed to `memory_notes.id` AND to source sessions with
-  `ON DELETE CASCADE` — the database-enforced half of withdrawal.
+**Search has a real substrate — two tables, because the schema manifest
+classifies per table, not per row:**
+- **`memory_candidates`** (`cascade_owned`, `sourceTable: sessions`,
+  `NOT NULL source_session_id … ON DELETE CASCADE`): inbox candidates —
+  id, path, content hash, body, evidence refs, lifecycle state
+  (validated transitions + audit events from day one). The
+  database-enforced half of withdrawal, exactly as §Correction demands.
+  No FTS — candidates are inactive and unsearchable by construction.
+- **`memory_notes`** (`independent`, with the amendment cited as its
+  manifest rationale): promoted beliefs — id, path, content hash,
+  status, timestamps, and a **`content` column** (the body projection —
+  named exactly `content`, because `validateExternalContentFTSProjection`
+  hardcodes that column name in its expected delete command).
+- **`memory_notes_fts`** (FTS5 external-content over `memory_notes`) with
+  **all three triggers** (`_ai`, `_ad`, `_au` — the `messages_fts`
+  precedent; the guard checks only the delete trigger, so a
+  delete-only implementation passes the invariant while never indexing:
+  the *edit-becomes-searchable* test leg exists because of that gap),
+  and the `ftsProjectionDeleteChecks` entry.
+- **`memory_evidence`** (`cascade_owned`, double FK): annotation rows for
+  promoted beliefs, keyed to `memory_notes.id` and to sessions with
+  `ON DELETE CASCADE`.
+- Promotion is: file move (confined primitive), then one transaction —
+  insert `memory_notes`, copy annotations to `memory_evidence`, delete
+  the `memory_candidates` row. A crash between file move and transaction
+  leaves a belief file without rows; reconcile heals it (creates the
+  note row, re-links evidence from frontmatter) — the direction of
+  authority below makes this safe.
 
-**Erasure follows the artifact-cleaner pattern, because "cascade hook"
-does not exist for files.** Session deletion already refuses to finalize
-while external artifacts remain (`ReserveSandboxArtifactTx`, a manifest
-row inside the transaction, `failed_external` + retryable receipt,
-bounded out-of-band cleanup, re-advance). Vault file deletion for
-inbox candidates joins that mechanism — which requires promoting
-`SessionService`'s single hardwired `SetArtifactCleaner` into a cleaner
-**list** (a named change in `sessions/service.go` + `app.go`, not a
-discovery). DB-side: `memory_evidence` cascades in the deleting
-transaction; `memory_notes` rows for inbox candidates cascade with their
-session; belief rows are `independent` — under the amendment they are
-user-authored primary content, not derived rows, and the manifest
-classification says so out loud.
+**Direction of authority, per field:** files win for **content**; the
+database wins for **evidence state**. A reconcile after a crash must not
+resurrect withdrawn evidence from stale frontmatter — withdrawal marks
+live in the sidecar and frontmatter is rewritten *from* the sidecar,
+never the reverse. Reconcile's file-writing half (id assignment,
+`withdrawn` rewrites) runs only on RPC-driven paths and startup, under a
+vault-wide singleflight; **`memory.search`'s pre-query reconcile is
+read-only** (index refresh, no file writes) — a `safe`, read-only tool
+must not write files, and two concurrent searches must not race
+frontmatter rewrites under `-race`.
+
+**Erasure follows the artifact pattern — with the real budget, which is
+five sites, not one.** The existing mechanism is sandbox-specific
+end-to-end, so joining it means: (1) a `vault_artifacts` manifest (or a
+`kind` discriminator with its own manifest classification) reserved in
+the deleting transaction — the real symbol to mirror is
+`Repository.ReserveSandboxArtifact`, whose path validation is
+sandbox-shaped and does not transfer; (2) a second pending-count arm in
+`AdvanceSessionDeletion`'s hardwired
+`SELECT COUNT(*) FROM sandbox_artifacts …` gate, or the session reports
+deleted while vault cleanup is pending; (3) failure scoping —
+`MarkSessionDeletionExternalFailure` currently flips *every* sandbox
+artifact row, and must not mark sandbox rows failed because the vault
+cleaner failed; (4) the removal loop beside
+`removeOwnedArtifactManifestRows`; (5) `SetArtifactCleaner` becoming a
+cleaner list, with the retry contract stated: `session_deletions` carries
+one `error_code`, so it reports the first failing cleaner, and retry
+re-runs **all** cleaners, each of which must be idempotent. Test 5 gets
+the partial-failure leg (one cleaner succeeds, one fails, retry
+completes) because that two-cleaner interaction is the new mechanism.
 
 **Reads are evidence, not authority — mechanically.** Search and read
-results return through the per-call nonce framing — which today lives as
-the **unexported** `frameIntegrationResult` with hardcoded wording, so
-the real first task is extracting a parameterized helper into
-`turing-backend/internal/egress` (named destination; both callers move
-to it, the "one implementation of a security control" rule). Bounds:
-`maxMemoryResultBytes = 16 KiB`, rune-safe, truncation announced.
-`memory.search` has **no model-controllable scope parameter** in Phase 1
-— default and only scope is `beliefs/`; `memory.read` targets
-`beliefs/` ids only. Neither can touch `inbox/` (candidates stay
-inactive), nor `persona.md`/`profile.md` — the pinned tiers are readable
-only as their fingerprinted, truncated pinned selves, so no tool path
-lets over-budget persona bytes reach the model or a remote provider
-outside the preimage.
+results return through the per-call nonce framing — extracted first into
+`turing-backend/internal/egress` as a parameterized helper (the current
+`frameIntegrationResult` is unexported with hardcoded wording; both
+callers move to the shared one). Bounds: `maxMemoryResultBytes = 16 KiB`,
+rune-safe, truncation announced. `memory.search` has **no
+model-controllable scope parameter**; default and only scope is
+`beliefs/`. `memory.read` targets belief ids only. Neither can touch
+`inbox/`, `persona.md`, or `profile.md` — the pinned tiers are readable
+only as their fingerprinted, truncated pinned selves.
 
-**Tool policies: two seeded, one defaulted, all read-only-flagged
-correctly.** `memory.search` and `memory.read` are seeded `safe` in
-`seedPolicies` — they are local reads of local files, the exact class as
-the already-safe-seeded `files.read`; leaving them `approval_required`
-would make the brain a nag (and `skills_list` shows the precedent's
-cost). Both join `readOnlyTools`, or a failed local search kills the run
-as `SideEffectUnknownError` — the exact bug the `read_only` bit exists to
-prevent. `memory.remember` takes the unknown-tool fallback
-(`approval_required`) and is **refused on automation allowlists** at save
-(the integrations precedent, same repository check): an unattended,
-pre-authorized remember is the Phase 1 hole through which
-non-user-authored text would become candidates before MEM-009's
+**Tool policies, with the honest rationale:** `memory.search` and
+`memory.read` are seeded `safe` (local reads of local files — the
+`files.read` class; leaving them `approval_required` makes the brain a
+nag) and join `readOnlyTools` — which matters **only when the user
+raises the policy to `approval_required`** (under `safe`/`DECISION_ALLOW`
+the runner's `sideEffecting` is already false; the `read_only` bit is
+what keeps a *raised* policy from turning a failed search into
+`SideEffectUnknownError`, and the test sets the raised policy so the
+entry is load-bearing, not decorative). `memory.remember` takes the
+unknown-tool fallback. **The whole `memory` server is refused on
+automation allowlists at save** — the integrations shape exactly (a
+whole-server check in `normalizeAllowedTools`, its own sentinel, gRPC
+mapping, and client string): an unattended run that searches the belief
+graph on a remote-provider automation would be memory egress with no
+human at prepare time, and an unattended `remember` is the hole through
+which non-user-authored text becomes candidates before MEM-009's
 extraction gate exists.
 
-**Pinned tiers: budgets, snapshot, context-ladder seat, and binding.**
+**Pinned tiers: budgets, snapshot, ladder seat, binding.**
 `maxPersonaBytes = 4096`, `maxProfileBytes = 4096`, rune-safe truncation
-with an in-context notice. Snapshotted at enqueue into the job proto
-(fields the runtime can re-derive the flag and fingerprint from) — a
-mid-run edit changes the next run. In the context-budget ladder the
-pinned pair is a **new droppable dimension** (`MemoryOmitted`, with its
-notice string and `Omissions.Notice()` arm), dropping after recall and
-before the skill index — silently truncating a persona is the one
-behavior every implementer defaults to and this plan forbids: over
-budget truncates *with notice*; over context drops *with notice*.
+with an in-context notice. Snapshotted at enqueue **in the same read
+that computes the fingerprint**, and — the skills precedent at its
+strongest — **recomputed inside the enqueue transaction** against the
+frozen decision (`ErrEgressMemorySnapshotChanged`, a wrapped sentinel
+beside the skills one, mapped in `mapEnqueueError`): without the
+in-enqueue recompute, an Obsidian autosave between consent and enqueue
+ships a job the runtime will hard-reject at `Execute` instead of a
+legible re-prepare. Ladder seat: the pinned pair is an **upstream
+pre-decision like the skill index** — built before `buildBudgetedContext`
+in the `buildSkillMessagesWithinContext` mold, passed through as a
+`MemoryOmitted` field on `contextOmissions` with its notice string,
+`Omissions.Notice()` arm, and the emit-payload key beside the others —
+not an in-ladder step, because the ladder never drops the skill index
+either and the plan should not invent a placement the code contradicts.
+Over budget truncates with notice; over context omits with notice;
+silence is forbidden in both directions.
 
-**Memory egress joins the consent — category, flag, fingerprint, and the
-tool-results honesty gap closed.** When pinned memory would ride
-(`providerEgress && pinned snapshot non-empty` — and the default
-`persona.md` shipped by init counts, so a fresh install discloses
-honestly rather than a test passing on an accidentally-empty vault) OR
-when memory tools are in `selected_tools` on a provider-egress run
-(belief content reaches the remote as tool results; without this
-conjunct the entire belief graph could leave under a generic "Tool
-results" line while the memory disclosure stays silent — the exact
-over/under-claiming #80 existed to fix): `MemoryProfileApplicable` is
-set, the category attaches, and both runtime mirrors move — the
-exact-set `required` list AND the truthiness gate rewritten as an
-equality mirror recomputed from the job. `memory_snapshot_fingerprint`
-(preimage: the **post-truncation pinned bytes of both tiers, notices
-included** — exactly what the job carries, so the runtime re-derives and
-refuses on mismatch like it does for skills; a shared no-`omitempty`
-preimage struct in `backendegress`) joins the signed challenge payload
-(a plain string compare — no `EqualFunc` needed), the enqueue
-fingerprint (version bump), and the frozen decision — which means the
-**fourth `run_egress_decisions` rename-copy-drop rebuild**
-(fresh temp name, cascade FK preserved per the schema-invariants pin,
-index recreated), a new `RunEgressDecision` proto field (next free
-number), and the `proto_contract_test.go` pin: budgeted, since #80
-explicitly refused this rebuild for a lesser reason and this plan should
-not pretend it is free. Lockstep version pair
-(`backendegress.DecisionVersion` + `egressChallengeVersion`) with the
-#80 fixture sweep, including its known hardcoded-JSON exception.
-Divergence noted in one sentence: `RecallApplicable` excludes
-external-agent runs; memory (like skills) rides to them — adjacent lines
-in both modules, deliberate, stated. The drift refusal gets its own
-legible wording beside the skills one; the Obsidian-autosave reality —
-a user with `profile.md` open on autosave will hit prepare/send
-mismatches repeatedly — is named as UX: the client surfaces "close the
-memory editor and re-prepare" rather than a bare mismatch loop
-(auto-re-prepare is deferred, said so).
+**Memory egress joins the consent — category, flag, fingerprint, both
+conjuncts.** `MemoryProfileApplicable` = `providerEgress && (pinned
+snapshot non-empty || memory tools in selected_tools)` — the second
+conjunct closes the honesty gap where the belief graph leaves as generic
+"Tool results" while the memory disclosure stays silent; both conjuncts
+are runtime-re-derivable (`selected_tools` is an exact frozen set on the
+job). The default `persona.md` counts as pinned content, so a fresh
+install discloses honestly. All mirrors move in both modules, including
+the rewritten truthiness gate as an equality mirror.
+`memory_snapshot_fingerprint` (preimage: post-truncation pinned bytes of
+both tiers, notices included — a shared no-`omitempty` struct in
+`backendegress` beside the skills one; plain string compare in
+`payloadMatchesEgressContext`) joins the signed payload, the enqueue
+fingerprint (version bump — the lockstep pair with the #80 fixture
+sweep, hardcoded-JSON exception included), and the frozen decision: the
+**third** `run_egress_decisions` rename-copy-drop rebuild (0014 created;
+0016 and 0017 rebuilt), fresh temp name, cascade FK preserved per the
+schema pin, index recreated, new proto field at the next free number,
+`proto_contract_test.go` pinned. Divergence stated: `RecallApplicable`
+excludes external-agent runs; memory (like skills) rides to them —
+adjacent lines, deliberate. Drift wording is memory-specific; the
+Obsidian-autosave UX is named (client suggests closing the memory editor
+and re-preparing; auto-re-prepare deferred).
 
-**The toggle governs new enqueues; snapshots and consents already taken
-stand.** Stored in the existing `settings` table. Off: nothing pinned at
-enqueue, memory tools absent from the runtime registry — which forces
-the lister to be **dynamic** (`ListMemoryTools` on the memory service's
-internal facet, runtime-identity entry in `app.go`, the
-`ListIntegrationTools` wiring shape; a static skills-style lister cannot
-deliver absence), empty-not-error on an unconfigured or toggled-off
-vault, with the registry-change notification firing on toggle so no
-restart is needed. Queued and in-flight jobs keep their snapshots and
-their consented decisions — consistent with skills semantics and with
-consent-at-prepare; test 7 asserts exactly this split rather than a
-"total" claim the snapshot design contradicts.
+**The toggle governs new enqueues AND refuses at dispatch.** Stored in
+the existing `settings` table. Off: nothing pins at enqueue; the dynamic
+lister (`ListMemoryTools`, internal facet, runtime-identity entry, the
+`ListIntegrationTools` wiring shape — a static skills-style lister
+structurally cannot deliver absence) returns empty; **and the memory
+service refuses tool calls at dispatch when off** — because the `tools`
+rows persist with `enabled = 1` after a toggle-off (UpsertTools never
+lowers them), so registry absence alone leaves a direct-dispatch hole.
+Registry-change notification fires on toggle; no restart. Queued and
+in-flight jobs keep their snapshots and consented decisions —
+consent-at-prepare semantics, asserted, not apologized for.
 
-**The pseudo-server list, audited against post-#81 code (three arms
-everywhere there are two, and no phantom edits):**
-`filterRegisteredWorkerTools`' policy-only availability;
-`UpsertTools`' pseudo branch; `BundledServerForTool` gains `memory.`;
-`mcpregistry/import.go` reserved names AND the **second copy** in
-`mcpregistry/management.go` (`RegisterMcpServer`'s check — miss it and a
-user can register an MCP server named `memory` from the app);
-`ListPseudoServerTools`' RPC-level allowlist gains a `memory` arm (the
-Memory page's policy display has no read API without it); the live
-triggers — which are **0017's**, not 0016's (0017 already
-dropped/recreated them; SQLite has no `ALTER TRIGGER`, so the new
-migration drops/recreates from 0017's text or silently loses the
-`integrations` carve-out); `readOnlyTools`. Explicitly **not** on the
-list: `beaconServerName` — `memory.*` names split correctly on the
-generic first-dot fallback, and there is no map to extend; budgeting an
-edit there sends an implementer hunting phantom work.
+**The pseudo-server list, audited against post-#81 code:**
+`filterRegisteredWorkerTools`' policy-only availability; `UpsertTools`'
+pseudo branch; `BundledServerForTool` gains `memory.`;
+`mcpregistry/import.go` reserved names AND the second copy in
+`mcpregistry/management.go`; `ListPseudoServerTools`' RPC-level allowlist
+gains a `memory` arm; the live triggers are **0017's** (drop/recreate
+from 0017's text or silently lose the `integrations` carve-out);
+`readOnlyTools`. Explicitly not on the list: `beaconServerName` —
+`memory.*` splits correctly on the first-dot fallback; there is no map.
 
 **What does NOT go in memory: instructions.** Procedures live behind the
-skill gate. The loading frame declares memory non-authoritative; the
-persona (human-authored) is the sole instruction channel among the
-files; the promotion UI shows full content so the human sees what they
-are about to believe. Imperative-content linting on candidates is Phase
-2, named so nobody believes it exists sooner.
+skill gate. The frame declares memory non-authoritative; the persona is
+the sole instruction channel; the promotion UI shows full content.
+Imperative-content linting is Phase 2.
 
-**The visualization is earned, not built.** Zero rendering code. Folders
-→ clusters, typed wikilinks → edges, persona/profile → hub stars, inbox
-→ the distinctly-colored "not yet believed" region, promotion → a star
-migrating between regions. Obsidian's graph shows it today; Agentage
-Galaxy in 3D; agentcairn-style provenance coloring later because the
-frontmatter carries what it needs.
+**The visualization is earned, not built.** Folders → clusters, typed
+wikilinks → edges, persona/profile → hub stars, inbox → the "not yet
+believed" region, promotion → a star migrating between regions.
+Obsidian's graph today; Agentage Galaxy in 3D; agentcairn-style
+provenance coloring later.
 
 ## What gets built (Phase 1)
 
-- **Migration (next free number; `0018` as of this writing — both
-  `migrations_test.go` pins move)** — triggers dropped/recreated from
-  0017's text with the `memory` arm; `memory_notes` (+ body projection),
-  `memory_notes_fts` (+ `AFTER DELETE` trigger), `memory_evidence`
-  (double cascade); the `run_egress_decisions` rebuild for
-  `memory_snapshot_fingerprint`; `schema_invariants_test.go` manifest
-  entries (`memory_notes` independent — with the amendment as its stated
-  justification; `memory_evidence` cascade-owned; the FTS pair in
-  `ftsProjectionDeleteChecks`).
-- **`internal/memoryfiles`** (new) — vault layout, lenient frontmatter,
-  id assignment, Obsidian-aware bounded walk with mtime cache, the
-  read/write/CAS confined-open primitives (refuse-symlinks posture).
-- **`turing-backend/internal/egress`** — the extracted, parameterized
-  framing/truncation helper (integrations moves onto it); the memory
-  preimage struct + fingerprint beside the skills one; the version bump
-  pair.
-- **`internal/repository`** — sidecar CRUD + reconcile; enqueue snapshot
-  of persona/profile; the erasure paths (evidence cascade in-tx; inbox
-  file cleanup via the artifact-manifest mechanism); the automation
-  allowlist refusal for `memory.remember`; the settings-table toggle.
-- **`internal/service/sessions` + `app.go`** — `SetArtifactCleaner`
-  becomes a cleaner list; the vault cleaner registers beside the
-  mcp-files one.
-- **`internal/service/memory`** (new) — `memory.remember` /
-  `memory.search` / `memory.read` (public/internal facet split, both
-  refusal directions); promotion/rejection/profile-apply RPCs;
-  `ListMemoryTools` (internal); toggle RPCs.
-- **Egress (both modules)** — the conditional category with all mirrors
-  including the runtime's rewritten truthiness gate and re-derived
-  fingerprint; the two-conjunct applicability (pinned OR memory tools
-  selected); legible drift wording;
-  `TestRemoteRunRejectsUnsupportedDisclosureCategories` re-pointed at
-  `ATTACHMENTS`.
-- **Runtime (`agent-runtime-go`)** — pinned injection under the
-  `MemoryOmitted` budget dimension; the dynamic lister client wiring
-  (`cmd/runtime/main.go`, `GeneralAssistantTools`); framed tool results;
-  `readOnlyTools` classification honored.
+- **Migration (`0018` as of this writing; both `migrations_test.go` pins
+  move)** — triggers from 0017's text + `memory`; `memory_candidates`
+  (cascade_owned), `memory_notes` (independent, `content` column),
+  `memory_notes_fts` (three triggers), `memory_evidence` (double
+  cascade); `vault_artifacts` (or kind column) with classification; the
+  `run_egress_decisions` rebuild; every table classified in
+  `schema_invariants_test.go` in the same change.
+- **`internal/memoryfiles`** — vault layout, lenient frontmatter, ULID
+  identity + duplicate handling, Obsidian-aware symlink-refusing bounded
+  walk with (mtime,size) cache, the primitive set
+  (`createInboxNote`/`promoteToBeliefs`/`applyProfileEdit`/
+  `rewriteFrontmatterRefs`) reimplementing `safe_fs.go`'s opener with
+  per-path locks and fsync discipline; fd-verified profile CAS.
+- **`turing-backend/internal/egress`** — the extracted parameterized
+  framing helper (integrations moves onto it); the memory preimage
+  struct + fingerprint; the version-bump pair.
+- **`internal/repository`** — candidates/notes/evidence CRUD +
+  reconcile (read-only vs file-writing halves, singleflight); enqueue
+  snapshot + in-transaction fingerprint recompute +
+  `ErrEgressMemorySnapshotChanged`; vault-artifact reservation; the
+  whole-server automation refusal (sentinel + mapping); the settings
+  toggle.
+- **`internal/service/sessions` + `session_delete.go` + `app.go`** — the
+  cleaner list; the second pending-count arm; scoped failure marking;
+  the second removal loop; idempotent-retry contract.
+- **`internal/service/memory`** (new) — the three tools (toggle-checked
+  at dispatch), promotion/rejection/profile-apply RPCs, `ListMemoryTools`
+  (internal), toggle RPCs; public/internal facet split, both refusal
+  directions.
+- **Egress (both modules)** — both conjuncts with all mirrors including
+  the rewritten truthiness gate; legible memory drift wording;
+  `TestRemoteRunRejectsUnsupportedDisclosureCategories` → `ATTACHMENTS`.
+- **Runtime** — pinned injection as an upstream pre-decision with the
+  `MemoryOmitted` omission field, notice, and emit key; dynamic lister
+  client wiring; framed results; `readOnlyTools` honored.
 - **`proto/turing/v1`** — memory service; job snapshot fields; decision
-  + disclosure fields; runtime-identity method names; pinned numbers,
-  pinned-toolchain regeneration, `proto_contract_test.go`.
+  + disclosure fields; runtime-identity names; pinned toolchain,
+  contract test.
 - **Client** — Memory page (tiers, inbox review with full content,
-  persona/profile editors with the autosave-mismatch UX, toggle,
-  provenance-with-withdrawn display); egress dialog's memory line.
-- **`scripts/init.sh` + compose + `CLAUDE.md`** — the `/memory` mount,
-  default `persona.md`, the doc line beside `skills/` and `sandbox/`.
+  persona/profile editors with autosave-mismatch UX, toggle, provenance
+  incl. withdrawn and parse-error rows); egress dialog memory line.
+- **`scripts/init.sh` + compose + `.gitignore` + `CLAUDE.md`** — the
+  `/memory` mount, default `persona.md`, `memory/*` gitignore +
+  `.gitkeep`, the doc line.
 
 ## The tests that gate the merge
 
 Break each production gate, watch the right test fail, restore.
 
 1. **The agent cannot write beliefs — and cannot read outside them.**
-   `memory.remember` targeting `persona.md`, `profile.md`, `beliefs/…` —
-   by name, `../`, absolute path, or a symlink planted *inside*
-   `inbox/` — is refused (the leg that kills a lexical-only check);
-   `safe` policy changes friction, not confinement. **Same suite for
-   `memory.read`**: `../`, absolute paths, `/skills`, the database file,
-   symlinks — the read tool is an equal escape surface and gets equal
-   tests.
+   `memory.remember` targeting `persona.md`/`profile.md`/`beliefs/…` by
+   name, `../`, absolute path, or a symlink planted inside `inbox/` —
+   refused; `safe` policy changes friction, not confinement; **the
+   `createInboxNote` primitive itself refuses a `beliefs/` target when
+   called directly, below the tool layer** (the leg that kills a
+   handler-hoisted check). Same suite for `memory.read`: `../`, absolute
+   paths, `/skills`, the database file, symlinks. Over-limit
+   `memory.remember` is **refused legibly, not truncated**.
 2. **Candidates are never active.** Pinned loading reads only
-   persona+profile; search and read cannot reach `inbox/` **by any
-   argument** (no scope parameter exists to abuse); an inbox note
-   influences nothing until promoted.
+   persona+profile; search and read cannot reach `inbox/` by any
+   argument (no scope parameter exists); an inbox note influences
+   nothing until promoted; `memory_candidates` rows are unsearchable.
 3. **Promotion converges and survives Obsidian.** RPC-promotion and
-   file-move promotion produce identical state; a **rename inside
-   `beliefs/`** keeps id, provenance, and index (the daily-Obsidian-op
-   leg); a concurrent Obsidian edit racing the profile-apply RPC loses
-   no user text (the CAS leg).
-4. **Budgets and framing hold, on both tools.** Persona/profile
-   over-budget truncate rune-safe with notices; `memory.search` AND
-   `memory.read` results are nonce-framed (two calls, distinct nonces),
-   bounded, spoof-resistant; a truncation landing mid-multibyte-rune
-   yields valid UTF-8 (the probe computes the boundary, per #78's
-   lesson).
-5. **Erasure cascades by tier, and survives failure.** Delete a session:
-   evidence rows gone in the deleting transaction; inbox candidates'
-   files removed via the cleaner — and when the cleaner **fails**, the
-   receipt is `failed_external` + retryable and the session is not
-   reported deleted until retry succeeds (the non-atomicity leg);
-   promoted beliefs survive with evidence withdrawn in sidecar and, on
-   next reconcile, frontmatter; a reconcile after a crash **cannot
-   resurrect withdrawn evidence from stale frontmatter** (sidecar wins
-   for evidence state — the direction of authority is per-field and this
-   test pins it).
-6. **The egress binding is real, two-sided, and per-tier.** Local-only
-   run: no category, no dialog. Remote run with the **default persona
-   only**: category present (the fresh-install honesty leg). Editing
-   `persona.md` — and separately `profile.md` — between prepare and send
-   refuses with the memory wording (per-tier preimage mutation, the #80
-   per-field discipline, truncation bytes included); non-memory drift
-   keeps its wording; the runtime **independently re-derives** flag and
-   fingerprint from the job and refuses a mismatched decision (the
-   strongest wrong-implementation: an orchestrator-only binding);
-   end-to-end through `Execute`; a decision claiming the category over
-   an empty snapshot with no memory tools selected is refused. A remote
-   run with memory tools in `selected_tools` and empty pinned tiers
-   still attaches the category (the tool-results honesty leg).
-7. **The toggle governs enqueues and survives re-report.** Off: nothing
-   pinned, tools absent from the registry (not offered-and-refused), no
-   category; on without restart via the notification; **off → worker
-   capability re-report → still off; off → restart → on ⇒ works** (the
-   one-way-door family, #76's deep legs); a job enqueued before the
-   flip keeps its snapshot and consent — asserted, not apologized for.
-8. **Snapshot semantics per tier.** Persona and profile edited mid-run:
-   running job unchanged, next run sees it.
+   file-move promotion produce identical state; a rename inside
+   `beliefs/` keeps id, provenance, and index; a crash between file
+   move and transaction heals on reconcile; the profile CAS refuses on
+   fd-verified hash mismatch with the re-read wording, and a concurrent
+   Obsidian edit racing the apply loses no user text.
+4. **Budgets and framing hold, on both tools.** Pinned over-budget
+   truncates rune-safe with notices; search AND read results are
+   nonce-framed (distinct per call), bounded, spoof-resistant,
+   valid-UTF-8 at a computed mid-rune boundary.
+5. **Erasure cascades by tier and survives failure.** Delete a session:
+   evidence and candidate rows gone in the deleting transaction; candidate
+   files removed via the cleaner; **one cleaner succeeding while the
+   other fails** yields `failed_external` + retryable with sandbox rows
+   unmarked by the vault failure, the session not reported deleted, and
+   a retry (re-running both, idempotent) completing; promoted beliefs
+   survive with evidence withdrawn in sidecar and, on next reconcile,
+   frontmatter; **a reconcile after a crash cannot resurrect withdrawn
+   evidence from stale frontmatter** (sidecar wins for evidence state).
+6. **The egress binding is real, two-sided, per-tier, and
+   failure-honest.** Local-only: no category. Remote with default
+   persona only: category present. Editing persona — and separately
+   profile — between prepare and send refuses with memory wording
+   (per-tier preimage mutation, truncation bytes included); non-memory
+   drift keeps its wording; the **enqueue-transaction recompute** refuses
+   a post-consent change with the wrapped sentinel mapped to a
+   distinguishable status; the runtime independently re-derives flag and
+   fingerprint from the job and refuses mismatches, end to end through
+   `Execute`; a decision claiming the category over an empty snapshot
+   with no memory tools selected is refused; memory tools selected with
+   empty pinned tiers still attaches the category; **a symlinked or
+   unreadable persona pins nothing, attaches no category, and surfaces
+   the visible unavailable row** (the negative honesty leg).
+7. **The toggle governs enqueues, refuses at dispatch, and survives
+   re-report.** Off: nothing pinned, tools absent from the registry,
+   **a direct `CallMemoryTool`-path dispatch with the toggle off is
+   refused** (the persisted-`tools`-rows hole); on without restart via
+   the notification; off → capability re-report → still off; off →
+   restart → on ⇒ works; a job enqueued before the flip keeps snapshot
+   and consent.
+8. **Snapshot semantics per tier** — mid-run edits change the next run.
 9. **Version skew fails closed at dispatch** — the literal pre-bump
    number.
-10. **Facets refuse in both directions**, runtime identity vs client
-    key, tools vs management.
-11. **The vault walk is Obsidian-proof.** Files under `.obsidian/` and
-    `.trash/` are never indexed nor searchable; a note deleted in
-    Obsidian leaves the search index on next reconcile (the
-    user-deletion leg the session-deletion test does not cover); the
-    4096-file bound refuses legibly.
-12. **Policy classes are right.** `memory.search`/`read` arrive `safe`
-    and read-only (a failed search returns a tool error, run continues);
-    `memory.remember` arrives `approval_required` and is refused on an
-    automation allowlist at save.
+10. **Facets refuse in both directions.**
+11. **The vault walk is Obsidian-proof.** `.obsidian/`/`.trash/` never
+    indexed; **a symlink inside `beliefs/` pointing outside the vault is
+    never ingested** (walk-level `Lstat` leg); a note deleted in
+    Obsidian leaves the index on next reconcile; **an edited note's new
+    text becomes searchable** (the insert/update-trigger leg the schema
+    guard cannot check); the 4096 bound refuses legibly and blocks
+    neither pinned tiers nor enqueue.
+12. **Policy classes are right, tested at the policy that matters.**
+    `memory.search`/`read` arrive `safe`; **raised to
+    `approval_required`, a failed search is still a recoverable tool
+    error** (the leg that makes the `readOnlyTools` entry load-bearing)
+    and `ToolPolicyDecision.ReadOnly` is asserted on the wire;
+    `memory.remember` arrives `approval_required`; the whole `memory`
+    server is refused on an automation allowlist at save.
 
 ## Deferred, deliberately (named MEM rungs, not loose ends)
 
-- **Automatic extraction** (MEM-009) with its pre-committed constraint:
-  user-authored text only; assistant/tool/recalled content never a
-  candidate source.
-- **Consolidation automations** (MEM-010) — the scheduler exists; the
-  reversibility design does not.
-- **Semantic retrieval** (MEM-013); episode summaries; per-session and
-  per-turn memory controls (MEM-008); imperative-content linting;
-  direct-write trusted areas; auto-re-prepare on autosave mismatch.
+- **Automatic extraction** (MEM-009): user-authored text only;
+  assistant/tool/recalled content never a candidate source.
+- **Belief revision chains, supersession, lifecycle-validated vault
+  edits** (MEM-010 — Relaxation 2's other half).
+- **Consolidation automations** (MEM-010); semantic retrieval (MEM-013);
+  episode summaries; per-session/per-turn controls (MEM-008);
+  imperative-content linting; direct-write trusted areas;
+  auto-re-prepare on autosave mismatch.
 - **Pointing Turing at an existing personal vault** — a separate mount
-  decision with its own trust story; Phase 1's vault is Turing's brain,
-  not the user's notes.
+  and trust decision; Phase 1's vault is Turing's brain, not the user's
+  notes.
 
 ## Documentation the implementation PR must update
 
-- **`docs/architecture/memory-governance.md`** — the promotion-is-
-  authorship amendment as a numbered section; the vault named as a
-  governed projection with its manifest classifications.
+- **`docs/architecture/memory-governance.md`** — the amendment section:
+  both relaxations, all three foreclosing passages rewritten, the vault
+  named as a governed projection with its manifest classifications.
 - `docs/architecture/2026-08-18-personal-agent-audit.md` — the substrate
-  note on the MEM ladder (005/006/007 reshaped; what remains).
+  note (005/006/007 reshaped; what remains).
 - `docs/architecture/remote-egress-policy.md` — `MEMORY_PROFILE` live:
-  both conjuncts (pinned; memory tools selected), the fingerprint beside
-  the skills one, the external-agent divergence from recall.
+  both conjuncts, the fingerprint beside the skills one, the
+  external-agent divergence from recall.
 - `docs/VISION.md` — memory joins the untrusted-input invariant's list.
 - `CLAUDE.md` — the `/memory` mount.
