@@ -53,8 +53,8 @@ for skills).
 The contract's taxonomy opens the door — it classes *"explicit profile
 edits, a deliberate 'remember this' action"* as **user-authored evidence**
 that *"may become active memory through an explicit user action"*
-(principle 1) — but the door is not already open: four passages currently
-foreclose what this plan does, and the amendment must rewrite all four,
+(principle 1) — but the door is not already open: five passages currently
+foreclose what this plan does, and the amendment must rewrite all five,
 not reinterpret around them:
 
 - §Ownership and scope's final paragraph (*"deleting the source withdraws
@@ -64,6 +64,11 @@ not reinterpret around them:
 - the **Active user-controlled memory** taxonomy row (*"an accepted
   candidate with immutable provenance"* — acceptance today preserves
   source dependency rather than reclassifying authorship),
+- §Correction's withdrawal sentence itself (*"every fact, candidate,
+  revision, … derived from that source is removed"* — a promoted belief
+  is a "fact"; Relaxation 1's authorship reclassification neutralizes it
+  exactly as it neutralizes §Retention, and under this plan's own
+  rewrite-don't-reinterpret posture it gets rewritten, not argued past),
 - §Egress (*"memory/profile … is not currently applicable or sent"* —
   false the day this ships — and *"only selected items with provenance
   and sensitivity filtering may be included"*: Phase 1 pins the tiers
@@ -110,7 +115,7 @@ stops at the vault directory — a vault is designed to be synced, and
 §Backup already scopes deletion against user-made copies.
 
 The implementation PR updates `docs/architecture/memory-governance.md`
-with this amendment as a numbered section touching the four passages.
+with this amendment as a numbered section touching the five passages.
 
 ## The brain's anatomy (locked)
 
@@ -314,11 +319,14 @@ model distillation the cleaner never learns about while the deletion
 reports complete. The six sites: (1) the manifest (its own schema
 classification); (2) a second pending-count arm in
 `AdvanceSessionDeletion`'s hardwired
-`SELECT COUNT(*) FROM sandbox_artifacts …` gate; (3) failure semantics — the receipt carries **one** `error_code` for
-two cleaners (`MarkSessionDeletionExternalFailure` writes only
-`session_deletions`; the per-artifact
-`MarkSandboxArtifactDeleteFailed` has no production caller today), so
-per-cleaner attribution is by message, and the removal loop is
+`SELECT COUNT(*) FROM sandbox_artifacts …` gate; (3) failure scoping — `MarkSessionDeletionExternalFailure` marks
+`session_deletions` AND bulk-flips every owned **sandbox** artifact row
+to `delete_failed` with a per-artifact audit row each; reused as-is for
+a vault-cleaner failure it would mark sandbox rows failed and emit
+false audit rows for files the failure never touched, so the vault
+cleaner gets its **own scoped failure marking against
+`vault_artifacts`** (the receipt still carries one `error_code`, so
+per-cleaner attribution is by message), and the removal loop is
 per-cleaner-scoped; (4) the removal loop beside
 `removeOwnedArtifactManifestRows`; (5) `SetArtifactCleaner` becoming a
 cleaner list; (6) **the cleaner-dispatch gate itself** —
@@ -408,8 +416,16 @@ the rewritten truthiness gate as an equality mirror.
 both tiers, notices included — a shared no-`omitempty` struct in
 `backendegress` beside the skills one; plain string compare in
 `payloadMatchesEgressContext`) joins the signed payload, the enqueue
-fingerprint (version bump — the lockstep pair with the #80 fixture
-sweep, hardcoded-JSON exception included), and the frozen decision: the
+fingerprint (a bump touching **three** version sites, not the #80 pair
+alone: `backendegress.DecisionVersion` and `egressChallengeVersion` —
+the lockstep pair with the #80 fixture sweep, hardcoded-JSON exception
+included — **plus the bare inline `version` local in
+`enqueueRequestFingerprint`**, `jobs.go`, last moved in #76, `5 → 6` as
+`MemorySnapshotFingerprint` joins the `egressFingerprint` struct;
+missing that third literal is not cosmetic — the enqueue fingerprint
+distinguishes "same idempotency key, different request", so a changed
+persona under a reused key would hash identically and silently replay
+the earlier job with the earlier snapshot), and the frozen decision: the
 **third** `run_egress_decisions` rename-copy-drop rebuild (0014 created;
 0016 and 0017 rebuilt), fresh temp name, cascade FK preserved (enforced
 behaviorally by the `cascade_owned` classification — there is no
@@ -512,14 +528,25 @@ provenance coloring later.
   incl. withdrawn and parse-error rows); egress dialog memory line.
 - **`scripts/init.sh` + compose + `.gitignore` + `.dockerignore` +
   `CLAUDE.md`** — the `/memory` mount, default `persona.md`, `memory/*`
-  gitignore + `.gitkeep`, the doc line — plus the two CI/build guards
-  the mount trips: `docker_compose_security_test.go` pins the
-  orchestrator's volume list by **exact equality** (add
-  `../memory:/memory` to the fixture), and `.dockerignore` needs a
-  **repo-scoped** `turing-backend/memory` entry — `**/memory` would hide
-  the new Go package `internal/service/memory`, the identical trap the
-  file's own skills comment records; the ignore-assertion list and
-  overbroad-pattern guard in the same test pin it.
+  gitignore + `.gitkeep`, the doc line — plus the **five** CI/build guards the mount trips:
+  `docker_compose_security_test.go` pins the orchestrator's volume list
+  by exact equality (add `../memory:/memory`); compose sets
+  `MEMORY_ROOT: /memory` explicitly in the `SKILLS_ROOT` mold, so
+  **both** pinned environment lists move; `scripts/compose.sh` gains
+  `validate_memory_bind_source` beside the skills/sandbox/mcp
+  validators — **security-relevant**, because the walk-level `Lstat`
+  posture polices only the inside of the mount and a symlinked host
+  `turing-backend/memory` would bind straight through without it —
+  with its `compose_test.go` guard beside
+  `TestComposeLaunchRejectsUnsafeSkillsBindSource`, and the
+  mount-presence test beside
+  `TestComposeMountsFileBackedSkillsIntoTheOrchestrator`; and
+  `.dockerignore` needs a **repo-scoped** `turing-backend/memory` entry
+  — `**/memory` would hide `agent-runtime-go/internal/memory`, a Go
+  package that **exists today** (recall), on top of the new
+  `internal/service/memory` — with new entries **added to** (not
+  covered by) the ignore-assertion enumeration and the
+  overbroad-pattern list in the security test.
 
 ## The tests that gate the merge
 
@@ -575,13 +602,24 @@ Break each production gate, watch the right test fail, restore.
    forbid it. Delete a session:
    evidence and candidate rows gone in the deleting transaction; candidate
    files removed via the cleaner; **one cleaner succeeding while the
-   other fails** yields `failed_external` + retryable, the session not
-   reported deleted, and a retry (re-running both, idempotent)
-   completing; **a session with zero sandbox artifacts and only pending
-   vault artifacts still enters the pending gate** (the second
-   pending-count arm's own leg — without it, wiring the cleaner but
-   forgetting the arm passes every other test while vault-only deletions
-   report complete with files on disk); promoted beliefs
+   other fails** yields `failed_external` + retryable, **sandbox
+   artifact rows unmarked and no false sandbox audit rows emitted by
+   the vault failure** (the scoped-failure-marking leg round 5
+   mistakenly deleted, restored), **the failing cleaner's manifest rows
+   surviving the partial success** (per-cleaner removal scoping — drop
+   both cleaners' rows and a no-retry path reports complete with files
+   on disk), the session not reported deleted, and a retry (re-running
+   both, idempotent) completing; **a session with zero sandbox
+   artifacts and only pending vault artifacts flows end-to-end** — the
+   pending gate fires with the exact dispatch literal, the vault
+   cleaner runs, the deletion completes (asserting the pending status
+   alone passes with any other literal while the ticker loops forever);
+   **a belief crash-healed by reconcile survives a subsequent session
+   deletion** (the composite leg: crash between move and transaction →
+   reconcile → delete session → the belief file is untouched — an
+   implementation releasing reservations only inside the promotion
+   transaction deletes crash-healed beliefs and passes everything
+   else); promoted beliefs
    survive with evidence withdrawn in sidecar and, on next reconcile,
    frontmatter; **a reconcile after a crash cannot resurrect withdrawn
    evidence from stale frontmatter** (sidecar wins for evidence state).
@@ -591,8 +629,16 @@ Break each production gate, watch the right test fail, restore.
    profile — between prepare and send refuses with memory wording
    (per-tier preimage mutation, truncation bytes included); non-memory
    drift keeps its wording; the **enqueue-transaction recompute** refuses
-   a post-consent change with the wrapped sentinel mapped to a
-   distinguishable status; the runtime independently re-derives flag and
+   a post-consent change with the wrapped sentinel — distinguishable by
+   message text within `FailedPrecondition`, with the specific arm
+   ordered before the generic `ErrEgressDecisionInvalid` arm (the
+   wrapped sentinel satisfies both, so ordering is load-bearing);
+   **a whitespace-only `persona.md` yields no category on both sides
+   and the run executes** (the trim rule mirrored identically in the
+   runtime's re-derivation — one-sided trimming is a flag mismatch and
+   a hard refusal at `Execute`); **`memory.read` returns bytes
+   identical to the file, not the projection** (edit the file, read
+   without an intervening reconcile, see the fresh bytes); the runtime independently re-derives flag and
    fingerprint from the job and refuses mismatches, end to end through
    `Execute`; a decision claiming the category over an empty snapshot
    with no memory tools selected is refused; memory tools selected with
@@ -621,7 +667,10 @@ Break each production gate, watch the right test fail, restore.
     fatal to the vault**; **two concurrent searches and a concurrent
     reconcile run under the race detector** (the leg that makes the
     mutex/singleflight claim falsifiable — remove the guard, `-race`
-    fails); the 4096 bound refuses legibly and blocks neither pinned
+    fails); **a search over a vault containing notes with unassigned
+    ids leaves every file byte-identical** (read-only means no ULID
+    assignment, no rewrite — a mutex-guarded write passes `-race` and
+    still mutates the user's vault); the 4096 bound refuses legibly and blocks neither pinned
     tiers nor enqueue.
 12. **Policy classes are right, tested at the policy that matters.**
     `memory.search`/`read` arrive `safe`; **raised to
@@ -652,7 +701,7 @@ Break each production gate, watch the right test fail, restore.
 ## Documentation the implementation PR must update
 
 - **`docs/architecture/memory-governance.md`** — the amendment section:
-  both relaxations, all three foreclosing passages rewritten, the vault
+  both relaxations, all five foreclosing passages rewritten, the vault
   named as a governed projection with its manifest classifications.
 - `docs/architecture/2026-08-18-personal-agent-audit.md` — the substrate
   note (005/006/007 reshaped; what remains).
