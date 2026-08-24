@@ -3829,6 +3829,54 @@ func TestSameAttemptAssignmentRefreshResumesRecoveringAndUpdatesWorkerVersion(t 
 	}
 }
 
+func TestFenceBetweenSendAndDeliveredMarkIsNotAStreamError(t *testing.T) {
+	h := newHarness(t)
+	enqueued := h.enqueueRun(t, "fence mid delivery")
+	stream, assigned := h.connectAssignedWorker(t, "worker-mid-delivery-fence", enqueued.RunID)
+	fenced := h.fenceOwnership(t, enqueued.RunID, "worker-mid-delivery-fence", assigned.GetAssignmentAttemptId())
+
+	var jobID string
+	if err := h.database.QueryRowContext(context.Background(),
+		`SELECT id FROM jobs WHERE run_id = ?`, enqueued.RunID).Scan(&jobID); err != nil {
+		t.Fatalf("read job id: %v", err)
+	}
+	// The schedule CI caught: the RunAssigned send succeeded, the run was
+	// fenced into recovering before the delivered bookkeeping committed, and
+	// the guarded UPDATE lost its row. That loss is the fence doing its job,
+	// not a stream error — returning it tore down the whole connection and
+	// cost the worker every other assignment it held.
+	if err := h.service.finishAssignmentDelivery(context.Background(), repository.Assignment{
+		JobID: jobID, RunID: enqueued.RunID, WorkerID: "worker-mid-delivery-fence", AttemptID: assigned.GetAssignmentAttemptId(),
+	}); err != nil {
+		t.Fatalf("finishAssignmentDelivery on a fenced run = %v, want nil", err)
+	}
+	after := h.runState(t, enqueued.RunID)
+	if after.Lifecycle != "recovering" || after.StateVersion != fenced.StateVersion {
+		t.Fatalf("run = %s at version %d, want the fenced recovering at %d untouched",
+			after.Lifecycle, after.StateVersion, fenced.StateVersion)
+	}
+
+	// The stream the old behavior killed is still the proof vehicle: the
+	// worker's heartbeat resolves the doubt and resumes the run.
+	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{
+		Heartbeat: &turingv1.RuntimeHeartbeat{WorkerId: "worker-mid-delivery-fence"},
+	}}); err != nil {
+		t.Fatalf("send heartbeat: %v", err)
+	}
+	refresh := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		job := cmd.GetRunAssigned()
+		return job != nil && job.GetRunId() == enqueued.RunID
+	}).GetRunAssigned()
+	if refresh.GetAssignmentAttemptId() != assigned.GetAssignmentAttemptId() {
+		t.Fatalf("refresh attempt = %q, want the unchanged %q",
+			refresh.GetAssignmentAttemptId(), assigned.GetAssignmentAttemptId())
+	}
+	resumed := h.runState(t, enqueued.RunID)
+	if resumed.Lifecycle != "running" {
+		t.Fatalf("run lifecycle = %q, want running after the ownership proof", resumed.Lifecycle)
+	}
+}
+
 func TestToolBeaconProofReturnsResultingVersionBeforeContinuation(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "beacon proof")
