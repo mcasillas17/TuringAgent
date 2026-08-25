@@ -195,6 +195,32 @@ func TestInitShipsAnActiveDefaultPersona(t *testing.T) {
 	}
 }
 
+// The default persona is active prose, pinned into every run exactly as
+// written, not a commented-out placeholder the user must uncomment. That is
+// tested against the persona content itself above; this test guards the
+// *documentation* describing it (README.md and CLAUDE.md, which describe
+// init.sh's behavior for humans) so the same false "commented default" /
+// "uncomment" framing cannot silently return there even if the persona
+// content and its own test stay honest.
+func TestDocsDoNotClaimPersonaIsCommented(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	for _, relPath := range []string{"README.md", "CLAUDE.md"} {
+		path := filepath.Join(repoRoot, relPath)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", relPath, err)
+		}
+		lower := strings.ToLower(string(content))
+		for _, forbidden := range []string{"commented default", "uncomment"} {
+			if strings.Contains(lower, forbidden) {
+				t.Fatalf("%s falsely describes the default persona as a commented-out placeholder (found %q); "+
+					"it must instead say init.sh writes an active starter persona.md, pinned exactly as written, "+
+					"only when the file is absent", relPath, forbidden)
+			}
+		}
+	}
+}
+
 // Re-running init.sh is routine — after a pull, after a reset, after a token
 // rotation. It must never rewrite the persona the user has been editing.
 func TestInitNeverOverwritesAnExistingPersona(t *testing.T) {

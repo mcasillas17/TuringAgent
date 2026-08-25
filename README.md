@@ -44,9 +44,10 @@ cd TuringAgent/turing-backend
 `init.sh` rejects root execution, creates `turing-backend/.env`, generates local
 bearer tokens, records the current non-root UID/GID for bind-mounted storage,
 creates `data/`, `skills/`, `mcp/`, a real (non-symlink) `sandbox/`, and the
-memory vault `memory/` with its `inbox/` and `beliefs/` folders and a commented
-default `persona.md` (written only when that file is absent — an existing
-`persona.md` or `profile.md` is secured to `0600` and never rewritten), and
+memory vault `memory/` with its `inbox/` and `beliefs/` folders and an active
+starter `persona.md`, pinned into every run exactly as written (written only
+when that file is absent — an existing `persona.md` or `profile.md` is
+secured to `0600` and never rewritten), and
 prints the Flutter client API key. It fails rather than changing ownership or
 permissions when existing sandbox content is inaccessible. Do not commit `.env`.
 
