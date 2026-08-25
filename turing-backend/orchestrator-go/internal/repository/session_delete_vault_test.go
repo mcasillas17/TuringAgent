@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -575,6 +576,198 @@ func TestAdvanceSessionDeletionCompletionDoesNotDeadlockAgainstAConcurrentPass(t
 	for i := 0; i < 2; i++ {
 		if err := <-done; err != nil {
 			t.Fatalf("concurrent pass %d: %v", i, err)
+		}
+	}
+}
+
+// seedVaultCandidates gives one session several notes in the vault inbox, which
+// is what a real conversation that proposed more than one belief leaves behind.
+func seedVaultCandidates(t *testing.T, repo *Repository, titles ...string) (string, []MemoryCandidate) {
+	t.Helper()
+	sessionID := newMemoryTestSession(t, repo)
+	candidates := make([]MemoryCandidate, 0, len(titles))
+	for _, title := range titles {
+		candidate, err := repo.CreateMemoryCandidate(ctx(), CreateMemoryCandidateInput{
+			SessionID: sessionID,
+			Kind:      MemoryCandidateKindBelief,
+			Title:     title,
+			Body:      "The user keeps " + title + ".",
+		})
+		if err != nil {
+			t.Fatalf("CreateMemoryCandidate(%q): %v", title, err)
+		}
+		candidates = append(candidates, candidate)
+	}
+	return sessionID, candidates
+}
+
+func vaultArtifactStates(t *testing.T, repo *Repository, sessionID string) map[string]string {
+	t.Helper()
+	artifacts, err := repo.SessionVaultArtifacts(ctx(), sessionID)
+	if err != nil {
+		t.Fatalf("SessionVaultArtifacts: %v", err)
+	}
+	states := make(map[string]string, len(artifacts))
+	for _, artifact := range artifacts {
+		states[artifact.ArtifactID] = artifact.State
+	}
+	return states
+}
+
+// A poisoned manifest row is one row. Every sibling in the same session names a
+// note the user asked to have removed, and abandoning the pass at the first
+// refusal leaves those notes in the vault behind a manifest that can never
+// drain — one tampered entry holding the whole withdrawal hostage, forever.
+//
+// The poison is placed first, in the middle and last, because "keep going" and
+// "stop after the failure" are indistinguishable when the only bad row is the
+// last one.
+func TestPurgeSessionVaultArtifactsDrainsEverySiblingOfAPoisonedRow(t *testing.T) {
+	titles := []string{"bees", "chickens", "goats"}
+	for poisoned := 0; poisoned < len(titles); poisoned++ {
+		t.Run(titles[poisoned], func(t *testing.T) {
+			repo, vault, database := newMemoryTestRepo(t)
+			sessionID, candidates := seedVaultCandidates(t, repo, titles...)
+			writeVaultNote(t, vault, "beliefs/precious.md", "# A file the user owns\n")
+			artifacts, err := repo.SessionVaultArtifacts(ctx(), sessionID)
+			if err != nil {
+				t.Fatalf("SessionVaultArtifacts: %v", err)
+			}
+			if len(artifacts) != len(titles) {
+				t.Fatalf("seeded artifacts = %d, want %d", len(artifacts), len(titles))
+			}
+			if _, err := repo.db.ExecContext(ctx(), `
+				UPDATE vault_artifacts SET vault_path = ? WHERE id = ?
+			`, "beliefs/precious.md", artifacts[poisoned].ArtifactID); err != nil {
+				t.Fatalf("tamper with the manifest row: %v", err)
+			}
+
+			if _, err := repo.PurgeSessionVaultArtifacts(ctx(), sessionID); !errors.Is(err, ErrVaultArtifactPathScope) {
+				t.Fatalf("purge error = %v, want ErrVaultArtifactPathScope", err)
+			}
+			for index, candidate := range candidates {
+				full := filepath.Join(vault.Root(), filepath.FromSlash(candidate.InboxPath))
+				_, statErr := os.Stat(full)
+				if index == poisoned {
+					if statErr != nil {
+						t.Fatalf("the poisoned row's own file was removed anyway: %v", statErr)
+					}
+					continue
+				}
+				if !os.IsNotExist(statErr) {
+					t.Fatalf("sibling %q survived a pass poisoned at %d: %v", candidate.InboxPath, poisoned, statErr)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(vault.Root(), "beliefs", "precious.md")); err != nil {
+				t.Fatalf("a tampered manifest row deleted the belief: %v", err)
+			}
+
+			states := vaultArtifactStates(t, repo, sessionID)
+			if len(states) != 1 || states[artifacts[poisoned].ArtifactID] != VaultArtifactStateDeleteFailed {
+				t.Fatalf("rows after the pass = %+v, want only the poisoned row, delete_failed", states)
+			}
+			for index, artifact := range artifacts {
+				want := 0
+				if index == poisoned {
+					want = 1
+				}
+				if got := vaultArtifactAuditCount(t, database, artifact.ArtifactID); got != want {
+					t.Fatalf("cleanup audits for artifact %d = %d, want %d", index, got, want)
+				}
+			}
+
+			// The ticker retries a stuck withdrawal on a schedule. Each retry
+			// re-reads the same poisoned row, and a marker that re-audits a row
+			// it already marked turns one broken file into an unbounded stream
+			// of audit rows saying the same thing.
+			for retry := 0; retry < 3; retry++ {
+				if _, err := repo.PurgeSessionVaultArtifacts(ctx(), sessionID); !errors.Is(err, ErrVaultArtifactPathScope) {
+					t.Fatalf("retry %d error = %v, want ErrVaultArtifactPathScope", retry, err)
+				}
+				if got := vaultArtifactAuditCount(t, database, artifacts[poisoned].ArtifactID); got != 1 {
+					t.Fatalf("cleanup audits after retry %d = %d, want the one failure recorded once", retry, got)
+				}
+				states = vaultArtifactStates(t, repo, sessionID)
+				if len(states) != 1 || states[artifacts[poisoned].ArtifactID] != VaultArtifactStateDeleteFailed {
+					t.Fatalf("rows after retry %d = %+v, want the poisoned row and nothing else", retry, states)
+				}
+			}
+
+			// And it can still finish. Once the row names its own note again,
+			// the retry drains it and the withdrawal is over.
+			if _, err := repo.db.ExecContext(ctx(), `
+				UPDATE vault_artifacts SET vault_path = ? WHERE id = ?
+			`, candidates[poisoned].InboxPath, artifacts[poisoned].ArtifactID); err != nil {
+				t.Fatalf("repair the manifest row: %v", err)
+			}
+			removed, err := repo.PurgeSessionVaultArtifacts(ctx(), sessionID)
+			if err != nil {
+				t.Fatalf("PurgeSessionVaultArtifacts after the repair: %v", err)
+			}
+			if removed != 1 {
+				t.Fatalf("removed after the repair = %d, want the last row drained", removed)
+			}
+			if got := len(vaultArtifactStates(t, repo, sessionID)); got != 0 {
+				t.Fatalf("rows after the repair = %d, want none", got)
+			}
+			if _, err := os.Stat(filepath.Join(vault.Root(), filepath.FromSlash(candidates[poisoned].InboxPath))); !os.IsNotExist(err) {
+				t.Fatalf("the repaired row's file survived: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(vault.Root(), "beliefs", "precious.md")); err != nil {
+				t.Fatalf("the belief did not survive the whole withdrawal: %v", err)
+			}
+		})
+	}
+}
+
+// Every failed row is marked and audited, but what the pass reports back is
+// bounded. A manifest full of unusable rows is still one withdrawal, and an
+// error that grows a clause per row is a value assembled from as many vault
+// paths as the manifest happens to hold.
+func TestPurgeSessionVaultArtifactsReportsBoundedOpaqueFailuresForEveryFailedRow(t *testing.T) {
+	repo, _, database := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+	poisonedIDs := make([]string, 0, 12)
+	for index := 0; index < 12; index++ {
+		reserved, err := repo.ReserveVaultArtifact(ctx(), ReserveVaultArtifactInput{
+			SessionID: sessionID,
+			VaultPath: fmt.Sprintf("inbox/note-%02d.md", index),
+		})
+		if err != nil {
+			t.Fatalf("ReserveVaultArtifact(%d): %v", index, err)
+		}
+		if _, err := repo.db.ExecContext(ctx(), `
+			UPDATE vault_artifacts SET vault_path = ? WHERE id = ?
+		`, fmt.Sprintf("beliefs/poison-%02d.md", index), reserved.ArtifactID); err != nil {
+			t.Fatalf("tamper with manifest row %d: %v", index, err)
+		}
+		poisonedIDs = append(poisonedIDs, reserved.ArtifactID)
+	}
+
+	_, err := repo.PurgeSessionVaultArtifacts(ctx(), sessionID)
+	if !errors.Is(err, ErrVaultArtifactPathScope) {
+		t.Fatalf("purge error = %v, want ErrVaultArtifactPathScope", err)
+	}
+	if len(err.Error()) > maxVaultPurgeErrorBytes {
+		t.Fatalf("purge error is %d bytes over %d rows, want it bounded at %d",
+			len(err.Error()), len(poisonedIDs), maxVaultPurgeErrorBytes)
+	}
+	if strings.Contains(err.Error(), "poison-") || strings.Contains(err.Error(), sessionID) {
+		t.Fatalf("purge error leaked what it touched: %q", err.Error())
+	}
+
+	// The bound is on the report, never on the work: every unusable row is
+	// still marked and still audited exactly once.
+	states := vaultArtifactStates(t, repo, sessionID)
+	if len(states) != len(poisonedIDs) {
+		t.Fatalf("rows after the pass = %d, want all %d retained", len(states), len(poisonedIDs))
+	}
+	for index, artifactID := range poisonedIDs {
+		if states[artifactID] != VaultArtifactStateDeleteFailed {
+			t.Fatalf("row %d = %q, want delete_failed", index, states[artifactID])
+		}
+		if got := vaultArtifactAuditCount(t, database, artifactID); got != 1 {
+			t.Fatalf("cleanup audits for row %d = %d, want 1", index, got)
 		}
 	}
 }

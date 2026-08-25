@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // seedDeletableSession builds a session that has produced one of everything the
@@ -1188,5 +1189,69 @@ func TestDeleteSessionRefusesAfterCancelLeavesExecutionActive(t *testing.T) {
 	}
 	if got := countRows(t, repo, `SELECT COUNT(*) FROM sessions WHERE id = ?`, enqueued.SessionID); got != 1 {
 		t.Fatal("refused deletion still removed the session")
+	}
+}
+
+// The count of files the sandbox does not own is answered once, while the rows
+// that describe them are still there. A withdrawal now advances across more
+// than one transaction, and the retry re-enters with the session — and
+// therefore its whole sandbox manifest — already cascaded away. Recomputing the
+// count there answers zero, and a receipt reporting that nothing was left
+// behind over files that are still on the user's disk is the one thing this
+// number exists to prevent.
+func TestAdvanceSessionDeletionPreservesRetainedLegacyCountAcrossACompletionRetry(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+	enqueued := seedDeletableSession(t, repo, "Legacy retained", "touch legacy")
+	finishRun(t, repo, enqueued.RunID)
+	for _, physicalPath := range []string{"legacy-one.txt", "legacy-two.txt"} {
+		if _, err := repo.db.ExecContext(ctx, `
+			INSERT INTO sandbox_artifacts (
+				id, session_id, run_id, logical_path_hash, physical_path, state, policy,
+				deletion_generation, created_at
+			) VALUES (?, ?, ?, ?, ?, 'ready', 'retain_legacy_unowned', 0, ?)
+		`,
+			"artifact_"+physicalPath, enqueued.SessionID, enqueued.RunID,
+			"sha256:"+physicalPath, physicalPath, FormatTimestamp(time.Now().UTC()),
+		); err != nil {
+			t.Fatalf("seed legacy artifact %q: %v", physicalPath, err)
+		}
+	}
+	if _, err := repo.BeginSessionDeletion(ctx, enqueued.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+
+	failed, err := repo.AdvanceSessionDeletion(ctx, enqueued.SessionID, func(context.Context) error {
+		return errors.New("the vault could not be rewritten")
+	})
+	if err != nil {
+		t.Fatalf("AdvanceSessionDeletion: %v", err)
+	}
+	if failed.State != "failed_external" || failed.ErrorCode != SessionDeletionMemoryReconcileFailed {
+		t.Fatalf("receipt = %+v, want retryable memory_reconcile_failed", failed)
+	}
+	if failed.RetainedLegacyArtifactCount != 2 {
+		t.Fatalf("retained legacy count on the first pass = %d, want 2", failed.RetainedLegacyArtifactCount)
+	}
+	if got := countRows(t, repo, `SELECT COUNT(*) FROM sandbox_artifacts WHERE session_id = ?`, enqueued.SessionID); got != 0 {
+		t.Fatalf("sandbox rows after the cascade = %d, want the manifest gone with its session", got)
+	}
+
+	retry, err := repo.AdvanceSessionDeletion(ctx, enqueued.SessionID, func(context.Context) error { return nil })
+	if err != nil {
+		t.Fatalf("retry AdvanceSessionDeletion: %v", err)
+	}
+	if retry.State != "completed" || retry.Retryable {
+		t.Fatalf("retry receipt = %+v, want completed", retry)
+	}
+	if retry.RetainedLegacyArtifactCount != 2 {
+		t.Fatalf("retained legacy count on the retry = %d, want the one-time answer of 2 preserved", retry.RetainedLegacyArtifactCount)
+	}
+	persisted, err := repo.SessionDeletionReceipt(ctx, enqueued.SessionID)
+	if err != nil {
+		t.Fatalf("SessionDeletionReceipt: %v", err)
+	}
+	if persisted.RetainedLegacyArtifactCount != 2 {
+		t.Fatalf("persisted retained legacy count = %d, want 2", persisted.RetainedLegacyArtifactCount)
 	}
 }

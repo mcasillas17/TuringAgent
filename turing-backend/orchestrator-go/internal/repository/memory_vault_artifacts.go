@@ -34,6 +34,20 @@ const maxVaultArtifactPathBytes = 512
 // the sandbox manifest.
 const vaultArtifactCleanupFailedAction = "session.vault_artifact.cleanup.failed"
 
+// maxVaultPurgeErrors bounds how many underlying failures one purge report
+// carries back to its caller. A pass now visits every row rather than
+// abandoning the manifest at the first refusal, so the number of failures it
+// can observe is the number of rows the session owns — and an error assembled
+// one clause per row is a value whose size a manifest gets to choose. Every
+// failed row is still marked and still audited; only the report is capped.
+const maxVaultPurgeErrors = 4
+
+// maxVaultPurgeErrorBytes is the ceiling the bounded report stays under. It is
+// the cap the failure classes and the summary fit inside with room to spare,
+// and it exists so the bound is a property that can be asserted rather than an
+// intention.
+const maxVaultPurgeErrorBytes = 1024
+
 var (
 	// ErrVaultArtifactPathScope reports a path that is not a note inside the
 	// vault inbox. The manifest only ever records candidate files, so anything

@@ -63,6 +63,22 @@ const (
 	// finish. It is a separate class because the two failures are separately
 	// retryable and land in separate manifests.
 	SessionDeletionVaultCleanupFailed = "vault_artifact_cleanup_failed"
+	// SessionDeletionArtifactManifestFinalizeFailed names a withdrawal whose
+	// external files are gone and whose manifest rows could not be dropped.
+	//
+	// It is deliberately not one of the cleanup-failed classes. Those mean
+	// "the file is still there", and they are recorded by marking every row
+	// delete_failed with one audit row each — a per-file claim that Turing
+	// could not remove a file it in fact removed. This class says the opposite
+	// and truthful thing: the removal happened, the bookkeeping did not, and
+	// the rows are being kept because the retry needs them.
+	SessionDeletionArtifactManifestFinalizeFailed = "artifact_manifest_finalize_failed"
+	// SessionDeletionUnsupportedArtifactScope names a cleaner that failed under
+	// a scope this withdrawal has no manifest for. There is nothing to mark and
+	// nothing to audit, so the receipt is the only place the failure can live —
+	// and it has to live somewhere, because the alternative is handing back the
+	// pending gate and waiting forever on a cleaner that already failed.
+	SessionDeletionUnsupportedArtifactScope = "artifact_scope_unsupported"
 	// SessionDeletionMemoryReconcileFailed names a withdrawal whose rows are
 	// gone but whose on-disk completion could not be written.
 	SessionDeletionMemoryReconcileFailed = "memory_reconcile_failed"
