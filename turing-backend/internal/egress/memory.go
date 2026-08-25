@@ -44,10 +44,36 @@ type MemorySnapshot struct {
 	MemoryToolsSelected bool   `json:"memory_tools_selected"`
 }
 
+// Canonical clears a withheld tier's body and hash.
+//
+// A tier is either read or it is not; "withheld but here is what was in it
+// anyway" is not a fact this snapshot is allowed to state. No producer today
+// builds that contradiction on purpose, but Canonical is the one place that
+// forecloses it, rather than leaving every reader — the fingerprint, the
+// applicability check, a future one — to remember to check Withheld before it
+// trusts Body. Called once here, both the consent binding and the "would
+// anything reach a prompt" answer are computed against the same bytes, and a
+// withheld tier can never smuggle content through either by disagreeing with
+// its own flag.
+func (s MemorySnapshot) Canonical() MemorySnapshot {
+	if s.PersonaWithheld {
+		s.PersonaBody = ""
+		s.PersonaContentHash = ""
+	}
+	if s.ProfileWithheld {
+		s.ProfileBody = ""
+		s.ProfileContentHash = ""
+	}
+	return s
+}
+
 // MemorySnapshotFingerprint is the one-way binding between a consent and the
-// pinned material it was granted over.
+// pinned material it was granted over. It hashes the canonical form so a
+// withheld tier's leftover body — which a producer must never create, but
+// which this function does not have to trust it avoided — cannot shift the
+// binding away from what a withheld tier actually contributes: nothing.
 func MemorySnapshotFingerprint(snapshot MemorySnapshot) (string, error) {
-	encoded, err := json.Marshal(snapshot)
+	encoded, err := json.Marshal(snapshot.Canonical())
 	if err != nil {
 		return "", err
 	}
@@ -60,8 +86,15 @@ func MemorySnapshotFingerprint(snapshot MemorySnapshot) (string, error) {
 // runtime's re-derivation must not hold two different ideas of "empty": a
 // persona of nothing but spaces contributes no instruction and must not put a
 // memory category on a disclosure.
+//
+// A withheld tier contributes nothing regardless of what its body holds, for
+// the same reason the runtime's own prompt assembly ignores a withheld body
+// before it looks at it: withheld and empty are different facts, but both are
+// "nothing reaches the prompt", and this is the one place the disclosure asks
+// that question.
 func (s MemorySnapshot) HasPinnedContent() bool {
-	return strings.TrimSpace(s.PersonaBody) != "" || strings.TrimSpace(s.ProfileBody) != ""
+	canonical := s.Canonical()
+	return strings.TrimSpace(canonical.PersonaBody) != "" || strings.TrimSpace(canonical.ProfileBody) != ""
 }
 
 // IsMemoryToolName reports whether a frozen selected-tool name belongs to the

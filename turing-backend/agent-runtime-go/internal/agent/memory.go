@@ -30,6 +30,11 @@ var memoryProfileFraming = backendegress.Framing{
 // selected tools. Nothing here reads the vault, and nothing here consults the
 // egress decision — a re-derivation that took any part of its input from the
 // claim it is checking would agree with that claim by construction.
+//
+// Canonical is called here too, on the runtime's own re-derivation, so a
+// withheld tier answers "would this reach the prompt?" the same way on this
+// side of the wire as it does in the orchestrator's Preimage — matching what
+// pinnedMemoryMessages already does when it builds the prompt itself.
 func runtimeMemorySnapshot(job *turingv1.AgentJob) backendegress.MemorySnapshot {
 	persona := job.GetPinnedPersona()
 	profile := job.GetPinnedProfile()
@@ -44,7 +49,7 @@ func runtimeMemorySnapshot(job *turingv1.AgentJob) backendegress.MemorySnapshot 
 		ProfileContentHash:  profile.GetContentHash(),
 		ProfileWithheld:     profile.GetWithheld(),
 		MemoryToolsSelected: backendegress.SelectedToolsIncludeMemory(job.GetSelectedTools()),
-	}
+	}.Canonical()
 }
 
 func runtimeMemorySnapshotFingerprint(job *turingv1.AgentJob) (string, error) {

@@ -196,3 +196,36 @@ func tail(value string) string {
 	}
 	return value[len(value)-120:]
 }
+
+// Preimage is the one place a MemoryEgressSnapshot becomes the bytes the
+// fingerprint and the frozen job both trust, so it is where a contradiction —
+// a tier marked unavailable that still carries Content, which memoryfiles
+// should never construct but which this projection must not amplify if it
+// ever did — has to be closed rather than passed through.
+func TestPreimageCanonicalizesAnUnavailableTiersLeftoverContent(t *testing.T) {
+	contradiction := MemoryEgressSnapshot{
+		Enabled: true,
+		Persona: MemoryPinnedDocument{
+			RelPath: memoryfiles.PersonaFileName, Available: false,
+			Content:     "a stray read that should never have survived unavailability",
+			ContentHash: "stale-persona-hash",
+		},
+		Profile: MemoryPinnedDocument{
+			RelPath: memoryfiles.ProfileFileName, Available: true,
+			Content: "The user keeps chickens.", ContentHash: "profile-hash",
+		},
+	}
+	preimage := contradiction.Preimage(nil)
+	if preimage.PersonaBody != "" || preimage.PersonaContentHash != "" {
+		t.Fatalf("an unavailable persona kept its leftover body/hash: %+v", preimage)
+	}
+	if !preimage.PersonaWithheld {
+		t.Fatal("an unavailable persona lost its withheld flag")
+	}
+	if preimage.HasPinnedContent() != true {
+		t.Fatal("the legitimately available profile was hidden by the persona's contradiction")
+	}
+	if preimage.ProfileBody != "The user keeps chickens." {
+		t.Fatalf("a healthy tier was altered alongside the contradictory one: %+v", preimage)
+	}
+}

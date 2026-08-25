@@ -338,6 +338,73 @@ func TestAVaultEditReachesTheNextRunAndNotTheQueuedOne(t *testing.T) {
 	}
 }
 
+// A queued job's profile is fixed the same way its persona is: turning memory
+// off while the job waits does not rewrite either half of what the user
+// already consented to send.
+func TestQueuedJobKeepsItsProfileSnapshotAcrossAToggleFlip(t *testing.T) {
+	repo, vault, sessionID := memoryEgressRepo(t)
+	writePin(t, vault, memoryfiles.ProfileFileName, "The user keeps chickens.")
+
+	if _, err := repo.EnqueueUserMessage(context.Background(), EnqueueUserMessageInput{
+		SessionID: sessionID, Content: "local", ContentType: "text",
+		AgentID: "general_assistant", ModelProvider: "ollama", Model: "qwen2.5:7b",
+	}); err != nil {
+		t.Fatalf("EnqueueUserMessage: %v", err)
+	}
+	if _, err := repo.SetMemoryEnabled(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	writePin(t, vault, memoryfiles.ProfileFileName, "The user keeps bees.")
+
+	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-frozen-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.PinnedProfile == nil || job.PinnedProfile.Body != "The user keeps chickens." {
+		t.Fatalf("job profile = %+v, want the snapshot taken at enqueue", job.PinnedProfile)
+	}
+}
+
+// An edit to the profile lands on the next run, not the one already accepted —
+// the same guarantee TestAVaultEditReachesTheNextRunAndNotTheQueuedOne makes
+// for the persona, exercised here for the other tier. Each job carries the
+// profile that was on disk when its message was taken.
+func TestAProfileEditReachesTheNextRunAndNotTheQueuedOne(t *testing.T) {
+	repo, vault, firstSession := memoryEgressRepo(t)
+	secondSession := newMemoryTestSession(t, repo)
+	writePin(t, vault, memoryfiles.ProfileFileName, "The user keeps chickens.")
+	enqueueLocal := func(sessionID string, content string) {
+		t.Helper()
+		if _, err := repo.EnqueueUserMessage(context.Background(), EnqueueUserMessageInput{
+			SessionID: sessionID, Content: content, ContentType: "text",
+			AgentID: "general_assistant", ModelProvider: "ollama", Model: "qwen2.5:7b",
+		}); err != nil {
+			t.Fatalf("EnqueueUserMessage(%s): %v", content, err)
+		}
+	}
+	enqueueLocal(firstSession, "first")
+	writePin(t, vault, memoryfiles.ProfileFileName, "The user keeps bees.")
+	enqueueLocal(secondSession, "second")
+
+	first, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-profile-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-profile-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.PinnedProfile.Body != "The user keeps chickens." {
+		t.Fatalf("first job profile = %+v, want the pre-edit words", first.PinnedProfile)
+	}
+	if second.PinnedProfile.Body != "The user keeps bees." {
+		t.Fatalf("second job profile = %+v, want the post-edit words", second.PinnedProfile)
+	}
+	if first.MemorySnapshotFingerprint == second.MemorySnapshotFingerprint {
+		t.Fatal("two different profiles produced the same job fingerprint")
+	}
+}
+
 // The enqueue transaction opens the two pinned documents and nothing else. A
 // scan or an index refresh in here would hold a write lock for as long as the
 // user's vault is large, on the path a person is waiting on — and it would do

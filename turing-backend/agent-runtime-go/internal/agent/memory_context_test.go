@@ -401,6 +401,50 @@ func TestWithheldPinsInjectNothing(t *testing.T) {
 	}
 }
 
+// A withheld tier that somehow still carries a body — a state the orchestrator
+// must never construct, but one this runtime does not get to assume it never
+// will — has to be treated as absent by both the applicability flag and the
+// prompt, in agreement with each other. Disagreement here is not academic: it
+// is exactly the shape of bug that would let a disclosure under-claim what a
+// prompt actually sent, or refuse a run over a mismatch neither side caused.
+func TestContradictoryWithheldBodyIsAbsentToApplicabilityAndThePrompt(t *testing.T) {
+	remote := &scriptedProvider{
+		endpoint: "https://api.anthropic.com/v1",
+		events:   []llm.StreamEvent{{Type: "text", Text: "ok"}, {Type: "completed"}},
+	}
+	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
+	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
+		return remote, nil
+	})
+	job := routedJob()
+	job.PinnedPersona = &turingv1.PinnedPersonaSnapshot{
+		PersonaId: "persona.md", Withheld: true, Body: "leftover persona that must never surface",
+	}
+	job.PinnedProfile = &turingv1.PinnedProfileSnapshot{
+		ProfileId: "profile.md", Withheld: true, Body: "leftover profile that must never surface",
+	}
+	rebindMemory(t, job)
+
+	if runtimeMemoryProfileApplicable(job) {
+		t.Fatal("a withheld tier's leftover body made the memory category applicable")
+	}
+	if job.GetEgressDecision().GetMemoryProfileApplicable() {
+		t.Fatal("rebindMemory disagrees with runtimeMemoryProfileApplicable about a withheld contradiction")
+	}
+
+	if failure := findRunFailed(collectUpdates(t, assistant, job)); failure != nil {
+		t.Fatalf("a withheld tier's own contradiction failed the run: %+v", failure)
+	}
+	if len(remote.requests) != 1 {
+		t.Fatalf("remote provider requests = %d, want 1", len(remote.requests))
+	}
+	for _, message := range remote.requests[0].Messages {
+		if strings.Contains(message.Content, "must never surface") {
+			t.Fatalf("a withheld tier's leftover body reached the prompt: %+v", message)
+		}
+	}
+}
+
 // Pinned memory is omitted as a unit when it cannot fit, and the omission is
 // announced. Half a persona is worse than none: it would read as the user's
 // complete instruction while being a fragment of it.

@@ -143,6 +143,89 @@ func TestMemorySnapshotHasPinnedContent(t *testing.T) {
 	}
 }
 
+// A withheld tier must read as empty even if its body somehow disagrees. No
+// producer today builds that contradiction on purpose, but a preimage that
+// let a stray body outvote its own Withheld flag would put a memory category
+// on a disclosure for a tier that injects nothing — the exact gap Canonical
+// closes.
+func TestMemorySnapshotHasPinnedContentTreatsAWithheldBodyAsAbsent(t *testing.T) {
+	personaContradiction := MemorySnapshot{PersonaWithheld: true, PersonaBody: "leftover persona"}
+	if personaContradiction.HasPinnedContent() {
+		t.Fatal("a withheld persona with a stray body claims pinned content")
+	}
+	profileContradiction := MemorySnapshot{ProfileWithheld: true, ProfileBody: "leftover profile"}
+	if profileContradiction.HasPinnedContent() {
+		t.Fatal("a withheld profile with a stray body claims pinned content")
+	}
+	bothContradictory := MemorySnapshot{
+		PersonaWithheld: true, PersonaBody: "leftover persona",
+		ProfileWithheld: true, ProfileBody: "leftover profile",
+	}
+	if bothContradictory.HasPinnedContent() {
+		t.Fatal("two withheld tiers with stray bodies claim pinned content")
+	}
+	// A withheld tier's contradiction must not hide a legitimately pinned
+	// sibling tier: the trim is per tier, not an all-or-nothing switch.
+	mixed := MemorySnapshot{PersonaWithheld: true, PersonaBody: "leftover persona", ProfileBody: "The user keeps chickens."}
+	if !mixed.HasPinnedContent() {
+		t.Fatal("a legitimately pinned profile was hidden by an unrelated withheld persona contradiction")
+	}
+}
+
+// Canonical is the mechanism the two tests above rely on. It has to clear both
+// the body and the hash together — a hash of bytes nobody was shown would be a
+// second way to smuggle the same contradiction past a reader that only checked
+// Body.
+func TestMemorySnapshotCanonicalClearsAWithheldTiersBodyAndHash(t *testing.T) {
+	contradiction := MemorySnapshot{
+		PersonaWithheld: true, PersonaBody: "leftover", PersonaContentHash: "stale-hash",
+		ProfileWithheld: false, ProfileBody: "kept", ProfileContentHash: "kept-hash",
+	}
+	canonical := contradiction.Canonical()
+	if canonical.PersonaBody != "" || canonical.PersonaContentHash != "" {
+		t.Fatalf("canonical withheld persona = %+v, want an empty body and hash", canonical)
+	}
+	if canonical.ProfileBody != "kept" || canonical.ProfileContentHash != "kept-hash" {
+		t.Fatalf("canonical dropped a non-withheld tier: %+v", canonical)
+	}
+	if !canonical.PersonaWithheld {
+		t.Fatal("canonicalising cleared the withheld flag itself, not just the body")
+	}
+}
+
+// The fingerprint is the actual consent binding, so it is the one that most
+// needs to be blind to a withheld tier's leftover body: two snapshots that
+// agree a tier is withheld must bind to the same fingerprint no matter what
+// garbage that tier's body happens to hold.
+func TestMemorySnapshotFingerprintIgnoresAWithheldTiersBody(t *testing.T) {
+	withheldEmpty := MemorySnapshot{PersonaWithheld: true}
+	withheldWithLeftoverBody := MemorySnapshot{PersonaWithheld: true, PersonaBody: "leftover", PersonaContentHash: "stale"}
+
+	clean, err := MemorySnapshotFingerprint(withheldEmpty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contradictory, err := MemorySnapshotFingerprint(withheldWithLeftoverBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clean != contradictory {
+		t.Fatalf("fingerprints diverged on a withheld tier's leftover body: %q vs %q", clean, contradictory)
+	}
+
+	// The flip side has to hold too: a withheld tier must still fingerprint
+	// differently from an actually-pinned one carrying the same words, or the
+	// binding would let content pass consent granted over "withheld".
+	pinned := MemorySnapshot{PersonaWithheld: false, PersonaBody: "leftover", PersonaContentHash: "stale"}
+	pinnedFingerprint, err := MemorySnapshotFingerprint(pinned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinnedFingerprint == contradictory {
+		t.Fatal("a withheld tier and a pinned tier with the same body produced the same fingerprint")
+	}
+}
+
 func TestIsMemoryToolName(t *testing.T) {
 	for _, name := range []string{"memory/memory.search", "memory/memory.read", "memory/memory.remember"} {
 		if !IsMemoryToolName(name) {

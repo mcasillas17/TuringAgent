@@ -48,6 +48,12 @@ type MemoryEgressSnapshot struct {
 // selected tools come from the caller because they are frozen elsewhere — by
 // the routing decision, not by the vault — and the memory category depends on
 // them as much as on the pins.
+//
+// Canonical is called here, at the one place this repository turns a read of
+// the vault into the preimage everything downstream trusts: the fingerprint,
+// and the frozen job body a worker will inject. An unavailable document should
+// never carry Content today, but should is not a guarantee this projection
+// gets to lean on for what a withheld tier is allowed to say it pinned.
 func (s MemoryEgressSnapshot) Preimage(selectedTools []string) backendegress.MemorySnapshot {
 	return backendegress.MemorySnapshot{
 		PersonaID:           s.Persona.RelPath,
@@ -60,7 +66,7 @@ func (s MemoryEgressSnapshot) Preimage(selectedTools []string) backendegress.Mem
 		ProfileContentHash:  s.Profile.ContentHash,
 		ProfileWithheld:     !s.Profile.Available,
 		MemoryToolsSelected: backendegress.SelectedToolsIncludeMemory(selectedTools),
-	}
+	}.Canonical()
 }
 
 // EgressMemorySnapshot reads the toggle and the two pinned documents in one
