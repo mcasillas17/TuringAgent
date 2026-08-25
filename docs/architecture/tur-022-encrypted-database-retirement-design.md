@@ -106,6 +106,19 @@ Why the selected path is sound, with its costs stated:
   `-DSQLITE_ENABLE_FTS5`**, so FTS5 presence is a property of our pinned
   build, not of a distro package. Codegen-style determinism applies: the
   SQLCipher version is pinned by tag and checksum in the Dockerfile.
+- **The link mechanism itself, recorded as selection evidence:** mattn's
+  `sqlite3_libsqlite3.go` hardcodes `-lsqlite3` (and, on darwin, Homebrew
+  `sqlite`-keg include/lib paths) — verified in the v1.14.24 module source —
+  so a SQLCipher named `libsqlcipher` is not found by the tag as-is. In the
+  containerized builder the Dockerfile owns the mapping: it installs the
+  pinned SQLCipher build into the builder prefix under the `sqlite3`
+  library and header names the tag hardcodes (an install-prefix mapping the
+  image controls end-to-end), so the link is deterministic and no distro
+  `libsqlite3` can shadow it. On darwin dev machines the tag's hardcoded
+  keg paths point at plain `sqlite`, so an encrypted-flavor build there
+  requires explicit `CGO_CFLAGS`/`CGO_LDFLAGS` overrides — the encrypted
+  flavor is container-first, and G1 remains the runtime kill for any build
+  where a plain SQLite was linked and `PRAGMA key` silently no-opped.
 - **Cost 1 — the `sqlite_fts5` build tag becomes inert under `libsqlite3`.**
   mattn's tag injects `-DSQLITE_ENABLE_FTS5` into the *bundled*
   amalgamation; when linking a system library the amalgamation is not
@@ -220,6 +233,25 @@ asks the OS keystore to unwrap the blob — the KEK never leaves keystore
 custody; on retirement-eligible custody the unwrap happens *inside* the
 Secure Enclave — and sends the unwrapped DEK to the orchestrator, which
 holds it in memory only and moves LOCKED → OPEN.
+
+**The wrap direction is the same surface, host-side.** Every KEK operation
+happens in the app, where the KEK lives: at the initial encryption ceremony
+the app generates the 32-byte DEK from the host CSPRNG, wraps it via the
+keystore, persists the wrapper through a `StoreWrapper` RPC, and delivers
+the DEK through `Unlock`; KEK rotation is fetch → unwrap → rewrap under the
+new KEK → store as `data/keys/turing.db.dek.next` → commit — all host-side,
+no orchestrator-side KEK crypto ever. The alternative — the orchestrator
+generating the DEK in-container and round-tripping it to the app for
+wrapping — is rejected: it adds a second plaintext-DEK transit over the
+loopback hop for zero custody gain.
+
+**The client is therefore a transient key holder, and the design says so.**
+Between unwrap and `Unlock` completing, the plaintext DEK exists in the
+app's process memory. Requirements: the app zeroes its DEK buffer
+immediately after `Unlock` (or `StoreWrapper`+`Unlock`) returns, never
+persists it, and never logs it; the retirement ceremony's zero-live-holders
+check counts the client (§Retirement, step 4); G11 asserts the client-side
+handling.
 Compared alternatives, each rejected:
 
 - **Environment injection** (compose reads the keystore via
@@ -258,8 +290,12 @@ orchestrator is **LOCKED**:
 
 - The database file is **never opened for writing, truncated, replaced, or
   recreated**. The encrypted database is opened only after a successful key
-  probe, with open flags that exclude create semantics; a missing wrapper, a
-  failed unwrap, or a wrong key each produce their own typed state.
+  probe, with open flags that exclude create semantics — concretely, two
+  things in today's `connection.go` must change on the encrypted path: the
+  file URI carries `mode=rw` (not SQLite's default create-on-open), and
+  `secureSQLiteFile(path, true)`'s `O_CREAT` open must not run against a
+  locked or missing encrypted database. A missing wrapper, a failed unwrap,
+  or a wrong key each produce their own typed state.
   SQLCipher makes wrong-key detection deterministic: the documented probe is
   `SELECT count(*) FROM sqlite_master`, which fails unless the key is right
   ([API](https://www.zetetic.net/sqlcipher/sqlcipher-api/)). A wrong key
@@ -298,17 +334,34 @@ key before the first page read, and
 
 - The DSN shrinks to the path plus non-I/O parameters only
   (`_foreign_keys=on` is a connection flag and stays; `_journal_mode=WAL`
-  **moves out of the DSN**). The DSN never carries key material — mutecomm's
-  `_pragma_key` pattern is structurally impossible here because the
-  parameter does not exist in mattn.
+  **moves out of the DSN**; `_locking_mode=EXCLUSIVE` **moves in** — next
+  bullet). The DSN never carries key material — mutecomm's `_pragma_key`
+  pattern is structurally impossible here because the parameter does not
+  exist in mattn.
+- **EXCLUSIVE locking rides the DSN, and that placement is load-bearing.**
+  `PRAGMA locking_mode` is a connection-mode setting that performs no file
+  I/O by itself, and mattn supports it as the `_locking_mode` DSN parameter,
+  executed inside `Open` before `ConnectHook` runs (parameter parsing near
+  line 1330, the exec near line 1709 — which mattn performs unconditionally,
+  defaulting to NORMAL — versus the hook invocation near line 1773;
+  [`sqlite3.go` at v1.14.24](https://github.com/mattn/go-sqlite3/blob/v1.14.24/sqlite3.go)).
+  Putting it in the DSN makes the no-`-shm` guarantee structural: EXCLUSIVE
+  is set before *any* file access can occur, so no ordering convention
+  inside the hook can regress it. A hook-ordered `locking_mode` was
+  considered and rejected: the key probe is the first WAL-mode file access
+  (the database header persists WAL), so any hook sequence that probes
+  before setting EXCLUSIVE silently creates the wal-index — exactly the
+  wrong implementation G2 kills.
 - The `ConnectHook` becomes the ordered keying sequence, run on every pooled
-  connection: `PRAGMA key = "x'…'"` → key probe (G1/G5) → `PRAGMA
+  connection: `PRAGMA key = "x'…'"` → key probe (G1/G5; with EXCLUSIVE
+  already set from the DSN, this first access creates no `-shm`) → `PRAGMA
   temp_store = MEMORY` (re-establishing today's guard under the new build —
   SQLCipher's own design doc requires it: "transient files are not
   encrypted, so you must disable file based temporary storage";
   [design doc](https://www.zetetic.net/sqlcipher/design/)) → `PRAGMA
-  locking_mode = EXCLUSIVE` → `PRAGMA journal_mode = WAL` → the remaining
-  session pragmas.
+  journal_mode = WAL` (a no-op on an already-WAL database; load-bearing
+  only on first creation of the staging database) → the remaining session
+  pragmas.
 - **The `-shm` wal-index is avoided entirely, not argued about.** Setting
   EXCLUSIVE locking before the first WAL access means SQLite "never
   attempts to call any of the shared-memory methods and hence no
@@ -322,8 +375,14 @@ key before the first page read, and
   constraint this design places on TUR-016 — a coordination note, not an
   existing fact:** under EXCLUSIVE locking no second process can attach
   while the orchestrator runs, so encrypted-era backups must run
-  **in-process** through the driver's online backup API. TUR-016 has not
-  landed and owns its own backup design; nothing today constrains it. But
+  **in-process** through the driver's online backup API — and because
+  EXCLUSIVE also bars a second connection to the same file, the backup's
+  *source* side is the one pooled connection, so backups must run in
+  bounded backup-step increments that yield between steps, under the same
+  single-connection discipline the migration budgets impose (the
+  destination is a separate file and gets its own keyed connection).
+  TUR-016 has not landed and owns its own backup design; nothing today
+  constrains it. But
   note the constraint is mostly forced by encryption itself, not by the
   locking mode: once the file is SQLCipher-encrypted, any backup path must
   read through a *keyed* connection regardless of locking, so an external
@@ -372,17 +431,28 @@ Instead:
    than the transaction budget.
 4. Verification before the swap: per-table row counts match, `PRAGMA
    integrity_check` passes on staging, and the FTS5 probe query returns on
-   staging. Then the finalize step: plaintext database checkpointed and
-   closed, staging checkpointed and closed, atomic rename of the plaintext
-   original to `data/turing.db.pre-encryption` (it becomes a **legacy
-   plaintext predecessor** — inventory §below — retained until encrypted
-   operation is verified, destroyed only by the retirement ceremony or by
-   explicit user action), staging renamed to `data/turing.db`, directory
-   fsynced, wrapper blob committed. A crash at any point before the final
-   rename leaves the plaintext database authoritative and the staging file
-   discardable/resumable; a crash after it leaves the encrypted database
-   authoritative with the predecessor intact. There is no window with zero
-   readable databases.
+   staging. Then the finalize step, whose two renames are **not** one
+   atomic act and are therefore bracketed by a durable intent marker:
+   plaintext database checkpointed and closed, staging checkpointed and
+   closed, a `data/turing.db.swap-intent` marker written and fsynced,
+   *then* rename 1 (plaintext original to `data/turing.db.pre-encryption` —
+   it becomes a **legacy plaintext predecessor**, inventory §below,
+   retained until encrypted operation is verified, destroyed only by the
+   retirement ceremony or by explicit user action), rename 2 (staging to
+   `data/turing.db`), directory fsync, wrapper blob committed, marker
+   removed. Crash rules are marker-driven and deterministic: **before the
+   marker exists**, the plaintext database is authoritative and staging is
+   discardable/resumable; **while the marker exists**, startup completes
+   the swap *forward* (the staging copy is already verified — rename it
+   into place, never fall back to the predecessor, and never let the
+   ordinary open path run against the empty canonical path: between the
+   renames nothing exists at `data/turing.db`, and today's
+   `secureSQLiteFile(path, true)` + default open flags would silently
+   create an empty database there — G5's named kill reached through the
+   migration path); **after the marker is removed**, the encrypted
+   database is authoritative with the predecessor intact. There is no
+   window with zero readable databases on disk, and no crash point with
+   two authoritative ones.
 5. Cancellation (user-initiated from the status surface) before finalize
    discards nothing the user needs: the plaintext database was never
    modified; staging and its journal are deleted; the system returns to
@@ -395,7 +465,7 @@ implementation must meter itself against — gates, not performance claims:
 |---|---|---|
 | Per-batch transaction time | **≤ 250 ms** | The pool is one connection per database (`SetMaxOpenConns(1)`); SQLite serializes writers per database file. 250 ms bounds how long any status/cancellation query queued on the shared plumbing waits behind a batch, and keeps WAL growth per transaction small. The batch controller measures each batch and **halves the batch size when a batch overruns**, to an adaptive floor of 16 rows — budgets hold on slow disks by shrinking work, not by hoping. |
 | Batch size ceiling | **≤ 1,000 rows or ≤ 4 MiB of row payload, whichever first** | Large blob rows (message bodies, tool results) must not blow the transaction budget through row count alone; small rows must not incur per-transaction overhead ten thousand times. The dual ceiling is the starting point the adaptive controller shrinks from. |
-| Startup pause to a serving status surface | **≤ 5 s** | The Flutter client and `restart: unless-stopped` both need the process responsive fast; a migration must never look like a hung boot. The pause covers unwrap, key probe, and fence setup — copying happens *after* the surface is up, inside MIGRATING. When no migration is pending, added startup overhead (unwrap + probe) must stay **≤ 2 s**. |
+| Startup pause to a serving status surface | **≤ 5 s** | The Flutter client and `restart: unless-stopped` both need the process responsive fast; a migration must never look like a hung boot. The pause covers boot and fence setup only — under the selected key delivery the orchestrator never unwraps anything (it boots LOCKED and *receives* the DEK over `Unlock`, which cannot arrive before the surface serves), and copying happens *after* the surface is up, inside MIGRATING. Once the DEK has been delivered, added overhead to OPEN (key probe + open) must stay **≤ 2 s**. The unlock round-trip itself is user-dependent (the app must be running) and is deliberately unbudgeted. |
 | Finalize/swap quiesce | **≤ 5 s** | Checkpoint-close-rename-fsync of two databases on a local SSD; anything longer indicates an unquiesced writer, which is a bug the gate should catch, not a wait to extend. |
 | Cancellation latency | **≤ 500 ms** | Cancellation is checked between batches; worst case is one in-flight batch (≤ 250 ms) plus its commit/rollback and fence release. |
 | Resume overhead after interruption | **≤ 1 batch** | The progress journal commits with each batch's transaction; at most the interrupted batch is re-copied (idempotent by cursor). |
@@ -405,6 +475,24 @@ rewrap of the single DEK blob (no data rewrite, no budgets consumed);
 **DEK rotation** is the same staged copy encrypted→encrypted under the same
 budgets. `PRAGMA rekey` is rejected for rotation for the same
 unbounded/uncancellable reason.
+
+**Rollback — reverting encryption after the swap — is the same machinery
+run in reverse, and it is not predecessor promotion.** A user who enables
+encryption and later reverts gets a staged copy encrypted→plaintext (same
+batches, budgets, progress journal, verification, intent marker, and swap),
+which preserves **every** write made since encryption. The tempting
+shortcut — promoting `data/turing.db.pre-encryption` back into place — is
+compared and rejected as the *default* path because the predecessor is
+frozen at swap time: promoting it silently discards everything written
+since, an unbounded data-loss window. Predecessor promotion survives only
+as the explicit **key-loss last resort** (§Unavailable-key behavior's
+recovery UX), where the encrypted database is unreadable by definition, the
+loss window is stated to the user in the confirmation, and the unreadable
+encrypted file is renamed aside, never deleted. After a completed rollback
+the wrapper blob is destroyed, `DATABASE_ENCRYPTION` returns to `off`, and
+the inventory drops to the plaintext-era artifact set. An interrupted
+rollback resumes exactly as an interrupted migration does — same journal,
+same marker rules.
 
 The schema migration runner is untouched: encryption is a file-level
 lifecycle that runs **before** `ApplyMigrations`, and the full-filename sort
@@ -540,10 +628,13 @@ every precondition holds — each step fails closed:
    requests or accepts a key, so `unless-stopped` cannot resurrect a key
    holder mid-ceremony.
 4. **Quiesce:** every client stream closed, database handles closed, WAL
-   checkpointed; then **zero live key holders confirmed** — in this
-   architecture the orchestrator is the only process that ever holds the
-   DEK, so the confirmation is that the orchestrator's own database and key
-   state are closed and zeroed, recorded in the ceremony receipt.
+   checkpointed; then **zero live key holders confirmed**. There are
+   exactly two processes that ever hold the plaintext DEK — the
+   orchestrator (holding it for use) and the Flutter unlock agent (holding
+   it transiently during delivery, §Containerized key delivery) — so the
+   confirmation covers both: the orchestrator's database and key state
+   closed and zeroed, and the client quiesced past its zeroization point
+   with no unlock in flight, recorded in the ceremony receipt.
 5. **Destruction:** every managed wrapper destroyed (primary and any
    staging wrapper), and on retirement-eligible custody the KEK itself
    destroyed in the keystore; encrypted files may additionally be deleted
@@ -582,21 +673,33 @@ implementation it kills. Break the gate, watch the test fail, restore.
    the main file but leaves WAL/journal plaintext; the driver swap that
    silently drops the `ConnectHook` temp-store guard; the locking-mode
    regression that re-creates a wal-index.
-3. **G3 — Key hygiene end to end.** Assert the DSN string, the process
-   environment, compose config, process arguments, log capture, and every
-   error text contain no key bytes, no wrapper bytes, and no passphrase
-   under fault injection (wrong key, failed unwrap, failed unlock).
-   *Kills:* the mutecomm-style `_pragma_key` DSN; the "helpful" error that
-   embeds the key it failed with; the debug log line in the unlock path.
-4. **G4 — Budgets are enforced, not aspirational.** Fault-injected and
-   metered migration runs: per-batch transaction time ≤ 250 ms with
-   adaptive halving observed under an artificially slowed VFS; cancellation
-   observed ≤ 500 ms from request to plaintext-intact stop; kill -9 at
-   arbitrary batch boundaries resumes with ≤ 1 batch re-copied; status
-   surface serves within 5 s of boot with a migration pending. *Kills:* the
-   one-shot `sqlcipher_export` implementation wearing a progress bar; the
-   resume that restarts from zero; the cancel that leaves a half-swapped
-   pair.
+3. **G3 — Key hygiene end to end, and the domains stay apart.** Assert the
+   DSN string, the process environment, compose config, process arguments,
+   log capture, and every error text contain no key bytes, no wrapper
+   bytes, and no passphrase under fault injection (wrong key, failed
+   unwrap, failed unlock). Assert the DEK and KEK are never derived from,
+   equal to, or substitutable for `TURING_INTEGRATION_KEY` — sealing a
+   credential with the database key, or keying the database with the
+   credential key, both fail. *Kills:* the mutecomm-style `_pragma_key`
+   DSN; the "helpful" error that embeds the key it failed with; the debug
+   log line in the unlock path; the "convenient" reuse that collapses the
+   two key domains.
+4. **G4 — Budgets are enforced across migration, rotation, restore, and
+   rollback — not aspirational.** Fault-injected and metered runs:
+   per-batch transaction time ≤ 250 ms with adaptive halving observed
+   under an artificially slowed VFS; cancellation observed ≤ 500 ms from
+   request to plaintext-intact stop; kill -9 at arbitrary batch boundaries
+   **and at every finalize boundary** (marker write, between the two
+   renames, before the directory fsync) resumes or completes forward with
+   ≤ 1 batch re-copied and never opens the empty canonical path with
+   create semantics; the same interruption matrix runs against DEK
+   rotation, TUR-016-shaped restore, and rollback (the acceptance's four
+   named fault-injection surfaces); status surface serves within 5 s of
+   boot with a migration pending. *Kills:* the one-shot `sqlcipher_export`
+   implementation wearing a progress bar; the resume that restarts from
+   zero; the cancel that leaves a half-swapped pair; the crash between
+   renames that "recovers" by creating an empty database; the rollback
+   that quietly promotes the stale predecessor.
 5. **G5 — Missing or wrong keys never destroy anything.** With no key,
    wrong key, corrupt wrapper, or absent keystore: the database file's
    bytes are unchanged after every startup path (hash before/after), no
@@ -638,13 +741,18 @@ implementation it kills. Break the gate, watch the test fail, restore.
 11. **G11 — Retirement is fail-closed and total.** Retirement refuses when
     custody is encryption-only, when wrapper state is unknown, or when a
     readable plaintext predecessor remains. A completed ceremony: fences
-    held, restart sentinel honored, zero live key holders in the receipt,
-    every managed wrapper gone — then **neither a previously connected
-    client nor a fresh process restart can read any encrypted-era managed
-    database or backup**, asserted by attempting both. *Kills:* the
-    ceremony that deletes files but leaves a wrapper; the one that retires
-    while a predecessor backup is still readable; the eligibility check
-    that defaults open on unknown custody.
+    held, restart sentinel honored, zero live key holders in the receipt —
+    including the unlock agent, whose DEK buffer is asserted zeroed after
+    every `Unlock`/`StoreWrapper` and never persisted or logged — every
+    managed wrapper gone, and the receipt reporting residual storage bytes
+    and the separately governed recovery/staging files as *disclosed, not
+    retired*; then **neither a previously connected client nor a fresh
+    process restart can read any encrypted-era managed database or
+    backup**, asserted by attempting both. *Kills:* the ceremony that
+    deletes files but leaves a wrapper; the one that retires while a
+    predecessor backup is still readable; the eligibility check that
+    defaults open on unknown custody; the unlock agent that keeps a copy;
+    the receipt that counts disclosure items as retired.
 12. **G12 — Product text tells the truth.** The client's retirement and
     deletion surfaces distinguish whole-database retirement from
     per-session logical withdrawal, disclose the separately governed
