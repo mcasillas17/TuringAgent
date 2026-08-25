@@ -21,6 +21,12 @@ enum ShellDestination {
     selectedIcon: Icons.auto_awesome,
     implemented: true,
   ),
+  memory(
+    label: 'Memory',
+    icon: Icons.psychology_outlined,
+    selectedIcon: Icons.psychology,
+    implemented: true,
+  ),
   integrations(
     label: 'Integrations',
     icon: Icons.extension_outlined,

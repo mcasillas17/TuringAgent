@@ -11,6 +11,7 @@ import '../generated/turing/v1/chat.pb.dart' as chatpb;
 import '../generated/turing/v1/common.pb.dart' as commonpb;
 import '../generated/turing/v1/events.pb.dart' as eventpb;
 import '../generated/turing/v1/integrations.pb.dart' as integrationpb;
+import '../generated/turing/v1/memory.pb.dart' as memorypb;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
@@ -20,6 +21,7 @@ import 'audit.dart' as model_audit;
 import 'external_agent.dart' as model_external_agent;
 import 'integration.dart' as model_integration;
 import 'automation.dart' as model_automation;
+import 'memory.dart' as model_memory;
 import 'message.dart' as model_message;
 import 'run_lifecycle.dart' as model_run_lifecycle;
 import 'run_state.dart' as model_run_state;
@@ -1227,5 +1229,385 @@ class GrpcMappers {
           'present, or scrubbed',
         );
     }
+  }
+
+  // ---------------------------------------------------------------------
+  // Memory
+  //
+  // Every enum below is decoded through decodeClosedEnum: a value this build
+  // has never heard of arrives as `unspecified` rather than as whichever
+  // member happens to sit at that number, so a newer backend can add a state
+  // without this client inventing a meaning for it. Timestamps stay null when
+  // absent, because "the server did not say when" is not the epoch.
+  // ---------------------------------------------------------------------
+
+  static model_memory.MemoryState memoryStateToModel(
+    memorypb.ListMemoryStateResponse response,
+  ) {
+    return model_memory.MemoryState(
+      settings: memorySettingsToModel(response.settings),
+      persona: memoryPersonaToModel(response.persona),
+      profile: memoryProfileToModel(response.profile),
+      tiers: response.tiers.map(memoryTierStateToModel).toList(),
+      notes: response.notes.map(memoryNoteToModel).toList(),
+      candidates: response.candidates.map(memoryCandidateToModel).toList(),
+    );
+  }
+
+  static model_memory.MemorySettings memorySettingsToModel(
+    memorypb.MemorySettings settings,
+  ) {
+    return model_memory.MemorySettings(
+      enabled: settings.enabled,
+      vaultRoot: settings.vaultRoot,
+      vaultWritable: settings.vaultWritable,
+      unavailableReason: _memoryUnavailableReasonToModel(
+        decodeClosedEnum(
+          message: settings,
+          fieldNumber: 4,
+          readValue: () => settings.unavailableReason,
+          unknownValue: memorypb
+              .MemoryUnavailableReason
+              .MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
+        ),
+      ),
+      parseError: settings.parseError,
+    );
+  }
+
+  static model_memory.MemoryDocument memoryPersonaToModel(
+    memorypb.MemoryPersona persona,
+  ) {
+    return model_memory.MemoryDocument(
+      content: persona.content,
+      contentHash: persona.contentHash,
+      status: _memoryNoteStatusToModel(
+        decodeClosedEnum(
+          message: persona,
+          fieldNumber: 3,
+          readValue: () => persona.status,
+          unknownValue:
+              memorypb.MemoryNoteStatus.MEMORY_NOTE_STATUS_UNSPECIFIED,
+        ),
+      ),
+      updatedAt: persona.hasUpdatedAt()
+          ? _timestampToDateTime(persona.updatedAt)
+          : null,
+      parseError: persona.parseError,
+      unavailableReason: _memoryUnavailableReasonToModel(
+        decodeClosedEnum(
+          message: persona,
+          fieldNumber: 6,
+          readValue: () => persona.unavailableReason,
+          unknownValue: memorypb
+              .MemoryUnavailableReason
+              .MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
+        ),
+      ),
+    );
+  }
+
+  static model_memory.MemoryDocument memoryProfileToModel(
+    memorypb.MemoryProfile profile,
+  ) {
+    return model_memory.MemoryDocument(
+      content: profile.content,
+      contentHash: profile.contentHash,
+      status: _memoryNoteStatusToModel(
+        decodeClosedEnum(
+          message: profile,
+          fieldNumber: 3,
+          readValue: () => profile.status,
+          unknownValue:
+              memorypb.MemoryNoteStatus.MEMORY_NOTE_STATUS_UNSPECIFIED,
+        ),
+      ),
+      updatedAt: profile.hasUpdatedAt()
+          ? _timestampToDateTime(profile.updatedAt)
+          : null,
+      parseError: profile.parseError,
+      unavailableReason: _memoryUnavailableReasonToModel(
+        decodeClosedEnum(
+          message: profile,
+          fieldNumber: 6,
+          readValue: () => profile.unavailableReason,
+          unknownValue: memorypb
+              .MemoryUnavailableReason
+              .MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
+        ),
+      ),
+    );
+  }
+
+  static model_memory.MemoryTierState memoryTierStateToModel(
+    memorypb.MemoryTierState tier,
+  ) {
+    return model_memory.MemoryTierState(
+      tier: memoryTierToModel(
+        decodeClosedEnum(
+          message: tier,
+          fieldNumber: 1,
+          readValue: () => tier.tier,
+          unknownValue: commonpb.MemoryTier.MEMORY_TIER_UNSPECIFIED,
+        ),
+      ),
+      enabled: tier.enabled,
+      noteCount: tier.noteCount,
+      pendingCandidateCount: tier.pendingCandidateCount,
+      updatedAt: tier.hasUpdatedAt()
+          ? _timestampToDateTime(tier.updatedAt)
+          : null,
+      unavailableReason: _memoryUnavailableReasonToModel(
+        decodeClosedEnum(
+          message: tier,
+          fieldNumber: 6,
+          readValue: () => tier.unavailableReason,
+          unknownValue: memorypb
+              .MemoryUnavailableReason
+              .MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
+        ),
+      ),
+      parseError: tier.parseError,
+    );
+  }
+
+  static model_memory.MemoryNote memoryNoteToModel(memorypb.MemoryNote note) {
+    return model_memory.MemoryNote(
+      noteId: note.noteId,
+      path: note.path,
+      title: note.title,
+      content: note.content,
+      contentHash: note.contentHash,
+      status: _memoryNoteStatusToModel(
+        decodeClosedEnum(
+          message: note,
+          fieldNumber: 6,
+          readValue: () => note.status,
+          unknownValue:
+              memorypb.MemoryNoteStatus.MEMORY_NOTE_STATUS_UNSPECIFIED,
+        ),
+      ),
+      tier: memoryTierToModel(
+        decodeClosedEnum(
+          message: note,
+          fieldNumber: 7,
+          readValue: () => note.tier,
+          unknownValue: commonpb.MemoryTier.MEMORY_TIER_UNSPECIFIED,
+        ),
+      ),
+      provenance: note.provenance.map(memoryProvenanceToModel).toList(),
+      createdAt: note.hasCreatedAt()
+          ? _timestampToDateTime(note.createdAt)
+          : null,
+      updatedAt: note.hasUpdatedAt()
+          ? _timestampToDateTime(note.updatedAt)
+          : null,
+      parseError: note.parseError,
+      unavailableReason: _memoryUnavailableReasonToModel(
+        decodeClosedEnum(
+          message: note,
+          fieldNumber: 12,
+          readValue: () => note.unavailableReason,
+          unknownValue: memorypb
+              .MemoryUnavailableReason
+              .MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
+        ),
+      ),
+    );
+  }
+
+  static model_memory.MemoryCandidate memoryCandidateToModel(
+    memorypb.MemoryCandidate candidate,
+  ) {
+    return model_memory.MemoryCandidate(
+      candidateId: candidate.candidateId,
+      kind: _memoryCandidateKindToModel(
+        decodeClosedEnum(
+          message: candidate,
+          fieldNumber: 2,
+          readValue: () => candidate.kind,
+          unknownValue: memorypb
+              .MemoryCandidateKind
+              .MEMORY_CANDIDATE_KIND_UNSPECIFIED,
+        ),
+      ),
+      inboxPath: candidate.inboxPath,
+      content: candidate.content,
+      contentHash: candidate.contentHash,
+      state: _memoryCandidateStateToModel(
+        decodeClosedEnum(
+          message: candidate,
+          fieldNumber: 6,
+          readValue: () => candidate.state,
+          unknownValue: memorypb
+              .MemoryCandidateState
+              .MEMORY_CANDIDATE_STATE_UNSPECIFIED,
+        ),
+      ),
+      managed: candidate.managed,
+      provenance: candidate.provenance.map(memoryProvenanceToModel).toList(),
+      promotedNoteId: candidate.promotedNoteId,
+      createdAt: candidate.hasCreatedAt()
+          ? _timestampToDateTime(candidate.createdAt)
+          : null,
+      updatedAt: candidate.hasUpdatedAt()
+          ? _timestampToDateTime(candidate.updatedAt)
+          : null,
+      decidedAt: candidate.hasDecidedAt()
+          ? _timestampToDateTime(candidate.decidedAt)
+          : null,
+      parseError: candidate.parseError,
+      unavailableReason: _memoryUnavailableReasonToModel(
+        decodeClosedEnum(
+          message: candidate,
+          fieldNumber: 13,
+          readValue: () => candidate.unavailableReason,
+          unknownValue: memorypb
+              .MemoryUnavailableReason
+              .MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
+        ),
+      ),
+    );
+  }
+
+  static model_memory.MemoryProvenance memoryProvenanceToModel(
+    memorypb.MemoryProvenance provenance,
+  ) {
+    return model_memory.MemoryProvenance(
+      kind: _memoryProvenanceKindToModel(
+        decodeClosedEnum(
+          message: provenance,
+          fieldNumber: 1,
+          readValue: () => provenance.kind,
+          unknownValue: memorypb
+              .MemoryProvenanceKind
+              .MEMORY_PROVENANCE_KIND_UNSPECIFIED,
+        ),
+      ),
+      sourceSessionId: provenance.sourceSessionId,
+      sourceSessionTitle: provenance.sourceSessionTitle,
+      observedAt: provenance.hasObservedAt()
+          ? _timestampToDateTime(provenance.observedAt)
+          : null,
+      withdrawn: provenance.withdrawn,
+      withdrawnAt: provenance.hasWithdrawnAt()
+          ? _timestampToDateTime(provenance.withdrawnAt)
+          : null,
+      evidenceCount: provenance.evidenceCount,
+    );
+  }
+
+  static model_memory.MemoryTier memoryTierToModel(commonpb.MemoryTier tier) {
+    switch (tier) {
+      case commonpb.MemoryTier.MEMORY_TIER_PERSONA:
+        return model_memory.MemoryTier.persona;
+      case commonpb.MemoryTier.MEMORY_TIER_PROFILE:
+        return model_memory.MemoryTier.profile;
+      case commonpb.MemoryTier.MEMORY_TIER_BELIEF:
+        return model_memory.MemoryTier.belief;
+      case commonpb.MemoryTier.MEMORY_TIER_NOTE:
+        return model_memory.MemoryTier.note;
+      case commonpb.MemoryTier.MEMORY_TIER_UNSPECIFIED:
+        return model_memory.MemoryTier.unspecified;
+    }
+    return model_memory.MemoryTier.unspecified;
+  }
+
+  static model_memory.MemoryUnavailableReason _memoryUnavailableReasonToModel(
+    memorypb.MemoryUnavailableReason reason,
+  ) {
+    switch (reason) {
+      case memorypb.MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_NONE:
+        return model_memory.MemoryUnavailableReason.none;
+      case memorypb.MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_DISABLED:
+        return model_memory.MemoryUnavailableReason.disabled;
+      case memorypb
+          .MemoryUnavailableReason
+          .MEMORY_UNAVAILABLE_REASON_VAULT_MISSING:
+        return model_memory.MemoryUnavailableReason.vaultMissing;
+      case memorypb
+          .MemoryUnavailableReason
+          .MEMORY_UNAVAILABLE_REASON_VAULT_UNREADABLE:
+        return model_memory.MemoryUnavailableReason.vaultUnreadable;
+      case memorypb
+          .MemoryUnavailableReason
+          .MEMORY_UNAVAILABLE_REASON_CONTENT_PARSE_FAILED:
+        return model_memory.MemoryUnavailableReason.contentParseFailed;
+      case memorypb
+          .MemoryUnavailableReason
+          .MEMORY_UNAVAILABLE_REASON_CONTENT_TOO_LARGE:
+        return model_memory.MemoryUnavailableReason.contentTooLarge;
+      case memorypb
+          .MemoryUnavailableReason
+          .MEMORY_UNAVAILABLE_REASON_UNSPECIFIED:
+        return model_memory.MemoryUnavailableReason.unspecified;
+    }
+    return model_memory.MemoryUnavailableReason.unspecified;
+  }
+
+  static model_memory.MemoryNoteStatus _memoryNoteStatusToModel(
+    memorypb.MemoryNoteStatus status,
+  ) {
+    switch (status) {
+      case memorypb.MemoryNoteStatus.MEMORY_NOTE_STATUS_MANAGED:
+        return model_memory.MemoryNoteStatus.managed;
+      case memorypb.MemoryNoteStatus.MEMORY_NOTE_STATUS_UNMANAGED:
+        return model_memory.MemoryNoteStatus.unmanaged;
+      case memorypb.MemoryNoteStatus.MEMORY_NOTE_STATUS_WITHDRAWN:
+        return model_memory.MemoryNoteStatus.withdrawn;
+      case memorypb.MemoryNoteStatus.MEMORY_NOTE_STATUS_UNSPECIFIED:
+        return model_memory.MemoryNoteStatus.unspecified;
+    }
+    return model_memory.MemoryNoteStatus.unspecified;
+  }
+
+  static model_memory.MemoryCandidateKind _memoryCandidateKindToModel(
+    memorypb.MemoryCandidateKind kind,
+  ) {
+    switch (kind) {
+      case memorypb.MemoryCandidateKind.MEMORY_CANDIDATE_KIND_BELIEF:
+        return model_memory.MemoryCandidateKind.belief;
+      case memorypb.MemoryCandidateKind.MEMORY_CANDIDATE_KIND_PROFILE_EDIT:
+        return model_memory.MemoryCandidateKind.profileEdit;
+      case memorypb.MemoryCandidateKind.MEMORY_CANDIDATE_KIND_UNSPECIFIED:
+        return model_memory.MemoryCandidateKind.unspecified;
+    }
+    return model_memory.MemoryCandidateKind.unspecified;
+  }
+
+  static model_memory.MemoryCandidateState _memoryCandidateStateToModel(
+    memorypb.MemoryCandidateState state,
+  ) {
+    switch (state) {
+      case memorypb.MemoryCandidateState.MEMORY_CANDIDATE_STATE_PENDING:
+        return model_memory.MemoryCandidateState.pending;
+      case memorypb.MemoryCandidateState.MEMORY_CANDIDATE_STATE_PROMOTED:
+        return model_memory.MemoryCandidateState.promoted;
+      case memorypb.MemoryCandidateState.MEMORY_CANDIDATE_STATE_REJECTED:
+        return model_memory.MemoryCandidateState.rejected;
+      case memorypb.MemoryCandidateState.MEMORY_CANDIDATE_STATE_WITHDRAWN:
+        return model_memory.MemoryCandidateState.withdrawn;
+      case memorypb.MemoryCandidateState.MEMORY_CANDIDATE_STATE_UNSPECIFIED:
+        return model_memory.MemoryCandidateState.unspecified;
+    }
+    return model_memory.MemoryCandidateState.unspecified;
+  }
+
+  static model_memory.MemoryProvenanceKind _memoryProvenanceKindToModel(
+    memorypb.MemoryProvenanceKind kind,
+  ) {
+    switch (kind) {
+      case memorypb
+          .MemoryProvenanceKind
+          .MEMORY_PROVENANCE_KIND_PROMOTED_FROM_CANDIDATE:
+        return model_memory.MemoryProvenanceKind.promotedFromCandidate;
+      case memorypb.MemoryProvenanceKind.MEMORY_PROVENANCE_KIND_USER_AUTHORED:
+        return model_memory.MemoryProvenanceKind.userAuthored;
+      case memorypb.MemoryProvenanceKind.MEMORY_PROVENANCE_KIND_IMPORTED:
+        return model_memory.MemoryProvenanceKind.imported;
+      case memorypb.MemoryProvenanceKind.MEMORY_PROVENANCE_KIND_UNSPECIFIED:
+        return model_memory.MemoryProvenanceKind.unspecified;
+    }
+    return model_memory.MemoryProvenanceKind.unspecified;
   }
 }

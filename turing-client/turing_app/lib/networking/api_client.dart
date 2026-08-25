@@ -5,6 +5,7 @@ import '../models/audit.dart';
 import '../models/external_agent.dart';
 import '../models/integration.dart';
 import '../models/automation.dart';
+import '../models/memory.dart';
 import '../models/message.dart';
 import '../models/mcp_server.dart';
 import '../models/remote_egress.dart';
@@ -214,7 +215,6 @@ abstract class TuringApi implements RemoteEgressApi {
 
   /// Every SKILL.md discovered under the backend's skills directory.
   Future<List<Skill>> listSkills();
-
   Future<Skill> getSkill({required String skillId});
 
   /// Enabling a skill does not implicitly approve any capability.
@@ -228,6 +228,90 @@ abstract class TuringApi implements RemoteEgressApi {
     required String capability,
     required bool granted,
   });
+
+  /// The whole vault as the backend sees it: the toggle, the tier rows, the
+  /// two pinned documents, accepted beliefs, and everything sitting in the
+  /// inbox — including the reasons anything could not be read.
+  ///
+  /// This client holds no memory state of its own. It renders what this
+  /// returns and re-reads after every decision, because the vault is files the
+  /// user can also edit in Obsidian and a cached copy would be a guess.
+  Future<MemoryState> listMemoryState() {
+    throw const TuringApiException(
+      code: 'memory_unsupported',
+      message: 'This client cannot read memory state',
+    );
+  }
+
+  /// Turns memory as a whole on or off. Returns the settings the server now
+  /// holds, so the page never has to assume the write landed.
+  Future<MemorySettings> setMemoryEnabled({required bool enabled}) {
+    throw const TuringApiException(
+      code: 'memory_unsupported',
+      message: 'This client cannot change memory settings',
+    );
+  }
+
+  /// Accepts a proposal as a belief. [expectedContentHash] is compare-and-set
+  /// against the text the user actually read.
+  Future<MemoryCandidate> promoteMemoryCandidate({
+    required String candidateId,
+    required String expectedContentHash,
+  }) {
+    throw const TuringApiException(
+      code: 'memory_unsupported',
+      message: 'This client cannot promote memory candidates',
+    );
+  }
+
+  Future<MemoryCandidate> rejectMemoryCandidate({
+    required String candidateId,
+    required String expectedContentHash,
+    String reason = '',
+  }) {
+    throw const TuringApiException(
+      code: 'memory_unsupported',
+      message: 'This client cannot reject memory candidates',
+    );
+  }
+
+  /// Applies an accepted `profile_edit` proposal. [expectedContentHash] is
+  /// compare-and-set against the profile document, not against the proposal:
+  /// the question is whether profile.md still says what the user was shown.
+  Future<MemoryDocument> applyMemoryProfile({
+    required String candidateId,
+    required String content,
+    required String expectedContentHash,
+  }) {
+    throw const TuringApiException(
+      code: 'memory_unsupported',
+      message: 'This client cannot apply memory profile edits',
+    );
+  }
+
+  /// Saves persona.md as the user typed it. This is the only write path to the
+  /// persona in the whole system, and it exists for the user alone — no agent
+  /// surface reaches it.
+  Future<MemoryDocument> saveMemoryPersona({
+    required String content,
+    required String expectedContentHash,
+  }) {
+    throw const TuringApiException(
+      code: 'memory_unsupported',
+      message: 'This client cannot save the memory persona',
+    );
+  }
+
+  /// Saves profile.md as the user typed it, with no proposal involved.
+  Future<MemoryDocument> saveMemoryProfile({
+    required String content,
+    required String expectedContentHash,
+  }) {
+    throw const TuringApiException(
+      code: 'memory_unsupported',
+      message: 'This client cannot save the memory profile',
+    );
+  }
 
   /// The assistants the user has configured that do NOT run on this machine.
   /// Turing's own assistant is not among them: it is the default, and it is

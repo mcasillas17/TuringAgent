@@ -7,8 +7,10 @@ import 'package:turing_flutter_app/features/workspace/agents_page.dart';
 import 'package:turing_flutter_app/features/workspace/session_agent_bar.dart';
 import 'package:turing_flutter_app/features/workspace/integrations_page.dart';
 import 'package:turing_flutter_app/features/workspace/automations_page.dart';
+import 'package:turing_flutter_app/features/workspace/memory_page.dart';
 import 'package:turing_flutter_app/features/workspace/skills_page.dart';
 import 'package:turing_flutter_app/features/workspace/telemetry_page.dart';
+import 'package:turing_flutter_app/l10n/generated/app_localizations.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/external_agent.dart';
 import 'package:turing_flutter_app/models/automation.dart';
@@ -88,6 +90,18 @@ void main() {
       // Something only the real page draws.
       expect(find.text('7 days'), findsOneWidget);
       expect(find.text('Tokens'), findsOneWidget);
+    });
+
+    testWidgets('Memory opens the vault page, not a placeholder', (
+      tester,
+    ) async {
+      await _pumpShell(tester, api: _FakeApi(), size: _desktop);
+
+      await tester.tap(find.text('Memory'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(MemoryPage), findsOneWidget);
+      expect(find.text('Not built yet'), findsNothing);
     });
 
     testWidgets('MCPs lists discovered tools grouped by server', (
@@ -1124,6 +1138,8 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ResponsiveShell(
             apiClient: api,
             eventSourceFactory: () => _FakeEventSource(),
@@ -2326,6 +2342,10 @@ Future<void> _pumpShell(
 
   await tester.pumpWidget(
     MaterialApp(
+      // The real app installs these in lib/app.dart; a destination that speaks
+      // localized copy needs them here too.
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: ResponsiveShell(
         apiClient: api,
         eventSourceFactory: eventSourceFactory ?? () => _FakeEventSource(),

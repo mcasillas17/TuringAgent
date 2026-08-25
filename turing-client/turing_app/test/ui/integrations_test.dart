@@ -13,6 +13,7 @@ import 'package:turing_flutter_app/networking/api_client.dart';
 
 import '../support/no_audit_api.dart';
 import '../support/no_mcp_registry_api.dart';
+import '../support/no_memory_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_automations_api.dart';
@@ -678,6 +679,7 @@ class _IntegrationsApi
     with
         NoAuditApi,
         NoMcpRegistryApi,
+        NoMemoryApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoAutomationsApi,

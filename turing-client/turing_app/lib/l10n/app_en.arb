@@ -53,22 +53,103 @@
   "runDispatchRetryNotice": "Starting attempt {attempt} of {maxAttempts}.",
   "@runDispatchRetryNotice": {
     "placeholders": {
-      "attempt": {"type": "int"},
-      "maxAttempts": {"type": "int"}
+      "attempt": {
+        "type": "int"
+      },
+      "maxAttempts": {
+        "type": "int"
+      }
     }
   },
   "runRecoveryRetryNotice": "Recovering with attempt {attempt} of {maxAttempts}.",
   "@runRecoveryRetryNotice": {
     "placeholders": {
-      "attempt": {"type": "int"},
-      "maxAttempts": {"type": "int"}
+      "attempt": {
+        "type": "int"
+      },
+      "maxAttempts": {
+        "type": "int"
+      }
     }
   },
   "runRecoveryExhaustedNotice": "Recovery stopped after attempt {attempt} of {maxAttempts}.",
   "@runRecoveryExhaustedNotice": {
     "placeholders": {
-      "attempt": {"type": "int"},
-      "maxAttempts": {"type": "int"}
+      "attempt": {
+        "type": "int"
+      },
+      "maxAttempts": {
+        "type": "int"
+      }
     }
-  }
+  },
+  "memoryPageTitle": "Memory",
+  "memoryPageSubtitle": "Memory is a vault of Markdown files you can open and edit yourself. Turing reads it, proposes additions into the inbox, and writes nothing you have not accepted. persona.md is yours alone.",
+  "memoryEnabledTitle": "Memory is on",
+  "memoryDisabledTitle": "Memory is off",
+  "memoryEnabledDetail": "Turing pins persona.md and profile.md into each run and can search accepted beliefs.",
+  "memoryDisabledDetail": "Memory tools are unavailable while memory is off, and nothing is pinned into a run. The vault stays on disk and stays readable here.",
+  "memoryReasonUnspecified": "The server did not say whether this could be read.",
+  "memoryReasonNone": "Readable.",
+  "memoryReasonDisabled": "Memory is off, so this is not in use.",
+  "memoryReasonVaultMissing": "This is not in the vault yet.",
+  "memoryReasonVaultUnreadable": "This could not be read from the vault.",
+  "memoryReasonContentParseFailed": "This could not be parsed.",
+  "memoryReasonContentTooLarge": "This is too large to read.",
+  "memoryStatusUnspecified": "The server did not say who may write this.",
+  "memoryStatusManaged": "Turing may rewrite this file.",
+  "memoryStatusUnmanaged": "You have taken this note over; Turing reads it and never writes it.",
+  "memoryStatusWithdrawn": "Withdrawn.",
+  "memoryCandidateStateUnspecified": "The server did not say where this proposal stands.",
+  "memoryCandidateStatePending": "Waiting for you.",
+  "memoryCandidateStatePromoted": "Accepted.",
+  "memoryCandidateStateRejected": "Rejected.",
+  "memoryCandidateStateWithdrawn": "The conversation behind this was deleted, so it can no longer be accepted.",
+  "memoryCandidateKindUnspecified": "Proposal",
+  "memoryCandidateKindBelief": "Proposed belief",
+  "memoryCandidateKindProfileEdit": "Proposed change to profile.md",
+  "memoryTierUnspecified": "Memory",
+  "memoryTierPersona": "Persona",
+  "memoryTierProfile": "Profile",
+  "memoryTierBelief": "Beliefs",
+  "memoryTierNote": "Notes",
+  "memoryPersonaHeading": "persona.md",
+  "memoryPersonaDescription": "Who Turing is. You are its only author: Turing never writes it, and no proposal can reach it. It is pinned into every run as written.",
+  "memoryProfileHeading": "profile.md",
+  "memoryProfileDescription": "What Turing knows about you. You write it here; Turing can only propose changes into the inbox for you to accept.",
+  "memorySaveAction": "Save",
+  "memoryRereadAction": "Re-read from the vault",
+  "memoryUnmanagedDraftTitle": "Your own draft",
+  "memoryUnmanagedDraftDetail": "Turing did not create this file and will not move it. To accept it, move the file into beliefs/ in your vault.",
+  "memoryNoteUnsearchable": "This note is not searchable until the problem above is fixed.",
+  "memoryNoteWithdrawnEvidence": "The evidence behind this was withdrawn with its conversation.",
+  "memoryNoteNoEvidence": "Kept with no evidence behind it.",
+  "memoryEvidenceCount": "{count, plural, =1{1 piece of evidence} other{{count} pieces of evidence}}",
+  "@memoryEvidenceCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "memoryInboxHeading": "Inbox",
+  "memoryInboxEmpty": "Nothing is waiting for you.",
+  "memoryBeliefsHeading": "Beliefs",
+  "memoryBeliefsEmpty": "No accepted beliefs yet.",
+  "memoryPromoteAction": "Promote",
+  "memoryRejectAction": "Reject",
+  "memoryApplyAction": "Apply",
+  "memoryProposalUnreadable": "This proposal could not be read in full, so there is nothing here to accept.",
+  "memoryExpectedProfileHash": "Applies only while profile.md still matches {hash}.",
+  "@memoryExpectedProfileHash": {
+    "placeholders": {
+      "hash": {
+        "type": "String"
+      }
+    }
+  },
+  "memoryEgressPinnedHeading": "Memory pinned into this run:",
+  "memoryEgressToolsHeading": "The memory tools this run may call:",
+  "memoryEgressBodyMayBeSent": "full content may be sent",
+  "memoryEgressNameOnly": "name and location only"
 }
