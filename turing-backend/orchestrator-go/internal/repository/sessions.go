@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/persisttime"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runcorrelation"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
@@ -19,6 +21,25 @@ import (
 type Repository struct {
 	db         *db.DB
 	skillStore *skillfiles.Store
+	// memoryVault is the user's note vault. It is nil until SetMemoryVault
+	// attaches one, and every memory method refuses rather than pretending
+	// there is nothing to remember.
+	memoryVault *memoryfiles.Vault
+	// memoryVaultMutex serialises whole-vault passes. A file-writing reconcile
+	// and an index refresh both derive their answer from one scan, and two
+	// passes interleaving would let one write the projection of bytes the
+	// other is in the middle of rewriting. It is held across the scan and the
+	// index transaction, never across an unrelated call.
+	memoryVaultMutex sync.Mutex
+	// memoryReconcileScanAnchor overrides the timestamp a pass treats as "when
+	// this walk started" (test-only; always empty in production). It lets a
+	// test place a row on either side of the anchor without racing a clock.
+	memoryReconcileScanAnchor string
+	// memoryPromotionBarrier, when set (test-only; always nil in production),
+	// runs after a promotion has moved the file and before the transaction
+	// that would record it, so a test can prove what a failure in that window
+	// leaves behind and that reconcile can finish it.
+	memoryPromotionBarrier func() error
 	// mcpRegistrySnapshotBarrier, when set (test-only; always nil in
 	// production), is invoked by MCPRegistrySnapshot once its single read
 	// transaction is open and its aggregate tool-byte budget guard has

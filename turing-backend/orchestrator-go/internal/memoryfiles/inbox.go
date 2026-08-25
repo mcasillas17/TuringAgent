@@ -46,6 +46,12 @@ func (k NoteKind) Valid() bool {
 // CreateInboxNoteRequest is everything a model-produced candidate may supply.
 // There is deliberately no path field: the vault names the file.
 type CreateInboxNoteRequest struct {
+	// NoteID is optional and is never model input. A server that must record
+	// the file in a durable manifest before any byte is written mints the
+	// identity itself and hands it in, so it can reserve the exact name this
+	// write will use. Left empty, the vault mints one. Either way the vault
+	// still names the file, from InboxNoteRelPath's single rule.
+	NoteID       string
 	Kind         NoteKind
 	Title        string
 	Body         string
@@ -78,12 +84,18 @@ func (v *Vault) CreateInboxNote(ctx context.Context, request CreateInboxNoteRequ
 	if len(request.Body) > MaxCandidateBodyBytes {
 		return InboxNote{}, &LimitError{What: "candidate body", Limit: MaxCandidateBodyBytes, Got: len(request.Body)}
 	}
-	noteID, err := NewNoteID()
-	if err != nil {
+	noteID := request.NoteID
+	if noteID == "" {
+		minted, err := NewNoteID()
+		if err != nil {
+			return InboxNote{}, err
+		}
+		noteID = minted
+	} else if err := validateNoteID(noteID); err != nil {
 		return InboxNote{}, err
 	}
 	title := sanitizeTitle(request.Title)
-	relPath := InboxDirName + "/" + noteFileName(noteID, title)
+	relPath := InboxNoteRelPath(noteID, request.Title)
 	content := renderNote(noteFrontmatter{
 		ID:        noteID,
 		Kind:      request.Kind,
@@ -147,6 +159,34 @@ func NewNoteID() (string, error) {
 		return "", fmt.Errorf("mint note identity: %w", err)
 	}
 	return id.String(), nil
+}
+
+// ErrNoteIdentity refuses an identity that is not a ULID this package minted
+// the shape of. It is separate from ErrConfinement because a rejected identity
+// never became a path in the first place.
+var ErrNoteIdentity = errors.New("note identity is not a ULID")
+
+// validateNoteID is the gate on a caller-supplied identity. Only a
+// canonical 26-character Crockford base32 ULID passes, so nothing
+// path-shaped, empty or merely decorative can reach a filename. It is the
+// same shape NewNoteID emits, checked rather than assumed.
+func validateNoteID(noteID string) error {
+	parsed, err := ulid.ParseStrict(noteID)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrNoteIdentity, err)
+	}
+	if parsed.String() != noteID {
+		return fmt.Errorf("%w: identity is not in its canonical form", ErrNoteIdentity)
+	}
+	return nil
+}
+
+// InboxNoteRelPath is the one rule that names a candidate file. CreateInboxNote
+// writes exactly here, so a caller holding the identity can compute the path a
+// write will use — and reserve it — before the write happens. Keeping planning
+// and writing on the same function is what makes the two provably agree.
+func InboxNoteRelPath(noteID string, title string) string {
+	return InboxDirName + "/" + noteFileName(noteID, sanitizeTitle(title))
 }
 
 // ContentHash is the compare-and-set token used across this package.

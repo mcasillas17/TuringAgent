@@ -1,0 +1,441 @@
+package repository
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"path"
+	"strings"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
+)
+
+// Vault artifact states mirror the CHECK constraint on vault_artifacts.
+// "writing" is a durable reservation taken before any byte reaches the vault,
+// so a crash between the reservation and the write leaves evidence that a file
+// may exist rather than silence. It is deliberately the same vocabulary
+// sandbox_artifacts uses, over a different table: the two manifests answer
+// different retention questions and must never share rows.
+const (
+	VaultArtifactStateWriting      = "writing"
+	VaultArtifactStateReady        = "ready"
+	VaultArtifactStateDeleteFailed = "delete_failed"
+)
+
+// maxVaultArtifactPathBytes bounds a manifest path. It is far below the
+// vault's own path limit because everything this manifest records is a note
+// the orchestrator named itself.
+const maxVaultArtifactPathBytes = 512
+
+// vaultArtifactCleanupFailedAction is the audit action a failed vault cleanup
+// records, one row per artifact, mirroring session.artifact.cleanup.failed for
+// the sandbox manifest.
+const vaultArtifactCleanupFailedAction = "session.vault_artifact.cleanup.failed"
+
+var (
+	// ErrVaultArtifactPathScope reports a path that is not a note inside the
+	// vault inbox. The manifest only ever records candidate files, so anything
+	// naming beliefs/, a pinned document, or a path shaped to escape either is
+	// refused before a row exists.
+	ErrVaultArtifactPathScope = errors.New("vault artifact path is outside the vault inbox")
+	// ErrVaultArtifactSessionUnavailable reports a reservation for a session
+	// that does not exist or has stopped accepting work.
+	ErrVaultArtifactSessionUnavailable = errors.New("vault artifact session is unavailable")
+	// ErrVaultArtifactNotFound reports an artifact id with no manifest row in
+	// this session.
+	ErrVaultArtifactNotFound = errors.New("vault artifact not found")
+	// ErrVaultArtifactInvalidTransition refuses a state change the lifecycle
+	// does not allow, such as finalizing an artifact twice.
+	ErrVaultArtifactInvalidTransition = errors.New("vault artifact state transition is not allowed")
+	// ErrVaultArtifactExists reports a second reservation for a path this
+	// session already reserved.
+	ErrVaultArtifactExists = errors.New("vault artifact is already reserved")
+)
+
+// VaultArtifact is one manifest row: the orchestrator's record that a session
+// is responsible for a specific file inside the user's vault.
+type VaultArtifact struct {
+	ArtifactID string
+	SessionID  string
+	// VaultPath is the vault-relative path the user sees in Obsidian.
+	VaultPath string
+	// PhysicalPath is where the bytes live relative to the vault root. The
+	// vault has no separate physical layout today, so it equals VaultPath; the
+	// column is kept distinct because it is what the UNIQUE constraint and a
+	// future relocation are keyed on, and collapsing them would make a move
+	// indistinguishable from a rename the user did themselves.
+	PhysicalPath string
+	State        string
+	CreatedAt    string
+	FinalizedAt  string
+}
+
+// ReserveVaultArtifactInput is the server-verified description of a vault write
+// that is about to happen. There is no caller-supplied artifact id and no
+// physical path: both are derived here, so the manifest cannot be widened by
+// whoever is asking.
+type ReserveVaultArtifactInput struct {
+	SessionID string
+	VaultPath string
+}
+
+// validateVaultInboxPath is this manifest's own gate. It refuses everything
+// that is not a plain, already-normalised note path under inbox/, without
+// consulting the vault: a reservation is taken before any file exists, so it
+// cannot lean on the filesystem to tell it whether a path is legitimate.
+func validateVaultInboxPath(vaultPath string) (string, error) {
+	if vaultPath == "" || len(vaultPath) > maxVaultArtifactPathBytes {
+		return "", ErrVaultArtifactPathScope
+	}
+	if strings.ContainsRune(vaultPath, 0) || strings.ContainsAny(vaultPath, "\\") {
+		return "", ErrVaultArtifactPathScope
+	}
+	for _, symbol := range vaultPath {
+		if symbol < 0x20 || symbol == 0x7f {
+			return "", ErrVaultArtifactPathScope
+		}
+	}
+	if vaultPath != path.Clean(vaultPath) {
+		return "", ErrVaultArtifactPathScope
+	}
+	if !strings.HasPrefix(vaultPath, memoryfiles.InboxDirName+"/") {
+		return "", ErrVaultArtifactPathScope
+	}
+	if !strings.HasSuffix(vaultPath, ".md") {
+		return "", ErrVaultArtifactPathScope
+	}
+	for _, component := range strings.Split(vaultPath, "/") {
+		if component == "" || component == "." || component == ".." {
+			return "", ErrVaultArtifactPathScope
+		}
+		if len(component) > memoryfiles.MaxVaultPathComponentBytes {
+			return "", ErrVaultArtifactPathScope
+		}
+	}
+	return vaultPath, nil
+}
+
+// ReserveVaultArtifact records that a session is about to write one file into
+// the vault inbox, before the write happens. Existence and liveness of the
+// session are checked inside the insert itself, so a session that starts being
+// deleted concurrently either loses the race and cascades this row away or
+// wins it and prevents the row being created at all.
+func (r *Repository) ReserveVaultArtifact(ctx context.Context, input ReserveVaultArtifactInput) (VaultArtifact, error) {
+	vaultPath, err := validateVaultInboxPath(input.VaultPath)
+	if err != nil {
+		return VaultArtifact{}, err
+	}
+	if strings.TrimSpace(input.SessionID) == "" {
+		return VaultArtifact{}, ErrVaultArtifactSessionUnavailable
+	}
+	artifact := VaultArtifact{
+		ArtifactID:   ids.New("vaultart"),
+		SessionID:    input.SessionID,
+		VaultPath:    vaultPath,
+		PhysicalPath: vaultPath,
+		State:        VaultArtifactStateWriting,
+		CreatedAt:    now(),
+	}
+	result, err := r.db.ExecContext(ctx, `
+		INSERT INTO vault_artifacts (
+			id, session_id, vault_path, physical_path, state, created_at, finalized_at
+		)
+		SELECT ?, ?, ?, ?, ?, ?, NULL
+		WHERE EXISTS (
+			SELECT 1 FROM sessions WHERE id = ? AND deletion_state = 'active'
+		)
+	`,
+		artifact.ArtifactID,
+		artifact.SessionID,
+		artifact.VaultPath,
+		artifact.PhysicalPath,
+		artifact.State,
+		artifact.CreatedAt,
+		artifact.SessionID,
+	)
+	if isUniqueViolation(err) {
+		return VaultArtifact{}, ErrVaultArtifactExists
+	}
+	if err != nil {
+		return VaultArtifact{}, err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return VaultArtifact{}, err
+	}
+	if inserted != 1 {
+		return VaultArtifact{}, ErrVaultArtifactSessionUnavailable
+	}
+	return artifact, nil
+}
+
+// FinalizeVaultArtifact closes a reservation once the file is on disk. It only
+// advances a reservation that is still writing, so a second finalization is a
+// refused transition rather than a silently rewritten timestamp.
+func (r *Repository) FinalizeVaultArtifact(ctx context.Context, artifactID string, sessionID string) (VaultArtifact, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return VaultArtifact{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	artifact, err := vaultArtifactByID(ctx, tx, artifactID, sessionID)
+	if err != nil {
+		return VaultArtifact{}, err
+	}
+	if artifact.State != VaultArtifactStateWriting {
+		return VaultArtifact{}, ErrVaultArtifactInvalidTransition
+	}
+	finalizedAt := now()
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE vault_artifacts
+		SET state = ?, finalized_at = ?
+		WHERE id = ? AND session_id = ? AND state = ?
+	`, VaultArtifactStateReady, finalizedAt, artifactID, sessionID, VaultArtifactStateWriting); err != nil {
+		return VaultArtifact{}, err
+	}
+	artifact.State = VaultArtifactStateReady
+	artifact.FinalizedAt = finalizedAt
+	if err := tx.Commit(); err != nil {
+		return VaultArtifact{}, err
+	}
+	return artifact, nil
+}
+
+// ReleaseVaultArtifactReservation withdraws a reservation whose write never
+// happened. It refuses to touch anything already finalized, so a later failure
+// cannot erase the manifest row for a file that is sitting in the user's vault.
+func (r *Repository) ReleaseVaultArtifactReservation(ctx context.Context, artifactID string, sessionID string) (bool, error) {
+	result, err := r.db.ExecContext(ctx, `
+		DELETE FROM vault_artifacts
+		WHERE id = ? AND session_id = ? AND state = ?
+	`, artifactID, sessionID, VaultArtifactStateWriting)
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return changed == 1, nil
+}
+
+// SessionVaultArtifacts lists every vault file one session is responsible for.
+func (r *Repository) SessionVaultArtifacts(ctx context.Context, sessionID string) ([]VaultArtifact, error) {
+	return queryVaultArtifacts(ctx, r.db, `
+		SELECT id, session_id, vault_path, physical_path, state, created_at, COALESCE(finalized_at, '')
+		FROM vault_artifacts
+		WHERE session_id = ?
+		ORDER BY created_at, id
+	`, sessionID)
+}
+
+// PendingSessionVaultArtifacts is the cleaner's worklist: everything that has
+// not already been marked as a failed deletion. A delete_failed row stays in
+// the manifest and out of the worklist, so a retry reports the same honest
+// failure instead of quietly deleting the record of it.
+func (r *Repository) PendingSessionVaultArtifacts(ctx context.Context, sessionID string) ([]VaultArtifact, error) {
+	return queryVaultArtifacts(ctx, r.db, `
+		SELECT id, session_id, vault_path, physical_path, state, created_at, COALESCE(finalized_at, '')
+		FROM vault_artifacts
+		WHERE session_id = ? AND state <> ?
+		ORDER BY created_at, id
+	`, sessionID, VaultArtifactStateDeleteFailed)
+}
+
+// CountSessionVaultArtifacts reports how many vault files a session still owns,
+// which is what a withdrawal receipt reports as outstanding work.
+func (r *Repository) CountSessionVaultArtifacts(ctx context.Context, sessionID string) (int, error) {
+	var count int
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM vault_artifacts WHERE session_id = ?
+	`, sessionID).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// MarkSessionVaultArtifactsDeleteFailed records that cleanup reached the vault
+// and could not remove the files, so a withdrawal stays retryable instead of
+// reporting a completion that left the user's notes behind.
+//
+// The statement names vault_artifacts and only vault_artifacts: sandbox rows
+// have their own cleaner, their own policy column and their own audit action,
+// and a marker that reached across would retire a sandbox file's manifest row
+// on the strength of a vault failure.
+func (r *Repository) MarkSessionVaultArtifactsDeleteFailed(ctx context.Context, sessionID string, errorCode string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	artifactIDs, err := vaultArtifactIDsForFailure(ctx, tx, sessionID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE vault_artifacts
+		SET state = ?
+		WHERE session_id = ? AND state <> ?
+	`, VaultArtifactStateDeleteFailed, sessionID, VaultArtifactStateDeleteFailed); err != nil {
+		return err
+	}
+	payloadBytes, err := json.Marshal(map[string]string{
+		"state":     VaultArtifactStateDeleteFailed,
+		"errorCode": errorCode,
+	})
+	if err != nil {
+		return err
+	}
+	for _, artifactID := range artifactIDs {
+		if err := recordAuditTx(ctx, tx, "", "system", "", vaultArtifactCleanupFailedAction, artifactID, string(payloadBytes)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// DeleteVaultArtifacts removes manifest rows for exactly the artifacts the
+// cleaner deleted, and refuses to reach into any other manifest: an id that
+// names a sandbox artifact matches nothing here, so a mixed list removes the
+// vault rows and leaves the sandbox rows to their own cleaner.
+func (r *Repository) DeleteVaultArtifacts(ctx context.Context, artifactIDs []string) error {
+	if len(artifactIDs) == 0 {
+		return nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, artifactID := range artifactIDs {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM vault_artifacts WHERE id = ?`, artifactID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// PurgeSessionVaultArtifacts is the hook the session-deletion cleaner calls.
+//
+// It removes the vault files a session left in the inbox, then removes manifest
+// rows for exactly the files that were actually removed. Any failure leaves
+// every one of the session's rows marked delete_failed, with one redacted audit
+// row each, so a withdrawal that could not finish stays visible and retryable
+// instead of reporting a completion that left the user's notes behind.
+//
+// Removal goes through RemoveInboxNote, which refuses every path outside
+// inbox/. A missing file is a success: cleanup is retried after partial
+// failures, and a file that is already gone is the outcome that was wanted.
+//
+// Session deletion is not wired to this yet; the six-site cleaner list is the
+// next task's to change.
+func (r *Repository) PurgeSessionVaultArtifacts(ctx context.Context, sessionID string) (int, error) {
+	vault, err := r.memoryVaultOrError()
+	if err != nil {
+		return 0, err
+	}
+	artifacts, err := r.PendingSessionVaultArtifacts(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	removed := make([]string, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		if _, err := validateVaultInboxPath(artifact.VaultPath); err != nil {
+			return 0, errors.Join(err, r.MarkSessionVaultArtifactsDeleteFailed(ctx, sessionID, "vault_path_scope"))
+		}
+		if err := vault.RemoveInboxNote(ctx, artifact.VaultPath); err != nil {
+			// The rows already removed stay removed: their files are gone, and
+			// re-recording them would ask a retry to delete files that no
+			// longer exist.
+			return 0, errors.Join(
+				err,
+				r.DeleteVaultArtifacts(ctx, removed),
+				r.MarkSessionVaultArtifactsDeleteFailed(ctx, sessionID, "vault_remove_failed"),
+			)
+		}
+		removed = append(removed, artifact.ArtifactID)
+	}
+	if err := r.DeleteVaultArtifacts(ctx, removed); err != nil {
+		return 0, err
+	}
+	return len(removed), nil
+}
+
+func vaultArtifactIDsForFailure(ctx context.Context, tx *sql.Tx, sessionID string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id
+		FROM vault_artifacts
+		WHERE session_id = ? AND state <> ?
+		ORDER BY id
+	`, sessionID, VaultArtifactStateDeleteFailed)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var artifactIDs []string
+	for rows.Next() {
+		var artifactID string
+		if err := rows.Scan(&artifactID); err != nil {
+			return nil, err
+		}
+		artifactIDs = append(artifactIDs, artifactID)
+	}
+	return artifactIDs, rows.Err()
+}
+
+func vaultArtifactByID(ctx context.Context, q rowQuerier, artifactID string, sessionID string) (VaultArtifact, error) {
+	var artifact VaultArtifact
+	err := q.QueryRowContext(ctx, `
+		SELECT id, session_id, vault_path, physical_path, state, created_at, COALESCE(finalized_at, '')
+		FROM vault_artifacts
+		WHERE id = ? AND session_id = ?
+	`, artifactID, sessionID).Scan(
+		&artifact.ArtifactID,
+		&artifact.SessionID,
+		&artifact.VaultPath,
+		&artifact.PhysicalPath,
+		&artifact.State,
+		&artifact.CreatedAt,
+		&artifact.FinalizedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return VaultArtifact{}, ErrVaultArtifactNotFound
+	}
+	if err != nil {
+		return VaultArtifact{}, err
+	}
+	return artifact, nil
+}
+
+type contextQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func queryVaultArtifacts(ctx context.Context, q contextQuerier, query string, args ...any) ([]VaultArtifact, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var artifacts []VaultArtifact
+	for rows.Next() {
+		var artifact VaultArtifact
+		if err := rows.Scan(
+			&artifact.ArtifactID,
+			&artifact.SessionID,
+			&artifact.VaultPath,
+			&artifact.PhysicalPath,
+			&artifact.State,
+			&artifact.CreatedAt,
+			&artifact.FinalizedAt,
+		); err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts, rows.Err()
+}
