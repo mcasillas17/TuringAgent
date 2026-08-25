@@ -107,9 +107,10 @@ Why the selected path is sound, with its costs stated:
   build, not of a distro package. Codegen-style determinism applies: the
   SQLCipher version is pinned by tag and checksum in the Dockerfile.
 - **The link mechanism itself, recorded as selection evidence:** mattn's
-  `sqlite3_libsqlite3.go` hardcodes `-lsqlite3` (and, on darwin, Homebrew
-  `sqlite`-keg include/lib paths) — verified in the v1.14.24 module source —
-  so a SQLCipher named `libsqlcipher` is not found by the tag as-is. In the
+  [`sqlite3_libsqlite3.go` at v1.14.24](https://github.com/mattn/go-sqlite3/blob/v1.14.24/sqlite3_libsqlite3.go)
+  hardcodes `-lsqlite3` (and, on darwin, Homebrew `sqlite`-keg include/lib
+  paths) — verified in the module source — so a SQLCipher named
+  `libsqlcipher` is not found by the tag as-is. In the
   containerized builder the Dockerfile owns the mapping: it installs the
   pinned SQLCipher build into the builder prefix under the `sqlite3`
   library and header names the tag hardcodes (an install-prefix mapping the
@@ -292,7 +293,9 @@ orchestrator is **LOCKED**:
   recreated**. The encrypted database is opened only after a successful key
   probe, with open flags that exclude create semantics — concretely, two
   things in today's `connection.go` must change on the encrypted path: the
-  file URI carries `mode=rw` (not SQLite's default create-on-open), and
+  file URI carries `mode=rw` — SQLite's URI documentation specifies `rw`
+  opens read-write without create, versus `rwc`'s read-write-create
+  default ([sqlite.org/uri.html](https://sqlite.org/uri.html)) — and
   `secureSQLiteFile(path, true)`'s `O_CREAT` open must not run against a
   locked or missing encrypted database. A missing wrapper, a failed unwrap,
   or a wrong key each produce their own typed state.
@@ -317,10 +320,15 @@ orchestrator is **LOCKED**:
   offer unlock), *keystore unavailable* (wrapper present, unwrap failing —
   name the platform condition, offer retry), and *key loss* (wrapper
   missing/corrupt or KEK destroyed — state plainly that the encrypted
-  database cannot be opened, offer restore from a managed backup via
-  TUR-016, and **never** offer "start fresh" as a default action; creating
-  a new database is an explicit, separately confirmed operation that
-  renames the unreadable file aside rather than deleting it).
+  database cannot be opened, then offer three explicit actions in this
+  order: restore from a managed backup via TUR-016; **promote the retained
+  plaintext predecessor** `data/turing.db.pre-encryption` where one still
+  exists, with its data-loss window — everything written since the
+  encryption swap — stated in the confirmation (§Migration's rollback
+  paragraph is the authority on why this is a last resort); and, **never
+  as a default**, creating a new database — an explicit, separately
+  confirmed operation that renames the unreadable file aside rather than
+  deleting it).
 
 ## Connection discipline under the selected driver (locked)
 
@@ -449,8 +457,17 @@ Instead:
    renames nothing exists at `data/turing.db`, and today's
    `secureSQLiteFile(path, true)` + default open flags would silently
    create an empty database there — G5's named kill reached through the
-   migration path); **after the marker is removed**, the encrypted
-   database is authoritative with the predecessor intact. There is no
+   migration path). Completing forward is **order-checked, never blind**:
+   recovery first determines which renames already happened —
+   `data/turing.db.pre-encryption` absent means rename 1 has not run and
+   the canonical path still holds the plaintext original, so rename 1
+   executes first; only then rename 2. A recovery that runs rename 2
+   unconditionally would let POSIX `rename()` silently replace the
+   still-present plaintext original with the staging file, destroying the
+   predecessor this design promises to retain — the wrong implementation
+   G4's marker-write fault injection kills. **After the marker is
+   removed**, the encrypted database is authoritative with the
+   predecessor intact. There is no
    window with zero readable databases on disk, and no crash point with
    two authoritative ones.
 5. Cancellation (user-initiated from the status surface) before finalize
