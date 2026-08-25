@@ -444,3 +444,33 @@ func TestEvidenceExcerptHashDigestsTheSupportedContentNotTheSession(t *testing.T
 		t.Fatalf("healed excerpt hash = %q, want %q", excerptHash, healedNote.ContentHash)
 	}
 }
+
+// The status a promotion writes is a decision about support, not about the
+// file: a belief whose every citation names a conversation that is already
+// gone is still accepted — the user said yes — but it may not be answered with
+// as if it were still grounded in something they can go and read.
+//
+// The rule is tested directly because the promotion path reaches it only when
+// a caller supplies refs this package does not construct today. Reachable or
+// not, deleting the rule must break a test.
+func TestPromotedNoteStatusWithdrawsAClaimWhoseEveryCitationIsGone(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		refs     []string
+		live     []string
+		expected string
+	}{
+		{name: "one citation, nothing live", refs: []string{"session_a"}, live: nil, expected: MemoryNoteStatusWithdrawn},
+		{name: "several citations, nothing live", refs: []string{"session_a", "session_b"}, live: []string{}, expected: MemoryNoteStatusWithdrawn},
+		{name: "the cited conversation is still there", refs: []string{"session_a"}, live: []string{"session_a"}, expected: MemoryNoteStatusManaged},
+		{name: "one of two survives", refs: []string{"session_a", "session_b"}, live: []string{"session_b"}, expected: MemoryNoteStatusManaged},
+		{name: "nothing was cited, so nothing was lost", refs: nil, live: nil, expected: MemoryNoteStatusManaged},
+		{name: "an empty citation list is not a withdrawal", refs: []string{}, live: []string{}, expected: MemoryNoteStatusManaged},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if status := promotedNoteStatus(testCase.refs, testCase.live); status != testCase.expected {
+				t.Fatalf("a promotion citing %v with %v still live was marked %q, want %q", testCase.refs, testCase.live, status, testCase.expected)
+			}
+		})
+	}
+}

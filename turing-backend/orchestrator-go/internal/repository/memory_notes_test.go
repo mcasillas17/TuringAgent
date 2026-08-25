@@ -225,3 +225,35 @@ func seedMemoryNoteRow(t *testing.T, repo *Repository, noteID string, path strin
 		t.Fatalf("seed memory note %q: %v", noteID, err)
 	}
 }
+
+// The resolver a belief read hands the vault answers for exactly one identity:
+// the one that was looked up and authorised. Anything else means the vault
+// asked a different question than the one this read answered, and the only
+// safe reply to a question nobody authorised is silence.
+//
+// The rule is tested directly because the vault only ever asks back with the
+// identity it was given. Reachable or not, deleting the check must break a
+// test.
+func TestResolveMemoryBeliefPathAnswersOnlyForTheIdentityItAuthorised(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		requested     string
+		expectedPath  string
+		expectedFound bool
+	}{
+		{name: "a different identity", requested: "note_other", expectedPath: "", expectedFound: false},
+		{name: "no identity at all", requested: "", expectedPath: "", expectedFound: false},
+		{name: "the same identity in another case", requested: "NOTE_A", expectedPath: "", expectedFound: false},
+		{name: "the identity this read authorised", requested: "note_a", expectedPath: "beliefs/a.md", expectedFound: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			path, found := resolveMemoryBeliefPath("note_a", "beliefs/a.md", testCase.requested)
+			if found != testCase.expectedFound {
+				t.Fatalf("the resolver asked for %q answered found=%v, want %v", testCase.requested, found, testCase.expectedFound)
+			}
+			if path != testCase.expectedPath {
+				t.Fatalf("the resolver asked for %q answered path %q, want %q", testCase.requested, path, testCase.expectedPath)
+			}
+		})
+	}
+}

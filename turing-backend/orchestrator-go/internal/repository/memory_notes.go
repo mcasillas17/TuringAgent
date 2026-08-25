@@ -129,14 +129,19 @@ func (r *Repository) ReadMemoryBelief(ctx context.Context, noteID string) (memor
 		return memoryfiles.BeliefDocument{}, err
 	}
 	return vault.ReadBeliefByID(ctx, noteID, func(requested string) (string, bool) {
-		// The resolver answers for exactly one identity: the one that was
-		// looked up. Anything else means the vault asked a different question
-		// than the one this read authorised.
-		if requested != noteID {
-			return "", false
-		}
-		return note.Path, true
+		return resolveMemoryBeliefPath(noteID, note.Path, requested)
 	})
+}
+
+// resolveMemoryBeliefPath answers the vault's path question for exactly one
+// identity: the one that was looked up and so authorised by this read.
+// Anything else means the vault asked a different question than the one that
+// was authorised, and the answer to that is nothing at all.
+func resolveMemoryBeliefPath(authorisedID string, authorisedPath string, requested string) (string, bool) {
+	if requested != authorisedID {
+		return "", false
+	}
+	return authorisedPath, true
 }
 
 // MemoryNoteEvidence is one conversation's support for a note, and how many

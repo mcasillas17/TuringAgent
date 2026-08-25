@@ -66,13 +66,7 @@ func (r *Repository) PromoteMemoryCandidate(ctx context.Context, candidateID str
 	if err != nil {
 		return MemoryNote{}, err
 	}
-	status := MemoryNoteStatusManaged
-	if len(candidate.EvidenceRefs) > 0 && len(live) == 0 {
-		// Every conversation behind this claim is already gone. The note is
-		// still accepted, but nothing may answer with it as if it were
-		// grounded in something the user can still look at.
-		status = MemoryNoteStatusWithdrawn
-	}
+	status := promotedNoteStatus(candidate.EvidenceRefs, live)
 	note := MemoryNote{
 		NoteID:      belief.NoteID,
 		Path:        belief.RelPath,
@@ -93,6 +87,20 @@ func (r *Repository) PromoteMemoryCandidate(ctx context.Context, candidateID str
 		return MemoryNote{}, err
 	}
 	return note, nil
+}
+
+// promotedNoteStatus decides what an accepted belief may be answered with,
+// given the conversations it cites and the ones among those that still exist.
+//
+// Every conversation behind the claim already being gone does not undo the
+// acceptance — the note is kept — but nothing may answer with it as if it were
+// grounded in something the user can still look at. A note that cites nothing
+// never claimed that grounding, so it keeps its standing.
+func promotedNoteStatus(evidenceRefs []string, live []string) string {
+	if len(evidenceRefs) > 0 && len(live) == 0 {
+		return MemoryNoteStatusWithdrawn
+	}
+	return MemoryNoteStatusManaged
 }
 
 // ApplyMemoryProfileCandidate writes the user's profile on the authority of a
