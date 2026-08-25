@@ -24,6 +24,7 @@ type Client struct {
 	approvals    turingv1.ApprovalServiceClient
 	mcp          turingv1.McpRegistryServiceClient
 	integrations turingv1.IntegrationServiceClient
+	memory       turingv1.MemoryServiceClient
 }
 
 const defaultApprovalWaitTimeout = 71 * time.Second
@@ -56,6 +57,7 @@ func New(conn *grpc.ClientConn, token string) *Client {
 		approvals:    turingv1.NewApprovalServiceClient(conn),
 		mcp:          turingv1.NewMcpRegistryServiceClient(conn),
 		integrations: turingv1.NewIntegrationServiceClient(conn),
+		memory:       turingv1.NewMemoryServiceClient(conn),
 	}
 }
 
@@ -238,6 +240,18 @@ func (c *Client) ListIntegrationTools(ctx context.Context) (*turingv1.ListIntegr
 
 func (c *Client) CallIntegrationTool(ctx context.Context, request *turingv1.CallIntegrationToolRequest) (*turingv1.CallIntegrationToolResponse, error) {
 	return c.integrations.CallIntegrationTool(c.withAuth(ctx), request)
+}
+
+// ListMemoryTools and CallMemoryTool are the memory service's internal facet.
+// The identity layer refuses every other method on this connection, so these
+// two are the whole of what a runtime can ask memory for: what exists, and run
+// one of them. Reading the vault and deciding a proposal stay the user's.
+func (c *Client) ListMemoryTools(ctx context.Context) (*turingv1.ListMemoryToolsResponse, error) {
+	return c.memory.ListMemoryTools(c.withAuth(ctx), &turingv1.ListMemoryToolsRequest{})
+}
+
+func (c *Client) CallMemoryTool(ctx context.Context, request *turingv1.CallMemoryToolRequest) (*turingv1.CallMemoryToolResponse, error) {
+	return c.memory.CallMemoryTool(c.withAuth(ctx), request)
 }
 
 func (c *Client) withAuth(ctx context.Context) context.Context {

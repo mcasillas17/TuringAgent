@@ -13,6 +13,7 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 )
 
 func remoteDecision() *PendingEgressDecision {
@@ -35,8 +36,29 @@ func remoteDecision() *PendingEgressDecision {
 		SkillSnapshotFingerprint: skillFingerprint,
 		RecallApplicable:         true,
 		MemoryProfileApplicable:  false,
-		ConsentGrantedAt:         "2026-08-20T01:02:03.000000000Z",
+		// Every repository test enqueues against a vault-less repository, so the
+		// snapshot a run is bound to is two withheld tiers and no memory tools.
+		MemorySnapshotFingerprint: vaultlessMemoryFingerprint(),
+		ConsentGrantedAt:          "2026-08-20T01:02:03.000000000Z",
 	}
+}
+
+// vaultlessMemoryFingerprint is what EgressMemorySnapshot produces when the
+// orchestrator has no vault: both tiers withheld, nothing pinned. It is built
+// from the same production projection the enqueue re-checks against, so a
+// change to the preimage moves this too rather than leaving the tests pinned to
+// a stale shape.
+func vaultlessMemoryFingerprint(selectedTools ...string) string {
+	snapshot := MemoryEgressSnapshot{
+		Enabled: true,
+		Persona: withheldPinnedDocument(memoryfiles.PersonaFileName, memoryUnavailableVaultMissing),
+		Profile: withheldPinnedDocument(memoryfiles.ProfileFileName, memoryUnavailableVaultMissing),
+	}
+	fingerprint, err := backendegress.MemorySnapshotFingerprint(snapshot.Preimage(selectedTools))
+	if err != nil {
+		panic(err)
+	}
+	return fingerprint
 }
 
 func TestEgressCategoryPolicyCoversProtoEnum(t *testing.T) {

@@ -3443,6 +3443,38 @@ func mapJob(job repository.Job) *turingv1.AgentJob {
 		AssignmentAttemptId:            job.AssignmentAttemptID,
 		EgressDecision:                 toProtoEgressDecision(job.EgressDecision),
 		SelectedTools:                  append([]string(nil), job.SelectedTools...),
+		PinnedPersona:                  toProtoPinnedPersona(job.PinnedPersona),
+		PinnedProfile:                  toProtoPinnedProfile(job.PinnedProfile),
+		MemorySnapshotFingerprint:      job.MemorySnapshotFingerprint,
+	}
+}
+
+// toProtoPinnedPersona and toProtoPinnedProfile keep nil as nil. A job enqueued
+// before the vault existed was never offered a persona, and inventing an empty
+// one would tell the runtime the user wrote nothing — a claim about them that
+// nobody made.
+func toProtoPinnedPersona(snapshot *repository.PinnedPersonaSnapshot) *turingv1.PinnedPersonaSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	return &turingv1.PinnedPersonaSnapshot{
+		PersonaId:   snapshot.PersonaID,
+		DisplayName: snapshot.DisplayName,
+		Body:        snapshot.Body,
+		ContentHash: snapshot.ContentHash,
+		Withheld:    snapshot.Withheld,
+	}
+}
+
+func toProtoPinnedProfile(snapshot *repository.PinnedProfileSnapshot) *turingv1.PinnedProfileSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	return &turingv1.PinnedProfileSnapshot{
+		ProfileId:   snapshot.ProfileID,
+		Body:        snapshot.Body,
+		ContentHash: snapshot.ContentHash,
+		Withheld:    snapshot.Withheld,
 	}
 }
 
@@ -3495,6 +3527,7 @@ func toProtoEgressDecision(decision *repository.RunEgressDecision) *turingv1.Run
 		RequestDigest:             decision.RequestDigest,
 		RemoteMcpServers:          remoteMCPServers,
 		IntegrationEndpoints:      integrationEndpoints,
+		MemorySnapshotFingerprint: decision.MemorySnapshotFingerprint,
 	}
 }
 

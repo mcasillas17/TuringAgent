@@ -108,6 +108,7 @@ func integrationExecuteJob(t *testing.T, connectionID string) *turingv1.AgentJob
 			ConnectionId: connectionID, DisplayName: "Personal GitHub", Tools: []string{"github.list_issues"},
 		}},
 	}
+	bindRuntimeMemory(job)
 	if err := validateEgressDecisionShape(job); err != nil {
 		t.Fatalf("integration job egress decision: %v", err)
 	}
@@ -159,6 +160,7 @@ func TestFrozenIntegrationToolFailsWhenCurrentDiscoveryIsEmpty(t *testing.T) {
 			ConnectionId: "conn_revoked", DisplayName: "Revoked GitHub", Tools: []string{"github.list_issues"},
 		}},
 	}
+	bindRuntimeMemory(job)
 	provider := &scriptedProvider{events: []llm.StreamEvent{{Type: "delta", Text: "must not run"}}}
 	assistant := NewGeneralAssistant(
 		map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: provider},

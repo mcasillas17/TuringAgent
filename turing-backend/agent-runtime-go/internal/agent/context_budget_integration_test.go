@@ -372,6 +372,8 @@ func TestBuildBudgetedContextWithRecallDoesNotReturnOmittedRecall(t *testing.T) 
 		nil,
 		false,
 		nil,
+		false,
+		nil,
 		nil,
 		nil,
 		[]llm.ChatMessage{{Role: "user", Content: "current question"}},

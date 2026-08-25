@@ -12,6 +12,10 @@ import (
 var errContextBudgetExceeded = errors.New("required context exceeds the configured model window")
 
 type contextInput struct {
+	// memory is the pinned persona and profile. It sits beside skills as
+	// upstream, pre-decision context: both are built before the budget runs,
+	// because both are all-or-nothing units the budget can only accept or drop.
+	memory                    []llm.ChatMessage
 	skills                    []llm.ChatMessage
 	history                   []llm.ChatMessage
 	recall                    *llm.ChatMessage
@@ -19,6 +23,7 @@ type contextInput struct {
 	requiredToolNames         map[string]struct{}
 	excludedOptionalToolNames map[string]struct{}
 	skillIndexOmitted         bool
+	memoryOmitted             bool
 	// minimalToolResults marks synthetic protocol placeholders supplied by the
 	// caller for preflight. Real tool content is never identified by sniffing
 	// untrusted bytes.
@@ -29,6 +34,7 @@ type contextOmissions struct {
 	HistoryMessages   int
 	RecallOmitted     bool
 	SkillIndexOmitted bool
+	MemoryOmitted     bool
 	ToolDefinitions   int
 	ToolResults       int
 }
@@ -48,6 +54,9 @@ func (o contextOmissions) Notice() string {
 	if o.SkillIndexOmitted {
 		omitted = append(omitted, "enabled skill metadata")
 	}
+	if o.MemoryOmitted {
+		omitted = append(omitted, "pinned memory")
+	}
 	if o.ToolDefinitions > 0 {
 		label := "tool definitions"
 		if o.ToolDefinitions == 1 {
@@ -66,6 +75,22 @@ func (o contextOmissions) Notice() string {
 		return ""
 	}
 	return "Context window limit: omitted " + joinNoticeItems(omitted) + " from this model request."
+}
+
+// EventPayload is the structured half of the same statement Notice makes in
+// prose. It exists as one method rather than as a literal at the emit site so
+// that a field added to this struct and forgotten here is a test failure rather
+// than an omission the client is never told about: the exhaustiveness guard
+// counts keys against fields.
+func (o contextOmissions) EventPayload() map[string]any {
+	return map[string]any{
+		"historyMessagesOmitted": o.HistoryMessages,
+		"recallOmitted":          o.RecallOmitted,
+		"skillIndexOmitted":      o.SkillIndexOmitted,
+		"memoryOmitted":          o.MemoryOmitted,
+		"toolDefinitionsOmitted": o.ToolDefinitions,
+		"toolResultsOmitted":     o.ToolResults,
+	}
 }
 
 func joinNoticeItems(items []string) string {
@@ -108,9 +133,15 @@ func buildBudgetedContext(
 
 	selectedHistory := make([][]llm.ChatMessage, 0)
 	recallUsed := false
-	omissions := contextOmissions{SkillIndexOmitted: input.skillIndexOmitted}
+	omissions := contextOmissions{
+		SkillIndexOmitted: input.skillIndexOmitted,
+		MemoryOmitted:     input.memoryOmitted,
+	}
 	buildRequest := func() llm.ChatRequest {
-		messages := make([]llm.ChatMessage, 0, len(input.skills)+len(input.history)+len(liveMessages)+1)
+		messages := make([]llm.ChatMessage, 0, len(input.memory)+len(input.skills)+len(input.history)+len(liveMessages)+1)
+		// The persona leads, because it is the user's statement of who is
+		// answering and everything after it is read in that voice.
+		messages = append(messages, input.memory...)
 		if recallUsed && input.recall != nil {
 			messages = append(messages, *input.recall)
 		}

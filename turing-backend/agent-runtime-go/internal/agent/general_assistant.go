@@ -17,6 +17,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -49,6 +50,11 @@ type GeneralAssistantTools struct {
 	TotalToolTimeout     time.Duration
 	RegisteredMCPServers func(context.Context) (map[string]ToolLister, error)
 	IntegrationTools     func(context.Context) (ToolLister, error)
+	// MemoryTools is discovered per registry build rather than held as a fixed
+	// client, so the memory toggle reaches a connected worker: the orchestrator
+	// answers with an empty list when memory is off, and the registry rebuild it
+	// publishes takes the tools away without a restart.
+	MemoryTools func(context.Context) (ToolLister, error)
 }
 
 const (
@@ -295,12 +301,26 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
 		}
 		requiredToolNames := requiredSkillToolNames(skillIndexIncluded)
+		memoryMessages, memoryOmitted, err := buildMemoryMessagesWithinContext(
+			provider,
+			job.GetModel(),
+			job,
+			skillMessages,
+			liveMessages,
+			toolDefinitions,
+			requiredToolNames,
+		)
+		if err != nil {
+			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
+		}
 		budgeted, recallMessage, err := a.buildBudgetedContextWithRecall(
 			ctx,
 			provider,
 			job,
 			skillMessages,
 			skillIndexOmitted,
+			memoryMessages,
+			memoryOmitted,
 			requiredToolNames,
 			excludedOptionalSkillToolNames(skillIndexIncluded, skillIndexOmitted),
 			historyMessages,
@@ -319,15 +339,10 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		}
 		if notice := budgeted.Omissions.Notice(); notice != "" &&
 			(!omissionNoticeEmitted || budgeted.Omissions != lastOmissions) {
-			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, map[string]any{
-				"note":                   notice,
-				"reason":                 "context_budget",
-				"historyMessagesOmitted": budgeted.Omissions.HistoryMessages,
-				"recallOmitted":          budgeted.Omissions.RecallOmitted,
-				"skillIndexOmitted":      budgeted.Omissions.SkillIndexOmitted,
-				"toolDefinitionsOmitted": budgeted.Omissions.ToolDefinitions,
-				"toolResultsOmitted":     budgeted.Omissions.ToolResults,
-			})); err != nil {
+			payload := budgeted.Omissions.EventPayload()
+			payload["note"] = notice
+			payload["reason"] = "context_budget"
+			if err := emit(messageEvent(job, turingv1.TuringEventType_TURING_EVENT_TYPE_AGENT_RUN_STEP, payload)); err != nil {
 				return err
 			}
 			lastOmissions = budgeted.Omissions
@@ -508,7 +523,20 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		if err != nil {
 			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
 		}
+		prospectiveMemoryMessages, prospectiveMemoryOmitted, err := buildMemoryMessagesWithinContext(
+			provider,
+			job.GetModel(),
+			job,
+			prospectiveSkillMessages,
+			prospectiveLive,
+			toolDefinitions,
+			requiredSkillToolNames(prospectiveSkillIndexIncluded),
+		)
+		if err != nil {
+			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
+		}
 		if _, err := buildBudgetedContext(provider, job.GetModel(), contextInput{
+			memory:            prospectiveMemoryMessages,
 			skills:            prospectiveSkillMessages,
 			history:           historyMessages,
 			recall:            recallMessage,
@@ -519,6 +547,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				prospectiveSkillIndexOmitted,
 			),
 			skillIndexOmitted:  prospectiveSkillIndexOmitted,
+			memoryOmitted:      prospectiveMemoryOmitted,
 			minimalToolResults: minimalToolResults,
 		}, toolDefinitions); err != nil {
 			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
@@ -674,6 +703,8 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	job *turingv1.AgentJob,
 	skillMessages []llm.ChatMessage,
 	skillIndexOmitted bool,
+	memoryMessages []llm.ChatMessage,
+	memoryOmitted bool,
 	requiredToolNames map[string]struct{},
 	excludedOptionalToolNames map[string]struct{},
 	historyMessages []llm.ChatMessage,
@@ -682,12 +713,14 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	recallForContext func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool),
 ) (budgetedContext, *llm.ChatMessage, error) {
 	baseInput := contextInput{
+		memory:                    memoryMessages,
 		skills:                    skillMessages,
 		history:                   historyMessages,
 		live:                      liveMessages,
 		requiredToolNames:         requiredToolNames,
 		excludedOptionalToolNames: excludedOptionalToolNames,
 		skillIndexOmitted:         skillIndexOmitted,
+		memoryOmitted:             memoryOmitted,
 	}
 	budgeted, err := buildBudgetedContext(provider, job.GetModel(), baseInput, toolDefinitions)
 	if err != nil || recallForContext == nil {
@@ -733,11 +766,13 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 		return budgetedContext{}, nil, err
 	}
 	broadInput := contextInput{
+		memory:                    memoryMessages,
 		skills:                    skillMessages,
 		live:                      liveMessages,
 		requiredToolNames:         requiredToolNames,
 		excludedOptionalToolNames: excludedOptionalToolNames,
 		skillIndexOmitted:         skillIndexOmitted,
+		memoryOmitted:             memoryOmitted,
 	}
 	broad, err := buildBudgetedContext(provider, job.GetModel(), broadInput, toolDefinitions)
 	if err != nil {
@@ -877,6 +912,19 @@ discoveryLoop:
 					return nil, loadErr
 				}
 				servers["integrations"] = integrationClient
+			}
+			if a.tools.MemoryTools != nil {
+				memoryClient, loadErr := a.tools.MemoryTools(ctx)
+				if loadErr != nil {
+					a.registryMu.Lock()
+					discovery.err = loadErr
+					discovery.retryAfterLeaderCancel = discovery.generation != a.registryGeneration || parentCtx.Err() != nil
+					a.discovery = nil
+					close(discovery.done)
+					a.registryMu.Unlock()
+					return nil, loadErr
+				}
+				servers[backendegress.MemoryServerName] = memoryClient
 			}
 		}
 		registry, err := BuildToolRegistry(ctx, servers)

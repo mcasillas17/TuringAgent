@@ -37,6 +37,8 @@ func TestLocalRunAcceptsAnEgressDecisionForItsRemoteMCPServer(t *testing.T) {
 		},
 	}
 
+	bindRuntimeMemory(job)
+
 	if err := validateEgressDecisionShape(job); err != nil {
 		t.Fatalf("validateEgressDecisionShape: %v", err)
 	}

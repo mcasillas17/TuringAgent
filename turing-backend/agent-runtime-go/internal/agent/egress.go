@@ -36,6 +36,7 @@ func validateEgressDecisionShape(job *turingv1.AgentJob) error {
 		decision.GetModel() != job.GetModel() ||
 		decision.GetConsentGrantedAt() == nil ||
 		decision.GetSkillSnapshotFingerprint() == "" ||
+		decision.GetMemorySnapshotFingerprint() == "" ||
 		!slices.Equal(decision.GetSelectedTools(), job.GetSelectedTools()) {
 		return errors.New("remote run decision does not match its frozen job")
 	}
@@ -51,9 +52,24 @@ func validateEgressDecisionShape(job *turingv1.AgentJob) error {
 	if err != nil || skillFingerprint != decision.GetSkillSnapshotFingerprint() {
 		return errors.New("remote run skill snapshot differs from the egress decision")
 	}
+	// The memory binding is re-derived from the frozen job, never taken from the
+	// decision that is being checked, and it is checked in both directions: the
+	// job's own copy and the decision's have to be the same string as the one
+	// this process computes from the pinned snapshot it was handed.
+	memoryFingerprint, err := runtimeMemorySnapshotFingerprint(job)
+	if err != nil ||
+		memoryFingerprint != decision.GetMemorySnapshotFingerprint() ||
+		memoryFingerprint != job.GetMemorySnapshotFingerprint() {
+		return errors.New("remote run memory snapshot differs from the egress decision")
+	}
 	recallApplicable := providerRemote && job.GetExternalAgent() == nil
+	// An equality mirror, not a "must be false" gate. The orchestrator decided
+	// this flag from the vault and the frozen tools; this process decides it
+	// again from the same inputs, and any disagreement — claiming memory on a
+	// run that would send none, or denying it on one that would — ends the run
+	// before a provider is contacted.
 	if decision.GetRecallApplicable() != recallApplicable ||
-		decision.GetMemoryProfileApplicable() {
+		decision.GetMemoryProfileApplicable() != runtimeMemoryProfileApplicable(job) {
 		return errors.New("remote run context flags differ from the egress decision")
 	}
 	if providerRemote {
@@ -125,6 +141,9 @@ func validateEgressDecisionShape(job *turingv1.AgentJob) error {
 		}
 		if job.GetExternalAgent() == nil {
 			required = append(required, turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL)
+		}
+		if runtimeMemoryProfileApplicable(job) {
+			required = append(required, turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_MEMORY_PROFILE)
 		}
 	}
 	if providerRemote && len(job.GetSelectedTools()) > 0 {

@@ -50,6 +50,12 @@ var (
 	ErrEgressChallengeAlreadyUsed   = errors.New("egress challenge was already used")
 	ErrEgressDecisionInvalid        = errors.New("egress decision is invalid")
 	ErrEgressSkillSnapshotChanged   = fmt.Errorf("egress skill snapshot changed: %w", ErrEgressDecisionInvalid)
+	// ErrEgressMemorySnapshotChanged sits beside the skill sentinel and wraps
+	// the same generic invalidity, because a vault edited between consent and
+	// send is a decision that no longer describes what would be sent. It is
+	// distinguishable so the caller can say which of the two moved: "your
+	// persona changed" is actionable, "the egress decision is invalid" is not.
+	ErrEgressMemorySnapshotChanged = fmt.Errorf("egress memory snapshot changed: %w", ErrEgressDecisionInvalid)
 )
 
 var validEgressDataCategories = map[string]int{
@@ -80,6 +86,7 @@ type PendingEgressDecision struct {
 	SkillSnapshotFingerprint  string
 	RecallApplicable          bool
 	MemoryProfileApplicable   bool
+	MemorySnapshotFingerprint string
 	ConsentGrantedAt          string
 	RemoteMCPServers          []RemoteMCPServerEgress
 	IntegrationEndpoints      []IntegrationEndpointEgress
@@ -103,6 +110,7 @@ type RunEgressDecision struct {
 	SkillSnapshotFingerprint  string                      `json:"skillSnapshotFingerprint"`
 	RecallApplicable          bool                        `json:"recallApplicable"`
 	MemoryProfileApplicable   bool                        `json:"memoryProfileApplicable"`
+	MemorySnapshotFingerprint string                      `json:"memorySnapshotFingerprint"`
 	ConsentGrantedAt          string                      `json:"consentGrantedAt"`
 	RemoteMCPServers          []RemoteMCPServerEgress     `json:"remoteMcpServers"`
 	IntegrationEndpoints      []IntegrationEndpointEgress `json:"integrationEndpoints"`
@@ -131,6 +139,7 @@ func normalizePendingEgressDecision(input *PendingEgressDecision) (*PendingEgres
 		(normalized.ExternalAgentID != "" && normalized.ExternalCredentialRefHash == "") ||
 		(normalized.ExternalAgentID == "" && normalized.ExternalCredentialRefHash != "") ||
 		normalized.SkillSnapshotFingerprint == "" ||
+		normalized.MemorySnapshotFingerprint == "" ||
 		normalized.ConsentGrantedAt == "" ||
 		hasEmptyOrDuplicate(normalized.SelectedTools) {
 		return nil, ErrEgressDecisionInvalid
@@ -312,6 +321,7 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 		SkillSnapshotFingerprint:  pending.SkillSnapshotFingerprint,
 		RecallApplicable:          pending.RecallApplicable,
 		MemoryProfileApplicable:   pending.MemoryProfileApplicable,
+		MemorySnapshotFingerprint: pending.MemorySnapshotFingerprint,
 		ConsentGrantedAt:          pending.ConsentGrantedAt,
 		RemoteMCPServers:          append([]RemoteMCPServerEgress{}, pending.RemoteMCPServers...),
 		IntegrationEndpoints:      cloneIntegrationEndpoints(pending.IntegrationEndpoints),
@@ -324,8 +334,8 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 			endpoint, endpoint_host, data_categories_json, selected_tools_json,
 			skill_snapshot_fingerprint, recall_applicable,
 			memory_profile_applicable, consent_granted_at, remote_mcp_servers_json,
-			integration_endpoints_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			integration_endpoints_json, memory_snapshot_fingerprint
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		decision.DecisionID,
 		decision.Version,
@@ -347,6 +357,7 @@ func insertRunEgressDecisionTx(ctx context.Context, tx *sql.Tx, runID string, pe
 		decision.ConsentGrantedAt,
 		string(remoteMCPServersJSON),
 		string(integrationEndpointsJSON),
+		decision.MemorySnapshotFingerprint,
 	)
 	if err != nil {
 		if isUniqueViolation(err) &&
@@ -369,7 +380,7 @@ func (r *Repository) GetRunEgressDecision(ctx context.Context, runID string) (Ru
 			endpoint, endpoint_host, data_categories_json, selected_tools_json,
 			skill_snapshot_fingerprint, recall_applicable,
 			memory_profile_applicable, consent_granted_at, remote_mcp_servers_json,
-			integration_endpoints_json
+			integration_endpoints_json, memory_snapshot_fingerprint
 		FROM run_egress_decisions
 		WHERE run_id = ?
 	`, runID).Scan(
@@ -393,6 +404,7 @@ func (r *Repository) GetRunEgressDecision(ctx context.Context, runID string) (Ru
 		&decision.ConsentGrantedAt,
 		&remoteMCPServersJSON,
 		&integrationEndpointsJSON,
+		&decision.MemorySnapshotFingerprint,
 	)
 	if err != nil {
 		return RunEgressDecision{}, err

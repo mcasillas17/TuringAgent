@@ -435,6 +435,12 @@ func mapEnqueueError(ctx context.Context, err error) error {
 	if errors.Is(err, repository.ErrEgressSkillSnapshotChanged) {
 		return status.Error(codes.FailedPrecondition, "the skill snapshot changed since consent was prepared; prepare the send again")
 	}
+	// Checked before the generic invalidity below, because this sentinel wraps
+	// it: the wider arm would swallow every vault edit into "invalid decision"
+	// and leave the user with nothing to act on.
+	if errors.Is(err, repository.ErrEgressMemorySnapshotChanged) {
+		return status.Error(codes.FailedPrecondition, memoryDriftMessage)
+	}
 	if errors.Is(err, repository.ErrRemoteEgressConsentRequired) ||
 		errors.Is(err, repository.ErrLocalEgressDecisionForbidden) ||
 		errors.Is(err, repository.ErrEgressDecisionInvalid) ||

@@ -51,12 +51,13 @@ func TestEnqueueFingerprintChangesWithIntegrationConnectionSet(t *testing.T) {
 // under the old canonical shape must not silently satisfy a request composed
 // under the new one. Both literals are real fingerprints this exact input
 // produced — one at local version 5, captured before the memory bump, and one
-// after — so the test fails if the version is reverted, left behind, or moved
+// after, with the memory snapshot fingerprint carried in the canonical egress
+// shape — so the test fails if the version is reverted, left behind, or moved
 // past the value the rest of this change assumes.
 func TestEnqueueFingerprintVersionMovedForMemorySnapshot(t *testing.T) {
 	const (
 		preMemoryBumpFingerprint  = "afbd1ccaad482e75dbc4bbf7bfecfd7319208b16d48581248220368e17ce009d"
-		postMemoryBumpFingerprint = "7b6e076114bb2c05942e0f30d450ac851695e16f03f28463b40caa58e0036e71"
+		postMemoryBumpFingerprint = "e8afcf90ae33103f26616639cff263dae3948cb6eb9aac1655c669449edc0aa5"
 	)
 	input := EnqueueUserMessageInput{
 		SessionID: "session", Content: "hello", AgentID: "general_assistant",
