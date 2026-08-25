@@ -463,9 +463,11 @@ Instead:
    the canonical path still holds the plaintext original, so rename 1
    executes first; only then rename 2. (The presence check is sound across
    encrypt→rollback→re-encrypt cycles because a completed rollback
-   archives its predecessor under a distinct `superseded-*` name — §the
-   rollback paragraph — so a bare `.pre-encryption` always belongs to the
-   in-flight attempt.) A recovery that runs rename 2
+   archives its predecessor under a distinct `superseded-*` name *inside
+   its own marker-guarded finalize*, and a new encryption attempt refuses
+   to start over a bare `.pre-encryption` with no in-flight marker — §the
+   rollback paragraph — so a bare `.pre-encryption` during finalize always
+   belongs to the in-flight attempt.) A recovery that runs rename 2
    unconditionally would let POSIX `rename()` silently replace the
    still-present plaintext original with the staging file, destroying the
    predecessor this design promises to retain — the wrong implementation
@@ -512,17 +514,28 @@ loss window is stated to the user in the confirmation, and the unreadable
 encrypted file is renamed aside, never deleted. After a completed rollback
 the wrapper blob is destroyed, `DATABASE_ENCRYPTION` returns to `off`, and
 the inventory drops to the plaintext-era artifact set — **plus the
-predecessor's explicit disposition**: the now-stale
-`data/turing.db.pre-encryption` (frozen at the original swap; the rollback
-output supersedes it) is renamed to a distinct archival name,
-`data/turing.db.pre-encryption.superseded-<attempt-id>`, stays in the
-managed legacy-plaintext inventory, is offered for deletion in the rollback
-confirmation, and is destroyed at latest by retirement's predecessor sweep.
-The rename is load-bearing, not housekeeping: it keeps the bare
-`.pre-encryption` name meaning exactly one thing — *the current encryption
-attempt's rename 1 already ran* — so a later re-encryption's order-checked
-finalize recovery cannot misread a leftover from an earlier cycle. An
-interrupted rollback resumes exactly as an interrupted migration does —
+predecessor's explicit disposition, executed inside rollback's own
+marker-guarded finalize, not after it**: the first step under rollback's
+swap-intent marker renames the now-stale `data/turing.db.pre-encryption`
+(frozen at the original swap; the rollback output supersedes it) to the
+distinct archival name
+`data/turing.db.pre-encryption.superseded-<attempt-id>`; only then do the
+swap renames run, and the marker is not removed until archival and swap
+have all completed — so an interruption anywhere in the sequence resumes
+forward under the same order-checked marker rules, and a
+completed-rollback-with-unarchived-predecessor state cannot exist. The
+archived file stays in the managed legacy-plaintext inventory, is offered
+for deletion in the rollback confirmation, and is destroyed at latest by
+retirement's predecessor sweep. The rename is load-bearing, not
+housekeeping: it keeps the bare `.pre-encryption` name meaning exactly one
+thing — *the current encryption attempt's rename 1 already ran* — so a
+later re-encryption's order-checked finalize recovery cannot misread a
+leftover from an earlier cycle. Belt and suspenders, fail closed: a new
+encryption attempt **refuses to start** if a bare
+`data/turing.db.pre-encryption` exists with no in-flight marker — that
+state is anomalous by construction (user-placed file or a bug), and the
+refusal surfaces it for the operator instead of letting finalize guess.
+An interrupted rollback resumes exactly as an interrupted migration does —
 same journal, same marker rules.
 
 The schema migration runner is untouched: encryption is a file-level
