@@ -51,9 +51,12 @@ func (s *Server) ListMemoryState(ctx context.Context, _ *turingv1.ListMemoryStat
 	if err != nil {
 		return nil, err
 	}
-	if view.reason != turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE {
+	if view.reason != turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE &&
+		settings.GetUnavailableReason() != turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_DISABLED {
 		// A vault the pass could not read is stated on the settings row rather
-		// than rendered as an empty, healthy vault.
+		// than rendered as an empty, healthy vault — unless the row is already
+		// saying the user turned memory off, which outranks it. The folder
+		// problem is not lost: it stays on the tier it actually stops.
 		settings.UnavailableReason = view.reason
 		settings.ParseError = view.detail
 	}
@@ -94,6 +97,14 @@ func (s *Server) SetMemoryEnabled(ctx context.Context, req *turingv1.SetMemoryEn
 	return s.settings(ctx)
 }
 
+// settings describes what memory is doing, in the order a person can act on.
+//
+// A toggle that is off outranks every other reason. "Memory is off" is a
+// decision the user made and the one thing on this row they can change; a vault
+// that has since gone missing is a fact about a folder. Reporting the folder
+// instead would invite them to go and fix it and expect memory back — so the
+// row keeps saying DISABLED, and the vault's own trouble is reported beside the
+// tier it actually stops from being read.
 func (s *Server) settings(ctx context.Context) (*turingv1.MemorySettings, error) {
 	enabled, err := s.repo.MemoryEnabled(ctx)
 	if err != nil {
@@ -103,15 +114,16 @@ func (s *Server) settings(ctx context.Context) (*turingv1.MemorySettings, error)
 		Enabled:           enabled,
 		UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE,
 	}
-	if !enabled {
+	if s.vault != nil {
+		settings.VaultRoot = s.vault.Root()
+		settings.VaultWritable = unix.Access(s.vault.Root(), unix.W_OK) == nil
+	}
+	switch {
+	case !enabled:
 		settings.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_DISABLED
-	}
-	if s.vault == nil {
+	case s.vault == nil:
 		settings.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING
-		return settings, nil
 	}
-	settings.VaultRoot = s.vault.Root()
-	settings.VaultWritable = unix.Access(s.vault.Root(), unix.W_OK) == nil
 	return settings, nil
 }
 
@@ -515,7 +527,10 @@ func (s *Server) tiers(ctx context.Context, settings *turingv1.MemorySettings, v
 		UnavailableReason:     view.reason,
 		ParseError:            view.detail,
 	}
-	if !settings.GetEnabled() {
+	if !settings.GetEnabled() && view.reason == turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE {
+		// Memory being off is why this tier is idle, unless the vault has a
+		// problem of its own — in which case the tier is where that problem is
+		// visible, since the settings row is busy saying DISABLED.
 		beliefTier.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_DISABLED
 	}
 	return []*turingv1.MemoryTierState{persona, profileTier, beliefTier}

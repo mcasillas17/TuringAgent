@@ -192,10 +192,10 @@ func New(cfg config.Config) (*App, error) {
 	// which is a state the surface already has to describe — whereas failing
 	// here would take the whole app down over a folder the user has not made.
 	var memoryVault *memoryfiles.Vault
-	if cfg.MemoryVaultRoot != "" {
-		memoryVault, err = memoryfiles.Open(cfg.MemoryVaultRoot)
+	if cfg.MemoryRoot != "" {
+		memoryVault, err = memoryfiles.Open(cfg.MemoryRoot)
 		if err != nil {
-			log.Printf("memory vault at %s is unavailable: %v", cfg.MemoryVaultRoot, err)
+			log.Printf("memory vault at %s is unavailable: %v", cfg.MemoryRoot, err)
 			memoryVault = nil
 		}
 	}

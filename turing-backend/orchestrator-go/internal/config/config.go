@@ -47,11 +47,11 @@ type Config struct {
 	InternalPort   int
 	DatabasePath   string
 	SkillsRoot     string
-	// MemoryVaultRoot is the folder the user can open in their own editor.
+	// MemoryRoot is the folder the user can open in their own editor.
 	// A root that does not exist is not fatal: memory reports itself
 	// unavailable and offers no tools, which is a state the app already has to
 	// render, rather than refusing to start.
-	MemoryVaultRoot           string
+	MemoryRoot                string
 	MCPConfigRoot             string
 	OllamaBaseURL             string
 	OllamaModel               string
@@ -335,9 +335,9 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if !filepath.IsAbs(skillsRoot) || filepath.Clean(skillsRoot) != skillsRoot {
 		return Config{}, fmt.Errorf("SKILLS_ROOT must be a clean absolute path")
 	}
-	memoryVaultRoot := stringValue("MEMORY_VAULT_ROOT", "/memory")
-	if !filepath.IsAbs(memoryVaultRoot) || filepath.Clean(memoryVaultRoot) != memoryVaultRoot {
-		return Config{}, fmt.Errorf("MEMORY_VAULT_ROOT must be a clean absolute path")
+	memoryRoot := stringValue("MEMORY_ROOT", "/memory")
+	if !filepath.IsAbs(memoryRoot) || filepath.Clean(memoryRoot) != memoryRoot {
+		return Config{}, fmt.Errorf("MEMORY_ROOT must be a clean absolute path")
 	}
 	mcpConfigRoot := stringValue("MCP_CONFIG_ROOT", "/mcp")
 	if !filepath.IsAbs(mcpConfigRoot) || filepath.Clean(mcpConfigRoot) != mcpConfigRoot {
@@ -357,7 +357,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		InternalPort:              internalPort,
 		DatabasePath:              stringValue("DATABASE_PATH", "/app/data/turing.db"),
 		SkillsRoot:                skillsRoot,
-		MemoryVaultRoot:           memoryVaultRoot,
+		MemoryRoot:                memoryRoot,
 		MCPConfigRoot:             mcpConfigRoot,
 		OllamaBaseURL:             ollamaEndpoint.Canonical,
 		OllamaModel:               stringValue("OLLAMA_MODEL", "qwen2.5:7b"),

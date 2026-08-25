@@ -2,8 +2,9 @@ package memory
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -40,11 +41,14 @@ var (
 //
 // The order of the gates is the design, not an accident:
 //
-//	the toggle first, so an off switch refuses every tool whatever the registry
-//	or the policy says; then whether the run is unattended, because memory is
-//	never touched with nobody in front of it and a tool the user marked safe
-//	would otherwise sail past an allowlist it never reaches; then the policy;
-//	then the arguments.
+//	identity first — the run either exists in this orchestrator's own tables or
+//	the call is over, because a run id is the only thing a caller names and
+//	everything after this is an answer about that run; then whether anybody is
+//	in front of it, because memory is never touched on an unattended run and a
+//	tool the user marked safe would otherwise sail past an allowlist it never
+//	reaches; then whether there is a vault to answer from at all; then the
+//	toggle, so an off switch refuses every tool whatever the registry says;
+//	then the policy; then the arguments.
 //
 // Nothing here reads a session id, a path or a scope from the caller. The run
 // names itself and everything else is resolved from the orchestrator's own
@@ -57,6 +61,12 @@ func (s *Server) CallMemoryTool(ctx context.Context, req *turingv1.CallMemoryToo
 	if !known {
 		return nil, status.Error(codes.NotFound, "memory tool not found")
 	}
+
+	run, err := s.authorizeRun(ctx, req.GetRunId())
+	if err != nil {
+		return nil, err
+	}
+
 	if s.vault == nil {
 		return nil, status.Error(codes.FailedPrecondition, "the memory vault is not available")
 	}
@@ -67,14 +77,6 @@ func (s *Server) CallMemoryTool(ctx context.Context, req *turingv1.CallMemoryToo
 	}
 	if !enabled {
 		return nil, status.Error(codes.FailedPrecondition, "memory is turned off")
-	}
-
-	// The grant is read from automation_runs by run id. A caller cannot claim
-	// to be attended: the row either exists for this run or it does not.
-	if _, unattended, err := s.repo.GetAutomationRunGrant(ctx, req.GetRunId()); err != nil {
-		return nil, status.Error(codes.Internal, "read automation grant failed")
-	} else if unattended {
-		return nil, status.Error(codes.PermissionDenied, "memory tools are not available to automations")
 	}
 
 	args := req.GetArgs().AsMap()
@@ -118,10 +120,40 @@ func (s *Server) CallMemoryTool(ctx context.Context, req *turingv1.CallMemoryToo
 	case ToolRead:
 		return s.callRead(ctx, args)
 	case ToolRemember:
-		return s.callRemember(ctx, req.GetRunId(), args)
+		return s.callRemember(ctx, run, args)
 	default:
 		return nil, status.Error(codes.NotFound, "memory tool not found")
 	}
+}
+
+// authorizeRun answers who is calling, and answers it from the orchestrator's
+// own tables.
+//
+// Two questions live here and neither is the caller's to answer. Does this run
+// exist: a run id is the whole of the identity a memory tool call carries, and
+// a fabricated one must die before the toggle is read, before the policy is
+// read, and long before anything opens the vault — "no accepted memory matched
+// that query" is itself a statement about the user, and a caller that guessed
+// an id is not entitled to one. And is anybody in front of it: that is read
+// from automation_runs by the same id, because the request has no field for a
+// caller to claim attendance with and must never grow one.
+func (s *Server) authorizeRun(ctx context.Context, runID string) (repository.Run, error) {
+	run, err := s.repo.GetRun(ctx, runID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// One message for a run that never existed and a run this caller may
+		// not use: which of the two it is, is not something a caller gets to
+		// probe for.
+		return repository.Run{}, status.Error(codes.PermissionDenied, "this run may not use memory")
+	}
+	if err != nil {
+		return repository.Run{}, status.Error(codes.Internal, "read run failed")
+	}
+	if _, unattended, err := s.repo.GetAutomationRunGrant(ctx, runID); err != nil {
+		return repository.Run{}, status.Error(codes.Internal, "read automation grant failed")
+	} else if unattended {
+		return repository.Run{}, status.Error(codes.PermissionDenied, "memory tools are not available to automations")
+	}
+	return run, nil
 }
 
 // requireExactArguments refuses anything the tool did not declare.
@@ -130,20 +162,22 @@ func (s *Server) CallMemoryTool(ctx context.Context, req *turingv1.CallMemoryToo
 // reaches the repository, and regardless of what the model believed the schema
 // said. Confinement that depended on the model reading additionalProperties
 // would not be confinement.
+//
+// The offending key is never named back. An argument name is the caller's own
+// bytes: it can be a megabyte of padding, or a secret dressed up as a field
+// name, and a refusal that repeated it would carry it into every status, every
+// event and every log line that quotes one. So the message is assembled from
+// what this tool declares and nothing else — which makes both its contents and
+// its length ours rather than the caller's.
 func requireExactArguments(tool memoryTool, args map[string]any) error {
 	allowed := make(map[string]struct{}, len(tool.arguments))
 	for _, name := range tool.arguments {
 		allowed[name] = struct{}{}
 	}
-	unknown := make([]string, 0)
 	for name := range args {
 		if _, ok := allowed[name]; !ok {
-			unknown = append(unknown, name)
+			return fmt.Errorf("%s takes only these arguments: %s", tool.name, strings.Join(tool.arguments, ", "))
 		}
-	}
-	if len(unknown) > 0 {
-		sort.Strings(unknown)
-		return fmt.Errorf("%s does not take %s", tool.name, strings.Join(unknown, ", "))
 	}
 	for _, name := range tool.required {
 		if _, present := args[name]; !present {
@@ -242,7 +276,7 @@ func (s *Server) callRead(ctx context.Context, args map[string]any) (*turingv1.C
 	return framedResult(readFraming, document.Content)
 }
 
-func (s *Server) callRemember(ctx context.Context, runID string, args map[string]any) (*turingv1.CallMemoryToolResponse, error) {
+func (s *Server) callRemember(ctx context.Context, run repository.Run, args map[string]any) (*turingv1.CallMemoryToolResponse, error) {
 	title, err := requiredRuneBoundedArgument(args, "title", maxMemoryTitleRunes)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -261,14 +295,10 @@ func (s *Server) callRemember(ctx context.Context, runID string, args map[string
 		kind = text
 	}
 
-	// The conversation this proposal belongs to is read from the run, never
-	// taken from the caller: provenance is what makes a memory withdrawable
-	// when its conversation is deleted, and a model that could name the session
-	// could attach its claim to someone else's.
-	run, err := s.repo.GetRun(ctx, runID)
-	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, "this run cannot file a memory")
-	}
+	// The conversation this proposal belongs to comes from the run the identity
+	// gate already resolved, never from the caller: provenance is what makes a
+	// memory withdrawable when its conversation is deleted, and a model that
+	// could name the session could attach its claim to someone else's.
 	if run.SessionID == "" {
 		return nil, status.Error(codes.FailedPrecondition, "this run has no conversation to file a memory against")
 	}

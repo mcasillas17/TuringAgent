@@ -2,8 +2,10 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -26,9 +28,61 @@ func (n *countingNotifier) NotifyMCPRegistryChanged(context.Context) error {
 	return nil
 }
 
+// recordedAudit is one redacted trail entry, kept whole so a test can assert
+// what a refusal did and did not write down.
+type recordedAudit struct {
+	action  string
+	target  string
+	payload map[string]any
+}
+
+// recordingAudit stands in for the audit service when the thing under test is
+// what reaches the trail rather than how it is stored.
+type recordingAudit struct{ records []recordedAudit }
+
+func (a *recordingAudit) Record(_ context.Context, _ string, _ string, _ string, action string, target string, payload map[string]any) error {
+	a.records = append(a.records, recordedAudit{action: action, target: target, payload: payload})
+	return nil
+}
+
+// text renders everything this recorder has seen as one string, which is the
+// shape a "this must appear nowhere" assertion actually needs.
+func (a *recordingAudit) text() string {
+	var builder strings.Builder
+	for _, record := range a.records {
+		fmt.Fprintf(&builder, "%s %s %v\n", record.action, record.target, record.payload)
+	}
+	return builder.String()
+}
+
 func newMemoryService(t *testing.T) (*Server, *repository.Repository, *memoryfiles.Vault, context.Context) {
 	t.Helper()
-	database, err := db.Open(filepath.Join(t.TempDir(), "turing.db"))
+	return newMemoryServiceAt(t, filepath.Join(t.TempDir(), "turing.db"), newVaultRoot(t), nil)
+}
+
+// newVaultRoot lays out an empty vault the way init.sh provisions one.
+func newVaultRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for _, dir := range []string{memoryfiles.InboxDirName, memoryfiles.BeliefsDirName} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o700); err != nil {
+			t.Fatalf("prepare vault dir %q: %v", dir, err)
+		}
+	}
+	return root
+}
+
+// newMemoryServiceAt builds the whole stack over paths the caller names, so a
+// test can put a second one over the same database and vault — which is what
+// a restart is.
+func newMemoryServiceAt(
+	t *testing.T,
+	dbPath string,
+	root string,
+	recorder AuditRecorder,
+) (*Server, *repository.Repository, *memoryfiles.Vault, context.Context) {
+	t.Helper()
+	database, err := db.Open(dbPath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -37,18 +91,15 @@ func newMemoryService(t *testing.T) (*Server, *repository.Repository, *memoryfil
 		t.Fatalf("apply migrations: %v", err)
 	}
 	repo := repository.New(database)
-	root := t.TempDir()
-	for _, dir := range []string{memoryfiles.InboxDirName, memoryfiles.BeliefsDirName} {
-		if err := os.MkdirAll(filepath.Join(root, dir), 0o700); err != nil {
-			t.Fatalf("prepare vault dir %q: %v", dir, err)
-		}
-	}
 	vault, err := memoryfiles.Open(root)
 	if err != nil {
 		t.Fatalf("open vault: %v", err)
 	}
 	repo.SetMemoryVault(vault)
-	return New(repo, vault, audit.New(repo)), repo, vault, context.Background()
+	if recorder == nil {
+		recorder = audit.New(repo)
+	}
+	return New(repo, vault, recorder), repo, vault, context.Background()
 }
 
 func newRun(t *testing.T, repo *repository.Repository, ctx context.Context) (string, string) {
@@ -97,17 +148,32 @@ func newAutomationRun(t *testing.T, repo *repository.Repository, ctx context.Con
 
 func setPolicies(t *testing.T, repo *repository.Repository, ctx context.Context, policy string) {
 	t.Helper()
-	discovered := make([]repository.DiscoveredTool, 0, 3)
-	for _, tool := range []string{ToolSearch, ToolRead, ToolRemember} {
+	setPolicyPerTool(t, repo, ctx, map[string]string{
+		ToolSearch: policy, ToolRead: policy, ToolRemember: policy,
+	})
+}
+
+// setPolicyPerTool gives each tool its own policy class, so a gate that is
+// meant to hold whatever the policy says can be tested against a mixture
+// rather than against three copies of one answer.
+func setPolicyPerTool(t *testing.T, repo *repository.Repository, ctx context.Context, policies map[string]string) {
+	t.Helper()
+	tools := make([]string, 0, len(policies))
+	for tool := range policies {
+		tools = append(tools, tool)
+	}
+	sort.Strings(tools)
+	discovered := make([]repository.DiscoveredTool, 0, len(tools))
+	for _, tool := range tools {
 		discovered = append(discovered, repository.DiscoveredTool{
-			ServerName: ServerName, ToolName: tool, SchemaJSON: `{"type":"object"}`, Policy: policy,
+			ServerName: ServerName, ToolName: tool, SchemaJSON: `{"type":"object"}`, Policy: policies[tool],
 		})
 	}
 	if err := repo.UpsertTools(ctx, discovered); err != nil {
 		t.Fatalf("UpsertTools: %v", err)
 	}
-	for _, tool := range []string{ToolSearch, ToolRead, ToolRemember} {
-		if err := repo.SetToolPolicyByName(ctx, ServerName, tool, policy); err != nil {
+	for _, tool := range tools {
+		if err := repo.SetToolPolicyByName(ctx, ServerName, tool, policies[tool]); err != nil {
 			t.Fatalf("SetToolPolicyByName(%s): %v", tool, err)
 		}
 	}

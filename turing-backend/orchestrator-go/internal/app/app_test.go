@@ -1204,7 +1204,7 @@ func newMemoryTestApp(t *testing.T) *App {
 		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret: "approval-secret",
 		DatabasePath:      t.TempDir() + "/turing.db",
-		MemoryVaultRoot:   root,
+		MemoryRoot:        root,
 		OllamaModel:       "llama3.2",
 		OpenAIModel:       "gpt-4o-mini",
 	})
