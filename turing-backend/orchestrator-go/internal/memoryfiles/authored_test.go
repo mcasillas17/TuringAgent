@@ -259,3 +259,67 @@ func assertFileContent(t *testing.T, path string, want string) {
 		t.Fatalf("%q = %q, want %q", path, onDisk, want)
 	}
 }
+
+// Emptying a pinned document is a thing the user is allowed to decide.
+//
+// The primitive writes what it was handed, including nothing at all: persona.md
+// is the user's own instruction channel, and a vault that could only ever add
+// to it would leave them unable to take back words they had already given a
+// model. The compare-and-set still applies, so the clear is made against the
+// text they were looking at.
+func TestSavePersonaAcceptsAnIntentionalClear(t *testing.T) {
+	vault := newTestVault(t)
+	personaPath := writeVaultFile(t, vault, PersonaFileName, "# Persona\n\nOld.\n")
+
+	saved, err := vault.SavePersona(context.Background(), SavePersonaRequest{
+		ExpectedContentHash: ContentHash("# Persona\n\nOld.\n"),
+		Content:             "",
+	})
+	if err != nil {
+		t.Fatalf("clear persona: %v", err)
+	}
+	if saved.Content != "" || saved.ContentHash != ContentHash("") {
+		t.Fatalf("saved = %+v, want an empty document", saved)
+	}
+	onDisk, err := os.ReadFile(personaPath)
+	if err != nil {
+		t.Fatalf("read persona: %v", err)
+	}
+	if len(onDisk) != 0 {
+		t.Fatalf("persona on disk = %q, want it emptied", onDisk)
+	}
+	// The pinned loader is the other half of the promise: a cleared document
+	// pins nothing, rather than reading back as unavailable.
+	pinned := vault.LoadPersona(context.Background())
+	if !pinned.Available || pinned.Reason != UnavailableNone {
+		t.Fatalf("pinned persona = %+v, want an available, empty document", pinned)
+	}
+	if pinned.Content != "" {
+		t.Fatalf("pinned persona content = %q, want nothing pinned", pinned.Content)
+	}
+}
+
+// Whitespace is the same decision typed differently. The file keeps the bytes
+// the user wrote, and the pin — which is what a model would see — is empty.
+func TestSaveProfileAcceptsWhitespaceAsAClear(t *testing.T) {
+	vault := newTestVault(t)
+	profilePath := writeVaultFile(t, vault, ProfileFileName, "# Profile\n\nOld.\n")
+
+	if _, err := vault.SaveProfile(context.Background(), SaveProfileRequest{
+		ExpectedContentHash: ContentHash("# Profile\n\nOld.\n"),
+		Content:             "   \n\t\n",
+	}); err != nil {
+		t.Fatalf("clear profile: %v", err)
+	}
+	onDisk, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatalf("read profile: %v", err)
+	}
+	if string(onDisk) != "   \n\t\n" {
+		t.Fatalf("profile on disk = %q, want exactly what was typed", onDisk)
+	}
+	pinned := vault.LoadProfile(context.Background())
+	if !pinned.Available || pinned.Content != "" {
+		t.Fatalf("pinned profile = %+v, want an available document pinning nothing", pinned)
+	}
+}

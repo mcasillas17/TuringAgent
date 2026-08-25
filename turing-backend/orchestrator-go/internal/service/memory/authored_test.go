@@ -160,14 +160,87 @@ func TestMemoryProfileHandSaveLeavesPendingProposalsAlone(t *testing.T) {
 	}
 }
 
-func TestMemoryDocumentSavesRefuseEmptyContent(t *testing.T) {
+// Clearing a pinned document is the user's decision to make.
+//
+// Refusing an empty save left the user unable to take back words they had
+// already given a model: the only remaining route was to leave Turing, open the
+// vault and empty the file by hand, which is precisely the "you cannot fix this
+// from here" the Memory page exists to close. The compare-and-set still holds,
+// so the clear is made against the text they were reading.
+func TestMemoryDocumentSavesAcceptAnIntentionalClear(t *testing.T) {
 	service, _, _, ctx := newMemoryService(t)
 
-	if _, err := service.SaveMemoryPersona(ctx, &turingv1.SaveMemoryPersonaRequest{Content: "   \n"}); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("blank persona save error = %v, want InvalidArgument", err)
+	persona, err := service.SaveMemoryPersona(ctx, &turingv1.SaveMemoryPersonaRequest{
+		Content: "# Persona\n\nBe direct.\n",
+	})
+	if err != nil {
+		t.Fatalf("SaveMemoryPersona: %v", err)
 	}
-	if _, err := service.SaveMemoryProfile(ctx, &turingv1.SaveMemoryProfileRequest{Content: ""}); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("blank profile save error = %v, want InvalidArgument", err)
+	cleared, err := service.SaveMemoryPersona(ctx, &turingv1.SaveMemoryPersonaRequest{
+		ExpectedContentHash: persona.GetPersona().GetContentHash(),
+		Content:             "",
+	})
+	if err != nil {
+		t.Fatalf("clearing the persona was refused: %v", err)
+	}
+	if cleared.GetPersona().GetContent() != "" {
+		t.Fatalf("cleared persona = %q, want it empty", cleared.GetPersona().GetContent())
+	}
+
+	profile, err := service.SaveMemoryProfile(ctx, &turingv1.SaveMemoryProfileRequest{
+		Content: "# Profile\n\nThey keep bees.\n",
+	})
+	if err != nil {
+		t.Fatalf("SaveMemoryProfile: %v", err)
+	}
+	if _, err := service.SaveMemoryProfile(ctx, &turingv1.SaveMemoryProfileRequest{
+		ExpectedContentHash: profile.GetProfile().GetContentHash(),
+		Content:             "   \n",
+	}); err != nil {
+		t.Fatalf("clearing the profile with whitespace was refused: %v", err)
+	}
+
+	// What the page reads back afterwards is an available, empty document —
+	// not a document that could not be read.
+	state, err := service.ListMemoryState(ctx, &turingv1.ListMemoryStateRequest{})
+	if err != nil {
+		t.Fatalf("ListMemoryState: %v", err)
+	}
+	if state.GetPersona().GetContent() != "" {
+		t.Fatalf("persona after the clear = %q", state.GetPersona().GetContent())
+	}
+	if state.GetPersona().GetUnavailableReason() != turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE {
+		t.Fatalf("persona reason = %v, want NONE for a document the user emptied", state.GetPersona().GetUnavailableReason())
+	}
+	if state.GetProfile().GetContent() != "" {
+		t.Fatalf("profile after the clear = %q", state.GetProfile().GetContent())
+	}
+}
+
+// The user's own hands got wider; the agent's did not. ApplyMemoryProfile is
+// still the proposal path, and a proposal that says nothing still cannot rewrite
+// the user's profile into nothing.
+func TestMemoryProfileProposalStillRefusesEmptyContent(t *testing.T) {
+	service, _, _, ctx := newMemoryService(t)
+
+	if _, err := service.ApplyMemoryProfile(ctx, &turingv1.ApplyMemoryProfileRequest{
+		CandidateId: "candidate-1",
+		Content:     "   \n",
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("blank profile proposal error = %v, want InvalidArgument", err)
+	}
+}
+
+// A save is still bounded. "Empty is allowed" must not read as "anything is".
+func TestMemoryDocumentSavesStillRefuseADocumentTooLargeToReadBack(t *testing.T) {
+	service, _, _, ctx := newMemoryService(t)
+
+	oversize := strings.Repeat("x", memoryfiles.MaxAuthoredDocumentBytes+1)
+	if _, err := service.SaveMemoryPersona(ctx, &turingv1.SaveMemoryPersonaRequest{Content: oversize}); err == nil {
+		t.Fatal("an over-ceiling persona save was accepted")
+	}
+	if _, err := service.SaveMemoryProfile(ctx, &turingv1.SaveMemoryProfileRequest{Content: oversize}); err == nil {
+		t.Fatal("an over-ceiling profile save was accepted")
 	}
 }
 

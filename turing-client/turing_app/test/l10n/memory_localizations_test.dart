@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/generated/turing/v1/common.pb.dart'
@@ -98,12 +100,67 @@ void main() {
         hasLength(1),
         reason: '$wireName has no category in this client',
       );
-      expect(match.single.label, isNotEmpty);
+      expect(match, hasLength(1));
     }
   });
 
-  test('memory is one of the categories the dialog can name', () {
+  testWidgets('every egress category the dialog can name has copy', (
+    tester,
+  ) async {
+    await loadCopy(tester);
+
+    for (final category in EgressDataCategory.values) {
+      expect(
+        localizedEgressCategoryCopy(l10n, category),
+        isNotEmpty,
+        reason: '$category would render as a blank line of consent',
+      );
+    }
+  });
+
+  testWidgets('every memory tier the egress dialog can be handed has copy', (
+    tester,
+  ) async {
+    await loadCopy(tester);
+
+    for (final tier in MemoryEgressTier.values) {
+      expect(localizedEgressMemoryTierCopy(l10n, tier), isNotEmpty);
+    }
+  });
+
+  testWidgets('memory is one of the categories the dialog can name', (
+    tester,
+  ) async {
+    await loadCopy(tester);
+
     expect(EgressDataCategory.memoryProfile.wireName, 'memory_profile');
-    expect(EgressDataCategory.memoryProfile.label, 'Memory and profile');
+    expect(
+      localizedEgressCategoryCopy(l10n, EgressDataCategory.memoryProfile),
+      'Memory and profile',
+    );
+  });
+
+  // The Memory page and the consent dialog are the two surfaces where the
+  // product says what it does with words the user did not write. Neither may
+  // carry English that a translator cannot reach.
+  test('the memory page and the egress dialog hold no hardcoded English', () {
+    for (final path in const [
+      'lib/features/workspace/memory_page.dart',
+      'lib/features/chat/remote_egress_dialog.dart',
+    ]) {
+      final source = File(path).readAsStringSync();
+      final offenders = <String>[];
+      for (final match in RegExp(r"'([^'\\\n]{4,})'").allMatches(source)) {
+        final literal = match.group(1)!;
+        if (!RegExp(r'[A-Za-z] [A-Za-z]').hasMatch(literal)) continue;
+        if (literal.startsWith('package:')) continue;
+        offenders.add(literal);
+      }
+      expect(
+        offenders,
+        isEmpty,
+        reason: '$path still spells prose in Dart instead of in the ARB',
+      );
+    }
   });
 }

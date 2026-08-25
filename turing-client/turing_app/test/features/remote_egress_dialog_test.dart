@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/chat/remote_egress_dialog.dart';
+import 'package:turing_flutter_app/l10n/generated/app_localizations.dart';
 import 'package:turing_flutter_app/models/remote_egress.dart';
 
 void main() {
@@ -28,19 +29,7 @@ void main() {
         ),
       ],
     );
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Builder(
-          builder: (context) => TextButton(
-            onPressed: () => showRemoteEgressDialog(context, disclosure),
-            child: const Text('Open'),
-          ),
-        ),
-      ),
-    );
-
-    await tester.tap(find.text('Open'));
-    await tester.pumpAndSettle();
+    await _open(tester, disclosure);
 
     expect(find.text('Brief Writer'), findsOneWidget);
     expect(find.text('full content may be sent'), findsOneWidget);
@@ -67,19 +56,7 @@ void main() {
         ),
       ],
     );
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Builder(
-          builder: (context) => TextButton(
-            onPressed: () => showRemoteEgressDialog(context, disclosure),
-            child: const Text('Open'),
-          ),
-        ),
-      ),
-    );
-
-    await tester.tap(find.text('Open'));
-    await tester.pumpAndSettle();
+    await _open(tester, disclosure);
 
     expect(find.text('Must Not Render'), findsNothing);
   });
@@ -107,19 +84,7 @@ void main() {
       ],
       selectedTools: const ['vendor/vendor.lookup'],
     );
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Builder(
-          builder: (context) => TextButton(
-            onPressed: () => showRemoteEgressDialog(context, disclosure),
-            child: const Text('Open'),
-          ),
-        ),
-      ),
-    );
-
-    await tester.tap(find.text('Open'));
-    await tester.pumpAndSettle();
+    await _open(tester, disclosure);
 
     expect(find.text('Send data off this machine?'), findsOneWidget);
     expect(
@@ -163,10 +128,7 @@ void main() {
       await _open(tester, disclosure);
 
       expect(find.text('Memory and profile'), findsOneWidget);
-      expect(
-        find.textContaining('pinned into this run'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('pinned into this run'), findsOneWidget);
       expect(find.textContaining('persona.md'), findsWidgets);
       expect(find.textContaining('profile.md'), findsWidgets);
       expect(find.textContaining('full content may be sent'), findsWidgets);
@@ -291,6 +253,143 @@ void main() {
       expect(find.textContaining('persona.md'), findsNothing);
       expect(find.textContaining('pinned into this run'), findsNothing);
     });
+
+    // The server sends this shape for every run that has the memory tools
+    // selected and nothing pinned: a single row naming the beliefs folder the
+    // tools can reach. Reading that row as "pinned into this run" would tell
+    // the user their accepted memory is already in the prompt when it is not.
+    testWidgets('a reachable beliefs folder is never called pinned', (
+      tester,
+    ) async {
+      final disclosure = RemoteEgressDisclosure(
+        challenge: 'challenge',
+        provider: 'openai_compatible',
+        model: 'remote',
+        endpoint: 'https://models.example/v1',
+        endpointHost: 'models.example',
+        dataCategories: const [EgressDataCategory.memoryProfile],
+        expiresAt: DateTime.utc(2026, 8, 24),
+        memoryProfileMayBeSent: true,
+        selectedTools: const ['memory/memory.search'],
+        memoryNotes: const [
+          MemoryEgressDisclosure(
+            noteId: 'beliefs',
+            title: 'Accepted memory reachable by the memory tools',
+            vaultPath: 'beliefs',
+            tier: MemoryEgressTier.belief,
+            bodyMayBeSent: false,
+          ),
+        ],
+      );
+
+      await _open(tester, disclosure);
+
+      expect(
+        find.textContaining('pinned into this run'),
+        findsNothing,
+        reason: 'nothing is pinned, so nothing may claim to be',
+      );
+      expect(find.textContaining('the memory tools can reach'), findsOneWidget);
+      expect(find.textContaining('beliefs'), findsWidgets);
+      expect(find.text('memory/memory.search'), findsOneWidget);
+    });
+
+    testWidgets('pinned documents and reachable memory get separate headings', (
+      tester,
+    ) async {
+      final disclosure = RemoteEgressDisclosure(
+        challenge: 'challenge',
+        provider: 'openai_compatible',
+        model: 'remote',
+        endpoint: 'https://models.example/v1',
+        endpointHost: 'models.example',
+        dataCategories: const [EgressDataCategory.memoryProfile],
+        expiresAt: DateTime.utc(2026, 8, 24),
+        memoryProfileMayBeSent: true,
+        selectedTools: const ['memory/memory.remember'],
+        memoryNotes: const [
+          MemoryEgressDisclosure(
+            noteId: '',
+            title: 'persona.md',
+            vaultPath: 'persona.md',
+            tier: MemoryEgressTier.persona,
+            bodyMayBeSent: true,
+          ),
+          MemoryEgressDisclosure(
+            noteId: 'beliefs',
+            title: 'Accepted memory reachable by the memory tools',
+            vaultPath: 'beliefs',
+            tier: MemoryEgressTier.belief,
+            bodyMayBeSent: false,
+          ),
+        ],
+      );
+
+      await _open(tester, disclosure);
+
+      expect(find.textContaining('pinned into this run'), findsOneWidget);
+      expect(find.textContaining('the memory tools can reach'), findsOneWidget);
+      expect(
+        find.textContaining('memory tools this run may call'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('persona.md'), findsWidgets);
+    });
+
+    // A tier a newer server names and this build does not is still memory that
+    // leaves the machine. It is disclosed on the honest side of the line.
+    testWidgets('an unknown tier is disclosed without being called pinned', (
+      tester,
+    ) async {
+      final disclosure = RemoteEgressDisclosure(
+        challenge: 'challenge',
+        provider: 'openai_compatible',
+        model: 'remote',
+        endpoint: 'https://models.example/v1',
+        endpointHost: 'models.example',
+        dataCategories: const [EgressDataCategory.memoryProfile],
+        expiresAt: DateTime.utc(2026, 8, 24),
+        memoryProfileMayBeSent: true,
+        memoryNotes: const [
+          MemoryEgressDisclosure(
+            noteId: '',
+            title: 'Something newer',
+            vaultPath: 'somewhere/new.md',
+            tier: MemoryEgressTier.unspecified,
+            bodyMayBeSent: false,
+          ),
+        ],
+      );
+
+      await _open(tester, disclosure);
+
+      expect(find.textContaining('pinned into this run'), findsNothing);
+      expect(find.textContaining('somewhere/new.md'), findsWidgets);
+    });
+
+    testWidgets('a bare memory server name is not offered as a tool', (
+      tester,
+    ) async {
+      final disclosure = RemoteEgressDisclosure(
+        challenge: 'challenge',
+        provider: 'openai_compatible',
+        model: 'remote',
+        endpoint: 'https://models.example/v1',
+        endpointHost: 'models.example',
+        dataCategories: const [EgressDataCategory.memoryProfile],
+        expiresAt: DateTime.utc(2026, 8, 24),
+        memoryProfileMayBeSent: true,
+        selectedTools: const ['memory', 'memoryx/tool'],
+      );
+
+      await _open(tester, disclosure);
+
+      expect(
+        find.textContaining('memory tools this run may call'),
+        findsNothing,
+        reason: 'neither name is a tool the memory server exposes',
+      );
+    });
   });
 }
 
@@ -300,6 +399,8 @@ Future<void> _open(
 ) async {
   await tester.pumpWidget(
     MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: Builder(
         builder: (context) => TextButton(
           onPressed: () => showRemoteEgressDialog(context, disclosure),

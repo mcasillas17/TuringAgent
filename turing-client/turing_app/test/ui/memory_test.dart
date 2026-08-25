@@ -181,9 +181,14 @@ void main() {
       expect(find.textContaining('Coffee talk'), findsOneWidget);
       expect(find.textContaining('2 pieces of evidence'), findsOneWidget);
       expect(find.textContaining('Turing may rewrite'), findsWidgets);
-      expect(find.textContaining('You have taken this note over'), findsWidgets);
-      expect(find.textContaining('evidence behind this was withdrawn'),
-          findsOneWidget);
+      expect(
+        find.textContaining('You have taken this note over'),
+        findsWidgets,
+      );
+      expect(
+        find.textContaining('evidence behind this was withdrawn'),
+        findsOneWidget,
+      );
       expect(find.textContaining('no evidence'), findsWidgets);
       expect(find.textContaining('duplicate note id'), findsOneWidget);
       expect(
@@ -195,19 +200,17 @@ void main() {
   });
 
   group('the persona and profile editors', () {
-    testWidgets('persona is named as the only place the user instructs Turing', (
-      tester,
-    ) async {
-      await _pumpMemory(tester, _MemoryApi());
+    testWidgets(
+      'persona is named as the only place the user instructs Turing',
+      (tester) async {
+        await _pumpMemory(tester, _MemoryApi());
 
-      expect(find.text('persona.md'), findsOneWidget);
-      expect(find.text('profile.md'), findsOneWidget);
-      expect(
-        find.textContaining('You are its only author'),
-        findsOneWidget,
-      );
-      expect(find.textContaining('Turing never writes it'), findsOneWidget);
-    });
+        expect(find.text('persona.md'), findsOneWidget);
+        expect(find.text('profile.md'), findsOneWidget);
+        expect(find.textContaining('You are its only author'), findsOneWidget);
+        expect(find.textContaining('Turing never writes it'), findsOneWidget);
+      },
+    );
 
     testWidgets('the editors say which version they hold and when it changed', (
       tester,
@@ -224,14 +227,17 @@ void main() {
         );
       await _pumpMemory(tester, api);
 
-      expect(find.textContaining('Editing version sha256:persona'),
-          findsOneWidget);
+      expect(
+        find.textContaining('Editing version sha256:persona'),
+        findsOneWidget,
+      );
       expect(find.textContaining('Last changed'), findsWidgets);
     });
 
     testWidgets('saving the persona sends the hash it was read at', (
       tester,
-    ) async {      final api = _MemoryApi();
+    ) async {
+      final api = _MemoryApi();
       await _pumpMemory(tester, api);
 
       await tester.enterText(
@@ -252,7 +258,9 @@ void main() {
       final api = _MemoryApi();
       await _pumpMemory(tester, api);
 
-      await tester.ensureVisible(find.byKey(const Key('memory-profile-editor')));
+      await tester.ensureVisible(
+        find.byKey(const Key('memory-profile-editor')),
+      );
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const Key('memory-profile-editor')),
@@ -312,7 +320,10 @@ void main() {
       final api = _MemoryApi()..state = _state(candidates: [_candidate()]);
       await _pumpMemory(tester, api);
 
-      expect(find.textContaining('They bike to work every day.'), findsOneWidget);
+      expect(
+        find.textContaining('They bike to work every day.'),
+        findsOneWidget,
+      );
       expect(find.text('inbox/01-bikes.md'), findsOneWidget);
       expect(find.textContaining('Commute chat'), findsOneWidget);
       expect(find.textContaining('sess-1'), findsOneWidget);
@@ -390,7 +401,10 @@ void main() {
       await _tap(tester, find.text('Promote'));
 
       expect(find.textContaining('changed since it was read'), findsWidgets);
-      expect(find.textContaining('They bike to work every day.'), findsOneWidget);
+      expect(
+        find.textContaining('They bike to work every day.'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('an unmanaged draft is readable and has no buttons', (
@@ -411,7 +425,10 @@ void main() {
         );
       await _pumpMemory(tester, api);
 
-      expect(find.textContaining('I dropped this here myself.'), findsOneWidget);
+      expect(
+        find.textContaining('I dropped this here myself.'),
+        findsOneWidget,
+      );
       expect(find.textContaining('Your own draft'), findsOneWidget);
       expect(find.text('Promote'), findsNothing);
       expect(find.text('Reject'), findsNothing);
@@ -443,8 +460,10 @@ void main() {
         );
       await _pumpMemory(tester, api);
 
-      expect(find.textContaining('conversation behind this was deleted'),
-          findsWidgets);
+      expect(
+        find.textContaining('conversation behind this was deleted'),
+        findsWidgets,
+      );
       expect(find.text('Promote'), findsNothing);
       expect(find.text('Reject'), findsNothing);
     });
@@ -470,6 +489,288 @@ void main() {
         findsNothing,
         reason: 'nobody accepts text they were never shown',
       );
+    });
+  });
+
+  group('evidence a belief no longer has', () {
+    testWidgets('a belief with nothing behind it says so, not nothing', (
+      tester,
+    ) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          notes: [
+            MemoryNote(
+              noteId: 'note-1',
+              path: 'beliefs/people/ada.md',
+              title: 'Ada',
+              content: 'They take their coffee black.',
+              contentHash: 'sha256:note-1',
+              status: MemoryNoteStatus.managed,
+              tier: MemoryTier.belief,
+              unavailableReason: MemoryUnavailableReason.none,
+              provenance: const [],
+            ),
+          ],
+        );
+      await _pumpMemory(tester, api);
+
+      expect(
+        find.textContaining('no evidence'),
+        findsOneWidget,
+        reason: 'an empty provenance list is a fact, not an absence of one',
+      );
+    });
+
+    testWidgets('a withdrawn belief says its evidence is gone', (tester) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          notes: [
+            MemoryNote(
+              noteId: 'note-1',
+              path: 'beliefs/people/ada.md',
+              title: 'Ada',
+              content: 'They take their coffee black.',
+              contentHash: 'sha256:note-1',
+              status: MemoryNoteStatus.withdrawn,
+              tier: MemoryTier.belief,
+              unavailableReason: MemoryUnavailableReason.none,
+              provenance: const [],
+            ),
+          ],
+        );
+      await _pumpMemory(tester, api);
+
+      expect(find.textContaining('withdrawn'), findsWidgets);
+      expect(
+        find.textContaining('never had any evidence'),
+        findsNothing,
+        reason: 'withdrawn and never-evidenced are different histories',
+      );
+    });
+
+    testWidgets('a withdrawn provenance row shows no conversation to open', (
+      tester,
+    ) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          notes: [
+            MemoryNote(
+              noteId: 'note-1',
+              path: 'beliefs/people/ada.md',
+              title: 'Ada',
+              content: 'They take their coffee black.',
+              contentHash: 'sha256:note-1',
+              status: MemoryNoteStatus.withdrawn,
+              tier: MemoryTier.belief,
+              unavailableReason: MemoryUnavailableReason.none,
+              provenance: const [
+                MemoryProvenance(
+                  kind: MemoryProvenanceKind.promotedFromCandidate,
+                  withdrawn: true,
+                ),
+              ],
+            ),
+          ],
+        );
+      await _pumpMemory(tester, api);
+
+      expect(find.textContaining('withdrawn'), findsWidgets);
+      expect(
+        find.textContaining('From '),
+        findsNothing,
+        reason: 'there is no conversation left to name',
+      );
+    });
+  });
+
+  group('tier counts and settings', () {
+    testWidgets('the vault says whether it could be read, not only why not', (
+      tester,
+    ) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          settings: const MemorySettings(
+            enabled: true,
+            vaultRoot: '/memory',
+            vaultWritable: false,
+            unavailableReason: MemoryUnavailableReason.vaultUnreadable,
+          ),
+        );
+      await _pumpMemory(tester, api);
+
+      expect(
+        find.textContaining('could not be read'),
+        findsWidgets,
+        reason: 'an unreadable vault is not rendered as a healthy one',
+      );
+    });
+
+    testWidgets('each tier says how much it holds and what is waiting', (
+      tester,
+    ) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          tiers: const [
+            MemoryTierState(
+              tier: MemoryTier.persona,
+              enabled: true,
+              noteCount: 1,
+            ),
+            MemoryTierState(
+              tier: MemoryTier.profile,
+              enabled: true,
+              noteCount: 1,
+              pendingCandidateCount: 2,
+            ),
+            MemoryTierState(
+              tier: MemoryTier.belief,
+              enabled: true,
+              noteCount: 3,
+              pendingCandidateCount: 4,
+            ),
+          ],
+        );
+      await _pumpMemory(tester, api);
+
+      expect(find.textContaining('3 items'), findsOneWidget);
+      expect(find.textContaining('4 proposals'), findsOneWidget);
+      expect(find.textContaining('2 proposals'), findsOneWidget);
+    });
+  });
+
+  group('unsaved text the user typed', () {
+    testWidgets('turning memory off does not throw away a draft persona', (
+      tester,
+    ) async {
+      final api = _MemoryApi();
+      await _pumpMemory(tester, api);
+
+      await tester.enterText(
+        find.byKey(const Key('memory-persona-editor')),
+        'half a thought',
+      );
+      await _tap(tester, find.byKey(const Key('memory-enabled-toggle')));
+
+      expect(
+        find.text('half a thought'),
+        findsOneWidget,
+        reason: 'a refresh is not permission to discard what the user typed',
+      );
+    });
+
+    testWidgets('deciding a proposal does not throw away a draft profile', (
+      tester,
+    ) async {
+      final api = _MemoryApi()..state = _state(candidates: [_candidate()]);
+      await _pumpMemory(tester, api);
+
+      await tester.enterText(
+        find.byKey(const Key('memory-profile-editor')),
+        'half a profile',
+      );
+      await _tap(tester, find.text('Promote'));
+
+      expect(find.text('half a profile'), findsOneWidget);
+    });
+
+    testWidgets('saving the persona leaves a draft profile alone', (
+      tester,
+    ) async {
+      final api = _MemoryApi();
+      await _pumpMemory(tester, api);
+
+      await tester.enterText(
+        find.byKey(const Key('memory-profile-editor')),
+        'half a profile',
+      );
+      await tester.enterText(
+        find.byKey(const Key('memory-persona-editor')),
+        '# Persona\n\nBe warmer.\n',
+      );
+      await _tap(tester, find.byKey(const Key('memory-persona-save')));
+
+      expect(find.text('half a profile'), findsOneWidget);
+      expect(
+        find.text('# Persona\n\nBe warmer.\n'),
+        findsNothing,
+        reason: 'the saved editor takes what the vault now holds',
+      );
+    });
+
+    testWidgets('re-reading one document leaves the other draft alone', (
+      tester,
+    ) async {
+      final api = _MemoryApi()
+        ..personaSaveError = const TuringApiException(
+          code: 'failed_precondition',
+          message: 'the file changed on disk since this editor read it',
+        );
+      await _pumpMemory(tester, api);
+
+      await tester.enterText(
+        find.byKey(const Key('memory-profile-editor')),
+        'half a profile',
+      );
+      await tester.enterText(
+        find.byKey(const Key('memory-persona-editor')),
+        'a persona draft',
+      );
+      await _tap(tester, find.byKey(const Key('memory-persona-save')));
+
+      expect(find.text('a persona draft'), findsOneWidget);
+      expect(find.text('half a profile'), findsOneWidget);
+
+      await _tap(tester, find.byKey(const Key('memory-persona-reread')));
+
+      expect(
+        find.text('a persona draft'),
+        findsNothing,
+        reason: 'the user asked for this one document to be re-read',
+      );
+      expect(find.text('half a profile'), findsOneWidget);
+    });
+  });
+
+  group('clearing a document on purpose', () {
+    testWidgets('an empty persona can be saved, because emptying is a choice', (
+      tester,
+    ) async {
+      final api = _MemoryApi();
+      await _pumpMemory(tester, api);
+
+      await tester.enterText(
+        find.byKey(const Key('memory-persona-editor')),
+        '   ',
+      );
+      await _tap(tester, find.byKey(const Key('memory-persona-save')));
+
+      expect(api.personaSaves, [('   ', 'sha256:persona')]);
+    });
+
+    testWidgets('a document that could not be read offers no save', (
+      tester,
+    ) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          persona: _document(
+            content: '',
+            contentHash: '',
+            status: MemoryNoteStatus.unmanaged,
+            unavailableReason: MemoryUnavailableReason.vaultUnreadable,
+            parseError: 'persona.md is a symlink',
+          ),
+        );
+      await _pumpMemory(tester, api);
+
+      final save = tester.widget<FilledButton>(
+        find.byKey(const Key('memory-persona-save')),
+      );
+      expect(
+        save.onPressed,
+        isNull,
+        reason: 'a save the server would refuse is not offered',
+      );
+      expect(find.textContaining('symlink'), findsOneWidget);
     });
   });
 
@@ -523,7 +824,8 @@ void main() {
                 noteId: 'note-$index',
                 path: 'beliefs/people/person-$index.md',
                 title: 'Person $index',
-                content: 'A belief long enough to wrap in a narrow window. ' * 3,
+                content:
+                    'A belief long enough to wrap in a narrow window. ' * 3,
                 contentHash: 'sha256:note-$index',
                 status: MemoryNoteStatus.managed,
                 tier: MemoryTier.belief,
