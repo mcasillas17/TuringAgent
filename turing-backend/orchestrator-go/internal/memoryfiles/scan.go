@@ -84,12 +84,106 @@ type SkippedEntry struct {
 	Reason  string
 }
 
+// AreaScan says whether one area of the vault was enumerated in full on this
+// pass, and when it was not, why.
+//
+// The zero value is deliberately "incomplete with no reason given": a caller
+// that never received an answer must not read one into the silence, and a
+// ScanResult returned alongside an error therefore authorises nothing.
+type AreaScan struct {
+	Complete bool
+	Reason   string
+}
+
+// ScanCompleteness is per-area enumeration completeness for one pass.
+//
+// It exists because "the walk returned no notes under beliefs/" and "the walk
+// could not read beliefs/" are the same empty list and opposite facts. A caller
+// that retires rows for notes it did not see must only do so on the first, so
+// the walk states which one it is rather than leaving it to be inferred.
+//
+// Root is not an area notes come from; it is the enumeration everything else
+// depends on. A root the walk could not list says nothing about what is under
+// it, so its failure is carried into both areas as well.
+type ScanCompleteness struct {
+	Root    AreaScan
+	Beliefs AreaScan
+	Inbox   AreaScan
+}
+
+// Area answers for one note-bearing area. AreaOther has no area-wide guarantee
+// to give — it is every folder the user keeps in the vault that memory does not
+// own — so it answers incomplete, which is the answer that authorises nothing.
+func (c ScanCompleteness) Area(area VaultArea) AreaScan {
+	switch area {
+	case AreaBeliefs:
+		return c.Beliefs
+	case AreaInbox:
+		return c.Inbox
+	case AreaOther:
+		return AreaScan{}
+	default:
+		return AreaScan{}
+	}
+}
+
 // ScanResult is one whole-vault pass.
 type ScanResult struct {
 	Notes            []NoteRow
 	Skipped          []SkippedEntry
 	DuplicateNoteIDs []string
+	// Completeness says which areas this pass actually managed to enumerate.
+	// Notes and Skipped describe what the walk saw; this describes what it was
+	// able to look at, which is the only basis on which absence means anything.
+	Completeness ScanCompleteness
 }
+
+// completenessTracker accumulates enumeration failures during one walk. It
+// starts out claiming every area was read whole and is only ever downgraded,
+// so a path that is never exercised cannot leave an area falsely incomplete.
+type completenessTracker struct {
+	completeness ScanCompleteness
+}
+
+func newCompletenessTracker() *completenessTracker {
+	return &completenessTracker{completeness: ScanCompleteness{
+		Root:    AreaScan{Complete: true},
+		Beliefs: AreaScan{Complete: true},
+		Inbox:   AreaScan{Complete: true},
+	}}
+}
+
+// markIncomplete records that the walk could not account for everything at or
+// under relPath. The empty path is the vault root, whose failure reaches every
+// area; anything outside beliefs/ and inbox/ reaches neither, because a folder
+// of the user's own that could not be read says nothing about their memory and
+// must not disable reconciliation for it forever.
+//
+// The first reason recorded for an area is the one kept. A second failure in
+// the same area does not make it any less incomplete, and overwriting would
+// make the message depend on directory listing order.
+func (t *completenessTracker) markIncomplete(relPath string, reason string) {
+	switch {
+	case relPath == "":
+		t.mark(&t.completeness.Root, reason)
+		t.mark(&t.completeness.Beliefs, reason)
+		t.mark(&t.completeness.Inbox, reason)
+	case relPath == BeliefsDirName || strings.HasPrefix(relPath, BeliefsDirName+"/"):
+		t.mark(&t.completeness.Beliefs, reason)
+	case relPath == InboxDirName || strings.HasPrefix(relPath, InboxDirName+"/"):
+		t.mark(&t.completeness.Inbox, reason)
+	}
+}
+
+func (t *completenessTracker) mark(area *AreaScan, reason string) {
+	if !area.Complete {
+		return
+	}
+	area.Complete = false
+	area.Reason = reason
+}
+
+func (t *completenessTracker) snapshot() ScanCompleteness { return t.completeness }
 
 // NoteMetadata is the cheap identity of a file's contents.
 //
@@ -291,8 +385,23 @@ func (v *Vault) ScanWithCache(ctx context.Context, cache *MetadataCache) (ScanRe
 // after the fact is the difference between a bounded walk and an unbounded one
 // that reports a bound: a vault with a million notes must not be pulled into
 // memory to be told it is too large.
+//
+// Alongside the notes it collects, the walk records which areas it managed to
+// enumerate in full. Every failure that leaves entries unaccounted for — a root
+// that vanished, a directory it could not open, a listing that gave out
+// halfway, an area that is no longer a directory, an entry it could not even
+// inspect — downgrades the area it happened in, because a caller that deletes
+// what this walk did not report must be able to tell "gone" from "unreadable".
+//
+// A folder refused by descentRefusal is deliberately not one of them: that is a
+// standing policy about paths this package could never write, it is reported in
+// Skipped, and it answers the same way on every pass. Treating it as an
+// enumeration failure would let one over-deep folder disable reconciliation for
+// the whole vault permanently.
 func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandidate, error) {
 	var candidates []scanCandidate
+	completeness := newCompletenessTracker()
+	defer func() { result.Completeness = completeness.snapshot() }()
 	queue := []string{""}
 	for len(queue) > 0 {
 		if err := ctx.Err(); err != nil {
@@ -307,6 +416,11 @@ func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandid
 		}
 		directory, err := v.openDirectory(ctx, components, false)
 		if err != nil {
+			// A root that cannot be opened is not an empty vault. It is a
+			// volume that was unmounted, a synced folder mid-rebuild, or a
+			// path the user moved — and every note in it would otherwise look
+			// deleted at once.
+			completeness.markIncomplete(relDirectory, fmt.Sprintf("%s could not be opened: %v", walkTargetName(relDirectory), err))
 			if relDirectory == "" && (errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist)) {
 				return nil, nil
 			}
@@ -331,8 +445,19 @@ func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandid
 				if errors.Is(err, unix.ENOENT) {
 					continue
 				}
+				// The entry is there and the walk cannot tell what it is, so it
+				// cannot tell whether notes live at or under it either.
+				completeness.markIncomplete(relPath, fmt.Sprintf("entry %q could not be inspected: %v", relPath, err))
 				result.Skipped = append(result.Skipped, SkippedEntry{RelPath: relPath, Reason: fmt.Sprintf("entry could not be inspected: %v", err)})
 				continue
+			}
+			if stat.Mode&unix.S_IFMT != unix.S_IFDIR && isAreaRoot(relPath) {
+				// beliefs/ or inbox/ replaced by a file, a symlink or anything
+				// else the walk will not descend into. The area is not empty;
+				// it is unreadable, and nothing under it was enumerated.
+				completeness.markIncomplete(relPath, fmt.Sprintf(
+					"%q is not a directory on this pass, so nothing under it was enumerated", relPath,
+				))
 			}
 			if reason := skipReason(name, relPath, stat); reason != "" {
 				result.Skipped = append(result.Skipped, SkippedEntry{RelPath: relPath, Reason: reason})
@@ -359,6 +484,10 @@ func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandid
 		}
 		_ = directory.Close()
 		if readErr != nil {
+			// Half a listing names half the notes. The entries it did return
+			// are kept — they were really there — but the area cannot be used
+			// to conclude anything about what was not returned.
+			completeness.markIncomplete(relDirectory, fmt.Sprintf("the listing of %s was incomplete: %v", walkTargetName(relDirectory), readErr))
 			result.Skipped = append(result.Skipped, SkippedEntry{
 				RelPath: relDirectory,
 				Reason:  fmt.Sprintf("directory listing was incomplete: %v", readErr),
@@ -369,6 +498,20 @@ func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandid
 		return candidates[first].relPath < candidates[second].relPath
 	})
 	return candidates, nil
+}
+
+// isAreaRoot reports whether relPath names beliefs/ or inbox/ itself.
+func isAreaRoot(relPath string) bool {
+	return relPath == BeliefsDirName || relPath == InboxDirName
+}
+
+// walkTargetName names what the walk was trying to read, so a reason carried
+// out of the pass says where the gap is without the caller holding the path.
+func walkTargetName(relDirectory string) string {
+	if relDirectory == "" {
+		return "the vault root"
+	}
+	return fmt.Sprintf("%q", relDirectory)
 }
 
 func vaultTooLargeError() error {

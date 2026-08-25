@@ -48,6 +48,24 @@ type MemoryNoteIssue struct {
 	Reason  string
 }
 
+// memoryVaultRootArea names the vault root in an incompleteness report. It is
+// not an area notes come from; it is the enumeration the other two rest on, so
+// a root that could not be listed is reported alongside them rather than
+// silently standing in for both.
+const memoryVaultRootArea = "root"
+
+// MemoryVaultAreaIssue names one area of the vault a pass could not enumerate
+// in full, and why.
+//
+// It exists because the difference between "the walk found no beliefs" and
+// "the walk could not read beliefs/" is invisible in a list of notes and is
+// the difference between reconciling and erasing the user's memory. While an
+// area is named here, nothing is retired for it.
+type MemoryVaultAreaIssue struct {
+	Area   string
+	Reason string
+}
+
 // MemoryIndexReport is what one pass over the vault learned. Everything it
 // could not index is named rather than swallowed: a note that silently fails
 // to appear in search is indistinguishable, to the user, from one Turing
@@ -72,6 +90,15 @@ type MemoryIndexReport struct {
 	// are reported rather than deleted, because a file the user may already
 	// have read is not something to remove on a guess.
 	OrphanInboxNotes []string
+	// IncompleteAreas names every area this pass could not enumerate in full.
+	// Nothing is retired for an area listed here: a walk that could not look
+	// has not established that anything is missing.
+	IncompleteAreas []MemoryVaultAreaIssue
+	// ContestedPaths lists notes whose new name is still held by a row this
+	// pass could not account for. Their files are in the vault and their rows
+	// are intact under the previous name; the rename lands once the note
+	// holding that name is resolved.
+	ContestedPaths []MemoryNoteIssue
 }
 
 // MemoryReconcileReport adds what the file-writing pass changed on disk.
@@ -105,6 +132,11 @@ type scannedVault struct {
 	inboxPaths  map[string]struct{}
 	duplicates  []string
 	skipped     []memoryfiles.SkippedEntry
+	// completeness says which areas the walk actually managed to enumerate.
+	// It is what every deletion in this file is gated on, so it is carried
+	// with the walk rather than re-derived: a caller that has the notes but
+	// not this has no way to tell an empty area from an unreadable one.
+	completeness memoryfiles.ScanCompleteness
 }
 
 // RefreshMemoryIndex brings the note index up to date with the vault without
@@ -189,10 +221,11 @@ func (r *Repository) readVaultAndState(ctx context.Context, vault *memoryfiles.V
 		return memoryVaultState{}, scannedVault{}, err
 	}
 	scanned := scannedVault{
-		beliefPaths: map[string]struct{}{},
-		inboxPaths:  map[string]struct{}{},
-		duplicates:  result.DuplicateNoteIDs,
-		skipped:     result.Skipped,
+		beliefPaths:  map[string]struct{}{},
+		inboxPaths:   map[string]struct{}{},
+		duplicates:   result.DuplicateNoteIDs,
+		skipped:      result.Skipped,
+		completeness: result.Completeness,
 	}
 	for _, note := range result.Notes {
 		switch note.Area {
@@ -402,7 +435,10 @@ func refsRewriteFor(note memoryfiles.NoteRow, desired []string) (memoryfiles.Rew
 // walk that has already finished, so no SQLite transaction is ever held open
 // across the filesystem.
 func (r *Repository) applyMemoryIndex(ctx context.Context, state memoryVaultState, scanned scannedVault) (MemoryIndexReport, error) {
-	report := MemoryIndexReport{DuplicateNoteIDs: scanned.duplicates}
+	report := MemoryIndexReport{
+		DuplicateNoteIDs: scanned.duplicates,
+		IncompleteAreas:  incompleteVaultAreas(scanned.completeness),
+	}
 	for _, entry := range scanned.skipped {
 		report.Skipped = append(report.Skipped, MemoryNoteIssue{RelPath: entry.RelPath, Reason: entry.Reason})
 	}
@@ -425,29 +461,62 @@ func (r *Repository) applyMemoryIndex(ctx context.Context, state memoryVaultStat
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	indexedIDs := map[string]struct{}{}
+	// The notes are sorted into what this pass will write and what it will
+	// only report on before anything is written, because deciding who owns a
+	// contested path needs the whole list: a note the pass is about to move is
+	// a note whose old name is about to be free, and one it is not is a note
+	// whose name has to be left alone.
+	writable := make([]memoryfiles.NoteRow, 0, len(scanned.beliefs))
+	scannedIDs := map[string]struct{}{}
 	for _, note := range scanned.beliefs {
-		if note.ParseError != "" {
-			report.Errors = append(report.Errors, MemoryNoteIssue{RelPath: note.RelPath, Reason: note.ParseError})
-			continue
+		if note.NoteID != "" {
+			// Recorded even for a note this pass refuses to index: an identity
+			// the walk saw is an identity whose row must not be treated as an
+			// abandoned name.
+			scannedIDs[note.NoteID] = struct{}{}
 		}
-		if !note.Indexable {
+		switch {
+		case note.ParseError != "":
+			report.Errors = append(report.Errors, MemoryNoteIssue{RelPath: note.RelPath, Reason: note.ParseError})
+		case !note.Indexable:
 			// Today every unindexable note also carries a parse error — a
 			// contested identity is reported as one — so this is a second
 			// gate rather than the branch that handles duplicates. It stands
 			// because "not indexable" is the scan's word, and a future reason
 			// to refuse a note must not become indexable by default.
-			continue
-		}
-		if note.NoteID == "" {
+		case note.NoteID == "":
 			report.AwaitingIdentity = append(report.AwaitingIdentity, note.RelPath)
+		default:
+			writable = append(writable, note)
+		}
+	}
+
+	beliefsComplete := scanned.completeness.Area(memoryfiles.AreaBeliefs).Complete
+	plan, err := planMemoryNotePaths(ctx, tx, writable, scannedIDs, state.anchor, beliefsComplete)
+	if err != nil {
+		return MemoryIndexReport{}, err
+	}
+	if err := parkMemoryNotePathsTx(ctx, tx, plan.park); err != nil {
+		return MemoryIndexReport{}, err
+	}
+	if r.memoryIndexParkBarrier != nil {
+		if err := r.memoryIndexParkBarrier(); err != nil {
+			return MemoryIndexReport{}, err
+		}
+	}
+
+	for _, note := range writable {
+		if _, waiting := plan.deferred[note.NoteID]; waiting {
+			report.ContestedPaths = append(report.ContestedPaths, MemoryNoteIssue{
+				RelPath: note.RelPath,
+				Reason:  memoryNotePathContestedReason,
+			})
 			continue
 		}
 		healed, withdrawn, err := indexMemoryNoteTx(ctx, tx, note)
 		if err != nil {
 			return MemoryIndexReport{}, err
 		}
-		indexedIDs[note.NoteID] = struct{}{}
 		report.Indexed++
 		if healed {
 			report.Healed++
@@ -457,11 +526,31 @@ func (r *Repository) applyMemoryIndex(ctx context.Context, state memoryVaultStat
 		}
 	}
 
-	removed, err := removeVanishedNotesTx(ctx, tx, state.anchor, indexedIDs, scanned.beliefPaths)
-	if err != nil {
-		return MemoryIndexReport{}, err
+	// The one deletion this pass performs, and the only thing gated on the
+	// walk having actually read beliefs/. Everything above is an upsert, which
+	// is safe to run on whatever the walk did manage to see; a removal is not,
+	// because it is inferred from what the walk did *not* see, and a walk that
+	// could not look did not fail to find anything.
+	if beliefsComplete {
+		// Every identity the walk saw is spared, not only the ones this pass
+		// wrote: a note it refused to index because two files claim it is a
+		// note that is present, and a note whose rename it held back is
+		// present under a name the projection cannot take yet. Both would
+		// otherwise read as files that vanished, because their rows still
+		// name paths the vault no longer has.
+		kept := make(map[string]struct{}, len(scannedIDs)+len(plan.deferred))
+		for noteID := range scannedIDs {
+			kept[noteID] = struct{}{}
+		}
+		for noteID := range plan.deferred {
+			kept[noteID] = struct{}{}
+		}
+		removed, err := removeVanishedNotesTx(ctx, tx, state.anchor, kept, scanned.beliefPaths)
+		if err != nil {
+			return MemoryIndexReport{}, err
+		}
+		report.Removed = removed
 	}
-	report.Removed = removed
 	if err := tx.Commit(); err != nil {
 		return MemoryIndexReport{}, err
 	}
@@ -469,6 +558,151 @@ func (r *Repository) applyMemoryIndex(ctx context.Context, state memoryVaultStat
 	sort.Strings(report.UnmanagedInboxDrafts)
 	sort.Strings(report.OrphanInboxNotes)
 	return report, nil
+}
+
+// memoryNotePathContestedReason is what the user is told when a rename could
+// not be applied this pass. It names no other note, because the answer to "why
+// is my note still under the old name" is that the pass declined to guess, not
+// which of their other memories it declined to guess about.
+const memoryNotePathContestedReason = "another note still holds this path; the rename will be applied once that note is resolved"
+
+// memoryNotePathParkPrefix is what a contested path is set to for the moment
+// between vacating it and writing the real one.
+//
+// It has to be something the vault could never produce, or a pass would be
+// able to leave a value behind that later reads back as a file the user has:
+// it opens with a NUL byte, which normalizeVaultPath refuses outright, so it
+// cannot be a path, cannot be typed, and cannot be created. The note's id
+// follows, because the path column is UNIQUE and two notes vacating at once
+// must not collide on the way out of one collision.
+const memoryNotePathParkPrefix = "\x00memory-note-path-parked\x00"
+
+func parkedMemoryNotePath(noteID string) string { return memoryNotePathParkPrefix + noteID }
+
+// memoryNotePathPlan is one pass's answer to every contested path: which rows
+// have to let go of their name before the real names are written, and which
+// notes are not being written at all this time because nobody could establish
+// that the name they want is free.
+type memoryNotePathPlan struct {
+	park     []string
+	deferred map[string]struct{}
+}
+
+// planMemoryNotePaths works out, before a single path is written, who owns each
+// name this pass wants to claim.
+//
+// The projection keys notes by identity but the path column is UNIQUE, so a
+// rename in Obsidian is an update that collides with whatever row still holds
+// the new name. A row is only pushed off its name when this pass can say what
+// becomes of it: either the walk found its file under a different name, and it
+// is being written there in this same transaction, or the walk read the whole
+// of beliefs/, never saw its identity, and its row predates the walk — which
+// makes it a name nothing in the vault answers to any more.
+//
+// Anything else, and the *claimant* waits instead. That is the conservative
+// direction: a note that keeps its old path for one more pass has lost nothing,
+// while a row pushed off its name with nothing to move it to would be a memory
+// vacated on a guess. Waiting cascades — a note that stays put keeps its own
+// name occupied — so the decision is taken to a fixpoint rather than in one
+// sweep.
+func planMemoryNotePaths(
+	ctx context.Context,
+	tx *sql.Tx,
+	writes []memoryfiles.NoteRow,
+	scannedIDs map[string]struct{},
+	anchor string,
+	removalEnabled bool,
+) (memoryNotePathPlan, error) {
+	plan := memoryNotePathPlan{deferred: map[string]struct{}{}}
+	if len(writes) == 0 {
+		return plan, nil
+	}
+
+	// Read inside the transaction rather than from the snapshot taken before
+	// the walk: a promotion may have committed a new note in between, and a
+	// row this pass cannot see is a collision it cannot avoid.
+	rows, err := tx.QueryContext(ctx, `SELECT id, path, created_at FROM memory_notes`)
+	if err != nil {
+		return memoryNotePathPlan{}, err
+	}
+	holderOf := map[string]string{}
+	createdAt := map[string]string{}
+	for rows.Next() {
+		var noteID, path, created string
+		if err := rows.Scan(&noteID, &path, &created); err != nil {
+			return memoryNotePathPlan{}, closeRowsWith(rows, err)
+		}
+		holderOf[path] = noteID
+		createdAt[noteID] = created
+	}
+	if err := closeRows(rows); err != nil {
+		return memoryNotePathPlan{}, err
+	}
+
+	writing := make(map[string]struct{}, len(writes))
+	for _, note := range writes {
+		writing[note.NoteID] = struct{}{}
+	}
+
+	// vacates answers the only question that matters about an incumbent: will
+	// this pass have moved it off this name by the time the transaction ends?
+	vacates := func(incumbent string) bool {
+		if _, queued := writing[incumbent]; queued {
+			_, waiting := plan.deferred[incumbent]
+			return !waiting
+		}
+		if !removalEnabled {
+			return false
+		}
+		if _, seen := scannedIDs[incumbent]; seen {
+			return false
+		}
+		return createdAt[incumbent] < anchor
+	}
+
+	for {
+		settled := true
+		for _, note := range writes {
+			if _, waiting := plan.deferred[note.NoteID]; waiting {
+				continue
+			}
+			incumbent, held := holderOf[note.RelPath]
+			if !held || incumbent == note.NoteID || vacates(incumbent) {
+				continue
+			}
+			plan.deferred[note.NoteID] = struct{}{}
+			settled = false
+		}
+		if settled {
+			break
+		}
+	}
+
+	for _, note := range writes {
+		if _, waiting := plan.deferred[note.NoteID]; waiting {
+			continue
+		}
+		if incumbent, held := holderOf[note.RelPath]; held && incumbent != note.NoteID {
+			plan.park = append(plan.park, incumbent)
+		}
+	}
+	plan.park = sortedUniqueStrings(plan.park)
+	return plan, nil
+}
+
+// parkMemoryNotePathsTx vacates each contested name. Only the path moves:
+// updated_at is left alone because nothing about the note itself changed, and a
+// note that reads as freshly touched every time a neighbour is renamed is a
+// note whose history stops meaning anything.
+func parkMemoryNotePathsTx(ctx context.Context, tx *sql.Tx, noteIDs []string) error {
+	for _, noteID := range noteIDs {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE memory_notes SET path = ? WHERE id = ?
+		`, parkedMemoryNotePath(noteID), noteID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // indexMemoryNoteTx projects one note. Whether the row exists is decided inside
@@ -559,13 +793,15 @@ func memoryNoteFromRow(note memoryfiles.NoteRow, status string) MemoryNote {
 // A row survives if either its identity or its path was seen, so a note whose
 // frontmatter temporarily fails to parse keeps its row and its evidence — a
 // typo in a YAML block is not a reason to destroy the citations a memory rests
-// on. Rows newer than this pass's anchor are left alone: they were written
+// on. keptIDs is every identity the walk saw, not only the ones this pass
+// wrote, because a note it read and declined to index is still a note the user
+// has. Rows newer than this pass's anchor are left alone: they were written
 // while the walk was already in progress, so this pass never saw their files.
 func removeVanishedNotesTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	anchor string,
-	indexedIDs map[string]struct{},
+	keptIDs map[string]struct{},
 	seenPaths map[string]struct{},
 ) (int, error) {
 	rows, err := tx.QueryContext(ctx, `
@@ -580,7 +816,7 @@ func removeVanishedNotesTx(
 		if err := rows.Scan(&noteID, &path); err != nil {
 			return 0, closeRowsWith(rows, err)
 		}
-		if _, indexed := indexedIDs[noteID]; indexed {
+		if _, kept := keptIDs[noteID]; kept {
 			continue
 		}
 		if _, seen := seenPaths[path]; seen {
@@ -607,7 +843,14 @@ func removeVanishedNotesTx(
 // Both are what a promotion, a rejection or a crash leaves behind, and both are
 // bounded by the anchor so a candidate written during the walk is not mistaken
 // for one whose file vanished.
+//
+// Both are also inferred from absence, so both are gated on the walk having
+// read the inbox in full. An inbox the walk could not enumerate holds every
+// candidate it ever did, as far as anyone here knows.
 func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState, scanned scannedVault) (int, int, error) {
+	if inbox := scanned.completeness.Area(memoryfiles.AreaInbox); !inbox.Complete {
+		return 0, 0, nil
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, 0, err
@@ -658,6 +901,27 @@ func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState
 		return 0, 0, err
 	}
 	return len(orphans), len(reservations), nil
+}
+
+// incompleteVaultAreas turns the walk's own account of what it could read into
+// the report the caller sees. The order is fixed — root, then the two areas —
+// so a report is stable to compare across passes.
+func incompleteVaultAreas(completeness memoryfiles.ScanCompleteness) []MemoryVaultAreaIssue {
+	var issues []MemoryVaultAreaIssue
+	for _, area := range []struct {
+		name string
+		scan memoryfiles.AreaScan
+	}{
+		{memoryVaultRootArea, completeness.Root},
+		{string(memoryfiles.AreaBeliefs), completeness.Beliefs},
+		{string(memoryfiles.AreaInbox), completeness.Inbox},
+	} {
+		if area.scan.Complete {
+			continue
+		}
+		issues = append(issues, MemoryVaultAreaIssue{Area: area.name, Reason: area.scan.Reason})
+	}
+	return issues
 }
 
 // staleRowsTx returns the ids of rows whose recorded path is no longer an inbox

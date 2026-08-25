@@ -51,6 +51,12 @@ type Repository struct {
 	// transaction that records it, so a test can fail that transaction and
 	// prove the file is removed again rather than left behind with no row.
 	memoryCandidateRecordBarrier func() error
+	// memoryIndexParkBarrier, when set (test-only; always nil in production),
+	// runs inside the index transaction after contested paths have been
+	// vacated and before the real ones are written, so a test can fail the
+	// transaction in exactly that window and prove no note is left holding a
+	// value that is not a vault path.
+	memoryIndexParkBarrier func() error
 	// mcpRegistrySnapshotBarrier, when set (test-only; always nil in
 	// production), is invoked by MCPRegistrySnapshot once its single read
 	// transaction is open and its aggregate tool-byte budget guard has
