@@ -774,6 +774,154 @@ void main() {
     });
   });
 
+  group('a vault nobody has written into yet', () {
+    testWidgets('offers the first persona save instead of refusing it', (
+      tester,
+    ) async {
+      // persona.md and profile.md do not exist until somebody writes them, so
+      // a fresh install opens this page with both documents missing. Treating
+      // that as unwritable makes the page permanently read-only: the one
+      // action that would fix it is the action being refused.
+      final api = _MemoryApi()
+        ..state = _state(
+          persona: _document(
+            content: '',
+            contentHash: '',
+            status: MemoryNoteStatus.unmanaged,
+            unavailableReason: MemoryUnavailableReason.vaultMissing,
+          ),
+          profile: _document(
+            content: '',
+            contentHash: '',
+            unavailableReason: MemoryUnavailableReason.vaultMissing,
+          ),
+          tiers: const [],
+        );
+      await _pumpMemory(tester, api);
+
+      final personaSave = tester.widget<FilledButton>(
+        find.byKey(const Key('memory-persona-save')),
+      );
+      final profileSave = tester.widget<FilledButton>(
+        find.byKey(const Key('memory-profile-save')),
+      );
+      expect(personaSave.onPressed, isNotNull);
+      expect(profileSave.onPressed, isNotNull);
+      expect(find.textContaining('not in the vault yet'), findsWidgets);
+    });
+
+    testWidgets('writes both documents for the first time with no version', (
+      tester,
+    ) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          persona: _document(
+            content: '',
+            contentHash: '',
+            status: MemoryNoteStatus.unmanaged,
+            unavailableReason: MemoryUnavailableReason.vaultMissing,
+          ),
+          profile: _document(
+            content: '',
+            contentHash: '',
+            unavailableReason: MemoryUnavailableReason.vaultMissing,
+          ),
+          tiers: const [],
+        );
+      await _pumpMemory(tester, api);
+
+      await tester.enterText(
+        find.byKey(const Key('memory-persona-editor')),
+        '# Persona\n\nBe direct.\n',
+      );
+      await _tap(tester, find.byKey(const Key('memory-persona-save')));
+      await tester.enterText(
+        find.byKey(const Key('memory-profile-editor')),
+        '# Profile\n\nI bike to work.\n',
+      );
+      await _tap(tester, find.byKey(const Key('memory-profile-save')));
+
+      expect(api.personaSaves, [('# Persona\n\nBe direct.\n', '')]);
+      expect(api.profileSaves, [('# Profile\n\nI bike to work.\n', '')]);
+    });
+  });
+
+  group('a document longer than a run carries', () {
+    testWidgets('shows the whole document, never the runtime notice', (
+      tester,
+    ) async {
+      // The editor is over the file. The truncation notice is something the
+      // runtime writes into the pin so a model knows it is holding a fragment;
+      // showing it here would put words in the editor the user never typed and
+      // would save them back into their own persona.
+      final api = _MemoryApi()
+        ..state = _state(
+          persona: _document(
+            content: '# Persona\n\nEvery byte of it, all the way down.\n',
+            contentHash: 'sha256:whole-document',
+            status: MemoryNoteStatus.unmanaged,
+            pinnedTruncated: true,
+            pinnedBytes: 4096,
+          ),
+        );
+      await _pumpMemory(tester, api);
+
+      final editor = tester.widget<TextField>(
+        find.byKey(const Key('memory-persona-editor')),
+      );
+      expect(
+        editor.controller?.text,
+        '# Persona\n\nEvery byte of it, all the way down.\n',
+      );
+      expect(find.textContaining('Open the vault to read the rest'), findsNothing);
+      expect(find.textContaining('4096'), findsWidgets);
+      expect(find.textContaining('reach'), findsWidgets);
+    });
+
+    testWidgets('saves the whole document against the document version', (
+      tester,
+    ) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          persona: _document(
+            content: '# Persona\n\nA long one.\n',
+            contentHash: 'sha256:whole-document',
+            status: MemoryNoteStatus.unmanaged,
+            pinnedTruncated: true,
+            pinnedBytes: 4096,
+          ),
+        );
+      await _pumpMemory(tester, api);
+
+      await tester.enterText(
+        find.byKey(const Key('memory-persona-editor')),
+        '# Persona\n\nA long one, edited.\n',
+      );
+      await _tap(tester, find.byKey(const Key('memory-persona-save')));
+
+      expect(api.personaSaves, [
+        ('# Persona\n\nA long one, edited.\n', 'sha256:whole-document'),
+      ]);
+    });
+
+    testWidgets('says nothing about truncation when nothing is cut', (
+      tester,
+    ) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          persona: _document(
+            content: '# Persona\n\nShort.\n',
+            contentHash: 'sha256:persona',
+            status: MemoryNoteStatus.unmanaged,
+            pinnedBytes: 20,
+          ),
+        );
+      await _pumpMemory(tester, api);
+
+      expect(find.textContaining('only the first'), findsNothing);
+    });
+  });
+
   group('the page as a whole', () {
     testWidgets('a backend failure is not rendered as an empty vault', (
       tester,
@@ -874,6 +1022,8 @@ MemoryDocument _document({
   MemoryNoteStatus status = MemoryNoteStatus.managed,
   MemoryUnavailableReason unavailableReason = MemoryUnavailableReason.none,
   String parseError = '',
+  bool pinnedTruncated = false,
+  int pinnedBytes = 0,
 }) {
   return MemoryDocument(
     content: content,
@@ -881,6 +1031,8 @@ MemoryDocument _document({
     status: status,
     unavailableReason: unavailableReason,
     parseError: parseError,
+    pinnedTruncated: pinnedTruncated,
+    pinnedBytes: pinnedBytes,
   );
 }
 

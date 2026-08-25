@@ -827,7 +827,7 @@ func TestMemoryProtoContract(t *testing.T) {
 	profile := file.Messages().ByName("MemoryProfile")
 	assertProtoFieldMembers(t, profile, map[protoreflect.Name]protoreflect.FieldNumber{
 		"content": 1, "content_hash": 2, "status": 3, "updated_at": 4, "parse_error": 5,
-		"unavailable_reason": 6,
+		"unavailable_reason": 6, "pinned_truncated": 7, "pinned_bytes": 8,
 	})
 
 	// The persona is its own message, not a second MemoryProfile: it is the
@@ -836,8 +836,21 @@ func TestMemoryProtoContract(t *testing.T) {
 	persona := file.Messages().ByName("MemoryPersona")
 	assertProtoFieldMembers(t, persona, map[protoreflect.Name]protoreflect.FieldNumber{
 		"content": 1, "content_hash": 2, "status": 3, "updated_at": 4, "parse_error": 5,
-		"unavailable_reason": 6,
+		"unavailable_reason": 6, "pinned_truncated": 7, "pinned_bytes": 8,
 	})
+
+	// content is the document as it stands on disk and content_hash is a hash
+	// of exactly those bytes, because it doubles as the compare-and-set token
+	// for a save. The two pinned_* fields are the separate statement about the
+	// runtime: how much of this reaches a prompt, and whether the rest is cut.
+	// Collapsing them — serving the truncated pin and its post-truncation hash
+	// as the editor's document — makes a long document unsaveable forever.
+	for _, document := range []protoreflect.MessageDescriptor{profile, persona} {
+		assertProtoField(t, document, "content", 1, protoreflect.StringKind, false, "")
+		assertProtoField(t, document, "content_hash", 2, protoreflect.StringKind, false, "")
+		assertProtoField(t, document, "pinned_truncated", 7, protoreflect.BoolKind, false, "")
+		assertProtoField(t, document, "pinned_bytes", 8, protoreflect.Int32Kind, false, "")
+	}
 
 	state := file.Messages().ByName("ListMemoryStateResponse")
 	assertProtoFieldMembers(t, state, map[protoreflect.Name]protoreflect.FieldNumber{

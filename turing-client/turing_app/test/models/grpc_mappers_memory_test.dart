@@ -165,4 +165,60 @@ void main() {
     expect(provenance.evidenceCount, 3);
     expect(provenance.observedAt, isNull);
   });
+
+  test('a pinned document carries the document and the pin separately', () {
+    // content is the file, content_hash is a hash of the file, and the two
+    // pinned_* fields are the separate statement about what a run carries.
+    // Mapping the pin's bytes into content — or its hash into content_hash —
+    // is what made a long document unsaveable: every compare-and-set the page
+    // sent was a hash of text that is nowhere on disk.
+    final document = GrpcMappers.memoryPersonaToModel(
+      memorypb.MemoryPersona(
+        content: '# Persona\n\nThe whole document, all of it.\n',
+        contentHash: 'sha256:whole-document',
+        status: memorypb.MemoryNoteStatus.MEMORY_NOTE_STATUS_UNMANAGED,
+        unavailableReason:
+            memorypb.MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_NONE,
+        pinnedTruncated: true,
+        pinnedBytes: 4096,
+      ),
+    );
+
+    expect(document.content, '# Persona\n\nThe whole document, all of it.\n');
+    expect(document.contentHash, 'sha256:whole-document');
+    expect(document.pinnedTruncated, isTrue);
+    expect(document.pinnedBytes, 4096);
+    expect(document.isWritable, isTrue);
+  });
+
+  test('a profile a run carries whole says so', () {
+    final document = GrpcMappers.memoryProfileToModel(
+      memorypb.MemoryProfile(
+        content: '# Profile\n\nShort.\n',
+        contentHash: 'sha256:profile',
+        pinnedBytes: 19,
+      ),
+    );
+
+    expect(document.pinnedTruncated, isFalse);
+    expect(document.pinnedBytes, 19);
+  });
+
+  test('a document missing from the vault is offered as a first save', () {
+    final document = GrpcMappers.memoryPersonaToModel(
+      memorypb.MemoryPersona(
+        unavailableReason: memorypb
+            .MemoryUnavailableReason
+            .MEMORY_UNAVAILABLE_REASON_VAULT_MISSING,
+      ),
+    );
+
+    expect(document.unavailableReason, MemoryUnavailableReason.vaultMissing);
+    expect(document.contentHash, isEmpty);
+    expect(
+      document.isWritable,
+      isTrue,
+      reason: 'a persona nobody has written yet is written by writing it',
+    );
+  });
 }
