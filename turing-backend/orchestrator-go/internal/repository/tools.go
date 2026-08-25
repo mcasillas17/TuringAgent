@@ -10,11 +10,30 @@ import (
 
 const toolRegistryInitializedKey = "tool_registry_initialized"
 
+// DiscoveredTool is one tool a worker reports.
 type DiscoveredTool struct {
 	ServerName string
 	ToolName   string
 	SchemaJSON string
 	Policy     string
+}
+
+// IsPseudoServerName reports whether a server name belongs to the orchestrator
+// itself rather than to an MCP process. A pseudo-server has no mcp_servers row,
+// so its tool rows carry a NULL mcp_server_id and are gated on policy alone.
+//
+// The list lives here because three different layers ask the same question —
+// the upsert that writes the rows, the capability filter that decides what a
+// worker may see, and the trigger in schema/0020_memory_pseudo_server.sql that
+// refuses everything else with a NULL server. A name added to one and not the
+// others is a tool that registers and then vanishes.
+func IsPseudoServerName(serverName string) bool {
+	switch serverName {
+	case "skills", "integrations", "memory":
+		return true
+	default:
+		return false
+	}
 }
 
 // UpsertTools replaces the enabled tool snapshot while retaining rows for
@@ -46,7 +65,7 @@ func (r *Repository) UpsertTools(ctx context.Context, tools []DiscoveredTool) er
 		return err
 	}
 	for _, tool := range tools {
-		if tool.ServerName == "skills" || tool.ServerName == "integrations" {
+		if IsPseudoServerName(tool.ServerName) {
 			_, err := tx.ExecContext(ctx, `
 				INSERT INTO tools (
 					id, server_name, tool_name, policy, schema_json, enabled, discovered_at, mcp_server_id, present

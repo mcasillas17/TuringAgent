@@ -21,9 +21,10 @@ import 'memory.pb.dart' as $0;
 export 'memory.pb.dart';
 
 /// The public facet is everything a client needs to read and decide; the
-/// internal facet is ListMemoryTools alone, which the runtime calls over the
-/// internal channel to wire memory tools dynamically. The split is enforced by
-/// method name at the identity layer, so both names must stay stable.
+/// internal facet is ListMemoryTools and CallMemoryTool, which the runtime
+/// calls over the internal channel to wire and run memory tools dynamically.
+/// The split is enforced by method name at the identity layer, so all of these
+/// names must stay stable.
 @$pb.GrpcServiceName('turing.v1.MemoryService')
 class MemoryServiceClient extends $grpc.Client {
   /// The hostname for this service.
@@ -109,6 +110,13 @@ class MemoryServiceClient extends $grpc.Client {
     return $createUnaryCall(_$listMemoryTools, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.CallMemoryToolResponse> callMemoryTool(
+    $0.CallMemoryToolRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$callMemoryTool, request, options: options);
+  }
+
   // method descriptors
 
   static final _$listMemoryState =
@@ -161,6 +169,11 @@ class MemoryServiceClient extends $grpc.Client {
           '/turing.v1.MemoryService/ListMemoryTools',
           ($0.ListMemoryToolsRequest value) => value.writeToBuffer(),
           $0.ListMemoryToolsResponse.fromBuffer);
+  static final _$callMemoryTool =
+      $grpc.ClientMethod<$0.CallMemoryToolRequest, $0.CallMemoryToolResponse>(
+          '/turing.v1.MemoryService/CallMemoryTool',
+          ($0.CallMemoryToolRequest value) => value.writeToBuffer(),
+          $0.CallMemoryToolResponse.fromBuffer);
 }
 
 @$pb.GrpcServiceName('turing.v1.MemoryService')
@@ -258,6 +271,15 @@ abstract class MemoryServiceBase extends $grpc.Service {
         ($core.List<$core.int> value) =>
             $0.ListMemoryToolsRequest.fromBuffer(value),
         ($0.ListMemoryToolsResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.CallMemoryToolRequest,
+            $0.CallMemoryToolResponse>(
+        'CallMemoryTool',
+        callMemoryTool_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.CallMemoryToolRequest.fromBuffer(value),
+        ($0.CallMemoryToolResponse value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.ListMemoryStateResponse> listMemoryState_Pre(
@@ -347,4 +369,13 @@ abstract class MemoryServiceBase extends $grpc.Service {
 
   $async.Future<$0.ListMemoryToolsResponse> listMemoryTools(
       $grpc.ServiceCall call, $0.ListMemoryToolsRequest request);
+
+  $async.Future<$0.CallMemoryToolResponse> callMemoryTool_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.CallMemoryToolRequest> $request) async {
+    return callMemoryTool($call, await $request);
+  }
+
+  $async.Future<$0.CallMemoryToolResponse> callMemoryTool(
+      $grpc.ServiceCall call, $0.CallMemoryToolRequest request);
 }

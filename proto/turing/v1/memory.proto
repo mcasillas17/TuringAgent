@@ -93,6 +93,12 @@ message MemoryCandidate {
   // Human-readable detail for unavailable_reason. Empty when content is whole.
   string parse_error = 12;
   MemoryUnavailableReason unavailable_reason = 13;
+  // False for a draft the user dropped into the inbox themselves. Turing has
+  // no row for it and will not rewrite or move it, so it is listed for reading
+  // and there is no RPC that promotes it — the user moves the file. A client
+  // that rendered an unmanaged draft with a Promote button would be offering
+  // an action the server refuses.
+  bool managed = 14;
 }
 
 // An accepted memory: a Markdown file in the user's vault.
@@ -206,6 +212,10 @@ message ApplyMemoryProfileRequest {
   // Compare-and-set against MemoryProfile.content_hash. Empty means the caller
   // expects no profile to exist yet.
   string expected_content_hash = 2;
+  // The pending profile_edit candidate this apply acts on. Turing writes
+  // profile.md only on the authority of a proposal the user is looking at, so
+  // there is no path here and no way to write the profile without one.
+  string candidate_id = 3;
 }
 
 message ApplyMemoryProfileResponse {
@@ -226,10 +236,28 @@ message ListMemoryToolsResponse {
   repeated MemoryToolDescriptor tools = 1;
 }
 
+// A memory tool call, dispatched by the runtime over the internal channel.
+//
+// There is no session_id and no vault path. The run names itself, and the
+// server resolves the conversation the run belongs to from its own tables: a
+// caller that could name the session could file a memory against a
+// conversation it has nothing to do with.
+message CallMemoryToolRequest {
+  string run_id = 1;
+  string approval_id = 2;
+  string tool_name = 3;
+  google.protobuf.Struct args = 4;
+}
+
+message CallMemoryToolResponse {
+  google.protobuf.Struct result = 1;
+}
+
 // The public facet is everything a client needs to read and decide; the
-// internal facet is ListMemoryTools alone, which the runtime calls over the
-// internal channel to wire memory tools dynamically. The split is enforced by
-// method name at the identity layer, so both names must stay stable.
+// internal facet is ListMemoryTools and CallMemoryTool, which the runtime
+// calls over the internal channel to wire and run memory tools dynamically.
+// The split is enforced by method name at the identity layer, so all of these
+// names must stay stable.
 service MemoryService {
   rpc ListMemoryState(ListMemoryStateRequest) returns (ListMemoryStateResponse);
   rpc GetMemorySettings(GetMemorySettingsRequest) returns (MemorySettings);
@@ -243,4 +271,5 @@ service MemoryService {
 
   // Internal facet only.
   rpc ListMemoryTools(ListMemoryToolsRequest) returns (ListMemoryToolsResponse);
+  rpc CallMemoryTool(CallMemoryToolRequest) returns (CallMemoryToolResponse);
 }

@@ -184,6 +184,7 @@ class MemoryCandidate extends $pb.GeneratedMessage {
     $1.Timestamp? decidedAt,
     $core.String? parseError,
     MemoryUnavailableReason? unavailableReason,
+    $core.bool? managed,
   }) {
     final result = create();
     if (candidateId != null) result.candidateId = candidateId;
@@ -199,6 +200,7 @@ class MemoryCandidate extends $pb.GeneratedMessage {
     if (decidedAt != null) result.decidedAt = decidedAt;
     if (parseError != null) result.parseError = parseError;
     if (unavailableReason != null) result.unavailableReason = unavailableReason;
+    if (managed != null) result.managed = managed;
     return result;
   }
 
@@ -246,6 +248,7 @@ class MemoryCandidate extends $pb.GeneratedMessage {
             MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
         valueOf: MemoryUnavailableReason.valueOf,
         enumValues: MemoryUnavailableReason.values)
+    ..aOB(14, _omitFieldNames ? '' : 'managed')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -390,6 +393,20 @@ class MemoryCandidate extends $pb.GeneratedMessage {
   $core.bool hasUnavailableReason() => $_has(12);
   @$pb.TagNumber(13)
   void clearUnavailableReason() => $_clearField(13);
+
+  /// False for a draft the user dropped into the inbox themselves. Turing has
+  /// no row for it and will not rewrite or move it, so it is listed for reading
+  /// and there is no RPC that promotes it — the user moves the file. A client
+  /// that rendered an unmanaged draft with a Promote button would be offering
+  /// an action the server refuses.
+  @$pb.TagNumber(14)
+  $core.bool get managed => $_getBF(13);
+  @$pb.TagNumber(14)
+  set managed($core.bool value) => $_setBool(13, value);
+  @$pb.TagNumber(14)
+  $core.bool hasManaged() => $_has(13);
+  @$pb.TagNumber(14)
+  void clearManaged() => $_clearField(14);
 }
 
 /// An accepted memory: a Markdown file in the user's vault.
@@ -1818,11 +1835,13 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
   factory ApplyMemoryProfileRequest({
     $core.String? content,
     $core.String? expectedContentHash,
+    $core.String? candidateId,
   }) {
     final result = create();
     if (content != null) result.content = content;
     if (expectedContentHash != null)
       result.expectedContentHash = expectedContentHash;
+    if (candidateId != null) result.candidateId = candidateId;
     return result;
   }
 
@@ -1841,6 +1860,7 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'content')
     ..aOS(2, _omitFieldNames ? '' : 'expectedContentHash')
+    ..aOS(3, _omitFieldNames ? '' : 'candidateId')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1885,6 +1905,18 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
   $core.bool hasExpectedContentHash() => $_has(1);
   @$pb.TagNumber(2)
   void clearExpectedContentHash() => $_clearField(2);
+
+  /// The pending profile_edit candidate this apply acts on. Turing writes
+  /// profile.md only on the authority of a proposal the user is looking at, so
+  /// there is no path here and no way to write the profile without one.
+  @$pb.TagNumber(3)
+  $core.String get candidateId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set candidateId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasCandidateId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearCandidateId() => $_clearField(3);
 }
 
 class ApplyMemoryProfileResponse extends $pb.GeneratedMessage {
@@ -2154,6 +2186,170 @@ class ListMemoryToolsResponse extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(1)
   $pb.PbList<MemoryToolDescriptor> get tools => $_getList(0);
+}
+
+/// A memory tool call, dispatched by the runtime over the internal channel.
+///
+/// There is no session_id and no vault path. The run names itself, and the
+/// server resolves the conversation the run belongs to from its own tables: a
+/// caller that could name the session could file a memory against a
+/// conversation it has nothing to do with.
+class CallMemoryToolRequest extends $pb.GeneratedMessage {
+  factory CallMemoryToolRequest({
+    $core.String? runId,
+    $core.String? approvalId,
+    $core.String? toolName,
+    $2.Struct? args,
+  }) {
+    final result = create();
+    if (runId != null) result.runId = runId;
+    if (approvalId != null) result.approvalId = approvalId;
+    if (toolName != null) result.toolName = toolName;
+    if (args != null) result.args = args;
+    return result;
+  }
+
+  CallMemoryToolRequest._();
+
+  factory CallMemoryToolRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory CallMemoryToolRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'CallMemoryToolRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'runId')
+    ..aOS(2, _omitFieldNames ? '' : 'approvalId')
+    ..aOS(3, _omitFieldNames ? '' : 'toolName')
+    ..aOM<$2.Struct>(4, _omitFieldNames ? '' : 'args',
+        subBuilder: $2.Struct.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CallMemoryToolRequest clone() =>
+      CallMemoryToolRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CallMemoryToolRequest copyWith(
+          void Function(CallMemoryToolRequest) updates) =>
+      super.copyWith((message) => updates(message as CallMemoryToolRequest))
+          as CallMemoryToolRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static CallMemoryToolRequest create() => CallMemoryToolRequest._();
+  @$core.override
+  CallMemoryToolRequest createEmptyInstance() => create();
+  static $pb.PbList<CallMemoryToolRequest> createRepeated() =>
+      $pb.PbList<CallMemoryToolRequest>();
+  @$core.pragma('dart2js:noInline')
+  static CallMemoryToolRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<CallMemoryToolRequest>(create);
+  static CallMemoryToolRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get runId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set runId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasRunId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearRunId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get approvalId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set approvalId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasApprovalId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearApprovalId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get toolName => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set toolName($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasToolName() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearToolName() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $2.Struct get args => $_getN(3);
+  @$pb.TagNumber(4)
+  set args($2.Struct value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasArgs() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearArgs() => $_clearField(4);
+  @$pb.TagNumber(4)
+  $2.Struct ensureArgs() => $_ensure(3);
+}
+
+class CallMemoryToolResponse extends $pb.GeneratedMessage {
+  factory CallMemoryToolResponse({
+    $2.Struct? result,
+  }) {
+    final result$ = create();
+    if (result != null) result$.result = result;
+    return result$;
+  }
+
+  CallMemoryToolResponse._();
+
+  factory CallMemoryToolResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory CallMemoryToolResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'CallMemoryToolResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOM<$2.Struct>(1, _omitFieldNames ? '' : 'result',
+        subBuilder: $2.Struct.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CallMemoryToolResponse clone() =>
+      CallMemoryToolResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CallMemoryToolResponse copyWith(
+          void Function(CallMemoryToolResponse) updates) =>
+      super.copyWith((message) => updates(message as CallMemoryToolResponse))
+          as CallMemoryToolResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static CallMemoryToolResponse create() => CallMemoryToolResponse._();
+  @$core.override
+  CallMemoryToolResponse createEmptyInstance() => create();
+  static $pb.PbList<CallMemoryToolResponse> createRepeated() =>
+      $pb.PbList<CallMemoryToolResponse>();
+  @$core.pragma('dart2js:noInline')
+  static CallMemoryToolResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<CallMemoryToolResponse>(create);
+  static CallMemoryToolResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $2.Struct get result => $_getN(0);
+  @$pb.TagNumber(1)
+  set result($2.Struct value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasResult() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearResult() => $_clearField(1);
+  @$pb.TagNumber(1)
+  $2.Struct ensureResult() => $_ensure(0);
 }
 
 const $core.bool _omitFieldNames =

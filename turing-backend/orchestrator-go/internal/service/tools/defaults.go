@@ -28,6 +28,21 @@ var seedPolicies = map[policyKey]Policy{
 	{serverName: "files", toolName: "files.update"}:   PolicyApprovalRequired,
 }
 
+// pseudoSeedPolicies is the same idea for the orchestrator's own pseudo-servers,
+// kept in a separate table because those tools are not served by a bundled MCP
+// server and must not appear in LegacyPolicyDefaults — that list is the rollout
+// fallback for a worker that reports no capabilities, and a worker cannot serve
+// a tool the orchestrator dispatches for it.
+//
+// Reading the user's own memory is safe: it leaves the vault, and every
+// conversation, exactly as it found it. memory.remember is deliberately absent,
+// so it falls to the unknown default and stops to ask — writing a proposal into
+// the user's vault is a change to what Turing believes about them.
+var pseudoSeedPolicies = map[policyKey]Policy{
+	{serverName: "memory", toolName: "memory.search"}: PolicySafe,
+	{serverName: "memory", toolName: "memory.read"}:   PolicySafe,
+}
+
 // DefaultPolicyFor assigns an orchestrator-owned policy to a tool when it is
 // first discovered. Unknown tools require approval and are never assumed safe.
 func DefaultPolicyFor(serverName string, toolName string) Policy {
@@ -36,6 +51,9 @@ func DefaultPolicyFor(serverName string, toolName string) Policy {
 	}
 
 	if policy, ok := seedPolicies[policyKey{serverName: serverName, toolName: toolName}]; ok {
+		return policy
+	}
+	if policy, ok := pseudoSeedPolicies[policyKey{serverName: serverName, toolName: toolName}]; ok {
 		return policy
 	}
 	return PolicyApprovalRequired
@@ -51,6 +69,8 @@ func BundledServerForTool(toolName string) (string, bool) {
 		return "skills", true
 	case strings.HasPrefix(toolName, "github."):
 		return "integrations", true
+	case strings.HasPrefix(toolName, "memory."):
+		return "memory", true
 	}
 
 	for key := range seedPolicies {
@@ -61,10 +81,16 @@ func BundledServerForTool(toolName string) (string, bool) {
 	return "", false
 }
 
+// readOnlyTools names the tools whose failure the runtime may treat as
+// recoverable, because nothing was changed by attempting them. It is a separate
+// question from the policy: a user who raises memory.search to
+// approval_required has changed when Turing may look, not what looking does.
 var readOnlyTools = map[policyKey]bool{
 	{serverName: "integrations", toolName: "github.list_issues"}: true,
 	{serverName: "integrations", toolName: "github.get_issue"}:   true,
 	{serverName: "integrations", toolName: "github.get_file"}:    true,
+	{serverName: "memory", toolName: "memory.search"}:            true,
+	{serverName: "memory", toolName: "memory.read"}:              true,
 }
 
 func ToolReadOnly(serverName, toolName string) bool {

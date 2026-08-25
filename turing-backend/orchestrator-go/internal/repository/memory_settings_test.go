@@ -85,9 +85,9 @@ func TestToolReportingDoesNotOverwriteTheMemoryToggle(t *testing.T) {
 	for range 2 {
 		if err := repo.UpsertTools(ctx, []DiscoveredTool{{
 			ServerName: "memory",
-			ToolName:   "memory_search",
+			ToolName:   "memory.search",
 			SchemaJSON: `{"type":"object"}`,
-			Policy:     "ask",
+			Policy:     "safe",
 		}}); err != nil {
 			t.Fatalf("UpsertTools: %v", err)
 		}

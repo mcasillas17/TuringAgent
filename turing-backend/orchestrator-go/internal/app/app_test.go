@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -647,6 +650,7 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 		"turing.v1.SkillService",
 		"turing.v1.AutomationService",
 		"turing.v1.TelemetryService",
+		"turing.v1.MemoryService",
 	} {
 		if _, ok := publicServices[name]; !ok {
 			t.Fatalf("public server missing %s", name)
@@ -669,6 +673,12 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 	}
 	if _, ok := internalServices["turing.v1.IntegrationService"]; !ok {
 		t.Fatal("internal server missing integration dispatch facet")
+	}
+	// MemoryService is split the same way: the runtime needs the tool facet,
+	// and the public facet refuses it. Reading the vault and deciding a
+	// proposal stay on the public side, which the facet itself enforces.
+	if _, ok := internalServices["turing.v1.MemoryService"]; !ok {
+		t.Fatal("internal server missing memory tool facet")
 	}
 	// A usage report is for the person, not for the machinery. Registering it
 	// internally would put it behind per-identity authorization instead of
@@ -1176,5 +1186,97 @@ func TestStopReturnsWhenPublicStreamIsActive(t *testing.T) {
 		case <-time.After(time.Second):
 		}
 		t.Fatal("Stop did not return while a public stream was active")
+	}
+}
+
+// newMemoryTestApp is newTestApp with a real vault on disk, so the memory
+// facets have something to answer about.
+func newMemoryTestApp(t *testing.T) *App {
+	t.Helper()
+	root := t.TempDir()
+	for _, dir := range []string{memoryfiles.InboxDirName, memoryfiles.BeliefsDirName} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o700); err != nil {
+			t.Fatalf("prepare vault dir %q: %v", dir, err)
+		}
+	}
+	app, err := New(config.Config{
+		ClientAPIKey: "client",
+		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
+		ApprovalJWTSecret: "approval-secret",
+		DatabasePath:      t.TempDir() + "/turing.db",
+		MemoryVaultRoot:   root,
+		OllamaModel:       "llama3.2",
+		OpenAIModel:       "gpt-4o-mini",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Stop)
+	return app
+}
+
+// MemoryService is split the same way IntegrationService is: reading the vault
+// and deciding a proposal are the user's, discovering and running a memory tool
+// is the runtime's, and each facet refuses the other's half. The runtime
+// identity has to name both internal methods or dynamic wiring never happens.
+func TestMemoryServiceFacetAndRuntimeIdentityWiring(t *testing.T) {
+	app := newMemoryTestApp(t)
+	publicServices := app.PublicServer.GetServiceInfo()
+	if _, ok := publicServices["turing.v1.MemoryService"]; !ok {
+		t.Fatal("public server missing turing.v1.MemoryService")
+	}
+	internalServices := app.InternalServer.GetServiceInfo()
+	if _, ok := internalServices["turing.v1.MemoryService"]; !ok {
+		t.Fatal("internal server missing the memory tool facet")
+	}
+
+	publicClient := turingv1.NewMemoryServiceClient(newBufconnClient(t, app.PublicServer))
+	internalClient := turingv1.NewMemoryServiceClient(newBufconnClient(t, app.InternalServer))
+	publicCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer client")
+	internalCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer internal")
+
+	if _, err := publicClient.ListMemoryTools(publicCtx, &turingv1.ListMemoryToolsRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("public discovery error = %v, want PermissionDenied", err)
+	}
+	if _, err := publicClient.CallMemoryTool(publicCtx, &turingv1.CallMemoryToolRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("public dispatch error = %v, want PermissionDenied", err)
+	}
+	managementCalls := map[string]func() error{
+		"ListMemoryState": func() error {
+			_, err := internalClient.ListMemoryState(internalCtx, &turingv1.ListMemoryStateRequest{})
+			return err
+		},
+		"GetMemorySettings": func() error {
+			_, err := internalClient.GetMemorySettings(internalCtx, &turingv1.GetMemorySettingsRequest{})
+			return err
+		},
+		"SetMemoryEnabled": func() error {
+			_, err := internalClient.SetMemoryEnabled(internalCtx, &turingv1.SetMemoryEnabledRequest{})
+			return err
+		},
+		"PromoteMemoryCandidate": func() error {
+			_, err := internalClient.PromoteMemoryCandidate(internalCtx, &turingv1.PromoteMemoryCandidateRequest{})
+			return err
+		},
+		"ApplyMemoryProfile": func() error {
+			_, err := internalClient.ApplyMemoryProfile(internalCtx, &turingv1.ApplyMemoryProfileRequest{})
+			return err
+		},
+	}
+	for name, call := range managementCalls {
+		// The identity interceptor refuses these before the facet does, which
+		// is the stronger of the two answers; either way it is a refusal.
+		if err := call(); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("internal %s error = %v, want PermissionDenied", name, err)
+		}
+	}
+
+	tools, err := internalClient.ListMemoryTools(internalCtx, &turingv1.ListMemoryToolsRequest{})
+	if err != nil || len(tools.GetTools()) != 3 {
+		t.Fatalf("runtime discovery = %d tools err=%v, want the three memory tools", len(tools.GetTools()), err)
+	}
+	state, err := publicClient.ListMemoryState(publicCtx, &turingv1.ListMemoryStateRequest{})
+	if err != nil || !state.GetSettings().GetEnabled() {
+		t.Fatalf("public state = %+v err=%v, want memory enabled by default", state.GetSettings(), err)
 	}
 }

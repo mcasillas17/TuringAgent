@@ -29,6 +29,7 @@ const (
 	MemoryService_GetMemoryProfile_FullMethodName       = "/turing.v1.MemoryService/GetMemoryProfile"
 	MemoryService_ApplyMemoryProfile_FullMethodName     = "/turing.v1.MemoryService/ApplyMemoryProfile"
 	MemoryService_ListMemoryTools_FullMethodName        = "/turing.v1.MemoryService/ListMemoryTools"
+	MemoryService_CallMemoryTool_FullMethodName         = "/turing.v1.MemoryService/CallMemoryTool"
 )
 
 // MemoryServiceClient is the client API for MemoryService service.
@@ -36,9 +37,10 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // The public facet is everything a client needs to read and decide; the
-// internal facet is ListMemoryTools alone, which the runtime calls over the
-// internal channel to wire memory tools dynamically. The split is enforced by
-// method name at the identity layer, so both names must stay stable.
+// internal facet is ListMemoryTools and CallMemoryTool, which the runtime
+// calls over the internal channel to wire and run memory tools dynamically.
+// The split is enforced by method name at the identity layer, so all of these
+// names must stay stable.
 type MemoryServiceClient interface {
 	ListMemoryState(ctx context.Context, in *ListMemoryStateRequest, opts ...grpc.CallOption) (*ListMemoryStateResponse, error)
 	GetMemorySettings(ctx context.Context, in *GetMemorySettingsRequest, opts ...grpc.CallOption) (*MemorySettings, error)
@@ -51,6 +53,7 @@ type MemoryServiceClient interface {
 	ApplyMemoryProfile(ctx context.Context, in *ApplyMemoryProfileRequest, opts ...grpc.CallOption) (*ApplyMemoryProfileResponse, error)
 	// Internal facet only.
 	ListMemoryTools(ctx context.Context, in *ListMemoryToolsRequest, opts ...grpc.CallOption) (*ListMemoryToolsResponse, error)
+	CallMemoryTool(ctx context.Context, in *CallMemoryToolRequest, opts ...grpc.CallOption) (*CallMemoryToolResponse, error)
 }
 
 type memoryServiceClient struct {
@@ -161,14 +164,25 @@ func (c *memoryServiceClient) ListMemoryTools(ctx context.Context, in *ListMemor
 	return out, nil
 }
 
+func (c *memoryServiceClient) CallMemoryTool(ctx context.Context, in *CallMemoryToolRequest, opts ...grpc.CallOption) (*CallMemoryToolResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CallMemoryToolResponse)
+	err := c.cc.Invoke(ctx, MemoryService_CallMemoryTool_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MemoryServiceServer is the server API for MemoryService service.
 // All implementations must embed UnimplementedMemoryServiceServer
 // for forward compatibility.
 //
 // The public facet is everything a client needs to read and decide; the
-// internal facet is ListMemoryTools alone, which the runtime calls over the
-// internal channel to wire memory tools dynamically. The split is enforced by
-// method name at the identity layer, so both names must stay stable.
+// internal facet is ListMemoryTools and CallMemoryTool, which the runtime
+// calls over the internal channel to wire and run memory tools dynamically.
+// The split is enforced by method name at the identity layer, so all of these
+// names must stay stable.
 type MemoryServiceServer interface {
 	ListMemoryState(context.Context, *ListMemoryStateRequest) (*ListMemoryStateResponse, error)
 	GetMemorySettings(context.Context, *GetMemorySettingsRequest) (*MemorySettings, error)
@@ -181,6 +195,7 @@ type MemoryServiceServer interface {
 	ApplyMemoryProfile(context.Context, *ApplyMemoryProfileRequest) (*ApplyMemoryProfileResponse, error)
 	// Internal facet only.
 	ListMemoryTools(context.Context, *ListMemoryToolsRequest) (*ListMemoryToolsResponse, error)
+	CallMemoryTool(context.Context, *CallMemoryToolRequest) (*CallMemoryToolResponse, error)
 	mustEmbedUnimplementedMemoryServiceServer()
 }
 
@@ -220,6 +235,9 @@ func (UnimplementedMemoryServiceServer) ApplyMemoryProfile(context.Context, *App
 }
 func (UnimplementedMemoryServiceServer) ListMemoryTools(context.Context, *ListMemoryToolsRequest) (*ListMemoryToolsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListMemoryTools not implemented")
+}
+func (UnimplementedMemoryServiceServer) CallMemoryTool(context.Context, *CallMemoryToolRequest) (*CallMemoryToolResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CallMemoryTool not implemented")
 }
 func (UnimplementedMemoryServiceServer) mustEmbedUnimplementedMemoryServiceServer() {}
 func (UnimplementedMemoryServiceServer) testEmbeddedByValue()                       {}
@@ -422,6 +440,24 @@ func _MemoryService_ListMemoryTools_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MemoryService_CallMemoryTool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CallMemoryToolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MemoryServiceServer).CallMemoryTool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MemoryService_CallMemoryTool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MemoryServiceServer).CallMemoryTool(ctx, req.(*CallMemoryToolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MemoryService_ServiceDesc is the grpc.ServiceDesc for MemoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -468,6 +504,10 @@ var MemoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListMemoryTools",
 			Handler:    _MemoryService_ListMemoryTools_Handler,
+		},
+		{
+			MethodName: "CallMemoryTool",
+			Handler:    _MemoryService_CallMemoryTool_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

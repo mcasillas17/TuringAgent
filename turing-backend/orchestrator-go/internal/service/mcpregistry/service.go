@@ -526,9 +526,22 @@ func (s *Server) UpdateToolPolicyByName(ctx context.Context, req *turingv1.Updat
 	return descriptor, nil
 }
 
+// managedPseudoServerNames are the orchestrator-owned pseudo-servers this
+// management surface will describe. It is deliberately a separate list from
+// reservedMCPServerNames: the bundled MCP servers are reserved too, but they
+// have real mcp_servers rows and are listed through ListMcpServers instead.
+var managedPseudoServerNames = map[string]struct{}{
+	"skills":       {},
+	"integrations": {},
+	"memory":       {},
+}
+
 func (s *Server) ListPseudoServerTools(ctx context.Context, req *turingv1.ListPseudoServerToolsRequest) (*turingv1.ListPseudoServerToolsResponse, error) {
-	if req == nil || (req.GetServerName() != "skills" && req.GetServerName() != "integrations") {
-		return nil, status.Error(codes.InvalidArgument, "server_name must be skills or integrations")
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "server_name must be skills, integrations, or memory")
+	}
+	if _, managed := managedPseudoServerNames[req.GetServerName()]; !managed {
+		return nil, status.Error(codes.InvalidArgument, "server_name must be skills, integrations, or memory")
 	}
 	tools, err := s.repo.ListPseudoServerTools(ctx, req.GetServerName())
 	if err != nil {

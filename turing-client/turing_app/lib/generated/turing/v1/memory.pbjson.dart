@@ -225,6 +225,7 @@ const MemoryCandidate$json = {
       '6': '.turing.v1.MemoryUnavailableReason',
       '10': 'unavailableReason'
     },
+    {'1': 'managed', '3': 14, '4': 1, '5': 8, '10': 'managed'},
   ],
 };
 
@@ -241,7 +242,8 @@ final $typed_data.Uint8List memoryCandidateDescriptor = $convert.base64Decode(
     'cm90b2J1Zi5UaW1lc3RhbXBSCXVwZGF0ZWRBdBI5CgpkZWNpZGVkX2F0GAsgASgLMhouZ29vZ2'
     'xlLnByb3RvYnVmLlRpbWVzdGFtcFIJZGVjaWRlZEF0Eh8KC3BhcnNlX2Vycm9yGAwgASgJUgpw'
     'YXJzZUVycm9yElEKEnVuYXZhaWxhYmxlX3JlYXNvbhgNIAEoDjIiLnR1cmluZy52MS5NZW1vcn'
-    'lVbmF2YWlsYWJsZVJlYXNvblIRdW5hdmFpbGFibGVSZWFzb24=');
+    'lVbmF2YWlsYWJsZVJlYXNvblIRdW5hdmFpbGFibGVSZWFzb24SGAoHbWFuYWdlZBgOIAEoCFIH'
+    'bWFuYWdlZA==');
 
 @$core.Deprecated('Use memoryNoteDescriptor instead')
 const MemoryNote$json = {
@@ -734,14 +736,15 @@ const ApplyMemoryProfileRequest$json = {
       '5': 9,
       '10': 'expectedContentHash'
     },
+    {'1': 'candidate_id', '3': 3, '4': 1, '5': 9, '10': 'candidateId'},
   ],
 };
 
 /// Descriptor for `ApplyMemoryProfileRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List applyMemoryProfileRequestDescriptor =
-    $convert.base64Decode(
-        'ChlBcHBseU1lbW9yeVByb2ZpbGVSZXF1ZXN0EhgKB2NvbnRlbnQYASABKAlSB2NvbnRlbnQSMg'
-        'oVZXhwZWN0ZWRfY29udGVudF9oYXNoGAIgASgJUhNleHBlY3RlZENvbnRlbnRIYXNo');
+final $typed_data.Uint8List applyMemoryProfileRequestDescriptor = $convert.base64Decode(
+    'ChlBcHBseU1lbW9yeVByb2ZpbGVSZXF1ZXN0EhgKB2NvbnRlbnQYASABKAlSB2NvbnRlbnQSMg'
+    'oVZXhwZWN0ZWRfY29udGVudF9oYXNoGAIgASgJUhNleHBlY3RlZENvbnRlbnRIYXNoEiEKDGNh'
+    'bmRpZGF0ZV9pZBgDIAEoCVILY2FuZGlkYXRlSWQ=');
 
 @$core.Deprecated('Use applyMemoryProfileResponseDescriptor instead')
 const ApplyMemoryProfileResponse$json = {
@@ -826,3 +829,48 @@ final $typed_data.Uint8List listMemoryToolsResponseDescriptor =
     $convert.base64Decode(
         'ChdMaXN0TWVtb3J5VG9vbHNSZXNwb25zZRI1CgV0b29scxgBIAMoCzIfLnR1cmluZy52MS5NZW'
         '1vcnlUb29sRGVzY3JpcHRvclIFdG9vbHM=');
+
+@$core.Deprecated('Use callMemoryToolRequestDescriptor instead')
+const CallMemoryToolRequest$json = {
+  '1': 'CallMemoryToolRequest',
+  '2': [
+    {'1': 'run_id', '3': 1, '4': 1, '5': 9, '10': 'runId'},
+    {'1': 'approval_id', '3': 2, '4': 1, '5': 9, '10': 'approvalId'},
+    {'1': 'tool_name', '3': 3, '4': 1, '5': 9, '10': 'toolName'},
+    {
+      '1': 'args',
+      '3': 4,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Struct',
+      '10': 'args'
+    },
+  ],
+};
+
+/// Descriptor for `CallMemoryToolRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List callMemoryToolRequestDescriptor = $convert.base64Decode(
+    'ChVDYWxsTWVtb3J5VG9vbFJlcXVlc3QSFQoGcnVuX2lkGAEgASgJUgVydW5JZBIfCgthcHByb3'
+    'ZhbF9pZBgCIAEoCVIKYXBwcm92YWxJZBIbCgl0b29sX25hbWUYAyABKAlSCHRvb2xOYW1lEisK'
+    'BGFyZ3MYBCABKAsyFy5nb29nbGUucHJvdG9idWYuU3RydWN0UgRhcmdz');
+
+@$core.Deprecated('Use callMemoryToolResponseDescriptor instead')
+const CallMemoryToolResponse$json = {
+  '1': 'CallMemoryToolResponse',
+  '2': [
+    {
+      '1': 'result',
+      '3': 1,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Struct',
+      '10': 'result'
+    },
+  ],
+};
+
+/// Descriptor for `CallMemoryToolResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List callMemoryToolResponseDescriptor =
+    $convert.base64Decode(
+        'ChZDYWxsTWVtb3J5VG9vbFJlc3BvbnNlEi8KBnJlc3VsdBgBIAEoCzIXLmdvb2dsZS5wcm90b2'
+        'J1Zi5TdHJ1Y3RSBnJlc3VsdA==');

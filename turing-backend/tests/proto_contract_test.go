@@ -41,8 +41,8 @@ func TestProtoContractsDefineRequiredServices(t *testing.T) {
 		"memory.proto": {
 			"service MemoryService", "rpc ListMemoryState", "rpc GetMemorySettings",
 			"rpc SetMemoryEnabled", "rpc PromoteMemoryCandidate", "rpc RejectMemoryCandidate",
-			"rpc ApplyMemoryProfile", "rpc ListMemoryTools", "message MemoryCandidate",
-			"message MemoryNote", "message MemoryProvenance",
+			"rpc ApplyMemoryProfile", "rpc ListMemoryTools", "rpc CallMemoryTool",
+			"message MemoryCandidate", "message MemoryNote", "message MemoryProvenance",
 		},
 	}
 	for file, snippets := range required {
@@ -806,8 +806,11 @@ func TestMemoryProtoContract(t *testing.T) {
 	assertProtoFieldMembers(t, candidate, map[protoreflect.Name]protoreflect.FieldNumber{
 		"candidate_id": 1, "kind": 2, "inbox_path": 3, "content": 4, "content_hash": 5,
 		"state": 6, "provenance": 7, "promoted_note_id": 8, "created_at": 9, "updated_at": 10,
-		"decided_at": 11, "parse_error": 12, "unavailable_reason": 13,
+		"decided_at": 11, "parse_error": 12, "unavailable_reason": 13, "managed": 14,
 	})
+	// A draft the user dropped into the inbox themselves is listed so they know
+	// Turing can see it, and marked so no client offers to promote it.
+	assertProtoField(t, candidate, "managed", 14, protoreflect.BoolKind, false, "")
 	// Full content, never a preview: the user is accepting exactly this text.
 	assertProtoField(t, candidate, "content", 4, protoreflect.StringKind, false, "")
 
@@ -833,6 +836,16 @@ func TestMemoryProtoContract(t *testing.T) {
 	// Compare-and-set: an edit composed against a stale profile is rejected
 	// rather than silently overwriting a concurrent one.
 	assertProtoField(t, apply, "expected_content_hash", 2, protoreflect.StringKind, false, "")
+	// The profile is written only on the authority of a proposal the user is
+	// looking at, so there is a candidate here and never a path.
+	assertProtoField(t, apply, "candidate_id", 3, protoreflect.StringKind, false, "")
+
+	// A memory tool call names its run and nothing else. No session id, no
+	// path, no scope: the server resolves the conversation from its own tables.
+	call := file.Messages().ByName("CallMemoryToolRequest")
+	assertProtoFieldMembers(t, call, map[protoreflect.Name]protoreflect.FieldNumber{
+		"run_id": 1, "approval_id": 2, "tool_name": 3, "args": 4,
+	})
 
 	promote := file.Messages().ByName("PromoteMemoryCandidateRequest")
 	assertProtoField(t, promote, "candidate_id", 1, protoreflect.StringKind, false, "")
@@ -851,6 +864,9 @@ func TestMemoryProtoContract(t *testing.T) {
 		"GetMemoryProfile":       {"turing.v1.GetMemoryProfileRequest", "turing.v1.MemoryProfile"},
 		"ApplyMemoryProfile":     {"turing.v1.ApplyMemoryProfileRequest", "turing.v1.ApplyMemoryProfileResponse"},
 		"ListMemoryTools":        {"turing.v1.ListMemoryToolsRequest", "turing.v1.ListMemoryToolsResponse"},
+		"CallMemoryTool":         {"turing.v1.CallMemoryToolRequest", "turing.v1.CallMemoryToolResponse"},
+		"ListMemoryCandidates":   {"turing.v1.ListMemoryCandidatesRequest", "turing.v1.ListMemoryCandidatesResponse"},
+		"GetMemoryCandidate":     {"turing.v1.GetMemoryCandidateRequest", "turing.v1.MemoryCandidate"},
 	} {
 		descriptor := service.Methods().ByName(method)
 		if descriptor == nil {
@@ -868,6 +884,7 @@ func TestMemoryProtoContract(t *testing.T) {
 	// memory-tool wiring needs the internal one by name.
 	for name, want := range map[string]string{
 		turingv1.MemoryService_ListMemoryTools_FullMethodName: "/turing.v1.MemoryService/ListMemoryTools",
+		turingv1.MemoryService_CallMemoryTool_FullMethodName:  "/turing.v1.MemoryService/CallMemoryTool",
 		turingv1.MemoryService_ListMemoryState_FullMethodName: "/turing.v1.MemoryService/ListMemoryState",
 	} {
 		if name != want {

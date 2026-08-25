@@ -638,7 +638,7 @@ func (s *Server) filterRegisteredWorkerTools(
 	for _, tool := range discovered {
 		var available bool
 		var err error
-		if tool.ServerName == "skills" || tool.ServerName == "integrations" {
+		if repository.IsPseudoServerName(tool.ServerName) {
 			available, err = s.repo.PseudoServerToolAvailable(ctx, tool.ServerName, tool.ToolName)
 		} else {
 			available, err = s.repo.MCPToolAvailable(ctx, tool.ServerName, tool.ToolName)

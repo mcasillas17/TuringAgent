@@ -37,15 +37,16 @@ var (
 )
 
 // reservedMCPServerNames are names TuringAgent's own first-party servers
-// own — the three bundled MCP servers plus the "integrations" pseudo-server
-// that owns the `github.` tool namespace (see UpdateToolPolicyByName and
-// ListPseudoServerTools) — and a caller cannot register or import over any
-// of them regardless of tier.
+// own — the three bundled MCP servers plus the "integrations" and "memory"
+// pseudo-servers that own the `github.` and `memory.` tool namespaces (see
+// UpdateToolPolicyByName and ListPseudoServerTools) — and a caller cannot
+// register or import over any of them regardless of tier.
 var reservedMCPServerNames = map[string]struct{}{
 	"system":       {},
 	"files":        {},
 	"skills":       {},
 	"integrations": {},
+	"memory":       {},
 }
 
 // isReservedMCPServerName compares case-insensitively: mcpServerNamePattern

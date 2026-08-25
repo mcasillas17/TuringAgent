@@ -12,6 +12,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 	agentsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/agents"
@@ -22,6 +23,7 @@ import (
 	eventsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	integrationsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/integrations"
 	mcpregistrysvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/mcpregistry"
+	memorysvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/memory"
 	runtimesvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runtime"
 	sessionsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/sessions"
 	skillsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/skills"
@@ -48,6 +50,7 @@ type App struct {
 	ApprovalService    *approvalsvc.Server
 	AuditService       *auditsvc.Server
 	MCPRegistryService *mcpregistrysvc.Server
+	MemoryService      *memorysvc.Server
 	HealthService      *HealthServer
 	// InternalIdentityNames is the exact set of least-privilege identity
 	// names wired into InternalServer's authorization interceptors — names
@@ -184,6 +187,22 @@ func New(cfg config.Config) (*App, error) {
 	integrationService := integrationsvc.New(repo, integrationSealer, auditService)
 	integrationService.SetApprovalEnforcer(approvalService)
 	integrationService.SetRegistryChangeNotifier(runtimeService)
+	// A vault that is not there is not a reason to refuse to start. Memory
+	// reports itself unavailable, offers no tools and refuses every dispatch,
+	// which is a state the surface already has to describe — whereas failing
+	// here would take the whole app down over a folder the user has not made.
+	var memoryVault *memoryfiles.Vault
+	if cfg.MemoryVaultRoot != "" {
+		memoryVault, err = memoryfiles.Open(cfg.MemoryVaultRoot)
+		if err != nil {
+			log.Printf("memory vault at %s is unavailable: %v", cfg.MemoryVaultRoot, err)
+			memoryVault = nil
+		}
+	}
+	repo.SetMemoryVault(memoryVault)
+	memoryService := memorysvc.New(repo, memoryVault, auditService)
+	memoryService.SetApprovalEnforcer(approvalService)
+	memoryService.SetRegistryChangeNotifier(runtimeService)
 	mcpRegistryService := mcpregistrysvc.New(repo, integrationSealer, nil)
 	mcpRegistryService.SetAuditRecorder(auditService)
 	mcpRegistryService.SetMCPConfigRoot(cfg.MCPConfigRoot)
@@ -256,6 +275,8 @@ func New(cfg config.Config) (*App, error) {
 			turingv1.McpRegistryService_CallRegisteredMcpTool_FullMethodName,
 			turingv1.IntegrationService_ListIntegrationTools_FullMethodName,
 			turingv1.IntegrationService_CallIntegrationTool_FullMethodName,
+			turingv1.MemoryService_ListMemoryTools_FullMethodName,
+			turingv1.MemoryService_CallMemoryTool_FullMethodName,
 		),
 		auth.NewServiceIdentity("approval-consumer", cfg.ApprovalConsumerToken,
 			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
@@ -303,6 +324,10 @@ func New(cfg config.Config) (*App, error) {
 	// and dispatch tools. Neither facet ever returns a sealed credential.
 	turingv1.RegisterIntegrationServiceServer(publicServer, integrationsvc.NewPublicServer(integrationService))
 	turingv1.RegisterMcpRegistryServiceServer(publicServer, mcpregistrysvc.NewPublicServer(mcpRegistryService))
+	// Split the same way, and for the same reason: reading the vault and
+	// deciding a proposal are the user's, while discovering and running a
+	// memory tool is the runtime's. Neither facet can do the other's half.
+	turingv1.RegisterMemoryServiceServer(publicServer, memorysvc.NewPublicServer(memoryService))
 	// Public only: nothing outside the orchestrator schedules a run, and the
 	// runtime has no reason to read the automation library.
 	turingv1.RegisterAutomationServiceServer(publicServer, automationService)
@@ -322,6 +347,7 @@ func New(cfg config.Config) (*App, error) {
 	turingv1.RegisterRuntimeServiceServer(internalServer, runtimeService)
 	turingv1.RegisterMcpRegistryServiceServer(internalServer, mcpregistrysvc.NewInternalServer(mcpRegistryService))
 	turingv1.RegisterIntegrationServiceServer(internalServer, integrationsvc.NewInternalServer(integrationService))
+	turingv1.RegisterMemoryServiceServer(internalServer, memorysvc.NewInternalServer(memoryService))
 
 	application := &App{
 		PublicServer:          publicServer,
@@ -336,6 +362,7 @@ func New(cfg config.Config) (*App, error) {
 		ApprovalService:       approvalService,
 		AuditService:          auditService,
 		MCPRegistryService:    mcpRegistryService,
+		MemoryService:         memoryService,
 		HealthService:         healthService,
 		InternalIdentityNames: internalIdentityNames,
 		database:              database,
