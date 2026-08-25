@@ -189,3 +189,31 @@ func TestCreateInboxNoteRefusesEveryKindOutsideTheTwoKnownOnes(t *testing.T) {
 		}
 	}
 }
+
+// The caller's own claim about a candidate's kind is checked before the file is
+// even opened. Its own frontmatter is authoritative afterwards — that is the
+// gate TestPromoteToBeliefsRefusesProfileEditDeclaredAsBelief covers — but a
+// caller that says "this is a profile edit" and points promotion at a belief is
+// asking for two different things at once, and neither of them is a promotion.
+// Without this leg the request's Kind field would be decoration: settable to
+// anything, read by nothing.
+func TestPromoteToBeliefsRefusesACallerClaimedProfileEditOverABeliefFile(t *testing.T) {
+	vault := newTestVault(t)
+	candidate := seedCandidate(t, vault, KindBelief, "Keeps bees", "The user keeps bees.")
+
+	for _, claimed := range []NoteKind{KindProfileEdit, "profile-edit", "Belief", "anything"} {
+		_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
+			SourceRelPath: candidate.RelPath,
+			Kind:          claimed,
+		})
+		if !errors.Is(err, ErrKind) {
+			t.Fatalf("claimed kind %q: expected the promotion to be refused, got %v", claimed, err)
+		}
+		if _, err := os.Lstat(filepath.Join(vault.Root(), filepath.FromSlash(candidate.RelPath))); err != nil {
+			t.Fatalf("claimed kind %q: the refused candidate was disturbed: %v", claimed, err)
+		}
+		if _, err := os.Lstat(filepath.Join(vault.Root(), BeliefsDirName)); err != nil {
+			t.Fatalf("claimed kind %q: beliefs/ was disturbed: %v", claimed, err)
+		}
+	}
+}

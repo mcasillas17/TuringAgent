@@ -978,3 +978,49 @@ func TestReconcileRecordsNothingWhenItChangesNothing(t *testing.T) {
 		t.Fatalf("audit rows grew from %d to %d over two no-op passes", before, after)
 	}
 }
+
+// The inbox has its own arm of the same rule, and it is not the beliefs arm.
+//
+// A candidate whose frontmatter cannot be read is neither a draft the user
+// wrote by hand nor an orphan of a crashed creation, and reporting it as either
+// would be a lie the vault page shows the user. It gets its own error row,
+// naming the file and saying why — the recovery path for the torn-file residual
+// a mid-write Obsidian edit leaves behind. Without this leg the inbox arm could
+// be deleted and the beliefs arm would keep every other test green.
+func TestAMalformedInboxNoteIsItsOwnErrorRowAndNothingElse(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	writeVaultNote(t, vault, "inbox/torn.md", "---\nkind: \"gossip\"\n---\n\nThe user keeps aardvarks.\n")
+
+	report, err := repo.RefreshMemoryIndex(ctx())
+	if err != nil {
+		t.Fatalf("RefreshMemoryIndex: %v", err)
+	}
+	if len(report.Errors) != 1 || report.Errors[0].RelPath != "inbox/torn.md" {
+		t.Fatalf("errors = %+v, want the torn candidate named", report.Errors)
+	}
+	if report.Errors[0].Reason == "" {
+		t.Fatalf("the torn candidate was reported with no reason")
+	}
+	// It is not silently reclassified as one of the two things a readable inbox
+	// file can be.
+	if len(report.UnmanagedInboxDrafts) != 0 {
+		t.Fatalf("unmanaged drafts = %+v, want an unreadable candidate reported as an error instead",
+			report.UnmanagedInboxDrafts)
+	}
+	if len(report.OrphanInboxNotes) != 0 {
+		t.Fatalf("orphan inbox notes = %+v, want an unreadable candidate reported as an error instead",
+			report.OrphanInboxNotes)
+	}
+	// And it never becomes memory.
+	hits, err := repo.SearchMemoryNotes(ctx(), "aardvarks", 10)
+	if err != nil {
+		t.Fatalf("SearchMemoryNotes: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("an unparseable candidate reached the index: %+v", hits)
+	}
+	// The file is left exactly where the user can fix it.
+	if _, err := os.Stat(filepath.Join(vault.Root(), "inbox", "torn.md")); err != nil {
+		t.Fatalf("the torn candidate was disturbed: %v", err)
+	}
+}

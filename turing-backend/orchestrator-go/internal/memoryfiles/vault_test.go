@@ -538,3 +538,48 @@ func TestCreateInboxNoteHonoursContextCancellation(t *testing.T) {
 		t.Fatalf("expected context cancellation, got %v", err)
 	}
 }
+
+// The three path bounds are separate rules and each one has to hold on its own.
+// A path can sit well inside the depth limit with every component well inside
+// the component limit and still be far past the 4096-byte ceiling: 20 folders
+// of 250 bytes is a legal shape and an illegal length. Without this leg the
+// byte bound could be deleted outright and the depth and component checks would
+// keep every existing test green.
+func TestRelPathRefusesAnOverlongPathThatPassesEveryOtherBound(t *testing.T) {
+	component := strings.Repeat("a", MaxVaultPathComponentBytes-5)
+	components := make([]string, 0, 20)
+	for range 20 {
+		components = append(components, component)
+	}
+	deep := strings.Join(components, "/")
+	if len(components)+1 >= MaxVaultPathDepth {
+		t.Fatalf("the fixture is %d components deep, which the depth bound would refuse first", len(components)+1)
+	}
+	for _, name := range components {
+		if len(name) > MaxVaultPathComponentBytes {
+			t.Fatalf("the fixture has a %d-byte component, which the component bound would refuse first", len(name))
+		}
+	}
+
+	for _, gate := range []struct {
+		name  string
+		check func(string) (string, error)
+		path  string
+	}{
+		{"inbox", requireInboxRelPath, InboxDirName + "/" + deep + "/note.md"},
+		{"beliefs", requireBeliefsRelPath, BeliefsDirName + "/" + deep + "/note.md"},
+	} {
+		t.Run(gate.name, func(t *testing.T) {
+			if len(gate.path) <= MaxVaultPathBytes {
+				t.Fatalf("the fixture is %d bytes, which is inside the %d-byte bound", len(gate.path), MaxVaultPathBytes)
+			}
+			_, err := gate.check(gate.path)
+			if !errors.Is(err, ErrConfinement) {
+				t.Fatalf("a %d-byte path was not refused: %v", len(gate.path), err)
+			}
+			if !strings.Contains(err.Error(), "4096-byte limit") {
+				t.Fatalf("the refusal does not say which bound was hit: %v", err)
+			}
+		})
+	}
+}

@@ -902,3 +902,86 @@ func TestPurgeSessionVaultArtifactsReportsFinalizationBesideARowItCouldNotRemove
 		t.Fatalf("audits for the deleted note after the retry = %d, want none", got)
 	}
 }
+
+// seedSandboxArtifactWith seeds one sandbox row with an explicit state and
+// policy, so a marking rule can be tested against rows it is supposed to leave
+// alone as well as the ones it owns.
+func seedSandboxArtifactWith(
+	t *testing.T, repo *Repository, sessionID string, runID string,
+	artifactID string, state string, policy string,
+) {
+	t.Helper()
+	if _, err := repo.db.ExecContext(ctx(), `
+		INSERT INTO sandbox_artifacts (
+			id, session_id, run_id, logical_path_hash, physical_path, state, policy,
+			deletion_generation, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+	`, artifactID, sessionID, runID, "sha256:"+artifactID,
+		"sessions/"+sessionID+"/files/"+artifactID+".txt", state, policy, now()); err != nil {
+		t.Fatalf("seed sandbox artifact %q: %v", artifactID, err)
+	}
+}
+
+func sandboxArtifactState(t *testing.T, repo *Repository, artifactID string) string {
+	t.Helper()
+	var state string
+	if err := repo.db.QueryRowContext(ctx(),
+		`SELECT state FROM sandbox_artifacts WHERE id = ?`, artifactID).Scan(&state); err != nil {
+		t.Fatalf("read sandbox artifact %q: %v", artifactID, err)
+	}
+	return state
+}
+
+// A sandbox cleanup failure marks the rows the sandbox cleaner was actually
+// asked to remove, and only those.
+//
+// Two kinds of row sit beside them in the same manifest and neither is this
+// failure's to touch. A retain_legacy_unowned row names a file the sandbox does
+// not own and never tried to delete — marking it delete_failed files an audit
+// row claiming Turing failed at work it never started, and points the retry at
+// a file it must not remove. A row a previous partial pass already marked
+// carries its own audit row already; re-marking it inflates one failure into
+// two and makes the receipt's history unreadable.
+func TestMarkSessionDeletionSandboxFailureMarksOnlyTheRowsItOwns(t *testing.T) {
+	repo, _, _ := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+	enqueued, err := repo.EnqueueUserMessage(ctx(), EnqueueUserMessageInput{
+		SessionID: sessionID, Content: "write a file", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatalf("EnqueueUserMessage: %v", err)
+	}
+	seedSandboxArtifactWith(t, repo, sessionID, enqueued.RunID,
+		"artifact_owned", SandboxArtifactStateReady, SandboxArtifactPolicyDeleteOnSessionDelete)
+	seedSandboxArtifactWith(t, repo, sessionID, enqueued.RunID,
+		"artifact_legacy", SandboxArtifactStateReady, SandboxArtifactPolicyRetainLegacyUnowned)
+	seedSandboxArtifactWith(t, repo, sessionID, enqueued.RunID,
+		"artifact_already_failed", SandboxArtifactStateDeleteFailed, SandboxArtifactPolicyDeleteOnSessionDelete)
+	if _, err := repo.BeginSessionDeletion(ctx(), sessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+
+	if err := repo.MarkSessionDeletionSandboxFailure(ctx(), sessionID, "sandbox_artifact_cleanup_failed"); err != nil {
+		t.Fatalf("MarkSessionDeletionSandboxFailure: %v", err)
+	}
+
+	if got := sandboxArtifactState(t, repo, "artifact_owned"); got != SandboxArtifactStateDeleteFailed {
+		t.Fatalf("the sandbox's own row state = %q, want %q", got, SandboxArtifactStateDeleteFailed)
+	}
+	if got := sandboxArtifactAuditCount(t, repo, "artifact_owned"); got != 1 {
+		t.Fatalf("audit rows for the failed sandbox file = %d, want exactly one", got)
+	}
+	if got := sandboxArtifactState(t, repo, "artifact_legacy"); got != SandboxArtifactStateReady {
+		t.Fatalf("a retained legacy row was marked %q; the sandbox never tried to delete it", got)
+	}
+	if got := sandboxArtifactAuditCount(t, repo, "artifact_legacy"); got != 0 {
+		t.Fatalf("audit rows for a retained legacy file = %d, want none", got)
+	}
+	if got := sandboxArtifactState(t, repo, "artifact_already_failed"); got != SandboxArtifactStateDeleteFailed {
+		t.Fatalf("an already-failed row state = %q, want it left as it was", got)
+	}
+	if got := sandboxArtifactAuditCount(t, repo, "artifact_already_failed"); got != 0 {
+		t.Fatalf("a second audit row was filed for an already-failed file: %d", got)
+	}
+}

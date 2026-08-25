@@ -186,3 +186,42 @@ func TestMemoryProjectionIsDisposable(t *testing.T) {
 		t.Fatalf("stat the belief: %v", err)
 	}
 }
+
+// Search answers from beliefs and from nothing else.
+//
+// Reconcile is what normally keeps an inbox note out of this table, and that is
+// covered elsewhere. This is the second, independent leg: the projection query
+// itself refuses to answer from a row whose path is not under beliefs/. Both
+// have to hold, because they fail in different ways — a reconcile bug files the
+// row, and a query with no path predicate then reads an unreviewed claim about
+// the user straight back to a model as accepted memory.
+func TestSearchMemoryNotesAnswersOnlyFromBeliefs(t *testing.T) {
+	repo, _, _ := newMemoryTestRepo(t)
+	seedMemoryNoteRow(t, repo, "note_belief", "beliefs/accepted.md", "The user keeps beekeeping equipment.", MemoryNoteStatusManaged)
+	seedMemoryNoteRow(t, repo, "note_inbox", "inbox/proposed.md", "The user keeps beekeeping equipment.", MemoryNoteStatusManaged)
+	seedMemoryNoteRow(t, repo, "note_root", "persona.md", "The user keeps beekeeping equipment.", MemoryNoteStatusUnmanaged)
+
+	notes, err := repo.SearchMemoryNotes(ctx(), "beekeeping", 10)
+	if err != nil {
+		t.Fatalf("SearchMemoryNotes: %v", err)
+	}
+	if len(notes) != 1 {
+		t.Fatalf("search returned %d notes, want only the belief: %+v", len(notes), notes)
+	}
+	if notes[0].NoteID != "note_belief" {
+		t.Fatalf("search answered with %q from %q, want the belief", notes[0].NoteID, notes[0].Path)
+	}
+}
+
+// seedMemoryNoteRow writes one projection row directly, so a query can be
+// tested against a path the rest of the system is supposed to never file.
+func seedMemoryNoteRow(t *testing.T, repo *Repository, noteID string, path string, content string, status string) {
+	t.Helper()
+	timestamp := now()
+	if _, err := repo.db.ExecContext(ctx(), `
+		INSERT INTO memory_notes (id, path, content, content_hash, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, noteID, path, content, "sha256:"+noteID, status, timestamp, timestamp); err != nil {
+		t.Fatalf("seed memory note %q: %v", noteID, err)
+	}
+}
