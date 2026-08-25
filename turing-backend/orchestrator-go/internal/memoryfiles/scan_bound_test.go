@@ -66,6 +66,55 @@ func TestScanIndexBoundIsExactAndTheWalkStopsAtTheFirstFileOverIt(t *testing.T) 
 			)
 		}
 	})
+
+	// The scan bound is a discovery bound, not a read bound. A vault too large
+	// to index must still let the pinned documents through and still answer a
+	// read of a belief the caller already knows the identity of — otherwise a
+	// user who accumulates one note too many in their vault would lose their
+	// persona, their profile and every citation already in flight, on top of
+	// search.
+	const beliefID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	const beliefContent = "---\nid: \"" + beliefID + "\"\ntitle: \"Known belief\"\n---\nkept across an over-bound vault\n"
+	writeVaultFile(t, vault, "beliefs/known.md", beliefContent)
+	writeVaultFile(t, vault, PersonaFileName, "persona content that must stay pinned")
+	writeVaultFile(t, vault, ProfileFileName, "profile content that must stay pinned")
+
+	t.Run("Scan still refuses an over-bound vault with the pinned files and known belief present", func(t *testing.T) {
+		if _, err := vault.Scan(context.Background()); !errors.Is(err, ErrVaultTooLarge) {
+			t.Fatalf("expected the over-bound vault to still refuse scanning, got %v", err)
+		}
+	})
+
+	t.Run("LoadPersona still pins its content", func(t *testing.T) {
+		persona := vault.LoadPersona(context.Background())
+		if !persona.Available {
+			t.Fatalf("persona must stay pinned when the vault is over the scan bound: %+v", persona)
+		}
+		if persona.Content != "persona content that must stay pinned" {
+			t.Fatalf("persona content = %q", persona.Content)
+		}
+	})
+
+	t.Run("LoadProfile still pins its content", func(t *testing.T) {
+		profile := vault.LoadProfile(context.Background())
+		if !profile.Available {
+			t.Fatalf("profile must stay pinned when the vault is over the scan bound: %+v", profile)
+		}
+		if profile.Content != "profile content that must stay pinned" {
+			t.Fatalf("profile content = %q", profile.Content)
+		}
+	})
+
+	t.Run("ReadBeliefByID still serves a known belief", func(t *testing.T) {
+		resolve := func(string) (string, bool) { return "beliefs/known.md", true }
+		belief, err := vault.ReadBeliefByID(context.Background(), beliefID, resolve)
+		if err != nil {
+			t.Fatalf("a known belief must remain readable when the vault is over the scan bound: %v", err)
+		}
+		if belief.Content != beliefContent {
+			t.Fatalf("belief content = %q, want %q", belief.Content, beliefContent)
+		}
+	})
 }
 
 // A vault is a folder on the user's disk, and a folder can be nested as deeply
