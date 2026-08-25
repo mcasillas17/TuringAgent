@@ -127,8 +127,8 @@ func TestCandidateCreationDuringReconcileSurvives(t *testing.T) {
 func TestPurgeSessionVaultArtifactsRemovesFilesThenRows(t *testing.T) {
 	repo, vault, _ := newMemoryTestRepo(t)
 	sessionID := newMemoryTestSession(t, repo)
-	first := pendingBeliefCandidate(t, repo, sessionID, nil)
-	second := pendingBeliefCandidate(t, repo, sessionID, nil)
+	first := pendingBeliefCandidate(t, repo, sessionID)
+	second := pendingBeliefCandidate(t, repo, sessionID)
 	// One file is already gone, which is what a retry after a partial failure
 	// looks like. Removing it again must still count as success.
 	if err := os.Remove(filepath.Join(vault.Root(), filepath.FromSlash(second.InboxPath))); err != nil {
@@ -160,7 +160,7 @@ func TestPurgeSessionVaultArtifactsRemovesFilesThenRows(t *testing.T) {
 func TestPurgeSessionVaultArtifactsKeepsRowsWhenTheVaultRefuses(t *testing.T) {
 	repo, vault, database := newMemoryTestRepo(t)
 	sessionID := newMemoryTestSession(t, repo)
-	candidate := pendingBeliefCandidate(t, repo, sessionID, nil)
+	candidate := pendingBeliefCandidate(t, repo, sessionID)
 
 	inbox := filepath.Join(vault.Root(), "inbox")
 	if err := os.RemoveAll(inbox); err != nil {

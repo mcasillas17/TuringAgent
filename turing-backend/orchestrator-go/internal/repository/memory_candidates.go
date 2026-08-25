@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
@@ -33,13 +34,6 @@ const (
 )
 
 const (
-	// maxMemoryCandidateBodyRunes is the schema's own bound on the stored body,
-	// restated here so an over-long claim is refused legibly instead of
-	// arriving as a CHECK constraint failure. SQLite's length() counts
-	// characters, so this is a character bound; memoryfiles bounds the same
-	// body in bytes. Both are refusals — a claim about the user that was
-	// silently cut in half is a different claim.
-	maxMemoryCandidateBodyRunes = 4096
 	// maxMemoryCandidateTitleRunes bounds a model-supplied title. The vault
 	// bounds it too; this stops an unbounded string reaching the file layer.
 	maxMemoryCandidateTitleRunes = 200
@@ -50,6 +44,10 @@ const (
 	maxMemoryEvidenceRefBytes = 128
 	// maxMemoryCandidateListLimit is the hard ceiling on one candidate listing.
 	maxMemoryCandidateListLimit = 200
+	// abandonedCandidateRemovalTimeout bounds the removal of bytes that reached
+	// the vault but that no row will describe. It runs outside the caller's
+	// cancellation, so it needs a deadline of its own.
+	abandonedCandidateRemovalTimeout = 5 * time.Second
 )
 
 var (
@@ -99,16 +97,17 @@ type MemoryCandidate struct {
 }
 
 // CreateMemoryCandidateInput is everything a caller may supply. There is
-// deliberately no candidate id, no path and no created-at: provenance is what
+// deliberately no candidate id, no path and no evidence: provenance is what
 // makes a candidate withdrawable when a conversation is deleted, so it is
 // derived from the session the run belongs to rather than accepted from
-// whoever is asking.
+// whoever is asking. A model that could name the conversations its claim rests
+// on could name someone else's, and the belief that came out of it would then
+// survive — or be withdrawn by — a conversation it has nothing to do with.
 type CreateMemoryCandidateInput struct {
-	SessionID    string
-	Kind         string
-	Title        string
-	Body         string
-	EvidenceRefs []string
+	SessionID string
+	Kind      string
+	Title     string
+	Body      string
 }
 
 // MemoryCandidateQuery bounds one candidate listing.
@@ -160,7 +159,7 @@ func (r *Repository) CreateMemoryCandidate(ctx context.Context, input CreateMemo
 	if err != nil {
 		return MemoryCandidate{}, err
 	}
-	refs, refsJSON, err := validateMemoryEvidenceRefs(input.EvidenceRefs)
+	refs, refsJSON, err := validateMemoryEvidenceRefs(serverDerivedEvidenceRefs(input.SessionID))
 	if err != nil {
 		return MemoryCandidate{}, err
 	}
@@ -178,6 +177,11 @@ func (r *Repository) CreateMemoryCandidate(ctx context.Context, input CreateMemo
 	if err != nil {
 		return MemoryCandidate{}, err
 	}
+	if r.memoryCandidateWriteBarrier != nil {
+		if err := r.memoryCandidateWriteBarrier(); err != nil {
+			return MemoryCandidate{}, err
+		}
+	}
 
 	note, err := vault.CreateInboxNote(ctx, memoryfiles.CreateInboxNoteRequest{
 		NoteID:       noteID,
@@ -193,7 +197,7 @@ func (r *Repository) CreateMemoryCandidate(ctx context.Context, input CreateMemo
 		return MemoryCandidate{}, err
 	}
 	if note.RelPath != artifact.VaultPath {
-		return MemoryCandidate{}, ErrMemoryVaultPathMismatch
+		return MemoryCandidate{}, r.abandonWrittenCandidate(ctx, vault, note.RelPath, ErrMemoryVaultPathMismatch)
 	}
 
 	createdAt := now()
@@ -209,10 +213,24 @@ func (r *Repository) CreateMemoryCandidate(ctx context.Context, input CreateMemo
 		CreatedAt:       createdAt,
 		UpdatedAt:       createdAt,
 	}
+	if err := r.recordMemoryCandidate(ctx, candidate, refsJSON, artifact); err != nil {
+		return MemoryCandidate{}, r.abandonWrittenCandidate(ctx, vault, note.RelPath, err)
+	}
+	return candidate, nil
+}
 
+// recordMemoryCandidate is the database half of a creation: the candidate row
+// and the closing of the reservation that tracked its file, in one transaction
+// so the manifest and the index never disagree about the same bytes.
+func (r *Repository) recordMemoryCandidate(ctx context.Context, candidate MemoryCandidate, refsJSON string, artifact VaultArtifact) error {
+	if r.memoryCandidateRecordBarrier != nil {
+		if err := r.memoryCandidateRecordBarrier(); err != nil {
+			return err
+		}
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return MemoryCandidate{}, err
+		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, `
@@ -232,25 +250,54 @@ func (r *Repository) CreateMemoryCandidate(ctx context.Context, input CreateMemo
 		candidate.CreatedAt,
 		candidate.UpdatedAt,
 	); err != nil {
-		return MemoryCandidate{}, err
+		return err
 	}
 	if err := finalizeVaultArtifactTx(ctx, tx, artifact.ArtifactID, artifact.SessionID); err != nil {
-		return MemoryCandidate{}, err
+		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return MemoryCandidate{}, err
-	}
-	return candidate, nil
+	return tx.Commit()
 }
 
-// TransitionMemoryCandidate moves a candidate that keeps its row — today only
-// a withdrawal. Promotion, profile application and rejection consume the row
-// instead, because a decided candidate's file has left the inbox and a row
-// describing an inbox entry that is gone is a lie the cleaner would trust.
-func (r *Repository) TransitionMemoryCandidate(ctx context.Context, candidateID string, toState string) (MemoryCandidate, error) {
-	if toState != MemoryCandidateStateWithdrawn {
-		return MemoryCandidate{}, fmt.Errorf("%w: %q is not a state a candidate row may be moved to", ErrMemoryCandidateInvalidTransition, toState)
-	}
+// abandonWrittenCandidate removes bytes that reached the vault but that no row
+// will ever describe.
+//
+// A file nothing has a record of is worse than either half alone: the manifest
+// cannot name it, so no cleaner can find it, and the user is left with a claim
+// about themselves that Turing has no way to withdraw. The removal goes through
+// RemoveInboxNote and nothing else, so this path can never be pointed at a
+// belief or at a pinned document.
+//
+// The reservation is deliberately left alone. If it is still there it is the
+// record that this path may hold a file, and a cleaner that finds none has
+// nothing to do; if the session was deleted underneath this write, the cascade
+// already took it and there is nothing left to leave behind.
+func (r *Repository) abandonWrittenCandidate(ctx context.Context, vault *memoryfiles.Vault, relPath string, cause error) error {
+	// The removal runs even when the caller's context is already done: the
+	// bytes are in the user's vault either way, and a cancelled context is not
+	// a reason to leave them there. It is bounded so a hung filesystem cannot
+	// hold the caller open indefinitely.
+	removal, cancel := context.WithTimeout(context.WithoutCancel(ctx), abandonedCandidateRemovalTimeout)
+	defer cancel()
+	return errors.Join(cause, vault.RemoveInboxNote(removal, relPath))
+}
+
+// WithdrawMemoryCandidate retires a proposal without deciding it.
+//
+// It is the only lifecycle move that keeps the row, and it is a method rather
+// than an argument to a generic transition on purpose. A caller that could name
+// the state a candidate moves to could mark one promoted or rejected while its
+// file is still sitting in the inbox and its row still claims to be a live
+// proposal — a decision the user never sees, on a claim they never reviewed.
+// Promotion, profile application and rejection consume the row instead, because
+// a decided candidate's file has left the inbox and a row describing an inbox
+// entry that is gone is a lie the cleaner would trust.
+//
+// The UPDATE is the state machine, not a step after it: it moves only a row
+// that is still pending, and the audit row is written only once that statement
+// reports it changed exactly one row. Auditing on the strength of the read
+// instead would record a decision that never happened — the loudest possible
+// version of losing a candidate silently.
+func (r *Repository) WithdrawMemoryCandidate(ctx context.Context, candidateID string) (MemoryCandidate, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return MemoryCandidate{}, err
@@ -261,21 +308,27 @@ func (r *Repository) TransitionMemoryCandidate(ctx context.Context, candidateID 
 	if err != nil {
 		return MemoryCandidate{}, err
 	}
-	if err := requireMemoryCandidateTransition(candidate.State, toState); err != nil {
-		return MemoryCandidate{}, err
-	}
 	decidedAt := now()
-	if _, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		UPDATE memory_candidates
 		SET state = ?, decided_at = ?, updated_at = ?
 		WHERE id = ? AND state = ?
-	`, toState, decidedAt, decidedAt, candidateID, MemoryCandidateStatePending); err != nil {
+	`, MemoryCandidateStateWithdrawn, decidedAt, decidedAt, candidateID, MemoryCandidateStatePending)
+	if err != nil {
 		return MemoryCandidate{}, err
 	}
-	if err := recordMemoryCandidateDecisionTx(ctx, tx, candidate, toState); err != nil {
+	changed, err := result.RowsAffected()
+	if err != nil {
 		return MemoryCandidate{}, err
 	}
-	candidate.State = toState
+	if changed != 1 {
+		return MemoryCandidate{}, fmt.Errorf("%w: %q cannot become %q",
+			ErrMemoryCandidateInvalidTransition, candidate.State, MemoryCandidateStateWithdrawn)
+	}
+	if err := recordMemoryCandidateDecisionTx(ctx, tx, candidate, MemoryCandidateStateWithdrawn); err != nil {
+		return MemoryCandidate{}, err
+	}
+	candidate.State = MemoryCandidateStateWithdrawn
 	candidate.DecidedAt = decidedAt
 	candidate.UpdatedAt = decidedAt
 	if err := tx.Commit(); err != nil {
@@ -370,15 +423,13 @@ func validateMemoryCandidateBody(body string) (string, error) {
 	if strings.TrimSpace(body) == "" {
 		return "", fmt.Errorf("%w: a candidate must state a claim", ErrMemoryCandidateBody)
 	}
-	// Both bounds are refusals, and both are stated here rather than left to
-	// the layer that would hit them: the vault bounds the file in bytes, the
-	// row bounds the stored claim in characters, and a caller deserves the
-	// same legible refusal either way.
-	if len(body) > memoryfiles.MaxCandidateBodyBytes {
+	// One bound, in bytes, stated here rather than left to the layer that would
+	// hit it: the vault refuses the same number of bytes and the row's CHECK
+	// counts the same bytes, so a caller gets the same legible refusal wherever
+	// it would have landed. It is a refusal and never a truncation — a claim
+	// about the user that was silently cut in half is a different claim.
+	if len([]byte(body)) > memoryfiles.MaxCandidateBodyBytes {
 		return "", fmt.Errorf("%w: body exceeds %d bytes", ErrMemoryCandidateBody, memoryfiles.MaxCandidateBodyBytes)
-	}
-	if utf8.RuneCountInString(body) > maxMemoryCandidateBodyRunes {
-		return "", fmt.Errorf("%w: body exceeds %d characters", ErrMemoryCandidateBody, maxMemoryCandidateBodyRunes)
 	}
 	return body, nil
 }
@@ -388,6 +439,38 @@ func validateMemoryCandidateTitle(title string) (string, error) {
 		return "", fmt.Errorf("%w: title exceeds %d characters", ErrMemoryCandidateBody, maxMemoryCandidateTitleRunes)
 	}
 	return title, nil
+}
+
+// serverDerivedEvidenceRefs is the whole of Phase 1's provenance rule: a
+// candidate is grounded in the conversation that produced it and in nothing
+// else. It is a function rather than an inline literal because
+// requireServerDerivedEvidence checks decisions against exactly this rule, and
+// the two must never be able to disagree about what the server derives.
+func serverDerivedEvidenceRefs(sessionID string) []string {
+	return []string{sessionID}
+}
+
+// requireServerDerivedEvidence refuses a stored provenance that is not the one
+// the server derived.
+//
+// Creation only ever writes serverDerivedEvidenceRefs, so anything else has
+// been edited underneath the orchestrator, and both directions matter. A row
+// citing another conversation would ground a belief in one that never produced
+// it — and deleting that conversation would then withdraw a claim it had
+// nothing to do with. A row citing nothing at all is the quieter forgery: it
+// promotes as grounded memory that no deletion can ever reach, because nothing
+// links it to a conversation. Equality against the derived list refuses both.
+func requireServerDerivedEvidence(candidate MemoryCandidate) error {
+	derived := serverDerivedEvidenceRefs(candidate.SourceSessionID)
+	if len(candidate.EvidenceRefs) != len(derived) {
+		return fmt.Errorf("%w: a candidate must cite the conversation that produced it, and only that one", ErrMemoryCandidateEvidence)
+	}
+	for index, ref := range candidate.EvidenceRefs {
+		if ref != derived[index] {
+			return fmt.Errorf("%w: a candidate may only cite the conversation that produced it", ErrMemoryCandidateEvidence)
+		}
+	}
+	return nil
 }
 
 // validateMemoryEvidenceRefs checks the provenance list and renders it as the
@@ -432,22 +515,26 @@ func validateMemoryEvidenceRef(ref string) error {
 	return nil
 }
 
+// decodeMemoryEvidenceRefs reads the stored provenance strictly.
+//
+// Stored data is not trusted on the way back in — a row written by an older
+// build, or edited by hand, does not get to reach the file layer unchecked —
+// but "not trusted" means refused, never quietly repaired. Dropping the
+// entries that fail to parse would let a poisoned row promote with less
+// provenance than it claims: a belief the user accepts as grounded in three
+// conversations, silently grounded in one, and surviving the deletion of the
+// other two.
 func decodeMemoryEvidenceRefs(encoded string) ([]string, error) {
 	var refs []string
 	if err := json.Unmarshal([]byte(encoded), &refs); err != nil {
-		return nil, fmt.Errorf("%w: stored refs are not a JSON array", ErrMemoryCandidateEvidence)
+		return nil, fmt.Errorf("%w: stored refs are not a JSON array of identifiers", ErrMemoryCandidateEvidence)
 	}
-	// Stored data is not trusted on the way back in either: a row written by an
-	// older build, or edited by hand, does not get to reach the file layer
-	// unchecked.
-	checked := make([]string, 0, len(refs))
 	for _, ref := range refs {
 		if err := validateMemoryEvidenceRef(ref); err != nil {
-			continue
+			return nil, err
 		}
-		checked = append(checked, ref)
 	}
-	return checked, nil
+	return refs, nil
 }
 
 type rowScanner interface {

@@ -93,8 +93,14 @@ CREATE TABLE memory_candidates (
   kind TEXT NOT NULL CHECK (kind IN ('belief', 'profile_edit')),
   inbox_path TEXT NOT NULL,
   content_hash TEXT NOT NULL,
-  -- Bounded on purpose: a candidate is a claim, not a transcript.
-  body TEXT NOT NULL CHECK (length(body) > 0 AND length(body) <= 4096),
+  -- Bounded on purpose: a candidate is a claim, not a transcript. The bound is
+  -- UTF-8 bytes, matching memoryfiles.MaxCandidateBodyBytes exactly, so the row
+  -- refuses precisely what the file layer refuses. length() alone counts
+  -- characters, which would let a body three times the vault's byte limit
+  -- through whenever the user does not write in ASCII.
+  body TEXT NOT NULL CHECK (
+    length(CAST(body AS BLOB)) > 0 AND length(CAST(body AS BLOB)) <= 16384
+  ),
   evidence_refs_json TEXT NOT NULL
     CHECK (json_valid(evidence_refs_json) AND json_type(evidence_refs_json) = 'array'),
   state TEXT NOT NULL CHECK (state IN ('pending', 'promoted', 'rejected', 'withdrawn')),
@@ -146,11 +152,16 @@ CREATE TABLE vault_artifacts (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   vault_path TEXT NOT NULL,
-  physical_path TEXT NOT NULL,
+  -- Globally unique, not unique per session. One file in the user's vault is
+  -- one tracked artifact, whichever session wrote it: scoping this to the
+  -- session would let a second session reserve a path the first already owns,
+  -- and deleting the second would then delete a file the first is still
+  -- responsible for — one conversation erasing another's note through a
+  -- manifest that looked consistent to both.
+  physical_path TEXT NOT NULL UNIQUE,
   state TEXT NOT NULL CHECK (state IN ('writing', 'ready', 'delete_failed')),
   created_at TEXT NOT NULL,
-  finalized_at TEXT,
-  UNIQUE (session_id, physical_path)
+  finalized_at TEXT
 );
 
 CREATE INDEX idx_vault_artifacts_session_state

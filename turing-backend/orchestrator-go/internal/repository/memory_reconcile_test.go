@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 )
 
@@ -357,11 +358,10 @@ func TestReconcileHealsAPromotionThatCrashedAfterTheFileMoved(t *testing.T) {
 	repo, vault, _ := newMemoryTestRepo(t)
 	sessionID := newMemoryTestSession(t, repo)
 	candidate, err := repo.CreateMemoryCandidate(ctx(), CreateMemoryCandidateInput{
-		SessionID:    sessionID,
-		Kind:         MemoryCandidateKindBelief,
-		Title:        "bees",
-		Body:         "The user keeps bees.",
-		EvidenceRefs: []string{sessionID},
+		SessionID: sessionID,
+		Kind:      MemoryCandidateKindBelief,
+		Title:     "bees",
+		Body:      "The user keeps bees.",
 	})
 	if err != nil {
 		t.Fatalf("CreateMemoryCandidate: %v", err)
@@ -589,7 +589,7 @@ func TestMemoryMethodsRefuseWithoutAVault(t *testing.T) {
 func TestReconcileReportsManagedInboxNotesWithNoCandidateRow(t *testing.T) {
 	repo, vault, database := newMemoryTestRepo(t)
 	sessionID := newMemoryTestSession(t, repo)
-	candidate := pendingBeliefCandidate(t, repo, sessionID, nil)
+	candidate := pendingBeliefCandidate(t, repo, sessionID)
 	if _, err := database.ExecContext(ctx(), `DELETE FROM memory_candidates WHERE id = ?`, candidate.CandidateID); err != nil {
 		t.Fatalf("drop the candidate row: %v", err)
 	}
@@ -688,5 +688,293 @@ func TestReconcileKeepsAReservationFinalizedAfterTheScanStarted(t *testing.T) {
 	}
 	if len(artifacts) != 1 {
 		t.Fatalf("artifacts = %+v, want the reservation preserved", artifacts)
+	}
+}
+
+// A note whose conversations were deleted has to say so in the file the user
+// opens. `refs: []` reads as a note nobody ever grounded — a different claim
+// about their own memory — so the rewrite writes the withdrawal marker, leaves
+// every other byte of their frontmatter alone, and cannot be read back as a
+// citation on the next pass.
+func TestWithdrawnEvidenceIsWrittenAsAWithdrawalAndCannotBeReinserted(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+	noteID := newTestNoteID(t)
+	original := "---\n" +
+		"# a comment the user wrote\n" +
+		"aliases:\n" +
+		"  - \"Alt name\"\n" +
+		"id: \"" + noteID + "\"\n" +
+		"kind: \"belief\"\n" +
+		"managed: true\n" +
+		"refs:\n" +
+		"  - \"" + sessionID + "\"\n" +
+		"tags: [memory, bees]\n" +
+		"title:    'Loosely quoted'\n" +
+		"---\n" +
+		"\n" +
+		"# Body heading\n" +
+		"\n" +
+		"The user keeps bees.   Odd    spacing.\n"
+	writeVaultNote(t, vault, "beliefs/note.md", original)
+
+	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
+		t.Fatalf("ReconcileMemoryVault: %v", err)
+	}
+	if got := evidenceSessions(t, repo, noteID); len(got) != 1 {
+		t.Fatalf("evidence after adoption = %v, want the citation linked", got)
+	}
+	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+
+	report, err := repo.ReconcileMemoryVault(ctx())
+	if err != nil {
+		t.Fatalf("ReconcileMemoryVault after the deletion: %v", err)
+	}
+	if report.RefsRewritten != 1 {
+		t.Fatalf("refs rewritten = %d, want the file caught up with the sidecar", report.RefsRewritten)
+	}
+
+	// Byte-preserving: only the refs value moved.
+	want := strings.Replace(original,
+		"  - \""+sessionID+"\"\n",
+		"  \""+memoryfiles.WithdrawnRefsMarker+"\"\n", 1)
+	if got := readVaultNote(t, vault, "beliefs/note.md"); got != want {
+		t.Fatalf("the withdrawal disturbed the user's file:\nwant %q\ngot  %q", want, got)
+	}
+
+	// It says withdrawn, not "never grounded", and it stays that way.
+	note, found := noteRowFor(t, repo, noteID)
+	if !found || note.Status != MemoryNoteStatusWithdrawn {
+		t.Fatalf("note = (%+v, %v), want it marked withdrawn", note, found)
+	}
+	second, err := repo.ReconcileMemoryVault(ctx())
+	if err != nil {
+		t.Fatalf("second ReconcileMemoryVault: %v", err)
+	}
+	if second.RefsRewritten != 0 {
+		t.Fatalf("a converged vault rewrote %d notes", second.RefsRewritten)
+	}
+	if got := evidenceSessions(t, repo, noteID); len(got) != 0 {
+		t.Fatalf("the withdrawal marker was re-read as a citation: %v", got)
+	}
+}
+
+// The same marker on a note reconcile has never seen: the crash-heal path may
+// read frontmatter refs as annotations, so it has to hear "withdrawn" as a
+// withdrawal rather than as a session named `withdrawn`.
+func TestHealingANoteThatAlreadySaysWithdrawnKeepsItWithdrawn(t *testing.T) {
+	repo, vault, database := newMemoryTestRepo(t)
+	noteID := newTestNoteID(t)
+	writeVaultNote(t, vault, "beliefs/note.md",
+		"---\nid: \""+noteID+"\"\nkind: \"belief\"\nmanaged: true\nrefs: \""+
+			memoryfiles.WithdrawnRefsMarker+"\"\n---\n\nThe user keeps bees.\n")
+
+	report, err := repo.ReconcileMemoryVault(ctx())
+	if err != nil {
+		t.Fatalf("ReconcileMemoryVault: %v", err)
+	}
+	if report.NotesHealed != 1 {
+		t.Fatalf("healed = %d, want 1", report.NotesHealed)
+	}
+	note, found := noteRowFor(t, repo, noteID)
+	if !found || note.Status != MemoryNoteStatusWithdrawn {
+		t.Fatalf("healed note = (%+v, %v), want a file that says withdrawn to be indexed withdrawn", note, found)
+	}
+	var evidence int
+	if err := database.QueryRowContext(ctx(), `SELECT COUNT(*) FROM memory_evidence`).Scan(&evidence); err != nil {
+		t.Fatalf("count evidence: %v", err)
+	}
+	if evidence != 0 {
+		t.Fatalf("evidence rows = %d, want the marker to ground nothing", evidence)
+	}
+	hits, err := repo.SearchMemoryNotes(ctx(), "bees", 10)
+	if err != nil {
+		t.Fatalf("SearchMemoryNotes: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("a withdrawn note is searchable: %+v", hits)
+	}
+}
+
+// Frontmatter refs on a note with no row are annotations, not authority: they
+// are linked only for conversations that still exist, and a note that already
+// has a row is never re-grounded from its file.
+func TestFrontmatterRefsAreAnnotationsValidatedAgainstLiveSessions(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	live := newMemoryTestSession(t, repo)
+	gone := newMemoryTestSession(t, repo)
+	if err := repo.DeleteSession(ctx(), gone); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	noteID := newTestNoteID(t)
+	writeVaultNote(t, vault, "beliefs/note.md",
+		managedBelief(noteID, []string{live, gone, "sess_never_existed"}, "The user keeps bees."))
+
+	if _, err := repo.RefreshMemoryIndex(ctx()); err != nil {
+		t.Fatalf("RefreshMemoryIndex: %v", err)
+	}
+	if got := evidenceSessions(t, repo, noteID); len(got) != 1 || got[0] != live {
+		t.Fatalf("evidence = %v, want only the conversation that still exists", got)
+	}
+
+	// The row exists now, so its sidecar wins: adding a citation by hand to the
+	// file does not add evidence.
+	stranger := newMemoryTestSession(t, repo)
+	writeVaultNote(t, vault, "beliefs/note.md",
+		managedBelief(noteID, []string{live, stranger}, "The user keeps bees."))
+	if _, err := repo.RefreshMemoryIndex(ctx()); err != nil {
+		t.Fatalf("RefreshMemoryIndex after the hand edit: %v", err)
+	}
+	if got := evidenceSessions(t, repo, noteID); len(got) != 1 || got[0] != live {
+		t.Fatalf("evidence = %v, want the sidecar to win over the file", got)
+	}
+}
+
+// auditRowsFor returns every (action, target, payload) the audit log holds, so
+// a test can assert both what reconcile recorded and what it did not.
+func auditRows(t *testing.T, database *db.DB) []struct{ Action, Target, Payload string } {
+	t.Helper()
+	rows, err := database.QueryContext(ctx(), `
+		SELECT action, COALESCE(target, ''), COALESCE(payload_json, '') FROM audit_logs ORDER BY id
+	`)
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var records []struct{ Action, Target, Payload string }
+	for rows.Next() {
+		var record struct{ Action, Target, Payload string }
+		if err := rows.Scan(&record.Action, &record.Target, &record.Payload); err != nil {
+			t.Fatalf("scan audit row: %v", err)
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("audit rows: %v", err)
+	}
+	return records
+}
+
+func auditActions(t *testing.T, database *db.DB) map[string]int {
+	t.Helper()
+	counted := map[string]int{}
+	for _, record := range auditRows(t, database) {
+		counted[record.Action]++
+	}
+	return counted
+}
+
+// Reconcile changes the user's memory on the strength of what it found in
+// their files: it adopts notes, heals rows a crash lost, withdraws beliefs
+// whose conversations are gone, retires notes whose files were deleted, and
+// removes candidate rows and reservations that no longer describe anything.
+// Every one of those is a change to what Turing remembers about them, and an
+// unrecorded change is one they cannot audit, question or trust.
+//
+// Each row names an id and a status and nothing else. A path carries the note's
+// title, which is the user's own prose about themselves — an audit log is not
+// where that belongs.
+func TestReconcileRecordsWhatItChangedWithoutRecordingWhatItSays(t *testing.T) {
+	repo, vault, database := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+
+	// A hand-written belief to adopt, with prose and a title that must never
+	// reach the audit log.
+	writeVaultNote(t, vault, "beliefs/marmalade-secrets.md", "# Marmalade secrets\n\nThe user despises marmalade.\n")
+	// A belief whose conversation is about to be deleted: it will be withdrawn
+	// in the index and rewritten in the file.
+	withdrawnID := newTestNoteID(t)
+	writeVaultNote(t, vault, "beliefs/bees.md", managedBelief(withdrawnID, []string{sessionID}, "The user keeps bees."))
+	// A candidate whose file is gone: an orphan row and its reservation.
+	orphan, err := repo.CreateMemoryCandidate(ctx(), CreateMemoryCandidateInput{
+		SessionID: sessionID,
+		Kind:      MemoryCandidateKindBelief,
+		Title:     "chickens",
+		Body:      "The user keeps chickens.",
+	})
+	if err != nil {
+		t.Fatalf("CreateMemoryCandidate: %v", err)
+	}
+	if err := os.Remove(filepath.Join(vault.Root(), filepath.FromSlash(orphan.InboxPath))); err != nil {
+		t.Fatalf("remove the candidate file: %v", err)
+	}
+
+	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
+		t.Fatalf("ReconcileMemoryVault: %v", err)
+	}
+	first := auditActions(t, database)
+	if first[memoryNoteIndexedAction] != 2 {
+		t.Fatalf("healed notes audited = %d, want both beliefs recorded", first[memoryNoteIndexedAction])
+	}
+	if first[memoryCandidateOrphanedAction] != 1 {
+		t.Fatalf("orphan candidate audits = %d, want 1", first[memoryCandidateOrphanedAction])
+	}
+	if first[memoryReservationReleasedAction] != 1 {
+		t.Fatalf("reservation release audits = %d, want 1", first[memoryReservationReleasedAction])
+	}
+
+	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
+		t.Fatalf("ReconcileMemoryVault after the deletion: %v", err)
+	}
+	second := auditActions(t, database)
+	if second[memoryNoteWithdrawnAction] != 1 {
+		t.Fatalf("withdrawal audits = %d, want the withdrawn belief recorded", second[memoryNoteWithdrawnAction])
+	}
+	if second[memoryNoteRefsRewrittenAction] != 1 {
+		t.Fatalf("refs rewrite audits = %d, want the frontmatter rewrite recorded", second[memoryNoteRefsRewrittenAction])
+	}
+
+	// A file the user deleted retires its row, and that is recorded too.
+	if err := os.Remove(filepath.Join(vault.Root(), "beliefs", "marmalade-secrets.md")); err != nil {
+		t.Fatalf("remove the adopted note: %v", err)
+	}
+	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
+		t.Fatalf("ReconcileMemoryVault after the file deletion: %v", err)
+	}
+	third := auditActions(t, database)
+	if third[memoryNoteRemovedAction] != 1 {
+		t.Fatalf("index removal audits = %d, want 1", third[memoryNoteRemovedAction])
+	}
+
+	// Nothing the user wrote is in any of it: not their prose, not the file
+	// names that carry their titles, and not the conversation ids.
+	for _, record := range auditRows(t, database) {
+		if !strings.HasPrefix(record.Action, "memory.") {
+			continue
+		}
+		for _, secret := range []string{
+			"marmalade", "Marmalade", "bees", "chickens", "beliefs/", "inbox/", ".md",
+			sessionID, orphan.InboxPath,
+		} {
+			if strings.Contains(record.Payload, secret) || strings.Contains(record.Target, secret) {
+				t.Fatalf("audit row %+v leaked %q", record, secret)
+			}
+		}
+	}
+}
+
+// A pass that changes nothing records nothing: an audit log that fills up with
+// "reconcile ran and did nothing" is one nobody can read the real events out of.
+func TestReconcileRecordsNothingWhenItChangesNothing(t *testing.T) {
+	repo, vault, database := newMemoryTestRepo(t)
+	noteID := newTestNoteID(t)
+	writeVaultNote(t, vault, "beliefs/note.md", managedBelief(noteID, nil, "The user keeps bees."))
+	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
+		t.Fatalf("ReconcileMemoryVault: %v", err)
+	}
+	before := len(auditRows(t, database))
+
+	for pass := 0; pass < 2; pass++ {
+		if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
+			t.Fatalf("ReconcileMemoryVault pass %d: %v", pass, err)
+		}
+	}
+	if after := len(auditRows(t, database)); after != before {
+		t.Fatalf("audit rows grew from %d to %d over two no-op passes", before, after)
 	}
 }

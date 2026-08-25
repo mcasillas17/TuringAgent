@@ -65,8 +65,11 @@ type NoteRow struct {
 	RawFrontmatter string
 	Body           string
 	EvidenceRefs   []string
-	Status         NoteStatus
-	ParseError     string
+	// EvidenceWithdrawn is true when the file itself says its citations were
+	// withdrawn, which is a different statement from carrying none.
+	EvidenceWithdrawn bool
+	Status            NoteStatus
+	ParseError        string
 	// Indexable is false for every note the caller must not project into
 	// search: broken frontmatter, or an identity two files both claim.
 	Indexable   bool
@@ -526,6 +529,7 @@ func (v *Vault) readNoteRow(ctx context.Context, candidate scanCandidate) (NoteR
 	row.RawFrontmatter = parsed.RawFrontmatter
 	row.Body = parsed.Body
 	row.EvidenceRefs = parsed.Refs
+	row.EvidenceWithdrawn = parsed.Withdrawn
 	row.Indexable = true
 	if parsed.Managed {
 		row.Status = NoteStatusManaged

@@ -40,6 +40,17 @@ type Repository struct {
 	// that would record it, so a test can prove what a failure in that window
 	// leaves behind and that reconcile can finish it.
 	memoryPromotionBarrier func() error
+	// memoryCandidateWriteBarrier, when set (test-only; always nil in
+	// production), runs after a candidate's path is reserved and before the
+	// vault write, so a test can delete the session in exactly that window and
+	// prove the bytes that land afterwards do not survive as an untracked file
+	// in the user's vault.
+	memoryCandidateWriteBarrier func() error
+	// memoryCandidateRecordBarrier, when set (test-only; always nil in
+	// production), runs after the candidate file is written and before the
+	// transaction that records it, so a test can fail that transaction and
+	// prove the file is removed again rather than left behind with no row.
+	memoryCandidateRecordBarrier func() error
 	// mcpRegistrySnapshotBarrier, when set (test-only; always nil in
 	// production), is invoked by MCPRegistrySnapshot once its single read
 	// transaction is open and its aggregate tool-byte budget guard has

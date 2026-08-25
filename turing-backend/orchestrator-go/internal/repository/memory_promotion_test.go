@@ -10,14 +10,13 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 )
 
-func pendingBeliefCandidate(t *testing.T, repo *Repository, sessionID string, refs []string) MemoryCandidate {
+func pendingBeliefCandidate(t *testing.T, repo *Repository, sessionID string) MemoryCandidate {
 	t.Helper()
 	candidate, err := repo.CreateMemoryCandidate(ctx(), CreateMemoryCandidateInput{
-		SessionID:    sessionID,
-		Kind:         MemoryCandidateKindBelief,
-		Title:        "bees",
-		Body:         "The user keeps bees.",
-		EvidenceRefs: refs,
+		SessionID: sessionID,
+		Kind:      MemoryCandidateKindBelief,
+		Title:     "bees",
+		Body:      "The user keeps bees.",
 	})
 	if err != nil {
 		t.Fatalf("CreateMemoryCandidate: %v", err)
@@ -28,7 +27,7 @@ func pendingBeliefCandidate(t *testing.T, repo *Repository, sessionID string, re
 func TestPromoteMemoryCandidateMovesTheFileAndConsumesTheRow(t *testing.T) {
 	repo, vault, _ := newMemoryTestRepo(t)
 	sessionID := newMemoryTestSession(t, repo)
-	candidate := pendingBeliefCandidate(t, repo, sessionID, []string{sessionID})
+	candidate := pendingBeliefCandidate(t, repo, sessionID)
 
 	note, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID)
 	if err != nil {
@@ -68,27 +67,30 @@ func TestPromoteMemoryCandidateMovesTheFileAndConsumesTheRow(t *testing.T) {
 	}
 }
 
-// Citations are copied live. A conversation that has already been deleted
-// cannot ground a new belief, and a belief with nothing left to stand on is
-// promoted as withdrawn rather than as accepted memory.
-func TestPromoteMemoryCandidateCopiesOnlyLiveEvidence(t *testing.T) {
+// Provenance is server-derived: a candidate cites exactly the conversation
+// that produced it, and a promotion copies that citation only while the
+// conversation still exists.
+func TestPromoteMemoryCandidateCopiesOnlyTheLiveSourceSession(t *testing.T) {
 	repo, _, _ := newMemoryTestRepo(t)
 	sessionID := newMemoryTestSession(t, repo)
-	goneID := newMemoryTestSession(t, repo)
-	candidate := pendingBeliefCandidate(t, repo, sessionID, []string{sessionID, goneID})
-	if err := repo.DeleteSession(ctx(), goneID); err != nil {
-		t.Fatalf("DeleteSession: %v", err)
-	}
+	stranger := newMemoryTestSession(t, repo)
+	candidate := pendingBeliefCandidate(t, repo, sessionID)
 
 	note, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID)
 	if err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
 	}
-	if got := evidenceSessions(t, repo, note.NoteID); len(got) != 1 || got[0] != sessionID {
-		t.Fatalf("evidence = %v, want only the surviving conversation", got)
+	got := evidenceSessions(t, repo, note.NoteID)
+	if len(got) != 1 || got[0] != sessionID {
+		t.Fatalf("evidence = %v, want only the conversation that produced the claim", got)
+	}
+	for _, session := range got {
+		if session == stranger {
+			t.Fatalf("a promotion grounded a belief in an unrelated conversation")
+		}
 	}
 	if note.Status != MemoryNoteStatusManaged {
-		t.Fatalf("status = %q, want managed while one citation survives", note.Status)
+		t.Fatalf("status = %q, want managed while the source conversation survives", note.Status)
 	}
 }
 
@@ -113,9 +115,9 @@ func TestPromoteMemoryCandidateRefusesWhatItMayNotPromote(t *testing.T) {
 		t.Fatalf("profile edit promotion error = %v, want ErrMemoryCandidateKind", err)
 	}
 
-	withdrawn := pendingBeliefCandidate(t, repo, sessionID, nil)
-	if _, err := repo.TransitionMemoryCandidate(ctx(), withdrawn.CandidateID, MemoryCandidateStateWithdrawn); err != nil {
-		t.Fatalf("TransitionMemoryCandidate: %v", err)
+	withdrawn := pendingBeliefCandidate(t, repo, sessionID)
+	if _, err := repo.WithdrawMemoryCandidate(ctx(), withdrawn.CandidateID); err != nil {
+		t.Fatalf("WithdrawMemoryCandidate: %v", err)
 	}
 	if _, err := repo.PromoteMemoryCandidate(ctx(), withdrawn.CandidateID); !errors.Is(err, ErrMemoryCandidateInvalidTransition) {
 		t.Fatalf("withdrawn promotion error = %v, want ErrMemoryCandidateInvalidTransition", err)
@@ -128,7 +130,7 @@ func TestPromoteMemoryCandidateRefusesWhatItMayNotPromote(t *testing.T) {
 func TestPromotionThatFailsAfterTheFileMovedIsHealable(t *testing.T) {
 	repo, vault, _ := newMemoryTestRepo(t)
 	sessionID := newMemoryTestSession(t, repo)
-	candidate := pendingBeliefCandidate(t, repo, sessionID, []string{sessionID})
+	candidate := pendingBeliefCandidate(t, repo, sessionID)
 
 	failure := errors.New("the database went away")
 	repo.memoryPromotionBarrier = func() error { return failure }
@@ -242,7 +244,7 @@ func TestApplyMemoryProfileCandidateRefusesStaleAndWrongKind(t *testing.T) {
 		t.Fatalf("a refused apply consumed the candidate: %v", err)
 	}
 
-	belief := pendingBeliefCandidate(t, repo, sessionID, nil)
+	belief := pendingBeliefCandidate(t, repo, sessionID)
 	if _, err := repo.ApplyMemoryProfileCandidate(ctx(), ApplyMemoryProfileInput{
 		CandidateID: belief.CandidateID,
 		Content:     "# Profile\n",
@@ -254,7 +256,7 @@ func TestApplyMemoryProfileCandidateRefusesStaleAndWrongKind(t *testing.T) {
 func TestRejectMemoryCandidateRemovesRowAndFile(t *testing.T) {
 	repo, vault, _ := newMemoryTestRepo(t)
 	sessionID := newMemoryTestSession(t, repo)
-	candidate := pendingBeliefCandidate(t, repo, sessionID, []string{sessionID})
+	candidate := pendingBeliefCandidate(t, repo, sessionID)
 
 	if err := repo.RejectMemoryCandidate(ctx(), candidate.CandidateID); err != nil {
 		t.Fatalf("RejectMemoryCandidate: %v", err)
@@ -293,7 +295,7 @@ func TestRejectMemoryCandidateRemovesRowAndFile(t *testing.T) {
 func TestRejectMemoryCandidateCannotDeleteOutsideTheInbox(t *testing.T) {
 	repo, vault, database := newMemoryTestRepo(t)
 	sessionID := newMemoryTestSession(t, repo)
-	candidate := pendingBeliefCandidate(t, repo, sessionID, nil)
+	candidate := pendingBeliefCandidate(t, repo, sessionID)
 	noteID := newTestNoteID(t)
 	writeVaultNote(t, vault, "beliefs/precious.md", managedBelief(noteID, nil, "The user keeps bees."))
 
@@ -321,17 +323,17 @@ func TestCandidateDecisionsRecordRedactedAuditRows(t *testing.T) {
 	repo, _, database := newMemoryTestRepo(t)
 	sessionID := newMemoryTestSession(t, repo)
 
-	promoted := pendingBeliefCandidate(t, repo, sessionID, nil)
+	promoted := pendingBeliefCandidate(t, repo, sessionID)
 	if _, err := repo.PromoteMemoryCandidate(ctx(), promoted.CandidateID); err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
 	}
-	rejected := pendingBeliefCandidate(t, repo, sessionID, nil)
+	rejected := pendingBeliefCandidate(t, repo, sessionID)
 	if err := repo.RejectMemoryCandidate(ctx(), rejected.CandidateID); err != nil {
 		t.Fatalf("RejectMemoryCandidate: %v", err)
 	}
-	withdrawn := pendingBeliefCandidate(t, repo, sessionID, nil)
-	if _, err := repo.TransitionMemoryCandidate(ctx(), withdrawn.CandidateID, MemoryCandidateStateWithdrawn); err != nil {
-		t.Fatalf("TransitionMemoryCandidate: %v", err)
+	withdrawn := pendingBeliefCandidate(t, repo, sessionID)
+	if _, err := repo.WithdrawMemoryCandidate(ctx(), withdrawn.CandidateID); err != nil {
+		t.Fatalf("WithdrawMemoryCandidate: %v", err)
 	}
 
 	decisions := map[string]MemoryCandidate{
@@ -368,7 +370,7 @@ func TestCandidateDecisionsRecordRedactedAuditRows(t *testing.T) {
 func TestPromotionRacingAnIndexRefreshLinksEachCitationOnce(t *testing.T) {
 	repo, _, database := newMemoryTestRepo(t)
 	sessionID := newMemoryTestSession(t, repo)
-	candidate := pendingBeliefCandidate(t, repo, sessionID, []string{sessionID})
+	candidate := pendingBeliefCandidate(t, repo, sessionID)
 
 	repo.memoryPromotionBarrier = func() error {
 		_, err := repo.RefreshMemoryIndex(ctx())
@@ -388,5 +390,57 @@ func TestPromotionRacingAnIndexRefreshLinksEachCitationOnce(t *testing.T) {
 	}
 	if rows != 1 {
 		t.Fatalf("evidence rows = %d, want exactly one per citation", rows)
+	}
+}
+
+// The excerpt hash is meant to be a non-reversible fingerprint of what the
+// citation supports. Hashing the session id instead makes it a fingerprint of
+// the conversation — which is already stored in the row beside it in plain
+// text, so it says nothing new, and says nothing at all about the claim it is
+// supposed to stand behind.
+func TestEvidenceExcerptHashDigestsTheSupportedContentNotTheSession(t *testing.T) {
+	repo, _, database := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+	candidate := pendingBeliefCandidate(t, repo, sessionID)
+
+	note, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID)
+	if err != nil {
+		t.Fatalf("PromoteMemoryCandidate: %v", err)
+	}
+	var excerptHash string
+	if err := database.QueryRowContext(ctx(), `
+		SELECT excerpt_hash FROM memory_evidence WHERE note_id = ? AND session_id = ?
+	`, note.NoteID, sessionID).Scan(&excerptHash); err != nil {
+		t.Fatalf("read excerpt hash: %v", err)
+	}
+	if excerptHash != note.ContentHash {
+		t.Fatalf("excerpt hash = %q, want the digest of the content it supports (%q)", excerptHash, note.ContentHash)
+	}
+	if excerptHash == memoryfiles.ContentHash(sessionID) {
+		t.Fatalf("excerpt hash is a digest of the conversation id, not of the claim")
+	}
+	if strings.Contains(excerptHash, sessionID) || strings.Contains(excerptHash, "bees") {
+		t.Fatalf("excerpt hash %q is not a hash", excerptHash)
+	}
+
+	// The same must hold for a belief reconcile heals from the file: the hash
+	// describes the note that exists, not the conversation that is cited.
+	healed := newMemoryTestSession(t, repo)
+	healedID := newTestNoteID(t)
+	writeVaultNote(t, repo.memoryVault, "beliefs/healed.md", managedBelief(healedID, []string{healed}, "The user keeps chickens."))
+	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
+		t.Fatalf("ReconcileMemoryVault: %v", err)
+	}
+	healedNote, found := noteRowFor(t, repo, healedID)
+	if !found {
+		t.Fatalf("the hand-written belief was not healed into the index")
+	}
+	if err := database.QueryRowContext(ctx(), `
+		SELECT excerpt_hash FROM memory_evidence WHERE note_id = ? AND session_id = ?
+	`, healedID, healed).Scan(&excerptHash); err != nil {
+		t.Fatalf("read healed excerpt hash: %v", err)
+	}
+	if excerptHash != healedNote.ContentHash {
+		t.Fatalf("healed excerpt hash = %q, want %q", excerptHash, healedNote.ContentHash)
 	}
 }

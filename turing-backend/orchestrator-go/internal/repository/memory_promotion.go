@@ -83,7 +83,7 @@ func (r *Repository) PromoteMemoryCandidate(ctx context.Context, candidateID str
 	if err := upsertMemoryNoteTx(ctx, tx, note); err != nil {
 		return MemoryNote{}, err
 	}
-	if err := linkMemoryEvidenceTx(ctx, tx, note.NoteID, live); err != nil {
+	if err := linkMemoryEvidenceTx(ctx, tx, note.NoteID, note.ContentHash, live); err != nil {
 		return MemoryNote{}, err
 	}
 	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted); err != nil {
@@ -172,10 +172,11 @@ func (r *Repository) RejectMemoryCandidate(ctx context.Context, candidateID stri
 
 // pendingCandidateForDecision loads a candidate and checks everything a
 // decision depends on before any file is touched: that it exists, that it is
-// the kind this decision is for, that the lifecycle allows the move, and that
-// the path stored beside it is still an inbox path. The last check is not
-// redundant with the vault's own gate — it is what turns a tampered row into a
-// typed refusal instead of a primitive's confinement error.
+// the kind this decision is for, that the lifecycle allows the move, that the
+// provenance stored beside it is the one the server derived, and that the path
+// stored beside it is still an inbox path. The last two are not redundant with
+// the layers below — they turn a tampered row into a typed refusal instead of
+// a forged citation or a primitive's confinement error.
 func (r *Repository) pendingCandidateForDecision(ctx context.Context, candidateID string, kind string, to string) (MemoryCandidate, error) {
 	candidate, err := memoryCandidateByIDTx(ctx, r.db, candidateID)
 	if err != nil {
@@ -185,6 +186,9 @@ func (r *Repository) pendingCandidateForDecision(ctx context.Context, candidateI
 		return MemoryCandidate{}, fmt.Errorf("%w: candidate is a %s", ErrMemoryCandidateKind, candidate.Kind)
 	}
 	if err := requireMemoryCandidateTransition(candidate.State, to); err != nil {
+		return MemoryCandidate{}, err
+	}
+	if err := requireServerDerivedEvidence(candidate); err != nil {
 		return MemoryCandidate{}, err
 	}
 	if _, err := validateVaultInboxPath(candidate.InboxPath); err != nil {

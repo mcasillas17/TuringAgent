@@ -3,10 +3,42 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"sort"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 )
+
+// Reconcile audit actions. Every one of these is a change to what Turing
+// remembers about the user, made on the strength of what a pass found in their
+// files rather than on anything they asked for — so each one is recorded.
+//
+// The rows carry an id and a status and nothing else. A note's path carries its
+// title, which is the user's own prose about themselves, and a candidate's
+// session id names the conversation it came from: an audit log is not where
+// either belongs. An id is enough to look the rest up while the row still
+// exists, and means nothing once it does not.
+const (
+	memoryNoteIndexedAction         = "memory.note.indexed"
+	memoryNoteWithdrawnAction       = "memory.note.withdrawn"
+	memoryNoteRemovedAction         = "memory.note.removed"
+	memoryNoteRefsRewrittenAction   = "memory.note.refs_rewritten"
+	memoryCandidateOrphanedAction   = "memory.candidate.orphan_removed"
+	memoryReservationReleasedAction = "memory.reservation.released"
+)
+
+// recordMemoryReconcileTx writes one redacted reconcile row inside the same
+// transaction as the change it describes, for the same reason a candidate
+// decision does: a record written separately can be lost while the change it
+// describes survives, and then the user's memory has moved with nothing saying
+// why.
+func recordMemoryReconcileTx(ctx context.Context, tx *sql.Tx, action string, target string, status string) error {
+	payload, err := json.Marshal(map[string]string{"status": status})
+	if err != nil {
+		return err
+	}
+	return recordAuditTx(ctx, tx, "", "system", "", action, target, string(payload))
+}
 
 // MemoryNoteIssue names one file the user needs to know about and why. The
 // reason describes the file's structure — a broken frontmatter block, a
@@ -294,25 +326,18 @@ func (r *Repository) rewriteRefsFromSidecar(ctx context.Context, vault *memoryfi
 			continue
 		}
 		desired := sortedUniqueStrings(current.evidenceByNote[note.NoteID])
-		if equalStringSets(note.EvidenceRefs, desired) {
+		request, needed := refsRewriteFor(*note, desired)
+		if !needed {
 			continue
 		}
-		if desired == nil {
-			// A non-nil empty slice is what clears the list; nil would mean
-			// "leave the refs alone", which is the opposite instruction.
-			desired = []string{}
-		}
-		updated, err := vault.RewriteFrontmatterRefs(ctx, memoryfiles.RewriteFrontmatterRefsRequest{
-			RelPath:             note.RelPath,
-			Refs:                desired,
-			ExpectedContentHash: note.ContentHash,
-		})
+		updated, err := vault.RewriteFrontmatterRefs(ctx, request)
 		if err != nil {
 			return len(rewritten), err
 		}
 		note.Content = updated.Content
 		note.ContentHash = updated.ContentHash
 		note.EvidenceRefs = desired
+		note.EvidenceWithdrawn = request.Withdrawn
 		rewritten = append(rewritten, *note)
 	}
 	if len(rewritten) == 0 {
@@ -331,11 +356,46 @@ func (r *Repository) rewriteRefsFromSidecar(ctx context.Context, vault *memoryfi
 		if err := updateMemoryNoteContentTx(ctx, tx, note.NoteID, note.Content, note.ContentHash); err != nil {
 			return 0, err
 		}
+		status := "refs_updated"
+		if note.EvidenceWithdrawn {
+			status = MemoryNoteStatusWithdrawn
+		}
+		if err := recordMemoryReconcileTx(ctx, tx, memoryNoteRefsRewrittenAction, note.NoteID, status); err != nil {
+			return 0, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return len(rewritten), nil
+}
+
+// refsRewriteFor decides what one note's refs value has to say, given what the
+// sidecar knows, and whether saying it means writing to the user's file at all.
+//
+// Three outcomes, and the third is the one that matters: a note still citing
+// conversations the sidecar no longer has is *withdrawn*, in words. Handing it
+// an empty list instead would say something different and untrue — that nobody
+// ever grounded it — and the marker, unlike a list, cannot be read back as a
+// citation, so the pass after this one cannot undo the withdrawal. A note that
+// genuinely never carried citations is left exactly as the user wrote it.
+func refsRewriteFor(note memoryfiles.NoteRow, desired []string) (memoryfiles.RewriteFrontmatterRefsRequest, bool) {
+	request := memoryfiles.RewriteFrontmatterRefsRequest{
+		RelPath:             note.RelPath,
+		ExpectedContentHash: note.ContentHash,
+	}
+	if len(desired) > 0 {
+		if equalStringSets(note.EvidenceRefs, desired) {
+			return request, false
+		}
+		request.Refs = desired
+		return request, true
+	}
+	if len(note.EvidenceRefs) == 0 {
+		return request, false
+	}
+	request.Withdrawn = true
+	return request, true
 }
 
 // applyMemoryIndex writes the projection. It runs in one transaction, over a
@@ -425,9 +485,10 @@ func indexMemoryNoteTx(ctx context.Context, tx *sql.Tx, note memoryfiles.NoteRow
 			return false, false, err
 		}
 		// A note whose every citation names a conversation that no longer
-		// exists has lost its support. It is kept — the user accepted it —
-		// and marked, so nothing answers with it as if it were still grounded.
-		withdrawn := len(note.EvidenceRefs) > 0 && len(live) == 0
+		// exists has lost its support, and so has one whose file already says
+		// its evidence was withdrawn. It is kept — the user accepted it — and
+		// marked, so nothing answers with it as if it were still grounded.
+		withdrawn := note.EvidenceWithdrawn || (len(note.EvidenceRefs) > 0 && len(live) == 0)
 		if withdrawn {
 			status = MemoryNoteStatusWithdrawn
 		}
@@ -437,8 +498,16 @@ func indexMemoryNoteTx(ctx context.Context, tx *sql.Tx, note memoryfiles.NoteRow
 		if err := upsertMemoryNoteTx(ctx, tx, memoryNoteFromRow(note, status)); err != nil {
 			return false, false, err
 		}
-		if err := linkMemoryEvidenceTx(ctx, tx, note.NoteID, live); err != nil {
+		if err := linkMemoryEvidenceTx(ctx, tx, note.NoteID, note.ContentHash, live); err != nil {
 			return false, false, err
+		}
+		if err := recordMemoryReconcileTx(ctx, tx, memoryNoteIndexedAction, note.NoteID, status); err != nil {
+			return false, false, err
+		}
+		if withdrawn {
+			if err := recordMemoryReconcileTx(ctx, tx, memoryNoteWithdrawnAction, note.NoteID, "evidence_gone"); err != nil {
+				return false, false, err
+			}
 		}
 		return true, withdrawn, nil
 	case err != nil:
@@ -464,6 +533,14 @@ func indexMemoryNoteTx(ctx context.Context, tx *sql.Tx, note memoryfiles.NoteRow
 	}
 	if err := upsertMemoryNoteTx(ctx, tx, memoryNoteFromRow(note, status)); err != nil {
 		return false, false, err
+	}
+	// Only the transition is recorded, not every pass over an unchanged note:
+	// a log that fills with "reconcile looked at this and left it alone" is one
+	// nobody can read the real events out of.
+	if withdrawn {
+		if err := recordMemoryReconcileTx(ctx, tx, memoryNoteWithdrawnAction, note.NoteID, "evidence_gone"); err != nil {
+			return false, false, err
+		}
 	}
 	return false, withdrawn, nil
 }
@@ -518,6 +595,9 @@ func removeVanishedNotesTx(
 		if _, err := tx.ExecContext(ctx, `DELETE FROM memory_notes WHERE id = ?`, noteID); err != nil {
 			return 0, err
 		}
+		if err := recordMemoryReconcileTx(ctx, tx, memoryNoteRemovedAction, noteID, "file_missing"); err != nil {
+			return 0, err
+		}
 	}
 	return len(vanished), nil
 }
@@ -544,6 +624,9 @@ func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState
 		if _, err := tx.ExecContext(ctx, `DELETE FROM memory_candidates WHERE id = ?`, candidateID); err != nil {
 			return 0, 0, err
 		}
+		if err := recordMemoryReconcileTx(ctx, tx, memoryCandidateOrphanedAction, candidateID, "inbox_file_missing"); err != nil {
+			return 0, 0, err
+		}
 	}
 
 	// A reservation is taken before the bytes exist, so its own age says
@@ -565,6 +648,9 @@ func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState
 	}
 	for _, artifactID := range reservations {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM vault_artifacts WHERE id = ?`, artifactID); err != nil {
+			return 0, 0, err
+		}
+		if err := recordMemoryReconcileTx(ctx, tx, memoryReservationReleasedAction, artifactID, "inbox_file_missing"); err != nil {
 			return 0, 0, err
 		}
 	}

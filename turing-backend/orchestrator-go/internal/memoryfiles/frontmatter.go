@@ -20,6 +20,17 @@ const (
 	FrontmatterKeyRefs      = "refs"
 )
 
+// WithdrawnRefsMarker is what the refs key says once the conversations behind a
+// note have been deleted.
+//
+// It is a plain word in the file the user opens, because that is the point: an
+// empty list reads as a note nobody ever grounded, which is a different claim
+// about their own memory than one whose support was withdrawn. It is a scalar
+// rather than a one-item list so that nothing which re-links evidence from
+// frontmatter can read it back as a citation — a withdrawal that could be
+// parsed as a session id is a withdrawal a later pass can undo.
+const WithdrawnRefsMarker = "withdrawn"
+
 const frontmatterFence = "---"
 
 // noteFrontmatter is the frontmatter Turing writes. It is deliberately not the
@@ -113,11 +124,16 @@ func noteParseError(relPath string, format string, args ...any) error {
 // own bytes: nothing this package writes back is produced by re-encoding them,
 // so a user's key order, comments and quoting survive a Turing edit.
 type ParsedNote struct {
-	ID             string
-	Kind           NoteKind
-	Title          string
-	Managed        bool
-	Refs           []string
+	ID      string
+	Kind    NoteKind
+	Title   string
+	Managed bool
+	Refs    []string
+	// Withdrawn is true when the refs key carries the withdrawal marker rather
+	// than a list. It is kept separate from an empty Refs so a client can show
+	// "this note's evidence was withdrawn" rather than "this note was never
+	// grounded", and so nothing mistakes the marker for a session id.
+	Withdrawn      bool
 	HasFrontmatter bool
 	RawFrontmatter string
 	Body           string
@@ -215,7 +231,7 @@ func readFrontmatterFields(relPath string, parsed *ParsedNote, mapping *yaml.Nod
 				parsed.Managed = strings.EqualFold(value.Value, "true")
 			}
 		case FrontmatterKeyRefs:
-			parsed.Refs = scalarSequence(value)
+			parsed.Refs, parsed.Withdrawn = readNoteRefs(value)
 		}
 	}
 	return nil
@@ -241,6 +257,17 @@ func readNoteKind(relPath string, value *yaml.Node) (NoteKind, error) {
 
 func knownNoteKinds() string {
 	return string(KindBelief) + " or " + string(KindProfileEdit)
+}
+
+// readNoteRefs reads the refs key leniently. A list is a list of citations; the
+// withdrawal marker is a statement that the citations are gone and never a
+// citation itself; anything else is a value this parser does not recognise and
+// leaves alone, which is what a hand-edited vault is allowed to contain.
+func readNoteRefs(value *yaml.Node) ([]string, bool) {
+	if value.Kind == yaml.ScalarNode {
+		return nil, strings.EqualFold(strings.TrimSpace(value.Value), WithdrawnRefsMarker)
+	}
+	return scalarSequence(value), false
 }
 
 func scalarSequence(value *yaml.Node) []string {

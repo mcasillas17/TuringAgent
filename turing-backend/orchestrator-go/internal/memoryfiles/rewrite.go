@@ -15,11 +15,16 @@ import (
 // an existing note: the evidence refs and the stable identity.
 //
 // Refs is tri-state on purpose. A nil slice leaves the existing list untouched;
-// a non-nil slice — including an empty one — replaces it, which is how a
-// withdrawn session's evidence is removed.
+// a non-nil slice — including an empty one — replaces it.
+//
+// Withdrawn is the third thing the refs key can say, and it is separate from an
+// empty list on purpose: `refs: []` reads as a note nobody ever grounded, while
+// the withdrawal marker says the conversations behind it were deleted. It wins
+// over Refs when both are set, because a withdrawal is not a list.
 type RewriteFrontmatterRefsRequest struct {
 	RelPath             string
 	Refs                []string
+	Withdrawn           bool
 	NoteID              string
 	ExpectedContentHash string
 }
@@ -62,8 +67,8 @@ func (v *Vault) RewriteFrontmatterRefs(ctx context.Context, request RewriteFront
 	if err != nil {
 		return RewrittenNote{}, err
 	}
-	if request.Refs == nil && request.NoteID == "" {
-		return RewrittenNote{}, errors.New("rewrite requested with neither refs nor an identity to set")
+	if request.Refs == nil && request.NoteID == "" && !request.Withdrawn {
+		return RewrittenNote{}, errors.New("rewrite requested with neither refs nor a withdrawal nor an identity to set")
 	}
 
 	unlock, err := v.locks.lockContext(ctx, v.pathLockKey(clean))
@@ -193,7 +198,17 @@ func spliceFrontmatterKeys(relPath string, raw string, newline string, request R
 			return "", err
 		}
 	}
-	if request.Refs != nil {
+	switch {
+	case request.Withdrawn:
+		// A withdrawal replaces the whole value, list or not: the note now says
+		// its evidence is gone rather than listing what is left of it.
+		updated, err = spliceFrontmatterValue(relPath, updated, FrontmatterKeyRefs, newline, func(style valueStyle) string {
+			return style.renderScalar(yamlQuote(WithdrawnRefsMarker))
+		})
+		if err != nil {
+			return "", err
+		}
+	case request.Refs != nil:
 		updated, err = spliceFrontmatterValue(relPath, updated, FrontmatterKeyRefs, newline, func(style valueStyle) string {
 			return style.renderSequence(request.Refs)
 		})

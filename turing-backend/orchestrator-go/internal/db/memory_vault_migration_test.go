@@ -378,8 +378,11 @@ func TestVaultArtifactsAreSessionOwnedAndDistinctFromSandboxArtifacts(t *testing
 		t.Fatal("an unknown vault artifact state was accepted")
 	}
 
-	// One physical file is one tracked artifact per session; a second row would
-	// let a cleanup delete a path another row still believes it owns.
+	// One physical file is one tracked artifact, across every session. Scoping
+	// the constraint to the session would let a second session reserve a path
+	// the first one already owns, and then its cleanup would delete a file
+	// another session's manifest still claims — a cross-session deletion of
+	// the user's note through a manifest that looked consistent to both.
 	if _, err := database.ExecContext(ctx, `
 		INSERT INTO vault_artifacts (
 			id, session_id, vault_path, physical_path, state, created_at
@@ -388,6 +391,16 @@ func TestVaultArtifactsAreSessionOwnedAndDistinctFromSandboxArtifacts(t *testing
 			'writing', '2026-08-24T00:00:00Z')`,
 	); err == nil {
 		t.Fatal("a second vault artifact for the same session and physical path was accepted")
+	}
+	insertTestSession(t, ctx, database, "session_vault_other")
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO vault_artifacts (
+			id, session_id, vault_path, physical_path, state, created_at
+		) VALUES (
+			'vault_cross', 'session_vault_other', 'inbox/cand_1.md', '/skills/../vault/inbox/cand_1.md',
+			'writing', '2026-08-24T00:00:00Z')`,
+	); err == nil {
+		t.Fatal("a second session reserved a physical path another session already owns")
 	}
 
 	// vault_artifacts is its own table, never a discriminator on sandbox_artifacts.
@@ -539,7 +552,7 @@ func TestMemoryCandidateLifecycleConstraintsRejectIncoherentRows(t *testing.T) {
 		promotedNoteID string
 	}{
 		{"empty body", "cand_empty", "inbox/empty.md", "", "[]", "pending", "", ""},
-		{"oversized body", "cand_big", "inbox/big.md", strings.Repeat("a", 4097), "[]", "pending", "", ""},
+		{"oversized body", "cand_big", "inbox/big.md", strings.Repeat("a", maxCandidateBodyBytes+1), "[]", "pending", "", ""},
 		{"evidence refs are not JSON", "cand_bad_json", "inbox/badjson.md", "b", "not json", "pending", "", ""},
 		{"evidence refs are a JSON object", "cand_json_object", "inbox/object.md", "b", `{"a":1}`, "pending", "", ""},
 		{"decided candidate with no decision time", "cand_undecided", "inbox/undecided.md", "b", "[]", "rejected", "", ""},
@@ -628,5 +641,65 @@ func TestMemoryVaultMigrationPreservesEgressDecisionCheckConstraints(t *testing.
 	}
 	if err := insert("openai_compatible", "https://api.example/v1", "api.example", "", "", "[]"); err != nil {
 		t.Fatalf("a well-formed remote decision was rejected: %v", err)
+	}
+}
+
+// maxCandidateBodyBytes restates memoryfiles.MaxCandidateBodyBytes here rather
+// than importing it: this package is the schema, and a bound the schema shares
+// with the file layer has to be asserted independently or the two drift
+// together the moment one of them changes.
+const maxCandidateBodyBytes = 16 * 1024
+
+// The stored bound is UTF-8 bytes, not characters. SQLite's length() counts
+// characters, so a body of 16384 multibyte runes is 3x over the vault's byte
+// limit and the row would take it; length(CAST(body AS BLOB)) is what makes the
+// row refuse exactly what the file layer refuses.
+func TestMemoryCandidateBodyIsBoundedInUTF8Bytes(t *testing.T) {
+	ctx := context.Background()
+	database := openMemoryVaultDB(t, ctx)
+	insertTestSession(t, ctx, database, "session_body_bound")
+
+	insert := func(id string, body string) error {
+		_, err := database.ExecContext(ctx, `
+			INSERT INTO memory_candidates (
+				id, source_session_id, kind, inbox_path, content_hash, body,
+				evidence_refs_json, state, created_at, updated_at
+			) VALUES (?, 'session_body_bound', 'belief', ?, 'hash', ?, '[]', 'pending',
+				'2026-08-24T00:00:00Z', '2026-08-24T00:00:00Z')`,
+			id, "inbox/"+id+".md", body)
+		return err
+	}
+
+	// Two bytes per rune: 8192 of them is exactly the bound, and one more rune
+	// is two bytes past it.
+	const twoByteRune = "é"
+	for _, accepted := range []struct {
+		name string
+		body string
+	}{
+		{"exactly the bound in ASCII", strings.Repeat("a", maxCandidateBodyBytes)},
+		{"past the old character bound", strings.Repeat("a", 4097)},
+		{"exactly the bound in two-byte runes", strings.Repeat(twoByteRune, maxCandidateBodyBytes/2)},
+		{"a multibyte rune ending on the bound", strings.Repeat("a", maxCandidateBodyBytes-2) + twoByteRune},
+	} {
+		t.Run(accepted.name, func(t *testing.T) {
+			if err := insert("cand_ok_"+strings.ReplaceAll(accepted.name, " ", "_"), accepted.body); err != nil {
+				t.Fatalf("a body of %d bytes was refused: %v", len(accepted.body), err)
+			}
+		})
+	}
+	for _, refused := range []struct {
+		name string
+		body string
+	}{
+		{"one byte past the bound", strings.Repeat("a", maxCandidateBodyBytes+1)},
+		{"one two-byte rune past the bound", strings.Repeat(twoByteRune, maxCandidateBodyBytes/2) + twoByteRune},
+		{"a multibyte rune straddling the bound", strings.Repeat("a", maxCandidateBodyBytes-1) + twoByteRune},
+	} {
+		t.Run(refused.name, func(t *testing.T) {
+			if err := insert("cand_bad_"+strings.ReplaceAll(refused.name, " ", "_"), refused.body); err == nil {
+				t.Fatalf("a body of %d bytes was accepted", len(refused.body))
+			}
+		})
 	}
 }

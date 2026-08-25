@@ -234,9 +234,16 @@ func liveSessionRefsTx(ctx context.Context, tx *sql.Tx, refs []string) ([]string
 }
 
 // linkMemoryEvidenceTx records what a note is grounded in, keeping only a hash
-// of what each citation points at — never the excerpt itself. It must run after
+// of what each citation supports — never the excerpt itself. It must run after
 // the note row exists: evidence is owned by the note, and the foreign key says
 // so.
+//
+// excerptHash digests the content the citation stands behind. It is
+// deliberately not a digest of the session id: that would be a fingerprint of
+// the conversation, which is already stored in plain text in the column beside
+// it, and would say nothing at all about the claim the citation is supposed to
+// support. Hashing the note's own bytes keeps the row non-reversible and makes
+// it mean something — it names which version of the claim was cited.
 //
 // Linking is idempotent per (note, session). Two writers legitimately reach the
 // same citation — an index refresh healing a belief in the window between a
@@ -245,7 +252,7 @@ func liveSessionRefsTx(ctx context.Context, tx *sql.Tx, refs []string) ([]string
 // every count of what a memory rests on. The schema has no unique constraint to
 // lean on, so the check is stated in the same statement as the insert rather
 // than in a read the other writer could interleave with.
-func linkMemoryEvidenceTx(ctx context.Context, tx *sql.Tx, noteID string, liveRefs []string) error {
+func linkMemoryEvidenceTx(ctx context.Context, tx *sql.Tx, noteID string, excerptHash string, liveRefs []string) error {
 	for _, ref := range liveRefs {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO memory_evidence (id, note_id, session_id, excerpt_hash, created_at)
@@ -253,7 +260,7 @@ func linkMemoryEvidenceTx(ctx context.Context, tx *sql.Tx, noteID string, liveRe
 			WHERE NOT EXISTS (
 				SELECT 1 FROM memory_evidence WHERE note_id = ? AND session_id = ?
 			)
-		`, ids.New("memev"), noteID, ref, memoryfiles.ContentHash(ref), now(), noteID, ref); err != nil {
+		`, ids.New("memev"), noteID, ref, excerptHash, now(), noteID, ref); err != nil {
 			return err
 		}
 	}

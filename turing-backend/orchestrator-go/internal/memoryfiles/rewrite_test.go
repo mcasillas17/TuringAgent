@@ -490,3 +490,119 @@ func TestRewriteFrontmatterRefsWritesNothingWhenTheContentIsUnchanged(t *testing
 		t.Fatalf("an identical rewrite changed the file: %q", onDisk)
 	}
 }
+
+// Withdrawal is not the same as "no citations". A note whose supporting
+// conversations were deleted has to say so in the file the user opens —
+// `refs: []` reads as a note nobody ever grounded, which is a different claim
+// about their own memory. The literal marker also cannot be read back as a
+// citation, so a later pass cannot re-insert what a deletion withdrew.
+func TestRewriteFrontmatterRefsWritesWithdrawnAndPreservesEveryOtherByte(t *testing.T) {
+	vault := newTestVault(t)
+	writeVaultFile(t, vault, "beliefs/note.md", handWrittenNote)
+
+	result, err := vault.RewriteFrontmatterRefs(context.Background(), RewriteFrontmatterRefsRequest{
+		RelPath:   "beliefs/note.md",
+		Withdrawn: true,
+	})
+	if err != nil {
+		t.Fatalf("withdraw refs: %v", err)
+	}
+	// Only the bytes the refs value occupied change, and the marker lands in
+	// the position and indentation the user's own file already used: the range
+	// this splice replaces starts at the value, so the key line — and any
+	// comment the user left on it — is never inside it.
+	want := strings.Replace(
+		handWrittenNote,
+		"  - \"sess_withdrawn\"\n  - \"sess_kept\"\n",
+		"  \""+WithdrawnRefsMarker+"\"\n",
+		1,
+	)
+	if result.Content != want {
+		t.Fatalf("withdrawal was not byte-preserving:\nwant %q\ngot  %q", want, result.Content)
+	}
+	onDisk, err := os.ReadFile(filepath.Join(vault.Root(), "beliefs", "note.md"))
+	if err != nil {
+		t.Fatalf("read note: %v", err)
+	}
+	if string(onDisk) != want {
+		t.Fatalf("on-disk bytes differ from the reported content:\nwant %q\ngot  %q", want, onDisk)
+	}
+
+	// Read back: the marker is a withdrawal, never a citation. Anything that
+	// re-links evidence from frontmatter sees nothing to link.
+	parsed, err := ParseNote("beliefs/note.md", result.Content)
+	if err != nil {
+		t.Fatalf("parse the withdrawn note: %v", err)
+	}
+	if !parsed.Withdrawn {
+		t.Fatalf("the withdrawn note does not read back as withdrawn: %+v", parsed)
+	}
+	if len(parsed.Refs) != 0 {
+		t.Fatalf("refs = %v, want a withdrawal to carry no citations", parsed.Refs)
+	}
+	if parsed.ID != "01ARZ3NDEKTSV4RRFFQ69G5FAV" || parsed.Title != "Loosely quoted" {
+		t.Fatalf("withdrawal disturbed the keys around it: %+v", parsed)
+	}
+
+	// Idempotent: withdrawing an already-withdrawn note changes nothing, so a
+	// pass that runs on a timer does not rewrite the user's file forever.
+	again, err := vault.RewriteFrontmatterRefs(context.Background(), RewriteFrontmatterRefsRequest{
+		RelPath:             "beliefs/note.md",
+		Withdrawn:           true,
+		ExpectedContentHash: result.ContentHash,
+	})
+	if err != nil {
+		t.Fatalf("second withdrawal: %v", err)
+	}
+	if again.Changed || again.Content != want {
+		t.Fatalf("a second withdrawal rewrote the note: changed=%v", again.Changed)
+	}
+}
+
+// A note the user wrote by hand with no frontmatter at all still has to be
+// able to say its evidence was withdrawn, without their prose moving.
+func TestRewriteFrontmatterRefsWithdrawsOnANoteWithNoFrontmatter(t *testing.T) {
+	vault := newTestVault(t)
+	body := "# Written by hand\n\nThe user keeps bees.\n"
+	writeVaultFile(t, vault, "beliefs/plain.md", body)
+
+	result, err := vault.RewriteFrontmatterRefs(context.Background(), RewriteFrontmatterRefsRequest{
+		RelPath:   "beliefs/plain.md",
+		Withdrawn: true,
+	})
+	if err != nil {
+		t.Fatalf("withdraw refs: %v", err)
+	}
+	if !strings.HasSuffix(result.Content, body) {
+		t.Fatalf("the user's prose moved:\n%q", result.Content)
+	}
+	parsed, err := ParseNote("beliefs/plain.md", result.Content)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !parsed.Withdrawn || len(parsed.Refs) != 0 {
+		t.Fatalf("parsed = %+v, want a withdrawal with no citations", parsed)
+	}
+}
+
+// A user who types the marker themselves is telling Turing the same thing, and
+// a lenient parser has to hear it the same way rather than treating the value
+// as a session named "withdrawn".
+func TestParseNoteReadsAHandWrittenWithdrawalMarker(t *testing.T) {
+	for _, written := range []string{
+		"refs: withdrawn\n",
+		"refs: \"withdrawn\"\n",
+		"refs:   Withdrawn  \n",
+	} {
+		parsed, err := ParseNote("beliefs/note.md", "---\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\n"+written+"---\n\nBody.\n")
+		if err != nil {
+			t.Fatalf("parse %q: %v", written, err)
+		}
+		if !parsed.Withdrawn {
+			t.Fatalf("%q did not read back as withdrawn", written)
+		}
+		if len(parsed.Refs) != 0 {
+			t.Fatalf("%q produced citations %v", written, parsed.Refs)
+		}
+	}
+}
