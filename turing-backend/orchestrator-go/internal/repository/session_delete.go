@@ -412,18 +412,36 @@ func (r *Repository) AdvanceSessionDeletion(ctx context.Context, sessionID strin
 		}
 		return receipt, nil
 	}
+	// How many files the sandbox does not own is answered once, while the rows
+	// describing them are still there, and never unanswered afterwards.
+	//
+	// A withdrawal now advances across more than one transaction: a completion
+	// that could not finish leaves the receipt retryable with the session — and
+	// therefore its whole sandbox manifest — already cascaded away. The retry
+	// re-enters here and observes zero, because there is nothing left to count,
+	// not because nothing was retained. Writing that zero over the earlier
+	// answer turns "two files of yours are still on disk" into "nothing was
+	// left behind", which is the one thing this number exists to say.
+	//
+	// So the observation only ever raises the count. `receipt` already carries
+	// the persisted value read at the top of this function, and both it and the
+	// stored column take the larger of the two.
+	var observedLegacyArtifacts int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(DISTINCT physical_path)
 		FROM sandbox_artifacts
 		WHERE session_id = ? AND policy = ?
-	`, sessionID, SandboxArtifactPolicyRetainLegacyUnowned).Scan(&receipt.RetainedLegacyArtifactCount); err != nil {
+	`, sessionID, SandboxArtifactPolicyRetainLegacyUnowned).Scan(&observedLegacyArtifacts); err != nil {
 		return SessionDeletionReceipt{}, err
+	}
+	if observedLegacyArtifacts > receipt.RetainedLegacyArtifactCount {
+		receipt.RetainedLegacyArtifactCount = observedLegacyArtifacts
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE session_deletions
-		SET retained_legacy_artifact_count = ?
+		SET retained_legacy_artifact_count = MAX(retained_legacy_artifact_count, ?)
 		WHERE session_id = ?
-	`, receipt.RetainedLegacyArtifactCount, sessionID); err != nil {
+	`, observedLegacyArtifacts, sessionID); err != nil {
 		return SessionDeletionReceipt{}, err
 	}
 
@@ -534,6 +552,36 @@ func (r *Repository) SessionExecutionRunIDs(ctx context.Context, sessionID strin
 		runIDs = append(runIDs, runID)
 	}
 	return runIDs, rows.Err()
+}
+
+// MarkSessionDeletionReceiptFailure records an external failure that has no
+// manifest to mark.
+//
+// Two failures look like this, and both would be misreported by either of the
+// manifest markers. A cleanup that removed the files and could not drop the
+// rows naming them has nothing to mark delete_failed — those rows describe
+// files that are gone, and marking them files a per-file audit row claiming
+// Turing could not remove a file it just removed. A cleaner failing under a
+// scope with no manifest here has nothing of its own to mark at all, and
+// marking one of the manifests we do know would attribute a stranger's failure
+// to a store that did not fail.
+//
+// So this touches the receipt and only the receipt: the withdrawal stays
+// visibly unfinished and retryable, and every manifest row is left exactly as
+// the pass left it, which is what the retry needs to read.
+func (r *Repository) MarkSessionDeletionReceiptFailure(ctx context.Context, sessionID string, errorCode string) error {
+	if errorCode == "" {
+		return errors.New("session deletion external failure code is required")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := markSessionDeletionFailedTx(ctx, tx, sessionID, errorCode); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // MarkSessionDeletionSandboxFailure preserves only an opaque error class when a

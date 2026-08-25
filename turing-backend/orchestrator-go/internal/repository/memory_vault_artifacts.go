@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path"
 	"strings"
 
@@ -68,6 +69,17 @@ var (
 	// to one session at a time, because two claims on one file means one
 	// session's cleanup deletes the other's note.
 	ErrVaultArtifactExists = errors.New("vault artifact is already reserved")
+	// ErrVaultArtifactRemoveFailed reports a tracked file the vault would not
+	// release. It stands in for the underlying error deliberately: that error
+	// can name a path inside the user's vault, and this value is joined into
+	// what a withdrawal reports back to its caller.
+	ErrVaultArtifactRemoveFailed = errors.New("vault artifact could not be removed")
+	// ErrVaultArtifactManifestFinalize reports the opposite situation: every
+	// note was removed and the rows that named them could not be dropped. It is
+	// separated from a removal failure because the two demand contradictory
+	// records — one says the user's notes are still on disk, the other says
+	// they are gone and only Turing's bookkeeping is behind.
+	ErrVaultArtifactManifestFinalize = errors.New("vault artifact manifest could not be finalized")
 )
 
 // VaultArtifact is one manifest row: the orchestrator's record that a session
@@ -277,25 +289,44 @@ func (r *Repository) CountSessionVaultArtifacts(ctx context.Context, sessionID s
 // and could not remove the named files, so a withdrawal stays retryable instead
 // of reporting a completion that left the user's notes behind.
 //
-// It marks exactly the artifacts it is given and no others. A pass that fails
-// partway through has already deleted some of the session's files, and marking
-// those as failures would file an audit row saying Turing could not delete a
-// file it just deleted — a false record of the user's own withdrawal, and a
-// retry sent looking for something that is already gone.
+// It marks exactly the artifacts it is given and no others. A pass that could
+// not remove some of the session's files has already deleted the rest, and
+// marking those as failures would file an audit row saying Turing could not
+// delete a file it just deleted — a false record of the user's own withdrawal,
+// and a retry sent looking for something that is already gone.
 //
 // The statement names vault_artifacts and only vault_artifacts: sandbox rows
 // have their own cleaner, their own policy column and their own audit action,
 // and an id from that manifest matches nothing here.
 func (r *Repository) MarkSessionVaultArtifactsDeleteFailed(ctx context.Context, sessionID string, artifactIDs []string, errorCode string) error {
-	if len(artifactIDs) == 0 {
-		return nil
+	failures := make([]vaultArtifactFailure, 0, len(artifactIDs))
+	for _, artifactID := range artifactIDs {
+		failures = append(failures, vaultArtifactFailure{artifactID: artifactID, errorCode: errorCode})
 	}
-	payloadBytes, err := json.Marshal(map[string]string{
-		"state":     VaultArtifactStateDeleteFailed,
-		"errorCode": errorCode,
-	})
-	if err != nil {
-		return err
+	return r.markVaultArtifactsDeleteFailed(ctx, sessionID, failures)
+}
+
+// vaultArtifactFailure is one row a pass could not remove, with the class it
+// failed under. Each row carries its own class because one pass now visits
+// every row: a manifest can hold a tampered path and an unreachable file at
+// once, and collapsing them onto a single class would record one of the two
+// failures as the other.
+type vaultArtifactFailure struct {
+	artifactID string
+	errorCode  string
+}
+
+// markVaultArtifactsDeleteFailed marks each failed row and audits it once.
+//
+// "Once" is the load-bearing word. A stuck withdrawal is retried on a ticker,
+// and every retry re-reads the same unremovable rows — so a marker that
+// re-audits a row it has already marked turns one file the vault would not
+// release into an unbounded stream of audit rows all saying the same thing.
+// Excluding rows that are already delete_failed makes the mark the transition
+// it claims to be, and the audit the record of that transition.
+func (r *Repository) markVaultArtifactsDeleteFailed(ctx context.Context, sessionID string, failures []vaultArtifactFailure) error {
+	if len(failures) == 0 {
+		return nil
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -303,12 +334,12 @@ func (r *Repository) MarkSessionVaultArtifactsDeleteFailed(ctx context.Context, 
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	for _, artifactID := range artifactIDs {
+	for _, failure := range failures {
 		result, err := tx.ExecContext(ctx, `
 			UPDATE vault_artifacts
 			SET state = ?
-			WHERE id = ? AND session_id = ?
-		`, VaultArtifactStateDeleteFailed, artifactID, sessionID)
+			WHERE id = ? AND session_id = ? AND state <> ?
+		`, VaultArtifactStateDeleteFailed, failure.artifactID, sessionID, VaultArtifactStateDeleteFailed)
 		if err != nil {
 			return err
 		}
@@ -316,13 +347,21 @@ func (r *Repository) MarkSessionVaultArtifactsDeleteFailed(ctx context.Context, 
 		if err != nil {
 			return err
 		}
-		// The audit row lands only for a row this statement actually marked, in
+		// The audit row lands only for a row this statement actually moved, in
 		// the same transaction as the mark: an id naming nothing in this
-		// manifest is not a vault failure and does not get recorded as one.
+		// manifest is not a vault failure and does not get recorded as one, and
+		// neither is a row a previous pass already reported.
 		if marked != 1 {
 			continue
 		}
-		if err := recordAuditTx(ctx, tx, "", "system", "", vaultArtifactCleanupFailedAction, artifactID, string(payloadBytes)); err != nil {
+		payloadBytes, err := json.Marshal(map[string]string{
+			"state":     VaultArtifactStateDeleteFailed,
+			"errorCode": failure.errorCode,
+		})
+		if err != nil {
+			return err
+		}
+		if err := recordAuditTx(ctx, tx, "", "system", "", vaultArtifactCleanupFailedAction, failure.artifactID, string(payloadBytes)); err != nil {
 			return err
 		}
 	}
@@ -354,12 +393,34 @@ func (r *Repository) DeleteVaultArtifacts(ctx context.Context, artifactIDs []str
 // calls.
 //
 // It removes the vault files a session left in the inbox, then removes manifest
-// rows for exactly the files that were actually removed. A failure stops the
-// pass: the rows whose files are already gone leave the manifest first, and
-// only the rows still naming a file — the one that failed and the ones this
-// pass never reached — are marked delete_failed, with one redacted audit row
-// each. A withdrawal that could not finish stays visible and retryable, and no
-// audit row claims a failure for a file that was deleted.
+// rows for exactly the files that were actually removed.
+//
+// Every row is attempted, and a row that cannot be removed does not stop the
+// pass. Each row names a different file, and one unusable row — a reservation
+// tampered to point outside the inbox, a note the vault will not release — says
+// nothing about the note beside it. Abandoning the manifest at the first
+// refusal leaves every sibling in the user's vault behind a row that can never
+// drain: the retry re-reads the same worklist, fails on the same row, and stops
+// in the same place, forever. So the pass keeps going, the drainable siblings
+// leave, and only the rows still naming a file are kept.
+//
+// Order is deliberate: the rows whose files are gone leave the manifest before
+// anything is filed as a failure, so no audit row claims a failure for a file
+// that was deleted. Only the rows that actually failed are marked
+// delete_failed, one redacted audit row each, and only the first time — a stuck
+// withdrawal is retried on a ticker, and re-auditing a row already marked turns
+// one broken file into an unbounded stream of identical audit rows.
+//
+// A pass that removed every note and could not then drop the rows naming them
+// is reported as ErrVaultArtifactManifestFinalize and marks nothing. The notes
+// are gone; the rows are the retry's worklist, and removal is idempotent, so
+// the retry drains them rather than repeating the work.
+//
+// What it reports back is bounded and opaque. Every failed row is marked and
+// audited, but the error carries at most maxVaultPurgeErrors failure classes
+// plus a count: the number of failures a pass can observe is the number of rows
+// the session owns, and the underlying errors can name paths inside the user's
+// vault.
 //
 // Removal goes through RemoveInboxNote, which refuses every path outside
 // inbox/. A missing file is a success: cleanup is retried after partial
@@ -388,23 +449,54 @@ func (r *Repository) PurgeSessionVaultArtifacts(ctx context.Context, sessionID s
 		return 0, err
 	}
 	removed := make([]string, 0, len(artifacts))
-	for index, artifact := range artifacts {
-		errorCode, err := removeVaultArtifactFile(ctx, vault, artifact)
-		if err == nil {
+	failures := make([]vaultArtifactFailure, 0, len(artifacts))
+	collected := make([]error, 0, maxVaultPurgeErrors)
+	for _, artifact := range artifacts {
+		errorCode, failure := removeVaultArtifactFile(ctx, vault, artifact)
+		if failure == nil {
 			removed = append(removed, artifact.ArtifactID)
 			continue
 		}
-		// Order is the point. The rows already removed leave the manifest
-		// before anything is filed as a failure, so the failure report names
-		// only files that are still in the user's vault.
-		failure := errors.Join(err, r.DeleteVaultArtifacts(ctx, removed))
-		return 0, errors.Join(failure, r.MarkSessionVaultArtifactsDeleteFailed(
-			ctx, sessionID, vaultArtifactIDs(artifacts[index:]), errorCode))
+		failures = append(failures, vaultArtifactFailure{
+			artifactID: artifact.ArtifactID,
+			errorCode:  errorCode,
+		})
+		if len(collected) < maxVaultPurgeErrors {
+			collected = append(collected, failure)
+		}
 	}
-	if err := r.DeleteVaultArtifacts(ctx, removed); err != nil {
-		return 0, err
+	forgetErr := r.DeleteVaultArtifacts(ctx, removed)
+	if len(failures) == 0 {
+		if forgetErr != nil {
+			// Every note is gone and only the bookkeeping is behind. That is a
+			// different fact from a note Turing could not delete, and it is
+			// typed so the caller can report it as the one it is: marking these
+			// rows delete_failed would file an audit entry claiming each
+			// removed note is still on the user's disk.
+			return 0, errors.Join(ErrVaultArtifactManifestFinalize, forgetErr)
+		}
+		return len(removed), nil
 	}
-	return len(removed), nil
+	return 0, errors.Join(
+		forgetErr,
+		vaultPurgeFailure(collected, len(failures), len(artifacts)),
+		r.markVaultArtifactsDeleteFailed(ctx, sessionID, failures),
+	)
+}
+
+// vaultPurgeFailure is the bounded, opaque report of a pass that could not
+// finish. It joins the sampled failure classes so a caller can still recognise
+// one with errors.Is, and adds the counts the sample leaves out, so a report
+// truncated at maxVaultPurgeErrors still says how much it is not showing.
+func vaultPurgeFailure(collected []error, failed int, total int) error {
+	if failed == 0 {
+		return nil
+	}
+	reported := make([]error, 0, len(collected)+1)
+	reported = append(reported, collected...)
+	reported = append(reported, fmt.Errorf(
+		"vault artifact cleanup failed for %d of %d tracked files", failed, total))
+	return errors.Join(reported...)
 }
 
 // removeVaultArtifactFile deletes one tracked file and names the failure in the
@@ -412,22 +504,19 @@ func (r *Repository) PurgeSessionVaultArtifacts(ctx context.Context, sessionID s
 // gate first: a manifest row that has been tampered with is refused here as a
 // typed error rather than reaching the primitive's confinement check, and a
 // tampered row can never be turned into a way to delete a belief either way.
+//
+// Both failures are returned as their class and nothing more. The underlying
+// removal error can name a path inside the user's vault, and this value is
+// joined into what a withdrawal reports back to its caller; the class is what
+// the audit row records, and it is all a caller can act on anyway.
 func removeVaultArtifactFile(ctx context.Context, vault *memoryfiles.Vault, artifact VaultArtifact) (string, error) {
 	if _, err := validateVaultInboxPath(artifact.VaultPath); err != nil {
-		return "vault_path_scope", err
+		return "vault_path_scope", ErrVaultArtifactPathScope
 	}
 	if err := vault.RemoveInboxNote(ctx, artifact.VaultPath); err != nil {
-		return "vault_remove_failed", err
+		return "vault_remove_failed", ErrVaultArtifactRemoveFailed
 	}
 	return "", nil
-}
-
-func vaultArtifactIDs(artifacts []VaultArtifact) []string {
-	artifactIDs := make([]string, 0, len(artifacts))
-	for _, artifact := range artifacts {
-		artifactIDs = append(artifactIDs, artifact.ArtifactID)
-	}
-	return artifactIDs
 }
 
 func vaultArtifactByID(ctx context.Context, q rowQuerier, artifactID string, sessionID string) (VaultArtifact, error) {

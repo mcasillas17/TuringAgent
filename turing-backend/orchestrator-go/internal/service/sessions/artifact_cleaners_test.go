@@ -974,3 +974,167 @@ func TestDeleteSessionKeepsTheRetainedLegacyCountAcrossACompletionRetry(t *testi
 		t.Fatalf("persisted retained legacy count = %d, want 1", persisted.RetainedLegacyArtifactCount)
 	}
 }
+
+// finalizeOnlyPurger removes every note the way the real purge does and then
+// refuses the manifest write. It is the vault's version of a storage failure
+// landing between the deletion and the record of it.
+type finalizeOnlyPurger struct {
+	mu     sync.Mutex
+	repo   *repository.Repository
+	vault  *memoryfiles.Vault
+	broken bool
+}
+
+func (p *finalizeOnlyPurger) PurgeSessionVaultArtifacts(ctx context.Context, sessionID string) (int, error) {
+	p.mu.Lock()
+	broken := p.broken
+	p.mu.Unlock()
+	if !broken {
+		return p.repo.PurgeSessionVaultArtifacts(ctx, sessionID)
+	}
+	pending, err := p.repo.PendingSessionVaultArtifacts(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	for _, artifact := range pending {
+		if err := p.vault.RemoveInboxNote(ctx, artifact.VaultPath); err != nil {
+			return 0, err
+		}
+	}
+	// The notes are gone and the rows that named them are untouched.
+	return 0, errors.Join(
+		repository.ErrVaultArtifactManifestFinalize,
+		errors.New("vault manifest is unwritable"),
+	)
+}
+
+func (p *finalizeOnlyPurger) heal() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.broken = false
+}
+
+// The vault reaches the same split the sandbox does. A note the user asked to
+// have withdrawn, which Turing did in fact delete, must never be recorded as a
+// file Turing could not delete — the audit log is what a user reads to learn
+// what is still on their disk, and a false entry there is the same lie whether
+// it comes from the sandbox manifest or the vault one.
+func TestDeleteSessionDoesNotBlameTheVaultForAManifestItCouldNotFinalize(t *testing.T) {
+	server, repo, vault, database := newVaultBackedServer(t)
+	sessionID, candidate := seedVaultCandidate(t, repo, "bees")
+	purger := &finalizeOnlyPurger{repo: repo, vault: vault, broken: true}
+	server.RegisterArtifactCleaners(NewVaultArtifactCleaner(purger))
+	ctx := context.Background()
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if got := response.GetDeletion().GetErrorCode(); got != repository.SessionDeletionArtifactManifestFinalizeFailed {
+		t.Fatalf("error code = %q, want the distinct %q class",
+			got, repository.SessionDeletionArtifactManifestFinalizeFailed)
+	}
+	if _, err := os.Stat(filepath.Join(vault.Root(), filepath.FromSlash(candidate.InboxPath))); !os.IsNotExist(err) {
+		t.Fatalf("the note survived, so this was not a finalize-only failure: %v", err)
+	}
+	if got := auditActionCount(t, database, "session.vault_artifact.cleanup.failed"); got != 0 {
+		t.Fatalf("per-note deletion-failure audits = %d, want none for a note that was deleted", got)
+	}
+	rows, err := repo.SessionVaultArtifacts(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("SessionVaultArtifacts: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("vault rows = %+v, want the manifest preserved for the retry", rows)
+	}
+	if rows[0].State == repository.VaultArtifactStateDeleteFailed {
+		t.Fatalf("row state = %q, want it not relabelled as an undeleted note", rows[0].State)
+	}
+
+	// Removal is idempotent, so the retry runs over a note that is already gone
+	// and finally drains the row.
+	purger.heal()
+	retry, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID})
+	if err != nil {
+		t.Fatalf("retry DeleteSession: %v", err)
+	}
+	if retry.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("retry receipt = %+v, want completed", retry.GetDeletion())
+	}
+	if got := auditActionCount(t, database, "session.vault_artifact.cleanup.failed"); got != 0 {
+		t.Fatalf("per-note deletion-failure audits after the retry = %d, want none", got)
+	}
+}
+
+// A stranger scope is a wiring mistake wherever in the pass it surfaces. One
+// that removes files and then cannot drop its rows has to be reported as the
+// misconfiguration it is, not as an ordinary manifest failure that a retry
+// would eventually clear — no retry clears a cleaner nothing here knows how to
+// mark.
+func TestDeleteSessionFailsClosedOnAnUnknownScopeThatOnlyFailsToFinalize(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{})
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Unknown finalize scope")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	seedSandboxArtifactRow(t, database, session.SessionID, "artifact_unknown_finalize")
+	stranger := &failingForgetCleaner{
+		scope:    "object_store",
+		forgetFn: func() error { return errors.New("object store manifest unwritable") },
+	}
+	server.RegisterArtifactCleaners(stranger)
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if got := response.GetDeletion().GetErrorCode(); got != repository.SessionDeletionUnsupportedArtifactScope {
+		t.Fatalf("error code = %q, want the explicit %q class",
+			got, repository.SessionDeletionUnsupportedArtifactScope)
+	}
+	if !response.GetDeletion().GetRetryable() {
+		t.Fatalf("receipt = %+v, want it retryable", response.GetDeletion())
+	}
+}
+
+// A misconfigured cleaner must not cost a real failure its evidence. The
+// stranger decides the receipt's class, because no retry fixes a scope nothing
+// here can mark — but the sandbox files that genuinely could not be deleted are
+// still on the user's disk, and the rows naming them still have to say so.
+func TestDeleteSessionStillMarksAKnownScopeWhenAStrangerScopeAlsoFails(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{})
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "Stranger beside a real failure")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	seedSandboxArtifactRow(t, database, session.SessionID, "artifact_real_failure")
+	sandbox := &scopedFakeCleaner{scope: ArtifactScopeSandbox}
+	sandbox.fail(errors.New("sandbox unreachable"))
+	stranger := &scopedFakeCleaner{scope: "object_store"}
+	stranger.fail(errors.New("object store unavailable"))
+	server.RegisterArtifactCleaners(sandbox, stranger)
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if got := response.GetDeletion().GetErrorCode(); got != repository.SessionDeletionUnsupportedArtifactScope {
+		t.Fatalf("error code = %q, want the stranger to decide the class", got)
+	}
+	rows, err := repo.SessionSandboxArtifacts(ctx, session.SessionID)
+	if err != nil {
+		t.Fatalf("SessionSandboxArtifacts: %v", err)
+	}
+	if len(rows) != 1 || rows[0].State != repository.SandboxArtifactStateDeleteFailed {
+		t.Fatalf("sandbox rows = %+v, want the real failure still marked delete_failed", rows)
+	}
+	if got := auditRowCount(t, database, "session.artifact.cleanup.failed", "artifact_real_failure"); got != 1 {
+		t.Fatalf("audits for the genuinely undeleted file = %d, want 1", got)
+	}
+}

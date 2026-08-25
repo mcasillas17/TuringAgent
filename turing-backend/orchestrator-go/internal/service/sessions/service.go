@@ -267,9 +267,9 @@ func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionR
 	if receipt.State == "failed_external" &&
 		receipt.ErrorCode == repository.SessionDeletionArtifactCleanupPending &&
 		len(s.artifactCleaners) > 0 {
-		failedScopes := s.runArtifactCleaners(ctx, receipt)
-		if len(failedScopes) > 0 {
-			current, err := s.recordArtifactCleanupFailure(ctx, receipt.SessionID, failedScopes)
+		outcome := s.runArtifactCleaners(ctx, receipt)
+		if outcome.failed() {
+			current, err := s.recordArtifactCleanupFailure(ctx, receipt.SessionID, outcome)
 			if err != nil {
 				return nil, err
 			}
@@ -305,8 +305,47 @@ func (s *Server) deletionCompletion() repository.SessionDeletionCompletion {
 	}
 }
 
-// runArtifactCleaners attempts every registered cleaner and reports the scopes
-// that could not finish.
+// artifactCleanupOutcome is what one dispatch pass observed, split by what
+// actually went wrong.
+//
+// The split is the point. A scope whose removal failed still has the user's
+// files in it, and saying so means marking every one of its rows delete_failed
+// with an audit row naming the file. A scope whose removal succeeded and whose
+// manifest could not then be drained is the opposite situation described in the
+// same breath: the files are gone, the rows that named them are the retry's
+// worklist, and marking them files a per-file audit row claiming Turing could
+// not delete a file the user's own withdrawal did delete. Collapsing the two
+// into one list of "failed scopes" is what makes that false record possible.
+type artifactCleanupOutcome struct {
+	// cleanupFailures names the scopes whose external files are still there.
+	cleanupFailures []string
+	// finalizeFailures names the scopes whose files are gone and whose
+	// manifest rows could not be dropped.
+	finalizeFailures []string
+}
+
+func (o artifactCleanupOutcome) failed() bool {
+	return len(o.cleanupFailures) > 0 || len(o.finalizeFailures) > 0
+}
+
+// unsupportedScope reports whether any failure came from a cleaner registered
+// under a scope this withdrawal has no manifest for.
+func (o artifactCleanupOutcome) unsupportedScope() bool {
+	for _, scope := range o.cleanupFailures {
+		if scope != ArtifactScopeSandbox && scope != ArtifactScopeVault {
+			return true
+		}
+	}
+	for _, scope := range o.finalizeFailures {
+		if scope != ArtifactScopeSandbox && scope != ArtifactScopeVault {
+			return true
+		}
+	}
+	return false
+}
+
+// runArtifactCleaners attempts every registered cleaner and reports what it
+// observed.
 //
 // It never short-circuits. Each scope is a separate store with a separate
 // manifest, and stopping at the first failure would leave the other scope's
@@ -314,58 +353,87 @@ func (s *Server) deletionCompletion() repository.SessionDeletionCompletion {
 // scratch output because the vault was unreachable, or the reverse. A cleaner
 // that finishes also forgets its own rows here, even when a sibling failed, so
 // the manifest that survives names exactly the files that survived.
-func (s *Server) runArtifactCleaners(ctx context.Context, receipt repository.SessionDeletionReceipt) []string {
-	failures := make([]string, 0, len(s.artifactCleaners))
+func (s *Server) runArtifactCleaners(
+	ctx context.Context,
+	receipt repository.SessionDeletionReceipt,
+) artifactCleanupOutcome {
+	var outcome artifactCleanupOutcome
 	completed := make([]SessionArtifactCleaner, 0, len(s.artifactCleaners))
 	for _, cleaner := range s.artifactCleaners {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), artifactCleanupTimeout)
 		err := cleaner.CleanupSessionArtifacts(cleanupCtx, receipt.SessionID, receipt.LifecycleVersion)
 		cancel()
 		if err != nil {
-			failures = append(failures, cleaner.ArtifactScope())
+			outcome.cleanupFailures = append(outcome.cleanupFailures, cleaner.ArtifactScope())
 			continue
 		}
 		completed = append(completed, cleaner)
 	}
 	for _, cleaner := range completed {
 		if err := cleaner.ForgetCleanedArtifacts(context.WithoutCancel(ctx), receipt.SessionID); err != nil {
-			// The files are gone and the rows are not. That is the same
-			// outstanding-work state a failed removal leaves, and it is
-			// reported as this scope's failure so the next pass reruns it —
-			// removal is idempotent, so rerunning it over files that are
-			// already gone drains the rows rather than repeating the work.
-			failures = append(failures, cleaner.ArtifactScope())
+			// The files are gone and the rows are not. That still holds the
+			// withdrawal open — the pending gate counts rows, so the next pass
+			// reruns this scope, and removal is idempotent, so rerunning it
+			// over files that are already gone drains the rows rather than
+			// repeating the work. What it is not is a file Turing could not
+			// delete, and it is reported separately so nothing records it as
+			// one.
+			outcome.finalizeFailures = append(outcome.finalizeFailures, cleaner.ArtifactScope())
 		}
 	}
-	return failures
+	return outcome
 }
 
 // recordArtifactCleanupFailure marks each failing scope's own manifest and
 // leaves every other scope's rows and audit trail alone.
 //
 // The receipt carries one error class for the whole withdrawal, derived from
-// the set of scopes that failed rather than from the order they were tried in,
-// so two installs that registered their cleaners differently produce the same
-// receipt. The per-scope attribution lives where it can be acted on: in the
-// rows that were marked and the audit row each one produced.
+// what failed rather than from the order the cleaners were tried in, so two
+// installs that registered their cleaners differently produce the same receipt.
+// The per-scope attribution lives where it can be acted on: in the rows that
+// were marked and the audit row each one produced.
+//
+// Only a scope whose files are still there has its manifest marked. A manifest
+// that could not be finalized, and a scope with no manifest here at all, are
+// recorded on the receipt alone — there is nothing truthful to mark in either
+// case, and marking anyway is how a withdrawal files a deletion failure for a
+// file it deleted, or attributes a stranger's failure to a store that worked.
 func (s *Server) recordArtifactCleanupFailure(
 	ctx context.Context,
 	sessionID string,
-	failedScopes []string,
+	outcome artifactCleanupOutcome,
 ) (repository.SessionDeletionReceipt, error) {
-	errorCode := artifactCleanupErrorCode(failedScopes)
-	failed := make(map[string]bool, len(failedScopes))
-	for _, scope := range failedScopes {
+	errorCode := artifactCleanupErrorCode(outcome)
+	failureCtx := context.WithoutCancel(ctx)
+	marked := false
+	// A stranger scope decides the receipt's class but does not silence the
+	// failures beside it. A sandbox or vault removal that genuinely failed left
+	// the user's files on disk, and the rows naming them are the only place
+	// that fact is written down; withholding it until someone unregisters a
+	// misconfigured cleaner would lose the evidence for the failure that
+	// actually touched their data.
+	failed := make(map[string]bool, len(outcome.cleanupFailures))
+	for _, scope := range outcome.cleanupFailures {
 		failed[scope] = true
 	}
-	failureCtx := context.WithoutCancel(ctx)
 	if failed[ArtifactScopeSandbox] {
 		if err := s.repo.MarkSessionDeletionSandboxFailure(failureCtx, sessionID, errorCode); err != nil {
 			return repository.SessionDeletionReceipt{}, status.Error(codes.Internal, "record session artifact cleanup failure")
 		}
+		marked = true
 	}
 	if failed[ArtifactScopeVault] {
 		if err := s.repo.MarkSessionDeletionVaultFailure(failureCtx, sessionID, errorCode); err != nil {
+			return repository.SessionDeletionReceipt{}, status.Error(codes.Internal, "record session artifact cleanup failure")
+		}
+		marked = true
+	}
+	// Nothing was marked, so nothing has recorded the failure yet. Leaving it
+	// there hands back the pending gate — a withdrawal that looks like it is
+	// politely waiting for a cleaner which has in fact already failed, and it
+	// waits forever.
+	if !marked {
+		if err := s.repo.MarkSessionDeletionReceiptFailure(failureCtx, sessionID, errorCode); err != nil {
 			return repository.SessionDeletionReceipt{}, status.Error(codes.Internal, "record session artifact cleanup failure")
 		}
 	}
@@ -376,12 +444,25 @@ func (s *Server) recordArtifactCleanupFailure(
 	return current, nil
 }
 
-// artifactCleanupErrorCode names the one opaque class the receipt reports for a
-// set of failed scopes. A vault-only failure says so, because it is the one a
-// user can act on by closing their editor; anything wider falls back to the
-// general artifact class rather than picking a winner between scopes.
-func artifactCleanupErrorCode(failedScopes []string) string {
-	if len(failedScopes) == 1 && failedScopes[0] == ArtifactScopeVault {
+// artifactCleanupErrorCode names the one opaque class the receipt reports for
+// what a dispatch pass observed.
+//
+// A scope this withdrawal has no manifest for comes first, because it is a
+// wiring mistake rather than a store being unavailable and no retry will fix
+// it. Then a removal that failed, because the user's files are still there: a
+// vault-only failure says so, since it is the one a user can act on by closing
+// their editor, and anything wider falls back to the general artifact class
+// rather than picking a winner between scopes. A manifest that could not be
+// finalized is last and separate — the files are gone, and reporting that under
+// a cleanup class would tell the user their notes are still on disk.
+func artifactCleanupErrorCode(outcome artifactCleanupOutcome) string {
+	if outcome.unsupportedScope() {
+		return repository.SessionDeletionUnsupportedArtifactScope
+	}
+	if len(outcome.cleanupFailures) == 0 {
+		return repository.SessionDeletionArtifactManifestFinalizeFailed
+	}
+	if len(outcome.cleanupFailures) == 1 && outcome.cleanupFailures[0] == ArtifactScopeVault {
 		return repository.SessionDeletionVaultCleanupFailed
 	}
 	return repository.SessionDeletionSandboxCleanupFailed

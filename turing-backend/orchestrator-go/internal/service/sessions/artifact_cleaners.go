@@ -72,14 +72,31 @@ func (c *vaultArtifactCleaner) ArtifactScope() string { return ArtifactScopeVaul
 
 func (c *vaultArtifactCleaner) CleanupSessionArtifacts(ctx context.Context, sessionID string, _ int64) error {
 	_, err := c.purger.PurgeSessionVaultArtifacts(ctx, sessionID)
+	if errors.Is(err, repository.ErrVaultArtifactManifestFinalize) {
+		// Every note was removed and only the rows naming them survived. That
+		// is not a note this cleaner failed to delete, and returning it as one
+		// would mark each surviving row delete_failed and file an audit entry
+		// telling the user a note Turing did erase is still on their disk. The
+		// outstanding work is real, so it is reported — as finalization, from
+		// ForgetCleanedArtifacts, which is the question it actually answers.
+		return nil
+	}
 	return err
 }
 
-// ForgetCleanedArtifacts has nothing left to do. The purge removes a manifest
-// row in the same pass as the file it names, so a row that outlived this
-// cleaner's success does not exist — and dropping rows here would drop the ones
-// a partial failure deliberately kept.
-func (c *vaultArtifactCleaner) ForgetCleanedArtifacts(context.Context, string) error { return nil }
+// ForgetCleanedArtifacts finishes the bookkeeping the purge could not.
+//
+// The purge removes a manifest row in the same pass as the file it names, so
+// after a clean pass there is nothing left to find and this costs one empty
+// read. It is not a no-op only because that pass can remove every file and then
+// fail to drop the rows: those rows are still the retry's worklist, removal is
+// idempotent, and rerunning the purge over notes that are already gone drains
+// them. It deliberately does not drop rows on its own — the ones a partial
+// failure kept are still naming notes in the user's vault.
+func (c *vaultArtifactCleaner) ForgetCleanedArtifacts(ctx context.Context, sessionID string) error {
+	_, err := c.purger.PurgeSessionVaultArtifacts(ctx, sessionID)
+	return err
+}
 
 // memoryVaultReconciler is the only part of the repository the completion
 // needs. The signature mirrors *repository.Repository exactly.

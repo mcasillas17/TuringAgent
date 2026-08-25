@@ -748,6 +748,19 @@ func TestPurgeSessionVaultArtifactsReportsBoundedOpaqueFailuresForEveryFailedRow
 	if !errors.Is(err, ErrVaultArtifactPathScope) {
 		t.Fatalf("purge error = %v, want ErrVaultArtifactPathScope", err)
 	}
+	// The report samples; it does not accumulate. The number of failures one
+	// pass can observe is the number of rows the session owns, which is
+	// unbounded, so a report that carried one entry per failed row would grow
+	// with the manifest. What has to survive truncation is recognisability —
+	// the class is still there for errors.Is — and the counts, which say how
+	// much the sample is leaving out.
+	if sampled := strings.Count(err.Error(), ErrVaultArtifactPathScope.Error()); sampled > maxVaultPurgeErrors {
+		t.Fatalf("purge error carries %d entries for %d failed rows, want at most %d",
+			sampled, len(poisonedIDs), maxVaultPurgeErrors)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("%d of %d", len(poisonedIDs), len(poisonedIDs))) {
+		t.Fatalf("purge error %q does not say how many of the rows failed", err.Error())
+	}
 	if len(err.Error()) > maxVaultPurgeErrorBytes {
 		t.Fatalf("purge error is %d bytes over %d rows, want it bounded at %d",
 			len(err.Error()), len(poisonedIDs), maxVaultPurgeErrorBytes)
