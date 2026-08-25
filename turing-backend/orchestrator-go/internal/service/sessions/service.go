@@ -376,7 +376,7 @@ func (s *Server) runArtifactCleaners(
 		completed = append(completed, cleaner)
 	}
 	for _, cleaner := range completed {
-		if err := cleaner.ForgetCleanedArtifacts(context.WithoutCancel(ctx), receipt.SessionID); err != nil {
+		if err := s.forgetCleanedArtifacts(ctx, cleaner, receipt.SessionID); err != nil {
 			// The files are gone and the rows are not. That still holds the
 			// withdrawal open — the pending gate counts rows, so the next pass
 			// reruns this scope, and removal is idempotent, so rerunning it
@@ -388,6 +388,36 @@ func (s *Server) runArtifactCleaners(
 		}
 	}
 	return outcome
+}
+
+// forgetCleanedArtifacts runs the manifest write a finished cleaner still owes,
+// detached from the caller and bounded on its own.
+//
+// Detached, because the files are already gone: a client that hung up, or a
+// shutdown that has begun, must not leave the rows naming them behind. Bounded,
+// because detached is not the same as unbounded — a store that has stopped
+// answering would otherwise hold this call, the request behind it, and the
+// reconcile loop waiting on shutdown open forever. The deadline is the same one
+// removal gets, since this is the same store answering the same withdrawal, and
+// a write that outlives it is reported as an unfinished manifest, which is
+// exactly what it is.
+func (s *Server) forgetCleanedArtifacts(
+	ctx context.Context,
+	cleaner SessionArtifactCleaner,
+	sessionID string,
+) error {
+	forgetCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.artifactFinalizeTimeout())
+	defer cancel()
+	return cleaner.ForgetCleanedArtifacts(forgetCtx, sessionID)
+}
+
+// artifactFinalizeTimeout returns artifactCleanupTimeout, or the override a
+// test has set.
+func (s *Server) artifactFinalizeTimeout() time.Duration {
+	if s.artifactFinalizeTimeoutOverride > 0 {
+		return s.artifactFinalizeTimeoutOverride
+	}
+	return artifactCleanupTimeout
 }
 
 // recordArtifactCleanupFailure marks each failing scope's own manifest and
@@ -443,7 +473,12 @@ func (s *Server) recordArtifactCleanupFailure(
 			return repository.SessionDeletionReceipt{}, status.Error(codes.Internal, "record session artifact cleanup failure")
 		}
 	}
-	current, err := s.repo.SessionDeletionReceipt(ctx, sessionID)
+	// Read back on the same detached context the marks were written on. The
+	// failure is already durable at this point, and re-reading it through a
+	// caller that has gone away — a client that hung up, or the shutdown that
+	// cancels the reconcile loop — turns a correctly recorded failure into a
+	// read error the loop reports as a failed resume.
+	current, err := s.repo.SessionDeletionReceipt(failureCtx, sessionID)
 	if err != nil {
 		return repository.SessionDeletionReceipt{}, status.Error(codes.Internal, "read session deletion receipt")
 	}

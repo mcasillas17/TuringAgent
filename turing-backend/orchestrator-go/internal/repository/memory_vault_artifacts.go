@@ -411,10 +411,16 @@ func (r *Repository) DeleteVaultArtifacts(ctx context.Context, artifactIDs []str
 // withdrawal is retried on a ticker, and re-auditing a row already marked turns
 // one broken file into an unbounded stream of identical audit rows.
 //
-// A pass that removed every note and could not then drop the rows naming them
-// is reported as ErrVaultArtifactManifestFinalize and marks nothing. The notes
-// are gone; the rows are the retry's worklist, and removal is idempotent, so
-// the retry drains them rather than repeating the work.
+// A pass that could not drop the rows for the notes it did remove reports
+// ErrVaultArtifactManifestFinalize, whether or not another row failed beside
+// them. The rows that genuinely failed are marked and audited one by one here,
+// so that fact is already recorded where it can be acted on; the class the
+// caller reads is the one describing the rows that are being kept despite
+// naming nothing. Reporting the pass as a cleanup failure instead invites the
+// caller to mark every row the session still owns, which by then includes rows
+// naming notes that are gone. The notes are gone, the rows are the retry's
+// worklist, and removal is idempotent, so the retry drains them rather than
+// repeating the work.
 //
 // What it reports back is bounded and opaque. Every failed row is marked and
 // audited, but the error carries at most maxVaultPurgeErrors failure classes
@@ -466,14 +472,19 @@ func (r *Repository) PurgeSessionVaultArtifacts(ctx context.Context, sessionID s
 		}
 	}
 	forgetErr := r.DeleteVaultArtifacts(ctx, removed)
+	if forgetErr != nil {
+		// Whatever else this pass observed, the rows for the notes it did
+		// remove are still here — and that is a finalization failure, not a
+		// note that survived. It is classified as one regardless of the
+		// failures beside it: those rows are marked and audited individually,
+		// just below, while a caller that read only a cleanup failure here
+		// would answer it by marking every row the session still owns, which
+		// now includes rows naming notes that are gone.
+		forgetErr = errors.Join(ErrVaultArtifactManifestFinalize, forgetErr)
+	}
 	if len(failures) == 0 {
 		if forgetErr != nil {
-			// Every note is gone and only the bookkeeping is behind. That is a
-			// different fact from a note Turing could not delete, and it is
-			// typed so the caller can report it as the one it is: marking these
-			// rows delete_failed would file an audit entry claiming each
-			// removed note is still on the user's disk.
-			return 0, errors.Join(ErrVaultArtifactManifestFinalize, forgetErr)
+			return 0, forgetErr
 		}
 		return len(removed), nil
 	}

@@ -73,12 +73,19 @@ func (c *vaultArtifactCleaner) ArtifactScope() string { return ArtifactScopeVaul
 func (c *vaultArtifactCleaner) CleanupSessionArtifacts(ctx context.Context, sessionID string, _ int64) error {
 	_, err := c.purger.PurgeSessionVaultArtifacts(ctx, sessionID)
 	if errors.Is(err, repository.ErrVaultArtifactManifestFinalize) {
-		// Every note was removed and only the rows naming them survived. That
-		// is not a note this cleaner failed to delete, and returning it as one
-		// would mark each surviving row delete_failed and file an audit entry
-		// telling the user a note Turing did erase is still on their disk. The
-		// outstanding work is real, so it is reported — as finalization, from
-		// ForgetCleanedArtifacts, which is the question it actually answers.
+		// Rows are being kept for notes that are gone. Returning that as a
+		// removal failure would have the withdrawal mark every row the session
+		// still owns and file an audit entry per row telling the user a note
+		// Turing did erase is still on their disk.
+		//
+		// This holds even when a note beside them genuinely could not be
+		// removed. That row was marked and audited by the pass that observed
+		// it — individually, so the record names the file it is about — and
+		// the session-wide marker cannot tell the two kinds of surviving row
+		// apart. The outstanding work is real either way and is reported as
+		// finalization, from ForgetCleanedArtifacts, which is the question it
+		// actually answers; both rows stay, so the next pass re-attempts the
+		// note that is still there.
 		return nil
 	}
 	return err
