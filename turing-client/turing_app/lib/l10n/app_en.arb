@@ -148,8 +148,106 @@
       }
     }
   },
+  "memoryBackendUnreachable": "Could not reach the backend",
+  "memoryEditingVersion": "Editing version {hash}",
+  "@memoryEditingVersion": {
+    "placeholders": {
+      "hash": {
+        "type": "String"
+      }
+    }
+  },
+  "memoryLastChanged": "Last changed {date} at {time}",
+  "@memoryLastChanged": {
+    "placeholders": {
+      "date": {
+        "type": "DateTime",
+        "format": "yMMMd"
+      },
+      "time": {
+        "type": "DateTime",
+        "format": "Hm"
+      }
+    }
+  },
+  "memoryProvenanceFrom": "From {source}",
+  "@memoryProvenanceFrom": {
+    "placeholders": {
+      "source": {
+        "type": "String"
+      }
+    }
+  },
+  "memoryNoProfileYet": "(no profile yet)",
+  "memorySaveUnavailable": "This document cannot be saved from here until the problem above is fixed.",
+  "memoryTierItemCount": "{count, plural, =0{Nothing is in this tier.} =1{1 item in this tier.} other{{count} items in this tier.}}",
+  "@memoryTierItemCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "memoryTierPendingCount": "{count, plural, =0{No proposals are waiting for this tier.} =1{1 proposal is waiting for this tier.} other{{count} proposals are waiting for this tier.}}",
+  "@memoryTierPendingCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "egressDialogTitleUnknownHost": "Send data off this machine?",
+  "egressDialogTitle": "Send data to {host}?",
+  "@egressDialogTitle": {
+    "placeholders": {
+      "host": {
+        "type": "String"
+      }
+    }
+  },
+  "egressDialogMaySendHeading": "This run may send:",
+  "egressDialogMcpHeading": "Remote MCP destinations:",
+  "egressDialogIntegrationHeading": "Connected-account destinations:",
+  "egressDialogSkillsHeading": "Skills that may be sent:",
+  "egressSkillBodyMayBeSent": "full content may be sent",
+  "egressSkillNameOnly": "name and description only",
+  "egressDialogSingleRunNotice": "This consent applies only to this exact run.",
+  "egressDialogExpiry": "Confirm before {date} at {time}.",
+  "@egressDialogExpiry": {
+    "placeholders": {
+      "date": {
+        "type": "DateTime",
+        "format": "yMMMd"
+      },
+      "time": {
+        "type": "DateTime",
+        "format": "Hm"
+      }
+    }
+  },
+  "egressDialogCancel": "Cancel",
+  "egressDialogSend": "Send",
+  "egressCategoryCurrentMessage": "Current message",
+  "egressCategoryConversationHistory": "Conversation history",
+  "egressCategoryCrossSessionRecall": "Cross-session recall",
+  "egressCategoryMemoryProfile": "Memory and profile",
+  "egressCategorySkillContent": "Enabled skill content",
+  "egressCategoryToolSchemas": "Tool schemas",
+  "egressCategoryToolArguments": "Tool arguments",
+  "egressCategoryToolResults": "Tool results",
+  "egressCategoryAttachments": "Attachments",
+  "egressMemoryTierUnspecified": "Memory",
+  "egressMemoryTierPersona": "Persona",
+  "egressMemoryTierProfile": "Profile",
+  "egressMemoryTierBelief": "Belief",
+  "egressMemoryTierNote": "Note",
   "memoryEgressPinnedHeading": "Memory pinned into this run:",
+  "memoryEgressPinnedDetail": "These documents are in the prompt as written.",
+  "memoryEgressReachableHeading": "Memory the memory tools can reach:",
+  "memoryEgressReachableDetail": "Nothing here is in the prompt. A tool call would have to go and read it, and whatever it read would then be part of this run.",
   "memoryEgressToolsHeading": "The memory tools this run may call:",
+  "memoryEgressToolsDetail": "What those tools return is part of this run and may be sent with it.",
+  "memoryEgressUnnamed": "The server did not name which memory this run may send.",
   "memoryEgressBodyMayBeSent": "full content may be sent",
   "memoryEgressNameOnly": "name and location only"
 }

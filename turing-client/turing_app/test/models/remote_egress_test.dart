@@ -120,6 +120,31 @@ void main() {
     test('a run that never touches memory says nothing about it', () {
       expect(_disclosure().mentionsMemory, isFalse);
     });
+
+    // The server derives both the category and the applicability flag from one
+    // decision, so this shape is a contradiction rather than a run. Resolving
+    // it towards "memory is in play" would put a persona claim in front of a
+    // user whose run the server just said sends no memory, so the two fields
+    // the server actually speaks with are the ones that decide.
+    test(
+      'a named entry with neither the category nor the flag is no claim',
+      () {
+        expect(
+          _disclosure(
+            memoryNotes: const [
+              MemoryEgressDisclosure(
+                noteId: '',
+                title: 'persona.md',
+                vaultPath: 'persona.md',
+                tier: MemoryEgressTier.persona,
+                bodyMayBeSent: true,
+              ),
+            ],
+          ).mentionsMemory,
+          isFalse,
+        );
+      },
+    );
   });
 }
 

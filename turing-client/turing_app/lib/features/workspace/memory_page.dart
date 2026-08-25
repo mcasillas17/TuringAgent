@@ -35,16 +35,24 @@ class _MemoryPageState extends State<MemoryPage> {
   /// "whatever is there now".
   String _personaHash = '';
   String _profileHash = '';
+
+  /// The server's text as each editor last adopted it. An editor whose content
+  /// has drifted from this holds words the user typed and has not saved.
+  String _personaAdopted = '';
+  String _profileAdopted = '';
   bool _busy = false;
   String _settingsError = '';
   String _personaError = '';
   String _profileError = '';
   String _inboxError = '';
 
+  bool get _personaDirty => _persona.text != _personaAdopted;
+  bool get _profileDirty => _profile.text != _profileAdopted;
+
   @override
   void initState() {
     super.initState();
-    _state = _load();
+    _state = _load(adoptPersona: true, adoptProfile: true);
   }
 
   @override
@@ -54,20 +62,37 @@ class _MemoryPageState extends State<MemoryPage> {
     super.dispose();
   }
 
-  Future<MemoryState> _load() async {
+  /// Re-reads the page, and adopts the server's text into the editors the
+  /// caller has the standing to overwrite.
+  ///
+  /// Everything on this page re-reads after a write, because a promotion moves
+  /// a file and an apply rewrites a document and the page cannot truthfully
+  /// patch its own copy. But a re-read is not permission to throw away words
+  /// the user typed and has not saved: unless this particular action was about
+  /// this particular document, a dirty editor keeps its text — and keeps the
+  /// hash it composed that text against, so the save that follows still asks
+  /// "is it still the version I read?" and is refused honestly if it is not.
+  Future<MemoryState> _load({
+    bool adoptPersona = false,
+    bool adoptProfile = false,
+  }) async {
     final state = await widget.apiClient.listMemoryState();
-    // The editors follow the server, never the other way round: a re-read is
-    // how the user recovers from an edit that landed in Obsidian instead.
-    _persona.text = state.persona.content;
-    _profile.text = state.profile.content;
-    _personaHash = state.persona.contentHash;
-    _profileHash = state.profile.contentHash;
+    if (adoptPersona || !_personaDirty) {
+      _persona.text = state.persona.content;
+      _personaAdopted = state.persona.content;
+      _personaHash = state.persona.contentHash;
+    }
+    if (adoptProfile || !_profileDirty) {
+      _profile.text = state.profile.content;
+      _profileAdopted = state.profile.content;
+      _profileHash = state.profile.contentHash;
+    }
     return state;
   }
 
-  void _reload() {
+  void _reload({bool adoptPersona = false, bool adoptProfile = false}) {
     setState(() {
-      _state = _load();
+      _state = _load(adoptPersona: adoptPersona, adoptProfile: adoptProfile);
     });
   }
 
@@ -78,8 +103,10 @@ class _MemoryPageState extends State<MemoryPage> {
   /// truthfully patch its own copy afterwards, so it asks again.
   Future<void> _mutate(
     Future<void> Function() request,
-    void Function(String message) onError,
-  ) async {
+    void Function(String message) onError, {
+    bool adoptPersona = false,
+    bool adoptProfile = false,
+  }) async {
     if (_busy) return;
     setState(() {
       _busy = true;
@@ -90,7 +117,7 @@ class _MemoryPageState extends State<MemoryPage> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _state = _load();
+        _state = _load(adoptPersona: adoptPersona, adoptProfile: adoptProfile);
       });
     } catch (error) {
       if (!mounted) return;
@@ -121,9 +148,9 @@ class _MemoryPageState extends State<MemoryPage> {
           if (snapshot.hasError) {
             return WorkspaceNotice(
               icon: Icons.error_outline,
-              title: 'Could not reach the backend',
+              title: l10n.memoryBackendUnreachable,
               body: _describe(snapshot.error!),
-              onRetry: _reload,
+              onRetry: () => _reload(adoptPersona: true, adoptProfile: true),
               tone: AppColors.danger,
             );
           }
@@ -148,6 +175,7 @@ class _MemoryPageState extends State<MemoryPage> {
                 expectedContentHash: _personaHash,
               ),
               (message) => _personaError = message,
+              adoptPersona: true,
             ),
             onSaveProfile: () => _mutate(
               () => widget.apiClient.saveMemoryProfile(
@@ -155,8 +183,10 @@ class _MemoryPageState extends State<MemoryPage> {
                 expectedContentHash: _profileHash,
               ),
               (message) => _profileError = message,
+              adoptProfile: true,
             ),
-            onReread: _reload,
+            onRereadPersona: () => _reload(adoptPersona: true),
+            onRereadProfile: () => _reload(adoptProfile: true),
             onPromote: (candidate) => _mutate(
               () => widget.apiClient.promoteMemoryCandidate(
                 candidateId: candidate.candidateId,
@@ -203,7 +233,8 @@ class _MemoryBody extends StatelessWidget {
     required this.onToggle,
     required this.onSavePersona,
     required this.onSaveProfile,
-    required this.onReread,
+    required this.onRereadPersona,
+    required this.onRereadProfile,
     required this.onPromote,
     required this.onReject,
     required this.onApply,
@@ -221,10 +252,20 @@ class _MemoryBody extends StatelessWidget {
   final ValueChanged<bool> onToggle;
   final VoidCallback onSavePersona;
   final VoidCallback onSaveProfile;
-  final VoidCallback onReread;
+  final VoidCallback onRereadPersona;
+  final VoidCallback onRereadProfile;
   final ValueChanged<MemoryCandidate> onPromote;
   final ValueChanged<MemoryCandidate> onReject;
   final ValueChanged<MemoryCandidate> onApply;
+
+  /// The server's own row for a tier, if it sent one. A build that has not
+  /// heard about a tier renders no row for it rather than an invented one.
+  MemoryTierState? _tierFor(MemoryTier tier) {
+    for (final row in state.tiers) {
+      if (row.tier == tier) return row;
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -257,8 +298,9 @@ class _MemoryBody extends StatelessWidget {
           palette: palette,
           busy: busy,
           error: personaError,
+          tier: _tierFor(MemoryTier.persona),
           onSave: onSavePersona,
-          onReread: onReread,
+          onReread: onRereadPersona,
         ),
         const SizedBox(height: 12),
         _DocumentCard(
@@ -274,8 +316,9 @@ class _MemoryBody extends StatelessWidget {
           palette: palette,
           busy: busy,
           error: profileError,
+          tier: _tierFor(MemoryTier.profile),
           onSave: onSaveProfile,
-          onReread: onReread,
+          onReread: onRereadProfile,
         ),
         const SizedBox(height: 22),
         _SectionHeading(text: l10n.memoryInboxHeading, palette: palette),
@@ -368,6 +411,7 @@ class _SettingsCard extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               Switch(
+                key: const Key('memory-enabled-toggle'),
                 value: settings.enabled,
                 onChanged: busy ? null : onToggle,
               ),
@@ -391,6 +435,17 @@ class _SettingsCard extends StatelessWidget {
               style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
           ],
+          const SizedBox(height: 8),
+          // Why the vault is or is not usable, in the vault's own words. A
+          // parse error alone left the "it is there but unreadable" case
+          // rendering as an ordinary, healthy vault.
+          _StatusLine(
+            text: localizedMemoryUnavailableCopy(
+              l10n,
+              settings.unavailableReason,
+            ),
+            tone: _reasonTone(settings.unavailableReason),
+          ),
           if (settings.parseError.isNotEmpty) ...[
             const SizedBox(height: 10),
             _ErrorLine(message: settings.parseError),
@@ -424,6 +479,7 @@ class _DocumentCard extends StatelessWidget {
     required this.palette,
     required this.busy,
     required this.error,
+    required this.tier,
     required this.onSave,
     required this.onReread,
   });
@@ -439,6 +495,7 @@ class _DocumentCard extends StatelessWidget {
   final AppPalette palette;
   final bool busy;
   final String error;
+  final MemoryTierState? tier;
   final VoidCallback onSave;
   final VoidCallback onReread;
 
@@ -482,10 +539,11 @@ class _DocumentCard extends StatelessWidget {
             const SizedBox(height: 8),
             _ErrorLine(message: document.parseError),
           ],
+          if (tier case final row?) _TierCounts(row: row, palette: palette),
           if (document.updatedAt case final updated?) ...[
             const SizedBox(height: 6),
             Text(
-              'Last changed ${updated.toLocal()}',
+              l10n.memoryLastChanged(updated.toLocal(), updated.toLocal()),
               style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
           ],
@@ -496,7 +554,7 @@ class _DocumentCard extends StatelessWidget {
             // refusal — and it is a document hash, never the egress snapshot
             // fingerprint, which is a binding token and stays off screen.
             SelectableText(
-              'Editing version ${document.contentHash}',
+              l10n.memoryEditingVersion(document.contentHash),
               style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
           ],
@@ -513,14 +571,25 @@ class _DocumentCard extends StatelessWidget {
             const SizedBox(height: 10),
             _ErrorLine(message: error),
           ],
+          if (!document.isWritable) ...[
+            const SizedBox(height: 8),
+            _StatusLine(
+              text: l10n.memorySaveUnavailable,
+              tone: AppColors.warning,
+            ),
+          ],
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
             runSpacing: 4,
             children: [
+              // Empty is a save like any other: clearing persona.md is how a
+              // user takes back words they already gave a model. What is
+              // refused here is a save the server would refuse anyway, because
+              // the document could not be read in the first place.
               FilledButton(
                 key: saveKey,
-                onPressed: busy ? null : onSave,
+                onPressed: busy || !document.isWritable ? null : onSave,
                 child: Text(l10n.memorySaveAction),
               ),
               // Re-reading is always the user's move, never automatic. After a
@@ -589,7 +658,11 @@ class _CandidateCard extends StatelessWidget {
             // nothing in it is interpreted as markup.
             SelectableText(
               candidate.content,
-              style: TextStyle(fontSize: 13.5, height: 1.5, color: palette.text),
+              style: TextStyle(
+                fontSize: 13.5,
+                height: 1.5,
+                color: palette.text,
+              ),
             ),
           if (!candidate.contentIsWhole) ...[
             const SizedBox(height: 8),
@@ -599,8 +672,7 @@ class _CandidateCard extends StatelessWidget {
             const SizedBox(height: 8),
             _ErrorLine(message: candidate.parseError),
           ],
-          if (candidate.unavailableReason !=
-              MemoryUnavailableReason.none) ...[
+          if (candidate.unavailableReason != MemoryUnavailableReason.none) ...[
             const SizedBox(height: 8),
             _StatusLine(
               text: localizedMemoryUnavailableCopy(
@@ -646,7 +718,7 @@ class _CandidateCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               l10n.memoryExpectedProfileHash(
-                profileHash.isEmpty ? '(no profile yet)' : profileHash,
+                profileHash.isEmpty ? l10n.memoryNoProfileYet : profileHash,
               ),
               style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
@@ -715,7 +787,11 @@ class _NoteCard extends StatelessWidget {
             const SizedBox(height: 10),
             SelectableText(
               note.content,
-              style: TextStyle(fontSize: 13.5, height: 1.5, color: palette.text),
+              style: TextStyle(
+                fontSize: 13.5,
+                height: 1.5,
+                color: palette.text,
+              ),
             ),
           ],
           const SizedBox(height: 10),
@@ -725,7 +801,10 @@ class _NoteCard extends StatelessWidget {
           ),
           if (note.updatedAt case final updated?)
             _StatusLine(
-              text: 'Last changed ${updated.toLocal()}',
+              text: l10n.memoryLastChanged(
+                updated.toLocal(),
+                updated.toLocal(),
+              ),
               tone: palette.textMuted,
             ),
           if (note.parseError.isNotEmpty) ...[
@@ -735,7 +814,10 @@ class _NoteCard extends StatelessWidget {
           if (note.unavailableReason != MemoryUnavailableReason.none &&
               note.unavailableReason != MemoryUnavailableReason.unspecified)
             _StatusLine(
-              text: localizedMemoryUnavailableCopy(l10n, note.unavailableReason),
+              text: localizedMemoryUnavailableCopy(
+                l10n,
+                note.unavailableReason,
+              ),
               tone: _reasonTone(note.unavailableReason),
             ),
           if (!note.isIndexable) ...[
@@ -745,6 +827,20 @@ class _NoteCard extends StatelessWidget {
               tone: AppColors.warning,
             ),
           ],
+          // An empty provenance list is a fact, not an absence of one. Left
+          // to render nothing it reads as a belief whose sourcing simply was
+          // not mentioned, which is exactly the impression a claim resting on
+          // nothing must not give.
+          if (note.provenance.isEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: _StatusLine(
+                text: note.status == MemoryNoteStatus.withdrawn
+                    ? l10n.memoryNoteWithdrawnEvidence
+                    : l10n.memoryNoteNoEvidence,
+                tone: AppColors.warning,
+              ),
+            ),
           for (final provenance in note.provenance)
             _ProvenanceLine(
               provenance: provenance,
@@ -785,7 +881,7 @@ class _ProvenanceLine extends StatelessWidget {
         children: [
           if (source.isNotEmpty)
             SelectableText(
-              'From $source',
+              l10n.memoryProvenanceFrom(source),
               style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
           if (provenance.withdrawn)
@@ -833,6 +929,37 @@ class _TierStatus extends StatelessWidget {
           const SizedBox(height: 6),
           _ErrorLine(message: tier.parseError),
         ],
+        _TierCounts(row: tier, palette: palette),
+      ],
+    );
+  }
+}
+
+/// How much a tier holds, and how much is waiting on the user.
+///
+/// The server counts both; showing them is the difference between "the inbox
+/// looks empty" and "the inbox is empty". The counts are the tier's own answer,
+/// so a page that renders a shorter list than the vault holds says so.
+class _TierCounts extends StatelessWidget {
+  const _TierCounts({required this.row, required this.palette});
+
+  final MemoryTierState row;
+  final AppPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _StatusLine(
+          text: l10n.memoryTierItemCount(row.noteCount),
+          tone: palette.textMuted,
+        ),
+        _StatusLine(
+          text: l10n.memoryTierPendingCount(row.pendingCandidateCount),
+          tone: palette.textMuted,
+        ),
       ],
     );
   }
@@ -897,7 +1024,11 @@ class _ErrorLine extends StatelessWidget {
   Widget build(BuildContext context) => Row(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      const Icon(Icons.warning_amber_rounded, size: 16, color: AppColors.danger),
+      const Icon(
+        Icons.warning_amber_rounded,
+        size: 16,
+        color: AppColors.danger,
+      ),
       const SizedBox(width: 7),
       Expanded(
         child: SelectableText(

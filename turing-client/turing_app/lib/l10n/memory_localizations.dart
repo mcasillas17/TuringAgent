@@ -1,4 +1,5 @@
 import '../models/memory.dart';
+import '../models/remote_egress.dart';
 import 'generated/app_localizations.dart';
 
 /// The one place a memory status becomes a sentence.
@@ -93,5 +94,59 @@ String localizedMemoryTierCopy(AppLocalizations l10n, MemoryTier tier) {
       return l10n.memoryTierBelief;
     case MemoryTier.note:
       return l10n.memoryTierNote;
+  }
+}
+
+/// The categories the consent dialog lists, in the user's words.
+///
+/// Exhaustive for the same reason as the rest of this file: a category added
+/// to the wire and to this client, but never given a sentence, would show the
+/// user a blank bullet in the one dialog that exists to tell them what leaves
+/// the machine.
+String localizedEgressCategoryCopy(
+  AppLocalizations l10n,
+  EgressDataCategory category,
+) {
+  switch (category) {
+    case EgressDataCategory.currentMessage:
+      return l10n.egressCategoryCurrentMessage;
+    case EgressDataCategory.conversationHistory:
+      return l10n.egressCategoryConversationHistory;
+    case EgressDataCategory.crossSessionRecall:
+      return l10n.egressCategoryCrossSessionRecall;
+    case EgressDataCategory.memoryProfile:
+      return l10n.egressCategoryMemoryProfile;
+    case EgressDataCategory.skillContent:
+      return l10n.egressCategorySkillContent;
+    case EgressDataCategory.toolSchemas:
+      return l10n.egressCategoryToolSchemas;
+    case EgressDataCategory.toolArguments:
+      return l10n.egressCategoryToolArguments;
+    case EgressDataCategory.toolResults:
+      return l10n.egressCategoryToolResults;
+    case EgressDataCategory.attachments:
+      return l10n.egressCategoryAttachments;
+  }
+}
+
+/// The tier a disclosed memory belongs to, in the user's words.
+///
+/// An unrecognised tier is called "Memory" rather than guessed at: saying
+/// something true and vague beats naming a tier the server never claimed.
+String localizedEgressMemoryTierCopy(
+  AppLocalizations l10n,
+  MemoryEgressTier tier,
+) {
+  switch (tier) {
+    case MemoryEgressTier.persona:
+      return l10n.egressMemoryTierPersona;
+    case MemoryEgressTier.profile:
+      return l10n.egressMemoryTierProfile;
+    case MemoryEgressTier.belief:
+      return l10n.egressMemoryTierBelief;
+    case MemoryEgressTier.note:
+      return l10n.egressMemoryTierNote;
+    case MemoryEgressTier.unspecified:
+      return l10n.egressMemoryTierUnspecified;
   }
 }

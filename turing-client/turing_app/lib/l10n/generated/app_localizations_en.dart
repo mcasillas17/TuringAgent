@@ -366,10 +366,173 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get memoryBackendUnreachable => 'Could not reach the backend';
+
+  @override
+  String memoryEditingVersion(String hash) {
+    return 'Editing version $hash';
+  }
+
+  @override
+  String memoryLastChanged(DateTime date, DateTime time) {
+    final intl.DateFormat dateDateFormat = intl.DateFormat.yMMMd(localeName);
+    final String dateString = dateDateFormat.format(date);
+    final intl.DateFormat timeDateFormat = intl.DateFormat.Hm(localeName);
+    final String timeString = timeDateFormat.format(time);
+
+    return 'Last changed $dateString at $timeString';
+  }
+
+  @override
+  String memoryProvenanceFrom(String source) {
+    return 'From $source';
+  }
+
+  @override
+  String get memoryNoProfileYet => '(no profile yet)';
+
+  @override
+  String get memorySaveUnavailable =>
+      'This document cannot be saved from here until the problem above is fixed.';
+
+  @override
+  String memoryTierItemCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count items in this tier.',
+      one: '1 item in this tier.',
+      zero: 'Nothing is in this tier.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String memoryTierPendingCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count proposals are waiting for this tier.',
+      one: '1 proposal is waiting for this tier.',
+      zero: 'No proposals are waiting for this tier.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get egressDialogTitleUnknownHost => 'Send data off this machine?';
+
+  @override
+  String egressDialogTitle(String host) {
+    return 'Send data to $host?';
+  }
+
+  @override
+  String get egressDialogMaySendHeading => 'This run may send:';
+
+  @override
+  String get egressDialogMcpHeading => 'Remote MCP destinations:';
+
+  @override
+  String get egressDialogIntegrationHeading =>
+      'Connected-account destinations:';
+
+  @override
+  String get egressDialogSkillsHeading => 'Skills that may be sent:';
+
+  @override
+  String get egressSkillBodyMayBeSent => 'full content may be sent';
+
+  @override
+  String get egressSkillNameOnly => 'name and description only';
+
+  @override
+  String get egressDialogSingleRunNotice =>
+      'This consent applies only to this exact run.';
+
+  @override
+  String egressDialogExpiry(DateTime date, DateTime time) {
+    final intl.DateFormat dateDateFormat = intl.DateFormat.yMMMd(localeName);
+    final String dateString = dateDateFormat.format(date);
+    final intl.DateFormat timeDateFormat = intl.DateFormat.Hm(localeName);
+    final String timeString = timeDateFormat.format(time);
+
+    return 'Confirm before $dateString at $timeString.';
+  }
+
+  @override
+  String get egressDialogCancel => 'Cancel';
+
+  @override
+  String get egressDialogSend => 'Send';
+
+  @override
+  String get egressCategoryCurrentMessage => 'Current message';
+
+  @override
+  String get egressCategoryConversationHistory => 'Conversation history';
+
+  @override
+  String get egressCategoryCrossSessionRecall => 'Cross-session recall';
+
+  @override
+  String get egressCategoryMemoryProfile => 'Memory and profile';
+
+  @override
+  String get egressCategorySkillContent => 'Enabled skill content';
+
+  @override
+  String get egressCategoryToolSchemas => 'Tool schemas';
+
+  @override
+  String get egressCategoryToolArguments => 'Tool arguments';
+
+  @override
+  String get egressCategoryToolResults => 'Tool results';
+
+  @override
+  String get egressCategoryAttachments => 'Attachments';
+
+  @override
+  String get egressMemoryTierUnspecified => 'Memory';
+
+  @override
+  String get egressMemoryTierPersona => 'Persona';
+
+  @override
+  String get egressMemoryTierProfile => 'Profile';
+
+  @override
+  String get egressMemoryTierBelief => 'Belief';
+
+  @override
+  String get egressMemoryTierNote => 'Note';
+
+  @override
   String get memoryEgressPinnedHeading => 'Memory pinned into this run:';
 
   @override
+  String get memoryEgressPinnedDetail =>
+      'These documents are in the prompt as written.';
+
+  @override
+  String get memoryEgressReachableHeading =>
+      'Memory the memory tools can reach:';
+
+  @override
+  String get memoryEgressReachableDetail =>
+      'Nothing here is in the prompt. A tool call would have to go and read it, and whatever it read would then be part of this run.';
+
+  @override
   String get memoryEgressToolsHeading => 'The memory tools this run may call:';
+
+  @override
+  String get memoryEgressToolsDetail =>
+      'What those tools return is part of this run and may be sent with it.';
+
+  @override
+  String get memoryEgressUnnamed =>
+      'The server did not name which memory this run may send.';
 
   @override
   String get memoryEgressBodyMayBeSent => 'full content may be sent';

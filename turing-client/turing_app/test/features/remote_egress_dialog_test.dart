@@ -390,6 +390,53 @@ void main() {
         reason: 'neither name is a tool the memory server exposes',
       );
     });
+
+    testWidgets(
+      'two beliefs whose titles read the same are still two separate rows, '
+      'each keyed by the note the server named',
+      (tester) async {
+        final disclosure = RemoteEgressDisclosure(
+          challenge: 'challenge',
+          provider: 'openai_compatible',
+          model: 'remote',
+          endpoint: 'https://models.example/v1',
+          endpointHost: 'models.example',
+          dataCategories: const [EgressDataCategory.memoryProfile],
+          expiresAt: DateTime.utc(2026, 8, 24),
+          selectedTools: const ['memory/memory.search'],
+          memoryNotes: const [
+            MemoryEgressDisclosure(
+              noteId: 'note-1',
+              title: 'Ada',
+              vaultPath: 'beliefs/note-1.md',
+              tier: MemoryEgressTier.belief,
+              bodyMayBeSent: false,
+            ),
+            MemoryEgressDisclosure(
+              noteId: 'note-2',
+              title: 'Ada',
+              vaultPath: 'beliefs/note-2.md',
+              tier: MemoryEgressTier.belief,
+              bodyMayBeSent: false,
+            ),
+          ],
+        );
+
+        await _open(tester, disclosure);
+
+        expect(
+          find.byKey(const ValueKey('egress-memory-note-1')),
+          findsOneWidget,
+          reason:
+              'the row has to be addressable by the note the server named, '
+              'not by copy two beliefs can share',
+        );
+        expect(
+          find.byKey(const ValueKey('egress-memory-note-2')),
+          findsOneWidget,
+        );
+      },
+    );
   });
 }
 

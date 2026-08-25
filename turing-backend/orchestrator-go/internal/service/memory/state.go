@@ -225,19 +225,31 @@ func (s *Server) beliefProto(ctx context.Context, row memoryfiles.NoteRow) *turi
 		note.CreatedAt = timestampProto(indexed.CreatedAt)
 		note.UpdatedAt = timestampProto(indexed.UpdatedAt)
 	}
-	sessions, err := s.repo.MemoryNoteEvidenceSessions(ctx, row.NoteID)
+	evidence, err := s.repo.MemoryNoteEvidence(ctx, row.NoteID)
 	if err != nil {
 		return note
 	}
-	// One provenance row per conversation the claim still rests on, plus the
-	// file's own statement that its citations were withdrawn. Excerpts are
-	// never returned; the count is the whole of what is said about them.
-	for _, sessionID := range sessions {
+	withdrawn := row.EvidenceWithdrawn || indexed.Status == repository.MemoryNoteStatusWithdrawn
+	// One provenance row per conversation the claim still rests on, carrying how
+	// many times that conversation cited it. Excerpts are never returned; the
+	// count is the whole of what is said about them.
+	for _, cited := range evidence {
 		note.Provenance = append(note.Provenance, &turingv1.MemoryProvenance{
 			Kind:            turingv1.MemoryProvenanceKind_MEMORY_PROVENANCE_KIND_PROMOTED_FROM_CANDIDATE,
-			SourceSessionId: sessionID,
-			Withdrawn:       row.EvidenceWithdrawn || indexed.Status == repository.MemoryNoteStatusWithdrawn,
-			EvidenceCount:   1,
+			SourceSessionId: cited.SessionID,
+			Withdrawn:       withdrawn,
+			EvidenceCount:   int32(cited.Count),
+		})
+	}
+	// A withdrawn note whose conversations are all gone would otherwise arrive
+	// with an empty list, which reads the same as a belief that never had any
+	// evidence. They are different histories, so the withdrawal is said out
+	// loud: no session to open, and nothing counted.
+	if withdrawn && len(note.Provenance) == 0 {
+		note.Provenance = append(note.Provenance, &turingv1.MemoryProvenance{
+			Kind:          turingv1.MemoryProvenanceKind_MEMORY_PROVENANCE_KIND_PROMOTED_FROM_CANDIDATE,
+			Withdrawn:     true,
+			EvidenceCount: 0,
 		})
 	}
 	return note
@@ -553,13 +565,31 @@ func candidateProto(candidate repository.MemoryCandidate) *turingv1.MemoryCandid
 		Provenance:        make([]*turingv1.MemoryProvenance, 0, len(candidate.EvidenceRefs)),
 	}
 	withdrawn := candidate.State == repository.MemoryCandidateStateWithdrawn
+	// The refs are server-derived: one per conversation the proposal was
+	// written in. A withdrawn proposal is one whose conversation was deleted,
+	// so what it rests on now is nothing, and the count says nothing rather
+	// than repeating the one it used to have.
+	evidenceCount := int32(1)
+	if withdrawn {
+		evidenceCount = 0
+	}
 	for _, ref := range candidate.EvidenceRefs {
 		proposal.Provenance = append(proposal.Provenance, &turingv1.MemoryProvenance{
 			Kind:            turingv1.MemoryProvenanceKind_MEMORY_PROVENANCE_KIND_PROMOTED_FROM_CANDIDATE,
 			SourceSessionId: ref,
 			Withdrawn:       withdrawn,
 			WithdrawnAt:     timestampProto(candidate.DecidedAt),
-			EvidenceCount:   1,
+			EvidenceCount:   evidenceCount,
+		})
+	}
+	// Withdrawn with no refs left would arrive looking like a proposal that
+	// never had a source at all. Say the withdrawal instead.
+	if withdrawn && len(proposal.Provenance) == 0 {
+		proposal.Provenance = append(proposal.Provenance, &turingv1.MemoryProvenance{
+			Kind:          turingv1.MemoryProvenanceKind_MEMORY_PROVENANCE_KIND_PROMOTED_FROM_CANDIDATE,
+			Withdrawn:     true,
+			WithdrawnAt:   timestampProto(candidate.DecidedAt),
+			EvidenceCount: 0,
 		})
 	}
 	return proposal

@@ -139,6 +139,41 @@ func (r *Repository) ReadMemoryBelief(ctx context.Context, noteID string) (memor
 	})
 }
 
+// MemoryNoteEvidence is one conversation's support for a note, and how many
+// times that conversation cited it. The count is what the vault page shows
+// under a belief: "one message said this once" and "five messages said it over
+// a year" are different reasons to keep believing something.
+type MemoryNoteEvidence struct {
+	SessionID string
+	Count     int
+}
+
+// MemoryNoteEvidence lists the sessions still supporting a note together with
+// how much each one supports it. Rows are deleted with their session, so a note
+// whose conversations are all gone comes back empty rather than stale.
+func (r *Repository) MemoryNoteEvidence(ctx context.Context, noteID string) ([]MemoryNoteEvidence, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT session_id, COUNT(*)
+		FROM memory_evidence
+		WHERE note_id = ?
+		GROUP BY session_id
+		ORDER BY session_id
+	`, noteID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var evidence []MemoryNoteEvidence
+	for rows.Next() {
+		var row MemoryNoteEvidence
+		if err := rows.Scan(&row.SessionID, &row.Count); err != nil {
+			return nil, err
+		}
+		evidence = append(evidence, row)
+	}
+	return evidence, rows.Err()
+}
+
 // MemoryNoteEvidenceSessions lists the sessions still supporting a note, which
 // is the sidecar's answer and the one a frontmatter rewrite is derived from.
 func (r *Repository) MemoryNoteEvidenceSessions(ctx context.Context, noteID string) ([]string, error) {

@@ -105,6 +105,19 @@ class MemoryDocument {
   final DateTime? updatedAt;
   final String parseError;
   final MemoryUnavailableReason unavailableReason;
+
+  /// Whether this client may offer to write the document at all.
+  ///
+  /// This is about the file, never about what the user typed into it: an empty
+  /// persona is a save the user is entitled to make, and refusing it would
+  /// leave "take back what I told the model" as something only reachable by
+  /// leaving Turing. What is refused is a save the server would refuse anyway,
+  /// because the document could not be read — missing, unreadable, a symlink,
+  /// too large, or a state this build cannot name. Memory being switched off is
+  /// not one of those: the vault is still on disk and still the user's.
+  bool get isWritable =>
+      unavailableReason == MemoryUnavailableReason.none ||
+      unavailableReason == MemoryUnavailableReason.disabled;
 }
 
 /// Where a claim came from, and whether it still stands.

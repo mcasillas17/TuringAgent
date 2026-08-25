@@ -1,17 +1,15 @@
 enum EgressDataCategory {
-  currentMessage('Current message', 'current_message'),
-  conversationHistory('Conversation history', 'conversation_history'),
-  crossSessionRecall('Cross-session recall', 'cross_session_recall'),
-  memoryProfile('Memory and profile', 'memory_profile'),
-  skillContent('Enabled skill content', 'skill_content'),
-  toolSchemas('Tool schemas', 'tool_schemas'),
-  toolArguments('Tool arguments', 'tool_arguments'),
-  toolResults('Tool results', 'tool_results'),
-  attachments('Attachments', 'attachments');
+  currentMessage('current_message'),
+  conversationHistory('conversation_history'),
+  crossSessionRecall('cross_session_recall'),
+  memoryProfile('memory_profile'),
+  skillContent('skill_content'),
+  toolSchemas('tool_schemas'),
+  toolArguments('tool_arguments'),
+  toolResults('tool_results'),
+  attachments('attachments');
 
-  const EgressDataCategory(this.label, this.wireName);
-
-  final String label;
+  const EgressDataCategory(this.wireName);
 
   /// The backend's own name for this category. Carried so a test can pin this
   /// list against the wire enum: a category the server can disclose but this
@@ -95,12 +93,60 @@ class RemoteEgressDisclosure {
 
   /// The memory tools frozen into this run, if any. Derived from the selected
   /// tool set rather than a separate field so it cannot disagree with it.
+  ///
+  /// The rule is the backend's `IsMemoryToolName`, character for character: the
+  /// separator must be there and something must follow it. A bare `memory` is
+  /// not a callable tool, and a third-party server called `memoryx` does not
+  /// get to borrow the category.
   List<String> get memoryTools => List.unmodifiable(
     selectedTools.where(
-      (tool) => tool == 'memory' || tool.startsWith('memory/'),
+      (tool) =>
+          tool.startsWith(_memoryToolPrefix) &&
+          tool.length > _memoryToolPrefix.length,
     ),
   );
+
+  /// The documents that are already in the prompt, word for word.
+  ///
+  /// Only the two pinned documents qualify. Everything else the server
+  /// discloses is memory a tool could go and read, which is a different promise
+  /// and gets a different sentence.
+  List<MemoryEgressDisclosure> get pinnedMemory => List.unmodifiable(
+    memoryNotes.where(
+      (note) =>
+          note.tier == MemoryEgressTier.persona ||
+          note.tier == MemoryEgressTier.profile,
+    ),
+  );
+
+  /// The memory a tool or the graph could reach during this run.
+  ///
+  /// A tier this build cannot name lands here rather than among the pinned
+  /// documents: disclosing it is honest, and calling it pinned would not be.
+  List<MemoryEgressDisclosure> get toolReachableMemory => List.unmodifiable(
+    memoryNotes.where(
+      (note) =>
+          note.tier != MemoryEgressTier.persona &&
+          note.tier != MemoryEgressTier.profile,
+    ),
+  );
+
+  /// Whether this run touches memory at all, and so whether the dialog says
+  /// anything about it.
+  ///
+  /// The disclosed category and the applicability flag are the server's answer
+  /// arriving by two fields, and either one on its own is enough to speak up.
+  /// A named vault entry is deliberately *not* enough: the server derives both
+  /// fields from the same applicability decision that decides whether to name
+  /// entries at all, so an entry arriving without either one is a contradiction
+  /// — and resolving it towards "memory is in play" would tell the user their
+  /// persona is being sent on a run that the server just said does not send it.
+  bool get mentionsMemory =>
+      memoryProfileMayBeSent ||
+      dataCategories.contains(EgressDataCategory.memoryProfile);
 }
+
+const String _memoryToolPrefix = 'memory/';
 
 class SkillEgressDisclosure {
   const SkillEgressDisclosure({

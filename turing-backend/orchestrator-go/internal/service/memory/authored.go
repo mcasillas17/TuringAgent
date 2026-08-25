@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"errors"
-	"strings"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
@@ -35,7 +34,7 @@ func (s *Server) GetMemoryPersona(ctx context.Context, _ *turingv1.GetMemoryPers
 // moved on from is refused with an instruction, never applied over the newer
 // words and never silently re-prepared against them.
 func (s *Server) SaveMemoryPersona(ctx context.Context, req *turingv1.SaveMemoryPersonaRequest) (*turingv1.SaveMemoryPersonaResponse, error) {
-	if err := s.requireAuthoredSave(req.GetContent()); err != nil {
+	if err := s.requireAuthoredSave(); err != nil {
 		return nil, err
 	}
 	saved, err := s.vault.SavePersona(ctx, memoryfiles.SavePersonaRequest{
@@ -64,7 +63,7 @@ func (s *Server) SaveMemoryPersona(ctx context.Context, req *turingv1.SaveMemory
 // authority entirely: the user writing about themselves, with no proposal in
 // the picture and no pending one disturbed.
 func (s *Server) SaveMemoryProfile(ctx context.Context, req *turingv1.SaveMemoryProfileRequest) (*turingv1.SaveMemoryProfileResponse, error) {
-	if err := s.requireAuthoredSave(req.GetContent()); err != nil {
+	if err := s.requireAuthoredSave(); err != nil {
 		return nil, err
 	}
 	saved, err := s.vault.SaveProfile(ctx, memoryfiles.SaveProfileRequest{
@@ -84,15 +83,18 @@ func (s *Server) SaveMemoryProfile(ctx context.Context, req *turingv1.SaveMemory
 }
 
 // requireAuthoredSave is the shared precondition for both hand saves: there is
-// a vault to write into, and the user actually typed something. Blank content
-// is refused rather than accepted as "delete my persona" — emptying a pinned
-// document is a decision, and it does not look like a save.
-func (s *Server) requireAuthoredSave(content string) error {
+// a vault to write into.
+//
+// Empty content is a save like any other. persona.md is the user's own
+// instruction channel, and a save that could only ever add to it would leave
+// them unable to take back words they had already given a model — the only
+// remaining route being to leave Turing and empty the file by hand, which is
+// exactly the dead end the Memory page exists to close. The size ceiling still
+// applies, in the primitive that does the writing. The proposal path, which
+// writes on a model's authority rather than the user's, keeps refusing blanks.
+func (s *Server) requireAuthoredSave() error {
 	if s.vault == nil {
 		return status.Error(codes.FailedPrecondition, "the memory vault is not available")
-	}
-	if strings.TrimSpace(content) == "" {
-		return status.Error(codes.InvalidArgument, "content is required; to empty a document, edit it in the vault")
 	}
 	return nil
 }
