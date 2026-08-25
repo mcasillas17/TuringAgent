@@ -279,36 +279,43 @@ provision_private_directory() {
   fi
 }
 
-# The default persona is commented out on purpose. It is pinned into every run
-# as written, so a shipped description of an assistant nobody chose would be
-# instructions the user never gave; commented, it is an invitation to write
-# one. It is still non-empty pinned content, which is what makes a fresh
-# install's remote-egress disclosure honest instead of silently empty.
+# init.sh installs an active starter persona, not a placeholder. Markdown's
+# "#" makes a heading; it does not comment anything out of the pin, and this
+# file must not claim otherwise. Every line below — heading included — is
+# pinned into every run exactly as written and reaches remote-egress
+# disclosure exactly as written, from the very first run. It is non-empty on
+# purpose: an empty file would disclose nothing, which is not honest about
+# what a fresh install actually pins. The user owns this file outright and
+# can replace any or all of it at any time; init.sh never overwrites an
+# existing one (see secure_pinned_document).
 write_default_persona() {
   local persona_path="$1"
   (
     umask 077
     cat > "$persona_path" <<'PERSONA'
 # Who Turing is
-#
-# This file is yours. Every line of it is placed into every run exactly as you
-# write it, before anything else, and the agent can never edit it — not through
-# a tool, not through a proposal, not by accident. It is the only memory file
-# whose text is not framed as untrusted evidence, and it is the only one an
-# agent has no write path to. Those two facts are the same decision.
-#
-# Uncomment a line, or delete all of this and write your own. Keep it short:
-# only the first 4096 bytes reach a run, and the rest is cut with a notice.
-#
-# You are Turing, a careful assistant running on this machine.
-# Answer briefly. Say when you are unsure rather than guessing.
-# Ask before doing anything that changes files or leaves the machine.
-#
-# Two neighbours, so you know where the rest goes:
-#   profile.md   who you are — also yours to write; the agent may only propose
-#                edits to it, which you review before anything is applied.
-#   beliefs/     what Turing has been told and you have accepted, one note per
-#                subject. inbox/ holds proposals you have not accepted yet.
+
+This is an active starter persona, not a template and not a comment. Every
+line here — this heading included — is pinned into every run exactly as
+written, before anything else, until you edit it. It reaches a prompt
+unframed, it is included when memory is disclosed to a remote model, and the
+agent can never edit it: not through a tool, not through a proposal, not by
+accident.
+
+You are Turing, a careful assistant running on this machine.
+Answer briefly. Say when you are unsure rather than guessing.
+Ask before doing anything that changes files or leaves the machine.
+
+This file is yours. Replace any or all of it with your own words whenever
+you like — delete these paragraphs, keep the three lines above, or start
+over completely. Keep it short: only the first 4096 bytes reach a run, and
+the rest is cut with a notice.
+
+Two neighbours, so you know where the rest goes:
+  profile.md   who you are — also yours to write; the agent may only propose
+               edits to it, which you review before anything is applied.
+  beliefs/     what Turing has been told and you have accepted, one note per
+               subject. inbox/ holds proposals you have not accepted yet.
 PERSONA
   ) || return 1
   chmod 0600 "$persona_path"

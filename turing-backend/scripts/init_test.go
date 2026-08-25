@@ -141,11 +141,14 @@ func TestInitCreatesPrivateMemoryVaultWithTierDirectories(t *testing.T) {
 	}
 }
 
-// persona.md is the only pinned document the agent can never write, so a fresh
-// install ships a commented default: it makes the file the user edits obvious,
-// and it is deliberately non-empty pinned content, which is what makes a fresh
-// install's remote-egress disclosure honest rather than silently empty.
-func TestInitShipsACommentedDefaultPersona(t *testing.T) {
+// persona.md is the only pinned document the agent can never write, so a
+// fresh install ships an active starter persona rather than an empty file: a
+// fresh install's remote-egress disclosure must be honest, and an empty
+// persona would disclose nothing. Markdown's "#" makes a heading, not a
+// comment, and nothing in this file is inert — every line, headings
+// included, is pinned into every run exactly as written. The file must say
+// so, and must not claim otherwise (no "commented out", no "uncomment").
+func TestInitShipsAnActiveDefaultPersona(t *testing.T) {
 	result := runInit(t, "501", "20", "")
 
 	persona := filepath.Join(result.memory, "persona.md")
@@ -165,8 +168,23 @@ func TestInitShipsACommentedDefaultPersona(t *testing.T) {
 	if strings.TrimSpace(body) == "" {
 		t.Fatal("the default persona is empty; a fresh install would pin nothing and disclose nothing")
 	}
-	if !strings.HasPrefix(body, "#") {
-		t.Fatalf("the default persona does not open as a comment:\n%s", body)
+	lower := strings.ToLower(body)
+	for _, forbidden := range []string{"uncomment", "commented out"} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("the default persona falsely claims its lines are inert comments (found %q):\n%s", forbidden, body)
+		}
+	}
+	if !strings.Contains(lower, "active") && !strings.Contains(lower, "pinned into every run") {
+		t.Fatalf("the default persona does not state that its contents are active/pinned until edited:\n%s", body)
+	}
+	for _, want := range []string{
+		"You are Turing, a careful assistant running on this machine.",
+		"Answer briefly. Say when you are unsure rather than guessing.",
+		"Ask before doing anything that changes files or leaves the machine.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the default persona is missing the intended default persona line %q:\n%s", want, body)
+		}
 	}
 	// Initialization prints one secret on purpose, the client API key. The
 	// user's own persona prose is not the script's to echo.
