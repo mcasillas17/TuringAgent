@@ -31,6 +31,111 @@ func TestComposeMountsFileBackedSkillsIntoTheOrchestrator(t *testing.T) {
 	}
 }
 
+// The vault is the orchestrator's memory: persona, profile, inbox and beliefs
+// as files the user opens in their own editor. It mounts read/write because
+// promotion moves files and the profile is written in place, and MEMORY_ROOT is
+// set explicitly rather than left to the binary's default so the container path
+// and the bind target are one decision in one file.
+func TestComposeMountsTheMemoryVaultIntoTheOrchestrator(t *testing.T) {
+	content, err := os.ReadFile("../infra/docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(content)
+	for _, want := range []string{"MEMORY_ROOT: /memory", "- ../memory:/memory"} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("docker-compose.yml is missing %q", want)
+		}
+	}
+	if strings.Contains(compose, "../memory:/memory:ro") {
+		t.Fatal("the memory vault is mounted read-only; promotion and profile edits write files")
+	}
+}
+
+// A symlinked host memory/ binds straight through: the vault's own walk refuses
+// links at every component *inside* the mount, but the mount source itself is
+// resolved by Docker before any orchestrator code runs. Validate it here, in the
+// same pass and the same shape as skills, sandbox and mcp.
+func TestComposeLaunchRejectsUnsafeMemoryBindSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(*testing.T, string)
+		wantOutput string
+	}{
+		{
+			name: "missing",
+			setup: func(t *testing.T, root string) {
+				if err := os.Remove(filepath.Join(root, "memory")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory must be a real directory",
+		},
+		{
+			name: "symlink",
+			setup: func(t *testing.T, root string) {
+				memory := filepath.Join(root, "memory")
+				if err := os.Remove(memory); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(root, "outside-memory")
+				if err := os.Mkdir(target, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, memory); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory must be a real directory, not a symlink",
+		},
+		{
+			name: "not a directory",
+			setup: func(t *testing.T, root string) {
+				memory := filepath.Join(root, "memory")
+				if err := os.Remove(memory); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(memory, []byte("not a directory"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory must be a real directory",
+		},
+		{
+			name: "not writable",
+			setup: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "memory"), 0500); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory is not owned, readable, writable, and traversable",
+		},
+		{
+			name: "not mode 0700",
+			setup: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "memory"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory must have mode 0700",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := executeComposeWithSetup(t, true, "501", "20", "501", "20", test.setup, "up")
+			if result.err == nil {
+				t.Fatalf("compose.sh accepted an unsafe memory vault; docker log:\n%s", result.dockerLog)
+			}
+			if !strings.Contains(result.output, test.wantOutput) {
+				t.Fatalf("failure did not explain the unsafe memory vault:\n%s", result.output)
+			}
+			if result.dockerLog != "" {
+				t.Fatalf("docker was called before the memory rejection:\n%s", result.dockerLog)
+			}
+		})
+	}
+}
+
 func TestComposeLaunchRejectsUnsafeSkillsBindSource(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -470,6 +575,9 @@ func executeComposeWithSetup(
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(root, "mcp"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "memory"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if setup != nil {
