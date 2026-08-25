@@ -1,8 +1,12 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"errors"
+	"log"
+	"os"
 	"strings"
 	"testing"
 
@@ -56,9 +60,17 @@ func deleteSession(t *testing.T, repo *repository.Repository, ctx context.Contex
 
 func remember(t *testing.T, service *Server, ctx context.Context, runID string, title, body string) string {
 	t.Helper()
+	return rememberKind(t, service, ctx, runID, title, body, "")
+}
+
+func rememberKind(t *testing.T, service *Server, ctx context.Context, runID string, title, body, kind string) string {
+	t.Helper()
+	args := map[string]any{"title": title, "body": body}
+	if kind != "" {
+		args["kind"] = kind
+	}
 	response, err := service.CallMemoryTool(ctx, &turingv1.CallMemoryToolRequest{
-		RunId: runID, ToolName: ToolRemember,
-		Args: callArgs(t, map[string]any{"title": title, "body": body}),
+		RunId: runID, ToolName: ToolRemember, Args: callArgs(t, args),
 	})
 	if err != nil {
 		t.Fatalf("memory.remember: %v", err)
@@ -105,6 +117,37 @@ func TestMemoryProposalIsAuditedAgainstTheRunThatMadeIt(t *testing.T) {
 		t.Fatalf("payload = %s, want the kind and only the kind", record.PayloadJSON.String)
 	}
 	for _, forbidden := range []string{body, "4242", "Card"} {
+		if strings.Contains(record.PayloadJSON.String, forbidden) {
+			t.Fatalf("the audit payload carried %q", forbidden)
+		}
+	}
+}
+
+// The other kind a model may propose is a profile edit, and it is the more
+// sensitive of the two: the profile is what Turing says about the user in
+// every conversation. Its row records the kind and, still, nothing else.
+func TestMemoryProfileEditProposalRecordsOnlyItsKind(t *testing.T) {
+	service, repo, _, ctx := newMemoryService(t)
+	runID, _ := newRun(t, repo, ctx)
+	setPolicies(t, repo, ctx, "safe")
+	const body = "They are being treated for a condition they have not told anyone about."
+
+	candidateID := rememberKind(t, service, ctx, runID, "Profile", body, "profile_edit")
+
+	record := onlyAuditRowFor(t, repo, ctx, "memory.tool.proposed")
+	if !record.CorrelationID.Valid || record.CorrelationID.String != runID {
+		t.Fatalf("correlation = %v, want the run %q that made the proposal", record.CorrelationID, runID)
+	}
+	if record.ActorType != "runtime" {
+		t.Fatalf("actor type = %q, want runtime", record.ActorType)
+	}
+	if !record.Target.Valid || record.Target.String != candidateID {
+		t.Fatalf("target = %v, want the candidate %q", record.Target, candidateID)
+	}
+	if record.PayloadJSON.String != `{"kind":"profile_edit"}` {
+		t.Fatalf("payload = %s, want the kind and only the kind", record.PayloadJSON.String)
+	}
+	for _, forbidden := range []string{body, "condition", "Profile"} {
 		if strings.Contains(record.PayloadJSON.String, forbidden) {
 			t.Fatalf("the audit payload carried %q", forbidden)
 		}
@@ -221,5 +264,79 @@ func TestMemoryProposalFailsRatherThanLeaveAnUncorrelatedAuditRow(t *testing.T) 
 
 	if records := auditRowsFor(t, repo, ctx, "memory.tool.proposed"); len(records) != 0 {
 		t.Fatalf("memory.tool.proposed rows = %d, want none: an uncorrelated row is residue", len(records))
+	}
+}
+
+// failingAudit is a trail that is there but cannot be written to right now —
+// the run is fine, the proposal is fine, the insert is not.
+type failingAudit struct {
+	calls int
+	err   error
+}
+
+func (a *failingAudit) Record(context.Context, string, string, string, string, string, map[string]any) error {
+	return a.err
+}
+
+func (a *failingAudit) RecordForExistingRun(context.Context, string, string, string, string, string, map[string]any) (bool, error) {
+	a.calls++
+	return false, a.err
+}
+
+// A trail that cannot be written to is not the same thing as a conversation
+// that is gone, and the two must not be answered the same way. Here the run is
+// still there and the proposal is already durable in the user's inbox, so
+// refusing the call would only invite a retry that files the same claim a
+// second time. The row is lost and logged; the vault is not made a mess of.
+func TestMemoryProposalSurvivesAnAuditWriteFailureWithoutFilingItselfTwice(t *testing.T) {
+	service, repo, _, ctx := newMemoryService(t)
+	runID, sessionID := newRun(t, repo, ctx)
+	setPolicies(t, repo, ctx, "safe")
+
+	recorder := &failingAudit{err: errors.New("audit_logs is unwritable")}
+	service.audit = recorder
+
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	first := remember(t, service, ctx, runID, "Card", "They drink it black.")
+	if recorder.calls != 1 {
+		t.Fatalf("run-scoped audit writes = %d, want exactly one attempt", recorder.calls)
+	}
+	if !strings.Contains(logs.String(), "memory.tool.proposed") || !strings.Contains(logs.String(), first) {
+		t.Fatalf("the lost row was not logged: %q", logs.String())
+	}
+
+	// One call, one proposal. The failure is in the trail, not in the vault.
+	candidates, err := repo.ListMemoryCandidates(ctx, repository.MemoryCandidateQuery{
+		SessionID: sessionID, Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListMemoryCandidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].CandidateID != first {
+		t.Fatalf("candidates = %d, want the single proposal the one call filed", len(candidates))
+	}
+}
+
+// A memory server with nowhere to record is not a server that records less; it
+// is one whose proposals would be untraceable. remember refuses rather than
+// filing a claim about the user that nothing can account for.
+func TestMemoryProposalRefusesWhenThereIsNoTrailToRecordItIn(t *testing.T) {
+	service, repo, _, ctx := newMemoryService(t)
+	runID, sessionID := newRun(t, repo, ctx)
+	setPolicies(t, repo, ctx, "safe")
+	service.audit = nil
+
+	_, err := service.CallMemoryTool(ctx, &turingv1.CallMemoryToolRequest{
+		RunId: runID, ToolName: ToolRemember,
+		Args: callArgs(t, map[string]any{"title": "Card", "body": "They drink it black."}),
+	})
+	if code := status.Code(err); code != codes.Internal {
+		t.Fatalf("error = %v (%s), want Internal", err, code)
+	}
+	if message := status.Convert(err).Message(); strings.Contains(message, sessionID) || strings.Contains(message, runID) {
+		t.Fatalf("refusal %q named the run or session back", message)
 	}
 }

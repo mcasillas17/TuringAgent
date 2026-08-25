@@ -45,6 +45,14 @@ func (a *recordingAudit) Record(_ context.Context, _ string, _ string, _ string,
 	return nil
 }
 
+// RecordForExistingRun reports the row as inserted, because the runs these
+// tests build are real and still there. What this fake is for is what the
+// trail was told, not whether the correlated insert found its run.
+func (a *recordingAudit) RecordForExistingRun(_ context.Context, _ string, _ string, _ string, action string, target string, payload map[string]any) (bool, error) {
+	a.records = append(a.records, recordedAudit{action: action, target: target, payload: payload})
+	return true, nil
+}
+
 // text renders everything this recorder has seen as one string, which is the
 // shape a "this must appear nowhere" assertion actually needs.
 func (a *recordingAudit) text() string {

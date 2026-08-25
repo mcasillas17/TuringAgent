@@ -314,7 +314,19 @@ func (s *Server) callRemember(ctx context.Context, run repository.Run, args map[
 	}
 	// The audit row names the decision, not the claim. The body is the private
 	// half of this call and never leaves the vault and its own row.
-	s.record(ctx, "memory.tool.proposed", candidate.CandidateID, map[string]any{"kind": candidate.Kind})
+	//
+	// It is correlated to the run, because this is something a model did inside
+	// one conversation rather than something the user decided about their
+	// account, and because that correlation is what lets deleting the
+	// conversation scrub the row. The candidate has to be durable first — the
+	// row names an id creation mints, so there is nowhere earlier to put this —
+	// and the one failure that comes back is the conversation having gone,
+	// which took the candidate with it. Answering that with a candidate id
+	// would be naming a proposal that no longer exists.
+	if err := s.recordForRun(ctx, run.RunID, "memory.tool.proposed", candidate.CandidateID,
+		map[string]any{"kind": candidate.Kind}); err != nil {
+		return nil, err
+	}
 
 	// Identity, the name the user will see, and where it stands. Never the body:
 	// a model that could read back what it just wrote could use remember as a
