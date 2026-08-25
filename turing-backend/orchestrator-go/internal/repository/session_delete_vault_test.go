@@ -784,3 +784,121 @@ func TestPurgeSessionVaultArtifactsReportsBoundedOpaqueFailuresForEveryFailedRow
 		}
 	}
 }
+
+// refuseVaultArtifactForget makes the manifest write for exactly one row fail,
+// the way storage fails between deleting a file and recording that it is gone.
+// It is a trigger rather than a stubbed repository because the classification
+// under test lives inside PurgeSessionVaultArtifacts, and a stand-in for the
+// method it calls would prove only that the stand-in was called.
+func refuseVaultArtifactForget(t *testing.T, repo *Repository, artifactID string) func() {
+	t.Helper()
+	// A trigger body cannot carry bind variables, and the id is one this test
+	// just generated.
+	if _, err := repo.db.ExecContext(ctx(), fmt.Sprintf(`
+		CREATE TRIGGER refuse_vault_artifact_forget
+		BEFORE DELETE ON vault_artifacts
+		WHEN OLD.id = '%s'
+		BEGIN SELECT RAISE(ABORT, 'vault manifest is unwritable'); END
+	`, artifactID)); err != nil {
+		t.Fatalf("install the manifest-write refusal: %v", err)
+	}
+	healed := false
+	heal := func() {
+		if healed {
+			return
+		}
+		healed = true
+		if _, err := repo.db.ExecContext(ctx(), `DROP TRIGGER refuse_vault_artifact_forget`); err != nil {
+			t.Fatalf("heal the manifest write: %v", err)
+		}
+	}
+	t.Cleanup(heal)
+	return heal
+}
+
+// One pass can fail both ways at once: a note the vault will not release, and
+// the rows for the notes it did release refusing to leave the manifest.
+//
+// Both facts are true, and the manifest already records the first one per row.
+// What the pass reports back has to carry the second, because the caller reads
+// it to decide whether this was "files are still there" — which is answered by
+// marking every surviving row delete_failed — and the rows surviving here name
+// notes that are gone. Reporting only the removal failure is what turns a
+// deleted note into an audit row telling the user it is still on their disk.
+func TestPurgeSessionVaultArtifactsReportsFinalizationBesideARowItCouldNotRemove(t *testing.T) {
+	repo, vault, database := newMemoryTestRepo(t)
+	sessionID, candidates := seedVaultCandidates(t, repo, "bees", "chickens")
+	writeVaultNote(t, vault, "beliefs/precious.md", "# A file the user owns\n")
+	artifacts, err := repo.SessionVaultArtifacts(ctx(), sessionID)
+	if err != nil {
+		t.Fatalf("SessionVaultArtifacts: %v", err)
+	}
+	if len(artifacts) != 2 {
+		t.Fatalf("seeded artifacts = %d, want 2", len(artifacts))
+	}
+	poisoned, removable := artifacts[0], artifacts[1]
+	if _, err := repo.db.ExecContext(ctx(), `
+		UPDATE vault_artifacts SET vault_path = ? WHERE id = ?
+	`, "beliefs/precious.md", poisoned.ArtifactID); err != nil {
+		t.Fatalf("tamper with the manifest row: %v", err)
+	}
+	heal := refuseVaultArtifactForget(t, repo, removable.ArtifactID)
+
+	_, err = repo.PurgeSessionVaultArtifacts(ctx(), sessionID)
+	if !errors.Is(err, ErrVaultArtifactManifestFinalize) {
+		t.Fatalf("purge error = %v, want it to carry ErrVaultArtifactManifestFinalize", err)
+	}
+	if !errors.Is(err, ErrVaultArtifactPathScope) {
+		t.Fatalf("purge error = %v, want the refused row still recognisable", err)
+	}
+
+	// The note that was removed is gone, and the note the pass refused to touch
+	// is exactly where the user left it.
+	if _, statErr := os.Stat(filepath.Join(vault.Root(), filepath.FromSlash(candidates[1].InboxPath))); !os.IsNotExist(statErr) {
+		t.Fatalf("the removable note survived: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(vault.Root(), "beliefs", "precious.md")); statErr != nil {
+		t.Fatalf("a tampered manifest row deleted the belief: %v", statErr)
+	}
+
+	states := vaultArtifactStates(t, repo, sessionID)
+	if len(states) != 2 {
+		t.Fatalf("rows after the pass = %+v, want both retained for the retry", states)
+	}
+	if states[poisoned.ArtifactID] != VaultArtifactStateDeleteFailed {
+		t.Fatalf("poisoned row = %q, want delete_failed", states[poisoned.ArtifactID])
+	}
+	if states[removable.ArtifactID] == VaultArtifactStateDeleteFailed {
+		t.Fatalf("the removed note's row = %q, want it not relabelled as undeleted",
+			states[removable.ArtifactID])
+	}
+	if got := vaultArtifactAuditCount(t, database, poisoned.ArtifactID); got != 1 {
+		t.Fatalf("audits for the note that is still there = %d, want 1", got)
+	}
+	if got := vaultArtifactAuditCount(t, database, removable.ArtifactID); got != 0 {
+		t.Fatalf("audits for the note that was deleted = %d, want none", got)
+	}
+
+	// Once storage answers again and the row names its own note, the retry
+	// drains both rows: removal is idempotent, so the note already gone costs
+	// nothing to re-attempt.
+	heal()
+	if _, err := repo.db.ExecContext(ctx(), `
+		UPDATE vault_artifacts SET vault_path = ? WHERE id = ?
+	`, candidates[0].InboxPath, poisoned.ArtifactID); err != nil {
+		t.Fatalf("repair the manifest row: %v", err)
+	}
+	removed, err := repo.PurgeSessionVaultArtifacts(ctx(), sessionID)
+	if err != nil {
+		t.Fatalf("PurgeSessionVaultArtifacts after the repair: %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("removed after the repair = %d, want both rows drained", removed)
+	}
+	if got := len(vaultArtifactStates(t, repo, sessionID)); got != 0 {
+		t.Fatalf("rows after the repair = %d, want none", got)
+	}
+	if got := vaultArtifactAuditCount(t, database, removable.ArtifactID); got != 0 {
+		t.Fatalf("audits for the deleted note after the retry = %d, want none", got)
+	}
+}

@@ -31,6 +31,12 @@ type Server struct {
 	bus              *eventsvc.Bus
 	artifactCleaners []SessionArtifactCleaner
 	memoryCompletion repository.SessionDeletionCompletion
+	// artifactFinalizeTimeoutOverride replaces artifactCleanupTimeout for the
+	// detached manifest write when set (test-only, zero value unused in
+	// production). It lets a test prove the wrapper itself bounds a manifest
+	// write that never answers, with a caller context carrying no deadline of
+	// its own, without spending the real bound in wall-clock time.
+	artifactFinalizeTimeoutOverride time.Duration
 }
 
 // messageSearcher is the only part of the repository the search handler needs.

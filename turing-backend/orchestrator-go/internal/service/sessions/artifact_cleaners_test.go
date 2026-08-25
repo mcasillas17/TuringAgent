@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1136,5 +1137,334 @@ func TestDeleteSessionStillMarksAKnownScopeWhenAStrangerScopeAlsoFails(t *testin
 	}
 	if got := auditRowCount(t, database, "session.artifact.cleanup.failed", "artifact_real_failure"); got != 1 {
 		t.Fatalf("audits for the genuinely undeleted file = %d, want 1", got)
+	}
+}
+
+// refuseVaultArtifactForget makes the manifest write for exactly one row fail,
+// the way storage fails between deleting a note and recording that it is gone.
+// The refusal is installed in the database rather than in a stand-in for the
+// repository, because what is under test is how the real purge classifies a
+// pass that failed in two ways at once.
+func refuseVaultArtifactForget(t *testing.T, database *db.DB, artifactID string) func() {
+	t.Helper()
+	// A trigger body cannot carry bind variables, and the id is one this test
+	// just generated.
+	if _, err := database.ExecContext(context.Background(), fmt.Sprintf(`
+		CREATE TRIGGER refuse_vault_artifact_forget
+		BEFORE DELETE ON vault_artifacts
+		WHEN OLD.id = '%s'
+		BEGIN SELECT RAISE(ABORT, 'vault manifest is unwritable'); END
+	`, artifactID)); err != nil {
+		t.Fatalf("install the manifest-write refusal: %v", err)
+	}
+	healed := false
+	heal := func() {
+		if healed {
+			return
+		}
+		healed = true
+		if _, err := database.ExecContext(context.Background(), `DROP TRIGGER refuse_vault_artifact_forget`); err != nil {
+			t.Fatalf("heal the manifest write: %v", err)
+		}
+	}
+	t.Cleanup(heal)
+	return heal
+}
+
+// seedSecondVaultCandidate gives a session a second note, so a pass can have
+// one row it cannot remove and one it can.
+func seedSecondVaultCandidate(t *testing.T, repo *repository.Repository, sessionID string, title string) repository.MemoryCandidate {
+	t.Helper()
+	candidate, err := repo.CreateMemoryCandidate(context.Background(), repository.CreateMemoryCandidateInput{
+		SessionID: sessionID,
+		Kind:      repository.MemoryCandidateKindBelief,
+		Title:     title,
+		Body:      "The user keeps " + title + ".",
+	})
+	if err != nil {
+		t.Fatalf("CreateMemoryCandidate(%q): %v", title, err)
+	}
+	return candidate
+}
+
+// vaultArtifactByPath finds the manifest row naming one note.
+func vaultArtifactByPath(t *testing.T, repo *repository.Repository, sessionID string, vaultPath string) repository.VaultArtifact {
+	t.Helper()
+	artifacts, err := repo.SessionVaultArtifacts(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("SessionVaultArtifacts: %v", err)
+	}
+	for _, artifact := range artifacts {
+		if artifact.VaultPath == vaultPath {
+			return artifact
+		}
+	}
+	t.Fatalf("no manifest row for %q in %+v", vaultPath, artifacts)
+	return repository.VaultArtifact{}
+}
+
+// A withdrawal can fail in both directions in the same pass: one note the vault
+// will not release, and the rows for the notes it did release refusing to leave
+// the manifest.
+//
+// The failure that touched the user's data is already written down per row, by
+// the pass that observed it. What must not happen is the withdrawal answering
+// the second failure with the session-wide vault marker: that marks every row
+// still standing, and the rows still standing here include one naming a note
+// Turing did delete — an audit entry telling the user a note they asked to have
+// removed, and which is gone, is still on their disk.
+func TestDeleteSessionDoesNotBlameADeletedNoteForAPoisonedRowBesideIt(t *testing.T) {
+	server, repo, vault, database := newVaultBackedServer(t)
+	sessionID, poisonedCandidate := seedVaultCandidate(t, repo, "bees")
+	removableCandidate := seedSecondVaultCandidate(t, repo, sessionID, "chickens")
+	beliefPath := filepath.Join(vault.Root(), "beliefs", "precious.md")
+	if err := os.WriteFile(beliefPath, []byte("# A file the user owns\n"), 0o600); err != nil {
+		t.Fatalf("write the belief: %v", err)
+	}
+	poisoned := vaultArtifactByPath(t, repo, sessionID, poisonedCandidate.InboxPath)
+	removable := vaultArtifactByPath(t, repo, sessionID, removableCandidate.InboxPath)
+	ctx := context.Background()
+	if _, err := database.ExecContext(ctx, `
+		UPDATE vault_artifacts SET vault_path = ? WHERE id = ?
+	`, "beliefs/precious.md", poisoned.ArtifactID); err != nil {
+		t.Fatalf("tamper with the manifest row: %v", err)
+	}
+	heal := refuseVaultArtifactForget(t, database, removable.ArtifactID)
+	server.RegisterArtifactCleaners(NewVaultArtifactCleaner(repo))
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if response.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_FAILED_EXTERNAL ||
+		!response.GetDeletion().GetRetryable() {
+		t.Fatalf("receipt = %+v, want retryable failed_external", response.GetDeletion())
+	}
+	if got := response.GetDeletion().GetErrorCode(); got != repository.SessionDeletionArtifactManifestFinalizeFailed {
+		t.Fatalf("error code = %q, want the distinct %q class",
+			got, repository.SessionDeletionArtifactManifestFinalizeFailed)
+	}
+
+	// What actually happened on disk: one note gone, one note the pass refused
+	// to touch, and the belief a tampered row named untouched.
+	if _, statErr := os.Stat(filepath.Join(vault.Root(), filepath.FromSlash(removableCandidate.InboxPath))); !os.IsNotExist(statErr) {
+		t.Fatalf("the removable note survived, so this was not the compound failure: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(vault.Root(), filepath.FromSlash(poisonedCandidate.InboxPath))); statErr != nil {
+		t.Fatalf("the poisoned row's own note was removed anyway: %v", statErr)
+	}
+	if _, statErr := os.Stat(beliefPath); statErr != nil {
+		t.Fatalf("a tampered manifest row deleted the belief: %v", statErr)
+	}
+
+	rows, err := repo.SessionVaultArtifacts(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("SessionVaultArtifacts: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("vault rows = %+v, want both preserved for the retry", rows)
+	}
+	states := make(map[string]string, len(rows))
+	for _, row := range rows {
+		states[row.ArtifactID] = row.State
+	}
+	if states[poisoned.ArtifactID] != repository.VaultArtifactStateDeleteFailed {
+		t.Fatalf("the row naming a note still on disk = %q, want delete_failed", states[poisoned.ArtifactID])
+	}
+	if states[removable.ArtifactID] == repository.VaultArtifactStateDeleteFailed {
+		t.Fatalf("the deleted note's row = %q, want it not relabelled as undeleted",
+			states[removable.ArtifactID])
+	}
+	if got := auditRowCount(t, database, "session.vault_artifact.cleanup.failed", poisoned.ArtifactID); got != 1 {
+		t.Fatalf("audits for the note that is still there = %d, want 1", got)
+	}
+	if got := auditRowCount(t, database, "session.vault_artifact.cleanup.failed", removable.ArtifactID); got != 0 {
+		t.Fatalf("audits for the note that was deleted = %d, want none", got)
+	}
+
+	// Once storage answers again and the row names its own note, the retry
+	// drains the manifest and the withdrawal finishes.
+	heal()
+	if _, err := database.ExecContext(ctx, `
+		UPDATE vault_artifacts SET vault_path = ? WHERE id = ?
+	`, poisonedCandidate.InboxPath, poisoned.ArtifactID); err != nil {
+		t.Fatalf("repair the manifest row: %v", err)
+	}
+	retry, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID})
+	if err != nil {
+		t.Fatalf("retry DeleteSession: %v", err)
+	}
+	if retry.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("retry receipt = %+v, want completed", retry.GetDeletion())
+	}
+	remaining, err := repo.SessionVaultArtifacts(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("SessionVaultArtifacts after the retry: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("vault rows after the retry = %+v, want the manifest drained", remaining)
+	}
+	if got := auditRowCount(t, database, "session.vault_artifact.cleanup.failed", removable.ArtifactID); got != 0 {
+		t.Fatalf("audits for the deleted note after the retry = %d, want none", got)
+	}
+	if got := auditRowCount(t, database, "session.vault_artifact.cleanup.failed", poisoned.ArtifactID); got != 1 {
+		t.Fatalf("audits for the poisoned row after the retry = %d, want the one failure recorded once", got)
+	}
+	if _, statErr := os.Stat(beliefPath); statErr != nil {
+		t.Fatalf("the belief did not survive the whole withdrawal: %v", statErr)
+	}
+}
+
+// blockingForgetCleaner finishes its removal and then never returns from the
+// manifest write, the way a storage layer that has stopped answering behaves.
+// It waits on the context it was handed, so it returns exactly when — and only
+// when — that context is bounded.
+type blockingForgetCleaner struct {
+	scope string
+	// entered reports that the manifest write has begun blocking.
+	entered chan struct{}
+	// safety is how long the fake waits for a deadline that never comes. It
+	// exists so an unbounded call fails this test instead of hanging the whole
+	// package until the go test timeout.
+	safety time.Duration
+	// unbounded is the error a call that outlived the safety net reports.
+	unbounded error
+}
+
+func (c *blockingForgetCleaner) ArtifactScope() string { return c.scope }
+
+func (c *blockingForgetCleaner) CleanupSessionArtifacts(context.Context, string, int64) error {
+	return nil
+}
+
+func (c *blockingForgetCleaner) ForgetCleanedArtifacts(ctx context.Context, _ string) error {
+	select {
+	case c.entered <- struct{}{}:
+	default:
+	}
+	timer := time.NewTimer(c.safety)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return c.unbounded
+	}
+}
+
+// The manifest write a finished cleaner still owes is detached from the
+// caller's context on purpose — the files are already gone, and a client that
+// hung up must not leave the rows naming them behind. Detached is not the same
+// as unbounded: a storage layer that never answers would hold the withdrawal,
+// the request, and the shutdown that is waiting on it open forever.
+func TestDeleteSessionBoundsAManifestWriteThatNeverAnswers(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{})
+	server.artifactFinalizeTimeoutOverride = 150 * time.Millisecond
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "A manifest that never answers")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	seedSandboxArtifactRow(t, database, session.SessionID, "artifact_unbounded_finalize")
+	unbounded := errors.New("the manifest write was never bounded")
+	cleaner := &blockingForgetCleaner{
+		scope:     ArtifactScopeSandbox,
+		entered:   make(chan struct{}, 1),
+		safety:    10 * time.Second,
+		unbounded: unbounded,
+	}
+	server.RegisterArtifactCleaners(cleaner)
+
+	started := time.Now()
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	elapsed := time.Since(started)
+	select {
+	case <-cleaner.entered:
+	default:
+		t.Fatal("the manifest write never ran, so this proved nothing about its bound")
+	}
+	if elapsed >= cleaner.safety {
+		t.Fatalf("DeleteSession took %v, want it bounded well under the %v safety net",
+			elapsed, cleaner.safety)
+	}
+	// A bounded write that ran out of time is still outstanding work, and the
+	// rows it could not drop are still the retry's worklist.
+	if response.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_FAILED_EXTERNAL ||
+		!response.GetDeletion().GetRetryable() {
+		t.Fatalf("receipt = %+v, want retryable failed_external", response.GetDeletion())
+	}
+	if got := response.GetDeletion().GetErrorCode(); got != repository.SessionDeletionArtifactManifestFinalizeFailed {
+		t.Fatalf("error code = %q, want %q",
+			got, repository.SessionDeletionArtifactManifestFinalizeFailed)
+	}
+	if got := auditRowCount(t, database, "session.artifact.cleanup.failed", "artifact_unbounded_finalize"); got != 0 {
+		t.Fatalf("per-file deletion-failure audits = %d, want none for a file that was deleted", got)
+	}
+	rows, err := repo.SessionSandboxArtifacts(ctx, session.SessionID)
+	if err != nil {
+		t.Fatalf("SessionSandboxArtifacts: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("sandbox rows = %+v, want the manifest preserved for the retry", rows)
+	}
+}
+
+// The reconcile ticker and the shutdown behind it are the reason the bound has
+// to exist. ResumePendingDeletions walks every unfinished receipt, and one
+// storage layer that has stopped answering must cost that walk a deadline
+// rather than the process's ability to stop.
+func TestResumePendingDeletionsProgressesPastAManifestWriteThatNeverAnswers(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{})
+	server.artifactFinalizeTimeoutOverride = 150 * time.Millisecond
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "A withdrawal the ticker retries")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	seedSandboxArtifactRow(t, database, session.SessionID, "artifact_resume_finalize")
+	cleaner := &blockingForgetCleaner{
+		scope:     ArtifactScopeSandbox,
+		entered:   make(chan struct{}, 1),
+		safety:    10 * time.Second,
+		unbounded: errors.New("the manifest write was never bounded"),
+	}
+	server.RegisterArtifactCleaners(cleaner)
+	if _, err := repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+
+	resumeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- server.ResumePendingDeletions(resumeCtx) }()
+	// The shutdown path cancels this context and then waits for the loop. The
+	// wait only ends if the detached manifest write is bounded.
+	select {
+	case <-cleaner.entered:
+	case <-time.After(cleaner.safety):
+		t.Fatal("the manifest write never ran")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ResumePendingDeletions: %v", err)
+		}
+	case <-time.After(cleaner.safety):
+		t.Fatal("ResumePendingDeletions never returned, so a stalled manifest write blocks shutdown")
+	}
+	persisted, err := repo.SessionDeletionReceipt(ctx, session.SessionID)
+	if err != nil {
+		t.Fatalf("SessionDeletionReceipt: %v", err)
+	}
+	if persisted.ErrorCode != repository.SessionDeletionArtifactManifestFinalizeFailed || !persisted.Retryable {
+		t.Fatalf("persisted receipt = %+v, want a retryable manifest-finalize failure", persisted)
 	}
 }
