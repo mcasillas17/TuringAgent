@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	DecisionVersion          = 2
+	DecisionVersion          = 3
 	maxSkillDisplayNameRunes = 80
 )
 

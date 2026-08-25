@@ -172,6 +172,45 @@ func TestWorkerAdvertisingLiteralV1CannotClaimPostBumpRemoteDecision(t *testing.
 	}
 }
 
+func TestWorkerAdvertisingLiteralV2CannotClaimPostBumpRemoteDecision(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "Post-memory-bump remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := remoteDecision()
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "remote", AgentID: "general_assistant",
+		ModelProvider: "openai_compatible", Model: decision.Model,
+		EgressDecision: decision, SelectedTools: decision.SelectedTools,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(
+		ctx, "general_assistant", "stale-v2-worker", 0, time.Hour,
+		&WorkerRoutingCapabilities{
+			Models: []RoutingModelCapability{{
+				Provider: "openai_compatible", Model: decision.Model, MaxContextTokens: 8192,
+			}},
+			Tools: decision.SelectedTools, MaxConcurrentRuns: 1,
+			// Deliberately the literal pre-bump number, not the constant: a
+			// worker built before memory existed in the decision cannot be
+			// trusted to honour a memory-bearing one, and the check has to fail
+			// closed even after the constant moves again.
+			RemoteEgressDecisionVersion: 2,
+		},
+		func(RoutingRequirements) bool { return true },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.JobID != "" {
+		t.Fatalf("literal-v2 worker claimed post-bump job %q; queued %q", claimed.JobID, enqueued.JobID)
+	}
+}
+
 func TestListPendingRoutingWorkPageUsesStableKeyset(t *testing.T) {
 	repo := New(openTestDB(t))
 	ctx := context.Background()

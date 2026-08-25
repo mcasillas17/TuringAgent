@@ -1,0 +1,246 @@
+syntax = "proto3";
+
+package turing.v1;
+
+option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "turing/v1/common.proto";
+
+// Memory is a vault the user can open: notes are Markdown files on their disk,
+// not opaque rows. SQLite holds only the enablement, lifecycle and provenance
+// that a filesystem cannot express, so every message here reports content read
+// from the vault plus the reason it could not be read when that happens.
+
+enum MemoryCandidateKind {
+  MEMORY_CANDIDATE_KIND_UNSPECIFIED = 0;
+  MEMORY_CANDIDATE_KIND_BELIEF = 1;
+  MEMORY_CANDIDATE_KIND_PROFILE_EDIT = 2;
+}
+
+enum MemoryCandidateState {
+  MEMORY_CANDIDATE_STATE_UNSPECIFIED = 0;
+  MEMORY_CANDIDATE_STATE_PENDING = 1;
+  MEMORY_CANDIDATE_STATE_PROMOTED = 2;
+  MEMORY_CANDIDATE_STATE_REJECTED = 3;
+  // The session that produced the candidate was deleted. The candidate is kept
+  // so the record does not silently vanish, but it can no longer be promoted.
+  MEMORY_CANDIDATE_STATE_WITHDRAWN = 4;
+}
+
+// Whether Turing may rewrite the file. An unmanaged note is one the user has
+// taken over by hand; Turing reads it and never writes it back.
+enum MemoryNoteStatus {
+  MEMORY_NOTE_STATUS_UNSPECIFIED = 0;
+  MEMORY_NOTE_STATUS_MANAGED = 1;
+  MEMORY_NOTE_STATUS_UNMANAGED = 2;
+  MEMORY_NOTE_STATUS_WITHDRAWN = 3;
+}
+
+enum MemoryProvenanceKind {
+  MEMORY_PROVENANCE_KIND_UNSPECIFIED = 0;
+  MEMORY_PROVENANCE_KIND_PROMOTED_FROM_CANDIDATE = 1;
+  MEMORY_PROVENANCE_KIND_USER_AUTHORED = 2;
+  MEMORY_PROVENANCE_KIND_IMPORTED = 3;
+}
+
+// Why a read produced nothing. NONE is distinct from UNSPECIFIED so a client
+// can tell "the server answered: nothing is wrong" from "the server did not
+// say", and never renders an empty vault as a healthy one.
+enum MemoryUnavailableReason {
+  MEMORY_UNAVAILABLE_REASON_UNSPECIFIED = 0;
+  MEMORY_UNAVAILABLE_REASON_NONE = 1;
+  MEMORY_UNAVAILABLE_REASON_DISABLED = 2;
+  MEMORY_UNAVAILABLE_REASON_VAULT_MISSING = 3;
+  MEMORY_UNAVAILABLE_REASON_VAULT_UNREADABLE = 4;
+  MEMORY_UNAVAILABLE_REASON_CONTENT_PARSE_FAILED = 5;
+  MEMORY_UNAVAILABLE_REASON_CONTENT_TOO_LARGE = 6;
+}
+
+// Where a claim came from, and whether it still stands.
+message MemoryProvenance {
+  MemoryProvenanceKind kind = 1;
+  string source_session_id = 2;
+  string source_session_title = 3;
+  google.protobuf.Timestamp observed_at = 4;
+  // Set once the originating session is gone. The note survives deletion, so
+  // the client has to be able to say the evidence behind it no longer exists
+  // rather than presenting an unsupported claim as supported.
+  bool withdrawn = 5;
+  google.protobuf.Timestamp withdrawn_at = 6;
+  // Count only. Excerpts are never returned; the vault holds hashes of them.
+  int32 evidence_count = 7;
+}
+
+// A proposed memory awaiting the user's decision.
+message MemoryCandidate {
+  string candidate_id = 1;
+  MemoryCandidateKind kind = 2;
+  // Path of the inbox file, relative to the vault root, so the user can open
+  // the same thing Turing is describing.
+  string inbox_path = 3;
+  // The complete proposed text, never a preview or truncation: the user is
+  // being asked to accept exactly this.
+  string content = 4;
+  string content_hash = 5;
+  MemoryCandidateState state = 6;
+  repeated MemoryProvenance provenance = 7;
+  string promoted_note_id = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  google.protobuf.Timestamp decided_at = 11;
+  // Human-readable detail for unavailable_reason. Empty when content is whole.
+  string parse_error = 12;
+  MemoryUnavailableReason unavailable_reason = 13;
+}
+
+// An accepted memory: a Markdown file in the user's vault.
+message MemoryNote {
+  string note_id = 1;
+  string path = 2;
+  string title = 3;
+  string content = 4;
+  string content_hash = 5;
+  MemoryNoteStatus status = 6;
+  MemoryTier tier = 7;
+  repeated MemoryProvenance provenance = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  string parse_error = 11;
+  MemoryUnavailableReason unavailable_reason = 12;
+}
+
+// The single profile document.
+message MemoryProfile {
+  string content = 1;
+  // Doubles as the compare-and-set token for ApplyMemoryProfile.
+  string content_hash = 2;
+  MemoryNoteStatus status = 3;
+  google.protobuf.Timestamp updated_at = 4;
+  string parse_error = 5;
+  MemoryUnavailableReason unavailable_reason = 6;
+}
+
+message MemoryTierState {
+  MemoryTier tier = 1;
+  bool enabled = 2;
+  int32 note_count = 3;
+  int32 pending_candidate_count = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  MemoryUnavailableReason unavailable_reason = 6;
+  string parse_error = 7;
+}
+
+message MemorySettings {
+  bool enabled = 1;
+  // Absolute path so the user can open the vault in their own editor.
+  string vault_root = 2;
+  bool vault_writable = 3;
+  MemoryUnavailableReason unavailable_reason = 4;
+  string parse_error = 5;
+}
+
+message ListMemoryStateRequest {}
+
+message ListMemoryStateResponse {
+  MemorySettings settings = 1;
+  repeated MemoryTierState tiers = 2;
+  repeated MemoryNote notes = 3;
+  repeated MemoryCandidate candidates = 4;
+  MemoryProfile profile = 5;
+}
+
+message GetMemorySettingsRequest {}
+
+message SetMemoryEnabledRequest {
+  bool enabled = 1;
+  // Unset (MEMORY_TIER_UNSPECIFIED) toggles memory as a whole.
+  MemoryTier tier = 2;
+}
+
+message ListMemoryCandidatesRequest {
+  MemoryCandidateState state = 1;
+  MemoryCandidateKind kind = 2;
+}
+
+message ListMemoryCandidatesResponse {
+  repeated MemoryCandidate candidates = 1;
+  MemoryUnavailableReason unavailable_reason = 2;
+}
+
+message GetMemoryCandidateRequest {
+  string candidate_id = 1;
+}
+
+message PromoteMemoryCandidateRequest {
+  string candidate_id = 1;
+  // Compare-and-set against MemoryCandidate.content_hash: a decision composed
+  // against text that has since changed is refused, not applied to the new
+  // text the user never read.
+  string expected_content_hash = 2;
+  // Optional user edit accepted in place of the proposed content.
+  string edited_content = 3;
+  MemoryTier target_tier = 4;
+}
+
+message PromoteMemoryCandidateResponse {
+  MemoryCandidate candidate = 1;
+  MemoryNote note = 2;
+}
+
+message RejectMemoryCandidateRequest {
+  string candidate_id = 1;
+  string expected_content_hash = 2;
+  string reason = 3;
+}
+
+message RejectMemoryCandidateResponse {
+  MemoryCandidate candidate = 1;
+}
+
+message GetMemoryProfileRequest {}
+
+message ApplyMemoryProfileRequest {
+  string content = 1;
+  // Compare-and-set against MemoryProfile.content_hash. Empty means the caller
+  // expects no profile to exist yet.
+  string expected_content_hash = 2;
+}
+
+message ApplyMemoryProfileResponse {
+  MemoryProfile profile = 1;
+}
+
+message MemoryToolDescriptor {
+  string tool_name = 1;
+  ToolPolicy policy = 2;
+  google.protobuf.Struct schema = 3;
+  bool enabled = 4;
+  string description = 5;
+}
+
+message ListMemoryToolsRequest {}
+
+message ListMemoryToolsResponse {
+  repeated MemoryToolDescriptor tools = 1;
+}
+
+// The public facet is everything a client needs to read and decide; the
+// internal facet is ListMemoryTools alone, which the runtime calls over the
+// internal channel to wire memory tools dynamically. The split is enforced by
+// method name at the identity layer, so both names must stay stable.
+service MemoryService {
+  rpc ListMemoryState(ListMemoryStateRequest) returns (ListMemoryStateResponse);
+  rpc GetMemorySettings(GetMemorySettingsRequest) returns (MemorySettings);
+  rpc SetMemoryEnabled(SetMemoryEnabledRequest) returns (MemorySettings);
+  rpc ListMemoryCandidates(ListMemoryCandidatesRequest) returns (ListMemoryCandidatesResponse);
+  rpc GetMemoryCandidate(GetMemoryCandidateRequest) returns (MemoryCandidate);
+  rpc PromoteMemoryCandidate(PromoteMemoryCandidateRequest) returns (PromoteMemoryCandidateResponse);
+  rpc RejectMemoryCandidate(RejectMemoryCandidateRequest) returns (RejectMemoryCandidateResponse);
+  rpc GetMemoryProfile(GetMemoryProfileRequest) returns (MemoryProfile);
+  rpc ApplyMemoryProfile(ApplyMemoryProfileRequest) returns (ApplyMemoryProfileResponse);
+
+  // Internal facet only.
+  rpc ListMemoryTools(ListMemoryToolsRequest) returns (ListMemoryToolsResponse);
+}

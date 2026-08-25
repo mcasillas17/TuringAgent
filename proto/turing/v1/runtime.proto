@@ -83,6 +83,30 @@ message AgentJob {
   // report or resume came from the attempt that still owns the run, rather than
   // from a fenced predecessor; the worker must echo it unchanged.
   string assignment_attempt_id = 20;
+  // The persona and profile as they read when the message was accepted, pinned
+  // exactly like skills so a later vault edit cannot rewrite a queued run.
+  // withheld says the tier was off or unreadable, which is a different fact
+  // from an empty body and must not be inferred from one.
+  PinnedPersonaSnapshot pinned_persona = 21;
+  PinnedProfileSnapshot pinned_profile = 22;
+  // Binds this job to the memory snapshot the egress decision was granted
+  // against. Internal to the run protocol; never surfaced to a client.
+  string memory_snapshot_fingerprint = 23;
+}
+
+message PinnedPersonaSnapshot {
+  string persona_id = 1;
+  string display_name = 2;
+  string body = 3;
+  string content_hash = 4;
+  bool withheld = 5;
+}
+
+message PinnedProfileSnapshot {
+  string profile_id = 1;
+  string body = 2;
+  string content_hash = 3;
+  bool withheld = 4;
 }
 
 // Where to send a run that the user routed off this machine.

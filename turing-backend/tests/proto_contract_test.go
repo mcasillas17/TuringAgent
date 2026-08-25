@@ -34,6 +34,16 @@ func TestProtoContractsDefineRequiredServices(t *testing.T) {
 		},
 		"mcp.proto":    {"message McpRequest", "message McpResult"},
 		"health.proto": {"service HealthService", "rpc Check", "rpc Version"},
+		// Memory is a vault the user can open. The public surface lists state
+		// and tiers, toggles memory, promotes or rejects a candidate, and
+		// applies a profile edit; ListMemoryTools is the internal-only
+		// discovery call the runtime uses to wire memory tools dynamically.
+		"memory.proto": {
+			"service MemoryService", "rpc ListMemoryState", "rpc GetMemorySettings",
+			"rpc SetMemoryEnabled", "rpc PromoteMemoryCandidate", "rpc RejectMemoryCandidate",
+			"rpc ApplyMemoryProfile", "rpc ListMemoryTools", "message MemoryCandidate",
+			"message MemoryNote", "message MemoryProvenance",
+		},
 	}
 	for file, snippets := range required {
 		data, err := os.ReadFile(filepath.Join(root, file))
@@ -489,6 +499,7 @@ func TestRuntimeApprovalResumeProtoContractUsesApprovedAllocations(t *testing.T)
 		"trace_id": 7, "model_provider": 8, "model": 9, "user_text": 10, "requested_tools": 11, "attempt": 12,
 		"skills": 13, "external_agent": 14, "required_context_tokens": 15, "minimum_worker_max_concurrent_runs": 16,
 		"egress_decision": 17, "selected_tools": 18, "expected_state_version": 19, "assignment_attempt_id": 20,
+		"pinned_persona": 21, "pinned_profile": 22, "memory_snapshot_fingerprint": 23,
 	})
 	assertProtoFieldMembers(t, runtime.Messages().ByName("RuntimeRunCompleted"), map[protoreflect.Name]protoreflect.FieldNumber{
 		"run_id": 1, "assistant_message_id": 2, "content": 3, "usage": 4, "token_usage": 5, "expected_state_version": 6,
@@ -645,6 +656,36 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	assertProtoField(t, disclosure, "selected_tools", 10, protoreflect.StringKind, true, "")
 	assertProtoField(t, disclosure, "integration_endpoints", 11, protoreflect.MessageKind, true, "turing.v1.IntegrationEgressDestination")
 	assertProtoField(t, disclosure, "skills", 12, protoreflect.MessageKind, true, "turing.v1.SkillEgressDisclosure")
+	assertProtoField(t, disclosure, "memory_notes", 13, protoreflect.MessageKind, true, "turing.v1.MemoryEgressDisclosure")
+	assertProtoField(t, disclosure, "memory_profile_may_be_sent", 14, protoreflect.BoolKind, false, "")
+	assertProtoField(t, disclosure, "data_category_details", 15, protoreflect.MessageKind, true, "turing.v1.EgressDataCategoryDetail")
+
+	// The disclosure is what the user reads before consenting, so its memory
+	// fields name content, never the signed snapshot fingerprint the run-owned
+	// decision carries internally.
+	memoryDisclosure := common.Messages().ByName("MemoryEgressDisclosure")
+	assertProtoField(t, memoryDisclosure, "note_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, memoryDisclosure, "title", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, memoryDisclosure, "vault_path", 3, protoreflect.StringKind, false, "")
+	assertProtoField(t, memoryDisclosure, "tier", 4, protoreflect.EnumKind, false, "")
+	assertProtoField(t, memoryDisclosure, "body_may_be_sent", 5, protoreflect.BoolKind, false, "")
+	if memoryDisclosure.Fields().ByName("memory_snapshot_fingerprint") != nil {
+		t.Fatal("MemoryEgressDisclosure must not carry a snapshot fingerprint")
+	}
+
+	categoryDetail := common.Messages().ByName("EgressDataCategoryDetail")
+	assertProtoField(t, categoryDetail, "category", 1, protoreflect.EnumKind, false, "")
+	assertProtoField(t, categoryDetail, "summary", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, categoryDetail, "items", 3, protoreflect.StringKind, true, "")
+	assertProtoField(t, categoryDetail, "item_count", 4, protoreflect.Int32Kind, false, "")
+
+	assertProtoEnumValues(t, common.Enums().ByName("MemoryTier"), map[protoreflect.Name]protoreflect.EnumNumber{
+		"MEMORY_TIER_UNSPECIFIED": 0,
+		"MEMORY_TIER_PERSONA":     1,
+		"MEMORY_TIER_PROFILE":     2,
+		"MEMORY_TIER_BELIEF":      3,
+		"MEMORY_TIER_NOTE":        4,
+	})
 
 	skill := common.Messages().ByName("SkillEgressDisclosure")
 	assertProtoField(t, skill, "skill_id", 1, protoreflect.StringKind, false, "")
@@ -679,6 +720,8 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	assertProtoField(t, decision, "external_credential_ref_hash", 15, protoreflect.StringKind, false, "")
 	assertProtoField(t, decision, "request_digest", 16, protoreflect.StringKind, false, "")
 	assertProtoField(t, decision, "remote_mcp_servers", 17, protoreflect.MessageKind, true, "turing.v1.RemoteMcpEgressDestination")
+	assertProtoField(t, decision, "integration_endpoints", 18, protoreflect.MessageKind, true, "turing.v1.IntegrationEgressDestination")
+	assertProtoField(t, decision, "memory_snapshot_fingerprint", 19, protoreflect.StringKind, false, "")
 
 	provider := common.Messages().ByName("ProviderConfig")
 	assertProtoField(t, provider, "remote_endpoint", 5, protoreflect.StringKind, false, "")
@@ -716,6 +759,154 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	assertProtoField(t, auditPayload, "egress_data_categories", 23, protoreflect.EnumKind, true, "")
 	assertProtoField(t, auditPayload, "egress_decision_version", 24, protoreflect.Int32Kind, false, "")
 	assertProtoField(t, auditPayload, "egress_consent_granted_at", 25, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
+}
+
+func TestMemoryProtoContract(t *testing.T) {
+	file := turingv1.File_turing_v1_memory_proto
+
+	assertProtoEnumValues(t, file.Enums().ByName("MemoryCandidateKind"), map[protoreflect.Name]protoreflect.EnumNumber{
+		"MEMORY_CANDIDATE_KIND_UNSPECIFIED":  0,
+		"MEMORY_CANDIDATE_KIND_BELIEF":       1,
+		"MEMORY_CANDIDATE_KIND_PROFILE_EDIT": 2,
+	})
+	assertProtoEnumValues(t, file.Enums().ByName("MemoryCandidateState"), map[protoreflect.Name]protoreflect.EnumNumber{
+		"MEMORY_CANDIDATE_STATE_UNSPECIFIED": 0,
+		"MEMORY_CANDIDATE_STATE_PENDING":     1,
+		"MEMORY_CANDIDATE_STATE_PROMOTED":    2,
+		"MEMORY_CANDIDATE_STATE_REJECTED":    3,
+		"MEMORY_CANDIDATE_STATE_WITHDRAWN":   4,
+	})
+	// The managed/unmanaged distinction a client renders: whether Turing may
+	// rewrite a file the user can also edit by hand in their own vault.
+	assertProtoEnumValues(t, file.Enums().ByName("MemoryNoteStatus"), map[protoreflect.Name]protoreflect.EnumNumber{
+		"MEMORY_NOTE_STATUS_UNSPECIFIED": 0,
+		"MEMORY_NOTE_STATUS_MANAGED":     1,
+		"MEMORY_NOTE_STATUS_UNMANAGED":   2,
+		"MEMORY_NOTE_STATUS_WITHDRAWN":   3,
+	})
+	assertProtoEnumValues(t, file.Enums().ByName("MemoryProvenanceKind"), map[protoreflect.Name]protoreflect.EnumNumber{
+		"MEMORY_PROVENANCE_KIND_UNSPECIFIED":             0,
+		"MEMORY_PROVENANCE_KIND_PROMOTED_FROM_CANDIDATE": 1,
+		"MEMORY_PROVENANCE_KIND_USER_AUTHORED":           2,
+		"MEMORY_PROVENANCE_KIND_IMPORTED":                3,
+	})
+	assertProtoEnumValues(t, file.Enums().ByName("MemoryUnavailableReason"), map[protoreflect.Name]protoreflect.EnumNumber{
+		"MEMORY_UNAVAILABLE_REASON_UNSPECIFIED":          0,
+		"MEMORY_UNAVAILABLE_REASON_NONE":                 1,
+		"MEMORY_UNAVAILABLE_REASON_DISABLED":             2,
+		"MEMORY_UNAVAILABLE_REASON_VAULT_MISSING":        3,
+		"MEMORY_UNAVAILABLE_REASON_VAULT_UNREADABLE":     4,
+		"MEMORY_UNAVAILABLE_REASON_CONTENT_PARSE_FAILED": 5,
+		"MEMORY_UNAVAILABLE_REASON_CONTENT_TOO_LARGE":    6,
+	})
+
+	provenance := file.Messages().ByName("MemoryProvenance")
+	assertProtoFieldMembers(t, provenance, map[protoreflect.Name]protoreflect.FieldNumber{
+		"kind": 1, "source_session_id": 2, "source_session_title": 3, "observed_at": 4,
+		"withdrawn": 5, "withdrawn_at": 6, "evidence_count": 7,
+	})
+	// Withdrawal is stated, never inferred from an absent session: a client has
+	// to be able to say the claim is no longer supported.
+	assertProtoField(t, provenance, "withdrawn", 5, protoreflect.BoolKind, false, "")
+
+	candidate := file.Messages().ByName("MemoryCandidate")
+	assertProtoFieldMembers(t, candidate, map[protoreflect.Name]protoreflect.FieldNumber{
+		"candidate_id": 1, "kind": 2, "inbox_path": 3, "content": 4, "content_hash": 5,
+		"state": 6, "provenance": 7, "promoted_note_id": 8, "created_at": 9, "updated_at": 10,
+		"decided_at": 11, "parse_error": 12, "unavailable_reason": 13,
+	})
+	// Full content, never a preview: the user is accepting exactly this text.
+	assertProtoField(t, candidate, "content", 4, protoreflect.StringKind, false, "")
+
+	note := file.Messages().ByName("MemoryNote")
+	assertProtoFieldMembers(t, note, map[protoreflect.Name]protoreflect.FieldNumber{
+		"note_id": 1, "path": 2, "title": 3, "content": 4, "content_hash": 5, "status": 6,
+		"tier": 7, "provenance": 8, "created_at": 9, "updated_at": 10, "parse_error": 11,
+		"unavailable_reason": 12,
+	})
+
+	profile := file.Messages().ByName("MemoryProfile")
+	assertProtoFieldMembers(t, profile, map[protoreflect.Name]protoreflect.FieldNumber{
+		"content": 1, "content_hash": 2, "status": 3, "updated_at": 4, "parse_error": 5,
+		"unavailable_reason": 6,
+	})
+
+	tierState := file.Messages().ByName("MemoryTierState")
+	assertProtoField(t, tierState, "tier", 1, protoreflect.EnumKind, false, "")
+	assertProtoField(t, tierState, "enabled", 2, protoreflect.BoolKind, false, "")
+
+	apply := file.Messages().ByName("ApplyMemoryProfileRequest")
+	assertProtoField(t, apply, "content", 1, protoreflect.StringKind, false, "")
+	// Compare-and-set: an edit composed against a stale profile is rejected
+	// rather than silently overwriting a concurrent one.
+	assertProtoField(t, apply, "expected_content_hash", 2, protoreflect.StringKind, false, "")
+
+	promote := file.Messages().ByName("PromoteMemoryCandidateRequest")
+	assertProtoField(t, promote, "candidate_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, promote, "expected_content_hash", 2, protoreflect.StringKind, false, "")
+
+	service := file.Services().ByName("MemoryService")
+	if service == nil {
+		t.Fatal("MemoryService is missing")
+	}
+	for method, io := range map[protoreflect.Name][2]string{
+		"ListMemoryState":        {"turing.v1.ListMemoryStateRequest", "turing.v1.ListMemoryStateResponse"},
+		"GetMemorySettings":      {"turing.v1.GetMemorySettingsRequest", "turing.v1.MemorySettings"},
+		"SetMemoryEnabled":       {"turing.v1.SetMemoryEnabledRequest", "turing.v1.MemorySettings"},
+		"PromoteMemoryCandidate": {"turing.v1.PromoteMemoryCandidateRequest", "turing.v1.PromoteMemoryCandidateResponse"},
+		"RejectMemoryCandidate":  {"turing.v1.RejectMemoryCandidateRequest", "turing.v1.RejectMemoryCandidateResponse"},
+		"GetMemoryProfile":       {"turing.v1.GetMemoryProfileRequest", "turing.v1.MemoryProfile"},
+		"ApplyMemoryProfile":     {"turing.v1.ApplyMemoryProfileRequest", "turing.v1.ApplyMemoryProfileResponse"},
+		"ListMemoryTools":        {"turing.v1.ListMemoryToolsRequest", "turing.v1.ListMemoryToolsResponse"},
+	} {
+		descriptor := service.Methods().ByName(method)
+		if descriptor == nil {
+			t.Fatalf("MemoryService.%s is missing", method)
+		}
+		if got := string(descriptor.Input().FullName()); got != io[0] {
+			t.Fatalf("MemoryService.%s input = %q, want %q", method, got, io[0])
+		}
+		if got := string(descriptor.Output().FullName()); got != io[1] {
+			t.Fatalf("MemoryService.%s output = %q, want %q", method, got, io[1])
+		}
+	}
+
+	// The facet split needs stable method names on both sides, and dynamic
+	// memory-tool wiring needs the internal one by name.
+	for name, want := range map[string]string{
+		turingv1.MemoryService_ListMemoryTools_FullMethodName: "/turing.v1.MemoryService/ListMemoryTools",
+		turingv1.MemoryService_ListMemoryState_FullMethodName: "/turing.v1.MemoryService/ListMemoryState",
+	} {
+		if name != want {
+			t.Fatalf("full method name = %q, want %q", name, want)
+		}
+	}
+
+	// Nothing on the public memory surface may carry a signed snapshot
+	// fingerprint; that lives only on the run-owned decision and job.
+	for index := 0; index < file.Messages().Len(); index++ {
+		message := file.Messages().Get(index)
+		if message.Fields().ByName("memory_snapshot_fingerprint") != nil {
+			t.Fatalf("%s exposes memory_snapshot_fingerprint on the public memory surface", message.FullName())
+		}
+	}
+}
+
+func TestPinnedMemorySnapshotRuntimeContract(t *testing.T) {
+	file := turingv1.File_turing_v1_runtime_proto
+	job := file.Messages().ByName("AgentJob")
+	assertProtoField(t, job, "pinned_persona", 21, protoreflect.MessageKind, false, "turing.v1.PinnedPersonaSnapshot")
+	assertProtoField(t, job, "pinned_profile", 22, protoreflect.MessageKind, false, "turing.v1.PinnedProfileSnapshot")
+	assertProtoField(t, job, "memory_snapshot_fingerprint", 23, protoreflect.StringKind, false, "")
+
+	persona := file.Messages().ByName("PinnedPersonaSnapshot")
+	assertProtoFieldMembers(t, persona, map[protoreflect.Name]protoreflect.FieldNumber{
+		"persona_id": 1, "display_name": 2, "body": 3, "content_hash": 4, "withheld": 5,
+	})
+	profile := file.Messages().ByName("PinnedProfileSnapshot")
+	assertProtoFieldMembers(t, profile, map[protoreflect.Name]protoreflect.FieldNumber{
+		"profile_id": 1, "body": 2, "content_hash": 3, "withheld": 4,
+	})
 }
 
 func TestMCPRegistryProtoContract(t *testing.T) {

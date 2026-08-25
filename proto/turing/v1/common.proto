@@ -31,6 +31,16 @@ enum EgressDataCategory {
   EGRESS_DATA_CATEGORY_ATTACHMENTS = 9;
 }
 
+// The vault's shelves. A tier is the unit a user turns on or off, so the
+// disclosure and the settings surface name the same vocabulary.
+enum MemoryTier {
+  MEMORY_TIER_UNSPECIFIED = 0;
+  MEMORY_TIER_PERSONA = 1;
+  MEMORY_TIER_PROFILE = 2;
+  MEMORY_TIER_BELIEF = 3;
+  MEMORY_TIER_NOTE = 4;
+}
+
 enum RoutingRequirementKind {
   ROUTING_REQUIREMENT_KIND_UNSPECIFIED = 0;
   ROUTING_REQUIREMENT_KIND_PROVIDER = 1;
@@ -207,6 +217,33 @@ message RemoteEgressDisclosure {
   repeated string selected_tools = 10;
   repeated IntegrationEgressDestination integration_endpoints = 11;
   repeated SkillEgressDisclosure skills = 12;
+  // Memory that would leave the machine, named note by note. The disclosure is
+  // what the user reads before consenting, so it carries titles and vault
+  // paths and never the signed snapshot fingerprint the run-owned decision
+  // uses internally.
+  repeated MemoryEgressDisclosure memory_notes = 13;
+  bool memory_profile_may_be_sent = 14;
+  // Per-category expansion of data_categories. The bare enum list cannot say
+  // *what* would be sent, so a client cannot honestly render the consent
+  // prompt from it alone.
+  repeated EgressDataCategoryDetail data_category_details = 15;
+}
+
+message MemoryEgressDisclosure {
+  string note_id = 1;
+  string title = 2;
+  string vault_path = 3;
+  MemoryTier tier = 4;
+  bool body_may_be_sent = 5;
+}
+
+message EgressDataCategoryDetail {
+  EgressDataCategory category = 1;
+  string summary = 2;
+  repeated string items = 3;
+  // Kept separate from items so a bounded/truncated list can still report the
+  // true total rather than understating what is being sent.
+  int32 item_count = 4;
 }
 
 message SkillEgressDisclosure {
@@ -257,6 +294,9 @@ message RunEgressDecision {
   string request_digest = 16;
   repeated RemoteMcpEgressDestination remote_mcp_servers = 17;
   repeated IntegrationEgressDestination integration_endpoints = 18;
+  // Binds the run to the exact memory snapshot the user consented to. Run-owned
+  // and internal: it is never surfaced on a public or audit response.
+  string memory_snapshot_fingerprint = 19;
 }
 
 message AgentDescriptor {

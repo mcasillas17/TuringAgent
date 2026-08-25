@@ -47,6 +47,9 @@ class AgentJob extends $pb.GeneratedMessage {
     $core.Iterable<$core.String>? selectedTools,
     $fixnum.Int64? expectedStateVersion,
     $core.String? assignmentAttemptId,
+    PinnedPersonaSnapshot? pinnedPersona,
+    PinnedProfileSnapshot? pinnedProfile,
+    $core.String? memorySnapshotFingerprint,
   }) {
     final result = create();
     if (jobId != null) result.jobId = jobId;
@@ -74,6 +77,10 @@ class AgentJob extends $pb.GeneratedMessage {
       result.expectedStateVersion = expectedStateVersion;
     if (assignmentAttemptId != null)
       result.assignmentAttemptId = assignmentAttemptId;
+    if (pinnedPersona != null) result.pinnedPersona = pinnedPersona;
+    if (pinnedProfile != null) result.pinnedProfile = pinnedProfile;
+    if (memorySnapshotFingerprint != null)
+      result.memorySnapshotFingerprint = memorySnapshotFingerprint;
     return result;
   }
 
@@ -122,6 +129,11 @@ class AgentJob extends $pb.GeneratedMessage {
     ..pPS(18, _omitFieldNames ? '' : 'selectedTools')
     ..aInt64(19, _omitFieldNames ? '' : 'expectedStateVersion')
     ..aOS(20, _omitFieldNames ? '' : 'assignmentAttemptId')
+    ..aOM<PinnedPersonaSnapshot>(21, _omitFieldNames ? '' : 'pinnedPersona',
+        subBuilder: PinnedPersonaSnapshot.create)
+    ..aOM<PinnedProfileSnapshot>(22, _omitFieldNames ? '' : 'pinnedProfile',
+        subBuilder: PinnedProfileSnapshot.create)
+    ..aOS(23, _omitFieldNames ? '' : 'memorySnapshotFingerprint')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -322,6 +334,243 @@ class AgentJob extends $pb.GeneratedMessage {
   $core.bool hasAssignmentAttemptId() => $_has(19);
   @$pb.TagNumber(20)
   void clearAssignmentAttemptId() => $_clearField(20);
+
+  /// The persona and profile as they read when the message was accepted, pinned
+  /// exactly like skills so a later vault edit cannot rewrite a queued run.
+  /// withheld says the tier was off or unreadable, which is a different fact
+  /// from an empty body and must not be inferred from one.
+  @$pb.TagNumber(21)
+  PinnedPersonaSnapshot get pinnedPersona => $_getN(20);
+  @$pb.TagNumber(21)
+  set pinnedPersona(PinnedPersonaSnapshot value) => $_setField(21, value);
+  @$pb.TagNumber(21)
+  $core.bool hasPinnedPersona() => $_has(20);
+  @$pb.TagNumber(21)
+  void clearPinnedPersona() => $_clearField(21);
+  @$pb.TagNumber(21)
+  PinnedPersonaSnapshot ensurePinnedPersona() => $_ensure(20);
+
+  @$pb.TagNumber(22)
+  PinnedProfileSnapshot get pinnedProfile => $_getN(21);
+  @$pb.TagNumber(22)
+  set pinnedProfile(PinnedProfileSnapshot value) => $_setField(22, value);
+  @$pb.TagNumber(22)
+  $core.bool hasPinnedProfile() => $_has(21);
+  @$pb.TagNumber(22)
+  void clearPinnedProfile() => $_clearField(22);
+  @$pb.TagNumber(22)
+  PinnedProfileSnapshot ensurePinnedProfile() => $_ensure(21);
+
+  /// Binds this job to the memory snapshot the egress decision was granted
+  /// against. Internal to the run protocol; never surfaced to a client.
+  @$pb.TagNumber(23)
+  $core.String get memorySnapshotFingerprint => $_getSZ(22);
+  @$pb.TagNumber(23)
+  set memorySnapshotFingerprint($core.String value) => $_setString(22, value);
+  @$pb.TagNumber(23)
+  $core.bool hasMemorySnapshotFingerprint() => $_has(22);
+  @$pb.TagNumber(23)
+  void clearMemorySnapshotFingerprint() => $_clearField(23);
+}
+
+class PinnedPersonaSnapshot extends $pb.GeneratedMessage {
+  factory PinnedPersonaSnapshot({
+    $core.String? personaId,
+    $core.String? displayName,
+    $core.String? body,
+    $core.String? contentHash,
+    $core.bool? withheld,
+  }) {
+    final result = create();
+    if (personaId != null) result.personaId = personaId;
+    if (displayName != null) result.displayName = displayName;
+    if (body != null) result.body = body;
+    if (contentHash != null) result.contentHash = contentHash;
+    if (withheld != null) result.withheld = withheld;
+    return result;
+  }
+
+  PinnedPersonaSnapshot._();
+
+  factory PinnedPersonaSnapshot.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory PinnedPersonaSnapshot.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'PinnedPersonaSnapshot',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'personaId')
+    ..aOS(2, _omitFieldNames ? '' : 'displayName')
+    ..aOS(3, _omitFieldNames ? '' : 'body')
+    ..aOS(4, _omitFieldNames ? '' : 'contentHash')
+    ..aOB(5, _omitFieldNames ? '' : 'withheld')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PinnedPersonaSnapshot clone() =>
+      PinnedPersonaSnapshot()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PinnedPersonaSnapshot copyWith(
+          void Function(PinnedPersonaSnapshot) updates) =>
+      super.copyWith((message) => updates(message as PinnedPersonaSnapshot))
+          as PinnedPersonaSnapshot;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static PinnedPersonaSnapshot create() => PinnedPersonaSnapshot._();
+  @$core.override
+  PinnedPersonaSnapshot createEmptyInstance() => create();
+  static $pb.PbList<PinnedPersonaSnapshot> createRepeated() =>
+      $pb.PbList<PinnedPersonaSnapshot>();
+  @$core.pragma('dart2js:noInline')
+  static PinnedPersonaSnapshot getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<PinnedPersonaSnapshot>(create);
+  static PinnedPersonaSnapshot? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get personaId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set personaId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasPersonaId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearPersonaId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get displayName => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set displayName($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasDisplayName() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearDisplayName() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get body => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set body($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasBody() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearBody() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get contentHash => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set contentHash($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasContentHash() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearContentHash() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.bool get withheld => $_getBF(4);
+  @$pb.TagNumber(5)
+  set withheld($core.bool value) => $_setBool(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasWithheld() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearWithheld() => $_clearField(5);
+}
+
+class PinnedProfileSnapshot extends $pb.GeneratedMessage {
+  factory PinnedProfileSnapshot({
+    $core.String? profileId,
+    $core.String? body,
+    $core.String? contentHash,
+    $core.bool? withheld,
+  }) {
+    final result = create();
+    if (profileId != null) result.profileId = profileId;
+    if (body != null) result.body = body;
+    if (contentHash != null) result.contentHash = contentHash;
+    if (withheld != null) result.withheld = withheld;
+    return result;
+  }
+
+  PinnedProfileSnapshot._();
+
+  factory PinnedProfileSnapshot.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory PinnedProfileSnapshot.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'PinnedProfileSnapshot',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'profileId')
+    ..aOS(2, _omitFieldNames ? '' : 'body')
+    ..aOS(3, _omitFieldNames ? '' : 'contentHash')
+    ..aOB(4, _omitFieldNames ? '' : 'withheld')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PinnedProfileSnapshot clone() =>
+      PinnedProfileSnapshot()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PinnedProfileSnapshot copyWith(
+          void Function(PinnedProfileSnapshot) updates) =>
+      super.copyWith((message) => updates(message as PinnedProfileSnapshot))
+          as PinnedProfileSnapshot;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static PinnedProfileSnapshot create() => PinnedProfileSnapshot._();
+  @$core.override
+  PinnedProfileSnapshot createEmptyInstance() => create();
+  static $pb.PbList<PinnedProfileSnapshot> createRepeated() =>
+      $pb.PbList<PinnedProfileSnapshot>();
+  @$core.pragma('dart2js:noInline')
+  static PinnedProfileSnapshot getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<PinnedProfileSnapshot>(create);
+  static PinnedProfileSnapshot? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get profileId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set profileId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasProfileId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearProfileId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get body => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set body($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasBody() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearBody() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get contentHash => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set contentHash($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasContentHash() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearContentHash() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.bool get withheld => $_getBF(3);
+  @$pb.TagNumber(4)
+  set withheld($core.bool value) => $_setBool(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasWithheld() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearWithheld() => $_clearField(4);
 }
 
 /// Where to send a run that the user routed off this machine.

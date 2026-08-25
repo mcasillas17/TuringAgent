@@ -229,7 +229,7 @@ func enqueueRequestFingerprint(input EnqueueUserMessageInput) (string, error) {
 			IntegrationEndpoints:      cloneIntegrationEndpoints(input.EgressDecision.IntegrationEndpoints),
 		}
 	}
-	version := 5
+	version := 6
 	requestedModel := input.RequestedModel
 	if egressDecision == nil {
 		version = 2

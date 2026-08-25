@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	egressChallengeVersion     = 2
+	egressChallengeVersion     = 3
 	egressChallengeDomain      = "turing.remote-egress.challenge.v1"
 	defaultEgressChallengeTTL  = 5 * time.Minute
 	maxEgressChallengeBytes    = 32 * 1024

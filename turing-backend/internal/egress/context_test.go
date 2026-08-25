@@ -143,3 +143,13 @@ func TestSanitizeSkillDisplayNameCapsOnRuneBoundary(t *testing.T) {
 		t.Fatalf("result %q does not end with an ellipsis", got)
 	}
 }
+
+// Memory joins the decision, so a worker that predates it must not be able to
+// honour one. The whole point of the version is that it moves when the meaning
+// of the decision changes, and the number is asserted literally here because a
+// bump that only moves a constant its own test reads back proves nothing.
+func TestDecisionVersionCoversMemorySnapshot(t *testing.T) {
+	if DecisionVersion != 3 {
+		t.Fatalf("DecisionVersion = %d, want 3 once the decision carries a memory snapshot", DecisionVersion)
+	}
+}
