@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -437,6 +438,89 @@ func TestEnqueueDoesNotWalkTheVault(t *testing.T) {
 	}
 	if job.PinnedPersona == nil || job.PinnedPersona.Body != "Speak plainly." {
 		t.Fatalf("job persona = %+v", job.PinnedPersona)
+	}
+}
+
+// A queued job keeps the consent it was accepted under, not only the snapshot.
+// Turning memory off while the job waits does not retract a decision the user
+// already granted: a claim that dropped it would hand the runtime a remote run
+// with nothing to check its binding against, which the runtime refuses — the
+// toggle would silently cancel work the user consented to instead of governing
+// the next enqueue.
+func TestQueuedJobKeepsItsConsentDecisionAcrossAToggleFlip(t *testing.T) {
+	repo, vault, sessionID := memoryEgressRepo(t)
+	writePin(t, vault, memoryfiles.PersonaFileName, "Speak plainly.")
+	decision := memoryRemoteDecision(t, repo, nil)
+	decision.MemoryProfileApplicable = true
+
+	if _, err := repo.EnqueueUserMessage(context.Background(), EnqueueUserMessageInput{
+		SessionID: sessionID, Content: "remote", ContentType: "text",
+		AgentID: "general_assistant", ModelProvider: "openai_compatible", Model: decision.Model,
+		EgressDecision: decision, SelectedTools: decision.SelectedTools,
+	}); err != nil {
+		t.Fatalf("EnqueueUserMessage: %v", err)
+	}
+	if _, err := repo.SetMemoryEnabled(context.Background(), false); err != nil {
+		t.Fatalf("SetMemoryEnabled: %v", err)
+	}
+
+	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-consent")
+	if err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
+	}
+	if job.EgressDecision == nil {
+		t.Fatal("the toggle retracted a consent the user had already granted")
+	}
+	if job.EgressDecision.MemorySnapshotFingerprint != decision.MemorySnapshotFingerprint {
+		t.Fatalf("job decision fingerprint = %q, want the one consent was granted over, %q",
+			job.EgressDecision.MemorySnapshotFingerprint, decision.MemorySnapshotFingerprint)
+	}
+	if !job.EgressDecision.MemoryProfileApplicable {
+		t.Fatal("the queued decision lost the memory category it was granted over")
+	}
+	if job.MemorySnapshotFingerprint != decision.MemorySnapshotFingerprint {
+		t.Fatalf("job fingerprint = %q, want it to still agree with the decision",
+			job.MemorySnapshotFingerprint)
+	}
+}
+
+// The vault index bound is a discovery bound, and the walk is not on the
+// enqueue path at all. A vault too large to index still has a persona, and the
+// person typing into that conversation still gets their message accepted with
+// the pin frozen onto it — an enqueue that consulted the walk would turn one
+// note too many in the user's vault into a conversation that stops working.
+func TestEnqueueStillFreezesPinsForAVaultTheScanRefuses(t *testing.T) {
+	repo, vault, sessionID := memoryEgressRepo(t)
+	writePin(t, vault, memoryfiles.PersonaFileName, "Speak plainly.")
+	beliefs := filepath.Join(vault.Root(), memoryfiles.BeliefsDirName)
+	for index := range memoryfiles.MaxVaultIndexedFiles + 1 {
+		if err := os.WriteFile(
+			filepath.Join(beliefs, fmt.Sprintf("note-%05d.md", index)), []byte("x"), 0o600,
+		); err != nil {
+			t.Fatalf("seed note %d: %v", index, err)
+		}
+	}
+	// Stated up front, so this cannot silently degrade into testing an
+	// ordinary vault the walk would have been happy with.
+	if _, err := vault.Scan(context.Background()); !errors.Is(err, memoryfiles.ErrVaultTooLarge) {
+		t.Fatalf("the fixture is not over the index bound: %v", err)
+	}
+
+	if _, err := repo.EnqueueUserMessage(context.Background(), EnqueueUserMessageInput{
+		SessionID: sessionID, Content: "local", ContentType: "text",
+		AgentID: "general_assistant", ModelProvider: "ollama", Model: "qwen2.5:7b",
+	}); err != nil {
+		t.Fatalf("a vault over the index bound blocked the enqueue: %v", err)
+	}
+	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-over-bound")
+	if err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
+	}
+	if job.PinnedPersona == nil || job.PinnedPersona.Withheld {
+		t.Fatalf("job persona = %+v, want it pinned despite the unscannable vault", job.PinnedPersona)
+	}
+	if job.PinnedPersona.Body != "Speak plainly." {
+		t.Fatalf("job persona body = %q, want the pinned words", job.PinnedPersona.Body)
 	}
 }
 
