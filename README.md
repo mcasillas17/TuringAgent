@@ -2,7 +2,7 @@
 
 TuringAgent is a local-first AI orchestration platform for running a private assistant stack on your own machine. It pairs a Flutter client with a Go gRPC backend that owns chat sessions, model routing, streaming events, tool execution, approvals, and audit state.
 
-The project is designed for local development first: secrets stay in your local `.env`, data is stored under `turing-backend/data/`, and file tools are constrained to `turing-backend/sandbox/`.
+The project is designed for local development first: secrets stay in your local `.env`, data is stored under `turing-backend/data/`, file tools are constrained to `turing-backend/sandbox/`, and the memory vault — the persona, profile, beliefs and proposals Turing keeps as plain Markdown you can open in Obsidian — lives under `turing-backend/memory/`, which is ignored by git except for its `.gitkeep`.
 
 ## What it does
 
@@ -43,9 +43,12 @@ cd TuringAgent/turing-backend
 
 `init.sh` rejects root execution, creates `turing-backend/.env`, generates local
 bearer tokens, records the current non-root UID/GID for bind-mounted storage,
-creates `data/`, `skills/`, and a real (non-symlink) `sandbox/`, and prints the
-Flutter client API key. It fails rather than changing ownership or permissions
-when existing sandbox content is inaccessible. Do not commit `.env`.
+creates `data/`, `skills/`, `mcp/`, a real (non-symlink) `sandbox/`, and the
+memory vault `memory/` with its `inbox/` and `beliefs/` folders and a commented
+default `persona.md` (written only when that file is absent — an existing
+`persona.md` or `profile.md` is secured to `0600` and never rewritten), and
+prints the Flutter client API key. It fails rather than changing ownership or
+permissions when existing sandbox content is inaccessible. Do not commit `.env`.
 
 Start the backend stack:
 
@@ -61,9 +64,12 @@ host port defaults to `3000` and can be changed with
 Use the repository scripts rather than invoking this Compose file directly.
 `scripts/compose.sh` validates and injects the current non-root host UID/GID;
 this prevents stale `.env` values or exported `HOST_UID`/`HOST_GID` variables
-from selecting the identity used for the data, skills, and sandbox bind mounts. All
-backend services otherwise run with read-only roots, no Linux capabilities, and
-`no-new-privileges`; only `/app/data`, `/skills`, and `/sandbox` are writable.
+from selecting the identity used for the data, skills, memory, and sandbox bind
+mounts, and it refuses to launch when one of those host directories is a
+symlink, is missing, or is not mode 0700. All backend services otherwise run
+with read-only roots, no Linux capabilities, and `no-new-privileges`; only
+`/app/data`, `/skills`, `/memory`, and `/sandbox` are writable, and `/memory` is
+mounted into the orchestrator alone.
 
 In another terminal, run the Flutter app:
 

@@ -33,6 +33,10 @@ services:
       ORCHESTRATOR_INTERNAL_PORT: ${ORCHESTRATOR_INTERNAL_PORT:-3001}
       DATABASE_PATH: ${DATABASE_PATH:-/app/data/turing.db}
       SKILLS_ROOT: /skills
+      # The memory vault, mounted read/write below. Set explicitly rather than
+      # left to the binary's default so the bind target and the path the
+      # orchestrator opens are one decision in one file.
+      MEMORY_ROOT: /memory
       MCP_CONFIG_ROOT: /mcp
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
@@ -67,6 +71,10 @@ services:
       - ../data:/app/data
       - ../skills:/skills
       - ../mcp:/mcp:ro
+      # Read/write: promotion moves a note between folders and a profile edit
+      # is written in place. The orchestrator is the only service that mounts
+      # it, and scripts/compose.sh validates the host directory first.
+      - ../memory:/memory
     networks:
       - net-system
       - net-files

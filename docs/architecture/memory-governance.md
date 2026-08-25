@@ -1,7 +1,9 @@
 # Memory governance and derived-state contract
 
-**Status:** architecture contract for MEM-001. Turing does not yet have curated
-long-term memory; this document constrains the memory work that follows.
+**Status:** architecture contract for MEM-001, amended once. Phase 1 of the
+vault-backed memory work ships under Amendment 1 below, which rewrites five
+passages of the original contract and names two relaxations. Everything the
+amendment does not name is unchanged and binding.
 
 ## Boundary and invariant
 
@@ -35,6 +37,115 @@ revisions, summaries, embeddings, vector indexes, graph edges, caches,
 connector projections, and prompt-assembly snapshots. Renaming derived state
 does not change its obligations.
 
+## Amendment 1 — vault-backed memory (Phase 1)
+
+Phase 1 gives Turing a memory the user can open in a text editor: an
+Obsidian-compatible vault of plain Markdown at `MEMORY_ROOT` (`/memory` in the
+container, `turing-backend/memory/` on the host), holding `persona.md`,
+`profile.md`, `inbox/` and `beliefs/`. This section is the whole amendment. It
+names two relaxations and rewrites five passages of the contract above —
+§Ownership and scope's final paragraph, §Retention's first bullet, the **Active
+user-controlled memory** taxonomy row, §Correction's withdrawal sentence, and
+§Egress — in place, rather than leaving them to be read around.
+
+### Relaxation 1 — promotion is authorship
+
+When the user promotes a candidate, with its full content displayed and
+editable before acceptance, that act is the item's source. Links to the session
+the proposal came from demote from load-bearing dependencies to annotations.
+
+The consequences, stated rather than implied:
+
+- **Machine-owned state obeys the unamended contract.** Candidates and evidence
+  annotations are derived state with a database-enforced cascade to the session
+  that produced them, plus an external file cleanup for the candidate files
+  themselves. A failed cleanup fails the withdrawal.
+- **User-adopted content survives the deletion of its source**, as a note the
+  user typed by hand would. Its evidence annotations do not: the rows are
+  removed in the deleting transaction, and the frontmatter references that cite
+  the deleted session are rewritten to `withdrawn` by a reconcile the deletion
+  flow triggers as its vault cleaner completes — not left for the next restart.
+  A promoted belief therefore never cites deleted evidence for longer than the
+  deletion takes, and the client shows it as unevidenced. The *content*
+  persists. That is the relaxation, and it is the only place a "fact" outlives
+  its originating session.
+
+### Relaxation 2 — vault beliefs defer the revision chain
+
+§Correction requires immutable revisions and supersession, and §Writers requires
+an authenticated orchestrator operation for every mutation. A folder the user
+edits in Obsidian offers neither: a file edit and an RPC converge in reconcile,
+which emits audit events for the changes it detects but cannot reconstruct a
+revision history the file never carried. Phase 1 therefore defers the belief
+revision chain, supersession, and lifecycle-validated vault edits to **MEM-010**,
+explicitly. `memory_candidates` rows, being machine-owned, keep validated
+lifecycle transitions and audit events from day one.
+
+Nothing here ships revision history for vault files, sensitivity filtering, or
+automatic extraction. Automatic candidate extraction from conversation remains
+**MEM-009**: today a candidate exists only because a run called
+`memory.remember`, and assistant, tool, and recalled content are not a
+candidate source.
+
+### The vault is a governed projection, and its tables say so
+
+The files are the content of record; SQLite holds what files cannot — identity,
+evidence, search, and the erasure contract. The schema manifest classifies every
+table in the same change that created it:
+
+- `memory_candidates` — **cascade_owned**, source `sessions`, `NOT NULL`
+  session foreign key with `ON DELETE CASCADE`. Inbox proposals, of both kinds
+  (`belief` and `profile_edit`), are machine-owned rows. They are never
+  searchable and never active: no tool argument can name `inbox/`, and nothing
+  in it is pinned.
+- `memory_evidence` — **cascade_owned**, source `sessions`, cascading from both
+  the note and the session. These are the annotations Relaxation 1 demotes.
+- `vault_artifacts` — **cascade_owned**, source `sessions`. A reservation is
+  written *before* the candidate file is created, so a crash leaves a row with
+  no file, which the idempotent cleaner tolerates, rather than a file no cleaner
+  knows about while the deletion reports complete.
+- `memory_notes` — **independent**, with Relaxation 1 as its written rationale:
+  promoted notes are user-authored files whose lifecycle the user controls, and
+  their session provenance cascades separately through `memory_evidence`.
+- `memory_notes_fts` — an **external-content FTS5 projection** over
+  `memory_notes.content`, with insert, delete, and update triggers, verified by
+  the same guard that verifies `messages_fts`.
+
+Two further boundaries, kept honest: `memory.remember` writes bounded
+distillations, refused legibly when over the limit rather than truncated, and
+never transcripts; and candidate bodies live in the cascade-owned table so that
+even before promotion they are not a second, less-governed copy of conversation
+content.
+
+### Named residuals
+
+These are known, bounded, and deliberately not claimed away:
+
+- **A vault is designed to be synced.** The erasure claim stops at the vault
+  directory. Copies made by Obsidian Sync, iCloud, Dropbox, git, or a backup
+  tool are outside it, exactly as §Backup and export already scopes deletion
+  against user-made copies.
+- **A profile write is deliberately not atomic.** `profile.md` is written
+  through a descriptor opened in place, verified by content hash on the same
+  descriptor, because a rename would swap the inode out from under an editor
+  holding the file open. A crash or a concurrent read mid-write can therefore
+  observe a torn `profile.md`; the pinned-file failure posture recovers it as a
+  visible parse-error row rather than as silence.
+- **The scan's (mtime, size) cache can serve stale text.** An edit made in the
+  same second that leaves the file the same length may not be noticed until the
+  next change. It affects the search projection only: `memory.read` serves the
+  file, freshly read.
+- **The 4096-file scan bound degrades search and reconcile only.** A vault past
+  it refuses legibly; pinned tiers and enqueue are never blocked by vault size.
+
+### What the amendment does not touch
+
+The physical-erasure limit, the backup and export rules, the scrubbed-tombstone
+exception, the writer authority rules, and the schema-invariant enforcement
+below are unchanged. Logical withdrawal remains distinct from physical erasure;
+a promoted note that survives a session deletion under Relaxation 1 is content
+the user authored, not a byte-level exception to anything.
+
 ## Trust classes
 
 | Class | Examples | Permitted use |
@@ -42,7 +153,7 @@ does not change its obligations.
 | User-authored evidence | User messages, explicit profile edits, a deliberate "remember this" action | May become active memory through an explicit user action. It is evidence of what the user said or requested, not proof that the statement is objectively true. |
 | Locally derived candidate | A fact, preference, summary, or consolidation proposed by a local model or deterministic process | Untrusted until reviewed. It may be stored as a source-linked candidate but must not silently become an active belief or instruction. |
 | External or delegated evidence | Assistant replies, remote-model output, tool results, files, web content, connector data, imported records | Untrusted content. It must retain source and egress attribution and cannot directly create an active belief or procedural instruction. Imports are isolated candidates until the user accepts them. |
-| Active user-controlled memory | A user-created item or an accepted candidate with immutable provenance and revision history | Eligible for recall within its scope. Recall must expose provenance and date, and active instructions must remain distinguishable from untrusted recalled content. |
+| Active user-controlled memory | A user-created item, or a candidate the user promoted with its full content shown and editable before acceptance | Eligible for recall within its scope. Recall must expose provenance and date, and active instructions must remain distinguishable from untrusted recalled content. Promotion is authorship: the promoted content's source is that act, and its links to the originating session are annotations rather than dependencies (Amendment 1, Relaxation 1). Immutable revision history is required of database-owned items and deferred for vault files (Relaxation 2). |
 | Operational metadata | IDs, timestamps, lifecycle state, hashes, model/extractor version, token counts | May support policy, audit, and explanation. It must not smuggle a content copy around deletion rules. |
 | Scrubbed audit tombstone | Minimal evidence that an action or deletion occurred | May survive source deletion only under the explicit exception above. It cannot be recalled as memory or reconstructed into deleted content. |
 
@@ -86,7 +197,12 @@ source.
 
 Source ownership is separate from recall scope. A user-scoped fact derived
 from a session message still depends on that message; deleting the source
-withdraws the derived fact even though its recall scope was wider.
+withdraws the derived fact even though its recall scope was wider — with one
+exception, defined in Amendment 1: content the user promoted by an explicit act
+with the full text shown and editable is authored by that act, so it survives
+the deletion of the session it was proposed in, while every machine-owned row
+about it is removed and every citation of the deleted source is rewritten to
+`withdrawn`.
 
 ## Egress
 
@@ -96,19 +212,30 @@ run does not gain standing access to the memory store.
 
 The remote-egress policy makes the destination and conservative maximum data
 classes visible and binds a one-time decision to the exact request and run.
-Memory/profile is a typed category but is not currently applicable or sent.
-When memory egress is implemented, adding that category will force a new
-prepare/confirm cycle, and only selected items with provenance and sensitivity
-filtering may be included. Candidates, full-memory exports, connector data, and
-background consolidation must not be sent implicitly. The egress record belongs
-to the run and remains attributable even if routing configuration later changes.
+Memory/profile is a typed category and, since Amendment 1, is applicable and
+sent: a remote run attaches it when the pinned persona/profile snapshot survives
+trimming or when a memory tool is in the frozen tool set. The consent is
+per run over whole pinned tiers rather than per item: the pinned documents are
+user-authored configuration the user consents to as a whole, disclosed by tier
+and vault path, and re-derived by the runtime before a provider is contacted.
+Per-item selection and sensitivity filtering are **deferred, not claimed** —
+nothing filters a pinned document by sensitivity today. Candidates, full-memory
+exports, connector data, and background consolidation must not be sent
+implicitly: `inbox/` is unreachable by any tool argument and is never pinned.
+The egress record belongs to the run and remains attributable even if routing
+configuration later changes. See
+[Remote egress policy](remote-egress-policy.md) for the exact applicability
+rule and its two-sided re-derivation.
 
 ## Retention
 
 No derived row may outlive the source it depends on.
 
 - Explicit active memory remains until the user supersedes, retracts, deletes,
-  or withdraws one of its sources.
+  or withdraws one of its sources — except for content the user authored by
+  promotion under Amendment 1, which depends on no session and remains until the
+  user deletes it. Its machine-owned annotations still obey the sentence above:
+  they are removed with the session they cite.
 - Candidate retention must be bounded and documented before automatic
   extraction ships. Expired or rejected candidates are deleted, not hidden
   indefinitely from the active view.
@@ -150,20 +277,29 @@ backup feature before that feature can make an erasure claim.
 Correction creates a new immutable revision and marks the previous revision
 superseded; it does not rewrite history. Only active revisions participate in
 current beliefs or recall. The UI and API must show what changed, who changed
-it, when, and which evidence supports each revision.
+it, when, and which evidence supports each revision. Amendment 1's Relaxation 2
+defers this for vault belief **files**, which the user edits in their own
+editor: those changes are detected and audited, not versioned. Database-owned
+candidates keep validated lifecycle transitions and audit events from day one.
 
 Retraction records that an item should no longer be used while preserving its
 source-linked history. Deletion removes the item and its dependent
-projections. Source or session withdrawal is stronger: every fact, candidate,
+projections. Source or session withdrawal is stronger: every candidate,
 revision, summary, embedding, index row, cache entry, and prompt snapshot
 derived from that source is removed in the same transaction or through a
-database-enforced cascade. A failed cascade fails the withdrawal rather than
-leaving an orphan.
+database-enforced cascade, together with every fact except one — content the
+user authored by promotion under Amendment 1, whose citations of the withdrawn
+source are rewritten to `withdrawn` in the same flow that removes the rows. A
+failed cascade, or a failed external file cleanup, fails the withdrawal rather
+than leaving an orphan.
 
 FTS is cascade-equivalent rather than a policy exception:
 `messages_fts` uses `messages` as external content, and an `AFTER DELETE`
-trigger removes the matching index row in the deleting transaction. The schema
-invariant verifies both the source declaration and delete trigger.
+trigger removes the matching index row in the deleting transaction.
+`memory_notes_fts` is the same shape over `memory_notes`, with an update trigger
+as well, so an edited note becomes searchable instead of leaving stale text in
+the index. The schema invariant verifies both the source declaration and delete
+trigger for each.
 
 ## SQLite physical-erasure limit
 

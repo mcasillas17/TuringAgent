@@ -3,6 +3,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# The vault layout the orchestrator opens at MEMORY_ROOT. Named here so the
+# provisioning below and the compose mount describe the same directory.
+MEMORY_PERSONA_NAME="persona.md"
+MEMORY_PROFILE_NAME="profile.md"
+MEMORY_INBOX_NAME="inbox"
+MEMORY_BELIEFS_NAME="beliefs"
+
 generate_secret() {
   openssl rand -hex 32
 }
@@ -175,6 +182,138 @@ provision_skills() {
   fi
 }
 
+provision_memory() {
+  local memory_path="$PWD/memory"
+  local tier
+  local document
+
+  if ! provision_private_directory "$memory_path" memory; then
+    return 1
+  fi
+  for tier in "$MEMORY_INBOX_NAME" "$MEMORY_BELIEFS_NAME"; do
+    if ! provision_private_directory "$memory_path/$tier" "memory/$tier"; then
+      return 1
+    fi
+  done
+  # Both pinned documents are prose about the user, so an existing one is
+  # secured; only the persona is created, because profile.md is the user's to
+  # write and an empty file init.sh invented would replace a visible "not
+  # written yet" with silence.
+  for document in "$MEMORY_PERSONA_NAME" "$MEMORY_PROFILE_NAME"; do
+    if ! secure_pinned_document "$memory_path/$document" "$document"; then
+      return 1
+    fi
+  done
+
+  if [[ -e "$memory_path/$MEMORY_PERSONA_NAME" ]]; then
+    return 0
+  fi
+  if ! write_default_persona "$memory_path/$MEMORY_PERSONA_NAME"; then
+    printf 'Initialization failed: could not write the default memory/%s.\n' \
+      "$MEMORY_PERSONA_NAME" >&2
+    return 1
+  fi
+}
+
+# A pinned document is never rewritten here — it is the user's text, and
+# persona.md is the one file whose contents reach a prompt unframed. A symlink
+# is refused rather than secured: unlike a mode, a link is not something
+# init.sh can fix without deciding what the user meant by it, and writing
+# through one would land the default wherever it points.
+secure_pinned_document() {
+  local path="$1"
+  local name="$2"
+
+  if [[ -L "$path" ]]; then
+    printf 'Initialization failed: memory/%s must be an owned regular file, not a symlink.\n' "$name" >&2
+    return 1
+  fi
+  if [[ ! -e "$path" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$path" || ! -O "$path" ]]; then
+    printf 'Initialization failed: memory/%s must be an owned regular file, not a symlink.\n' "$name" >&2
+    return 1
+  fi
+  if ! chmod 0600 "$path"; then
+    printf 'Initialization failed: could not secure memory/%s.\n' "$name" >&2
+    return 1
+  fi
+}
+
+# The private-directory dance the vault needs at three paths: refuse a symlink,
+# create at 0700 under a tight umask, require host ownership and access, then
+# secure and verify the mode.
+provision_private_directory() {
+  local path="$1"
+  local label="$2"
+
+  if [[ -L "$path" ]]; then
+    printf 'Initialization failed: %s must be a real directory, not a symlink.\n' "$label" >&2
+    return 1
+  fi
+  if [[ -e "$path" && ! -d "$path" ]]; then
+    printf 'Initialization failed: %s must be a real directory.\n' "$label" >&2
+    return 1
+  fi
+  if [[ ! -e "$path" ]] && ! (umask 077 && mkdir -m 0700 -- "$path"); then
+    printf 'Initialization failed: could not create %s directory.\n' "$label" >&2
+    return 1
+  fi
+  if [[ -L "$path" || ! -d "$path" ]]; then
+    printf 'Initialization failed: %s must be a real directory, not a symlink.\n' "$label" >&2
+    return 1
+  fi
+  if [[ ! -O "$path" || ! -r "$path" || ! -w "$path" || ! -x "$path" ]]; then
+    printf 'Initialization failed: %s is not owned, readable, writable, and traversable by the host user.\n' \
+      "$label" >&2
+    return 1
+  fi
+  if ! chmod 0700 "$path"; then
+    printf 'Initialization failed: could not secure %s directory.\n' "$label" >&2
+    return 1
+  fi
+  if [[ "$(path_mode "$path")" != "700" ]]; then
+    printf 'Initialization failed: %s must have mode 0700.\n' "$label" >&2
+    return 1
+  fi
+}
+
+# The default persona is commented out on purpose. It is pinned into every run
+# as written, so a shipped description of an assistant nobody chose would be
+# instructions the user never gave; commented, it is an invitation to write
+# one. It is still non-empty pinned content, which is what makes a fresh
+# install's remote-egress disclosure honest instead of silently empty.
+write_default_persona() {
+  local persona_path="$1"
+  (
+    umask 077
+    cat > "$persona_path" <<'PERSONA'
+# Who Turing is
+#
+# This file is yours. Every line of it is placed into every run exactly as you
+# write it, before anything else, and the agent can never edit it — not through
+# a tool, not through a proposal, not by accident. It is the only memory file
+# whose text is not framed as untrusted evidence, and it is the only one an
+# agent has no write path to. Those two facts are the same decision.
+#
+# Uncomment a line, or delete all of this and write your own. Keep it short:
+# only the first 4096 bytes reach a run, and the rest is cut with a notice.
+#
+# You are Turing, a careful assistant running on this machine.
+# Answer briefly. Say when you are unsure rather than guessing.
+# Ask before doing anything that changes files or leaves the machine.
+#
+# Two neighbours, so you know where the rest goes:
+#   profile.md   who you are — also yours to write; the agent may only propose
+#                edits to it, which you review before anything is applied.
+#   beliefs/     what Turing has been told and you have accepted, one note per
+#                subject. inbox/ holds proposals you have not accepted yet.
+PERSONA
+  ) || return 1
+  chmod 0600 "$persona_path"
+}
+
 provision_mcp_config() {
   local mcp_path="$PWD/mcp"
   local config_path="$mcp_path/mcp.json"
@@ -323,6 +462,7 @@ if ! is_positive_id "$current_uid" || ! is_positive_id "$current_gid"; then
 fi
 provision_sandbox
 provision_skills
+provision_memory
 provision_mcp_config
 
 validate_env_file

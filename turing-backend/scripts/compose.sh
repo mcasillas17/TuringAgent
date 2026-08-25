@@ -60,6 +60,26 @@ validate_skills_bind_source() {
   fi
 }
 
+validate_memory_bind_source() {
+  local memory_path="$PWD/memory"
+  if [[ -L "$memory_path" ]]; then
+    printf 'Compose launch failed: memory must be a real directory, not a symlink.\n' >&2
+    return 1
+  fi
+  if [[ ! -d "$memory_path" ]]; then
+    printf 'Compose launch failed: memory must be a real directory.\n' >&2
+    return 1
+  fi
+  if [[ ! -O "$memory_path" || ! -r "$memory_path" || ! -w "$memory_path" || ! -x "$memory_path" ]]; then
+    printf 'Compose launch failed: memory is not owned, readable, writable, and traversable by the host user.\n' >&2
+    return 1
+  fi
+  if [[ "$(path_mode "$memory_path")" != "700" ]]; then
+    printf 'Compose launch failed: memory must have mode 0700.\n' >&2
+    return 1
+  fi
+}
+
 validate_mcp_bind_source() {
   local mcp_path="$PWD/mcp"
   local config_path="$mcp_path/mcp.json"
@@ -184,6 +204,7 @@ if [[ -f .env ]]; then
   if [[ "${1:-}" != "down" ]]; then
     validate_sandbox_bind_source
     validate_skills_bind_source
+    validate_memory_bind_source
     validate_mcp_bind_source
     validate_data_bind_source
   fi

@@ -301,13 +301,21 @@ func TestInitRejectsUnsafeMemoryVaultEntries(t *testing.T) {
 			wantOutput: "memory/inbox must be a real directory",
 		},
 		{
-			name: "group writable vault",
+			name: "profile symlink",
 			setup: func(t *testing.T, root string) {
-				if err := os.Mkdir(filepath.Join(root, "memory"), 0770); err != nil {
+				memory := filepath.Join(root, "memory")
+				if err := os.Mkdir(memory, 0700); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(t.TempDir(), "outside-profile.md")
+				if err := os.WriteFile(target, []byte("outside\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(memory, "profile.md")); err != nil {
 					t.Fatal(err)
 				}
 			},
-			wantOutput: "memory must not be group- or world-writable",
+			wantOutput: "memory/profile.md must be an owned regular file, not a symlink",
 		},
 	}
 	for _, test := range tests {
@@ -321,6 +329,90 @@ func TestInitRejectsUnsafeMemoryVaultEntries(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Both pinned documents are prose about the user, and persona.md is the one
+// unframed instruction channel in the system. A copy restored from a backup, or
+// written under a permissive umask, is tightened on the next run rather than
+// left readable by everyone with an account on the machine.
+func TestInitSecuresExistingPinnedDocuments(t *testing.T) {
+	const persona = "my own persona\n"
+	const profile = "my own profile\n"
+	result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		memory := filepath.Join(root, "memory")
+		if err := os.Mkdir(memory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		for name, content := range map[string]string{
+			"persona.md": persona,
+			"profile.md": profile,
+		} {
+			path := filepath.Join(memory, name)
+			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if result.err != nil {
+		t.Fatalf("init.sh failed: %v\n%s", result.err, result.output)
+	}
+	for name, want := range map[string]string{
+		"persona.md": persona,
+		"profile.md": profile,
+	} {
+		path := filepath.Join(result.memory, name)
+		assertMode(t, path, 0600)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != want {
+			t.Fatalf("%s = %q, want the user's own text preserved", name, content)
+		}
+	}
+}
+
+// profile.md is the user's to write, and the client creates it on first save.
+// init.sh must not invent one: an empty file the user never wrote would pin
+// nothing but would replace the visible "not written yet" state with silence.
+func TestInitDoesNotCreateAProfile(t *testing.T) {
+	result := runInit(t, "501", "20", "")
+
+	if _, err := os.Lstat(filepath.Join(result.memory, "profile.md")); !os.IsNotExist(err) {
+		t.Fatalf("init.sh created a profile.md the user did not write: %v", err)
+	}
+}
+
+// A vault carried over from an earlier install, or created by a user with a
+// permissive umask, is secured rather than refused: init.sh owns provisioning,
+// and persona.md is the one unframed instruction channel in the system, so
+// leaving it group-readable is not an option.
+func TestInitSecuresAnExistingPermissiveMemoryVault(t *testing.T) {
+	result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		memory := filepath.Join(root, "memory")
+		if err := os.Mkdir(memory, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(memory, 0755); err != nil {
+			t.Fatal(err)
+		}
+		inbox := filepath.Join(memory, "inbox")
+		if err := os.Mkdir(inbox, 0770); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(inbox, 0770); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if result.err != nil {
+		t.Fatalf("init.sh failed: %v\n%s", result.err, result.output)
+	}
+	assertMode(t, result.memory, 0700)
+	assertMode(t, filepath.Join(result.memory, "inbox"), 0700)
+	assertMode(t, filepath.Join(result.memory, "beliefs"), 0700)
 }
 
 func TestInitCreatesPrivateDataDirectoryWithoutChown(t *testing.T) {
