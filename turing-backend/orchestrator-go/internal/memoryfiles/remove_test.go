@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 )
 
@@ -109,18 +108,14 @@ func TestRemoveInboxNoteRefusesDirectory(t *testing.T) {
 }
 
 func TestRemoveInboxNoteSyncsTheParentDirectory(t *testing.T) {
-	vault := newTestVault(t)
+	recorder := &syncRecorder{}
+	vault := openTestVault(t, newTestVaultRoot(t), recorder.hooks())
 	writeVaultFile(t, vault, "inbox/note.md", "candidate")
-	var directorySyncs atomic.Int64
-	realSync := vault.syncDirectory
-	vault.syncDirectory = func(directory *os.File) error {
-		directorySyncs.Add(1)
-		return realSync(directory)
-	}
+	inbox := inodeOf(t, filepath.Join(vault.Root(), InboxDirName))
 	if err := vault.RemoveInboxNote(context.Background(), "inbox/note.md"); err != nil {
 		t.Fatalf("remove inbox note: %v", err)
 	}
-	if directorySyncs.Load() == 0 {
+	if !recorder.syncedDirectory(inbox) {
 		t.Fatal("expected the parent directory to be fsynced after the deletion")
 	}
 }

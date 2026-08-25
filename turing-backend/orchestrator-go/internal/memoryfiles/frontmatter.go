@@ -126,7 +126,17 @@ type ParsedNote struct {
 // ParseNote reads a note's frontmatter without insisting the note is Turing's.
 // A file with no frontmatter is a perfectly good note the user wrote by hand:
 // it parses, carries no identity, and is unmanaged until reconcile assigns one.
-// Only a frontmatter block that opens and then cannot be read is an error.
+// Keys Turing does not know are kept and ignored — the user is invited to
+// annotate their own vault.
+//
+// Two things are errors, and both are per-note rather than fatal: a frontmatter
+// block that opens and then cannot be read, and a readable block that gives an
+// unreadable value to one of the few keys Turing owns. Today that is `kind`,
+// which decides whether a file may become a belief or rewrite the user's
+// profile; see readNoteKind. Such a note becomes a visible error row naming the
+// value and the kinds that are allowed, which is the plan's fail-soft posture:
+// the user is told which file needs their attention instead of watching it
+// quietly re-file itself as something more permissive.
 func ParseNote(relPath string, content string) (ParsedNote, error) {
 	rawFrontmatter, body, hasFrontmatter, err := splitFrontmatter(relPath, content)
 	if err != nil {
@@ -147,7 +157,9 @@ func ParseNote(relPath string, content string) (ParsedNote, error) {
 			if err != nil {
 				return ParsedNote{}, err
 			}
-			readFrontmatterFields(&parsed, mapping)
+			if err := readFrontmatterFields(relPath, &parsed, mapping); err != nil {
+				return ParsedNote{}, err
+			}
 		}
 	}
 	if parsed.Title == "" {
@@ -168,9 +180,15 @@ func frontmatterMapping(relPath string, document *yaml.Node) (*yaml.Node, error)
 }
 
 // readFrontmatterFields takes only what Turing needs and ignores everything
-// else. An unrecognised value is dropped rather than promoted to an error: the
+// else. An unrecognised *key* is dropped rather than promoted to an error: the
 // user's own keys are none of this parser's business.
-func readFrontmatterFields(parsed *ParsedNote, mapping *yaml.Node) {
+//
+// An unrecognised value of a key Turing owns is the opposite case. The kind
+// decides whether a file may become a belief or rewrite the user's profile, so
+// a value this parser cannot read is refused by name. Dropping it silently used
+// to leave the note kindless, which is the strictly more permissive state to be
+// in — a typo would quietly re-file a candidate as a hand-written draft.
+func readFrontmatterFields(relPath string, parsed *ParsedNote, mapping *yaml.Node) error {
 	for index := 0; index+1 < len(mapping.Content); index += 2 {
 		key := mapping.Content[index]
 		value := mapping.Content[index+1]
@@ -183,11 +201,11 @@ func readFrontmatterFields(parsed *ParsedNote, mapping *yaml.Node) {
 				parsed.ID = strings.TrimSpace(value.Value)
 			}
 		case FrontmatterKeyKind:
-			if value.Kind == yaml.ScalarNode {
-				if kind := NoteKind(strings.TrimSpace(value.Value)); kind.Valid() {
-					parsed.Kind = kind
-				}
+			kind, err := readNoteKind(relPath, value)
+			if err != nil {
+				return err
 			}
+			parsed.Kind = kind
 		case FrontmatterKeyTitle:
 			if value.Kind == yaml.ScalarNode {
 				parsed.Title = strings.TrimSpace(value.Value)
@@ -200,6 +218,29 @@ func readFrontmatterFields(parsed *ParsedNote, mapping *yaml.Node) {
 			parsed.Refs = scalarSequence(value)
 		}
 	}
+	return nil
+}
+
+// readNoteKind accepts the two kinds this package acts on, treats an absent or
+// blank value as "this note declares no kind" — which is what a note the user
+// wrote by hand looks like — and refuses everything else legibly.
+func readNoteKind(relPath string, value *yaml.Node) (NoteKind, error) {
+	if value.Kind != yaml.ScalarNode {
+		return "", noteParseError(relPath, "frontmatter key %q must be a plain value, one of %s", FrontmatterKeyKind, knownNoteKinds())
+	}
+	trimmed := strings.TrimSpace(value.Value)
+	if trimmed == "" {
+		return "", nil
+	}
+	kind := NoteKind(trimmed)
+	if !kind.Valid() {
+		return "", noteParseError(relPath, "frontmatter declares kind %q, which is not one of %s", value.Value, knownNoteKinds())
+	}
+	return kind, nil
+}
+
+func knownNoteKinds() string {
+	return string(KindBelief) + " or " + string(KindProfileEdit)
 }
 
 func scalarSequence(value *yaml.Node) []string {

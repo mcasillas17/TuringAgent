@@ -27,8 +27,6 @@ import (
 	"sync"
 
 	"golang.org/x/sys/unix"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -104,18 +102,45 @@ func (e *LimitError) Unwrap() error { return ErrTooLarge }
 type Vault struct {
 	root  string
 	locks *pathLockTable
-
-	// Injectable so a test can fail a durability step and prove the final name
-	// never appears. Production always uses the real fsync.
-	syncFile      func(*os.File) error
-	syncDirectory func(*os.File) error
+	hooks syncHooks
 }
+
+// syncHooks are the two durability calls every mutation runs through. They are
+// fixed when the Vault is constructed and never reassigned afterwards: a Vault
+// is shared across goroutines, and a hook swapped on a live value is a data
+// race on the one code path whose whole job is to be trustworthy.
+type syncHooks struct {
+	file      func(*os.File) error
+	directory func(*os.File) error
+}
+
+// realSyncHooks is the only set production ever uses.
+func realSyncHooks() syncHooks {
+	return syncHooks{
+		file:      func(file *os.File) error { return file.Sync() },
+		directory: func(directory *os.File) error { return directory.Sync() },
+	}
+}
+
+func (v *Vault) syncFile(file *os.File) error { return v.hooks.file(file) }
+
+func (v *Vault) syncDirectory(directory *os.File) error { return v.hooks.directory(directory) }
 
 // Open resolves the configured vault root exactly once. Ancestors of the
 // configured path may be symlinks — that is ordinary on macOS, where /var is a
 // link — but the vault directory itself must be a real directory, and every
 // path walked inside it afterwards refuses links outright.
 func Open(root string) (*Vault, error) {
+	return openVault(root, realSyncHooks())
+}
+
+// openVault is the one constructor. Hooks are a parameter rather than a field a
+// caller may assign later, so the durability discipline of a live Vault cannot
+// change underneath a goroutine already inside a write.
+func openVault(root string, hooks syncHooks) (*Vault, error) {
+	if hooks.file == nil || hooks.directory == nil {
+		return nil, errors.New("vault sync hooks must both be set")
+	}
 	if root == "" {
 		return nil, errors.New("vault root must be a non-empty absolute path")
 	}
@@ -138,10 +163,9 @@ func Open(root string) (*Vault, error) {
 		return nil, fmt.Errorf("resolve vault root: %w", err)
 	}
 	return &Vault{
-		root:          filepath.Clean(resolved),
-		locks:         processPathLocks,
-		syncFile:      func(file *os.File) error { return file.Sync() },
-		syncDirectory: func(directory *os.File) error { return directory.Sync() },
+		root:  filepath.Clean(resolved),
+		locks: processPathLocks,
+		hooks: hooks,
 	}, nil
 }
 
@@ -149,10 +173,20 @@ func Open(root string) (*Vault, error) {
 func (v *Vault) Root() string { return v.root }
 
 func (v *Vault) pathLockKey(clean string) string {
-	// Folded and NFC-normalized because the lock has to be the same lock for
-	// two spellings of one file: macOS is case-insensitive and stores
-	// decomposed names, so an unfolded key silently loses mutual exclusion.
-	return v.root + "\x00" + norm.NFC.String(cases.Fold().String(clean))
+	// The vault root plus the clean path, which is how safe_fs keys the table
+	// this one is modelled on. The path has already been through
+	// normalizeVaultPath, so the key is derived from bytes this package
+	// controls rather than from a caller's spelling.
+	//
+	// Named residual: on a case-insensitive filesystem two spellings of one
+	// name — inbox/Note.md and inbox/note.md — are one file with two keys, so
+	// they do not exclude each other. Every path this package acts on is either
+	// server-generated (a ULID and a slug, one canonical spelling) or a
+	// fixed name, so the two-spelling case needs a caller to invent it; and the
+	// confinement, the O_EXCL create and the fd-verified compare-and-set are
+	// what actually keep a write honest. The lock is contention control, not a
+	// safety boundary, and it does not carry a Unicode dependency for that.
+	return v.root + "\x00" + clean
 }
 
 type pathLockEntry struct {
@@ -452,6 +486,11 @@ func createStagingFile(parent *os.File, mode uint32) (*os.File, string, error) {
 // point before the link leaves nothing but an unreferenced staging file, so
 // partial content is never visible under the name a reader would open, and an
 // EEXIST from the link is real exclusivity rather than a truncation race.
+//
+// Its contract is all-or-nothing: when it returns an error, the final name was
+// not installed by this call. That is why a failed parent fsync unlinks the
+// entry it just made — the name would be visible but uncommitted, while the
+// caller has just been told the write did not happen.
 func (v *Vault) installStagedFile(ctx context.Context, parent *os.File, leaf string, content string) error {
 	staging, stagingName, err := createStagingFile(parent, 0o600)
 	if err != nil {
@@ -470,6 +509,13 @@ func (v *Vault) installStagedFile(ctx context.Context, parent *os.File, leaf str
 	if err := v.syncFile(staging); err != nil {
 		return fmt.Errorf("sync staged vault write: %w", err)
 	}
+	// Taken while the descriptor is still open, so the undo below can prove the
+	// entry it removes is the one this call linked and not a file that arrived
+	// under the same name afterwards.
+	var staged unix.Stat_t
+	if statErr := unix.Fstat(int(staging.Fd()), &staged); statErr != nil {
+		return fmt.Errorf("inspect staged vault write: %w", statErr)
+	}
 	if err := staging.Close(); err != nil {
 		return err
 	}
@@ -483,13 +529,36 @@ func (v *Vault) installStagedFile(ctx context.Context, parent *os.File, leaf str
 		return fmt.Errorf("install %q: %w", leaf, err)
 	}
 	if err := unix.Unlinkat(int(parent.Fd()), stagingName, 0); err != nil {
+		removeStaging = false
+		v.undoInstall(parent, leaf, staged)
 		return fmt.Errorf("remove vault staging file: %w", err)
 	}
 	removeStaging = false
 	if err := v.syncDirectory(parent); err != nil {
+		v.undoInstall(parent, leaf, staged)
 		return fmt.Errorf("sync vault directory after install: %w", err)
 	}
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		v.undoInstall(parent, leaf, staged)
+		return err
+	}
+	return nil
+}
+
+// undoInstall removes a name this call linked, and only if it is still that
+// exact inode. It is best-effort by design: the error the caller is already
+// returning is the one worth reporting, and a failure to undo leaves a visible
+// file rather than a silent one.
+func (v *Vault) undoInstall(parent *os.File, leaf string, installed unix.Stat_t) {
+	var current unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), leaf, &current, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return
+	}
+	if current.Dev != installed.Dev || current.Ino != installed.Ino {
+		return
+	}
+	_ = unix.Unlinkat(int(parent.Fd()), leaf, 0)
+	_ = v.syncDirectory(parent)
 }
 
 func writeAll(ctx context.Context, writer *os.File, content []byte) error {

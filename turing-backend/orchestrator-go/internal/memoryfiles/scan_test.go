@@ -242,8 +242,10 @@ func TestScanToleratesAMissingVaultDirectory(t *testing.T) {
 }
 
 func TestScanIsSafeUnderConcurrentUse(t *testing.T) {
+	const beliefs = 12
+
 	vault := newTestVault(t)
-	for index := 0; index < 12; index++ {
+	for index := 0; index < beliefs; index++ {
 		writeVaultFile(t, vault, fmt.Sprintf("beliefs/note-%02d.md", index), fmt.Sprintf("---\nid: \"note-%02d\"\n---\nbody\n", index))
 	}
 	cache := NewMetadataCache()
@@ -282,8 +284,15 @@ func TestScanIsSafeUnderConcurrentUse(t *testing.T) {
 	for err := range errorsChannel {
 		t.Fatalf("concurrent vault use failed: %v", err)
 	}
-	if cache.Len() != 12 {
-		t.Fatalf("cache holds %d entries", cache.Len())
+	// The beliefs are the only files that exist before the workers start, so
+	// they are the only entries every worker must have seen. Counting the whole
+	// cache would count the inbox notes the workers were writing while they
+	// scanned, which is a race against themselves rather than an assertion.
+	for index := 0; index < beliefs; index++ {
+		relPath := fmt.Sprintf("beliefs/note-%02d.md", index)
+		if _, ok := cache.Get(relPath); !ok {
+			t.Fatalf("%q never reached the cache", relPath)
+		}
 	}
 }
 
@@ -386,7 +395,7 @@ func TestLoadProfileReportsASymlinkAsUnavailableAndPinsNothing(t *testing.T) {
 
 func TestLoadPersonaReportsAnUnreadablyLargeDocumentWithoutPartialLoading(t *testing.T) {
 	vault := newTestVault(t)
-	writeVaultFile(t, vault, PersonaFileName, strings.Repeat("a", MaxNoteFileBytes+1))
+	writeVaultFile(t, vault, PersonaFileName, strings.Repeat("a", MaxPinnedSourceBytes+1))
 	pinned := vault.LoadPersona(context.Background())
 	if pinned.Available {
 		t.Fatal("an over-large persona must not be pinned")
@@ -416,10 +425,7 @@ func TestLoadPersonaTruncatesOnRuneBoundariesWithANotice(t *testing.T) {
 	if strings.ContainsRune(pinned.Content, utf8.RuneError) {
 		t.Fatal("truncation produced a replacement character")
 	}
-	body := strings.TrimSuffix(pinned.Content, truncationNotice(PersonaFileName, MaxPersonaBytes))
-	if body == pinned.Content {
-		t.Fatalf("no in-context truncation notice was added: %q", pinned.Content[len(pinned.Content)-120:])
-	}
+	body, _ := splitTruncationNotice(t, pinned)
 	if len(body) > MaxPersonaBytes {
 		t.Fatalf("pinned %d bytes, limit is %d", len(body), MaxPersonaBytes)
 	}
@@ -435,7 +441,7 @@ func TestLoadProfileTruncatesAtItsOwnLimit(t *testing.T) {
 	if !pinned.Truncated {
 		t.Fatal("expected truncation")
 	}
-	body := strings.TrimSuffix(pinned.Content, truncationNotice(ProfileFileName, MaxProfileBytes))
+	body, _ := splitTruncationNotice(t, pinned)
 	if len(body) != MaxProfileBytes {
 		t.Fatalf("pinned %d bytes, limit is %d", len(body), MaxProfileBytes)
 	}
@@ -529,6 +535,56 @@ func TestReadBeliefByIDRefusesAnIdentityMismatch(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected a file whose identity does not match to be refused")
+	}
+}
+
+// A note with no id is not this belief. It is a file the user wrote by hand
+// that reconcile has not adopted yet, and serving it because the index happened
+// to point here would answer a question about a memory nobody stored — the
+// citation would name an identity the file does not carry.
+func TestReadBeliefByIDRefusesAFileThatCarriesNoIdentity(t *testing.T) {
+	vault := newTestVault(t)
+	for name, content := range map[string]string{
+		"no frontmatter": "# Hand written\n\nSomething the user typed.\n",
+		"no id key":      "---\ntitle: \"Hand written\"\n---\nbody\n",
+		"blank id":       "---\nid: \"   \"\n---\nbody\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			relPath := "beliefs/unadopted.md"
+			writeVaultFile(t, vault, relPath, content)
+			_, err := vault.ReadBeliefByID(context.Background(), "01ARZ3NDEKTSV4RRFFQ69G5FAV", func(string) (string, bool) {
+				return relPath, true
+			})
+			if err == nil {
+				t.Fatal("expected a file with no stable identity to be refused")
+			}
+			if !strings.Contains(err.Error(), "01ARZ3NDEKTSV4RRFFQ69G5FAV") {
+				t.Fatalf("refusal %q does not name the identity that was asked for", err.Error())
+			}
+		})
+	}
+}
+
+func TestReadBeliefByIDServesOnlyAnExactIdentityMatch(t *testing.T) {
+	vault := newTestVault(t)
+	writeVaultFile(t, vault, "beliefs/note.md", "---\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\n---\nbody\n")
+	resolve := func(string) (string, bool) { return "beliefs/note.md", true }
+
+	belief, err := vault.ReadBeliefByID(context.Background(), "01ARZ3NDEKTSV4RRFFQ69G5FAV", resolve)
+	if err != nil {
+		t.Fatalf("an exact match must be served: %v", err)
+	}
+	if belief.NoteID != "01ARZ3NDEKTSV4RRFFQ69G5FAV" {
+		t.Fatalf("note id = %q", belief.NoteID)
+	}
+	for _, near := range []string{
+		"01arz3ndektsv4rrffq69g5fav",
+		" 01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		"01ARZ3NDEKTSV4RRFFQ69G5FA",
+	} {
+		if _, err := vault.ReadBeliefByID(context.Background(), near, resolve); err == nil {
+			t.Fatalf("identity %q is not the identity in the file and must be refused", near)
+		}
 	}
 }
 

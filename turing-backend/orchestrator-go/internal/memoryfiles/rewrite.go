@@ -96,12 +96,12 @@ func (v *Vault) RewriteFrontmatterRefs(ctx context.Context, request RewriteFront
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
 		return RewrittenNote{}, confinementError(clean, "entry is not a regular file")
 	}
-	currentBytes, err := readBounded(ctx, file, MaxNoteFileBytes)
+	currentBytes, err := readBounded(ctx, file, MaxNoteBytes)
 	if err != nil {
 		return RewrittenNote{}, fmt.Errorf("read %q: %w", clean, err)
 	}
-	if len(currentBytes) > MaxNoteFileBytes {
-		return RewrittenNote{}, &LimitError{What: fmt.Sprintf("note %q", clean), Limit: MaxNoteFileBytes, Got: len(currentBytes)}
+	if len(currentBytes) > MaxNoteBytes {
+		return RewrittenNote{}, &LimitError{What: fmt.Sprintf("note %q", clean), Limit: MaxNoteBytes, Got: len(currentBytes)}
 	}
 	current := string(currentBytes)
 	if request.ExpectedContentHash != "" && ContentHash(current) != request.ExpectedContentHash {
@@ -115,8 +115,8 @@ func (v *Vault) RewriteFrontmatterRefs(ctx context.Context, request RewriteFront
 	if updated == current {
 		return RewrittenNote{RelPath: clean, Content: current, ContentHash: ContentHash(current)}, nil
 	}
-	if len(updated) > MaxNoteFileBytes {
-		return RewrittenNote{}, &LimitError{What: fmt.Sprintf("note %q after the rewrite", clean), Limit: MaxNoteFileBytes, Got: len(updated)}
+	if len(updated) > MaxNoteBytes {
+		return RewrittenNote{}, &LimitError{What: fmt.Sprintf("note %q after the rewrite", clean), Limit: MaxNoteBytes, Got: len(updated)}
 	}
 	if err := ctx.Err(); err != nil {
 		return RewrittenNote{}, err

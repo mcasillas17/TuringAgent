@@ -100,28 +100,41 @@ type NoteMetadata struct {
 	ContentHash string
 }
 
-// MetadataCache is a concurrency-safe (mtime, size) map a later scan or search
-// can consult before re-reading a file.
+// MetadataCache lets a caller keep what one scan read and hand it back to the
+// next one. It is safe for concurrent use: two scans of the same vault share
+// one cache, and the app scans on a timer while the user is editing.
+//
+// Entries hold the note exactly as it parsed, before anything the vault decides
+// across files. Nothing whose answer depends on another note is stored here.
 type MetadataCache struct {
 	mutex   sync.RWMutex
-	entries map[string]NoteMetadata
+	entries map[string]cacheEntry
+}
+
+// cacheEntry keeps the cheap identity beside the parse it belongs to. A caller
+// that supplies metadata by hand gets an entry with no note attached, which is
+// a miss for reuse and a hit for freshness questions.
+type cacheEntry struct {
+	metadata NoteMetadata
+	note     NoteRow
+	hasNote  bool
 }
 
 func NewMetadataCache() *MetadataCache {
-	return &MetadataCache{entries: make(map[string]NoteMetadata)}
+	return &MetadataCache{entries: make(map[string]cacheEntry)}
 }
 
 func (c *MetadataCache) Put(relPath string, metadata NoteMetadata) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	c.entries[relPath] = metadata
+	c.entries[relPath] = cacheEntry{metadata: metadata}
 }
 
 func (c *MetadataCache) Get(relPath string) (NoteMetadata, bool) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-	metadata, ok := c.entries[relPath]
-	return metadata, ok
+	entry, ok := c.entries[relPath]
+	return entry.metadata, ok
 }
 
 // Fresh reports whether a cached entry still matches what the filesystem says.
@@ -143,6 +156,59 @@ func (c *MetadataCache) Drop(relPath string) {
 	delete(c.entries, relPath)
 }
 
+// The three methods below are what a scan uses. Each tolerates a nil cache, so
+// scanning without one is the same code path with the caching turned off
+// rather than a second implementation that can drift from this one.
+
+func (c *MetadataCache) reusableRow(relPath string, modTimeUnix int64, sizeBytes int64) (NoteRow, bool) {
+	if c == nil {
+		return NoteRow{}, false
+	}
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	entry, ok := c.entries[relPath]
+	if !ok || !entry.hasNote {
+		return NoteRow{}, false
+	}
+	if entry.metadata.ModTimeUnix != modTimeUnix || entry.metadata.SizeBytes != sizeBytes {
+		return NoteRow{}, false
+	}
+	return entry.note, true
+}
+
+func (c *MetadataCache) putScanned(relPath string, note NoteRow) {
+	if c == nil {
+		return
+	}
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.entries[relPath] = cacheEntry{
+		metadata: NoteMetadata{
+			ModTimeUnix: note.ModTimeUnix,
+			SizeBytes:   note.SizeBytes,
+			ContentHash: note.ContentHash,
+		},
+		note:    note,
+		hasNote: true,
+	}
+}
+
+// retain drops every path this pass did not see. A note the user deleted in
+// Obsidian has to leave the cache with it, or a later reader is holding the
+// only copy of a memory they asked to be rid of.
+func (c *MetadataCache) retain(seen map[string]struct{}) {
+	if c == nil {
+		return
+	}
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	for relPath := range c.entries {
+		if _, ok := seen[relPath]; !ok {
+			delete(c.entries, relPath)
+		}
+	}
+}
+
 type scanCandidate struct {
 	relPath     string
 	area        VaultArea
@@ -155,6 +221,21 @@ type scanCandidate struct {
 // points at. Directories the vault does not own — every dot folder, so
 // .obsidian and .trash included — are skipped whole.
 func (v *Vault) Scan(ctx context.Context) (ScanResult, error) {
+	return v.ScanWithCache(ctx, nil)
+}
+
+// ScanWithCache is the same pass with a cache the caller keeps between runs. A
+// note whose modification time and length are unchanged is not re-read or
+// re-parsed; it is served from what the last pass already read.
+//
+// The cache is deliberately not consulted for anything decided across the whole
+// vault. Duplicate identities are recomputed on every pass, because that answer
+// depends on the other files, and a cached verdict would leave the survivor of
+// a resolved duplicate refused forever.
+//
+// Paths that no longer exist are dropped at the end of the pass, so a deleted
+// note cannot be served out of the cache by a later reader.
+func (v *Vault) ScanWithCache(ctx context.Context, cache *MetadataCache) (ScanResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ScanResult{}, err
 	}
@@ -163,19 +244,21 @@ func (v *Vault) Scan(ctx context.Context) (ScanResult, error) {
 	if err != nil {
 		return ScanResult{}, err
 	}
-	if len(candidates) > MaxVaultIndexedFiles {
-		return ScanResult{}, fmt.Errorf(
-			"the vault holds %d notes, past the %d-note scan bound; memory search and reconciliation are bounded so a large vault cannot stall the app: %w",
-			len(candidates), MaxVaultIndexedFiles, ErrVaultTooLarge,
-		)
-	}
 	notes := make([]NoteRow, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return ScanResult{}, err
 		}
-		notes = append(notes, v.readNoteRow(ctx, candidate))
+		seen[candidate.relPath] = struct{}{}
+		row, reused := cache.reusableRow(candidate.relPath, candidate.modTimeUnix, candidate.sizeBytes)
+		if !reused {
+			row = v.readNoteRow(ctx, candidate)
+			cache.putScanned(candidate.relPath, row)
+		}
+		notes = append(notes, row)
 	}
+	cache.retain(seen)
 	sort.Slice(notes, func(first int, second int) bool {
 		return notes[first].RelPath < notes[second].RelPath
 	})
@@ -187,6 +270,11 @@ func (v *Vault) Scan(ctx context.Context) (ScanResult, error) {
 	return result, nil
 }
 
+// walkVault lists the vault breadth-first and refuses the moment it has seen
+// one indexable note more than the bound allows. Stopping there rather than
+// after the fact is the difference between a bounded walk and an unbounded one
+// that reports a bound: a vault with a million notes must not be pulled into
+// memory to be told it is too large.
 func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandidate, error) {
 	var candidates []scanCandidate
 	queue := []string{""}
@@ -235,6 +323,10 @@ func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandid
 				continue
 			}
 			if stat.Mode&unix.S_IFMT == unix.S_IFDIR {
+				if reason := descentRefusal(relPath); reason != "" {
+					result.Skipped = append(result.Skipped, SkippedEntry{RelPath: relPath, Reason: reason})
+					continue
+				}
 				queue = append(queue, relPath)
 				continue
 			}
@@ -244,6 +336,10 @@ func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandid
 				modTimeUnix: stat.Mtim.Sec,
 				sizeBytes:   stat.Size,
 			})
+			if len(candidates) > MaxVaultIndexedFiles {
+				_ = directory.Close()
+				return nil, vaultTooLargeError()
+			}
 		}
 		_ = directory.Close()
 		if readErr != nil {
@@ -257,6 +353,31 @@ func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandid
 		return candidates[first].relPath < candidates[second].relPath
 	})
 	return candidates, nil
+}
+
+func vaultTooLargeError() error {
+	return fmt.Errorf(
+		"the vault holds more than %d indexable notes, past the %d-note scan bound; memory search and reconciliation are bounded so a large vault cannot stall the app: %w",
+		MaxVaultIndexedFiles, MaxVaultIndexedFiles, ErrVaultTooLarge,
+	)
+}
+
+// descentRefusal says why the walk will not go into a directory. The bound is
+// the one every write gate already applies: a note deeper than
+// MaxVaultPathDepth is a note no primitive in this package could write or
+// rewrite, so indexing it would offer the user a memory nothing can maintain.
+// An ordinary Obsidian tree is nowhere near it.
+func descentRefusal(relPath string) string {
+	if len(relPath) > MaxVaultPathBytes {
+		return fmt.Sprintf("folder path exceeds the %d-byte vault path limit and is not walked", MaxVaultPathBytes)
+	}
+	if strings.Count(relPath, "/")+1 >= MaxVaultPathDepth {
+		return fmt.Sprintf(
+			"folder is %d levels deep, at the %d-level vault path limit; notes below it could not be written or rewritten, so they are not indexed",
+			strings.Count(relPath, "/")+1, MaxVaultPathDepth,
+		)
+	}
+	return ""
 }
 
 // skipReason returns why an entry is not indexed, or "" when it should be.
@@ -314,7 +435,7 @@ func (v *Vault) readNoteRow(ctx context.Context, candidate scanCandidate) NoteRo
 		ModTimeUnix: candidate.modTimeUnix,
 		SizeBytes:   candidate.sizeBytes,
 	}
-	content, stat, err := v.readConfinedFile(ctx, candidate.relPath, MaxNoteFileBytes)
+	content, stat, err := v.readConfinedFile(ctx, candidate.relPath, MaxNoteBytes)
 	if err != nil {
 		row.ParseError = err.Error()
 		return row

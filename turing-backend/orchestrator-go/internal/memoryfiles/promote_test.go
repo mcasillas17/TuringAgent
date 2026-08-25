@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func seedCandidate(t *testing.T, vault *Vault, kind NoteKind, title string, body string) InboxNote {
@@ -238,7 +241,7 @@ func TestPromoteToBeliefsRefusesAMissingSource(t *testing.T) {
 
 func TestPromoteToBeliefsRefusesAnOverLargeSource(t *testing.T) {
 	vault := newTestVault(t)
-	writeVaultFile(t, vault, "inbox/huge.md", strings.Repeat("a", MaxNoteFileBytes+1))
+	writeVaultFile(t, vault, "inbox/huge.md", strings.Repeat("a", MaxNoteBytes+1))
 	_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
 		SourceRelPath: "inbox/huge.md",
 		Kind:          KindBelief,
@@ -265,10 +268,10 @@ func TestPromoteToBeliefsAcceptsAHandWrittenCandidateWithoutFrontmatter(t *testi
 	writeVaultFile(t, vault, "inbox/hand.md", "# Hand written\n\nSomething the user typed.\n")
 	promoted, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
 		SourceRelPath: "inbox/hand.md",
-		Kind:          KindBelief,
+		Mode:          PromoteUnmanagedDraft,
 	})
 	if err != nil {
-		t.Fatalf("a candidate with no frontmatter is still a belief candidate: %v", err)
+		t.Fatalf("a candidate with no frontmatter is an unmanaged draft, promotable by file move: %v", err)
 	}
 	if !strings.HasPrefix(promoted.RelPath, BeliefsDirName+"/") {
 		t.Fatalf("promoted note %q is not under beliefs/", promoted.RelPath)
@@ -288,5 +291,194 @@ func TestPromoteToBeliefsHonoursContextCancellation(t *testing.T) {
 		Kind:          KindBelief,
 	}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
+	}
+}
+
+// overwriteInPlace edits a file the way Obsidian does: the same inode, opened
+// and rewritten, never replaced. An identity check that only compares inodes
+// cannot see this edit at all.
+func overwriteInPlace(t *testing.T, path string, content string) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		t.Fatalf("open %q for in-place edit: %v", path, err)
+	}
+	defer func() { _ = file.Close() }()
+	if _, err := file.WriteString(content); err != nil {
+		t.Fatalf("rewrite %q in place: %v", path, err)
+	}
+}
+
+func TestPromoteToBeliefsRefusesWhenTheSourceIsEditedUnderTheSameInode(t *testing.T) {
+	recorder := &syncRecorder{}
+	vault := openTestVault(t, newTestVaultRoot(t), recorder.hooks())
+	candidate := seedCandidate(t, vault, KindBelief, "Prefers dark mode", "The user prefers dark mode.")
+	sourcePath := filepath.Join(vault.Root(), filepath.FromSlash(candidate.RelPath))
+	sourceInode := inodeOf(t, sourcePath)
+
+	// The user's own words, typed into Obsidian after Turing read the file and
+	// before it unlinked it. Losing them is the failure this guards.
+	userEdit := strings.Replace(candidate.Content, "The user prefers dark mode.", "Actually they prefer light mode.", 1)
+	if userEdit == candidate.Content {
+		t.Fatal("the test edit did not change the candidate")
+	}
+	var once sync.Once
+	recorder.setBeforeDirectorySync(func() {
+		once.Do(func() { overwriteInPlace(t, sourcePath, userEdit) })
+	})
+
+	_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
+		SourceRelPath: candidate.RelPath,
+		Kind:          KindBelief,
+	})
+	if err == nil {
+		t.Fatal("expected a source edited mid-promotion to refuse")
+	}
+	if !strings.Contains(err.Error(), "changed while it was being promoted") {
+		t.Fatalf("refusal %q does not say what happened", err.Error())
+	}
+	if after := inodeOf(t, sourcePath); after != sourceInode {
+		t.Fatalf("the source inode changed: %d -> %d", sourceInode, after)
+	}
+	onDisk, readErr := os.ReadFile(sourcePath)
+	if readErr != nil {
+		t.Fatalf("the user's edited candidate was deleted: %v", readErr)
+	}
+	if string(onDisk) != userEdit {
+		t.Fatalf("the user's edit was overwritten: %q", onDisk)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(vault.Root(), BeliefsDirName))
+	if readErr != nil {
+		t.Fatalf("read beliefs: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a belief was promoted from bytes the user had already replaced: %v", entries[0].Name())
+	}
+}
+
+func TestPromoteToBeliefsRefusesWhenTheSourceIsReplacedMidPromotion(t *testing.T) {
+	recorder := &syncRecorder{}
+	vault := openTestVault(t, newTestVaultRoot(t), recorder.hooks())
+	candidate := seedCandidate(t, vault, KindBelief, "Prefers dark mode", "The user prefers dark mode.")
+	sourcePath := filepath.Join(vault.Root(), filepath.FromSlash(candidate.RelPath))
+
+	var once sync.Once
+	recorder.setBeforeDirectorySync(func() {
+		once.Do(func() {
+			// A whole-file replacement: a new inode under the same name, which
+			// is what a sync client or a "save as" does.
+			if err := os.Remove(sourcePath); err != nil {
+				t.Errorf("remove source: %v", err)
+				return
+			}
+			if err := os.WriteFile(sourcePath, []byte("replaced by the user\n"), 0o600); err != nil {
+				t.Errorf("replace source: %v", err)
+			}
+		})
+	})
+
+	_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
+		SourceRelPath: candidate.RelPath,
+		Kind:          KindBelief,
+	})
+	if err == nil {
+		t.Fatal("expected a replaced source to refuse")
+	}
+	onDisk, readErr := os.ReadFile(sourcePath)
+	if readErr != nil {
+		t.Fatalf("the replacement was deleted: %v", readErr)
+	}
+	if string(onDisk) != "replaced by the user\n" {
+		t.Fatalf("the replacement was disturbed: %q", onDisk)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(vault.Root(), BeliefsDirName))
+	if readErr != nil {
+		t.Fatalf("read beliefs: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a belief was promoted from replaced bytes: %v", entries[0].Name())
+	}
+}
+
+// The compensating delete exists to undo a promotion that never happened. If it
+// runs after the original is already gone, it does not undo anything — it
+// deletes the only copy of the note. The rollback therefore has to know whether
+// the source actually went away, not merely that something failed.
+func TestPromoteToBeliefsKeepsThePromotedCopyWhenOnlyTheFinalSyncFails(t *testing.T) {
+	recorder := &syncRecorder{}
+	vault := openTestVault(t, newTestVaultRoot(t), recorder.hooks())
+	candidate := seedCandidate(t, vault, KindBelief, "Prefers dark mode", "The user prefers dark mode.")
+	sourcePath := filepath.Join(vault.Root(), filepath.FromSlash(candidate.RelPath))
+
+	// During a promotion the directory fsyncs are, in order: the beliefs folder
+	// the copy was installed into, the vault root above it, and finally the
+	// inbox folder the original was just unlinked from. Failing the third one
+	// fails after the source is already gone.
+	recorder.setFailDirectorySyncNumber(3)
+
+	_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
+		SourceRelPath: candidate.RelPath,
+		Mode:          PromoteManagedCandidate,
+	})
+	if err == nil {
+		t.Fatal("a failed fsync must be reported, not swallowed")
+	}
+	if _, statErr := os.Lstat(sourcePath); !os.IsNotExist(statErr) {
+		t.Fatalf("the source was expected to be gone by this point: %v", statErr)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(vault.Root(), BeliefsDirName))
+	if readErr != nil {
+		t.Fatalf("read beliefs: %v", readErr)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("the promoted copy was rolled back after the original was already removed; beliefs/ holds %d files and the note is lost", len(entries))
+	}
+}
+
+// The rollback deletes a file. Everything it refuses to delete is therefore
+// load-bearing: if the copy it installed is already gone there is nothing to
+// undo, and if the name now holds a different inode it belongs to whoever put
+// it there — undoing a promotion must never turn into deleting a user's note.
+func TestRemoveInstalledCopyOnlyRemovesTheFileItInstalled(t *testing.T) {
+	vault := newTestVault(t)
+	parent, leaf, err := vault.openParent(context.Background(), "beliefs/rolled-back.md", false)
+	if err != nil {
+		t.Fatalf("open beliefs: %v", err)
+	}
+	defer func() { _ = parent.Close() }()
+
+	full := filepath.Join(vault.Root(), BeliefsDirName, leaf)
+	if err := os.WriteFile(full, []byte("installed by this promotion\n"), 0o600); err != nil {
+		t.Fatalf("write the installed copy: %v", err)
+	}
+	var installed unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), leaf, &installed, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		t.Fatalf("stat the installed copy: %v", err)
+	}
+
+	// Somebody else's file now occupies the name.
+	if err := os.Remove(full); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := os.WriteFile(full, []byte("the user's own note\n"), 0o600); err != nil {
+		t.Fatalf("write the user's file: %v", err)
+	}
+	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", installed); err == nil {
+		t.Fatal("expected the rollback to refuse a name it no longer owns")
+	}
+	onDisk, readErr := os.ReadFile(full)
+	if readErr != nil {
+		t.Fatalf("the rollback deleted a file it did not install: %v", readErr)
+	}
+	if string(onDisk) != "the user's own note\n" {
+		t.Fatalf("content = %q", onDisk)
+	}
+
+	// A copy that is already gone is not an error: the undo has nothing to do.
+	if err := os.Remove(full); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", installed); err != nil {
+		t.Fatalf("a missing copy is nothing to undo: %v", err)
 	}
 }

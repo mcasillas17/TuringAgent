@@ -124,13 +124,65 @@ func TestParseNoteReportsNonMappingFrontmatter(t *testing.T) {
 	}
 }
 
-func TestParseNoteIgnoresUnrecognisedKindWithoutFailing(t *testing.T) {
-	parsed, err := ParseNote("inbox/note.md", "---\nid: \"x\"\nkind: \"nonsense\"\n---\nbody\n")
-	if err != nil {
-		t.Fatalf("an unrecognised kind must stay lenient: %v", err)
+func TestParseNoteRefusesAnUnrecognisedKind(t *testing.T) {
+	// The kind is one of the few fields Turing owns, and it decides whether a
+	// file may become a belief or rewrite the user's profile. A value it does
+	// not recognise used to be dropped, which quietly turned a typo into a
+	// kindless hand-written draft — a strictly more permissive thing to be.
+	_, err := ParseNote("inbox/note.md", "---\nid: \"x\"\nkind: \"nonsense\"\n---\nbody\n")
+	var parseError *NoteParseError
+	if !errors.As(err, &parseError) {
+		t.Fatalf("expected a typed per-note parse error, got %v", err)
 	}
-	if parsed.Kind != "" {
-		t.Fatalf("expected an unrecognised kind to be dropped, got %q", parsed.Kind)
+	if !errors.Is(err, ErrNoteParse) {
+		t.Fatalf("expected ErrNoteParse, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "nonsense") {
+		t.Fatalf("refusal %q does not name the value it refused", err.Error())
+	}
+}
+
+func TestParseNoteAcceptsAnAbsentOrEmptyKind(t *testing.T) {
+	for name, content := range map[string]string{
+		"absent": "---\nid: \"x\"\n---\nbody\n",
+		"empty":  "---\nid: \"x\"\nkind: \"\"\n---\nbody\n",
+		"blank":  "---\nid: \"x\"\nkind: \"   \"\n---\nbody\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			parsed, err := ParseNote("inbox/note.md", content)
+			if err != nil {
+				t.Fatalf("a note that declares no kind is a hand-written draft, not an error: %v", err)
+			}
+			if parsed.Kind != "" {
+				t.Fatalf("kind = %q", parsed.Kind)
+			}
+		})
+	}
+}
+
+func TestParseNoteReadsBothKnownKinds(t *testing.T) {
+	for _, kind := range []NoteKind{KindBelief, KindProfileEdit} {
+		parsed, err := ParseNote("inbox/note.md", "---\nkind: \""+string(kind)+"\"\n---\nbody\n")
+		if err != nil {
+			t.Fatalf("kind %q must parse: %v", kind, err)
+		}
+		if parsed.Kind != kind {
+			t.Fatalf("kind = %q, want %q", parsed.Kind, kind)
+		}
+	}
+}
+
+func TestParseNoteRefusesAKindThatIsNotASingleValue(t *testing.T) {
+	for name, content := range map[string]string{
+		"sequence": "---\nkind:\n  - \"belief\"\n  - \"profile_edit\"\n---\nbody\n",
+		"mapping":  "---\nkind:\n  name: \"belief\"\n---\nbody\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseNote("inbox/note.md", content)
+			if !errors.Is(err, ErrNoteParse) {
+				t.Fatalf("a kind that is not one plain value must be refused, got %v", err)
+			}
+		})
 	}
 }
 

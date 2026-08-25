@@ -14,6 +14,13 @@ import (
 // person who has to act on it is the one holding the vault open.
 var ErrStaleContent = errors.New("the file changed since it was read; re-read it and apply the edit again")
 
+// MaxProfileEditBytes bounds what an accepted profile_edit may write. It is
+// exactly the candidate body limit, because the text being applied is a
+// candidate's own claim about the user: a body over 16 KiB is refused when the
+// candidate is created, and applying one would launder that same over-limit
+// text into the user's document through the back door.
+const MaxProfileEditBytes = MaxCandidateBodyBytes
+
 // StaleContentError names the file whose compare-and-set failed.
 type StaleContentError struct {
 	RelPath string
@@ -70,8 +77,8 @@ func (v *Vault) ApplyProfileEdit(ctx context.Context, request ApplyProfileEditRe
 	if err != nil {
 		return ProfileDocument{}, err
 	}
-	if len(request.Content) > MaxNoteFileBytes {
-		return ProfileDocument{}, &LimitError{What: "profile document", Limit: MaxNoteFileBytes, Got: len(request.Content)}
+	if len(request.Content) > MaxProfileEditBytes {
+		return ProfileDocument{}, &LimitError{What: "profile document", Limit: MaxProfileEditBytes, Got: len(request.Content)}
 	}
 
 	unlockCandidate, err := v.locks.lockContext(ctx, v.pathLockKey(candidate))
@@ -80,7 +87,7 @@ func (v *Vault) ApplyProfileEdit(ctx context.Context, request ApplyProfileEditRe
 	}
 	defer unlockCandidate()
 
-	candidateContent, _, err := v.readConfinedFile(ctx, candidate, MaxNoteFileBytes)
+	candidateContent, _, err := v.readConfinedFile(ctx, candidate, MaxNoteBytes)
 	if err != nil {
 		return ProfileDocument{}, err
 	}
@@ -144,12 +151,16 @@ func (v *Vault) writeProfileWithCompareAndSet(ctx context.Context, target string
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
 		return confinementError(target, "entry is not a regular file")
 	}
-	current, err := readBounded(ctx, file, MaxNoteFileBytes)
+	// The document already on disk is read against the pinned ceiling, not the
+	// edit limit: the user may have written a profile far longer than anything
+	// a candidate could propose, and the compare-and-set still has to be able
+	// to tell them their expected hash no longer matches.
+	current, err := readBounded(ctx, file, MaxPinnedSourceBytes)
 	if err != nil {
 		return fmt.Errorf("read %q: %w", target, err)
 	}
-	if len(current) > MaxNoteFileBytes {
-		return &LimitError{What: fmt.Sprintf("existing %q", target), Limit: MaxNoteFileBytes, Got: len(current)}
+	if len(current) > MaxPinnedSourceBytes {
+		return &LimitError{What: fmt.Sprintf("existing %q", target), Limit: MaxPinnedSourceBytes, Got: len(current)}
 	}
 	if ContentHash(string(current)) != expectedHash {
 		return &StaleContentError{RelPath: target}

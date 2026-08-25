@@ -11,11 +11,23 @@ import (
 )
 
 const (
-	// MaxPersonaBytes and MaxProfileBytes bound how much of each pinned
-	// document reaches a prompt. They bound the pin, not the file: the user may
-	// write as much as they like, and the rest simply is not pinned.
+	// MaxPersonaBytes and MaxProfileBytes are context budgets: how much of each
+	// pinned document reaches a prompt. They bound the pin, not the file. The
+	// user may write as much as they like; past the budget the pin is cut on a
+	// rune boundary and carries a notice saying so.
 	MaxPersonaBytes = 4096
 	MaxProfileBytes = 4096
+
+	// MaxPinnedSourceBytes is a different question with a different answer: how
+	// large a pinned document this package will read off disk at all. It exists
+	// only as a safety ceiling for the absurd case — a persona.md a script
+	// appended a gigabyte to — and it is two orders of magnitude above the
+	// budget precisely so that going over the budget stays what it is, an
+	// ordinary truncation, and never gets reported as an unreadable file.
+	//
+	// A file past this ceiling pins nothing and says why, per the plan's
+	// pinned-file failure posture: no silent partial load.
+	MaxPinnedSourceBytes = 512 * 1024
 )
 
 // UnavailableReason is the visible answer to "why is nothing pinned". It
@@ -71,7 +83,7 @@ func (v *Vault) loadPinned(ctx context.Context, relPath string, limit int, gate 
 		document.Detail = err.Error()
 		return document
 	}
-	content, stat, err := v.readConfinedFile(ctx, clean, MaxNoteFileBytes)
+	content, stat, err := v.readConfinedFile(ctx, clean, MaxPinnedSourceBytes)
 	if err != nil {
 		document.Reason = unavailableReasonFor(err)
 		document.Detail = err.Error()
@@ -88,10 +100,14 @@ func (v *Vault) loadPinned(ctx context.Context, relPath string, limit int, gate 
 	if strings.TrimSpace(pinned) == "" {
 		pinned = ""
 	} else if truncated {
-		pinned += truncationNotice(relPath, limit)
+		pinned += truncationNotice(relPath, len(pinned))
 	}
 	document.Content = pinned
-	document.ContentHash = ContentHash(content)
+	// The hash covers exactly what was pinned, notice included. It is the
+	// preimage an enqueue re-checks to notice the vault changed underneath a
+	// consented run, so hashing the file's own bytes instead would compare
+	// against something no model was ever shown.
+	document.ContentHash = ContentHash(pinned)
 	document.Available = true
 	document.Reason = UnavailableNone
 	return document
@@ -126,8 +142,13 @@ func truncateRunes(content string, limit int) (string, bool) {
 // truncationNotice is written in the document's own voice rather than as
 // metadata, because the model reading it has no other channel to learn that
 // what it is holding is a fragment.
-func truncationNotice(relPath string, limit int) string {
-	return fmt.Sprintf("\n\n[Only the first %d bytes of %s are pinned. Open the vault to read the rest.]\n", limit, relPath)
+//
+// It reports the bytes actually kept, not the budget. The rune-safe cut lands
+// at or below the budget, and a notice that always claimed the budget would be
+// quietly wrong on every document that ends in a multi-byte character — which
+// is the only situation where anyone would go looking at the number.
+func truncationNotice(relPath string, retainedBytes int) string {
+	return fmt.Sprintf("\n\n[Only the first %d bytes of %s are pinned. Open the vault to read the rest.]\n", retainedBytes, relPath)
 }
 
 // BeliefResolver maps a stable belief identity to its vault-relative path. The
@@ -171,7 +192,7 @@ func (v *Vault) ReadBeliefByID(ctx context.Context, beliefID string, resolve Bel
 	if err != nil {
 		return BeliefDocument{}, err
 	}
-	content, stat, err := v.readConfinedFile(ctx, clean, MaxNoteFileBytes)
+	content, stat, err := v.readConfinedFile(ctx, clean, MaxNoteBytes)
 	if err != nil {
 		return BeliefDocument{}, err
 	}
@@ -179,9 +200,15 @@ func (v *Vault) ReadBeliefByID(ctx context.Context, beliefID string, resolve Bel
 	if err != nil {
 		return BeliefDocument{}, err
 	}
-	// A file that names a different identity is not this belief, however the
-	// index got there. Serving it would answer a question nobody asked.
-	if parsed.ID != "" && parsed.ID != beliefID {
+	// A file that does not carry this identity is not this belief, however the
+	// index got there. Serving one that names a different id would answer a
+	// question nobody asked; serving one that names no id at all would attach a
+	// citation the file cannot support — it is a note the user wrote by hand
+	// that reconcile has not adopted yet, not a memory Turing stored.
+	if parsed.ID != beliefID {
+		if parsed.ID == "" {
+			return BeliefDocument{}, fmt.Errorf("%q carries no stable id, so it cannot be served as belief %q; the vault index is stale", clean, beliefID)
+		}
 		return BeliefDocument{}, fmt.Errorf("%q holds identity %q, not %q; the vault index is stale", clean, parsed.ID, beliefID)
 	}
 	return BeliefDocument{

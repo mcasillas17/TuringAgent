@@ -464,12 +464,10 @@ func TestRewriteFrontmatterRefsRefusesAnEmptyRequest(t *testing.T) {
 }
 
 func TestRewriteFrontmatterRefsWritesNothingWhenTheContentIsUnchanged(t *testing.T) {
-	vault := newTestVault(t)
+	recorder := &syncRecorder{}
+	vault := openTestVault(t, newTestVaultRoot(t), recorder.hooks())
 	writeVaultFile(t, vault, "beliefs/note.md", handWrittenNote)
-
-	writes := 0
-	realFileSync := vault.syncFile
-	vault.syncFile = func(file *os.File) error { writes++; return realFileSync(file) }
+	note := inodeOf(t, filepath.Join(vault.Root(), "beliefs", "note.md"))
 
 	result, err := vault.RewriteFrontmatterRefs(context.Background(), RewriteFrontmatterRefsRequest{
 		RelPath: "beliefs/note.md",
@@ -481,8 +479,8 @@ func TestRewriteFrontmatterRefsWritesNothingWhenTheContentIsUnchanged(t *testing
 	if result.Changed {
 		t.Fatal("an identical rewrite must not report a change")
 	}
-	if writes != 0 {
-		t.Fatalf("an identical rewrite touched the file %d times; Obsidian would see churn on every pass", writes)
+	if recorder.syncedFile(note) {
+		t.Fatal("an identical rewrite touched the file; Obsidian would see churn on every pass")
 	}
 	onDisk, readErr := os.ReadFile(filepath.Join(vault.Root(), "beliefs", "note.md"))
 	if readErr != nil {

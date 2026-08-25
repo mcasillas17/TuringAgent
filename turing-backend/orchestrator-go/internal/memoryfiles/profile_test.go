@@ -275,16 +275,12 @@ func TestApplyProfileEditRefusesASymlinkedProfile(t *testing.T) {
 }
 
 func TestApplyProfileEditFsyncsTheFileAndItsParent(t *testing.T) {
-	vault := newTestVault(t)
+	recorder := &syncRecorder{}
+	vault := openTestVault(t, newTestVaultRoot(t), recorder.hooks())
 	candidate := seedProfileEditCandidate(t, vault)
-	writeVaultFile(t, vault, ProfileFileName, "original")
-
-	fileSyncs := 0
-	directorySyncs := 0
-	realFileSync := vault.syncFile
-	realDirectorySync := vault.syncDirectory
-	vault.syncFile = func(file *os.File) error { fileSyncs++; return realFileSync(file) }
-	vault.syncDirectory = func(directory *os.File) error { directorySyncs++; return realDirectorySync(directory) }
+	profilePath := writeVaultFile(t, vault, ProfileFileName, "original")
+	profile := inodeOf(t, profilePath)
+	root := inodeOf(t, vault.Root())
 
 	if _, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
 		CandidateRelPath:    candidate.RelPath,
@@ -294,10 +290,10 @@ func TestApplyProfileEditFsyncsTheFileAndItsParent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("apply profile edit: %v", err)
 	}
-	if fileSyncs == 0 {
+	if !recorder.syncedFile(profile) {
 		t.Fatal("expected profile.md itself to be fsynced")
 	}
-	if directorySyncs == 0 {
+	if !recorder.syncedDirectory(root) {
 		t.Fatal("expected the vault root to be fsynced")
 	}
 }
@@ -308,7 +304,7 @@ func TestApplyProfileEditRefusesOverLargeContent(t *testing.T) {
 	_, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
 		CandidateRelPath: candidate.RelPath,
 		TargetRelPath:    ProfileFileName,
-		Content:          strings.Repeat("a", MaxNoteFileBytes+1),
+		Content:          strings.Repeat("a", MaxNoteBytes+1),
 	})
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("expected over-large profile content to be refused, got %v", err)

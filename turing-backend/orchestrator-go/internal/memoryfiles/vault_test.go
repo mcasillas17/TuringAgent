@@ -3,13 +3,17 @@ package memoryfiles
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
-func newTestVault(t *testing.T) *Vault {
+func newTestVaultRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	for _, dir := range []string{InboxDirName, BeliefsDirName} {
@@ -17,11 +21,111 @@ func newTestVault(t *testing.T) *Vault {
 			t.Fatalf("prepare vault dir %q: %v", dir, err)
 		}
 	}
-	vault, err := Open(root)
+	return root
+}
+
+func newTestVault(t *testing.T) *Vault {
+	t.Helper()
+	return openTestVault(t, newTestVaultRoot(t), realSyncHooks())
+}
+
+// openTestVault is the only way a test injects durability hooks. They are
+// constructor arguments rather than fields a test may assign, so production
+// keeps the property that a live Vault's fsync discipline never changes.
+func openTestVault(t *testing.T, root string, hooks syncHooks) *Vault {
+	t.Helper()
+	vault, err := openVault(root, hooks)
 	if err != nil {
 		t.Fatalf("open vault: %v", err)
 	}
 	return vault
+}
+
+// syncRecorder remembers which inodes were fsynced, so a durability test can
+// name the actual file and the actual directories that had to reach the disk
+// instead of counting calls and hoping they were the right ones.
+type syncRecorder struct {
+	mutex       sync.Mutex
+	files       []uint64
+	directories []uint64
+	// fileError, when set, fails every file fsync, which is how a test proves
+	// a half-written note never appears under its final name.
+	fileError error
+	// failDirectorySyncNumber, when positive, fails that directory fsync and
+	// only that one, counting from 1. It lets a test fail a specific step of a
+	// multi-step mutation instead of all of them.
+	failDirectorySyncNumber int
+	// beforeDirectorySync runs before each directory fsync. It is the seam a
+	// test uses to change the vault underneath an in-flight mutation.
+	beforeDirectorySync func()
+}
+
+// setBeforeDirectorySync installs the interference hook after any setup writes
+// have already happened, so a test only disturbs the operation it is about.
+func (r *syncRecorder) setBeforeDirectorySync(hook func()) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	r.beforeDirectorySync = hook
+}
+
+// setFailDirectorySyncNumber arms the failure after setup, for the same reason.
+func (r *syncRecorder) setFailDirectorySyncNumber(number int) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	r.failDirectorySyncNumber = number
+	r.directories = nil
+}
+
+func (r *syncRecorder) hooks() syncHooks {
+	return syncHooks{
+		file: func(file *os.File) error {
+			r.record(&r.files, file)
+			if r.fileError != nil {
+				return r.fileError
+			}
+			return file.Sync()
+		},
+		directory: func(directory *os.File) error {
+			r.mutex.Lock()
+			hook := r.beforeDirectorySync
+			failAt := r.failDirectorySyncNumber
+			number := len(r.directories) + 1
+			r.mutex.Unlock()
+			if hook != nil {
+				hook()
+			}
+			r.record(&r.directories, directory)
+			if failAt > 0 && number == failAt {
+				return fmt.Errorf("simulated directory fsync failure on call %d", number)
+			}
+			return directory.Sync()
+		},
+	}
+}
+
+func (r *syncRecorder) record(into *[]uint64, file *os.File) {
+	var stat unix.Stat_t
+	if err := unix.Fstat(int(file.Fd()), &stat); err != nil {
+		return
+	}
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	*into = append(*into, uint64(stat.Ino))
+}
+
+func (r *syncRecorder) syncedFile(inode uint64) bool { return r.saw(&r.files, inode) }
+
+func (r *syncRecorder) syncedDirectory(inode uint64) bool { return r.saw(&r.directories, inode) }
+
+func (r *syncRecorder) saw(from *[]uint64, inode uint64) bool {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	for _, seen := range *from {
+		if seen == inode {
+			return true
+		}
+	}
+	return false
 }
 
 func TestOpenRejectsRelativeRoot(t *testing.T) {
@@ -56,6 +160,30 @@ func TestOpenReportsCleanAbsoluteRoot(t *testing.T) {
 	}
 	if vault.Root() != filepath.Clean(vault.Root()) {
 		t.Fatalf("root %q is not clean", vault.Root())
+	}
+}
+
+// The lock key is the vault root and the clean path, exactly as safe_fs keys
+// its own table. Nothing else is folded in: the key has to be derivable from
+// the path this package already normalised, with no dependency of its own.
+func TestPathLockKeyIsTheRootAndTheCleanPath(t *testing.T) {
+	vault := newTestVault(t)
+	for _, clean := range []string{"inbox/Note.md", "beliefs/People/Miguel.md", ProfileFileName} {
+		want := vault.Root() + "\x00" + clean
+		if got := vault.pathLockKey(clean); got != want {
+			t.Fatalf("lock key for %q = %q, want %q", clean, got, want)
+		}
+	}
+}
+
+func TestPathLockKeysSeparateVaultsAndPaths(t *testing.T) {
+	first := newTestVault(t)
+	second := newTestVault(t)
+	if first.pathLockKey("inbox/a.md") == first.pathLockKey("inbox/b.md") {
+		t.Fatal("two paths share one lock key")
+	}
+	if first.pathLockKey("inbox/a.md") == second.pathLockKey("inbox/a.md") {
+		t.Fatal("two vaults share one lock key")
 	}
 }
 
@@ -374,8 +502,8 @@ func TestCreateInboxNoteIsExclusive(t *testing.T) {
 }
 
 func TestCreateInboxNoteLeavesNoPartialFinalName(t *testing.T) {
-	vault := newTestVault(t)
-	vault.syncFile = func(*os.File) error { return errors.New("simulated fsync failure") }
+	recorder := &syncRecorder{fileError: errors.New("simulated fsync failure")}
+	vault := openTestVault(t, newTestVaultRoot(t), recorder.hooks())
 	if _, err := vault.createInboxNoteAt(context.Background(), "inbox/note.md", "content"); err == nil {
 		t.Fatal("expected the staged write to fail")
 	}
