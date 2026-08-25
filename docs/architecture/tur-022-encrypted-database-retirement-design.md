@@ -473,6 +473,9 @@ counted as retired:**
   report names these files explicitly so the user can act on them. The
   operator cleanup of the recovery *table* changes shape under encryption —
   §next section, a deliberate amendment, not a footnote.
+- Sandbox artifacts under TUR-004's provenance manifest, session/memory
+  exports (TUR-015), and every user-created copy of anything — outside
+  Turing's custody, disclosed, out of scope.
 
 ## The recovery-table cleanup under encryption (a deliberate amendment)
 
@@ -516,9 +519,6 @@ survives:
 
 The implementation PR must rewrite the CLAUDE.md gotcha's cleanup steps to
 this ceremony (not merely add notes beside them) — §Documentation.
-- Sandbox artifacts under TUR-004's provenance manifest, session/memory
-  exports (TUR-015), and every user-created copy of anything — outside
-  Turing's custody, disclosed, out of scope.
 
 ## The retirement ceremony (locked)
 
@@ -650,6 +650,18 @@ implementation it kills. Break the gate, watch the test fail, restore.
     per-session logical withdrawal, disclose the separately governed
     recovery files and user-created copies, and never claim forensic
     erasure. *Kills:* the settings page that says "permanently erased."
+13. **G13 — The recovery-cleanup ceremony is exactly as narrow as
+    designed.** The in-process `legacy_skill_export_recovery` drop refuses
+    when any row's `skills/imported/<id>/SKILL.md` is missing or not
+    byte-identical (one corrupted file fails the whole ceremony, no partial
+    drop); refuses without a fresh TUR-016 backup receipt; never runs at
+    startup or without an explicit operator confirmation naming the row
+    count; and after success exactly the verified rows are gone and every
+    exported file is untouched. *Kills:* the drop that trusts row counts
+    without per-row content verification; the maintenance flow that
+    proceeds on a stale or absent backup receipt; the "cleanup" that quietly
+    widens into startup code — the exact regression the original
+    never-delete-nonempty-recovery invariant existed to prevent.
 
 ## Deferred, deliberately
 
