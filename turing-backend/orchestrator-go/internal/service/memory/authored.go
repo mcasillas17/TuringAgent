@@ -53,6 +53,8 @@ func (s *Server) SaveMemoryPersona(ctx context.Context, req *turingv1.SaveMemory
 		ContentHash:       saved.ContentHash,
 		Status:            turingv1.MemoryNoteStatus_MEMORY_NOTE_STATUS_UNMANAGED,
 		UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE,
+		PinnedTruncated:   saved.PinnedTruncated,
+		PinnedBytes:       int32(saved.PinnedBytes),
 	}}, nil
 }
 
@@ -79,6 +81,8 @@ func (s *Server) SaveMemoryProfile(ctx context.Context, req *turingv1.SaveMemory
 		ContentHash:       saved.ContentHash,
 		Status:            turingv1.MemoryNoteStatus_MEMORY_NOTE_STATUS_MANAGED,
 		UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE,
+		PinnedTruncated:   saved.PinnedTruncated,
+		PinnedBytes:       int32(saved.PinnedBytes),
 	}}, nil
 }
 
@@ -120,8 +124,8 @@ func authoredSaveError(err error, fallback string) error {
 // read it back on. The row says DISABLED so nobody mistakes a readable document
 // for one that is in use.
 func (s *Server) persona(ctx context.Context, settings *turingv1.MemorySettings) *turingv1.MemoryPersona {
-	document, reason, detail := s.pinnedDocument(ctx, settings, func(ctx context.Context) memoryfiles.PinnedDocument {
-		return s.vault.LoadPersona(ctx)
+	document, reason, detail := s.editableDocument(ctx, settings, func(ctx context.Context) memoryfiles.EditableDocument {
+		return s.vault.EditablePersona(ctx)
 	})
 	return &turingv1.MemoryPersona{
 		Content:     document.Content,
@@ -131,18 +135,29 @@ func (s *Server) persona(ctx context.Context, settings *turingv1.MemorySettings)
 		Status:            turingv1.MemoryNoteStatus_MEMORY_NOTE_STATUS_UNMANAGED,
 		ParseError:        detail,
 		UnavailableReason: reason,
+		PinnedTruncated:   document.PinnedTruncated,
+		PinnedBytes:       int32(document.PinnedBytes),
 	}
 }
 
-// pinnedDocument runs one pinned read and answers the two questions the client
-// asks of it separately: what the document says, and why it is not in use.
-func (s *Server) pinnedDocument(
+// editableDocument runs one editor-facing read and answers the two questions
+// the client asks of it separately: what the document says, and why it is not
+// in use.
+//
+// The read is deliberately the editor's, not the runtime's. A page handed the
+// pin would show a truncated document with a notice the user never typed, and
+// would send back a compare-and-set token hashed over text that is nowhere on
+// disk — so a document past the pin budget could be opened and never saved.
+// The runtime's own read is untouched: it still bounds, still appends the
+// notice, and still hashes what it sends, because that hash is the preimage of
+// the egress fingerprint.
+func (s *Server) editableDocument(
 	ctx context.Context,
 	settings *turingv1.MemorySettings,
-	load func(context.Context) memoryfiles.PinnedDocument,
-) (memoryfiles.PinnedDocument, turingv1.MemoryUnavailableReason, string) {
+	load func(context.Context) memoryfiles.EditableDocument,
+) (memoryfiles.EditableDocument, turingv1.MemoryUnavailableReason, string) {
 	if s.vault == nil {
-		return memoryfiles.PinnedDocument{}, turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING, ""
+		return memoryfiles.EditableDocument{}, turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING, ""
 	}
 	document := load(ctx)
 	reason := unavailableProto(document.Reason, document.Available)

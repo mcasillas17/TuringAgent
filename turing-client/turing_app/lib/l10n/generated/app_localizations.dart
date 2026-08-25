@@ -490,6 +490,12 @@ abstract class AppLocalizations {
   /// **'This is too large to read.'**
   String get memoryReasonContentTooLarge;
 
+  /// Shown above a persona.md or profile.md editor whose document is longer than the runtime pin budget. The editor holds the whole file; this says how much of it a model actually sees.
+  ///
+  /// In en, this message translates to:
+  /// **'Longer than a run carries: only the first {bytes} bytes reach a conversation. The whole document is here, and saving keeps all of it.'**
+  String memoryPinnedTruncated(int bytes);
+
   /// No description provided for @memoryStatusUnspecified.
   ///
   /// In en, this message translates to:

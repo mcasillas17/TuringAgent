@@ -1304,6 +1304,8 @@ class GrpcMappers {
               .MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
         ),
       ),
+      pinnedTruncated: persona.pinnedTruncated,
+      pinnedBytes: persona.pinnedBytes,
     );
   }
 
@@ -1336,6 +1338,8 @@ class GrpcMappers {
               .MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
         ),
       ),
+      pinnedTruncated: profile.pinnedTruncated,
+      pinnedBytes: profile.pinnedBytes,
     );
   }
 

@@ -48,11 +48,16 @@ type ApplyProfileEditRequest struct {
 	Content             string
 }
 
-// ProfileDocument is profile.md as it stands after an apply.
+// ProfileDocument is profile.md as it stands after an apply. ContentHash covers
+// the whole document that was written, and the two pinned fields say what a run
+// will carry of it — the same separation the editor read makes, so a page that
+// adopts an apply receipt holds a token the next save can actually use.
 type ProfileDocument struct {
-	RelPath     string
-	Content     string
-	ContentHash string
+	RelPath         string
+	Content         string
+	ContentHash     string
+	PinnedTruncated bool
+	PinnedBytes     int
 }
 
 // ApplyProfileEdit writes profile.md and nothing else, and only on the
@@ -110,10 +115,13 @@ func (v *Vault) ApplyProfileEdit(ctx context.Context, request ApplyProfileEditRe
 	if err := v.writePinnedDocumentWithCompareAndSet(ctx, target, request.ExpectedContentHash, request.Content); err != nil {
 		return ProfileDocument{}, err
 	}
+	pinnedBytes, truncated := pinnedBudget(request.Content, MaxProfileBytes)
 	return ProfileDocument{
-		RelPath:     target,
-		Content:     request.Content,
-		ContentHash: ContentHash(request.Content),
+		RelPath:         target,
+		Content:         request.Content,
+		ContentHash:     ContentHash(request.Content),
+		PinnedTruncated: truncated,
+		PinnedBytes:     pinnedBytes,
 	}, nil
 }
 

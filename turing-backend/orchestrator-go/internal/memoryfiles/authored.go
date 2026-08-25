@@ -28,10 +28,18 @@ type SaveProfileRequest struct {
 }
 
 // AuthoredDocument is a pinned document as it stands after the user saved it.
+//
+// ContentHash covers exactly the bytes that were written, so it is the token
+// the next save compares against. PinnedTruncated and PinnedBytes say what the
+// runtime will carry of it, which is a separate question and stays a separate
+// answer: an editor that conflated them could never save a long document
+// twice.
 type AuthoredDocument struct {
-	RelPath     string
-	Content     string
-	ContentHash string
+	RelPath         string
+	Content         string
+	ContentHash     string
+	PinnedTruncated bool
+	PinnedBytes     int
 }
 
 // SavePersona writes persona.md on the authority of the user and no one else.
@@ -47,7 +55,7 @@ type AuthoredDocument struct {
 // the update happens in place rather than by rename, because the user very
 // likely has this file open in Obsidian.
 func (v *Vault) SavePersona(ctx context.Context, request SavePersonaRequest) (AuthoredDocument, error) {
-	return v.saveAuthoredDocument(ctx, PersonaFileName, requirePersonaRelPath, request.ExpectedContentHash, request.Content)
+	return v.saveAuthoredDocument(ctx, PersonaFileName, MaxPersonaBytes, requirePersonaRelPath, request.ExpectedContentHash, request.Content)
 }
 
 // SaveProfile writes profile.md as the user typed it, with no candidate in the
@@ -58,7 +66,7 @@ func (v *Vault) SavePersona(ctx context.Context, request SavePersonaRequest) (Au
 // them apart is what lets the proposal path keep demanding a candidate the
 // user has read, instead of gaining a "no candidate needed" mode.
 func (v *Vault) SaveProfile(ctx context.Context, request SaveProfileRequest) (AuthoredDocument, error) {
-	return v.saveAuthoredDocument(ctx, ProfileFileName, requireProfileRelPath, request.ExpectedContentHash, request.Content)
+	return v.saveAuthoredDocument(ctx, ProfileFileName, MaxProfileBytes, requireProfileRelPath, request.ExpectedContentHash, request.Content)
 }
 
 // saveAuthoredDocument is the shared body of the two primitives above, and it
@@ -69,6 +77,7 @@ func (v *Vault) SaveProfile(ctx context.Context, request SaveProfileRequest) (Au
 func (v *Vault) saveAuthoredDocument(
 	ctx context.Context,
 	relPath string,
+	budget int,
 	gate func(string) (string, error),
 	expectedContentHash string,
 	content string,
@@ -93,9 +102,12 @@ func (v *Vault) saveAuthoredDocument(
 	if err := v.writePinnedDocumentWithCompareAndSet(ctx, target, expectedContentHash, content); err != nil {
 		return AuthoredDocument{}, err
 	}
+	pinnedBytes, truncated := pinnedBudget(content, budget)
 	return AuthoredDocument{
-		RelPath:     target,
-		Content:     content,
-		ContentHash: ContentHash(content),
+		RelPath:         target,
+		Content:         content,
+		ContentHash:     ContentHash(content),
+		PinnedTruncated: truncated,
+		PinnedBytes:     pinnedBytes,
 	}, nil
 }

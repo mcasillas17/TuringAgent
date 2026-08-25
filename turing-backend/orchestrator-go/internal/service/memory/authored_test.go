@@ -212,8 +212,25 @@ func TestMemoryDocumentSavesAcceptAnIntentionalClear(t *testing.T) {
 	if state.GetPersona().GetUnavailableReason() != turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE {
 		t.Fatalf("persona reason = %v, want NONE for a document the user emptied", state.GetPersona().GetUnavailableReason())
 	}
-	if state.GetProfile().GetContent() != "" {
-		t.Fatalf("profile after the clear = %q", state.GetProfile().GetContent())
+	if state.GetProfile().GetContent() != "   \n" {
+		t.Fatalf("profile after the clear = %q, want the whitespace the user actually typed", state.GetProfile().GetContent())
+	}
+	// The editor holds the keystrokes; the run holds nothing. Those are two
+	// different answers to two different questions, and the page is asking the
+	// first one.
+	if state.GetProfile().GetPinnedBytes() != 0 {
+		t.Fatalf("profile pinned bytes = %d, want nothing carried into a run", state.GetProfile().GetPinnedBytes())
+	}
+	if state.GetProfile().GetUnavailableReason() != turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE {
+		t.Fatalf("profile reason = %v, want NONE for a document the user emptied", state.GetProfile().GetUnavailableReason())
+	}
+	for _, tier := range state.GetTiers() {
+		if tier.GetTier() != turingv1.MemoryTier_MEMORY_TIER_PROFILE {
+			continue
+		}
+		if tier.GetNoteCount() != 0 {
+			t.Fatalf("profile tier note count = %d, want 0 for a document holding only whitespace", tier.GetNoteCount())
+		}
 	}
 }
 

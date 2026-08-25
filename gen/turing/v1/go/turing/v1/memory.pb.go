@@ -690,17 +690,32 @@ func (x *MemoryNote) GetUnavailableReason() MemoryUnavailableReason {
 
 // The single profile document.
 type MemoryProfile struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	Content string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
-	// Doubles as the compare-and-set token for ApplyMemoryProfile and for the
-	// user's own SaveMemoryProfile.
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The document as it stands on disk, whole. This is an editor's view, not a
+	// run's: the runtime's pin is bounded and carries a notice saying so, and
+	// handing that here would put words in the editor the user never typed and
+	// save them back into their own file.
+	Content string `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	// A hash of exactly the bytes in `content`. Doubles as the compare-and-set
+	// token for ApplyMemoryProfile and for the user's own SaveMemoryProfile,
+	// which are verified against the file — so this can never be the pin's
+	// post-truncation hash, or a long document could be read and never saved.
 	ContentHash       string                  `protobuf:"bytes,2,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
 	Status            MemoryNoteStatus        `protobuf:"varint,3,opt,name=status,proto3,enum=turing.v1.MemoryNoteStatus" json:"status,omitempty"`
 	UpdatedAt         *timestamppb.Timestamp  `protobuf:"bytes,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	ParseError        string                  `protobuf:"bytes,5,opt,name=parse_error,json=parseError,proto3" json:"parse_error,omitempty"`
 	UnavailableReason MemoryUnavailableReason `protobuf:"varint,6,opt,name=unavailable_reason,json=unavailableReason,proto3,enum=turing.v1.MemoryUnavailableReason" json:"unavailable_reason,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// True when this document is longer than the runtime's pin budget, so a run
+	// carries a fragment of what is above. Stated rather than left for a client
+	// to infer from a byte count it would have to know the budget to interpret.
+	PinnedTruncated bool `protobuf:"varint,7,opt,name=pinned_truncated,json=pinnedTruncated,proto3" json:"pinned_truncated,omitempty"`
+	// How many bytes of this document reach a prompt: the rune-safe cut at or
+	// below the budget when it is truncated, its whole length when it is not,
+	// and zero when nothing survives trimming. It counts the document's own
+	// bytes, never the truncation notice the runtime appends to the pin.
+	PinnedBytes   int32 `protobuf:"varint,8,opt,name=pinned_bytes,json=pinnedBytes,proto3" json:"pinned_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MemoryProfile) Reset() {
@@ -775,6 +790,20 @@ func (x *MemoryProfile) GetUnavailableReason() MemoryUnavailableReason {
 	return MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_UNSPECIFIED
 }
 
+func (x *MemoryProfile) GetPinnedTruncated() bool {
+	if x != nil {
+		return x.PinnedTruncated
+	}
+	return false
+}
+
+func (x *MemoryProfile) GetPinnedBytes() int32 {
+	if x != nil {
+		return x.PinnedBytes
+	}
+	return 0
+}
+
 // The single persona document: who Turing is.
 //
 // It is not a second profile. The profile is a description of the user that
@@ -783,17 +812,23 @@ func (x *MemoryProfile) GetUnavailableReason() MemoryUnavailableReason {
 // system writes it. Its own message keeps that asymmetry visible on the wire
 // instead of leaving it to a comment on a shared one.
 type MemoryPersona struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	Content string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
-	// Doubles as the compare-and-set token for SaveMemoryPersona.
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The document as it stands on disk, whole. See MemoryProfile.content.
+	Content string `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	// A hash of exactly the bytes in `content`, and the compare-and-set token
+	// for SaveMemoryPersona.
 	ContentHash string `protobuf:"bytes,2,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
 	// Always UNMANAGED: Turing reads this document and never rewrites it.
 	Status            MemoryNoteStatus        `protobuf:"varint,3,opt,name=status,proto3,enum=turing.v1.MemoryNoteStatus" json:"status,omitempty"`
 	UpdatedAt         *timestamppb.Timestamp  `protobuf:"bytes,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	ParseError        string                  `protobuf:"bytes,5,opt,name=parse_error,json=parseError,proto3" json:"parse_error,omitempty"`
 	UnavailableReason MemoryUnavailableReason `protobuf:"varint,6,opt,name=unavailable_reason,json=unavailableReason,proto3,enum=turing.v1.MemoryUnavailableReason" json:"unavailable_reason,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// True when a run carries only part of this document.
+	PinnedTruncated bool `protobuf:"varint,7,opt,name=pinned_truncated,json=pinnedTruncated,proto3" json:"pinned_truncated,omitempty"`
+	// How many bytes of this document reach a prompt.
+	PinnedBytes   int32 `protobuf:"varint,8,opt,name=pinned_bytes,json=pinnedBytes,proto3" json:"pinned_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MemoryPersona) Reset() {
@@ -866,6 +901,20 @@ func (x *MemoryPersona) GetUnavailableReason() MemoryUnavailableReason {
 		return x.UnavailableReason
 	}
 	return MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_UNSPECIFIED
+}
+
+func (x *MemoryPersona) GetPinnedTruncated() bool {
+	if x != nil {
+		return x.PinnedTruncated
+	}
+	return false
+}
+
+func (x *MemoryPersona) GetPinnedBytes() int32 {
+	if x != nil {
+		return x.PinnedBytes
+	}
+	return 0
 }
 
 type MemoryTierState struct {
@@ -2339,7 +2388,7 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1f\n" +
 	"\vparse_error\x18\v \x01(\tR\n" +
 	"parseError\x12Q\n" +
-	"\x12unavailable_reason\x18\f \x01(\x0e2\".turing.v1.MemoryUnavailableReasonR\x11unavailableReason\"\xb0\x02\n" +
+	"\x12unavailable_reason\x18\f \x01(\x0e2\".turing.v1.MemoryUnavailableReasonR\x11unavailableReason\"\xfe\x02\n" +
 	"\rMemoryProfile\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12!\n" +
 	"\fcontent_hash\x18\x02 \x01(\tR\vcontentHash\x123\n" +
@@ -2348,7 +2397,9 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"updated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1f\n" +
 	"\vparse_error\x18\x05 \x01(\tR\n" +
 	"parseError\x12Q\n" +
-	"\x12unavailable_reason\x18\x06 \x01(\x0e2\".turing.v1.MemoryUnavailableReasonR\x11unavailableReason\"\xb0\x02\n" +
+	"\x12unavailable_reason\x18\x06 \x01(\x0e2\".turing.v1.MemoryUnavailableReasonR\x11unavailableReason\x12)\n" +
+	"\x10pinned_truncated\x18\a \x01(\bR\x0fpinnedTruncated\x12!\n" +
+	"\fpinned_bytes\x18\b \x01(\x05R\vpinnedBytes\"\xfe\x02\n" +
 	"\rMemoryPersona\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12!\n" +
 	"\fcontent_hash\x18\x02 \x01(\tR\vcontentHash\x123\n" +
@@ -2357,7 +2408,9 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"updated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1f\n" +
 	"\vparse_error\x18\x05 \x01(\tR\n" +
 	"parseError\x12Q\n" +
-	"\x12unavailable_reason\x18\x06 \x01(\x0e2\".turing.v1.MemoryUnavailableReasonR\x11unavailableReason\"\xdc\x02\n" +
+	"\x12unavailable_reason\x18\x06 \x01(\x0e2\".turing.v1.MemoryUnavailableReasonR\x11unavailableReason\x12)\n" +
+	"\x10pinned_truncated\x18\a \x01(\bR\x0fpinnedTruncated\x12!\n" +
+	"\fpinned_bytes\x18\b \x01(\x05R\vpinnedBytes\"\xdc\x02\n" +
 	"\x0fMemoryTierState\x12)\n" +
 	"\x04tier\x18\x01 \x01(\x0e2\x15.turing.v1.MemoryTierR\x04tier\x12\x18\n" +
 	"\aenabled\x18\x02 \x01(\bR\aenabled\x12\x1d\n" +

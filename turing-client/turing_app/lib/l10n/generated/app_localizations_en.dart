@@ -232,6 +232,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get memoryReasonContentTooLarge => 'This is too large to read.';
 
   @override
+  String memoryPinnedTruncated(int bytes) {
+    return 'Longer than a run carries: only the first $bytes bytes reach a conversation. The whole document is here, and saving keeps all of it.';
+  }
+
+  @override
   String get memoryStatusUnspecified =>
       'The server did not say who may write this.';
 

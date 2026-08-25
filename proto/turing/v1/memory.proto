@@ -119,14 +119,29 @@ message MemoryNote {
 
 // The single profile document.
 message MemoryProfile {
+  // The document as it stands on disk, whole. This is an editor's view, not a
+  // run's: the runtime's pin is bounded and carries a notice saying so, and
+  // handing that here would put words in the editor the user never typed and
+  // save them back into their own file.
   string content = 1;
-  // Doubles as the compare-and-set token for ApplyMemoryProfile and for the
-  // user's own SaveMemoryProfile.
+  // A hash of exactly the bytes in `content`. Doubles as the compare-and-set
+  // token for ApplyMemoryProfile and for the user's own SaveMemoryProfile,
+  // which are verified against the file — so this can never be the pin's
+  // post-truncation hash, or a long document could be read and never saved.
   string content_hash = 2;
   MemoryNoteStatus status = 3;
   google.protobuf.Timestamp updated_at = 4;
   string parse_error = 5;
   MemoryUnavailableReason unavailable_reason = 6;
+  // True when this document is longer than the runtime's pin budget, so a run
+  // carries a fragment of what is above. Stated rather than left for a client
+  // to infer from a byte count it would have to know the budget to interpret.
+  bool pinned_truncated = 7;
+  // How many bytes of this document reach a prompt: the rune-safe cut at or
+  // below the budget when it is truncated, its whole length when it is not,
+  // and zero when nothing survives trimming. It counts the document's own
+  // bytes, never the truncation notice the runtime appends to the pin.
+  int32 pinned_bytes = 8;
 }
 
 // The single persona document: who Turing is.
@@ -137,14 +152,20 @@ message MemoryProfile {
 // system writes it. Its own message keeps that asymmetry visible on the wire
 // instead of leaving it to a comment on a shared one.
 message MemoryPersona {
+  // The document as it stands on disk, whole. See MemoryProfile.content.
   string content = 1;
-  // Doubles as the compare-and-set token for SaveMemoryPersona.
+  // A hash of exactly the bytes in `content`, and the compare-and-set token
+  // for SaveMemoryPersona.
   string content_hash = 2;
   // Always UNMANAGED: Turing reads this document and never rewrites it.
   MemoryNoteStatus status = 3;
   google.protobuf.Timestamp updated_at = 4;
   string parse_error = 5;
   MemoryUnavailableReason unavailable_reason = 6;
+  // True when a run carries only part of this document.
+  bool pinned_truncated = 7;
+  // How many bytes of this document reach a prompt.
+  int32 pinned_bytes = 8;
 }
 
 message MemoryTierState {

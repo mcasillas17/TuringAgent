@@ -619,6 +619,8 @@ class MemoryProfile extends $pb.GeneratedMessage {
     $1.Timestamp? updatedAt,
     $core.String? parseError,
     MemoryUnavailableReason? unavailableReason,
+    $core.bool? pinnedTruncated,
+    $core.int? pinnedBytes,
   }) {
     final result = create();
     if (content != null) result.content = content;
@@ -627,6 +629,8 @@ class MemoryProfile extends $pb.GeneratedMessage {
     if (updatedAt != null) result.updatedAt = updatedAt;
     if (parseError != null) result.parseError = parseError;
     if (unavailableReason != null) result.unavailableReason = unavailableReason;
+    if (pinnedTruncated != null) result.pinnedTruncated = pinnedTruncated;
+    if (pinnedBytes != null) result.pinnedBytes = pinnedBytes;
     return result;
   }
 
@@ -659,6 +663,8 @@ class MemoryProfile extends $pb.GeneratedMessage {
             MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
         valueOf: MemoryUnavailableReason.valueOf,
         enumValues: MemoryUnavailableReason.values)
+    ..aOB(7, _omitFieldNames ? '' : 'pinnedTruncated')
+    ..a<$core.int>(8, _omitFieldNames ? '' : 'pinnedBytes', $pb.PbFieldType.O3)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -682,6 +688,10 @@ class MemoryProfile extends $pb.GeneratedMessage {
       $pb.GeneratedMessage.$_defaultFor<MemoryProfile>(create);
   static MemoryProfile? _defaultInstance;
 
+  /// The document as it stands on disk, whole. This is an editor's view, not a
+  /// run's: the runtime's pin is bounded and carries a notice saying so, and
+  /// handing that here would put words in the editor the user never typed and
+  /// save them back into their own file.
   @$pb.TagNumber(1)
   $core.String get content => $_getSZ(0);
   @$pb.TagNumber(1)
@@ -691,8 +701,10 @@ class MemoryProfile extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearContent() => $_clearField(1);
 
-  /// Doubles as the compare-and-set token for ApplyMemoryProfile and for the
-  /// user's own SaveMemoryProfile.
+  /// A hash of exactly the bytes in `content`. Doubles as the compare-and-set
+  /// token for ApplyMemoryProfile and for the user's own SaveMemoryProfile,
+  /// which are verified against the file — so this can never be the pin's
+  /// post-truncation hash, or a long document could be read and never saved.
   @$pb.TagNumber(2)
   $core.String get contentHash => $_getSZ(1);
   @$pb.TagNumber(2)
@@ -739,6 +751,31 @@ class MemoryProfile extends $pb.GeneratedMessage {
   $core.bool hasUnavailableReason() => $_has(5);
   @$pb.TagNumber(6)
   void clearUnavailableReason() => $_clearField(6);
+
+  /// True when this document is longer than the runtime's pin budget, so a run
+  /// carries a fragment of what is above. Stated rather than left for a client
+  /// to infer from a byte count it would have to know the budget to interpret.
+  @$pb.TagNumber(7)
+  $core.bool get pinnedTruncated => $_getBF(6);
+  @$pb.TagNumber(7)
+  set pinnedTruncated($core.bool value) => $_setBool(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasPinnedTruncated() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearPinnedTruncated() => $_clearField(7);
+
+  /// How many bytes of this document reach a prompt: the rune-safe cut at or
+  /// below the budget when it is truncated, its whole length when it is not,
+  /// and zero when nothing survives trimming. It counts the document's own
+  /// bytes, never the truncation notice the runtime appends to the pin.
+  @$pb.TagNumber(8)
+  $core.int get pinnedBytes => $_getIZ(7);
+  @$pb.TagNumber(8)
+  set pinnedBytes($core.int value) => $_setSignedInt32(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasPinnedBytes() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearPinnedBytes() => $_clearField(8);
 }
 
 /// The single persona document: who Turing is.
@@ -756,6 +793,8 @@ class MemoryPersona extends $pb.GeneratedMessage {
     $1.Timestamp? updatedAt,
     $core.String? parseError,
     MemoryUnavailableReason? unavailableReason,
+    $core.bool? pinnedTruncated,
+    $core.int? pinnedBytes,
   }) {
     final result = create();
     if (content != null) result.content = content;
@@ -764,6 +803,8 @@ class MemoryPersona extends $pb.GeneratedMessage {
     if (updatedAt != null) result.updatedAt = updatedAt;
     if (parseError != null) result.parseError = parseError;
     if (unavailableReason != null) result.unavailableReason = unavailableReason;
+    if (pinnedTruncated != null) result.pinnedTruncated = pinnedTruncated;
+    if (pinnedBytes != null) result.pinnedBytes = pinnedBytes;
     return result;
   }
 
@@ -796,6 +837,8 @@ class MemoryPersona extends $pb.GeneratedMessage {
             MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
         valueOf: MemoryUnavailableReason.valueOf,
         enumValues: MemoryUnavailableReason.values)
+    ..aOB(7, _omitFieldNames ? '' : 'pinnedTruncated')
+    ..a<$core.int>(8, _omitFieldNames ? '' : 'pinnedBytes', $pb.PbFieldType.O3)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -819,6 +862,7 @@ class MemoryPersona extends $pb.GeneratedMessage {
       $pb.GeneratedMessage.$_defaultFor<MemoryPersona>(create);
   static MemoryPersona? _defaultInstance;
 
+  /// The document as it stands on disk, whole. See MemoryProfile.content.
   @$pb.TagNumber(1)
   $core.String get content => $_getSZ(0);
   @$pb.TagNumber(1)
@@ -828,7 +872,8 @@ class MemoryPersona extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearContent() => $_clearField(1);
 
-  /// Doubles as the compare-and-set token for SaveMemoryPersona.
+  /// A hash of exactly the bytes in `content`, and the compare-and-set token
+  /// for SaveMemoryPersona.
   @$pb.TagNumber(2)
   $core.String get contentHash => $_getSZ(1);
   @$pb.TagNumber(2)
@@ -876,6 +921,26 @@ class MemoryPersona extends $pb.GeneratedMessage {
   $core.bool hasUnavailableReason() => $_has(5);
   @$pb.TagNumber(6)
   void clearUnavailableReason() => $_clearField(6);
+
+  /// True when a run carries only part of this document.
+  @$pb.TagNumber(7)
+  $core.bool get pinnedTruncated => $_getBF(6);
+  @$pb.TagNumber(7)
+  set pinnedTruncated($core.bool value) => $_setBool(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasPinnedTruncated() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearPinnedTruncated() => $_clearField(7);
+
+  /// How many bytes of this document reach a prompt.
+  @$pb.TagNumber(8)
+  $core.int get pinnedBytes => $_getIZ(7);
+  @$pb.TagNumber(8)
+  set pinnedBytes($core.int value) => $_setSignedInt32(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasPinnedBytes() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearPinnedBytes() => $_clearField(8);
 }
 
 class MemoryTierState extends $pb.GeneratedMessage {

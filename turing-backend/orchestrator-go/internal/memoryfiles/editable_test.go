@@ -225,3 +225,98 @@ func TestAShortDocumentReportsNoTruncationAndItsWholeLengthAsPinned(t *testing.T
 		t.Fatalf("editable = %+v, want the document and its own hash", editable)
 	}
 }
+
+// The budget is a number of bytes, and the cut is on a rune boundary, so a
+// document whose 4096th byte lands mid-character must be cut short of the
+// budget rather than at it — and the editor must report the bytes that were
+// actually kept, not the budget it was aiming for. Counting runes here instead
+// of bytes, or rounding up to the budget, would tell the user more of their
+// document reaches a run than really does.
+func TestAMultibyteCutIsReportedAtTheBytesActuallyKept(t *testing.T) {
+	vault := newTestVault(t)
+	// Three-byte runes do not divide 4096, so the rune-safe cut necessarily
+	// lands below the budget.
+	multibyte := strings.Repeat("東", MaxPersonaBytes)
+	writeVaultFile(t, vault, PersonaFileName, multibyte)
+
+	editable := vault.EditablePersona(context.Background())
+	if !editable.PinnedTruncated {
+		t.Fatal("a document past the budget must say the pin will be cut")
+	}
+	if editable.PinnedBytes >= MaxPersonaBytes {
+		t.Fatalf("pinned bytes = %d, want a rune-safe cut strictly below the %d byte budget", editable.PinnedBytes, MaxPersonaBytes)
+	}
+	if editable.PinnedBytes%3 != 0 {
+		t.Fatalf("pinned bytes = %d, which is not a whole number of three-byte runes: the cut split a character", editable.PinnedBytes)
+	}
+	// And the count is the pin's own, not a second opinion: what the editor
+	// promises reaches a run is exactly what the runtime carries.
+	pinned := vault.LoadPersona(context.Background())
+	carried, _ := splitTruncationNotice(t, pinned)
+	if len(carried) != editable.PinnedBytes {
+		t.Fatalf("editor says %d bytes reach a run, the pin carries %d", editable.PinnedBytes, len(carried))
+	}
+	if editable.Content != multibyte {
+		t.Fatalf("editor content is %d bytes, want the whole %d byte document", len(editable.Content), len(multibyte))
+	}
+}
+
+// The budget is inclusive. A document of exactly the budget is carried whole,
+// and one byte more is the first that is cut — the pair that keeps a `<` from
+// silently becoming a `<=`.
+func TestThePinBudgetIsInclusiveAtItsExactBoundary(t *testing.T) {
+	exact := strings.Repeat("x", MaxPersonaBytes)
+
+	atBudget := newTestVault(t)
+	writeVaultFile(t, atBudget, PersonaFileName, exact)
+	editable := atBudget.EditablePersona(context.Background())
+	if editable.PinnedTruncated {
+		t.Fatal("a document of exactly the budget is carried whole, not cut")
+	}
+	if editable.PinnedBytes != MaxPersonaBytes {
+		t.Fatalf("pinned bytes = %d, want the whole %d", editable.PinnedBytes, MaxPersonaBytes)
+	}
+	if pinned := atBudget.LoadPersona(context.Background()); pinned.Content != exact {
+		t.Fatalf("the pin cut a document that fits: %d bytes carried of %d", len(pinned.Content), len(exact))
+	}
+
+	overBudget := newTestVault(t)
+	writeVaultFile(t, overBudget, PersonaFileName, exact+"x")
+	over := overBudget.EditablePersona(context.Background())
+	if !over.PinnedTruncated {
+		t.Fatal("one byte past the budget is the first byte that gets cut")
+	}
+	if over.PinnedBytes != MaxPersonaBytes {
+		t.Fatalf("pinned bytes = %d, want the budget %d", over.PinnedBytes, MaxPersonaBytes)
+	}
+}
+
+// The safety ceiling is inclusive too. A document of exactly the ceiling is
+// still the user's to read and edit; refusing it would make the boundary a
+// place where a save quietly stops being offered.
+func TestADocumentAtTheAuthoredCeilingIsStillServedWhole(t *testing.T) {
+	vault := newTestVault(t)
+	atCeiling := strings.Repeat("x", MaxAuthoredDocumentBytes)
+	writeVaultFile(t, vault, PersonaFileName, atCeiling)
+
+	editable := vault.EditablePersona(context.Background())
+	if !editable.Available || editable.Reason != UnavailableNone {
+		t.Fatalf("editable = {available:%v reason:%q}, want a document at the ceiling to be readable", editable.Available, editable.Reason)
+	}
+	if len(editable.Content) != MaxAuthoredDocumentBytes {
+		t.Fatalf("content is %d bytes, want the whole %d", len(editable.Content), MaxAuthoredDocumentBytes)
+	}
+	if editable.ContentHash != ContentHash(atCeiling) {
+		t.Fatal("the token at the ceiling is not a hash of the bytes on disk")
+	}
+
+	// And it saves, which is the whole point of having read it.
+	saved, err := vault.SavePersona(context.Background(), SavePersonaRequest{
+		ExpectedContentHash: editable.ContentHash,
+		Content:             "# Persona\n\nMuch shorter now.\n",
+	})
+	if err != nil {
+		t.Fatalf("saving over a ceiling-sized document: %v", err)
+	}
+	assertFileContent(t, filepath.Join(vault.Root(), PersonaFileName), saved.Content)
+}

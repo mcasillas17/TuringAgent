@@ -350,6 +350,8 @@ const MemoryProfile$json = {
       '6': '.turing.v1.MemoryUnavailableReason',
       '10': 'unavailableReason'
     },
+    {'1': 'pinned_truncated', '3': 7, '4': 1, '5': 8, '10': 'pinnedTruncated'},
+    {'1': 'pinned_bytes', '3': 8, '4': 1, '5': 5, '10': 'pinnedBytes'},
   ],
 };
 
@@ -360,7 +362,8 @@ final $typed_data.Uint8List memoryProfileDescriptor = $convert.base64Decode(
     'Tm90ZVN0YXR1c1IGc3RhdHVzEjkKCnVwZGF0ZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idW'
     'YuVGltZXN0YW1wUgl1cGRhdGVkQXQSHwoLcGFyc2VfZXJyb3IYBSABKAlSCnBhcnNlRXJyb3IS'
     'UQoSdW5hdmFpbGFibGVfcmVhc29uGAYgASgOMiIudHVyaW5nLnYxLk1lbW9yeVVuYXZhaWxhYm'
-    'xlUmVhc29uUhF1bmF2YWlsYWJsZVJlYXNvbg==');
+    'xlUmVhc29uUhF1bmF2YWlsYWJsZVJlYXNvbhIpChBwaW5uZWRfdHJ1bmNhdGVkGAcgASgIUg9w'
+    'aW5uZWRUcnVuY2F0ZWQSIQoMcGlubmVkX2J5dGVzGAggASgFUgtwaW5uZWRCeXRlcw==');
 
 @$core.Deprecated('Use memoryPersonaDescriptor instead')
 const MemoryPersona$json = {
@@ -393,6 +396,8 @@ const MemoryPersona$json = {
       '6': '.turing.v1.MemoryUnavailableReason',
       '10': 'unavailableReason'
     },
+    {'1': 'pinned_truncated', '3': 7, '4': 1, '5': 8, '10': 'pinnedTruncated'},
+    {'1': 'pinned_bytes', '3': 8, '4': 1, '5': 5, '10': 'pinnedBytes'},
   ],
 };
 
@@ -403,7 +408,8 @@ final $typed_data.Uint8List memoryPersonaDescriptor = $convert.base64Decode(
     'Tm90ZVN0YXR1c1IGc3RhdHVzEjkKCnVwZGF0ZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idW'
     'YuVGltZXN0YW1wUgl1cGRhdGVkQXQSHwoLcGFyc2VfZXJyb3IYBSABKAlSCnBhcnNlRXJyb3IS'
     'UQoSdW5hdmFpbGFibGVfcmVhc29uGAYgASgOMiIudHVyaW5nLnYxLk1lbW9yeVVuYXZhaWxhYm'
-    'xlUmVhc29uUhF1bmF2YWlsYWJsZVJlYXNvbg==');
+    'xlUmVhc29uUhF1bmF2YWlsYWJsZVJlYXNvbhIpChBwaW5uZWRfdHJ1bmNhdGVkGAcgASgIUg9w'
+    'aW5uZWRUcnVuY2F0ZWQSIQoMcGlubmVkX2J5dGVzGAggASgFUgtwaW5uZWRCeXRlcw==');
 
 @$core.Deprecated('Use memoryTierStateDescriptor instead')
 const MemoryTierState$json = {

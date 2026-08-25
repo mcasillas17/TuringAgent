@@ -84,11 +84,18 @@ class MemoryTierState {
   final String parseError;
 }
 
-/// One of the two pinned documents — `persona.md` or `profile.md`.
+/// One of the two authored documents — `persona.md` or `profile.md`.
 ///
-/// [contentHash] is the compare-and-set token: an editor saves against the hash
-/// it read, so a save composed against text the vault has since moved on from
-/// is refused instead of overwriting words the user never saw.
+/// [content] is the whole document as it sits on disk, and [contentHash] is the
+/// compare-and-set token taken over exactly those bytes: an editor saves against
+/// the hash it read, so a save composed against text the vault has since moved
+/// on from is refused instead of overwriting words the user never saw.
+///
+/// A run does not necessarily carry all of it. [pinnedTruncated] says whether
+/// the model sees less than what is shown here, and [pinnedBytes] says how much
+/// of the document reaches a conversation. Both describe the runtime's reading,
+/// not the editor's — nothing here is ever trimmed, and the truncation notice
+/// the runtime appends for the model is not part of [content].
 class MemoryDocument {
   const MemoryDocument({
     this.content = '',
@@ -97,6 +104,8 @@ class MemoryDocument {
     this.updatedAt,
     this.parseError = '',
     this.unavailableReason = MemoryUnavailableReason.unspecified,
+    this.pinnedTruncated = false,
+    this.pinnedBytes = 0,
   });
 
   final String content;
@@ -106,18 +115,36 @@ class MemoryDocument {
   final String parseError;
   final MemoryUnavailableReason unavailableReason;
 
+  /// Whether a run sees less of this document than the editor shows.
+  final bool pinnedTruncated;
+
+  /// How many of the document's own bytes reach a conversation.
+  final int pinnedBytes;
+
   /// Whether this client may offer to write the document at all.
   ///
   /// This is about the file, never about what the user typed into it: an empty
   /// persona is a save the user is entitled to make, and refusing it would
   /// leave "take back what I told the model" as something only reachable by
   /// leaving Turing. What is refused is a save the server would refuse anyway,
-  /// because the document could not be read — missing, unreadable, a symlink,
-  /// too large, or a state this build cannot name. Memory being switched off is
-  /// not one of those: the vault is still on disk and still the user's.
+  /// because the document could not be read — unreadable, a symlink, too large,
+  /// or a state this build cannot name.
+  ///
+  /// Two reasons look like refusals and are not. Memory being switched off
+  /// leaves the vault on disk and still the user's. And a document that is
+  /// simply not there yet is the ordinary first-run state: every vault starts
+  /// without a persona, and the way one comes to exist is that someone writes
+  /// it from here. Refusing that save would make the Memory page permanently
+  /// read-only on a fresh install — the file cannot appear until it is written,
+  /// and it cannot be written until it appears.
+  ///
+  /// A save into a missing document carries an empty [contentHash], which is
+  /// the same token the server already reads as "I am creating this" — so a
+  /// second writer that got there first is still caught rather than overwritten.
   bool get isWritable =>
       unavailableReason == MemoryUnavailableReason.none ||
-      unavailableReason == MemoryUnavailableReason.disabled;
+      unavailableReason == MemoryUnavailableReason.disabled ||
+      unavailableReason == MemoryUnavailableReason.vaultMissing;
 }
 
 /// Where a claim came from, and whether it still stands.

@@ -459,6 +459,8 @@ func (s *Server) ApplyMemoryProfile(ctx context.Context, req *turingv1.ApplyMemo
 		ContentHash:       document.ContentHash,
 		Status:            turingv1.MemoryNoteStatus_MEMORY_NOTE_STATUS_MANAGED,
 		UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE,
+		PinnedTruncated:   document.PinnedTruncated,
+		PinnedBytes:       int32(document.PinnedBytes),
 	}}, nil
 }
 
@@ -478,8 +480,8 @@ func (s *Server) candidateForDecision(ctx context.Context, candidateID string, e
 }
 
 func (s *Server) profile(ctx context.Context, settings *turingv1.MemorySettings) *turingv1.MemoryProfile {
-	document, reason, detail := s.pinnedDocument(ctx, settings, func(ctx context.Context) memoryfiles.PinnedDocument {
-		return s.vault.LoadProfile(ctx)
+	document, reason, detail := s.editableDocument(ctx, settings, func(ctx context.Context) memoryfiles.EditableDocument {
+		return s.vault.EditableProfile(ctx)
 	})
 	return &turingv1.MemoryProfile{
 		Content:           document.Content,
@@ -487,6 +489,8 @@ func (s *Server) profile(ctx context.Context, settings *turingv1.MemorySettings)
 		Status:            turingv1.MemoryNoteStatus_MEMORY_NOTE_STATUS_MANAGED,
 		ParseError:        detail,
 		UnavailableReason: reason,
+		PinnedTruncated:   document.PinnedTruncated,
+		PinnedBytes:       int32(document.PinnedBytes),
 	}
 }
 
@@ -528,7 +532,11 @@ func (s *Server) tiers(
 		UnavailableReason:     profile.GetUnavailableReason(),
 		ParseError:            profile.GetParseError(),
 	}
-	if profile.GetContent() != "" {
+	// Both rows count what memory actually holds, which is what survives
+	// trimming. The documents now arrive whole rather than pre-trimmed by the
+	// pinned projection, so the trim has to happen here or a profile holding
+	// nothing but whitespace would be counted as a profile.
+	if strings.TrimSpace(profile.GetContent()) != "" {
 		profileTier.NoteCount = 1
 	}
 	beliefTier := &turingv1.MemoryTierState{

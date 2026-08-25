@@ -96,6 +96,15 @@
   "memoryReasonVaultUnreadable": "This could not be read from the vault.",
   "memoryReasonContentParseFailed": "This could not be parsed.",
   "memoryReasonContentTooLarge": "This is too large to read.",
+  "memoryPinnedTruncated": "Longer than a run carries: only the first {bytes} bytes reach a conversation. The whole document is here, and saving keeps all of it.",
+  "@memoryPinnedTruncated": {
+    "description": "Shown above a persona.md or profile.md editor whose document is longer than the runtime pin budget. The editor holds the whole file; this says how much of it a model actually sees.",
+    "placeholders": {
+      "bytes": {
+        "type": "int"
+      }
+    }
+  },
   "memoryStatusUnspecified": "The server did not say who may write this.",
   "memoryStatusManaged": "Turing may rewrite this file.",
   "memoryStatusUnmanaged": "You have taken this note over; Turing reads it and never writes it.",

@@ -94,10 +94,10 @@ func (v *Vault) loadPinned(ctx context.Context, relPath string, limit int, gate 
 
 	pinned, truncated := truncateRunes(content, limit)
 	document.Truncated = truncated
-	// Whitespace that survives truncation is not content. Checked before the
-	// notice is appended, or the notice itself would make an empty pin look
-	// populated.
-	if strings.TrimSpace(pinned) == "" {
+	// Whitespace that survives truncation is not content. Checked through the
+	// shared budget rule, and before the notice is appended, or the notice
+	// itself would make an empty pin look populated.
+	if pinnedBytes, _ := pinnedBudget(content, limit); pinnedBytes == 0 {
 		pinned = ""
 	} else if truncated {
 		pinned += truncationNotice(relPath, len(pinned))

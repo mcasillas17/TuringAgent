@@ -558,6 +558,17 @@ class _DocumentCard extends StatelessWidget {
               style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
           ],
+          if (document.pinnedTruncated) ...[
+            const SizedBox(height: 6),
+            // The editor is over the whole file; a run is not. Saying so here
+            // is the only place a user can learn that the model is reading
+            // less than they wrote — the runtime's own notice goes into the
+            // pin, where it belongs, and never into their text.
+            _StatusLine(
+              text: l10n.memoryPinnedTruncated(document.pinnedBytes),
+              tone: AppColors.warning,
+            ),
+          ],
           const SizedBox(height: 12),
           TextField(
             key: editorKey,
