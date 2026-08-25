@@ -290,6 +290,7 @@ class _MemoryBody extends StatelessWidget {
           heading: l10n.memoryPersonaHeading,
           description: l10n.memoryPersonaDescription,
           document: state.persona,
+          vaultConfigured: state.settings.vaultRoot.isNotEmpty,
           controller: persona,
           editorKey: const Key('memory-persona-editor'),
           saveKey: const Key('memory-persona-save'),
@@ -308,6 +309,7 @@ class _MemoryBody extends StatelessWidget {
           heading: l10n.memoryProfileHeading,
           description: l10n.memoryProfileDescription,
           document: state.profile,
+          vaultConfigured: state.settings.vaultRoot.isNotEmpty,
           controller: profile,
           editorKey: const Key('memory-profile-editor'),
           saveKey: const Key('memory-profile-save'),
@@ -471,6 +473,7 @@ class _DocumentCard extends StatelessWidget {
     required this.heading,
     required this.description,
     required this.document,
+    required this.vaultConfigured,
     required this.controller,
     required this.editorKey,
     required this.saveKey,
@@ -487,6 +490,16 @@ class _DocumentCard extends StatelessWidget {
   final String heading;
   final String description;
   final MemoryDocument document;
+
+  /// Whether a vault is open at all, from `settings.vaultRoot`.
+  ///
+  /// [MemoryDocument.isWritable] is silent on this: the server reports
+  /// VAULT_MISSING on a document both when the vault is open and this file
+  /// has simply never been written, and when there is no vault open to write
+  /// into. Those are not the same refusal, and the document alone cannot
+  /// tell them apart — only the settings row can, so it is threaded down here
+  /// rather than folded into [MemoryDocument.isWritable]'s per-file meaning.
+  final bool vaultConfigured;
   final TextEditingController controller;
   final Key editorKey;
   final Key saveKey;
@@ -498,6 +511,21 @@ class _DocumentCard extends StatelessWidget {
   final MemoryTierState? tier;
   final VoidCallback onSave;
   final VoidCallback onReread;
+
+  /// Whether this page may offer to write [document] right now.
+  ///
+  /// [MemoryDocument.isWritable] answers for the file alone, and a VAULT_MISSING
+  /// document is writable by that reckoning — it is the ordinary shape of "the
+  /// vault is open and this file has not been created yet". But the same
+  /// reason is what a document reports when there is no vault open at all, and
+  /// offering to create a file with nowhere to land would be a save the server
+  /// can only refuse. [vaultConfigured] is the one signal that tells those
+  /// apart, so it gates VAULT_MISSING specifically without touching what
+  /// [MemoryDocument.isWritable] means for every other reason.
+  bool get _canSave =>
+      document.isWritable &&
+      (vaultConfigured ||
+          document.unavailableReason != MemoryUnavailableReason.vaultMissing);
 
   @override
   Widget build(BuildContext context) {
@@ -588,6 +616,12 @@ class _DocumentCard extends StatelessWidget {
               text: l10n.memorySaveUnavailable,
               tone: AppColors.warning,
             ),
+          ] else if (!_canSave) ...[
+            const SizedBox(height: 8),
+            _StatusLine(
+              text: l10n.memorySaveNeedsVault,
+              tone: AppColors.warning,
+            ),
           ],
           const SizedBox(height: 10),
           Wrap(
@@ -600,7 +634,7 @@ class _DocumentCard extends StatelessWidget {
               // the document could not be read in the first place.
               FilledButton(
                 key: saveKey,
-                onPressed: busy || !document.isWritable ? null : onSave,
+                onPressed: busy || !_canSave ? null : onSave,
                 child: Text(l10n.memorySaveAction),
               ),
               // Re-reading is always the user's move, never automatic. After a

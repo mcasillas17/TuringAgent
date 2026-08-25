@@ -401,6 +401,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'This document cannot be saved from here until the problem above is fixed.';
 
   @override
+  String get memorySaveNeedsVault =>
+      'Open or configure a vault before saving here.';
+
+  @override
   String memoryTierItemCount(int count) {
     String _temp0 = intl.Intl.pluralLogic(
       count,

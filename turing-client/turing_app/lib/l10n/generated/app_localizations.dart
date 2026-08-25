@@ -760,6 +760,12 @@ abstract class AppLocalizations {
   /// **'This document cannot be saved from here until the problem above is fixed.'**
   String get memorySaveUnavailable;
 
+  /// No description provided for @memorySaveNeedsVault.
+  ///
+  /// In en, this message translates to:
+  /// **'Open or configure a vault before saving here.'**
+  String get memorySaveNeedsVault;
+
   /// No description provided for @memoryTierItemCount.
   ///
   /// In en, this message translates to:

@@ -846,6 +846,96 @@ void main() {
     });
   });
 
+  group('no vault open at all', () {
+    // The server reports VAULT_MISSING on a document both when the vault is
+    // open and simply has not been written yet, and when there is no vault
+    // open to write into — the document's own reason cannot tell those apart.
+    // Only settings.vaultRoot says which one this is, so the page must look
+    // there before offering to create a file with nowhere to land.
+    testWidgets(
+      'disables save and explains why instead of offering to create a file',
+      (tester) async {
+        final api = _MemoryApi()
+          ..state = _state(
+            settings: const MemorySettings(
+              enabled: true,
+              vaultRoot: '',
+              vaultWritable: false,
+              unavailableReason: MemoryUnavailableReason.vaultMissing,
+            ),
+            persona: _document(
+              content: '',
+              contentHash: '',
+              status: MemoryNoteStatus.unmanaged,
+              unavailableReason: MemoryUnavailableReason.vaultMissing,
+            ),
+            profile: _document(
+              content: '',
+              contentHash: '',
+              unavailableReason: MemoryUnavailableReason.vaultMissing,
+            ),
+            tiers: const [],
+          );
+        await _pumpMemory(tester, api);
+
+        final personaSave = tester.widget<FilledButton>(
+          find.byKey(const Key('memory-persona-save')),
+        );
+        final profileSave = tester.widget<FilledButton>(
+          find.byKey(const Key('memory-profile-save')),
+        );
+        expect(personaSave.onPressed, isNull);
+        expect(profileSave.onPressed, isNull);
+        expect(
+          find.textContaining('Open or configure a vault'),
+          findsNWidgets(2),
+          reason: 'both documents share the same missing vault',
+        );
+      },
+    );
+
+    testWidgets('stays refused even while memory is switched off too', (
+      tester,
+    ) async {
+      // Memory being off is its own, separate reason a save is refused
+      // elsewhere on this page — but with no vault open, the document reason
+      // is still VAULT_MISSING (the server reports that before it ever looks
+      // at the toggle), so this is the same "no vault" case, not a new one.
+      final api = _MemoryApi()
+        ..state = _state(
+          settings: const MemorySettings(
+            enabled: false,
+            vaultRoot: '',
+            vaultWritable: false,
+            unavailableReason: MemoryUnavailableReason.disabled,
+          ),
+          persona: _document(
+            content: '',
+            contentHash: '',
+            status: MemoryNoteStatus.unmanaged,
+            unavailableReason: MemoryUnavailableReason.vaultMissing,
+          ),
+          profile: _document(
+            content: '',
+            contentHash: '',
+            unavailableReason: MemoryUnavailableReason.vaultMissing,
+          ),
+          tiers: const [],
+        );
+      await _pumpMemory(tester, api);
+
+      final personaSave = tester.widget<FilledButton>(
+        find.byKey(const Key('memory-persona-save')),
+      );
+      final profileSave = tester.widget<FilledButton>(
+        find.byKey(const Key('memory-profile-save')),
+      );
+      expect(personaSave.onPressed, isNull);
+      expect(profileSave.onPressed, isNull);
+      expect(find.textContaining('Open or configure a vault'), findsNWidgets(2));
+    });
+  });
+
   group('a document longer than a run carries', () {
     testWidgets('shows the whole document, never the runtime notice', (
       tester,
