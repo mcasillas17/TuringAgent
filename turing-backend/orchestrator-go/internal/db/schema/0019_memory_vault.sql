@@ -156,14 +156,18 @@ CREATE TABLE vault_artifacts (
 CREATE INDEX idx_vault_artifacts_session_state
   ON vault_artifacts (session_id, state);
 
--- run_egress_decisions gains memory_snapshot_fingerprint. SQLite cannot add a
--- NOT NULL column to a table carrying table-level CHECKs without restating
--- them, so the table is rebuilt exactly as 0014/0016/0017 did, under a fresh
--- temporary name so a re-run of an older migration can never collide with it.
--- Every column, constraint, cascade and index is restated verbatim; only the
--- new column is added, and existing rows get '' because a decision frozen
--- before memory existed disclosed no memory snapshot and must not be
--- retroactively credited with one.
+-- run_egress_decisions gains memory_snapshot_fingerprint. This follows the
+-- same rename-copy-drop rebuild 0014/0016/0017 used for this table, under a
+-- fresh temporary name so a re-run of an older migration can never collide
+-- with it, rather than a bare ALTER TABLE ADD COLUMN: the table's provider
+-- and agent-identity CHECKs and its cascades and indexes must all be
+-- restated explicitly as part of binding in the new column, so the change is
+-- reviewable as one complete, self-consistent table definition instead of a
+-- constraint set implied by diffing an ADD COLUMN against migrations several
+-- steps back. Every column, constraint, cascade and index is restated
+-- verbatim; only the new column is added, and existing rows get '' because a
+-- decision frozen before memory existed disclosed no memory snapshot and
+-- must not be retroactively credited with one.
 ALTER TABLE run_egress_decisions RENAME TO run_egress_decisions_before_memory_vault;
 
 CREATE TABLE run_egress_decisions (

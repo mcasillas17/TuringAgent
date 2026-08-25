@@ -344,6 +344,19 @@ func TestMemoryEvidenceCascadesFromBothOwners(t *testing.T) {
 	if remaining != 0 {
 		t.Fatalf("memory_evidence rows = %d, want both cascades to have fired", remaining)
 	}
+
+	// note_a was promoted independent of session_evidence_a: deleting the
+	// session that supplied its evidence must cascade the evidence row, not
+	// the note itself. A note is only removed by deleting memory_notes
+	// directly (as note_b was above).
+	var noteCount int
+	if err := database.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM memory_notes WHERE id = 'note_a'`).Scan(&noteCount); err != nil {
+		t.Fatal(err)
+	}
+	if noteCount != 1 {
+		t.Fatalf("memory_notes note_a count = %d, want the promoted note to survive its evidence session's deletion", noteCount)
+	}
 }
 
 func TestVaultArtifactsAreSessionOwnedAndDistinctFromSandboxArtifacts(t *testing.T) {
