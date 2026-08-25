@@ -461,7 +461,11 @@ Instead:
    recovery first determines which renames already happened —
    `data/turing.db.pre-encryption` absent means rename 1 has not run and
    the canonical path still holds the plaintext original, so rename 1
-   executes first; only then rename 2. A recovery that runs rename 2
+   executes first; only then rename 2. (The presence check is sound across
+   encrypt→rollback→re-encrypt cycles because a completed rollback
+   archives its predecessor under a distinct `superseded-*` name — §the
+   rollback paragraph — so a bare `.pre-encryption` always belongs to the
+   in-flight attempt.) A recovery that runs rename 2
    unconditionally would let POSIX `rename()` silently replace the
    still-present plaintext original with the staging file, destroying the
    predecessor this design promises to retain — the wrong implementation
@@ -507,9 +511,19 @@ recovery UX), where the encrypted database is unreadable by definition, the
 loss window is stated to the user in the confirmation, and the unreadable
 encrypted file is renamed aside, never deleted. After a completed rollback
 the wrapper blob is destroyed, `DATABASE_ENCRYPTION` returns to `off`, and
-the inventory drops to the plaintext-era artifact set. An interrupted
-rollback resumes exactly as an interrupted migration does — same journal,
-same marker rules.
+the inventory drops to the plaintext-era artifact set — **plus the
+predecessor's explicit disposition**: the now-stale
+`data/turing.db.pre-encryption` (frozen at the original swap; the rollback
+output supersedes it) is renamed to a distinct archival name,
+`data/turing.db.pre-encryption.superseded-<attempt-id>`, stays in the
+managed legacy-plaintext inventory, is offered for deletion in the rollback
+confirmation, and is destroyed at latest by retirement's predecessor sweep.
+The rename is load-bearing, not housekeeping: it keeps the bare
+`.pre-encryption` name meaning exactly one thing — *the current encryption
+attempt's rename 1 already ran* — so a later re-encryption's order-checked
+finalize recovery cannot misread a leftover from an earlier cycle. An
+interrupted rollback resumes exactly as an interrupted migration does —
+same journal, same marker rules.
 
 The schema migration runner is untouched: encryption is a file-level
 lifecycle that runs **before** `ApplyMigrations`, and the full-filename sort
@@ -554,9 +568,11 @@ G10), not a doc paragraph:
   its creation.
 - Migration staging: `data/turing.db.enc-staging` and its `-wal`/`-journal`,
   including the `_migration_progress` journal inside it.
-- Legacy plaintext predecessors: `data/turing.db.pre-encryption` and any
-  sibling `-wal`/`-journal` retained at swap time — readable predecessors
-  **must be migrated (then destroyed) before retirement can succeed**.
+- Legacy plaintext predecessors: `data/turing.db.pre-encryption`, any
+  `data/turing.db.pre-encryption.superseded-<attempt-id>` archived by a
+  completed rollback, and any sibling `-wal`/`-journal` retained at swap
+  time — readable predecessors **must be migrated (then destroyed) before
+  retirement can succeed**.
 - Managed backups under `data/backups/` (TUR-016's location, whatever it
   lands as) and any restore-staging files TUR-016 creates.
 - **Database rows are database content:** the retained
