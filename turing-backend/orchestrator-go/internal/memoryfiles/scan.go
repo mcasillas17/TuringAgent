@@ -228,6 +228,13 @@ func (v *Vault) Scan(ctx context.Context) (ScanResult, error) {
 // note whose modification time and length are unchanged is not re-read or
 // re-parsed; it is served from what the last pass already read.
 //
+// Only a verdict the pass reached about a file's own bytes is cached. A read
+// that failed — a cancelled context, an entry that vanished or could not be
+// opened — decided nothing about the note, so it is never stored: a cancelled
+// pass returns its context error and keeps nothing, and any other failure
+// leaves a visible row this pass only, read again on the next one even though
+// the file has not changed.
+//
 // The cache is deliberately not consulted for anything decided across the whole
 // vault. Duplicate identities are recomputed on every pass, because that answer
 // depends on the other files, and a cached verdict would leave the survivor of
@@ -253,8 +260,14 @@ func (v *Vault) ScanWithCache(ctx context.Context, cache *MetadataCache) (ScanRe
 		seen[candidate.relPath] = struct{}{}
 		row, reused := cache.reusableRow(candidate.relPath, candidate.modTimeUnix, candidate.sizeBytes)
 		if !reused {
-			row = v.readNoteRow(ctx, candidate)
-			cache.putScanned(candidate.relPath, row)
+			cacheable := false
+			row, cacheable, err = v.scanNoteRow(ctx, candidate)
+			if err != nil {
+				return ScanResult{}, err
+			}
+			if cacheable {
+				cache.putScanned(candidate.relPath, row)
+			}
 		}
 		notes = append(notes, row)
 	}
@@ -427,7 +440,53 @@ func areaOf(relPath string) VaultArea {
 	}
 }
 
-func (v *Vault) readNoteRow(ctx context.Context, candidate scanCandidate) NoteRow {
+// scanNoteRow produces the row one candidate contributes to this pass and says
+// whether that row may be cached. The distinction is the whole point: a row
+// derived from bytes this pass read is a verdict about the file and keeps until
+// the file changes, while a read that never got its bytes has decided nothing
+// and must be tried again.
+func (v *Vault) scanNoteRow(ctx context.Context, candidate scanCandidate) (NoteRow, bool, error) {
+	row, err := v.readNoteRow(ctx, candidate)
+	if err == nil {
+		return row, true, nil
+	}
+	// A read that failed because the caller hung up decided nothing about this
+	// note, so the pass reports the cancellation rather than inventing a note
+	// error out of it — and keeps nothing. The context is the whole test: a
+	// read that reports cancellation observed this same context, so ctx.Err()
+	// is already set by the time its error arrives here.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return NoteRow{}, false, ctxErr
+	}
+	return unreadableNoteRow(candidate, err), false, nil
+}
+
+// unreadableNoteRow is what a pass shows for a note it could not read at all.
+// The user is told which file and why — silence is the one behaviour the plan
+// forbids — and the row is deliberately never cached, so the next pass reads
+// the file again even though its modification time and length are unchanged. A
+// note that is genuinely unreadable keeps its row on every pass; a note that
+// was briefly unavailable comes back the moment it can be read.
+func unreadableNoteRow(candidate scanCandidate, err error) NoteRow {
+	return NoteRow{
+		RelPath:     candidate.relPath,
+		Area:        candidate.area,
+		Status:      NoteStatusError,
+		ModTimeUnix: candidate.modTimeUnix,
+		SizeBytes:   candidate.sizeBytes,
+		ParseError: fmt.Sprintf(
+			"the note could not be read on this pass and will be read again on the next one: %v", err,
+		),
+	}
+}
+
+// readNoteRow reads one note and parses what it read. The error it returns is
+// reserved for the read itself failing — a cancelled pass, an entry that could
+// not be opened, a descriptor that gave out mid-file — and the caller decides
+// what a failed read means for the pass. Content that was read and could not be
+// parsed is not an error here: it is the per-note error row the plan asks for,
+// and the only kind of refusal this package caches.
+func (v *Vault) readNoteRow(ctx context.Context, candidate scanCandidate) (NoteRow, error) {
 	row := NoteRow{
 		RelPath:     candidate.relPath,
 		Area:        candidate.area,
@@ -435,10 +494,21 @@ func (v *Vault) readNoteRow(ctx context.Context, candidate scanCandidate) NoteRo
 		ModTimeUnix: candidate.modTimeUnix,
 		SizeBytes:   candidate.sizeBytes,
 	}
-	content, stat, err := v.readConfinedFile(ctx, candidate.relPath, MaxNoteBytes)
+	content, stat, err := v.readScannedNote(ctx, candidate.relPath)
 	if err != nil {
+		var overLimit *LimitError
+		if !errors.As(err, &overLimit) {
+			return NoteRow{}, err
+		}
+		// The one refusal the read reaches by counting bytes it did read, so it
+		// is a statement about the file rather than about the read. Caching it
+		// is what keeps a half-megabyte note from being pulled off the disk on
+		// every timer tick, and its length is part of the cache key, so the
+		// moment the user trims the note it is read again.
+		row.ModTimeUnix = stat.Mtim.Sec
+		row.SizeBytes = stat.Size
 		row.ParseError = err.Error()
-		return row
+		return row, nil
 	}
 	row.Content = content
 	row.ContentHash = ContentHash(content)
@@ -448,7 +518,7 @@ func (v *Vault) readNoteRow(ctx context.Context, candidate scanCandidate) NoteRo
 	parsed, err := ParseNote(candidate.relPath, content)
 	if err != nil {
 		row.ParseError = err.Error()
-		return row
+		return row, nil
 	}
 	row.NoteID = parsed.ID
 	row.Kind = parsed.Kind
@@ -462,7 +532,18 @@ func (v *Vault) readNoteRow(ctx context.Context, candidate scanCandidate) NoteRo
 	} else {
 		row.Status = NoteStatusUnmanaged
 	}
-	return row
+	return row, nil
+}
+
+// readScannedNote is the scan's one read of a note's bytes, routed through the
+// test seam when one is installed and straight to the confined read otherwise.
+func (v *Vault) readScannedNote(ctx context.Context, relPath string) (string, unix.Stat_t, error) {
+	if v.scanRead == nil {
+		return v.readConfinedFile(ctx, relPath, MaxNoteBytes)
+	}
+	return v.scanRead(ctx, relPath, func() (string, unix.Stat_t, error) {
+		return v.readConfinedFile(ctx, relPath, MaxNoteBytes)
+	})
 }
 
 // flagDuplicateIdentities marks every copy of a shared identity as an error and

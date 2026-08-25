@@ -285,6 +285,9 @@ func spliceFrontmatterValue(relPath string, raw string, key string, newline stri
 	if err != nil {
 		return "", err
 	}
+	if err := refuseFlowMapping(relPath, key, mapping); err != nil {
+		return "", err
+	}
 	index, err := singleKeyIndex(relPath, mapping, key)
 	if err != nil {
 		return "", err
@@ -381,6 +384,31 @@ func commentOffset(segment string) int {
 		}
 	}
 	return -1
+}
+
+// refuseFlowMapping is the one frontmatter shape a byte splice cannot edit.
+//
+// Every replacement here is bounded by the start of the next key or by the end
+// of the block, and inside `{a: 1, b: 2}` neither bound is a boundary: the last
+// value's range swallows the closing brace, an earlier value's range ends where
+// the next key begins and the replacement drops a newline into the middle of the
+// mapping, and a key that is absent is appended after the closing brace where it
+// is not part of the mapping at all. All three hand the user back a note their
+// own editor can no longer read.
+//
+// The alternative is re-encoding the mapping, which is exactly what this
+// primitive exists not to do: it would reorder the user's keys, drop their
+// comments and renormalise their quoting. So the write is refused before it
+// happens, by name, with the one edit that makes the note editable again.
+func refuseFlowMapping(relPath string, key string, mapping *yaml.Node) error {
+	if mapping.Style&yaml.FlowStyle == 0 {
+		return nil
+	}
+	return noteParseError(
+		relPath,
+		"frontmatter is written as a YAML flow mapping ({...}), where every key shares one bracketed range; %q is edited by splicing that one value's bytes, which cannot be done inside braces without re-encoding the whole mapping and rewriting the rest of the frontmatter with it. Write the frontmatter one key per line and this edit will apply",
+		key,
+	)
 }
 
 // singleKeyIndex refuses a frontmatter that defines the same key twice: which

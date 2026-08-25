@@ -103,7 +103,18 @@ type Vault struct {
 	root  string
 	locks *pathLockTable
 	hooks syncHooks
+	// scanRead wraps the read a scan performs on one note. Production installs
+	// none, so the scan calls straight through. It is a constructor argument
+	// for the same reason the sync hooks are: a Vault is shared across
+	// goroutines, and a seam assignable on a live value would be a data race on
+	// the pass that reads the user's memory.
+	scanRead scanReadHook
 }
+
+// scanReadHook stands between a scan and one note's bytes. read is the real
+// confined read, so a hook may fail, delay or delegate without reimplementing
+// the descriptor walk.
+type scanReadHook func(ctx context.Context, relPath string, read func() (string, unix.Stat_t, error)) (string, unix.Stat_t, error)
 
 // syncHooks are the two durability calls every mutation runs through. They are
 // fixed when the Vault is constructed and never reassigned afterwards: a Vault
@@ -138,6 +149,11 @@ func Open(root string) (*Vault, error) {
 // caller may assign later, so the durability discipline of a live Vault cannot
 // change underneath a goroutine already inside a write.
 func openVault(root string, hooks syncHooks) (*Vault, error) {
+	return openVaultWith(root, hooks, nil)
+}
+
+// openVaultWith adds the scan read seam, which only a test supplies.
+func openVaultWith(root string, hooks syncHooks, scanRead scanReadHook) (*Vault, error) {
 	if hooks.file == nil || hooks.directory == nil {
 		return nil, errors.New("vault sync hooks must both be set")
 	}
@@ -163,9 +179,10 @@ func openVault(root string, hooks syncHooks) (*Vault, error) {
 		return nil, fmt.Errorf("resolve vault root: %w", err)
 	}
 	return &Vault{
-		root:  filepath.Clean(resolved),
-		locks: processPathLocks,
-		hooks: hooks,
+		root:     filepath.Clean(resolved),
+		locks:    processPathLocks,
+		hooks:    hooks,
+		scanRead: scanRead,
 	}, nil
 }
 
