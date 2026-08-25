@@ -59,9 +59,9 @@ The candidates, each verified upstream on 2026-08-24:
 | Driver | Licensing | `sqlite_fts5` | Builds / platforms | WAL & temp files | Backup integration | Migration safety | Freshness |
 |---|---|---|---|---|---|---|---|
 | **`mattn/go-sqlite3` v1.14.24 + `libsqlite3` tag, linked against SQLCipher built from source (SELECTED)** | Driver MIT ([README](https://github.com/mattn/go-sqlite3)); SQLCipher BSD-3-Clause ([LICENSE.md](https://github.com/sqlcipher/sqlcipher/blob/master/LICENSE.md)) | Guaranteed by our own pinned SQLCipher compile (`-DSQLITE_ENABLE_FTS5`); runtime-gated by the existing `TestFTS5IsCompiledIn` | `libsqlite3` linking documented for linux/darwin amd64+arm64 ([README](https://github.com/mattn/go-sqlite3)); we control the containerized build | SQLCipher encrypts main file, journal pages, statement journals, and WAL pages; **transient files are not encrypted** — file-based temp storage must stay disabled ([design doc](https://www.zetetic.net/sqlcipher/design/)) | Driver ships the online backup API (`backup.go` in the repo); SQLCipher additionally documents `sqlcipher_export()` ([API](https://www.zetetic.net/sqlcipher/sqlcipher-api/)) | Keeps the exact driver code the repo runs today (same `ConnectHook`, DSN semantics, pool behavior); engine moves **forward** 3.46.1 → 3.53.4 | SQLCipher v4.18.0 released 2026-08-18, upstream SQLite baseline 3.53.4 ([releases](https://github.com/sqlcipher/sqlcipher/releases)) |
-| `mutecomm/go-sqlcipher` v4 | Mix: mattn MIT + SQLCipher BSD-3 + libtomcrypt ("covered by their respective licenses" — [README](https://github.com/mutecomm/go-sqlcipher)) | Yes — `sqlite3_opt_fts5.go` carries `// +build sqlite_fts5 fts5` and `-DSQLITE_ENABLE_FTS5` ([source](https://raw.githubusercontent.com/mutecomm/go-sqlcipher/master/sqlite3_opt_fts5.go)) | Self-contained cgo bundle; linux/windows/solaris files present | Same SQLCipher codec semantics as selected; WAL via mattn-inherited DSN | mattn-inherited `backup.go` present | README documents keying **through the DSN** (`?_pragma_key=x'…'`) — the pattern this design forbids; `ConnectHook` does exist in its `sqlite3.go` | **Frozen: last commit and tag (v4.4.2, bundling SQLCipher 4.4.2) are 2020-12-07** ([tags](https://github.com/mutecomm/go-sqlcipher/tags), [commits](https://github.com/mutecomm/go-sqlcipher/commits/master)) |
-| `ncruces/go-sqlite3` + `adiantum` VFS | MIT ([README](https://github.com/ncruces/go-sqlite3)) | Not verified — not load-bearing for its rejection | cgo-free Wasm/wazero; very broad platform list | Adiantum VFS encrypts main db, WAL, journals in 4 KiB blocks; temp files encrypted with random keys ([VFS README](https://github.com/ncruces/go-sqlite3/blob/main/vfs/adiantum/README.md)) | Online backup listed as a feature | **Not SQLCipher-compatible** (no compatibility claimed); encryption is "fully deterministic" and the package "does not claim [to] protect databases against tampering or forgery" — no page MACs ([VFS README](https://github.com/ncruces/go-sqlite3/blob/main/vfs/adiantum/README.md)); adopting it is also a whole-driver rewrite | Actively maintained |
-| `modernc.org/sqlite` | BSD-3-Clause ([pkg.go.dev](https://pkg.go.dev/modernc.org/sqlite)) | Yes (transpiled amalgamation) | cgo-free, 23 platform combos, SQLite 3.53.3 | n/a | n/a | **No encryption support at all** — no mention of encryption or SQLCipher anywhere in its documentation ([pkg.go.dev](https://pkg.go.dev/modernc.org/sqlite)) | Active |
+| `mutecomm/go-sqlcipher` v4 | Mix: mattn MIT + SQLCipher BSD-3 + libtomcrypt ("covered by their respective licenses" — [README](https://github.com/mutecomm/go-sqlcipher)) | Yes — `sqlite3_opt_fts5.go` carries `// +build sqlite_fts5 fts5` and `-DSQLITE_ENABLE_FTS5` ([source](https://raw.githubusercontent.com/mutecomm/go-sqlcipher/master/sqlite3_opt_fts5.go)) | Self-contained cgo bundle; `sqlite3_windows.go` and `sqlite3_solaris.go` present beside the unix build ([repo file listing](https://github.com/mutecomm/go-sqlcipher)) | Same SQLCipher codec semantics as selected; WAL via mattn-inherited DSN | mattn-inherited `backup.go` present ([repo file listing](https://github.com/mutecomm/go-sqlcipher)) | README documents keying **through the DSN** (`?_pragma_key=x'…'`) — the pattern this design forbids; `ConnectHook` does exist in its [`sqlite3.go`](https://raw.githubusercontent.com/mutecomm/go-sqlcipher/master/sqlite3.go) | **Frozen: last commit and tag (v4.4.2, bundling SQLCipher 4.4.2) are 2020-12-07** ([tags](https://github.com/mutecomm/go-sqlcipher/tags), [commits](https://github.com/mutecomm/go-sqlcipher/commits/master)) |
+| `ncruces/go-sqlite3` + `adiantum` VFS | MIT ([README](https://github.com/ncruces/go-sqlite3)) | Not verified — not load-bearing for its rejection | cgo-free Wasm/wazero; very broad platform list ([README](https://github.com/ncruces/go-sqlite3)) | Adiantum VFS encrypts main db, WAL, journals in 4 KiB blocks; temp files encrypted with random keys ([VFS README](https://github.com/ncruces/go-sqlite3/blob/main/vfs/adiantum/README.md)) | "online backup" listed among its advanced features ([README](https://github.com/ncruces/go-sqlite3)) | **Not SQLCipher-compatible** (no compatibility claimed); encryption is "fully deterministic" and the package "does not claim [to] protect databases against tampering or forgery" — no page MACs ([VFS README](https://github.com/ncruces/go-sqlite3/blob/main/vfs/adiantum/README.md)); adopting it is also a whole-driver rewrite | Active — its docs currently reference v0.35.3 ([pkg.go.dev](https://pkg.go.dev/github.com/ncruces/go-sqlite3)) |
+| `modernc.org/sqlite` | BSD-3-Clause ([pkg.go.dev](https://pkg.go.dev/modernc.org/sqlite)) | Not verified — not load-bearing for its rejection | cgo-free transpiled amalgamation; 23 platform/arch combinations at SQLite 3.53.3 ([pkg.go.dev](https://pkg.go.dev/modernc.org/sqlite)) | n/a | n/a | **No encryption support at all** — no mention of encryption or SQLCipher anywhere in its documentation ([pkg.go.dev](https://pkg.go.dev/modernc.org/sqlite)) | Active ([pkg.go.dev](https://pkg.go.dev/modernc.org/sqlite)) |
 | SQLite Encryption Extension (SEE) | **Proprietary**: $2,000 perpetual source license ([sqlite.org/purchase/see](https://sqlite.org/purchase/see)) | Would inherit from build | Source product, compile yourself | Own codec, not SQLCipher format | Standard SQLite backup API | Not SQLCipher-compatible; closed source | Commercial |
 
 **Selection: keep `mattn/go-sqlite3` and link it against a pinned SQLCipher
@@ -204,11 +204,22 @@ what channel, holding what.
 authenticated loopback gRPC channel.** The desktop app already runs on the
 host, already holds the client API key, and already speaks to orchestrator
 `:3000`. A new `Unlock` RPC carries the DEK (not the KEK) exactly once per
-orchestrator boot: the app reads the wrapper blob (via a small read-only
-volume view or a fetch-wrapper RPC), asks the OS keystore to unwrap it —
-the KEK never leaves keystore custody; on retirement-eligible custody the
-unwrap happens *inside* the Secure Enclave — and sends the unwrapped DEK to
-the orchestrator, which holds it in memory only and moves LOCKED → OPEN.
+orchestrator boot. The app obtains the wrapper blob through a
+**`FetchWrapper` RPC on the same authenticated status/unlock surface** —
+selected over the alternative of the app reading
+`turing-backend/data/keys/turing.db.dek` directly off the host filesystem
+(the `data/` directory is a host bind mount, so the app *could*), which is
+rejected because the client's contract today is purely gRPC with no
+knowledge of backend directory layout, and a path-coupled client breaks
+silently when the layout moves and invites exactly the ad-hoc file handling
+`secureSQLiteFile`'s 0600/owner posture exists to prevent. Serving the
+wrapper pre-unlock does not weaken custody: the wrapper is KEK-sealed
+ciphertext whose protection comes from the keystore, the RPC still requires
+the client API key, and the LOCKED surface already exists. The app then
+asks the OS keystore to unwrap the blob — the KEK never leaves keystore
+custody; on retirement-eligible custody the unwrap happens *inside* the
+Secure Enclave — and sends the unwrapped DEK to the orchestrator, which
+holds it in memory only and moves LOCKED → OPEN.
 Compared alternatives, each rejected:
 
 - **Environment injection** (compose reads the keystore via
@@ -277,9 +288,12 @@ orchestrator is **LOCKED**:
 
 ## Connection discipline under the selected driver (locked)
 
-An ordering fact, verified against the mattn v1.14.24 module source: `Open`
-executes DSN-derived PRAGMAs (including `_journal_mode`) **before** invoking
-`ConnectHook`. SQLCipher requires the key before the first page read, and
+An ordering fact, verified against the mattn v1.14.24 module source
+([`sqlite3.go` at v1.14.24](https://github.com/mattn/go-sqlite3/blob/v1.14.24/sqlite3.go):
+the `PRAGMA journal_mode` exec sits near line 1700, the `ConnectHook`
+invocation near line 1773): `Open` executes DSN-derived PRAGMAs (including
+`_journal_mode`) **before** invoking `ConnectHook`. SQLCipher requires the
+key before the first page read, and
 `PRAGMA journal_mode = WAL` writes the database header. Therefore:
 
 - The DSN shrinks to the path plus non-I/O parameters only
@@ -304,11 +318,25 @@ executes DSN-derived PRAGMAs (including `_journal_mode`) **before** invoking
   already one connection and the orchestrator is already the database's only
   client. Defense in depth: even where a wal-index exists, sqlite.org
   documents it as a non-persistent reader index, not database content — but
-  the design does not lean on that; it removes the file. Named cost: no
-  second process (a shell `sqlite3`, an external backup tool) can attach
-  while the orchestrator runs; TUR-016 backups therefore run **in-process**
-  through the driver's online backup API, which is where they already
-  belong.
+  the design does not lean on that; it removes the file. **Named cost, and a
+  constraint this design places on TUR-016 — a coordination note, not an
+  existing fact:** under EXCLUSIVE locking no second process can attach
+  while the orchestrator runs, so encrypted-era backups must run
+  **in-process** through the driver's online backup API. TUR-016 has not
+  landed and owns its own backup design; nothing today constrains it. But
+  note the constraint is mostly forced by encryption itself, not by the
+  locking mode: once the file is SQLCipher-encrypted, any backup path must
+  read through a *keyed* connection regardless of locking, so an external
+  unkeyed `sqlite3 .backup` design would be invalidated by TUR-022 anyway.
+  What EXCLUSIVE locking additionally forecloses is a *second keyed
+  process* — and that alternative is compared and rejected here: delivering
+  the DEK to a second process would widen key custody (two live key
+  holders where the retirement ceremony's "zero live key holders" check
+  currently has one), and shared locking would re-create the `-shm`
+  wal-index this section exists to remove. If TUR-016 nevertheless lands an
+  out-of-process backup design, this locking decision must be revisited
+  before TUR-022 implementation starts — recorded as a cross-task risk in
+  §Deferred.
 - With SQLCipher active, main file, journal pages, statement journals, and
   WAL pages are encrypted under the database key
   ([design doc](https://www.zetetic.net/sqlcipher/design/)); with
@@ -389,13 +417,16 @@ checksums; this design **reuses those semantics and encrypts the managed
 artifacts** — it does not fork them, and implementation cannot start before
 TUR-016 lands. Concretely:
 
-- Managed backups are taken in-process through the driver's online backup
-  API with the **target opened through the same keyed driver** — the backup
-  API copies pages through the destination connection's codec, so an
-  unkeyed target would silently produce a *plaintext* backup; gate G8's
-  named kill. Managed backups are therefore encrypted under the same DEK
-  and carry **no key material**: a backup of the wrapper beside the backup
-  of the ciphertext would quietly widen the wrapper inventory.
+- Whatever backup mechanism TUR-016 lands, the requirement TUR-022 adds for
+  the encrypted era is: managed backups are taken through the driver's
+  online backup API on a keyed connection with the **target also opened
+  through the keyed driver** — the backup API copies pages through the
+  destination connection's codec, so an unkeyed target would silently
+  produce a *plaintext* backup; gate G8's named kill. (The in-process
+  constraint and its rationale are §Connection discipline's coordination
+  note.) Managed backups are therefore encrypted under the same DEK and
+  carry **no key material**: a backup of the wrapper beside the backup of
+  the ciphertext would quietly widen the wrapper inventory.
 - TUR-016's optional user-passphrase-encrypted *export* remains what the
   roadmap says it is: outside managed database-key custody and outside
   retirement — a user-created artifact, disclosed as such.
@@ -439,8 +470,52 @@ counted as retired:**
   `legacy_skills_export.go`) — these are plaintext files the 0011 recovery
   path deliberately writes and re-verifies on startup. **Database
   retirement does not withdraw legacy skill content**; the ceremony's
-  report names these files explicitly so the user can act on them
-  (offline cleanup remains the CLAUDE.md-documented operator procedure).
+  report names these files explicitly so the user can act on them. The
+  operator cleanup of the recovery *table* changes shape under encryption —
+  §next section, a deliberate amendment, not a footnote.
+
+## The recovery-table cleanup under encryption (a deliberate amendment)
+
+CLAUDE.md's documented cleanup for `legacy_skill_export_recovery` is
+plaintext-era: "stop the orchestrator, back up the database, verify every
+legacy file under `skills/imported/`, then use a SQLite client to
+`DROP TABLE legacy_skill_export_recovery;` before restarting." Once the
+database is SQLCipher-encrypted, the load-bearing step is broken: a generic
+unkeyed `sqlite3` client cannot open the file at all, and under this
+design's key-delivery decision no raw key ever exists outside orchestrator
+process memory for an operator to type into an interactive session. This
+design therefore **amends the cleanup procedure** rather than pretending it
+survives:
+
+- **Selected: the drop moves in-process, behind an explicit operator
+  ceremony.** A dedicated maintenance flow (surfaced in the client, executed
+  by the orchestrator) that runs only on explicit operator confirmation and
+  only after, in order: a fresh managed backup exists (TUR-016's receipt),
+  every recovery row is re-verified against a byte-identical
+  `skills/imported/<id>/SKILL.md` file using the verification machinery the
+  startup re-export already has (`legacy_skills_export.go`), and the
+  confirmation names the row count being dropped. Any unverifiable row
+  fails the whole ceremony closed.
+- This narrows, deliberately, the existing invariant that "application code
+  never deletes nonempty recovery." That invariant's *reason* — no atomic
+  commit boundary between SQLite and the filesystem, so silent deletion
+  could destroy the only copy — is preserved in full: nothing is deleted
+  silently, nothing at startup, nothing without per-row verified file
+  presence and a backup receipt. What changes is only *who holds the keyed
+  connection*, because after encryption the orchestrator is the only
+  process that can.
+- **Rejected alternative: hand the operator the raw DEK for a `sqlcipher`
+  CLI session.** This preserves the "offline, external client" shape at the
+  cost of the key-hygiene rule — key bytes would transit a terminal
+  (shell history, process arguments, scrollback), the exact disclosure
+  surfaces §the envelope forbids — and it creates a second live key holder
+  outside the inventory. Rejected.
+- **Rejected alternative: leave the procedure as documented.** Impossible
+  under encryption; documenting an impossible procedure is worse than
+  amending it.
+
+The implementation PR must rewrite the CLAUDE.md gotcha's cleanup steps to
+this ceremony (not merely add notes beside them) — §Documentation.
 - Sandbox artifacts under TUR-004's provenance manifest, session/memory
   exports (TUR-015), and every user-created copy of anything — outside
   Turing's custody, disclosed, out of scope.
@@ -595,14 +670,22 @@ implementation it kills. Break the gate, watch the test fail, restore.
   `libsqlite3`+SQLCipher link fails its validation spike; its staleness
   costs are recorded above so that decision, if forced, is made with open
   eyes.
+- **Cross-task risk, recorded: TUR-016's backup mechanism.** TUR-016 lands
+  first and owns backup/restore. If it chooses an out-of-process backup
+  design, §Connection discipline's EXCLUSIVE-locking decision must be
+  revisited before TUR-022 implementation starts; the keyed-connection
+  requirement for encrypted-era backups stands either way.
 
 ## Documentation the implementation PR must update
 
 - `docs/architecture/2026-08-18-personal-agent-audit.md` — TUR-022 status
   moves from pending-approval to implementation-tracking.
 - `CLAUDE.md` — the SQLCipher-linked build flavor, the new CI job, the
-  `DATABASE_ENCRYPTION` selector, and the retirement ceremony's operator
-  notes beside the existing `legacy_skill_export_recovery` gotcha.
+  `DATABASE_ENCRYPTION` selector, the retirement ceremony's operator notes,
+  and a **rewrite of the `legacy_skill_export_recovery` gotcha's cleanup
+  steps** to the in-process ceremony (§The recovery-table cleanup under
+  encryption) — the plaintext-era "use a SQLite client" instruction becomes
+  wrong the day encryption ships.
 - `turing-backend/.env.example` — the selector variable only, with a
   comment stating key material never lives in configuration.
 - Privacy/security/operator docs — LOCKED/MIGRATING/RETIRING states, the
