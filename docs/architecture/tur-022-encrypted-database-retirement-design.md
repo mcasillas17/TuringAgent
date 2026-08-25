@@ -519,7 +519,15 @@ marker-guarded finalize, not after it**: the first step under rollback's
 swap-intent marker renames the now-stale `data/turing.db.pre-encryption`
 (frozen at the original swap; the rollback output supersedes it) to the
 distinct archival name
-`data/turing.db.pre-encryption.superseded-<attempt-id>`; only then do the
+`data/turing.db.pre-encryption.superseded-<attempt-id>` — where
+`<attempt-id>` is not a placeholder but a pinned mechanism: the ULID
+generated at attempt start through the repo's existing id scheme
+(`internal/ids`, `oklog/ulid` — monotonic-timestamp + crypto-random, so
+distinct attempts get distinct ids by construction) and **recorded inside
+the swap-intent marker itself**, so a finalize resumed after a crash
+re-derives the identical archival name from the durable marker and the
+rename is idempotent, while a later attempt's different ULID can never
+collide with (and silently overwrite) an earlier archive; only then do the
 swap renames run, and the marker is not removed until archival and swap
 have all completed — so an interruption anywhere in the sequence resumes
 forward under the same order-checked marker rules, and a
