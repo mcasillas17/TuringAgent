@@ -781,7 +781,6 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     $core.Iterable<SkillEgressDisclosure>? skills,
     $core.Iterable<MemoryEgressDisclosure>? memoryNotes,
     $core.bool? memoryProfileMayBeSent,
-    $core.Iterable<EgressDataCategoryDetail>? dataCategoryDetails,
   }) {
     final result = create();
     if (challenge != null) result.challenge = challenge;
@@ -801,8 +800,6 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     if (memoryNotes != null) result.memoryNotes.addAll(memoryNotes);
     if (memoryProfileMayBeSent != null)
       result.memoryProfileMayBeSent = memoryProfileMayBeSent;
-    if (dataCategoryDetails != null)
-      result.dataCategoryDetails.addAll(dataCategoryDetails);
     return result;
   }
 
@@ -849,9 +846,6 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
         13, _omitFieldNames ? '' : 'memoryNotes', $pb.PbFieldType.PM,
         subBuilder: MemoryEgressDisclosure.create)
     ..aOB(14, _omitFieldNames ? '' : 'memoryProfileMayBeSent')
-    ..pc<EgressDataCategoryDetail>(
-        15, _omitFieldNames ? '' : 'dataCategoryDetails', $pb.PbFieldType.PM,
-        subBuilder: EgressDataCategoryDetail.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -973,12 +967,6 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
   $core.bool hasMemoryProfileMayBeSent() => $_has(13);
   @$pb.TagNumber(14)
   void clearMemoryProfileMayBeSent() => $_clearField(14);
-
-  /// Per-category expansion of data_categories. The bare enum list cannot say
-  /// *what* would be sent, so a client cannot honestly render the consent
-  /// prompt from it alone.
-  @$pb.TagNumber(15)
-  $pb.PbList<EgressDataCategoryDetail> get dataCategoryDetails => $_getList(14);
 }
 
 class MemoryEgressDisclosure extends $pb.GeneratedMessage {
@@ -1088,100 +1076,6 @@ class MemoryEgressDisclosure extends $pb.GeneratedMessage {
   $core.bool hasBodyMayBeSent() => $_has(4);
   @$pb.TagNumber(5)
   void clearBodyMayBeSent() => $_clearField(5);
-}
-
-class EgressDataCategoryDetail extends $pb.GeneratedMessage {
-  factory EgressDataCategoryDetail({
-    EgressDataCategory? category,
-    $core.String? summary,
-    $core.Iterable<$core.String>? items,
-    $core.int? itemCount,
-  }) {
-    final result = create();
-    if (category != null) result.category = category;
-    if (summary != null) result.summary = summary;
-    if (items != null) result.items.addAll(items);
-    if (itemCount != null) result.itemCount = itemCount;
-    return result;
-  }
-
-  EgressDataCategoryDetail._();
-
-  factory EgressDataCategoryDetail.fromBuffer($core.List<$core.int> data,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
-  factory EgressDataCategoryDetail.fromJson($core.String json,
-          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
-
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
-      _omitMessageNames ? '' : 'EgressDataCategoryDetail',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
-    ..e<EgressDataCategory>(
-        1, _omitFieldNames ? '' : 'category', $pb.PbFieldType.OE,
-        defaultOrMaker: EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED,
-        valueOf: EgressDataCategory.valueOf,
-        enumValues: EgressDataCategory.values)
-    ..aOS(2, _omitFieldNames ? '' : 'summary')
-    ..pPS(3, _omitFieldNames ? '' : 'items')
-    ..a<$core.int>(4, _omitFieldNames ? '' : 'itemCount', $pb.PbFieldType.O3)
-    ..hasRequiredFields = false;
-
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  EgressDataCategoryDetail clone() =>
-      EgressDataCategoryDetail()..mergeFromMessage(this);
-  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  EgressDataCategoryDetail copyWith(
-          void Function(EgressDataCategoryDetail) updates) =>
-      super.copyWith((message) => updates(message as EgressDataCategoryDetail))
-          as EgressDataCategoryDetail;
-
-  @$core.override
-  $pb.BuilderInfo get info_ => _i;
-
-  @$core.pragma('dart2js:noInline')
-  static EgressDataCategoryDetail create() => EgressDataCategoryDetail._();
-  @$core.override
-  EgressDataCategoryDetail createEmptyInstance() => create();
-  static $pb.PbList<EgressDataCategoryDetail> createRepeated() =>
-      $pb.PbList<EgressDataCategoryDetail>();
-  @$core.pragma('dart2js:noInline')
-  static EgressDataCategoryDetail getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<EgressDataCategoryDetail>(create);
-  static EgressDataCategoryDetail? _defaultInstance;
-
-  @$pb.TagNumber(1)
-  EgressDataCategory get category => $_getN(0);
-  @$pb.TagNumber(1)
-  set category(EgressDataCategory value) => $_setField(1, value);
-  @$pb.TagNumber(1)
-  $core.bool hasCategory() => $_has(0);
-  @$pb.TagNumber(1)
-  void clearCategory() => $_clearField(1);
-
-  @$pb.TagNumber(2)
-  $core.String get summary => $_getSZ(1);
-  @$pb.TagNumber(2)
-  set summary($core.String value) => $_setString(1, value);
-  @$pb.TagNumber(2)
-  $core.bool hasSummary() => $_has(1);
-  @$pb.TagNumber(2)
-  void clearSummary() => $_clearField(2);
-
-  @$pb.TagNumber(3)
-  $pb.PbList<$core.String> get items => $_getList(2);
-
-  /// Kept separate from items so a bounded/truncated list can still report the
-  /// true total rather than understating what is being sent.
-  @$pb.TagNumber(4)
-  $core.int get itemCount => $_getIZ(3);
-  @$pb.TagNumber(4)
-  set itemCount($core.int value) => $_setSignedInt32(3, value);
-  @$pb.TagNumber(4)
-  $core.bool hasItemCount() => $_has(3);
-  @$pb.TagNumber(4)
-  void clearItemCount() => $_clearField(4);
 }
 
 class SkillEgressDisclosure extends $pb.GeneratedMessage {

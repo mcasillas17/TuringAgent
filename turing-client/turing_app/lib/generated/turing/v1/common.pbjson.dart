@@ -532,14 +532,6 @@ const RemoteEgressDisclosure$json = {
       '5': 8,
       '10': 'memoryProfileMayBeSent'
     },
-    {
-      '1': 'data_category_details',
-      '3': 15,
-      '4': 3,
-      '5': 11,
-      '6': '.turing.v1.EgressDataCategoryDetail',
-      '10': 'dataCategoryDetails'
-    },
   ],
 };
 
@@ -558,9 +550,7 @@ final $typed_data.Uint8List remoteEgressDisclosureDescriptor = $convert.base64De
     'RGVzdGluYXRpb25SFGludGVncmF0aW9uRW5kcG9pbnRzEjgKBnNraWxscxgMIAMoCzIgLnR1cm'
     'luZy52MS5Ta2lsbEVncmVzc0Rpc2Nsb3N1cmVSBnNraWxscxJECgxtZW1vcnlfbm90ZXMYDSAD'
     'KAsyIS50dXJpbmcudjEuTWVtb3J5RWdyZXNzRGlzY2xvc3VyZVILbWVtb3J5Tm90ZXMSOgoabW'
-    'Vtb3J5X3Byb2ZpbGVfbWF5X2JlX3NlbnQYDiABKAhSFm1lbW9yeVByb2ZpbGVNYXlCZVNlbnQS'
-    'VwoVZGF0YV9jYXRlZ29yeV9kZXRhaWxzGA8gAygLMiMudHVyaW5nLnYxLkVncmVzc0RhdGFDYX'
-    'RlZ29yeURldGFpbFITZGF0YUNhdGVnb3J5RGV0YWlscw==');
+    'Vtb3J5X3Byb2ZpbGVfbWF5X2JlX3NlbnQYDiABKAhSFm1lbW9yeVByb2ZpbGVNYXlCZVNlbnQ=');
 
 @$core.Deprecated('Use memoryEgressDisclosureDescriptor instead')
 const MemoryEgressDisclosure$json = {
@@ -587,30 +577,6 @@ final $typed_data.Uint8List memoryEgressDisclosureDescriptor = $convert.base64De
     'RsZRgCIAEoCVIFdGl0bGUSHQoKdmF1bHRfcGF0aBgDIAEoCVIJdmF1bHRQYXRoEikKBHRpZXIY'
     'BCABKA4yFS50dXJpbmcudjEuTWVtb3J5VGllclIEdGllchInChBib2R5X21heV9iZV9zZW50GA'
     'UgASgIUg1ib2R5TWF5QmVTZW50');
-
-@$core.Deprecated('Use egressDataCategoryDetailDescriptor instead')
-const EgressDataCategoryDetail$json = {
-  '1': 'EgressDataCategoryDetail',
-  '2': [
-    {
-      '1': 'category',
-      '3': 1,
-      '4': 1,
-      '5': 14,
-      '6': '.turing.v1.EgressDataCategory',
-      '10': 'category'
-    },
-    {'1': 'summary', '3': 2, '4': 1, '5': 9, '10': 'summary'},
-    {'1': 'items', '3': 3, '4': 3, '5': 9, '10': 'items'},
-    {'1': 'item_count', '3': 4, '4': 1, '5': 5, '10': 'itemCount'},
-  ],
-};
-
-/// Descriptor for `EgressDataCategoryDetail`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List egressDataCategoryDetailDescriptor = $convert.base64Decode(
-    'ChhFZ3Jlc3NEYXRhQ2F0ZWdvcnlEZXRhaWwSOQoIY2F0ZWdvcnkYASABKA4yHS50dXJpbmcudj'
-    'EuRWdyZXNzRGF0YUNhdGVnb3J5UghjYXRlZ29yeRIYCgdzdW1tYXJ5GAIgASgJUgdzdW1tYXJ5'
-    'EhQKBWl0ZW1zGAMgAygJUgVpdGVtcxIdCgppdGVtX2NvdW50GAQgASgFUglpdGVtQ291bnQ=');
 
 @$core.Deprecated('Use skillEgressDisclosureDescriptor instead')
 const SkillEgressDisclosure$json = {

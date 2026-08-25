@@ -223,10 +223,6 @@ message RemoteEgressDisclosure {
   // uses internally.
   repeated MemoryEgressDisclosure memory_notes = 13;
   bool memory_profile_may_be_sent = 14;
-  // Per-category expansion of data_categories. The bare enum list cannot say
-  // *what* would be sent, so a client cannot honestly render the consent
-  // prompt from it alone.
-  repeated EgressDataCategoryDetail data_category_details = 15;
 }
 
 message MemoryEgressDisclosure {
@@ -235,15 +231,6 @@ message MemoryEgressDisclosure {
   string vault_path = 3;
   MemoryTier tier = 4;
   bool body_may_be_sent = 5;
-}
-
-message EgressDataCategoryDetail {
-  EgressDataCategory category = 1;
-  string summary = 2;
-  repeated string items = 3;
-  // Kept separate from items so a bounded/truncated list can still report the
-  // true total rather than understating what is being sent.
-  int32 item_count = 4;
 }
 
 message SkillEgressDisclosure {

@@ -658,7 +658,6 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	assertProtoField(t, disclosure, "skills", 12, protoreflect.MessageKind, true, "turing.v1.SkillEgressDisclosure")
 	assertProtoField(t, disclosure, "memory_notes", 13, protoreflect.MessageKind, true, "turing.v1.MemoryEgressDisclosure")
 	assertProtoField(t, disclosure, "memory_profile_may_be_sent", 14, protoreflect.BoolKind, false, "")
-	assertProtoField(t, disclosure, "data_category_details", 15, protoreflect.MessageKind, true, "turing.v1.EgressDataCategoryDetail")
 
 	// The disclosure is what the user reads before consenting, so its memory
 	// fields name content, never the signed snapshot fingerprint the run-owned
@@ -672,12 +671,6 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	if memoryDisclosure.Fields().ByName("memory_snapshot_fingerprint") != nil {
 		t.Fatal("MemoryEgressDisclosure must not carry a snapshot fingerprint")
 	}
-
-	categoryDetail := common.Messages().ByName("EgressDataCategoryDetail")
-	assertProtoField(t, categoryDetail, "category", 1, protoreflect.EnumKind, false, "")
-	assertProtoField(t, categoryDetail, "summary", 2, protoreflect.StringKind, false, "")
-	assertProtoField(t, categoryDetail, "items", 3, protoreflect.StringKind, true, "")
-	assertProtoField(t, categoryDetail, "item_count", 4, protoreflect.Int32Kind, false, "")
 
 	assertProtoEnumValues(t, common.Enums().ByName("MemoryTier"), map[protoreflect.Name]protoreflect.EnumNumber{
 		"MEMORY_TIER_UNSPECIFIED": 0,
