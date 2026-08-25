@@ -44,6 +44,10 @@ func (s *Server) ListMemoryState(ctx context.Context, _ *turingv1.ListMemoryStat
 		response.Profile = &turingv1.MemoryProfile{
 			UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING,
 		}
+		response.Persona = &turingv1.MemoryPersona{
+			Status:            turingv1.MemoryNoteStatus_MEMORY_NOTE_STATUS_UNMANAGED,
+			UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING,
+		}
 		return response, nil
 	}
 
@@ -63,7 +67,8 @@ func (s *Server) ListMemoryState(ctx context.Context, _ *turingv1.ListMemoryStat
 	response.Notes = view.notes
 	response.Candidates = view.candidates
 	response.Profile = s.profile(ctx, settings)
-	response.Tiers = s.tiers(ctx, settings, view, response.Profile)
+	response.Persona = s.persona(ctx, settings)
+	response.Tiers = s.tiers(settings, view, response.Profile, response.Persona)
 	return response, nil
 }
 
@@ -461,30 +466,31 @@ func (s *Server) candidateForDecision(ctx context.Context, candidateID string, e
 }
 
 func (s *Server) profile(ctx context.Context, settings *turingv1.MemorySettings) *turingv1.MemoryProfile {
-	if s.vault == nil {
-		return &turingv1.MemoryProfile{
-			UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING,
-		}
-	}
-	if !settings.GetEnabled() {
-		return &turingv1.MemoryProfile{
-			UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_DISABLED,
-		}
-	}
-	document := s.vault.LoadProfile(ctx)
-	profile := &turingv1.MemoryProfile{
+	document, reason, detail := s.pinnedDocument(ctx, settings, func(ctx context.Context) memoryfiles.PinnedDocument {
+		return s.vault.LoadProfile(ctx)
+	})
+	return &turingv1.MemoryProfile{
 		Content:           document.Content,
 		ContentHash:       document.ContentHash,
 		Status:            turingv1.MemoryNoteStatus_MEMORY_NOTE_STATUS_MANAGED,
-		ParseError:        document.Detail,
-		UnavailableReason: unavailableProto(document.Reason, document.Available),
+		ParseError:        detail,
+		UnavailableReason: reason,
 	}
-	return profile
 }
 
 // tiers reports the three tiers memory has, each with what it holds and why it
 // could not be read when that is the answer.
-func (s *Server) tiers(ctx context.Context, settings *turingv1.MemorySettings, view vaultView, profile *turingv1.MemoryProfile) []*turingv1.MemoryTierState {
+//
+// The pinned rows are derived from the documents the response already carries
+// rather than read a second time: two reads of the same file can disagree, and
+// a tier row saying "no persona" beside a persona row holding one is exactly
+// the kind of disagreement a user cannot resolve.
+func (s *Server) tiers(
+	settings *turingv1.MemorySettings,
+	view vaultView,
+	profile *turingv1.MemoryProfile,
+	persona *turingv1.MemoryPersona,
+) []*turingv1.MemoryTierState {
 	beliefCandidates, profileCandidates := 0, 0
 	for _, candidate := range view.candidates {
 		switch candidate.GetKind() {
@@ -494,20 +500,14 @@ func (s *Server) tiers(ctx context.Context, settings *turingv1.MemorySettings, v
 			profileCandidates++
 		}
 	}
-	persona := &turingv1.MemoryTierState{
+	personaTier := &turingv1.MemoryTierState{
 		Tier:              turingv1.MemoryTier_MEMORY_TIER_PERSONA,
 		Enabled:           settings.GetEnabled(),
-		UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE,
+		UnavailableReason: persona.GetUnavailableReason(),
+		ParseError:        persona.GetParseError(),
 	}
-	if s.vault != nil && settings.GetEnabled() {
-		document := s.vault.LoadPersona(ctx)
-		persona.UnavailableReason = unavailableProto(document.Reason, document.Available)
-		persona.ParseError = document.Detail
-		if document.Available && strings.TrimSpace(document.Content) != "" {
-			persona.NoteCount = 1
-		}
-	} else if !settings.GetEnabled() {
-		persona.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_DISABLED
+	if strings.TrimSpace(persona.GetContent()) != "" {
+		personaTier.NoteCount = 1
 	}
 	profileTier := &turingv1.MemoryTierState{
 		Tier:                  turingv1.MemoryTier_MEMORY_TIER_PROFILE,
@@ -533,7 +533,7 @@ func (s *Server) tiers(ctx context.Context, settings *turingv1.MemorySettings, v
 		// visible, since the settings row is busy saying DISABLED.
 		beliefTier.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_DISABLED
 	}
-	return []*turingv1.MemoryTierState{persona, profileTier, beliefTier}
+	return []*turingv1.MemoryTierState{personaTier, profileTier, beliefTier}
 }
 
 func candidateProto(candidate repository.MemoryCandidate) *turingv1.MemoryCandidate {

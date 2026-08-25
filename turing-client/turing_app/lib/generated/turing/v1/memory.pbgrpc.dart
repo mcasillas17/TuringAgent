@@ -102,6 +102,30 @@ class MemoryServiceClient extends $grpc.Client {
     return $createUnaryCall(_$applyMemoryProfile, request, options: options);
   }
 
+  /// The user's own hands on the two pinned documents. Public facet only: the
+  /// runtime identity is not granted these names, so no agent path — not even a
+  /// confused internal caller — can reach persona.md.
+  $grpc.ResponseFuture<$0.MemoryPersona> getMemoryPersona(
+    $0.GetMemoryPersonaRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$getMemoryPersona, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.SaveMemoryPersonaResponse> saveMemoryPersona(
+    $0.SaveMemoryPersonaRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$saveMemoryPersona, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.SaveMemoryProfileResponse> saveMemoryProfile(
+    $0.SaveMemoryProfileRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$saveMemoryProfile, request, options: options);
+  }
+
   /// Internal facet only.
   $grpc.ResponseFuture<$0.ListMemoryToolsResponse> listMemoryTools(
     $0.ListMemoryToolsRequest request, {
@@ -164,6 +188,21 @@ class MemoryServiceClient extends $grpc.Client {
       '/turing.v1.MemoryService/ApplyMemoryProfile',
       ($0.ApplyMemoryProfileRequest value) => value.writeToBuffer(),
       $0.ApplyMemoryProfileResponse.fromBuffer);
+  static final _$getMemoryPersona =
+      $grpc.ClientMethod<$0.GetMemoryPersonaRequest, $0.MemoryPersona>(
+          '/turing.v1.MemoryService/GetMemoryPersona',
+          ($0.GetMemoryPersonaRequest value) => value.writeToBuffer(),
+          $0.MemoryPersona.fromBuffer);
+  static final _$saveMemoryPersona = $grpc.ClientMethod<
+          $0.SaveMemoryPersonaRequest, $0.SaveMemoryPersonaResponse>(
+      '/turing.v1.MemoryService/SaveMemoryPersona',
+      ($0.SaveMemoryPersonaRequest value) => value.writeToBuffer(),
+      $0.SaveMemoryPersonaResponse.fromBuffer);
+  static final _$saveMemoryProfile = $grpc.ClientMethod<
+          $0.SaveMemoryProfileRequest, $0.SaveMemoryProfileResponse>(
+      '/turing.v1.MemoryService/SaveMemoryProfile',
+      ($0.SaveMemoryProfileRequest value) => value.writeToBuffer(),
+      $0.SaveMemoryProfileResponse.fromBuffer);
   static final _$listMemoryTools =
       $grpc.ClientMethod<$0.ListMemoryToolsRequest, $0.ListMemoryToolsResponse>(
           '/turing.v1.MemoryService/ListMemoryTools',
@@ -262,6 +301,33 @@ abstract class MemoryServiceBase extends $grpc.Service {
         ($core.List<$core.int> value) =>
             $0.ApplyMemoryProfileRequest.fromBuffer(value),
         ($0.ApplyMemoryProfileResponse value) => value.writeToBuffer()));
+    $addMethod(
+        $grpc.ServiceMethod<$0.GetMemoryPersonaRequest, $0.MemoryPersona>(
+            'GetMemoryPersona',
+            getMemoryPersona_Pre,
+            false,
+            false,
+            ($core.List<$core.int> value) =>
+                $0.GetMemoryPersonaRequest.fromBuffer(value),
+            ($0.MemoryPersona value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.SaveMemoryPersonaRequest,
+            $0.SaveMemoryPersonaResponse>(
+        'SaveMemoryPersona',
+        saveMemoryPersona_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.SaveMemoryPersonaRequest.fromBuffer(value),
+        ($0.SaveMemoryPersonaResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.SaveMemoryProfileRequest,
+            $0.SaveMemoryProfileResponse>(
+        'SaveMemoryProfile',
+        saveMemoryProfile_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.SaveMemoryProfileRequest.fromBuffer(value),
+        ($0.SaveMemoryProfileResponse value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.ListMemoryToolsRequest,
             $0.ListMemoryToolsResponse>(
         'ListMemoryTools',
@@ -360,6 +426,32 @@ abstract class MemoryServiceBase extends $grpc.Service {
 
   $async.Future<$0.ApplyMemoryProfileResponse> applyMemoryProfile(
       $grpc.ServiceCall call, $0.ApplyMemoryProfileRequest request);
+
+  $async.Future<$0.MemoryPersona> getMemoryPersona_Pre($grpc.ServiceCall $call,
+      $async.Future<$0.GetMemoryPersonaRequest> $request) async {
+    return getMemoryPersona($call, await $request);
+  }
+
+  $async.Future<$0.MemoryPersona> getMemoryPersona(
+      $grpc.ServiceCall call, $0.GetMemoryPersonaRequest request);
+
+  $async.Future<$0.SaveMemoryPersonaResponse> saveMemoryPersona_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.SaveMemoryPersonaRequest> $request) async {
+    return saveMemoryPersona($call, await $request);
+  }
+
+  $async.Future<$0.SaveMemoryPersonaResponse> saveMemoryPersona(
+      $grpc.ServiceCall call, $0.SaveMemoryPersonaRequest request);
+
+  $async.Future<$0.SaveMemoryProfileResponse> saveMemoryProfile_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.SaveMemoryProfileRequest> $request) async {
+    return saveMemoryProfile($call, await $request);
+  }
+
+  $async.Future<$0.SaveMemoryProfileResponse> saveMemoryProfile(
+      $grpc.ServiceCall call, $0.SaveMemoryProfileRequest request);
 
   $async.Future<$0.ListMemoryToolsResponse> listMemoryTools_Pre(
       $grpc.ServiceCall $call,

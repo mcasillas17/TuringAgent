@@ -107,7 +107,7 @@ func (v *Vault) ApplyProfileEdit(ctx context.Context, request ApplyProfileEditRe
 	}
 	defer unlockTarget()
 
-	if err := v.writeProfileWithCompareAndSet(ctx, target, request.ExpectedContentHash, request.Content); err != nil {
+	if err := v.writePinnedDocumentWithCompareAndSet(ctx, target, request.ExpectedContentHash, request.Content); err != nil {
 		return ProfileDocument{}, err
 	}
 	return ProfileDocument{
@@ -117,7 +117,11 @@ func (v *Vault) ApplyProfileEdit(ctx context.Context, request ApplyProfileEditRe
 	}, nil
 }
 
-func (v *Vault) writeProfileWithCompareAndSet(ctx context.Context, target string, expectedHash string, content string) error {
+// writePinnedDocumentWithCompareAndSet is the one fd-verified in-place write in
+// this package. Its callers each gate their own target first — an accepted
+// proposal for profile.md above, the user's own hand for either pinned document
+// in authored.go — so it never sees a path a caller chose freely.
+func (v *Vault) writePinnedDocumentWithCompareAndSet(ctx context.Context, target string, expectedHash string, content string) error {
 	parent, leaf, err := v.openParent(ctx, target, false)
 	if err != nil {
 		return err

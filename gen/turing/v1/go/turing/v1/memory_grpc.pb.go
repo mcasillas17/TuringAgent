@@ -28,6 +28,9 @@ const (
 	MemoryService_RejectMemoryCandidate_FullMethodName  = "/turing.v1.MemoryService/RejectMemoryCandidate"
 	MemoryService_GetMemoryProfile_FullMethodName       = "/turing.v1.MemoryService/GetMemoryProfile"
 	MemoryService_ApplyMemoryProfile_FullMethodName     = "/turing.v1.MemoryService/ApplyMemoryProfile"
+	MemoryService_GetMemoryPersona_FullMethodName       = "/turing.v1.MemoryService/GetMemoryPersona"
+	MemoryService_SaveMemoryPersona_FullMethodName      = "/turing.v1.MemoryService/SaveMemoryPersona"
+	MemoryService_SaveMemoryProfile_FullMethodName      = "/turing.v1.MemoryService/SaveMemoryProfile"
 	MemoryService_ListMemoryTools_FullMethodName        = "/turing.v1.MemoryService/ListMemoryTools"
 	MemoryService_CallMemoryTool_FullMethodName         = "/turing.v1.MemoryService/CallMemoryTool"
 )
@@ -51,6 +54,12 @@ type MemoryServiceClient interface {
 	RejectMemoryCandidate(ctx context.Context, in *RejectMemoryCandidateRequest, opts ...grpc.CallOption) (*RejectMemoryCandidateResponse, error)
 	GetMemoryProfile(ctx context.Context, in *GetMemoryProfileRequest, opts ...grpc.CallOption) (*MemoryProfile, error)
 	ApplyMemoryProfile(ctx context.Context, in *ApplyMemoryProfileRequest, opts ...grpc.CallOption) (*ApplyMemoryProfileResponse, error)
+	// The user's own hands on the two pinned documents. Public facet only: the
+	// runtime identity is not granted these names, so no agent path — not even a
+	// confused internal caller — can reach persona.md.
+	GetMemoryPersona(ctx context.Context, in *GetMemoryPersonaRequest, opts ...grpc.CallOption) (*MemoryPersona, error)
+	SaveMemoryPersona(ctx context.Context, in *SaveMemoryPersonaRequest, opts ...grpc.CallOption) (*SaveMemoryPersonaResponse, error)
+	SaveMemoryProfile(ctx context.Context, in *SaveMemoryProfileRequest, opts ...grpc.CallOption) (*SaveMemoryProfileResponse, error)
 	// Internal facet only.
 	ListMemoryTools(ctx context.Context, in *ListMemoryToolsRequest, opts ...grpc.CallOption) (*ListMemoryToolsResponse, error)
 	CallMemoryTool(ctx context.Context, in *CallMemoryToolRequest, opts ...grpc.CallOption) (*CallMemoryToolResponse, error)
@@ -154,6 +163,36 @@ func (c *memoryServiceClient) ApplyMemoryProfile(ctx context.Context, in *ApplyM
 	return out, nil
 }
 
+func (c *memoryServiceClient) GetMemoryPersona(ctx context.Context, in *GetMemoryPersonaRequest, opts ...grpc.CallOption) (*MemoryPersona, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MemoryPersona)
+	err := c.cc.Invoke(ctx, MemoryService_GetMemoryPersona_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *memoryServiceClient) SaveMemoryPersona(ctx context.Context, in *SaveMemoryPersonaRequest, opts ...grpc.CallOption) (*SaveMemoryPersonaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SaveMemoryPersonaResponse)
+	err := c.cc.Invoke(ctx, MemoryService_SaveMemoryPersona_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *memoryServiceClient) SaveMemoryProfile(ctx context.Context, in *SaveMemoryProfileRequest, opts ...grpc.CallOption) (*SaveMemoryProfileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SaveMemoryProfileResponse)
+	err := c.cc.Invoke(ctx, MemoryService_SaveMemoryProfile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *memoryServiceClient) ListMemoryTools(ctx context.Context, in *ListMemoryToolsRequest, opts ...grpc.CallOption) (*ListMemoryToolsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListMemoryToolsResponse)
@@ -193,6 +232,12 @@ type MemoryServiceServer interface {
 	RejectMemoryCandidate(context.Context, *RejectMemoryCandidateRequest) (*RejectMemoryCandidateResponse, error)
 	GetMemoryProfile(context.Context, *GetMemoryProfileRequest) (*MemoryProfile, error)
 	ApplyMemoryProfile(context.Context, *ApplyMemoryProfileRequest) (*ApplyMemoryProfileResponse, error)
+	// The user's own hands on the two pinned documents. Public facet only: the
+	// runtime identity is not granted these names, so no agent path — not even a
+	// confused internal caller — can reach persona.md.
+	GetMemoryPersona(context.Context, *GetMemoryPersonaRequest) (*MemoryPersona, error)
+	SaveMemoryPersona(context.Context, *SaveMemoryPersonaRequest) (*SaveMemoryPersonaResponse, error)
+	SaveMemoryProfile(context.Context, *SaveMemoryProfileRequest) (*SaveMemoryProfileResponse, error)
 	// Internal facet only.
 	ListMemoryTools(context.Context, *ListMemoryToolsRequest) (*ListMemoryToolsResponse, error)
 	CallMemoryTool(context.Context, *CallMemoryToolRequest) (*CallMemoryToolResponse, error)
@@ -232,6 +277,15 @@ func (UnimplementedMemoryServiceServer) GetMemoryProfile(context.Context, *GetMe
 }
 func (UnimplementedMemoryServiceServer) ApplyMemoryProfile(context.Context, *ApplyMemoryProfileRequest) (*ApplyMemoryProfileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplyMemoryProfile not implemented")
+}
+func (UnimplementedMemoryServiceServer) GetMemoryPersona(context.Context, *GetMemoryPersonaRequest) (*MemoryPersona, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMemoryPersona not implemented")
+}
+func (UnimplementedMemoryServiceServer) SaveMemoryPersona(context.Context, *SaveMemoryPersonaRequest) (*SaveMemoryPersonaResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SaveMemoryPersona not implemented")
+}
+func (UnimplementedMemoryServiceServer) SaveMemoryProfile(context.Context, *SaveMemoryProfileRequest) (*SaveMemoryProfileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SaveMemoryProfile not implemented")
 }
 func (UnimplementedMemoryServiceServer) ListMemoryTools(context.Context, *ListMemoryToolsRequest) (*ListMemoryToolsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListMemoryTools not implemented")
@@ -422,6 +476,60 @@ func _MemoryService_ApplyMemoryProfile_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MemoryService_GetMemoryPersona_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMemoryPersonaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MemoryServiceServer).GetMemoryPersona(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MemoryService_GetMemoryPersona_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MemoryServiceServer).GetMemoryPersona(ctx, req.(*GetMemoryPersonaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MemoryService_SaveMemoryPersona_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SaveMemoryPersonaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MemoryServiceServer).SaveMemoryPersona(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MemoryService_SaveMemoryPersona_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MemoryServiceServer).SaveMemoryPersona(ctx, req.(*SaveMemoryPersonaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MemoryService_SaveMemoryProfile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SaveMemoryProfileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MemoryServiceServer).SaveMemoryProfile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MemoryService_SaveMemoryProfile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MemoryServiceServer).SaveMemoryProfile(ctx, req.(*SaveMemoryProfileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MemoryService_ListMemoryTools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListMemoryToolsRequest)
 	if err := dec(in); err != nil {
@@ -500,6 +608,18 @@ var MemoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ApplyMemoryProfile",
 			Handler:    _MemoryService_ApplyMemoryProfile_Handler,
+		},
+		{
+			MethodName: "GetMemoryPersona",
+			Handler:    _MemoryService_GetMemoryPersona_Handler,
+		},
+		{
+			MethodName: "SaveMemoryPersona",
+			Handler:    _MemoryService_SaveMemoryPersona_Handler,
+		},
+		{
+			MethodName: "SaveMemoryProfile",
+			Handler:    _MemoryService_SaveMemoryProfile_Handler,
 		},
 		{
 			MethodName: "ListMemoryTools",

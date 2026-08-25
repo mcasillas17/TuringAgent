@@ -120,8 +120,27 @@ message MemoryNote {
 // The single profile document.
 message MemoryProfile {
   string content = 1;
-  // Doubles as the compare-and-set token for ApplyMemoryProfile.
+  // Doubles as the compare-and-set token for ApplyMemoryProfile and for the
+  // user's own SaveMemoryProfile.
   string content_hash = 2;
+  MemoryNoteStatus status = 3;
+  google.protobuf.Timestamp updated_at = 4;
+  string parse_error = 5;
+  MemoryUnavailableReason unavailable_reason = 6;
+}
+
+// The single persona document: who Turing is.
+//
+// It is not a second profile. The profile is a description of the user that
+// the agent may propose edits to; the persona is the user's instruction about
+// Turing, pinned unframed into every run, and no agent-facing path in the
+// system writes it. Its own message keeps that asymmetry visible on the wire
+// instead of leaving it to a comment on a shared one.
+message MemoryPersona {
+  string content = 1;
+  // Doubles as the compare-and-set token for SaveMemoryPersona.
+  string content_hash = 2;
+  // Always UNMANAGED: Turing reads this document and never rewrites it.
   MemoryNoteStatus status = 3;
   google.protobuf.Timestamp updated_at = 4;
   string parse_error = 5;
@@ -155,6 +174,7 @@ message ListMemoryStateResponse {
   repeated MemoryNote notes = 3;
   repeated MemoryCandidate candidates = 4;
   MemoryProfile profile = 5;
+  MemoryPersona persona = 6;
 }
 
 message GetMemorySettingsRequest {}
@@ -222,6 +242,40 @@ message ApplyMemoryProfileResponse {
   MemoryProfile profile = 1;
 }
 
+message GetMemoryPersonaRequest {}
+
+// The user saving persona.md by hand. There is no candidate here and no path:
+// this is the one document the user alone authors, and the only file this
+// request can write.
+message SaveMemoryPersonaRequest {
+  string content = 1;
+  // Compare-and-set against MemoryPersona.content_hash. Empty means the caller
+  // expects no persona to exist yet. A save composed against text the vault has
+  // since moved on from is refused rather than applied over the newer words —
+  // the same posture as ApplyMemoryProfile, for the same reason: the file is
+  // open in the user's own editor.
+  string expected_content_hash = 2;
+}
+
+message SaveMemoryPersonaResponse {
+  MemoryPersona persona = 1;
+}
+
+// The user saving profile.md by hand, which is a different authority from
+// ApplyMemoryProfile: that one applies a proposal Turing wrote and the user
+// accepted, this one is the user writing about themselves directly. Keeping
+// them separate is what lets the proposal path keep requiring a candidate.
+message SaveMemoryProfileRequest {
+  string content = 1;
+  // Compare-and-set against MemoryProfile.content_hash. Empty means the caller
+  // expects no profile to exist yet.
+  string expected_content_hash = 2;
+}
+
+message SaveMemoryProfileResponse {
+  MemoryProfile profile = 1;
+}
+
 message MemoryToolDescriptor {
   string tool_name = 1;
   ToolPolicy policy = 2;
@@ -268,6 +322,12 @@ service MemoryService {
   rpc RejectMemoryCandidate(RejectMemoryCandidateRequest) returns (RejectMemoryCandidateResponse);
   rpc GetMemoryProfile(GetMemoryProfileRequest) returns (MemoryProfile);
   rpc ApplyMemoryProfile(ApplyMemoryProfileRequest) returns (ApplyMemoryProfileResponse);
+  // The user's own hands on the two pinned documents. Public facet only: the
+  // runtime identity is not granted these names, so no agent path — not even a
+  // confused internal caller — can reach persona.md.
+  rpc GetMemoryPersona(GetMemoryPersonaRequest) returns (MemoryPersona);
+  rpc SaveMemoryPersona(SaveMemoryPersonaRequest) returns (SaveMemoryPersonaResponse);
+  rpc SaveMemoryProfile(SaveMemoryProfileRequest) returns (SaveMemoryProfileResponse);
 
   // Internal facet only.
   rpc ListMemoryTools(ListMemoryToolsRequest) returns (ListMemoryToolsResponse);

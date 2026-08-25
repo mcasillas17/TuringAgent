@@ -341,14 +341,15 @@ func requireProfileRelPath(input string) (string, error) {
 }
 
 // requirePersonaRelPath accepts persona.md and nothing else. Persona is
-// read-only to every primitive in this package.
+// read-only to every primitive an agent can reach; the only writer in this
+// package is SavePersona, which the user drives directly.
 func requirePersonaRelPath(input string) (string, error) {
 	clean, components, err := normalizeVaultPath(input)
 	if err != nil {
 		return "", err
 	}
 	if len(components) != 1 || components[0] != PersonaFileName {
-		return "", confinementError(input, "only "+PersonaFileName+" may be read here")
+		return "", confinementError(input, "only "+PersonaFileName+" may be read or saved here")
 	}
 	return clean, nil
 }

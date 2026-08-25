@@ -53,6 +53,15 @@ func (s *PublicServer) GetMemoryProfile(ctx context.Context, req *turingv1.GetMe
 func (s *PublicServer) ApplyMemoryProfile(ctx context.Context, req *turingv1.ApplyMemoryProfileRequest) (*turingv1.ApplyMemoryProfileResponse, error) {
 	return s.service.ApplyMemoryProfile(ctx, req)
 }
+func (s *PublicServer) GetMemoryPersona(ctx context.Context, req *turingv1.GetMemoryPersonaRequest) (*turingv1.MemoryPersona, error) {
+	return s.service.GetMemoryPersona(ctx, req)
+}
+func (s *PublicServer) SaveMemoryPersona(ctx context.Context, req *turingv1.SaveMemoryPersonaRequest) (*turingv1.SaveMemoryPersonaResponse, error) {
+	return s.service.SaveMemoryPersona(ctx, req)
+}
+func (s *PublicServer) SaveMemoryProfile(ctx context.Context, req *turingv1.SaveMemoryProfileRequest) (*turingv1.SaveMemoryProfileResponse, error) {
+	return s.service.SaveMemoryProfile(ctx, req)
+}
 func (*PublicServer) ListMemoryTools(context.Context, *turingv1.ListMemoryToolsRequest) (*turingv1.ListMemoryToolsResponse, error) {
 	return nil, status.Error(codes.PermissionDenied, "memory tool discovery is internal")
 }
@@ -93,6 +102,20 @@ func (*InternalServer) GetMemoryProfile(context.Context, *turingv1.GetMemoryProf
 }
 func (*InternalServer) ApplyMemoryProfile(context.Context, *turingv1.ApplyMemoryProfileRequest) (*turingv1.ApplyMemoryProfileResponse, error) {
 	return nil, memoryManagementDenied()
+}
+
+// The three below are the user writing their own documents, so the internal
+// facet does not merely lack permission — it has no such authority to be
+// granted. The persona in particular is the one file no agent path may write,
+// and this is where that stops being a convention.
+func (*InternalServer) GetMemoryPersona(context.Context, *turingv1.GetMemoryPersonaRequest) (*turingv1.MemoryPersona, error) {
+	return nil, memoryManagementDenied()
+}
+func (*InternalServer) SaveMemoryPersona(context.Context, *turingv1.SaveMemoryPersonaRequest) (*turingv1.SaveMemoryPersonaResponse, error) {
+	return nil, status.Error(codes.PermissionDenied, "the persona is written by the user and by nobody else")
+}
+func (*InternalServer) SaveMemoryProfile(context.Context, *turingv1.SaveMemoryProfileRequest) (*turingv1.SaveMemoryProfileResponse, error) {
+	return nil, status.Error(codes.PermissionDenied, "a hand-written profile save is the user's; propose an edit instead")
 }
 func (s *InternalServer) ListMemoryTools(ctx context.Context, req *turingv1.ListMemoryToolsRequest) (*turingv1.ListMemoryToolsResponse, error) {
 	return s.service.ListMemoryTools(ctx, req)

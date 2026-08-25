@@ -35,14 +35,17 @@ func TestProtoContractsDefineRequiredServices(t *testing.T) {
 		"mcp.proto":    {"message McpRequest", "message McpResult"},
 		"health.proto": {"service HealthService", "rpc Check", "rpc Version"},
 		// Memory is a vault the user can open. The public surface lists state
-		// and tiers, toggles memory, promotes or rejects a candidate, and
-		// applies a profile edit; ListMemoryTools is the internal-only
-		// discovery call the runtime uses to wire memory tools dynamically.
+		// and tiers, toggles memory, promotes or rejects a candidate, applies a
+		// profile edit, and saves the two pinned documents the user authors by
+		// hand; ListMemoryTools is the internal-only discovery call the runtime
+		// uses to wire memory tools dynamically.
 		"memory.proto": {
 			"service MemoryService", "rpc ListMemoryState", "rpc GetMemorySettings",
 			"rpc SetMemoryEnabled", "rpc PromoteMemoryCandidate", "rpc RejectMemoryCandidate",
 			"rpc ApplyMemoryProfile", "rpc ListMemoryTools", "rpc CallMemoryTool",
+			"rpc GetMemoryPersona", "rpc SaveMemoryPersona", "rpc SaveMemoryProfile",
 			"message MemoryCandidate", "message MemoryNote", "message MemoryProvenance",
+			"message MemoryPersona",
 		},
 	}
 	for file, snippets := range required {
@@ -827,6 +830,41 @@ func TestMemoryProtoContract(t *testing.T) {
 		"unavailable_reason": 6,
 	})
 
+	// The persona is its own message, not a second MemoryProfile: it is the
+	// user's description of Turing, the only unframed instruction channel in
+	// memory, and the one document no proposal may ever write.
+	persona := file.Messages().ByName("MemoryPersona")
+	assertProtoFieldMembers(t, persona, map[protoreflect.Name]protoreflect.FieldNumber{
+		"content": 1, "content_hash": 2, "status": 3, "updated_at": 4, "parse_error": 5,
+		"unavailable_reason": 6,
+	})
+
+	state := file.Messages().ByName("ListMemoryStateResponse")
+	assertProtoFieldMembers(t, state, map[protoreflect.Name]protoreflect.FieldNumber{
+		"settings": 1, "tiers": 2, "notes": 3, "candidates": 4, "profile": 5, "persona": 6,
+	})
+	assertProtoField(t, state, "persona", 6, protoreflect.MessageKind, false, "turing.v1.MemoryPersona")
+
+	// Both hand-authored saves are compare-and-set, and neither carries a
+	// candidate: they are the user writing their own documents, which is a
+	// different authority from applying a proposal a model wrote.
+	savePersona := file.Messages().ByName("SaveMemoryPersonaRequest")
+	assertProtoFieldMembers(t, savePersona, map[protoreflect.Name]protoreflect.FieldNumber{
+		"content": 1, "expected_content_hash": 2,
+	})
+	saveProfile := file.Messages().ByName("SaveMemoryProfileRequest")
+	assertProtoFieldMembers(t, saveProfile, map[protoreflect.Name]protoreflect.FieldNumber{
+		"content": 1, "expected_content_hash": 2,
+	})
+	for _, request := range []protoreflect.MessageDescriptor{savePersona, saveProfile} {
+		if request.Fields().ByName("candidate_id") != nil {
+			t.Fatalf("%s must not take a candidate; that is ApplyMemoryProfile's authority", request.Name())
+		}
+		if request.Fields().ByName("path") != nil {
+			t.Fatalf("%s must not take a path; each save writes exactly one document", request.Name())
+		}
+	}
+
 	tierState := file.Messages().ByName("MemoryTierState")
 	assertProtoField(t, tierState, "tier", 1, protoreflect.EnumKind, false, "")
 	assertProtoField(t, tierState, "enabled", 2, protoreflect.BoolKind, false, "")
@@ -867,6 +905,9 @@ func TestMemoryProtoContract(t *testing.T) {
 		"CallMemoryTool":         {"turing.v1.CallMemoryToolRequest", "turing.v1.CallMemoryToolResponse"},
 		"ListMemoryCandidates":   {"turing.v1.ListMemoryCandidatesRequest", "turing.v1.ListMemoryCandidatesResponse"},
 		"GetMemoryCandidate":     {"turing.v1.GetMemoryCandidateRequest", "turing.v1.MemoryCandidate"},
+		"GetMemoryPersona":       {"turing.v1.GetMemoryPersonaRequest", "turing.v1.MemoryPersona"},
+		"SaveMemoryPersona":      {"turing.v1.SaveMemoryPersonaRequest", "turing.v1.SaveMemoryPersonaResponse"},
+		"SaveMemoryProfile":      {"turing.v1.SaveMemoryProfileRequest", "turing.v1.SaveMemoryProfileResponse"},
 	} {
 		descriptor := service.Methods().ByName(method)
 		if descriptor == nil {

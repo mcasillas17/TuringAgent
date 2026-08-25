@@ -1262,6 +1262,22 @@ func TestMemoryServiceFacetAndRuntimeIdentityWiring(t *testing.T) {
 			_, err := internalClient.ApplyMemoryProfile(internalCtx, &turingv1.ApplyMemoryProfileRequest{})
 			return err
 		},
+		// The persona is the user's own instruction about who Turing is. The
+		// runtime identity is not granted these names at all, so this asserts
+		// the strongest form of the Tier 1 invariant: an agent holding the
+		// internal token cannot read or write persona.md over the wire.
+		"GetMemoryPersona": func() error {
+			_, err := internalClient.GetMemoryPersona(internalCtx, &turingv1.GetMemoryPersonaRequest{})
+			return err
+		},
+		"SaveMemoryPersona": func() error {
+			_, err := internalClient.SaveMemoryPersona(internalCtx, &turingv1.SaveMemoryPersonaRequest{Content: "agent authored"})
+			return err
+		},
+		"SaveMemoryProfile": func() error {
+			_, err := internalClient.SaveMemoryProfile(internalCtx, &turingv1.SaveMemoryProfileRequest{Content: "agent authored"})
+			return err
+		},
 	}
 	for name, call := range managementCalls {
 		// The identity interceptor refuses these before the facet does, which

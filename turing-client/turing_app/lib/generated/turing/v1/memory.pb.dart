@@ -691,7 +691,8 @@ class MemoryProfile extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearContent() => $_clearField(1);
 
-  /// Doubles as the compare-and-set token for ApplyMemoryProfile.
+  /// Doubles as the compare-and-set token for ApplyMemoryProfile and for the
+  /// user's own SaveMemoryProfile.
   @$pb.TagNumber(2)
   $core.String get contentHash => $_getSZ(1);
   @$pb.TagNumber(2)
@@ -701,6 +702,143 @@ class MemoryProfile extends $pb.GeneratedMessage {
   @$pb.TagNumber(2)
   void clearContentHash() => $_clearField(2);
 
+  @$pb.TagNumber(3)
+  MemoryNoteStatus get status => $_getN(2);
+  @$pb.TagNumber(3)
+  set status(MemoryNoteStatus value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasStatus() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearStatus() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $1.Timestamp get updatedAt => $_getN(3);
+  @$pb.TagNumber(4)
+  set updatedAt($1.Timestamp value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasUpdatedAt() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearUpdatedAt() => $_clearField(4);
+  @$pb.TagNumber(4)
+  $1.Timestamp ensureUpdatedAt() => $_ensure(3);
+
+  @$pb.TagNumber(5)
+  $core.String get parseError => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set parseError($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasParseError() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearParseError() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  MemoryUnavailableReason get unavailableReason => $_getN(5);
+  @$pb.TagNumber(6)
+  set unavailableReason(MemoryUnavailableReason value) => $_setField(6, value);
+  @$pb.TagNumber(6)
+  $core.bool hasUnavailableReason() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearUnavailableReason() => $_clearField(6);
+}
+
+/// The single persona document: who Turing is.
+///
+/// It is not a second profile. The profile is a description of the user that
+/// the agent may propose edits to; the persona is the user's instruction about
+/// Turing, pinned unframed into every run, and no agent-facing path in the
+/// system writes it. Its own message keeps that asymmetry visible on the wire
+/// instead of leaving it to a comment on a shared one.
+class MemoryPersona extends $pb.GeneratedMessage {
+  factory MemoryPersona({
+    $core.String? content,
+    $core.String? contentHash,
+    MemoryNoteStatus? status,
+    $1.Timestamp? updatedAt,
+    $core.String? parseError,
+    MemoryUnavailableReason? unavailableReason,
+  }) {
+    final result = create();
+    if (content != null) result.content = content;
+    if (contentHash != null) result.contentHash = contentHash;
+    if (status != null) result.status = status;
+    if (updatedAt != null) result.updatedAt = updatedAt;
+    if (parseError != null) result.parseError = parseError;
+    if (unavailableReason != null) result.unavailableReason = unavailableReason;
+    return result;
+  }
+
+  MemoryPersona._();
+
+  factory MemoryPersona.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory MemoryPersona.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'MemoryPersona',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'content')
+    ..aOS(2, _omitFieldNames ? '' : 'contentHash')
+    ..e<MemoryNoteStatus>(
+        3, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
+        defaultOrMaker: MemoryNoteStatus.MEMORY_NOTE_STATUS_UNSPECIFIED,
+        valueOf: MemoryNoteStatus.valueOf,
+        enumValues: MemoryNoteStatus.values)
+    ..aOM<$1.Timestamp>(4, _omitFieldNames ? '' : 'updatedAt',
+        subBuilder: $1.Timestamp.create)
+    ..aOS(5, _omitFieldNames ? '' : 'parseError')
+    ..e<MemoryUnavailableReason>(
+        6, _omitFieldNames ? '' : 'unavailableReason', $pb.PbFieldType.OE,
+        defaultOrMaker:
+            MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
+        valueOf: MemoryUnavailableReason.valueOf,
+        enumValues: MemoryUnavailableReason.values)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  MemoryPersona clone() => MemoryPersona()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  MemoryPersona copyWith(void Function(MemoryPersona) updates) =>
+      super.copyWith((message) => updates(message as MemoryPersona))
+          as MemoryPersona;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static MemoryPersona create() => MemoryPersona._();
+  @$core.override
+  MemoryPersona createEmptyInstance() => create();
+  static $pb.PbList<MemoryPersona> createRepeated() =>
+      $pb.PbList<MemoryPersona>();
+  @$core.pragma('dart2js:noInline')
+  static MemoryPersona getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<MemoryPersona>(create);
+  static MemoryPersona? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get content => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set content($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasContent() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearContent() => $_clearField(1);
+
+  /// Doubles as the compare-and-set token for SaveMemoryPersona.
+  @$pb.TagNumber(2)
+  $core.String get contentHash => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set contentHash($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasContentHash() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearContentHash() => $_clearField(2);
+
+  /// Always UNMANAGED: Turing reads this document and never rewrites it.
   @$pb.TagNumber(3)
   MemoryNoteStatus get status => $_getN(2);
   @$pb.TagNumber(3)
@@ -1040,6 +1178,7 @@ class ListMemoryStateResponse extends $pb.GeneratedMessage {
     $core.Iterable<MemoryNote>? notes,
     $core.Iterable<MemoryCandidate>? candidates,
     MemoryProfile? profile,
+    MemoryPersona? persona,
   }) {
     final result = create();
     if (settings != null) result.settings = settings;
@@ -1047,6 +1186,7 @@ class ListMemoryStateResponse extends $pb.GeneratedMessage {
     if (notes != null) result.notes.addAll(notes);
     if (candidates != null) result.candidates.addAll(candidates);
     if (profile != null) result.profile = profile;
+    if (persona != null) result.persona = persona;
     return result;
   }
 
@@ -1074,6 +1214,8 @@ class ListMemoryStateResponse extends $pb.GeneratedMessage {
         subBuilder: MemoryCandidate.create)
     ..aOM<MemoryProfile>(5, _omitFieldNames ? '' : 'profile',
         subBuilder: MemoryProfile.create)
+    ..aOM<MemoryPersona>(6, _omitFieldNames ? '' : 'persona',
+        subBuilder: MemoryPersona.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1129,6 +1271,17 @@ class ListMemoryStateResponse extends $pb.GeneratedMessage {
   void clearProfile() => $_clearField(5);
   @$pb.TagNumber(5)
   MemoryProfile ensureProfile() => $_ensure(4);
+
+  @$pb.TagNumber(6)
+  MemoryPersona get persona => $_getN(5);
+  @$pb.TagNumber(6)
+  set persona(MemoryPersona value) => $_setField(6, value);
+  @$pb.TagNumber(6)
+  $core.bool hasPersona() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearPersona() => $_clearField(6);
+  @$pb.TagNumber(6)
+  MemoryPersona ensurePersona() => $_ensure(5);
 }
 
 class GetMemorySettingsRequest extends $pb.GeneratedMessage {
@@ -1968,6 +2121,326 @@ class ApplyMemoryProfileResponse extends $pb.GeneratedMessage {
   static ApplyMemoryProfileResponse getDefault() => _defaultInstance ??=
       $pb.GeneratedMessage.$_defaultFor<ApplyMemoryProfileResponse>(create);
   static ApplyMemoryProfileResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  MemoryProfile get profile => $_getN(0);
+  @$pb.TagNumber(1)
+  set profile(MemoryProfile value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasProfile() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearProfile() => $_clearField(1);
+  @$pb.TagNumber(1)
+  MemoryProfile ensureProfile() => $_ensure(0);
+}
+
+class GetMemoryPersonaRequest extends $pb.GeneratedMessage {
+  factory GetMemoryPersonaRequest() => create();
+
+  GetMemoryPersonaRequest._();
+
+  factory GetMemoryPersonaRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory GetMemoryPersonaRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'GetMemoryPersonaRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetMemoryPersonaRequest clone() =>
+      GetMemoryPersonaRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetMemoryPersonaRequest copyWith(
+          void Function(GetMemoryPersonaRequest) updates) =>
+      super.copyWith((message) => updates(message as GetMemoryPersonaRequest))
+          as GetMemoryPersonaRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static GetMemoryPersonaRequest create() => GetMemoryPersonaRequest._();
+  @$core.override
+  GetMemoryPersonaRequest createEmptyInstance() => create();
+  static $pb.PbList<GetMemoryPersonaRequest> createRepeated() =>
+      $pb.PbList<GetMemoryPersonaRequest>();
+  @$core.pragma('dart2js:noInline')
+  static GetMemoryPersonaRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<GetMemoryPersonaRequest>(create);
+  static GetMemoryPersonaRequest? _defaultInstance;
+}
+
+/// The user saving persona.md by hand. There is no candidate here and no path:
+/// this is the one document the user alone authors, and the only file this
+/// request can write.
+class SaveMemoryPersonaRequest extends $pb.GeneratedMessage {
+  factory SaveMemoryPersonaRequest({
+    $core.String? content,
+    $core.String? expectedContentHash,
+  }) {
+    final result = create();
+    if (content != null) result.content = content;
+    if (expectedContentHash != null)
+      result.expectedContentHash = expectedContentHash;
+    return result;
+  }
+
+  SaveMemoryPersonaRequest._();
+
+  factory SaveMemoryPersonaRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory SaveMemoryPersonaRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SaveMemoryPersonaRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'content')
+    ..aOS(2, _omitFieldNames ? '' : 'expectedContentHash')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SaveMemoryPersonaRequest clone() =>
+      SaveMemoryPersonaRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SaveMemoryPersonaRequest copyWith(
+          void Function(SaveMemoryPersonaRequest) updates) =>
+      super.copyWith((message) => updates(message as SaveMemoryPersonaRequest))
+          as SaveMemoryPersonaRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SaveMemoryPersonaRequest create() => SaveMemoryPersonaRequest._();
+  @$core.override
+  SaveMemoryPersonaRequest createEmptyInstance() => create();
+  static $pb.PbList<SaveMemoryPersonaRequest> createRepeated() =>
+      $pb.PbList<SaveMemoryPersonaRequest>();
+  @$core.pragma('dart2js:noInline')
+  static SaveMemoryPersonaRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SaveMemoryPersonaRequest>(create);
+  static SaveMemoryPersonaRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get content => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set content($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasContent() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearContent() => $_clearField(1);
+
+  /// Compare-and-set against MemoryPersona.content_hash. Empty means the caller
+  /// expects no persona to exist yet. A save composed against text the vault has
+  /// since moved on from is refused rather than applied over the newer words —
+  /// the same posture as ApplyMemoryProfile, for the same reason: the file is
+  /// open in the user's own editor.
+  @$pb.TagNumber(2)
+  $core.String get expectedContentHash => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set expectedContentHash($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasExpectedContentHash() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearExpectedContentHash() => $_clearField(2);
+}
+
+class SaveMemoryPersonaResponse extends $pb.GeneratedMessage {
+  factory SaveMemoryPersonaResponse({
+    MemoryPersona? persona,
+  }) {
+    final result = create();
+    if (persona != null) result.persona = persona;
+    return result;
+  }
+
+  SaveMemoryPersonaResponse._();
+
+  factory SaveMemoryPersonaResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory SaveMemoryPersonaResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SaveMemoryPersonaResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOM<MemoryPersona>(1, _omitFieldNames ? '' : 'persona',
+        subBuilder: MemoryPersona.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SaveMemoryPersonaResponse clone() =>
+      SaveMemoryPersonaResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SaveMemoryPersonaResponse copyWith(
+          void Function(SaveMemoryPersonaResponse) updates) =>
+      super.copyWith((message) => updates(message as SaveMemoryPersonaResponse))
+          as SaveMemoryPersonaResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SaveMemoryPersonaResponse create() => SaveMemoryPersonaResponse._();
+  @$core.override
+  SaveMemoryPersonaResponse createEmptyInstance() => create();
+  static $pb.PbList<SaveMemoryPersonaResponse> createRepeated() =>
+      $pb.PbList<SaveMemoryPersonaResponse>();
+  @$core.pragma('dart2js:noInline')
+  static SaveMemoryPersonaResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SaveMemoryPersonaResponse>(create);
+  static SaveMemoryPersonaResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  MemoryPersona get persona => $_getN(0);
+  @$pb.TagNumber(1)
+  set persona(MemoryPersona value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasPersona() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearPersona() => $_clearField(1);
+  @$pb.TagNumber(1)
+  MemoryPersona ensurePersona() => $_ensure(0);
+}
+
+/// The user saving profile.md by hand, which is a different authority from
+/// ApplyMemoryProfile: that one applies a proposal Turing wrote and the user
+/// accepted, this one is the user writing about themselves directly. Keeping
+/// them separate is what lets the proposal path keep requiring a candidate.
+class SaveMemoryProfileRequest extends $pb.GeneratedMessage {
+  factory SaveMemoryProfileRequest({
+    $core.String? content,
+    $core.String? expectedContentHash,
+  }) {
+    final result = create();
+    if (content != null) result.content = content;
+    if (expectedContentHash != null)
+      result.expectedContentHash = expectedContentHash;
+    return result;
+  }
+
+  SaveMemoryProfileRequest._();
+
+  factory SaveMemoryProfileRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory SaveMemoryProfileRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SaveMemoryProfileRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'content')
+    ..aOS(2, _omitFieldNames ? '' : 'expectedContentHash')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SaveMemoryProfileRequest clone() =>
+      SaveMemoryProfileRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SaveMemoryProfileRequest copyWith(
+          void Function(SaveMemoryProfileRequest) updates) =>
+      super.copyWith((message) => updates(message as SaveMemoryProfileRequest))
+          as SaveMemoryProfileRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SaveMemoryProfileRequest create() => SaveMemoryProfileRequest._();
+  @$core.override
+  SaveMemoryProfileRequest createEmptyInstance() => create();
+  static $pb.PbList<SaveMemoryProfileRequest> createRepeated() =>
+      $pb.PbList<SaveMemoryProfileRequest>();
+  @$core.pragma('dart2js:noInline')
+  static SaveMemoryProfileRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SaveMemoryProfileRequest>(create);
+  static SaveMemoryProfileRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get content => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set content($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasContent() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearContent() => $_clearField(1);
+
+  /// Compare-and-set against MemoryProfile.content_hash. Empty means the caller
+  /// expects no profile to exist yet.
+  @$pb.TagNumber(2)
+  $core.String get expectedContentHash => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set expectedContentHash($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasExpectedContentHash() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearExpectedContentHash() => $_clearField(2);
+}
+
+class SaveMemoryProfileResponse extends $pb.GeneratedMessage {
+  factory SaveMemoryProfileResponse({
+    MemoryProfile? profile,
+  }) {
+    final result = create();
+    if (profile != null) result.profile = profile;
+    return result;
+  }
+
+  SaveMemoryProfileResponse._();
+
+  factory SaveMemoryProfileResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory SaveMemoryProfileResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SaveMemoryProfileResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOM<MemoryProfile>(1, _omitFieldNames ? '' : 'profile',
+        subBuilder: MemoryProfile.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SaveMemoryProfileResponse clone() =>
+      SaveMemoryProfileResponse()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SaveMemoryProfileResponse copyWith(
+          void Function(SaveMemoryProfileResponse) updates) =>
+      super.copyWith((message) => updates(message as SaveMemoryProfileResponse))
+          as SaveMemoryProfileResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SaveMemoryProfileResponse create() => SaveMemoryProfileResponse._();
+  @$core.override
+  SaveMemoryProfileResponse createEmptyInstance() => create();
+  static $pb.PbList<SaveMemoryProfileResponse> createRepeated() =>
+      $pb.PbList<SaveMemoryProfileResponse>();
+  @$core.pragma('dart2js:noInline')
+  static SaveMemoryProfileResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SaveMemoryProfileResponse>(create);
+  static SaveMemoryProfileResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
   MemoryProfile get profile => $_getN(0);

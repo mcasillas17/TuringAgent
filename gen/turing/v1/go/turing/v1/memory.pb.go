@@ -692,7 +692,8 @@ func (x *MemoryNote) GetUnavailableReason() MemoryUnavailableReason {
 type MemoryProfile struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Content string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
-	// Doubles as the compare-and-set token for ApplyMemoryProfile.
+	// Doubles as the compare-and-set token for ApplyMemoryProfile and for the
+	// user's own SaveMemoryProfile.
 	ContentHash       string                  `protobuf:"bytes,2,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
 	Status            MemoryNoteStatus        `protobuf:"varint,3,opt,name=status,proto3,enum=turing.v1.MemoryNoteStatus" json:"status,omitempty"`
 	UpdatedAt         *timestamppb.Timestamp  `protobuf:"bytes,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
@@ -774,6 +775,99 @@ func (x *MemoryProfile) GetUnavailableReason() MemoryUnavailableReason {
 	return MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_UNSPECIFIED
 }
 
+// The single persona document: who Turing is.
+//
+// It is not a second profile. The profile is a description of the user that
+// the agent may propose edits to; the persona is the user's instruction about
+// Turing, pinned unframed into every run, and no agent-facing path in the
+// system writes it. Its own message keeps that asymmetry visible on the wire
+// instead of leaving it to a comment on a shared one.
+type MemoryPersona struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Content string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	// Doubles as the compare-and-set token for SaveMemoryPersona.
+	ContentHash string `protobuf:"bytes,2,opt,name=content_hash,json=contentHash,proto3" json:"content_hash,omitempty"`
+	// Always UNMANAGED: Turing reads this document and never rewrites it.
+	Status            MemoryNoteStatus        `protobuf:"varint,3,opt,name=status,proto3,enum=turing.v1.MemoryNoteStatus" json:"status,omitempty"`
+	UpdatedAt         *timestamppb.Timestamp  `protobuf:"bytes,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	ParseError        string                  `protobuf:"bytes,5,opt,name=parse_error,json=parseError,proto3" json:"parse_error,omitempty"`
+	UnavailableReason MemoryUnavailableReason `protobuf:"varint,6,opt,name=unavailable_reason,json=unavailableReason,proto3,enum=turing.v1.MemoryUnavailableReason" json:"unavailable_reason,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *MemoryPersona) Reset() {
+	*x = MemoryPersona{}
+	mi := &file_turing_v1_memory_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MemoryPersona) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MemoryPersona) ProtoMessage() {}
+
+func (x *MemoryPersona) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_memory_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MemoryPersona.ProtoReflect.Descriptor instead.
+func (*MemoryPersona) Descriptor() ([]byte, []int) {
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *MemoryPersona) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *MemoryPersona) GetContentHash() string {
+	if x != nil {
+		return x.ContentHash
+	}
+	return ""
+}
+
+func (x *MemoryPersona) GetStatus() MemoryNoteStatus {
+	if x != nil {
+		return x.Status
+	}
+	return MemoryNoteStatus_MEMORY_NOTE_STATUS_UNSPECIFIED
+}
+
+func (x *MemoryPersona) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *MemoryPersona) GetParseError() string {
+	if x != nil {
+		return x.ParseError
+	}
+	return ""
+}
+
+func (x *MemoryPersona) GetUnavailableReason() MemoryUnavailableReason {
+	if x != nil {
+		return x.UnavailableReason
+	}
+	return MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_UNSPECIFIED
+}
+
 type MemoryTierState struct {
 	state                 protoimpl.MessageState  `protogen:"open.v1"`
 	Tier                  MemoryTier              `protobuf:"varint,1,opt,name=tier,proto3,enum=turing.v1.MemoryTier" json:"tier,omitempty"`
@@ -789,7 +883,7 @@ type MemoryTierState struct {
 
 func (x *MemoryTierState) Reset() {
 	*x = MemoryTierState{}
-	mi := &file_turing_v1_memory_proto_msgTypes[4]
+	mi := &file_turing_v1_memory_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -801,7 +895,7 @@ func (x *MemoryTierState) String() string {
 func (*MemoryTierState) ProtoMessage() {}
 
 func (x *MemoryTierState) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[4]
+	mi := &file_turing_v1_memory_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -814,7 +908,7 @@ func (x *MemoryTierState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryTierState.ProtoReflect.Descriptor instead.
 func (*MemoryTierState) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{4}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *MemoryTierState) GetTier() MemoryTier {
@@ -880,7 +974,7 @@ type MemorySettings struct {
 
 func (x *MemorySettings) Reset() {
 	*x = MemorySettings{}
-	mi := &file_turing_v1_memory_proto_msgTypes[5]
+	mi := &file_turing_v1_memory_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -892,7 +986,7 @@ func (x *MemorySettings) String() string {
 func (*MemorySettings) ProtoMessage() {}
 
 func (x *MemorySettings) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[5]
+	mi := &file_turing_v1_memory_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -905,7 +999,7 @@ func (x *MemorySettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemorySettings.ProtoReflect.Descriptor instead.
 func (*MemorySettings) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{5}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *MemorySettings) GetEnabled() bool {
@@ -951,7 +1045,7 @@ type ListMemoryStateRequest struct {
 
 func (x *ListMemoryStateRequest) Reset() {
 	*x = ListMemoryStateRequest{}
-	mi := &file_turing_v1_memory_proto_msgTypes[6]
+	mi := &file_turing_v1_memory_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -963,7 +1057,7 @@ func (x *ListMemoryStateRequest) String() string {
 func (*ListMemoryStateRequest) ProtoMessage() {}
 
 func (x *ListMemoryStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[6]
+	mi := &file_turing_v1_memory_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -976,7 +1070,7 @@ func (x *ListMemoryStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMemoryStateRequest.ProtoReflect.Descriptor instead.
 func (*ListMemoryStateRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{6}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{7}
 }
 
 type ListMemoryStateResponse struct {
@@ -986,13 +1080,14 @@ type ListMemoryStateResponse struct {
 	Notes         []*MemoryNote          `protobuf:"bytes,3,rep,name=notes,proto3" json:"notes,omitempty"`
 	Candidates    []*MemoryCandidate     `protobuf:"bytes,4,rep,name=candidates,proto3" json:"candidates,omitempty"`
 	Profile       *MemoryProfile         `protobuf:"bytes,5,opt,name=profile,proto3" json:"profile,omitempty"`
+	Persona       *MemoryPersona         `protobuf:"bytes,6,opt,name=persona,proto3" json:"persona,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListMemoryStateResponse) Reset() {
 	*x = ListMemoryStateResponse{}
-	mi := &file_turing_v1_memory_proto_msgTypes[7]
+	mi := &file_turing_v1_memory_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1004,7 +1099,7 @@ func (x *ListMemoryStateResponse) String() string {
 func (*ListMemoryStateResponse) ProtoMessage() {}
 
 func (x *ListMemoryStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[7]
+	mi := &file_turing_v1_memory_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1017,7 +1112,7 @@ func (x *ListMemoryStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMemoryStateResponse.ProtoReflect.Descriptor instead.
 func (*ListMemoryStateResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{7}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ListMemoryStateResponse) GetSettings() *MemorySettings {
@@ -1055,6 +1150,13 @@ func (x *ListMemoryStateResponse) GetProfile() *MemoryProfile {
 	return nil
 }
 
+func (x *ListMemoryStateResponse) GetPersona() *MemoryPersona {
+	if x != nil {
+		return x.Persona
+	}
+	return nil
+}
+
 type GetMemorySettingsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1063,7 +1165,7 @@ type GetMemorySettingsRequest struct {
 
 func (x *GetMemorySettingsRequest) Reset() {
 	*x = GetMemorySettingsRequest{}
-	mi := &file_turing_v1_memory_proto_msgTypes[8]
+	mi := &file_turing_v1_memory_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1075,7 +1177,7 @@ func (x *GetMemorySettingsRequest) String() string {
 func (*GetMemorySettingsRequest) ProtoMessage() {}
 
 func (x *GetMemorySettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[8]
+	mi := &file_turing_v1_memory_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1088,7 +1190,7 @@ func (x *GetMemorySettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMemorySettingsRequest.ProtoReflect.Descriptor instead.
 func (*GetMemorySettingsRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{8}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{9}
 }
 
 type SetMemoryEnabledRequest struct {
@@ -1102,7 +1204,7 @@ type SetMemoryEnabledRequest struct {
 
 func (x *SetMemoryEnabledRequest) Reset() {
 	*x = SetMemoryEnabledRequest{}
-	mi := &file_turing_v1_memory_proto_msgTypes[9]
+	mi := &file_turing_v1_memory_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1114,7 +1216,7 @@ func (x *SetMemoryEnabledRequest) String() string {
 func (*SetMemoryEnabledRequest) ProtoMessage() {}
 
 func (x *SetMemoryEnabledRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[9]
+	mi := &file_turing_v1_memory_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1127,7 +1229,7 @@ func (x *SetMemoryEnabledRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetMemoryEnabledRequest.ProtoReflect.Descriptor instead.
 func (*SetMemoryEnabledRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{9}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SetMemoryEnabledRequest) GetEnabled() bool {
@@ -1154,7 +1256,7 @@ type ListMemoryCandidatesRequest struct {
 
 func (x *ListMemoryCandidatesRequest) Reset() {
 	*x = ListMemoryCandidatesRequest{}
-	mi := &file_turing_v1_memory_proto_msgTypes[10]
+	mi := &file_turing_v1_memory_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1166,7 +1268,7 @@ func (x *ListMemoryCandidatesRequest) String() string {
 func (*ListMemoryCandidatesRequest) ProtoMessage() {}
 
 func (x *ListMemoryCandidatesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[10]
+	mi := &file_turing_v1_memory_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1179,7 +1281,7 @@ func (x *ListMemoryCandidatesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMemoryCandidatesRequest.ProtoReflect.Descriptor instead.
 func (*ListMemoryCandidatesRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{10}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListMemoryCandidatesRequest) GetState() MemoryCandidateState {
@@ -1206,7 +1308,7 @@ type ListMemoryCandidatesResponse struct {
 
 func (x *ListMemoryCandidatesResponse) Reset() {
 	*x = ListMemoryCandidatesResponse{}
-	mi := &file_turing_v1_memory_proto_msgTypes[11]
+	mi := &file_turing_v1_memory_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1218,7 +1320,7 @@ func (x *ListMemoryCandidatesResponse) String() string {
 func (*ListMemoryCandidatesResponse) ProtoMessage() {}
 
 func (x *ListMemoryCandidatesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[11]
+	mi := &file_turing_v1_memory_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1231,7 +1333,7 @@ func (x *ListMemoryCandidatesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMemoryCandidatesResponse.ProtoReflect.Descriptor instead.
 func (*ListMemoryCandidatesResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{11}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ListMemoryCandidatesResponse) GetCandidates() []*MemoryCandidate {
@@ -1257,7 +1359,7 @@ type GetMemoryCandidateRequest struct {
 
 func (x *GetMemoryCandidateRequest) Reset() {
 	*x = GetMemoryCandidateRequest{}
-	mi := &file_turing_v1_memory_proto_msgTypes[12]
+	mi := &file_turing_v1_memory_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1269,7 +1371,7 @@ func (x *GetMemoryCandidateRequest) String() string {
 func (*GetMemoryCandidateRequest) ProtoMessage() {}
 
 func (x *GetMemoryCandidateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[12]
+	mi := &file_turing_v1_memory_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1282,7 +1384,7 @@ func (x *GetMemoryCandidateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMemoryCandidateRequest.ProtoReflect.Descriptor instead.
 func (*GetMemoryCandidateRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{12}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetMemoryCandidateRequest) GetCandidateId() string {
@@ -1308,7 +1410,7 @@ type PromoteMemoryCandidateRequest struct {
 
 func (x *PromoteMemoryCandidateRequest) Reset() {
 	*x = PromoteMemoryCandidateRequest{}
-	mi := &file_turing_v1_memory_proto_msgTypes[13]
+	mi := &file_turing_v1_memory_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1320,7 +1422,7 @@ func (x *PromoteMemoryCandidateRequest) String() string {
 func (*PromoteMemoryCandidateRequest) ProtoMessage() {}
 
 func (x *PromoteMemoryCandidateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[13]
+	mi := &file_turing_v1_memory_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1333,7 +1435,7 @@ func (x *PromoteMemoryCandidateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromoteMemoryCandidateRequest.ProtoReflect.Descriptor instead.
 func (*PromoteMemoryCandidateRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{13}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *PromoteMemoryCandidateRequest) GetCandidateId() string {
@@ -1374,7 +1476,7 @@ type PromoteMemoryCandidateResponse struct {
 
 func (x *PromoteMemoryCandidateResponse) Reset() {
 	*x = PromoteMemoryCandidateResponse{}
-	mi := &file_turing_v1_memory_proto_msgTypes[14]
+	mi := &file_turing_v1_memory_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1386,7 +1488,7 @@ func (x *PromoteMemoryCandidateResponse) String() string {
 func (*PromoteMemoryCandidateResponse) ProtoMessage() {}
 
 func (x *PromoteMemoryCandidateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[14]
+	mi := &file_turing_v1_memory_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1399,7 +1501,7 @@ func (x *PromoteMemoryCandidateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromoteMemoryCandidateResponse.ProtoReflect.Descriptor instead.
 func (*PromoteMemoryCandidateResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{14}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PromoteMemoryCandidateResponse) GetCandidate() *MemoryCandidate {
@@ -1427,7 +1529,7 @@ type RejectMemoryCandidateRequest struct {
 
 func (x *RejectMemoryCandidateRequest) Reset() {
 	*x = RejectMemoryCandidateRequest{}
-	mi := &file_turing_v1_memory_proto_msgTypes[15]
+	mi := &file_turing_v1_memory_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1439,7 +1541,7 @@ func (x *RejectMemoryCandidateRequest) String() string {
 func (*RejectMemoryCandidateRequest) ProtoMessage() {}
 
 func (x *RejectMemoryCandidateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[15]
+	mi := &file_turing_v1_memory_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1452,7 +1554,7 @@ func (x *RejectMemoryCandidateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RejectMemoryCandidateRequest.ProtoReflect.Descriptor instead.
 func (*RejectMemoryCandidateRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{15}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *RejectMemoryCandidateRequest) GetCandidateId() string {
@@ -1485,7 +1587,7 @@ type RejectMemoryCandidateResponse struct {
 
 func (x *RejectMemoryCandidateResponse) Reset() {
 	*x = RejectMemoryCandidateResponse{}
-	mi := &file_turing_v1_memory_proto_msgTypes[16]
+	mi := &file_turing_v1_memory_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1497,7 +1599,7 @@ func (x *RejectMemoryCandidateResponse) String() string {
 func (*RejectMemoryCandidateResponse) ProtoMessage() {}
 
 func (x *RejectMemoryCandidateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[16]
+	mi := &file_turing_v1_memory_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1510,7 +1612,7 @@ func (x *RejectMemoryCandidateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RejectMemoryCandidateResponse.ProtoReflect.Descriptor instead.
 func (*RejectMemoryCandidateResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{16}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RejectMemoryCandidateResponse) GetCandidate() *MemoryCandidate {
@@ -1528,7 +1630,7 @@ type GetMemoryProfileRequest struct {
 
 func (x *GetMemoryProfileRequest) Reset() {
 	*x = GetMemoryProfileRequest{}
-	mi := &file_turing_v1_memory_proto_msgTypes[17]
+	mi := &file_turing_v1_memory_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1540,7 +1642,7 @@ func (x *GetMemoryProfileRequest) String() string {
 func (*GetMemoryProfileRequest) ProtoMessage() {}
 
 func (x *GetMemoryProfileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[17]
+	mi := &file_turing_v1_memory_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1553,7 +1655,7 @@ func (x *GetMemoryProfileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMemoryProfileRequest.ProtoReflect.Descriptor instead.
 func (*GetMemoryProfileRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{17}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{18}
 }
 
 type ApplyMemoryProfileRequest struct {
@@ -1572,7 +1674,7 @@ type ApplyMemoryProfileRequest struct {
 
 func (x *ApplyMemoryProfileRequest) Reset() {
 	*x = ApplyMemoryProfileRequest{}
-	mi := &file_turing_v1_memory_proto_msgTypes[18]
+	mi := &file_turing_v1_memory_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1584,7 +1686,7 @@ func (x *ApplyMemoryProfileRequest) String() string {
 func (*ApplyMemoryProfileRequest) ProtoMessage() {}
 
 func (x *ApplyMemoryProfileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[18]
+	mi := &file_turing_v1_memory_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1597,7 +1699,7 @@ func (x *ApplyMemoryProfileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyMemoryProfileRequest.ProtoReflect.Descriptor instead.
 func (*ApplyMemoryProfileRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{18}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ApplyMemoryProfileRequest) GetContent() string {
@@ -1630,7 +1732,7 @@ type ApplyMemoryProfileResponse struct {
 
 func (x *ApplyMemoryProfileResponse) Reset() {
 	*x = ApplyMemoryProfileResponse{}
-	mi := &file_turing_v1_memory_proto_msgTypes[19]
+	mi := &file_turing_v1_memory_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1642,7 +1744,7 @@ func (x *ApplyMemoryProfileResponse) String() string {
 func (*ApplyMemoryProfileResponse) ProtoMessage() {}
 
 func (x *ApplyMemoryProfileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[19]
+	mi := &file_turing_v1_memory_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1655,10 +1757,252 @@ func (x *ApplyMemoryProfileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyMemoryProfileResponse.ProtoReflect.Descriptor instead.
 func (*ApplyMemoryProfileResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{19}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ApplyMemoryProfileResponse) GetProfile() *MemoryProfile {
+	if x != nil {
+		return x.Profile
+	}
+	return nil
+}
+
+type GetMemoryPersonaRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMemoryPersonaRequest) Reset() {
+	*x = GetMemoryPersonaRequest{}
+	mi := &file_turing_v1_memory_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMemoryPersonaRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMemoryPersonaRequest) ProtoMessage() {}
+
+func (x *GetMemoryPersonaRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_memory_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMemoryPersonaRequest.ProtoReflect.Descriptor instead.
+func (*GetMemoryPersonaRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{21}
+}
+
+// The user saving persona.md by hand. There is no candidate here and no path:
+// this is the one document the user alone authors, and the only file this
+// request can write.
+type SaveMemoryPersonaRequest struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Content string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	// Compare-and-set against MemoryPersona.content_hash. Empty means the caller
+	// expects no persona to exist yet. A save composed against text the vault has
+	// since moved on from is refused rather than applied over the newer words —
+	// the same posture as ApplyMemoryProfile, for the same reason: the file is
+	// open in the user's own editor.
+	ExpectedContentHash string `protobuf:"bytes,2,opt,name=expected_content_hash,json=expectedContentHash,proto3" json:"expected_content_hash,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *SaveMemoryPersonaRequest) Reset() {
+	*x = SaveMemoryPersonaRequest{}
+	mi := &file_turing_v1_memory_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveMemoryPersonaRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveMemoryPersonaRequest) ProtoMessage() {}
+
+func (x *SaveMemoryPersonaRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_memory_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveMemoryPersonaRequest.ProtoReflect.Descriptor instead.
+func (*SaveMemoryPersonaRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *SaveMemoryPersonaRequest) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *SaveMemoryPersonaRequest) GetExpectedContentHash() string {
+	if x != nil {
+		return x.ExpectedContentHash
+	}
+	return ""
+}
+
+type SaveMemoryPersonaResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Persona       *MemoryPersona         `protobuf:"bytes,1,opt,name=persona,proto3" json:"persona,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveMemoryPersonaResponse) Reset() {
+	*x = SaveMemoryPersonaResponse{}
+	mi := &file_turing_v1_memory_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveMemoryPersonaResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveMemoryPersonaResponse) ProtoMessage() {}
+
+func (x *SaveMemoryPersonaResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_memory_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveMemoryPersonaResponse.ProtoReflect.Descriptor instead.
+func (*SaveMemoryPersonaResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *SaveMemoryPersonaResponse) GetPersona() *MemoryPersona {
+	if x != nil {
+		return x.Persona
+	}
+	return nil
+}
+
+// The user saving profile.md by hand, which is a different authority from
+// ApplyMemoryProfile: that one applies a proposal Turing wrote and the user
+// accepted, this one is the user writing about themselves directly. Keeping
+// them separate is what lets the proposal path keep requiring a candidate.
+type SaveMemoryProfileRequest struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Content string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	// Compare-and-set against MemoryProfile.content_hash. Empty means the caller
+	// expects no profile to exist yet.
+	ExpectedContentHash string `protobuf:"bytes,2,opt,name=expected_content_hash,json=expectedContentHash,proto3" json:"expected_content_hash,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *SaveMemoryProfileRequest) Reset() {
+	*x = SaveMemoryProfileRequest{}
+	mi := &file_turing_v1_memory_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveMemoryProfileRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveMemoryProfileRequest) ProtoMessage() {}
+
+func (x *SaveMemoryProfileRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_memory_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveMemoryProfileRequest.ProtoReflect.Descriptor instead.
+func (*SaveMemoryProfileRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *SaveMemoryProfileRequest) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *SaveMemoryProfileRequest) GetExpectedContentHash() string {
+	if x != nil {
+		return x.ExpectedContentHash
+	}
+	return ""
+}
+
+type SaveMemoryProfileResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Profile       *MemoryProfile         `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SaveMemoryProfileResponse) Reset() {
+	*x = SaveMemoryProfileResponse{}
+	mi := &file_turing_v1_memory_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SaveMemoryProfileResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SaveMemoryProfileResponse) ProtoMessage() {}
+
+func (x *SaveMemoryProfileResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_memory_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SaveMemoryProfileResponse.ProtoReflect.Descriptor instead.
+func (*SaveMemoryProfileResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *SaveMemoryProfileResponse) GetProfile() *MemoryProfile {
 	if x != nil {
 		return x.Profile
 	}
@@ -1678,7 +2022,7 @@ type MemoryToolDescriptor struct {
 
 func (x *MemoryToolDescriptor) Reset() {
 	*x = MemoryToolDescriptor{}
-	mi := &file_turing_v1_memory_proto_msgTypes[20]
+	mi := &file_turing_v1_memory_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1690,7 +2034,7 @@ func (x *MemoryToolDescriptor) String() string {
 func (*MemoryToolDescriptor) ProtoMessage() {}
 
 func (x *MemoryToolDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[20]
+	mi := &file_turing_v1_memory_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1703,7 +2047,7 @@ func (x *MemoryToolDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryToolDescriptor.ProtoReflect.Descriptor instead.
 func (*MemoryToolDescriptor) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{20}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *MemoryToolDescriptor) GetToolName() string {
@@ -1749,7 +2093,7 @@ type ListMemoryToolsRequest struct {
 
 func (x *ListMemoryToolsRequest) Reset() {
 	*x = ListMemoryToolsRequest{}
-	mi := &file_turing_v1_memory_proto_msgTypes[21]
+	mi := &file_turing_v1_memory_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1761,7 +2105,7 @@ func (x *ListMemoryToolsRequest) String() string {
 func (*ListMemoryToolsRequest) ProtoMessage() {}
 
 func (x *ListMemoryToolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[21]
+	mi := &file_turing_v1_memory_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1774,7 +2118,7 @@ func (x *ListMemoryToolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMemoryToolsRequest.ProtoReflect.Descriptor instead.
 func (*ListMemoryToolsRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{21}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{27}
 }
 
 type ListMemoryToolsResponse struct {
@@ -1786,7 +2130,7 @@ type ListMemoryToolsResponse struct {
 
 func (x *ListMemoryToolsResponse) Reset() {
 	*x = ListMemoryToolsResponse{}
-	mi := &file_turing_v1_memory_proto_msgTypes[22]
+	mi := &file_turing_v1_memory_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1798,7 +2142,7 @@ func (x *ListMemoryToolsResponse) String() string {
 func (*ListMemoryToolsResponse) ProtoMessage() {}
 
 func (x *ListMemoryToolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[22]
+	mi := &file_turing_v1_memory_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1811,7 +2155,7 @@ func (x *ListMemoryToolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMemoryToolsResponse.ProtoReflect.Descriptor instead.
 func (*ListMemoryToolsResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{22}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ListMemoryToolsResponse) GetTools() []*MemoryToolDescriptor {
@@ -1839,7 +2183,7 @@ type CallMemoryToolRequest struct {
 
 func (x *CallMemoryToolRequest) Reset() {
 	*x = CallMemoryToolRequest{}
-	mi := &file_turing_v1_memory_proto_msgTypes[23]
+	mi := &file_turing_v1_memory_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1851,7 +2195,7 @@ func (x *CallMemoryToolRequest) String() string {
 func (*CallMemoryToolRequest) ProtoMessage() {}
 
 func (x *CallMemoryToolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[23]
+	mi := &file_turing_v1_memory_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1864,7 +2208,7 @@ func (x *CallMemoryToolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallMemoryToolRequest.ProtoReflect.Descriptor instead.
 func (*CallMemoryToolRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{23}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *CallMemoryToolRequest) GetRunId() string {
@@ -1904,7 +2248,7 @@ type CallMemoryToolResponse struct {
 
 func (x *CallMemoryToolResponse) Reset() {
 	*x = CallMemoryToolResponse{}
-	mi := &file_turing_v1_memory_proto_msgTypes[24]
+	mi := &file_turing_v1_memory_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1916,7 +2260,7 @@ func (x *CallMemoryToolResponse) String() string {
 func (*CallMemoryToolResponse) ProtoMessage() {}
 
 func (x *CallMemoryToolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_memory_proto_msgTypes[24]
+	mi := &file_turing_v1_memory_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1929,7 +2273,7 @@ func (x *CallMemoryToolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallMemoryToolResponse.ProtoReflect.Descriptor instead.
 func (*CallMemoryToolResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_memory_proto_rawDescGZIP(), []int{24}
+	return file_turing_v1_memory_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *CallMemoryToolResponse) GetResult() *structpb.Struct {
@@ -2004,6 +2348,15 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"updated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1f\n" +
 	"\vparse_error\x18\x05 \x01(\tR\n" +
 	"parseError\x12Q\n" +
+	"\x12unavailable_reason\x18\x06 \x01(\x0e2\".turing.v1.MemoryUnavailableReasonR\x11unavailableReason\"\xb0\x02\n" +
+	"\rMemoryPersona\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\x12!\n" +
+	"\fcontent_hash\x18\x02 \x01(\tR\vcontentHash\x123\n" +
+	"\x06status\x18\x03 \x01(\x0e2\x1b.turing.v1.MemoryNoteStatusR\x06status\x129\n" +
+	"\n" +
+	"updated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1f\n" +
+	"\vparse_error\x18\x05 \x01(\tR\n" +
+	"parseError\x12Q\n" +
 	"\x12unavailable_reason\x18\x06 \x01(\x0e2\".turing.v1.MemoryUnavailableReasonR\x11unavailableReason\"\xdc\x02\n" +
 	"\x0fMemoryTierState\x12)\n" +
 	"\x04tier\x18\x01 \x01(\x0e2\x15.turing.v1.MemoryTierR\x04tier\x12\x18\n" +
@@ -2024,7 +2377,7 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"\x12unavailable_reason\x18\x04 \x01(\x0e2\".turing.v1.MemoryUnavailableReasonR\x11unavailableReason\x12\x1f\n" +
 	"\vparse_error\x18\x05 \x01(\tR\n" +
 	"parseError\"\x18\n" +
-	"\x16ListMemoryStateRequest\"\x9f\x02\n" +
+	"\x16ListMemoryStateRequest\"\xd3\x02\n" +
 	"\x17ListMemoryStateResponse\x125\n" +
 	"\bsettings\x18\x01 \x01(\v2\x19.turing.v1.MemorySettingsR\bsettings\x120\n" +
 	"\x05tiers\x18\x02 \x03(\v2\x1a.turing.v1.MemoryTierStateR\x05tiers\x12+\n" +
@@ -2032,7 +2385,8 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"\n" +
 	"candidates\x18\x04 \x03(\v2\x1a.turing.v1.MemoryCandidateR\n" +
 	"candidates\x122\n" +
-	"\aprofile\x18\x05 \x01(\v2\x18.turing.v1.MemoryProfileR\aprofile\"\x1a\n" +
+	"\aprofile\x18\x05 \x01(\v2\x18.turing.v1.MemoryProfileR\aprofile\x122\n" +
+	"\apersona\x18\x06 \x01(\v2\x18.turing.v1.MemoryPersonaR\apersona\"\x1a\n" +
 	"\x18GetMemorySettingsRequest\"^\n" +
 	"\x17SetMemoryEnabledRequest\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12)\n" +
@@ -2068,6 +2422,17 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"\x15expected_content_hash\x18\x02 \x01(\tR\x13expectedContentHash\x12!\n" +
 	"\fcandidate_id\x18\x03 \x01(\tR\vcandidateId\"P\n" +
 	"\x1aApplyMemoryProfileResponse\x122\n" +
+	"\aprofile\x18\x01 \x01(\v2\x18.turing.v1.MemoryProfileR\aprofile\"\x19\n" +
+	"\x17GetMemoryPersonaRequest\"h\n" +
+	"\x18SaveMemoryPersonaRequest\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\x122\n" +
+	"\x15expected_content_hash\x18\x02 \x01(\tR\x13expectedContentHash\"O\n" +
+	"\x19SaveMemoryPersonaResponse\x122\n" +
+	"\apersona\x18\x01 \x01(\v2\x18.turing.v1.MemoryPersonaR\apersona\"h\n" +
+	"\x18SaveMemoryProfileRequest\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\x122\n" +
+	"\x15expected_content_hash\x18\x02 \x01(\tR\x13expectedContentHash\"O\n" +
+	"\x19SaveMemoryProfileResponse\x122\n" +
 	"\aprofile\x18\x01 \x01(\v2\x18.turing.v1.MemoryProfileR\aprofile\"\xcf\x01\n" +
 	"\x14MemoryToolDescriptor\x12\x1b\n" +
 	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12-\n" +
@@ -2113,7 +2478,8 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"'MEMORY_UNAVAILABLE_REASON_VAULT_MISSING\x10\x03\x12.\n" +
 	"*MEMORY_UNAVAILABLE_REASON_VAULT_UNREADABLE\x10\x04\x122\n" +
 	".MEMORY_UNAVAILABLE_REASON_CONTENT_PARSE_FAILED\x10\x05\x12/\n" +
-	"+MEMORY_UNAVAILABLE_REASON_CONTENT_TOO_LARGE\x10\x062\x93\b\n" +
+	"+MEMORY_UNAVAILABLE_REASON_CONTENT_TOO_LARGE\x10\x062\xa5\n" +
+	"\n" +
 	"\rMemoryService\x12X\n" +
 	"\x0fListMemoryState\x12!.turing.v1.ListMemoryStateRequest\x1a\".turing.v1.ListMemoryStateResponse\x12S\n" +
 	"\x11GetMemorySettings\x12#.turing.v1.GetMemorySettingsRequest\x1a\x19.turing.v1.MemorySettings\x12Q\n" +
@@ -2123,7 +2489,10 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"\x16PromoteMemoryCandidate\x12(.turing.v1.PromoteMemoryCandidateRequest\x1a).turing.v1.PromoteMemoryCandidateResponse\x12j\n" +
 	"\x15RejectMemoryCandidate\x12'.turing.v1.RejectMemoryCandidateRequest\x1a(.turing.v1.RejectMemoryCandidateResponse\x12P\n" +
 	"\x10GetMemoryProfile\x12\".turing.v1.GetMemoryProfileRequest\x1a\x18.turing.v1.MemoryProfile\x12a\n" +
-	"\x12ApplyMemoryProfile\x12$.turing.v1.ApplyMemoryProfileRequest\x1a%.turing.v1.ApplyMemoryProfileResponse\x12X\n" +
+	"\x12ApplyMemoryProfile\x12$.turing.v1.ApplyMemoryProfileRequest\x1a%.turing.v1.ApplyMemoryProfileResponse\x12P\n" +
+	"\x10GetMemoryPersona\x12\".turing.v1.GetMemoryPersonaRequest\x1a\x18.turing.v1.MemoryPersona\x12^\n" +
+	"\x11SaveMemoryPersona\x12#.turing.v1.SaveMemoryPersonaRequest\x1a$.turing.v1.SaveMemoryPersonaResponse\x12^\n" +
+	"\x11SaveMemoryProfile\x12#.turing.v1.SaveMemoryProfileRequest\x1a$.turing.v1.SaveMemoryProfileResponse\x12X\n" +
 	"\x0fListMemoryTools\x12!.turing.v1.ListMemoryToolsRequest\x1a\".turing.v1.ListMemoryToolsResponse\x12U\n" +
 	"\x0eCallMemoryTool\x12 .turing.v1.CallMemoryToolRequest\x1a!.turing.v1.CallMemoryToolResponseB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
@@ -2140,7 +2509,7 @@ func file_turing_v1_memory_proto_rawDescGZIP() []byte {
 }
 
 var file_turing_v1_memory_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_turing_v1_memory_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_turing_v1_memory_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_turing_v1_memory_proto_goTypes = []any{
 	(MemoryCandidateKind)(0),               // 0: turing.v1.MemoryCandidateKind
 	(MemoryCandidateState)(0),              // 1: turing.v1.MemoryCandidateState
@@ -2151,103 +2520,121 @@ var file_turing_v1_memory_proto_goTypes = []any{
 	(*MemoryCandidate)(nil),                // 6: turing.v1.MemoryCandidate
 	(*MemoryNote)(nil),                     // 7: turing.v1.MemoryNote
 	(*MemoryProfile)(nil),                  // 8: turing.v1.MemoryProfile
-	(*MemoryTierState)(nil),                // 9: turing.v1.MemoryTierState
-	(*MemorySettings)(nil),                 // 10: turing.v1.MemorySettings
-	(*ListMemoryStateRequest)(nil),         // 11: turing.v1.ListMemoryStateRequest
-	(*ListMemoryStateResponse)(nil),        // 12: turing.v1.ListMemoryStateResponse
-	(*GetMemorySettingsRequest)(nil),       // 13: turing.v1.GetMemorySettingsRequest
-	(*SetMemoryEnabledRequest)(nil),        // 14: turing.v1.SetMemoryEnabledRequest
-	(*ListMemoryCandidatesRequest)(nil),    // 15: turing.v1.ListMemoryCandidatesRequest
-	(*ListMemoryCandidatesResponse)(nil),   // 16: turing.v1.ListMemoryCandidatesResponse
-	(*GetMemoryCandidateRequest)(nil),      // 17: turing.v1.GetMemoryCandidateRequest
-	(*PromoteMemoryCandidateRequest)(nil),  // 18: turing.v1.PromoteMemoryCandidateRequest
-	(*PromoteMemoryCandidateResponse)(nil), // 19: turing.v1.PromoteMemoryCandidateResponse
-	(*RejectMemoryCandidateRequest)(nil),   // 20: turing.v1.RejectMemoryCandidateRequest
-	(*RejectMemoryCandidateResponse)(nil),  // 21: turing.v1.RejectMemoryCandidateResponse
-	(*GetMemoryProfileRequest)(nil),        // 22: turing.v1.GetMemoryProfileRequest
-	(*ApplyMemoryProfileRequest)(nil),      // 23: turing.v1.ApplyMemoryProfileRequest
-	(*ApplyMemoryProfileResponse)(nil),     // 24: turing.v1.ApplyMemoryProfileResponse
-	(*MemoryToolDescriptor)(nil),           // 25: turing.v1.MemoryToolDescriptor
-	(*ListMemoryToolsRequest)(nil),         // 26: turing.v1.ListMemoryToolsRequest
-	(*ListMemoryToolsResponse)(nil),        // 27: turing.v1.ListMemoryToolsResponse
-	(*CallMemoryToolRequest)(nil),          // 28: turing.v1.CallMemoryToolRequest
-	(*CallMemoryToolResponse)(nil),         // 29: turing.v1.CallMemoryToolResponse
-	(*timestamppb.Timestamp)(nil),          // 30: google.protobuf.Timestamp
-	(MemoryTier)(0),                        // 31: turing.v1.MemoryTier
-	(ToolPolicy)(0),                        // 32: turing.v1.ToolPolicy
-	(*structpb.Struct)(nil),                // 33: google.protobuf.Struct
+	(*MemoryPersona)(nil),                  // 9: turing.v1.MemoryPersona
+	(*MemoryTierState)(nil),                // 10: turing.v1.MemoryTierState
+	(*MemorySettings)(nil),                 // 11: turing.v1.MemorySettings
+	(*ListMemoryStateRequest)(nil),         // 12: turing.v1.ListMemoryStateRequest
+	(*ListMemoryStateResponse)(nil),        // 13: turing.v1.ListMemoryStateResponse
+	(*GetMemorySettingsRequest)(nil),       // 14: turing.v1.GetMemorySettingsRequest
+	(*SetMemoryEnabledRequest)(nil),        // 15: turing.v1.SetMemoryEnabledRequest
+	(*ListMemoryCandidatesRequest)(nil),    // 16: turing.v1.ListMemoryCandidatesRequest
+	(*ListMemoryCandidatesResponse)(nil),   // 17: turing.v1.ListMemoryCandidatesResponse
+	(*GetMemoryCandidateRequest)(nil),      // 18: turing.v1.GetMemoryCandidateRequest
+	(*PromoteMemoryCandidateRequest)(nil),  // 19: turing.v1.PromoteMemoryCandidateRequest
+	(*PromoteMemoryCandidateResponse)(nil), // 20: turing.v1.PromoteMemoryCandidateResponse
+	(*RejectMemoryCandidateRequest)(nil),   // 21: turing.v1.RejectMemoryCandidateRequest
+	(*RejectMemoryCandidateResponse)(nil),  // 22: turing.v1.RejectMemoryCandidateResponse
+	(*GetMemoryProfileRequest)(nil),        // 23: turing.v1.GetMemoryProfileRequest
+	(*ApplyMemoryProfileRequest)(nil),      // 24: turing.v1.ApplyMemoryProfileRequest
+	(*ApplyMemoryProfileResponse)(nil),     // 25: turing.v1.ApplyMemoryProfileResponse
+	(*GetMemoryPersonaRequest)(nil),        // 26: turing.v1.GetMemoryPersonaRequest
+	(*SaveMemoryPersonaRequest)(nil),       // 27: turing.v1.SaveMemoryPersonaRequest
+	(*SaveMemoryPersonaResponse)(nil),      // 28: turing.v1.SaveMemoryPersonaResponse
+	(*SaveMemoryProfileRequest)(nil),       // 29: turing.v1.SaveMemoryProfileRequest
+	(*SaveMemoryProfileResponse)(nil),      // 30: turing.v1.SaveMemoryProfileResponse
+	(*MemoryToolDescriptor)(nil),           // 31: turing.v1.MemoryToolDescriptor
+	(*ListMemoryToolsRequest)(nil),         // 32: turing.v1.ListMemoryToolsRequest
+	(*ListMemoryToolsResponse)(nil),        // 33: turing.v1.ListMemoryToolsResponse
+	(*CallMemoryToolRequest)(nil),          // 34: turing.v1.CallMemoryToolRequest
+	(*CallMemoryToolResponse)(nil),         // 35: turing.v1.CallMemoryToolResponse
+	(*timestamppb.Timestamp)(nil),          // 36: google.protobuf.Timestamp
+	(MemoryTier)(0),                        // 37: turing.v1.MemoryTier
+	(ToolPolicy)(0),                        // 38: turing.v1.ToolPolicy
+	(*structpb.Struct)(nil),                // 39: google.protobuf.Struct
 }
 var file_turing_v1_memory_proto_depIdxs = []int32{
 	3,  // 0: turing.v1.MemoryProvenance.kind:type_name -> turing.v1.MemoryProvenanceKind
-	30, // 1: turing.v1.MemoryProvenance.observed_at:type_name -> google.protobuf.Timestamp
-	30, // 2: turing.v1.MemoryProvenance.withdrawn_at:type_name -> google.protobuf.Timestamp
+	36, // 1: turing.v1.MemoryProvenance.observed_at:type_name -> google.protobuf.Timestamp
+	36, // 2: turing.v1.MemoryProvenance.withdrawn_at:type_name -> google.protobuf.Timestamp
 	0,  // 3: turing.v1.MemoryCandidate.kind:type_name -> turing.v1.MemoryCandidateKind
 	1,  // 4: turing.v1.MemoryCandidate.state:type_name -> turing.v1.MemoryCandidateState
 	5,  // 5: turing.v1.MemoryCandidate.provenance:type_name -> turing.v1.MemoryProvenance
-	30, // 6: turing.v1.MemoryCandidate.created_at:type_name -> google.protobuf.Timestamp
-	30, // 7: turing.v1.MemoryCandidate.updated_at:type_name -> google.protobuf.Timestamp
-	30, // 8: turing.v1.MemoryCandidate.decided_at:type_name -> google.protobuf.Timestamp
+	36, // 6: turing.v1.MemoryCandidate.created_at:type_name -> google.protobuf.Timestamp
+	36, // 7: turing.v1.MemoryCandidate.updated_at:type_name -> google.protobuf.Timestamp
+	36, // 8: turing.v1.MemoryCandidate.decided_at:type_name -> google.protobuf.Timestamp
 	4,  // 9: turing.v1.MemoryCandidate.unavailable_reason:type_name -> turing.v1.MemoryUnavailableReason
 	2,  // 10: turing.v1.MemoryNote.status:type_name -> turing.v1.MemoryNoteStatus
-	31, // 11: turing.v1.MemoryNote.tier:type_name -> turing.v1.MemoryTier
+	37, // 11: turing.v1.MemoryNote.tier:type_name -> turing.v1.MemoryTier
 	5,  // 12: turing.v1.MemoryNote.provenance:type_name -> turing.v1.MemoryProvenance
-	30, // 13: turing.v1.MemoryNote.created_at:type_name -> google.protobuf.Timestamp
-	30, // 14: turing.v1.MemoryNote.updated_at:type_name -> google.protobuf.Timestamp
+	36, // 13: turing.v1.MemoryNote.created_at:type_name -> google.protobuf.Timestamp
+	36, // 14: turing.v1.MemoryNote.updated_at:type_name -> google.protobuf.Timestamp
 	4,  // 15: turing.v1.MemoryNote.unavailable_reason:type_name -> turing.v1.MemoryUnavailableReason
 	2,  // 16: turing.v1.MemoryProfile.status:type_name -> turing.v1.MemoryNoteStatus
-	30, // 17: turing.v1.MemoryProfile.updated_at:type_name -> google.protobuf.Timestamp
+	36, // 17: turing.v1.MemoryProfile.updated_at:type_name -> google.protobuf.Timestamp
 	4,  // 18: turing.v1.MemoryProfile.unavailable_reason:type_name -> turing.v1.MemoryUnavailableReason
-	31, // 19: turing.v1.MemoryTierState.tier:type_name -> turing.v1.MemoryTier
-	30, // 20: turing.v1.MemoryTierState.updated_at:type_name -> google.protobuf.Timestamp
-	4,  // 21: turing.v1.MemoryTierState.unavailable_reason:type_name -> turing.v1.MemoryUnavailableReason
-	4,  // 22: turing.v1.MemorySettings.unavailable_reason:type_name -> turing.v1.MemoryUnavailableReason
-	10, // 23: turing.v1.ListMemoryStateResponse.settings:type_name -> turing.v1.MemorySettings
-	9,  // 24: turing.v1.ListMemoryStateResponse.tiers:type_name -> turing.v1.MemoryTierState
-	7,  // 25: turing.v1.ListMemoryStateResponse.notes:type_name -> turing.v1.MemoryNote
-	6,  // 26: turing.v1.ListMemoryStateResponse.candidates:type_name -> turing.v1.MemoryCandidate
-	8,  // 27: turing.v1.ListMemoryStateResponse.profile:type_name -> turing.v1.MemoryProfile
-	31, // 28: turing.v1.SetMemoryEnabledRequest.tier:type_name -> turing.v1.MemoryTier
-	1,  // 29: turing.v1.ListMemoryCandidatesRequest.state:type_name -> turing.v1.MemoryCandidateState
-	0,  // 30: turing.v1.ListMemoryCandidatesRequest.kind:type_name -> turing.v1.MemoryCandidateKind
-	6,  // 31: turing.v1.ListMemoryCandidatesResponse.candidates:type_name -> turing.v1.MemoryCandidate
-	4,  // 32: turing.v1.ListMemoryCandidatesResponse.unavailable_reason:type_name -> turing.v1.MemoryUnavailableReason
-	31, // 33: turing.v1.PromoteMemoryCandidateRequest.target_tier:type_name -> turing.v1.MemoryTier
-	6,  // 34: turing.v1.PromoteMemoryCandidateResponse.candidate:type_name -> turing.v1.MemoryCandidate
-	7,  // 35: turing.v1.PromoteMemoryCandidateResponse.note:type_name -> turing.v1.MemoryNote
-	6,  // 36: turing.v1.RejectMemoryCandidateResponse.candidate:type_name -> turing.v1.MemoryCandidate
-	8,  // 37: turing.v1.ApplyMemoryProfileResponse.profile:type_name -> turing.v1.MemoryProfile
-	32, // 38: turing.v1.MemoryToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
-	33, // 39: turing.v1.MemoryToolDescriptor.schema:type_name -> google.protobuf.Struct
-	25, // 40: turing.v1.ListMemoryToolsResponse.tools:type_name -> turing.v1.MemoryToolDescriptor
-	33, // 41: turing.v1.CallMemoryToolRequest.args:type_name -> google.protobuf.Struct
-	33, // 42: turing.v1.CallMemoryToolResponse.result:type_name -> google.protobuf.Struct
-	11, // 43: turing.v1.MemoryService.ListMemoryState:input_type -> turing.v1.ListMemoryStateRequest
-	13, // 44: turing.v1.MemoryService.GetMemorySettings:input_type -> turing.v1.GetMemorySettingsRequest
-	14, // 45: turing.v1.MemoryService.SetMemoryEnabled:input_type -> turing.v1.SetMemoryEnabledRequest
-	15, // 46: turing.v1.MemoryService.ListMemoryCandidates:input_type -> turing.v1.ListMemoryCandidatesRequest
-	17, // 47: turing.v1.MemoryService.GetMemoryCandidate:input_type -> turing.v1.GetMemoryCandidateRequest
-	18, // 48: turing.v1.MemoryService.PromoteMemoryCandidate:input_type -> turing.v1.PromoteMemoryCandidateRequest
-	20, // 49: turing.v1.MemoryService.RejectMemoryCandidate:input_type -> turing.v1.RejectMemoryCandidateRequest
-	22, // 50: turing.v1.MemoryService.GetMemoryProfile:input_type -> turing.v1.GetMemoryProfileRequest
-	23, // 51: turing.v1.MemoryService.ApplyMemoryProfile:input_type -> turing.v1.ApplyMemoryProfileRequest
-	26, // 52: turing.v1.MemoryService.ListMemoryTools:input_type -> turing.v1.ListMemoryToolsRequest
-	28, // 53: turing.v1.MemoryService.CallMemoryTool:input_type -> turing.v1.CallMemoryToolRequest
-	12, // 54: turing.v1.MemoryService.ListMemoryState:output_type -> turing.v1.ListMemoryStateResponse
-	10, // 55: turing.v1.MemoryService.GetMemorySettings:output_type -> turing.v1.MemorySettings
-	10, // 56: turing.v1.MemoryService.SetMemoryEnabled:output_type -> turing.v1.MemorySettings
-	16, // 57: turing.v1.MemoryService.ListMemoryCandidates:output_type -> turing.v1.ListMemoryCandidatesResponse
-	6,  // 58: turing.v1.MemoryService.GetMemoryCandidate:output_type -> turing.v1.MemoryCandidate
-	19, // 59: turing.v1.MemoryService.PromoteMemoryCandidate:output_type -> turing.v1.PromoteMemoryCandidateResponse
-	21, // 60: turing.v1.MemoryService.RejectMemoryCandidate:output_type -> turing.v1.RejectMemoryCandidateResponse
-	8,  // 61: turing.v1.MemoryService.GetMemoryProfile:output_type -> turing.v1.MemoryProfile
-	24, // 62: turing.v1.MemoryService.ApplyMemoryProfile:output_type -> turing.v1.ApplyMemoryProfileResponse
-	27, // 63: turing.v1.MemoryService.ListMemoryTools:output_type -> turing.v1.ListMemoryToolsResponse
-	29, // 64: turing.v1.MemoryService.CallMemoryTool:output_type -> turing.v1.CallMemoryToolResponse
-	54, // [54:65] is the sub-list for method output_type
-	43, // [43:54] is the sub-list for method input_type
-	43, // [43:43] is the sub-list for extension type_name
-	43, // [43:43] is the sub-list for extension extendee
-	0,  // [0:43] is the sub-list for field type_name
+	2,  // 19: turing.v1.MemoryPersona.status:type_name -> turing.v1.MemoryNoteStatus
+	36, // 20: turing.v1.MemoryPersona.updated_at:type_name -> google.protobuf.Timestamp
+	4,  // 21: turing.v1.MemoryPersona.unavailable_reason:type_name -> turing.v1.MemoryUnavailableReason
+	37, // 22: turing.v1.MemoryTierState.tier:type_name -> turing.v1.MemoryTier
+	36, // 23: turing.v1.MemoryTierState.updated_at:type_name -> google.protobuf.Timestamp
+	4,  // 24: turing.v1.MemoryTierState.unavailable_reason:type_name -> turing.v1.MemoryUnavailableReason
+	4,  // 25: turing.v1.MemorySettings.unavailable_reason:type_name -> turing.v1.MemoryUnavailableReason
+	11, // 26: turing.v1.ListMemoryStateResponse.settings:type_name -> turing.v1.MemorySettings
+	10, // 27: turing.v1.ListMemoryStateResponse.tiers:type_name -> turing.v1.MemoryTierState
+	7,  // 28: turing.v1.ListMemoryStateResponse.notes:type_name -> turing.v1.MemoryNote
+	6,  // 29: turing.v1.ListMemoryStateResponse.candidates:type_name -> turing.v1.MemoryCandidate
+	8,  // 30: turing.v1.ListMemoryStateResponse.profile:type_name -> turing.v1.MemoryProfile
+	9,  // 31: turing.v1.ListMemoryStateResponse.persona:type_name -> turing.v1.MemoryPersona
+	37, // 32: turing.v1.SetMemoryEnabledRequest.tier:type_name -> turing.v1.MemoryTier
+	1,  // 33: turing.v1.ListMemoryCandidatesRequest.state:type_name -> turing.v1.MemoryCandidateState
+	0,  // 34: turing.v1.ListMemoryCandidatesRequest.kind:type_name -> turing.v1.MemoryCandidateKind
+	6,  // 35: turing.v1.ListMemoryCandidatesResponse.candidates:type_name -> turing.v1.MemoryCandidate
+	4,  // 36: turing.v1.ListMemoryCandidatesResponse.unavailable_reason:type_name -> turing.v1.MemoryUnavailableReason
+	37, // 37: turing.v1.PromoteMemoryCandidateRequest.target_tier:type_name -> turing.v1.MemoryTier
+	6,  // 38: turing.v1.PromoteMemoryCandidateResponse.candidate:type_name -> turing.v1.MemoryCandidate
+	7,  // 39: turing.v1.PromoteMemoryCandidateResponse.note:type_name -> turing.v1.MemoryNote
+	6,  // 40: turing.v1.RejectMemoryCandidateResponse.candidate:type_name -> turing.v1.MemoryCandidate
+	8,  // 41: turing.v1.ApplyMemoryProfileResponse.profile:type_name -> turing.v1.MemoryProfile
+	9,  // 42: turing.v1.SaveMemoryPersonaResponse.persona:type_name -> turing.v1.MemoryPersona
+	8,  // 43: turing.v1.SaveMemoryProfileResponse.profile:type_name -> turing.v1.MemoryProfile
+	38, // 44: turing.v1.MemoryToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
+	39, // 45: turing.v1.MemoryToolDescriptor.schema:type_name -> google.protobuf.Struct
+	31, // 46: turing.v1.ListMemoryToolsResponse.tools:type_name -> turing.v1.MemoryToolDescriptor
+	39, // 47: turing.v1.CallMemoryToolRequest.args:type_name -> google.protobuf.Struct
+	39, // 48: turing.v1.CallMemoryToolResponse.result:type_name -> google.protobuf.Struct
+	12, // 49: turing.v1.MemoryService.ListMemoryState:input_type -> turing.v1.ListMemoryStateRequest
+	14, // 50: turing.v1.MemoryService.GetMemorySettings:input_type -> turing.v1.GetMemorySettingsRequest
+	15, // 51: turing.v1.MemoryService.SetMemoryEnabled:input_type -> turing.v1.SetMemoryEnabledRequest
+	16, // 52: turing.v1.MemoryService.ListMemoryCandidates:input_type -> turing.v1.ListMemoryCandidatesRequest
+	18, // 53: turing.v1.MemoryService.GetMemoryCandidate:input_type -> turing.v1.GetMemoryCandidateRequest
+	19, // 54: turing.v1.MemoryService.PromoteMemoryCandidate:input_type -> turing.v1.PromoteMemoryCandidateRequest
+	21, // 55: turing.v1.MemoryService.RejectMemoryCandidate:input_type -> turing.v1.RejectMemoryCandidateRequest
+	23, // 56: turing.v1.MemoryService.GetMemoryProfile:input_type -> turing.v1.GetMemoryProfileRequest
+	24, // 57: turing.v1.MemoryService.ApplyMemoryProfile:input_type -> turing.v1.ApplyMemoryProfileRequest
+	26, // 58: turing.v1.MemoryService.GetMemoryPersona:input_type -> turing.v1.GetMemoryPersonaRequest
+	27, // 59: turing.v1.MemoryService.SaveMemoryPersona:input_type -> turing.v1.SaveMemoryPersonaRequest
+	29, // 60: turing.v1.MemoryService.SaveMemoryProfile:input_type -> turing.v1.SaveMemoryProfileRequest
+	32, // 61: turing.v1.MemoryService.ListMemoryTools:input_type -> turing.v1.ListMemoryToolsRequest
+	34, // 62: turing.v1.MemoryService.CallMemoryTool:input_type -> turing.v1.CallMemoryToolRequest
+	13, // 63: turing.v1.MemoryService.ListMemoryState:output_type -> turing.v1.ListMemoryStateResponse
+	11, // 64: turing.v1.MemoryService.GetMemorySettings:output_type -> turing.v1.MemorySettings
+	11, // 65: turing.v1.MemoryService.SetMemoryEnabled:output_type -> turing.v1.MemorySettings
+	17, // 66: turing.v1.MemoryService.ListMemoryCandidates:output_type -> turing.v1.ListMemoryCandidatesResponse
+	6,  // 67: turing.v1.MemoryService.GetMemoryCandidate:output_type -> turing.v1.MemoryCandidate
+	20, // 68: turing.v1.MemoryService.PromoteMemoryCandidate:output_type -> turing.v1.PromoteMemoryCandidateResponse
+	22, // 69: turing.v1.MemoryService.RejectMemoryCandidate:output_type -> turing.v1.RejectMemoryCandidateResponse
+	8,  // 70: turing.v1.MemoryService.GetMemoryProfile:output_type -> turing.v1.MemoryProfile
+	25, // 71: turing.v1.MemoryService.ApplyMemoryProfile:output_type -> turing.v1.ApplyMemoryProfileResponse
+	9,  // 72: turing.v1.MemoryService.GetMemoryPersona:output_type -> turing.v1.MemoryPersona
+	28, // 73: turing.v1.MemoryService.SaveMemoryPersona:output_type -> turing.v1.SaveMemoryPersonaResponse
+	30, // 74: turing.v1.MemoryService.SaveMemoryProfile:output_type -> turing.v1.SaveMemoryProfileResponse
+	33, // 75: turing.v1.MemoryService.ListMemoryTools:output_type -> turing.v1.ListMemoryToolsResponse
+	35, // 76: turing.v1.MemoryService.CallMemoryTool:output_type -> turing.v1.CallMemoryToolResponse
+	63, // [63:77] is the sub-list for method output_type
+	49, // [49:63] is the sub-list for method input_type
+	49, // [49:49] is the sub-list for extension type_name
+	49, // [49:49] is the sub-list for extension extendee
+	0,  // [0:49] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_memory_proto_init() }
@@ -2262,7 +2649,7 @@ func file_turing_v1_memory_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_memory_proto_rawDesc), len(file_turing_v1_memory_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   25,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

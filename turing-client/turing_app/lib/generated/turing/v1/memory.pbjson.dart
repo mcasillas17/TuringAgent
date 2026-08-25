@@ -362,6 +362,49 @@ final $typed_data.Uint8List memoryProfileDescriptor = $convert.base64Decode(
     'UQoSdW5hdmFpbGFibGVfcmVhc29uGAYgASgOMiIudHVyaW5nLnYxLk1lbW9yeVVuYXZhaWxhYm'
     'xlUmVhc29uUhF1bmF2YWlsYWJsZVJlYXNvbg==');
 
+@$core.Deprecated('Use memoryPersonaDescriptor instead')
+const MemoryPersona$json = {
+  '1': 'MemoryPersona',
+  '2': [
+    {'1': 'content', '3': 1, '4': 1, '5': 9, '10': 'content'},
+    {'1': 'content_hash', '3': 2, '4': 1, '5': 9, '10': 'contentHash'},
+    {
+      '1': 'status',
+      '3': 3,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.MemoryNoteStatus',
+      '10': 'status'
+    },
+    {
+      '1': 'updated_at',
+      '3': 4,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Timestamp',
+      '10': 'updatedAt'
+    },
+    {'1': 'parse_error', '3': 5, '4': 1, '5': 9, '10': 'parseError'},
+    {
+      '1': 'unavailable_reason',
+      '3': 6,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.MemoryUnavailableReason',
+      '10': 'unavailableReason'
+    },
+  ],
+};
+
+/// Descriptor for `MemoryPersona`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List memoryPersonaDescriptor = $convert.base64Decode(
+    'Cg1NZW1vcnlQZXJzb25hEhgKB2NvbnRlbnQYASABKAlSB2NvbnRlbnQSIQoMY29udGVudF9oYX'
+    'NoGAIgASgJUgtjb250ZW50SGFzaBIzCgZzdGF0dXMYAyABKA4yGy50dXJpbmcudjEuTWVtb3J5'
+    'Tm90ZVN0YXR1c1IGc3RhdHVzEjkKCnVwZGF0ZWRfYXQYBCABKAsyGi5nb29nbGUucHJvdG9idW'
+    'YuVGltZXN0YW1wUgl1cGRhdGVkQXQSHwoLcGFyc2VfZXJyb3IYBSABKAlSCnBhcnNlRXJyb3IS'
+    'UQoSdW5hdmFpbGFibGVfcmVhc29uGAYgASgOMiIudHVyaW5nLnYxLk1lbW9yeVVuYXZhaWxhYm'
+    'xlUmVhc29uUhF1bmF2YWlsYWJsZVJlYXNvbg==');
+
 @$core.Deprecated('Use memoryTierStateDescriptor instead')
 const MemoryTierState$json = {
   '1': 'MemoryTierState',
@@ -493,6 +536,14 @@ const ListMemoryStateResponse$json = {
       '6': '.turing.v1.MemoryProfile',
       '10': 'profile'
     },
+    {
+      '1': 'persona',
+      '3': 6,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.MemoryPersona',
+      '10': 'persona'
+    },
   ],
 };
 
@@ -503,7 +554,8 @@ final $typed_data.Uint8List listMemoryStateResponseDescriptor = $convert.base64D
     'b3J5VGllclN0YXRlUgV0aWVycxIrCgVub3RlcxgDIAMoCzIVLnR1cmluZy52MS5NZW1vcnlOb3'
     'RlUgVub3RlcxI6CgpjYW5kaWRhdGVzGAQgAygLMhoudHVyaW5nLnYxLk1lbW9yeUNhbmRpZGF0'
     'ZVIKY2FuZGlkYXRlcxIyCgdwcm9maWxlGAUgASgLMhgudHVyaW5nLnYxLk1lbW9yeVByb2ZpbG'
-    'VSB3Byb2ZpbGU=');
+    'VSB3Byb2ZpbGUSMgoHcGVyc29uYRgGIAEoCzIYLnR1cmluZy52MS5NZW1vcnlQZXJzb25hUgdw'
+    'ZXJzb25h');
 
 @$core.Deprecated('Use getMemorySettingsRequestDescriptor instead')
 const GetMemorySettingsRequest$json = {
@@ -766,6 +818,99 @@ final $typed_data.Uint8List applyMemoryProfileResponseDescriptor =
     $convert.base64Decode(
         'ChpBcHBseU1lbW9yeVByb2ZpbGVSZXNwb25zZRIyCgdwcm9maWxlGAEgASgLMhgudHVyaW5nLn'
         'YxLk1lbW9yeVByb2ZpbGVSB3Byb2ZpbGU=');
+
+@$core.Deprecated('Use getMemoryPersonaRequestDescriptor instead')
+const GetMemoryPersonaRequest$json = {
+  '1': 'GetMemoryPersonaRequest',
+};
+
+/// Descriptor for `GetMemoryPersonaRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List getMemoryPersonaRequestDescriptor =
+    $convert.base64Decode('ChdHZXRNZW1vcnlQZXJzb25hUmVxdWVzdA==');
+
+@$core.Deprecated('Use saveMemoryPersonaRequestDescriptor instead')
+const SaveMemoryPersonaRequest$json = {
+  '1': 'SaveMemoryPersonaRequest',
+  '2': [
+    {'1': 'content', '3': 1, '4': 1, '5': 9, '10': 'content'},
+    {
+      '1': 'expected_content_hash',
+      '3': 2,
+      '4': 1,
+      '5': 9,
+      '10': 'expectedContentHash'
+    },
+  ],
+};
+
+/// Descriptor for `SaveMemoryPersonaRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List saveMemoryPersonaRequestDescriptor =
+    $convert.base64Decode(
+        'ChhTYXZlTWVtb3J5UGVyc29uYVJlcXVlc3QSGAoHY29udGVudBgBIAEoCVIHY29udGVudBIyCh'
+        'VleHBlY3RlZF9jb250ZW50X2hhc2gYAiABKAlSE2V4cGVjdGVkQ29udGVudEhhc2g=');
+
+@$core.Deprecated('Use saveMemoryPersonaResponseDescriptor instead')
+const SaveMemoryPersonaResponse$json = {
+  '1': 'SaveMemoryPersonaResponse',
+  '2': [
+    {
+      '1': 'persona',
+      '3': 1,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.MemoryPersona',
+      '10': 'persona'
+    },
+  ],
+};
+
+/// Descriptor for `SaveMemoryPersonaResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List saveMemoryPersonaResponseDescriptor =
+    $convert.base64Decode(
+        'ChlTYXZlTWVtb3J5UGVyc29uYVJlc3BvbnNlEjIKB3BlcnNvbmEYASABKAsyGC50dXJpbmcudj'
+        'EuTWVtb3J5UGVyc29uYVIHcGVyc29uYQ==');
+
+@$core.Deprecated('Use saveMemoryProfileRequestDescriptor instead')
+const SaveMemoryProfileRequest$json = {
+  '1': 'SaveMemoryProfileRequest',
+  '2': [
+    {'1': 'content', '3': 1, '4': 1, '5': 9, '10': 'content'},
+    {
+      '1': 'expected_content_hash',
+      '3': 2,
+      '4': 1,
+      '5': 9,
+      '10': 'expectedContentHash'
+    },
+  ],
+};
+
+/// Descriptor for `SaveMemoryProfileRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List saveMemoryProfileRequestDescriptor =
+    $convert.base64Decode(
+        'ChhTYXZlTWVtb3J5UHJvZmlsZVJlcXVlc3QSGAoHY29udGVudBgBIAEoCVIHY29udGVudBIyCh'
+        'VleHBlY3RlZF9jb250ZW50X2hhc2gYAiABKAlSE2V4cGVjdGVkQ29udGVudEhhc2g=');
+
+@$core.Deprecated('Use saveMemoryProfileResponseDescriptor instead')
+const SaveMemoryProfileResponse$json = {
+  '1': 'SaveMemoryProfileResponse',
+  '2': [
+    {
+      '1': 'profile',
+      '3': 1,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.MemoryProfile',
+      '10': 'profile'
+    },
+  ],
+};
+
+/// Descriptor for `SaveMemoryProfileResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List saveMemoryProfileResponseDescriptor =
+    $convert.base64Decode(
+        'ChlTYXZlTWVtb3J5UHJvZmlsZVJlc3BvbnNlEjIKB3Byb2ZpbGUYASABKAsyGC50dXJpbmcudj'
+        'EuTWVtb3J5UHJvZmlsZVIHcHJvZmlsZQ==');
 
 @$core.Deprecated('Use memoryToolDescriptorDescriptor instead')
 const MemoryToolDescriptor$json = {
