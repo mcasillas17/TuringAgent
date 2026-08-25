@@ -336,7 +336,8 @@ func (r *Repository) DeleteVaultArtifacts(ctx context.Context, artifactIDs []str
 	return tx.Commit()
 }
 
-// PurgeSessionVaultArtifacts is the hook the session-deletion cleaner calls.
+// PurgeSessionVaultArtifacts is the hook the session-deletion vault cleaner
+// calls.
 //
 // It removes the vault files a session left in the inbox, then removes manifest
 // rows for exactly the files that were actually removed. A failure stops the
@@ -350,14 +351,25 @@ func (r *Repository) DeleteVaultArtifacts(ctx context.Context, artifactIDs []str
 // inbox/. A missing file is a success: cleanup is retried after partial
 // failures, and a file that is already gone is the outcome that was wanted.
 //
-// Session deletion is not wired to this yet; the six-site cleaner list is the
-// next task's to change.
+// It deliberately does not take the vault-wide pass lock. It touches only the
+// paths its own manifest names, one at a time, under the primitive's per-path
+// lock — and a withdrawal that waited on a whole-vault pass could be wedged by
+// one, having already been reached from a call that will itself need that lock
+// to finish.
 func (r *Repository) PurgeSessionVaultArtifacts(ctx context.Context, sessionID string) (int, error) {
-	vault, err := r.memoryVaultOrError()
+	artifacts, err := r.PendingSessionVaultArtifacts(ctx, sessionID)
 	if err != nil {
 		return 0, err
 	}
-	artifacts, err := r.PendingSessionVaultArtifacts(ctx, sessionID)
+	// An empty worklist is finished work, whether or not a vault is attached.
+	// An install with no vault has no notes to remove, and refusing here would
+	// hold every withdrawal on such an install open forever on a scope that
+	// owns nothing. A vault that is genuinely missing while rows still name
+	// files in it is a different matter, and falls through to the error below.
+	if len(artifacts) == 0 {
+		return 0, nil
+	}
+	vault, err := r.memoryVaultOrError()
 	if err != nil {
 		return 0, err
 	}

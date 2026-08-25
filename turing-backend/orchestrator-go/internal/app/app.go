@@ -145,11 +145,22 @@ func New(cfg config.Config) (*App, error) {
 		},
 	}, approvalService)
 	sessionService := sessionsvc.New(repo, cfg, runtimeService, eventBus)
-	sessionService.SetArtifactCleaner(sessionsvc.NewMCPArtifactCleaner(
-		cfg.MCPFilesBaseURL,
-		cfg.MCPFilesCleanupToken,
-		nil,
-	))
+	// Two scopes, two cleaners, one list. Each owns its own manifest end to
+	// end, so a sandbox that will not answer cannot leave the user's vault
+	// notes behind and a vault the user has open cannot strand sandbox scratch.
+	sessionService.RegisterArtifactCleaners(
+		sessionsvc.NewMCPArtifactCleaner(
+			repo,
+			cfg.MCPFilesBaseURL,
+			cfg.MCPFilesCleanupToken,
+			nil,
+		),
+		sessionsvc.NewVaultArtifactCleaner(repo),
+	)
+	// A withdrawal is not finished while a belief the user kept still cites the
+	// conversation it just removed. The rewrite happens as part of the
+	// deletion, not on the next restart.
+	sessionService.SetMemoryReconcileCompletion(sessionsvc.NewMemoryReconcileCompletion(repo))
 	if err := sessionService.ResumePendingDeletions(context.Background()); err != nil {
 		_ = database.Close()
 		return nil, fmt.Errorf("resume pending session deletions: %w", err)

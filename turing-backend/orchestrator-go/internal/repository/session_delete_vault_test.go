@@ -342,6 +342,22 @@ func TestAdvanceSessionDeletionStaysRetryableWhenCompletionCannotFinish(t *testi
 	if got := countRows(t, repo, `SELECT COUNT(*) FROM audit_logs WHERE action = 'session.deleted' AND target = ?`, sessionID); got != 1 {
 		t.Fatalf("session.deleted audit rows = %d, want exactly one across a retried withdrawal", got)
 	}
+	// And it still says how much was removed. A withdrawal that now advances
+	// across more than one transaction re-runs the audit scrub on every retry;
+	// scrubbing its own evidence would trade the record of what was deleted for
+	// the act of finishing the deletion.
+	var deletedPayload string
+	if err := repo.db.QueryRowContext(ctx(), `
+		SELECT payload_json FROM audit_logs WHERE action = 'session.deleted' AND target = ?
+	`, sessionID).Scan(&deletedPayload); err != nil {
+		t.Fatalf("read the session.deleted payload: %v", err)
+	}
+	if deletedPayload == scrubbedAuditPayload {
+		t.Fatalf("a retried withdrawal scrubbed its own evidence: %q", deletedPayload)
+	}
+	if !strings.Contains(deletedPayload, `"runs"`) || !strings.Contains(deletedPayload, `"messages"`) {
+		t.Fatalf("session.deleted payload = %q, want the counts intact", deletedPayload)
+	}
 }
 
 // The completion runs after the rows are gone, not before: what it has to

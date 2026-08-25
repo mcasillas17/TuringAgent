@@ -46,14 +46,70 @@ type SessionDeletionReceipt struct {
 // session" from "never carried a payload".
 const scrubbedAuditPayload = `{"scrubbed":true}`
 
+// Withdrawal error classes. Each one is an opaque class and nothing else: a
+// receipt is read by a client and projected into an audit row, so it must never
+// carry a path, a transport message, or anything else the failure knew.
+const (
+	// SessionDeletionArtifactCleanupPending is the one literal that says a
+	// withdrawal is waiting on external files. Both manifests raise it, and the
+	// dispatch gate matches it exactly — a second spelling for "there are still
+	// files" is a withdrawal that never dispatches a cleaner and reports
+	// completion with the user's notes still on disk.
+	SessionDeletionArtifactCleanupPending = "artifact_cleanup_pending"
+	// SessionDeletionSandboxCleanupFailed names a sandbox cleanup that could
+	// not finish.
+	SessionDeletionSandboxCleanupFailed = "artifact_cleanup_failed"
+	// SessionDeletionVaultCleanupFailed names a vault cleanup that could not
+	// finish. It is a separate class because the two failures are separately
+	// retryable and land in separate manifests.
+	SessionDeletionVaultCleanupFailed = "vault_artifact_cleanup_failed"
+	// SessionDeletionMemoryReconcileFailed names a withdrawal whose rows are
+	// gone but whose on-disk completion could not be written.
+	SessionDeletionMemoryReconcileFailed = "memory_reconcile_failed"
+)
+
+// SessionDeletionCompletion is the on-disk work a withdrawal must finish before
+// its receipt may claim completion.
+//
+// It runs after the cascade has committed and before the receipt is marked
+// completed, with no transaction open and no repository lock held. Both halves
+// of that are load-bearing:
+//
+//   - After the cascade, because what it has to repair is a note citing a
+//     conversation that no longer exists, and it cannot see that while the
+//     session row is still there.
+//   - Before the completion mark, because a receipt that says "completed" while
+//     a belief in the user's vault still names the deleted conversation is a
+//     withdrawal Turing reported and did not finish. A failure here leaves the
+//     receipt retryable instead, and the rows stay gone — that half of the
+//     promise is already kept and is never undone.
+//
+// It is not called inside the transaction. A vault pass walks the filesystem
+// and takes a vault-wide lock; holding SQLite open across either is how a
+// withdrawal and a reconcile wedge against each other.
+type SessionDeletionCompletion func(context.Context) error
+
 const sessionDeletionQuiesceLease = 5 * time.Minute
 
+// scrubSessionAuditPayloadsSQL empties the content out of every audit row a
+// withdrawn session left behind.
+//
+// session.deleted is excluded by name. It is the evidence that the withdrawal
+// happened, its payload is a pair of counts rather than anything the user
+// wrote, and a withdrawal is now advanced across more than one transaction — a
+// retry after an unfinished completion re-runs this statement over a
+// session.deleted row an earlier attempt already wrote. Without the exclusion
+// that retry replaces the counts with the tombstone, and the record of how much
+// was removed is lost to the act of finishing the removal.
 const scrubSessionAuditPayloadsSQL = `
 	UPDATE audit_logs SET payload_json = ?
-	WHERE correlation_id IN (SELECT id FROM agent_runs WHERE session_id = ?)
-		OR (
-			target = ?
-			AND (correlation_id IS NULL OR correlation_id = '')
+	WHERE action <> 'session.deleted'
+		AND (
+			correlation_id IN (SELECT id FROM agent_runs WHERE session_id = ?)
+			OR (
+				target = ?
+				AND (correlation_id IS NULL OR correlation_id = '')
+			)
 		)
 `
 
@@ -206,7 +262,10 @@ func cancelSessionWorkTx(ctx context.Context, tx *sql.Tx, sessionID string) erro
 
 // AdvanceSessionDeletion progresses a receipt without waiting for an active
 // runtime. A caller can retry it after the runtime acknowledges its exit.
-func (r *Repository) AdvanceSessionDeletion(ctx context.Context, sessionID string) (SessionDeletionReceipt, error) {
+//
+// completion is the on-disk work the withdrawal owes once its rows are gone.
+// Pass nil when there is none.
+func (r *Repository) AdvanceSessionDeletion(ctx context.Context, sessionID string, completion SessionDeletionCompletion) (SessionDeletionReceipt, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return SessionDeletionReceipt{}, err
@@ -295,18 +354,36 @@ func (r *Repository) AdvanceSessionDeletion(ctx context.Context, sessionID strin
 		}
 		return receipt, nil
 	}
-	var pendingArtifacts int
+	// Both manifests are counted, and counted separately. They answer different
+	// retention questions over different roots — scratch output inside the tool
+	// sandbox, and user-visible notes inside the vault the user opens — and a
+	// session can own files in one and none in the other. Summing them into a
+	// single query keyed on the sandbox's policy column would make a vault-only
+	// session look drained and complete a withdrawal with the note still there.
+	var pendingSandboxArtifacts int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM sandbox_artifacts
-		WHERE session_id = ? AND policy = 'delete_on_session_delete'
-	`, sessionID).Scan(&pendingArtifacts); err != nil {
+		WHERE session_id = ? AND policy = ?
+	`, sessionID, SandboxArtifactPolicyDeleteOnSessionDelete).Scan(&pendingSandboxArtifacts); err != nil {
 		return SessionDeletionReceipt{}, err
 	}
-	if pendingArtifacts > 0 {
+	// Every vault row counts, whatever state it is in. A `writing` reservation
+	// names a path that may hold bytes a crash left behind, and a
+	// `delete_failed` row names a file that is definitely still in the user's
+	// vault; both are outstanding work, and neither drains until its file does.
+	var pendingVaultArtifacts int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM vault_artifacts
+		WHERE session_id = ?
+	`, sessionID).Scan(&pendingVaultArtifacts); err != nil {
+		return SessionDeletionReceipt{}, err
+	}
+	if pendingSandboxArtifacts+pendingVaultArtifacts > 0 {
 		receipt.State = "failed_external"
 		receipt.Retryable = true
-		receipt.ErrorCode = "artifact_cleanup_pending"
+		receipt.ErrorCode = SessionDeletionArtifactCleanupPending
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE session_deletions
 			SET state = ?, retryable = 1, error_code = ?
@@ -343,21 +420,54 @@ func (r *Repository) AdvanceSessionDeletion(ctx context.Context, sessionID strin
 	); err != nil {
 		return SessionDeletionReceipt{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ? AND deletion_state = 'deleting'`, sessionID); err != nil {
-		return SessionDeletionReceipt{}, err
-	}
-	payload, err := json.Marshal(map[string]any{
-		"runs":     receipt.RunCount,
-		"messages": receipt.MessageCount,
-	})
+	// The cascade commits on its own, before the completion runs and before the
+	// receipt is marked completed. Removing the rows is the half of the promise
+	// the user asked for, and it is never held hostage to a file the vault
+	// would not let go of; the receipt is what stays honest about the rest.
+	//
+	// A retry after a completion failure re-enters here with the session
+	// already gone, which is why the audit row is written only when this
+	// statement actually removed something. Recording it unconditionally would
+	// stack one "session.deleted" row per retry — a count of attempts dressed
+	// up as a count of deletions.
+	deleted, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ? AND deletion_state = 'deleting'`, sessionID)
 	if err != nil {
 		return SessionDeletionReceipt{}, err
 	}
-	if err := recordAuditTx(ctx, tx, "", "client", "", "session.deleted", sessionID, string(payload)); err != nil {
+	removed, err := deleted.RowsAffected()
+	if err != nil {
 		return SessionDeletionReceipt{}, err
 	}
+	if removed > 0 {
+		payload, err := json.Marshal(map[string]any{
+			"runs":     receipt.RunCount,
+			"messages": receipt.MessageCount,
+		})
+		if err != nil {
+			return SessionDeletionReceipt{}, err
+		}
+		if err := recordAuditTx(ctx, tx, "", "client", "", "session.deleted", sessionID, string(payload)); err != nil {
+			return SessionDeletionReceipt{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return SessionDeletionReceipt{}, err
+	}
+
+	if completion != nil {
+		if completionErr := completion(ctx); completionErr != nil {
+			if err := r.markSessionDeletionCompletionFailure(ctx, sessionID, SessionDeletionMemoryReconcileFailed); err != nil {
+				return SessionDeletionReceipt{}, err
+			}
+			receipt.State = "failed_external"
+			receipt.Retryable = true
+			receipt.ErrorCode = SessionDeletionMemoryReconcileFailed
+			return receipt, nil
+		}
+	}
+
 	completedAt := now()
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := r.db.ExecContext(ctx, `
 		UPDATE session_deletions
 		SET state = 'completed',
 			terminal_at = ?,
@@ -371,10 +481,19 @@ func (r *Repository) AdvanceSessionDeletion(ctx context.Context, sessionID strin
 	receipt.State = "completed"
 	receipt.Retryable = false
 	receipt.ErrorCode = ""
-	if err := tx.Commit(); err != nil {
-		return SessionDeletionReceipt{}, err
-	}
 	return receipt, nil
+}
+
+// markSessionDeletionCompletionFailure keeps a withdrawal whose rows are gone
+// visibly unfinished. It touches neither artifact manifest: both drained before
+// the cascade ran, and there is nothing left in either to mark.
+func (r *Repository) markSessionDeletionCompletionFailure(ctx context.Context, sessionID string, errorCode string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE session_deletions
+		SET state = 'failed_external', retryable = 1, error_code = ?
+		WHERE session_id = ? AND state <> 'completed'
+	`, errorCode, sessionID)
+	return err
 }
 
 // SessionExecutionRunIDs returns only executions that must receive a runtime
@@ -401,10 +520,15 @@ func (r *Repository) SessionExecutionRunIDs(ctx context.Context, sessionID strin
 	return runIDs, rows.Err()
 }
 
-// MarkSessionDeletionExternalFailure preserves only an opaque error class when
-// a bounded external cleanup attempt fails. The detail stays out of durable
-// state because it can contain filesystem or transport information.
-func (r *Repository) MarkSessionDeletionExternalFailure(ctx context.Context, sessionID string, errorCode string) error {
+// MarkSessionDeletionSandboxFailure preserves only an opaque error class when a
+// bounded sandbox cleanup attempt fails. The detail stays out of durable state
+// because it can contain filesystem or transport information.
+//
+// It marks the sandbox manifest and only the sandbox manifest. A vault row
+// belongs to a different cleaner over a different root, and marking it here
+// would file an audit row saying Turing could not delete a note it never tried
+// to delete — then send the next retry looking for it.
+func (r *Repository) MarkSessionDeletionSandboxFailure(ctx context.Context, sessionID string, errorCode string) error {
 	if errorCode == "" {
 		return errors.New("session deletion external failure code is required")
 	}
@@ -413,30 +537,12 @@ func (r *Repository) MarkSessionDeletionExternalFailure(ctx context.Context, ses
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `
-		UPDATE session_deletions
-		SET state = 'failed_external', retryable = 1, error_code = ?
-		WHERE session_id = ? AND state <> 'completed'
-	`, errorCode, sessionID)
+	marked, err := markSessionDeletionFailedTx(ctx, tx, sessionID, errorCode)
 	if err != nil {
 		return err
 	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if changed == 0 {
-		var state string
-		if err := tx.QueryRowContext(ctx, `SELECT state FROM session_deletions WHERE session_id = ?`, sessionID).Scan(&state); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrSessionNotFound
-			}
-			return err
-		}
-		if state == "completed" {
-			return tx.Commit()
-		}
-		return ErrSessionNotFound
+	if !marked {
+		return tx.Commit()
 	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id
@@ -482,6 +588,109 @@ func (r *Repository) MarkSessionDeletionExternalFailure(ctx context.Context, ses
 		}
 	}
 	return tx.Commit()
+}
+
+// MarkSessionDeletionVaultFailure is the vault's half of the same promise: a
+// cleanup that could not remove the notes a session left in the user's vault
+// keeps the withdrawal retryable and records one redacted audit row per file
+// still sitting there.
+//
+// It is the mirror image of the sandbox call and shares nothing with it but
+// the receipt. It names vault_artifacts and only vault_artifacts, and it skips
+// rows a partial pass already marked — those already carry their audit row, and
+// filing a second one would inflate a single failure into two.
+func (r *Repository) MarkSessionDeletionVaultFailure(ctx context.Context, sessionID string, errorCode string) error {
+	if errorCode == "" {
+		return errors.New("session deletion external failure code is required")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	marked, err := markSessionDeletionFailedTx(ctx, tx, sessionID, errorCode)
+	if err != nil {
+		return err
+	}
+	if !marked {
+		return tx.Commit()
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id
+		FROM vault_artifacts
+		WHERE session_id = ? AND state <> ?
+		ORDER BY id
+	`, sessionID, VaultArtifactStateDeleteFailed)
+	if err != nil {
+		return err
+	}
+	var artifactIDs []string
+	for rows.Next() {
+		var artifactID string
+		if err := rows.Scan(&artifactID); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		artifactIDs = append(artifactIDs, artifactID)
+	}
+	if err := rows.Err(); err != nil {
+		return errors.Join(err, rows.Close())
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE vault_artifacts
+		SET state = ?
+		WHERE session_id = ? AND state <> ?
+	`, VaultArtifactStateDeleteFailed, sessionID, VaultArtifactStateDeleteFailed); err != nil {
+		return err
+	}
+	payloadBytes, err := json.Marshal(map[string]string{
+		"state":     VaultArtifactStateDeleteFailed,
+		"errorCode": errorCode,
+	})
+	if err != nil {
+		return err
+	}
+	for _, artifactID := range artifactIDs {
+		if err := recordAuditTx(ctx, tx, "", "system", "", vaultArtifactCleanupFailedAction, artifactID, string(payloadBytes)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// markSessionDeletionFailedTx moves a live receipt to a retryable external
+// failure and reports whether the caller should go on to mark its own manifest.
+// A receipt that is already a completed tombstone is left alone: it is not
+// reopened, and no manifest is marked on the strength of it.
+func markSessionDeletionFailedTx(ctx context.Context, tx *sql.Tx, sessionID string, errorCode string) (bool, error) {
+	result, err := tx.ExecContext(ctx, `
+		UPDATE session_deletions
+		SET state = 'failed_external', retryable = 1, error_code = ?
+		WHERE session_id = ? AND state <> 'completed'
+	`, errorCode, sessionID)
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if changed > 0 {
+		return true, nil
+	}
+	var state string
+	if err := tx.QueryRowContext(ctx, `SELECT state FROM session_deletions WHERE session_id = ?`, sessionID).Scan(&state); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, ErrSessionNotFound
+		}
+		return false, err
+	}
+	if state == "completed" {
+		return false, nil
+	}
+	return false, ErrSessionNotFound
 }
 
 // PendingSessionDeletionIDs returns receipts that must be retried after a

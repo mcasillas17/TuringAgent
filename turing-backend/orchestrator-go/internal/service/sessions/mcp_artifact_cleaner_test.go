@@ -28,7 +28,7 @@ func TestMCPArtifactCleanerUsesAuthenticatedInternalCleanupCall(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cleaner := NewMCPArtifactCleaner(server.URL, "approval-consumer-token", server.Client())
+	cleaner := NewMCPArtifactCleaner(nil, server.URL, "approval-consumer-token", server.Client())
 	if err := cleaner.CleanupSessionArtifacts(context.Background(), "sess_cleanup", 7); err != nil {
 		t.Fatalf("CleanupSessionArtifacts: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestMCPArtifactCleanerTreatsMissingNamespaceAsSuccessfulCleanup(t *testing.
 	}))
 	defer server.Close()
 
-	cleaner := NewMCPArtifactCleaner(server.URL, "approval-consumer-token", server.Client())
+	cleaner := NewMCPArtifactCleaner(nil, server.URL, "approval-consumer-token", server.Client())
 	if err := cleaner.CleanupSessionArtifacts(context.Background(), "sess_missing", 3); err != nil {
 		t.Fatalf("CleanupSessionArtifacts(missing namespace): %v", err)
 	}

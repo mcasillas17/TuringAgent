@@ -97,6 +97,7 @@ type scopedFakeCleaner struct {
 	forgets  int
 	err      error
 	delegate SessionArtifactCleaner
+	manifest sandboxArtifactManifest
 }
 
 func (c *scopedFakeCleaner) ArtifactScope() string { return c.scope }
@@ -120,7 +121,11 @@ func (c *scopedFakeCleaner) ForgetCleanedArtifacts(ctx context.Context, sessionI
 	c.mu.Lock()
 	c.forgets++
 	delegate := c.delegate
+	manifest := c.manifest
 	c.mu.Unlock()
+	if manifest != nil {
+		return forgetSandboxArtifacts(ctx, manifest, sessionID)
+	}
 	if delegate != nil {
 		return delegate.ForgetCleanedArtifacts(ctx, sessionID)
 	}
@@ -145,6 +150,17 @@ func auditRowCount(t *testing.T, database *db.DB, action string, target string) 
 	if err := database.QueryRowContext(context.Background(), `
 		SELECT COUNT(*) FROM audit_logs WHERE action = ? AND target = ?
 	`, action, target).Scan(&count); err != nil {
+		t.Fatalf("count %q audits: %v", action, err)
+	}
+	return count
+}
+
+func auditActionCount(t *testing.T, database *db.DB, action string) int {
+	t.Helper()
+	var count int
+	if err := database.QueryRowContext(context.Background(), `
+		SELECT COUNT(*) FROM audit_logs WHERE action = ?
+	`, action).Scan(&count); err != nil {
 		t.Fatalf("count %q audits: %v", action, err)
 	}
 	return count
@@ -188,38 +204,85 @@ func TestDeleteSessionCompletesAVaultOnlyPendingCleanup(t *testing.T) {
 
 // Only the exact literal the pending gate writes may dispatch the cleaners. A
 // receipt that failed for any other reason must not be answered by deleting the
-// user's files.
+// user's files: nothing a cleaner does would unstick it, and the notes it would
+// take with it are not what the withdrawal is waiting on.
 func TestDeleteSessionDispatchesCleanersOnlyForTheArtifactCleanupPendingGate(t *testing.T) {
-	server, repo, _, _ := newVaultBackedServer(t)
-	sessionID, _ := seedVaultCandidate(t, repo, "bees")
-	vaultCleaner := &scopedFakeCleaner{scope: ArtifactScopeVault}
+	server, repo, vault, database := newVaultBackedServer(t)
+	sessionID, candidate := seedVaultCandidate(t, repo, "bees")
+	vaultCleaner := &scopedFakeCleaner{scope: ArtifactScopeVault, delegate: NewVaultArtifactCleaner(repo)}
 	server.RegisterArtifactCleaners(vaultCleaner)
 	ctx := context.Background()
 
-	// A withdrawal held open by an unreconciled execution fails for a different
-	// reason and must leave the vault alone.
-	if _, err := repo.BeginSessionDeletion(ctx, sessionID); err != nil {
-		t.Fatalf("BeginSessionDeletion: %v", err)
+	// An execution nobody has proven is gone. The session owns a vault file,
+	// so the only thing keeping the cleaners out is the gate itself.
+	if _, err := repo.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+		SessionID: sessionID, Content: "still running", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	}); err != nil {
+		t.Fatalf("EnqueueUserMessage: %v", err)
 	}
-	if err := repo.MarkSessionDeletionSandboxFailure(ctx, sessionID, "execution_unreconciled"); err != nil {
-		t.Fatalf("MarkSessionDeletionSandboxFailure: %v", err)
-	}
-	if _, err := repo.SessionDeletionReceipt(ctx, sessionID); err != nil {
-		t.Fatalf("SessionDeletionReceipt: %v", err)
-	}
-	if vaultCleaner.attempts() != 0 {
-		t.Fatalf("cleaner attempts before any dispatch = %d, want 0", vaultCleaner.attempts())
+	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-gate"); err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
 	}
 
 	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID})
 	if err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
-	if response.GetDeletion().GetErrorCode() != "" &&
-		response.GetDeletion().GetErrorCode() != "artifact_cleanup_pending" &&
-		vaultCleaner.attempts() != 0 {
-		t.Fatalf("cleaners ran for receipt %+v", response.GetDeletion())
+	if response.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_IN_PROGRESS {
+		t.Fatalf("receipt = %+v, want quiescing", response.GetDeletion())
 	}
+	if vaultCleaner.attempts() != 0 {
+		t.Fatalf("cleaner attempts while quiescing = %d, want 0", vaultCleaner.attempts())
+	}
+
+	// The drain lease runs out. The receipt fails, but for a reason no cleaner
+	// can answer, so it still must not reach the vault.
+	if _, err := database.ExecContext(ctx, `
+		UPDATE session_deletions SET quiesce_deadline_at = '2000-01-01T00:00:00.000000000Z' WHERE session_id = ?
+	`, sessionID); err != nil {
+		t.Fatalf("expire the drain lease: %v", err)
+	}
+	expired, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession after the lease expired: %v", err)
+	}
+	if expired.GetDeletion().GetErrorCode() != "execution_unreconciled" {
+		t.Fatalf("receipt = %+v, want execution_unreconciled", expired.GetDeletion())
+	}
+	if vaultCleaner.attempts() != 0 {
+		t.Fatalf("cleaner attempts for a non-artifact failure = %d, want 0", vaultCleaner.attempts())
+	}
+	if _, err := os.Stat(filepath.Join(vault.Root(), filepath.FromSlash(candidate.InboxPath))); err != nil {
+		t.Fatalf("a withdrawal stuck on an execution deleted the user's note: %v", err)
+	}
+
+	// Once the runtime is accounted for, the gate opens and the same cleaner
+	// runs — proving the refusal above was the gate and not a missing wiring.
+	if err := repo.AcknowledgeExecutionExit(ctx, activeRunID(t, database, sessionID)); err != nil {
+		t.Fatalf("AcknowledgeExecutionExit: %v", err)
+	}
+	drained, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession after the exit: %v", err)
+	}
+	if vaultCleaner.attempts() != 1 {
+		t.Fatalf("cleaner attempts after the pending gate = %d, want 1", vaultCleaner.attempts())
+	}
+	if drained.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("receipt = %+v, want completed", drained.GetDeletion())
+	}
+}
+
+func activeRunID(t *testing.T, database *db.DB, sessionID string) string {
+	t.Helper()
+	var runID string
+	if err := database.QueryRowContext(context.Background(), `
+		SELECT id FROM agent_runs WHERE session_id = ? AND execution_active = 1 ORDER BY created_at, id LIMIT 1
+	`, sessionID).Scan(&runID); err != nil {
+		t.Fatalf("read the active run: %v", err)
+	}
+	return runID
 }
 
 // One scope failing must not take the other down with it. Every cleaner is
@@ -234,7 +297,7 @@ func TestDeleteSessionKeepsOnlyTheFailingCleanerScope(t *testing.T) {
 			seedSandboxArtifactRow(t, database, sessionID, "artifact_scope_"+failing)
 			ctx := context.Background()
 
-			sandboxCleaner := &scopedFakeCleaner{scope: ArtifactScopeSandbox}
+			sandboxCleaner := &scopedFakeCleaner{scope: ArtifactScopeSandbox, manifest: repo}
 			vaultCleaner := &scopedFakeCleaner{scope: ArtifactScopeVault, delegate: NewVaultArtifactCleaner(repo)}
 			failure := errors.New("cleanup transport unavailable")
 			if failing == ArtifactScopeSandbox {
@@ -283,7 +346,7 @@ func TestDeleteSessionKeepsOnlyTheFailingCleanerScope(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(vault.Root(), filepath.FromSlash(candidate.InboxPath))); !os.IsNotExist(err) {
 					t.Fatalf("the vault cleaner did not finish its own scope: %v", err)
 				}
-				if got := auditRowCount(t, database, "session.vault_artifact.cleanup.failed", ""); got != 0 {
+				if got := auditActionCount(t, database, "session.vault_artifact.cleanup.failed"); got != 0 {
 					t.Fatalf("vault failure audits = %d, want none for a sandbox failure", got)
 				}
 				if got := auditRowCount(t, database, "session.artifact.cleanup.failed", "artifact_scope_"+failing); got != 1 {
@@ -344,7 +407,7 @@ func TestDeleteSessionOutcomeIsIndependentOfCleanerRegistrationOrder(t *testing.
 		sessionID, _ := seedVaultCandidate(t, repo, "bees")
 		seedSandboxArtifactRow(t, database, sessionID, "artifact_order")
 		ctx := context.Background()
-		sandboxCleaner := &scopedFakeCleaner{scope: ArtifactScopeSandbox}
+		sandboxCleaner := &scopedFakeCleaner{scope: ArtifactScopeSandbox, manifest: repo}
 		vaultCleaner := &scopedFakeCleaner{scope: ArtifactScopeVault, delegate: NewVaultArtifactCleaner(repo)}
 		vaultCleaner.fail(errors.New("vault unavailable"))
 		if vaultFirst {
@@ -519,5 +582,125 @@ func TestDeleteSessionDoesNotDeadlockWithAConcurrentVaultPass(t *testing.T) {
 	close(failures)
 	for err := range failures {
 		t.Fatalf("concurrent pass: %v", err)
+	}
+}
+
+type stubVaultReconciler struct {
+	calls int
+	err   error
+}
+
+func (r *stubVaultReconciler) ReconcileMemoryVault(context.Context) (repository.MemoryReconcileReport, error) {
+	r.calls++
+	return repository.MemoryReconcileReport{}, r.err
+}
+
+// An install the user never gave a vault owes the withdrawal nothing on disk.
+// Reporting that as an unfinished completion would leave every deletion on such
+// an install permanently retryable over a promise it had already kept.
+func TestMemoryReconcileCompletionTreatsAnAbsentVaultAsNothingOwed(t *testing.T) {
+	unavailable := &stubVaultReconciler{err: repository.ErrMemoryVaultUnavailable}
+	if err := NewMemoryReconcileCompletion(unavailable)(context.Background()); err != nil {
+		t.Fatalf("completion with no vault = %v, want nil", err)
+	}
+	if unavailable.calls != 1 {
+		t.Fatalf("reconcile calls = %d, want 1", unavailable.calls)
+	}
+
+	// Every other failure is still a withdrawal that has not finished.
+	broken := &stubVaultReconciler{err: errors.New("the vault could not be rewritten")}
+	if err := NewMemoryReconcileCompletion(broken)(context.Background()); err == nil {
+		t.Fatal("completion swallowed a real reconcile failure")
+	}
+}
+
+// The same, end to end: a sandbox-only withdrawal on an install with no vault
+// reaches completion rather than sticking on a scope that owns nothing.
+func TestDeleteSessionCompletesOnAnInstallWithNoVault(t *testing.T) {
+	database := openSessionTestDB(t)
+	repo := repository.New(database)
+	server := New(repo, config.Config{}, &sessionCapabilitySource{})
+	server.SetMemoryReconcileCompletion(NewMemoryReconcileCompletion(repo))
+	ctx := context.Background()
+	session, err := repo.CreateSession(ctx, "No vault here")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	seedSandboxArtifactRow(t, database, session.SessionID, "artifact_no_vault")
+	sandboxCleaner := &scopedFakeCleaner{scope: ArtifactScopeSandbox, manifest: repo}
+	server.RegisterArtifactCleaners(sandboxCleaner, NewVaultArtifactCleaner(repo))
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: session.SessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if response.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("receipt = %+v, want completed", response.GetDeletion())
+	}
+}
+
+// Both scopes failing at once is one withdrawal, so it reports one class. Each
+// manifest still keeps its own rows and its own audit action, which is where a
+// reader finds out which store could not be reached.
+func TestDeleteSessionReportsOneClassWhenEveryScopeFails(t *testing.T) {
+	server, repo, vault, database := newVaultBackedServer(t)
+	sessionID, candidate := seedVaultCandidate(t, repo, "bees")
+	seedSandboxArtifactRow(t, database, sessionID, "artifact_both_fail")
+	ctx := context.Background()
+
+	sandboxCleaner := &scopedFakeCleaner{scope: ArtifactScopeSandbox, manifest: repo}
+	vaultCleaner := &scopedFakeCleaner{scope: ArtifactScopeVault, delegate: NewVaultArtifactCleaner(repo)}
+	sandboxCleaner.fail(errors.New("sandbox unavailable"))
+	vaultCleaner.fail(errors.New("vault unavailable"))
+	server.RegisterArtifactCleaners(sandboxCleaner, vaultCleaner)
+
+	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID})
+	if err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if sandboxCleaner.attempts() != 1 || vaultCleaner.attempts() != 1 {
+		t.Fatalf("attempts = (sandbox %d, vault %d), want both attempted",
+			sandboxCleaner.attempts(), vaultCleaner.attempts())
+	}
+	if response.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_FAILED_EXTERNAL ||
+		!response.GetDeletion().GetRetryable() {
+		t.Fatalf("receipt = %+v, want retryable failed_external", response.GetDeletion())
+	}
+	if code := response.GetDeletion().GetErrorCode(); code != "artifact_cleanup_failed" {
+		t.Fatalf("error code = %q, want the one general artifact class", code)
+	}
+
+	sandboxRows, err := repo.SessionSandboxArtifacts(ctx, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vaultRows, err := repo.SessionVaultArtifacts(ctx, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sandboxRows) != 1 || sandboxRows[0].State != repository.SandboxArtifactStateDeleteFailed {
+		t.Fatalf("sandbox rows = %+v, want the failing scope retained", sandboxRows)
+	}
+	if len(vaultRows) != 1 || vaultRows[0].State != repository.VaultArtifactStateDeleteFailed {
+		t.Fatalf("vault rows = %+v, want the failing scope retained", vaultRows)
+	}
+	if got := auditRowCount(t, database, "session.artifact.cleanup.failed", "artifact_both_fail"); got != 1 {
+		t.Fatalf("sandbox failure audits = %d, want 1", got)
+	}
+	if got := auditRowCount(t, database, "session.vault_artifact.cleanup.failed", vaultRows[0].ArtifactID); got != 1 {
+		t.Fatalf("vault failure audits = %d, want 1", got)
+	}
+	if _, err := os.Stat(filepath.Join(vault.Root(), filepath.FromSlash(candidate.InboxPath))); err != nil {
+		t.Fatalf("a failed vault cleanup removed the file anyway: %v", err)
+	}
+
+	sandboxCleaner.fail(nil)
+	vaultCleaner.fail(nil)
+	retry, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID})
+	if err != nil {
+		t.Fatalf("retry DeleteSession: %v", err)
+	}
+	if retry.GetDeletion().GetState() != turingv1.SessionDeletionState_SESSION_DELETION_STATE_COMPLETED {
+		t.Fatalf("retry receipt = %+v, want completed", retry.GetDeletion())
 	}
 }

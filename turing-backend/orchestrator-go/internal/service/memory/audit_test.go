@@ -49,7 +49,13 @@ func deleteSession(t *testing.T, repo *repository.Repository, ctx context.Contex
 	if _, err := repo.BeginSessionDeletion(ctx, sessionID); err != nil {
 		t.Fatalf("BeginSessionDeletion: %v", err)
 	}
-	receipt, err := repo.AdvanceSessionDeletion(ctx, sessionID)
+	// A proposal left a file in the vault inbox, so the withdrawal holds at the
+	// artifact gate until the vault cleaner has drained it — the same order the
+	// session service dispatches in.
+	if _, err := repo.PurgeSessionVaultArtifacts(ctx, sessionID); err != nil {
+		t.Fatalf("PurgeSessionVaultArtifacts: %v", err)
+	}
+	receipt, err := repo.AdvanceSessionDeletion(ctx, sessionID, nil)
 	if err != nil {
 		t.Fatalf("AdvanceSessionDeletion: %v", err)
 	}

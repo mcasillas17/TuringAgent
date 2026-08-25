@@ -194,9 +194,33 @@ func TestPurgeSessionVaultArtifactsKeepsRowsWhenTheVaultRefuses(t *testing.T) {
 	}
 }
 
-func TestPurgeSessionVaultArtifactsRefusesWithoutAVault(t *testing.T) {
+// A vault the install does not have is not a failed cleanup. It is a scope that
+// owns nothing, and refusing there would hold every withdrawal on a vault-less
+// install open forever on a manifest with no rows in it.
+//
+// A row that names a file is the opposite: the note it points at is somewhere
+// the cleanup cannot reach, and reporting that as a drained manifest would be a
+// withdrawal Turing claimed and did not make.
+func TestPurgeSessionVaultArtifactsRefusesWithoutAVaultOnlyWhenRowsNameFiles(t *testing.T) {
 	repo := New(openTestDB(t))
-	if _, err := repo.PurgeSessionVaultArtifacts(ctx(), "sess_x"); !errors.Is(err, ErrMemoryVaultUnavailable) {
+	session, err := repo.CreateSession(ctx(), "No vault here")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	removed, err := repo.PurgeSessionVaultArtifacts(ctx(), session.SessionID)
+	if err != nil || removed != 0 {
+		t.Fatalf("PurgeSessionVaultArtifacts over an empty manifest = (%d, %v), want (0, nil)", removed, err)
+	}
+
+	if _, err := repo.db.ExecContext(ctx(), `
+		INSERT INTO vault_artifacts (id, session_id, vault_path, physical_path, state, created_at, finalized_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, "vaultart_detached", session.SessionID, "inbox/note.md", "inbox/note.md",
+		VaultArtifactStateReady, now(), now()); err != nil {
+		t.Fatalf("seed a vault row: %v", err)
+	}
+	if _, err := repo.PurgeSessionVaultArtifacts(ctx(), session.SessionID); !errors.Is(err, ErrMemoryVaultUnavailable) {
 		t.Fatalf("error = %v, want ErrMemoryVaultUnavailable", err)
 	}
 }

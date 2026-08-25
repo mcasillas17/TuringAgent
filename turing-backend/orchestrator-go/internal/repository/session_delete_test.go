@@ -442,7 +442,7 @@ func TestAdvanceSessionDeletionWaitsForExecutionExitThenWithdrawsRows(t *testing
 	if _, err := repo.BeginSessionDeletion(ctx, enqueued.SessionID); err != nil {
 		t.Fatalf("BeginSessionDeletion: %v", err)
 	}
-	receipt, err := repo.AdvanceSessionDeletion(ctx, enqueued.SessionID)
+	receipt, err := repo.AdvanceSessionDeletion(ctx, enqueued.SessionID, nil)
 	if err != nil {
 		t.Fatalf("AdvanceSessionDeletion while active: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestAdvanceSessionDeletionWaitsForExecutionExitThenWithdrawsRows(t *testing
 		t.Fatalf("AcknowledgeExecutionExit: %v", err)
 	}
 
-	receipt, err = repo.AdvanceSessionDeletion(ctx, enqueued.SessionID)
+	receipt, err = repo.AdvanceSessionDeletion(ctx, enqueued.SessionID, nil)
 	if err != nil {
 		t.Fatalf("AdvanceSessionDeletion after acknowledgement: %v", err)
 	}
@@ -494,7 +494,7 @@ func TestAdvanceSessionDeletionRetainsRetryableFailureForOwnedArtifact(t *testin
 		t.Fatal(err)
 	}
 
-	receipt, err := repo.AdvanceSessionDeletion(ctx, enqueued.SessionID)
+	receipt, err := repo.AdvanceSessionDeletion(ctx, enqueued.SessionID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +521,7 @@ func TestAdvanceSessionDeletionFailsClosedAfterExecutionDrainLeaseExpires(t *tes
 		t.Fatal(err)
 	}
 
-	receipt, err := repo.AdvanceSessionDeletion(ctx, enqueued.SessionID)
+	receipt, err := repo.AdvanceSessionDeletion(ctx, enqueued.SessionID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +550,7 @@ func TestPendingSessionDeletionIDsExcludeCompletedReceipts(t *testing.T) {
 	if len(ids) != 1 || ids[0] != session.SessionID {
 		t.Fatalf("pending deletion ids = %v, want [%s]", ids, session.SessionID)
 	}
-	if _, err := repo.AdvanceSessionDeletion(ctx, session.SessionID); err != nil {
+	if _, err := repo.AdvanceSessionDeletion(ctx, session.SessionID, nil); err != nil {
 		t.Fatal(err)
 	}
 	ids, err = repo.PendingSessionDeletionIDs(ctx)

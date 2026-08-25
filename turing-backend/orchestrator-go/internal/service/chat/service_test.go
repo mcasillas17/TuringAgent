@@ -1380,7 +1380,7 @@ func TestSendMessageStreamClosesCleanlyWhenSessionIsDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	receipt, err = repo.AdvanceSessionDeletion(context.Background(), session.SessionID)
+	receipt, err = repo.AdvanceSessionDeletion(context.Background(), session.SessionID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

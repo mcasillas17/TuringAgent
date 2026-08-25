@@ -23,13 +23,14 @@ import (
 
 type Server struct {
 	turingv1.UnimplementedSessionServiceServer
-	repo            *repository.Repository
-	search          messageSearcher
-	cfg             config.Config
-	capabilities    capabilitySource
-	cursors         sessionCursorCodec
-	bus             *eventsvc.Bus
-	artifactCleaner sessionArtifactCleaner
+	repo             *repository.Repository
+	search           messageSearcher
+	cfg              config.Config
+	capabilities     capabilitySource
+	cursors          sessionCursorCodec
+	bus              *eventsvc.Bus
+	artifactCleaners []SessionArtifactCleaner
+	memoryCompletion repository.SessionDeletionCompletion
 }
 
 // messageSearcher is the only part of the repository the search handler needs.
@@ -69,11 +70,13 @@ type sessionDeletionCanceler interface {
 	CancelSessionRuns(context.Context, string, string)
 }
 
-type sessionArtifactCleaner interface {
-	CleanupSessionArtifacts(context.Context, string, int64) error
-}
-
 const artifactCleanupTimeout = 10 * time.Second
+
+// memoryCompletionTimeout bounds the on-disk work a withdrawal owes after its
+// rows are gone. It is larger than one cleaner call because the pass walks the
+// whole vault, and it is bounded at all because an unbounded one would hold a
+// withdrawal open on a filesystem that has stopped answering.
+const memoryCompletionTimeout = 30 * time.Second
 
 func New(repo *repository.Repository, cfg config.Config, capabilities capabilitySource, buses ...*eventsvc.Bus) *Server {
 	var bus *eventsvc.Bus
@@ -90,8 +93,26 @@ func New(repo *repository.Repository, cfg config.Config, capabilities capability
 	}
 }
 
-func (s *Server) SetArtifactCleaner(cleaner sessionArtifactCleaner) {
-	s.artifactCleaner = cleaner
+// RegisterArtifactCleaners records the cleaners a withdrawal dispatches, one
+// per manifest scope. It appends rather than replaces, so a second call adds a
+// scope instead of silently dropping the one registered first.
+//
+// The list is a list, not an order of precedence: every pass attempts all of
+// them, so registration order cannot change what a withdrawal leaves behind.
+func (s *Server) RegisterArtifactCleaners(cleaners ...SessionArtifactCleaner) {
+	for _, cleaner := range cleaners {
+		if cleaner == nil {
+			continue
+		}
+		s.artifactCleaners = append(s.artifactCleaners, cleaner)
+	}
+}
+
+// SetMemoryReconcileCompletion attaches the file-writing pass a withdrawal owes
+// once its rows are gone: a belief the user kept must stop citing a
+// conversation Turing has just told them no longer exists.
+func (s *Server) SetMemoryReconcileCompletion(completion repository.SessionDeletionCompletion) {
+	s.memoryCompletion = completion
 }
 
 // ResumePendingDeletions retries durable non-completed receipts. It is safe to
@@ -230,7 +251,7 @@ func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionR
 	if canceler, ok := s.capabilities.(sessionDeletionCanceler); ok {
 		canceler.CancelSessionRuns(ctx, req.SessionId, "session_deleting")
 	}
-	receipt, err = s.repo.AdvanceSessionDeletion(ctx, req.SessionId)
+	receipt, err = s.repo.AdvanceSessionDeletion(ctx, req.SessionId, s.deletionCompletion())
 	if err != nil {
 		switch {
 		case errors.Is(err, repository.ErrSessionNotFound):
@@ -239,34 +260,22 @@ func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionR
 			return nil, status.Error(codes.Internal, "delete session failed")
 		}
 	}
+	// Exactly this literal, and nothing else, dispatches the cleaners. Every
+	// other failure class describes a withdrawal that is stuck for a reason
+	// deleting the user's files would not fix — answering one of those by
+	// reaching into the sandbox or the vault is a deletion nobody asked for.
 	if receipt.State == "failed_external" &&
-		receipt.ErrorCode == "artifact_cleanup_pending" &&
-		s.artifactCleaner != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), artifactCleanupTimeout)
-		cleanupErr := s.artifactCleaner.CleanupSessionArtifacts(
-			cleanupCtx,
-			receipt.SessionID,
-			receipt.LifecycleVersion,
-		)
-		cancel()
-		if cleanupErr != nil {
-			if err := s.repo.MarkSessionDeletionExternalFailure(
-				context.WithoutCancel(ctx),
-				receipt.SessionID,
-				"artifact_cleanup_failed",
-			); err != nil {
-				return nil, status.Error(codes.Internal, "record session artifact cleanup failure")
-			}
-			current, err := s.repo.SessionDeletionReceipt(ctx, req.SessionId)
+		receipt.ErrorCode == repository.SessionDeletionArtifactCleanupPending &&
+		len(s.artifactCleaners) > 0 {
+		failedScopes := s.runArtifactCleaners(ctx, receipt)
+		if len(failedScopes) > 0 {
+			current, err := s.recordArtifactCleanupFailure(ctx, receipt.SessionID, failedScopes)
 			if err != nil {
-				return nil, status.Error(codes.Internal, "read session deletion receipt")
+				return nil, err
 			}
 			receipt = current
 		} else {
-			if err := s.removeOwnedArtifactManifestRows(ctx, receipt.SessionID); err != nil {
-				return nil, status.Error(codes.Internal, "delete session artifacts failed")
-			}
-			receipt, err = s.repo.AdvanceSessionDeletion(ctx, req.SessionId)
+			receipt, err = s.repo.AdvanceSessionDeletion(ctx, req.SessionId, s.deletionCompletion())
 			if err != nil {
 				return nil, status.Error(codes.Internal, "delete session failed")
 			}
@@ -281,6 +290,103 @@ func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionR
 	}, nil
 }
 
+// deletionCompletion hands the withdrawal the on-disk work it owes after the
+// cascade. It is nil when nothing is wired, which is what every caller that has
+// no vault gets.
+func (s *Server) deletionCompletion() repository.SessionDeletionCompletion {
+	completion := s.memoryCompletion
+	if completion == nil {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		completionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), memoryCompletionTimeout)
+		defer cancel()
+		return completion(completionCtx)
+	}
+}
+
+// runArtifactCleaners attempts every registered cleaner and reports the scopes
+// that could not finish.
+//
+// It never short-circuits. Each scope is a separate store with a separate
+// manifest, and stopping at the first failure would leave the other scope's
+// files in place with nothing recording why — the sandbox holding the user's
+// scratch output because the vault was unreachable, or the reverse. A cleaner
+// that finishes also forgets its own rows here, even when a sibling failed, so
+// the manifest that survives names exactly the files that survived.
+func (s *Server) runArtifactCleaners(ctx context.Context, receipt repository.SessionDeletionReceipt) []string {
+	failures := make([]string, 0, len(s.artifactCleaners))
+	completed := make([]SessionArtifactCleaner, 0, len(s.artifactCleaners))
+	for _, cleaner := range s.artifactCleaners {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), artifactCleanupTimeout)
+		err := cleaner.CleanupSessionArtifacts(cleanupCtx, receipt.SessionID, receipt.LifecycleVersion)
+		cancel()
+		if err != nil {
+			failures = append(failures, cleaner.ArtifactScope())
+			continue
+		}
+		completed = append(completed, cleaner)
+	}
+	for _, cleaner := range completed {
+		if err := cleaner.ForgetCleanedArtifacts(context.WithoutCancel(ctx), receipt.SessionID); err != nil {
+			// The files are gone and the rows are not. That is the same
+			// outstanding-work state a failed removal leaves, and it is
+			// reported as this scope's failure so the next pass reruns it —
+			// removal is idempotent, so rerunning it over files that are
+			// already gone drains the rows rather than repeating the work.
+			failures = append(failures, cleaner.ArtifactScope())
+		}
+	}
+	return failures
+}
+
+// recordArtifactCleanupFailure marks each failing scope's own manifest and
+// leaves every other scope's rows and audit trail alone.
+//
+// The receipt carries one error class for the whole withdrawal, derived from
+// the set of scopes that failed rather than from the order they were tried in,
+// so two installs that registered their cleaners differently produce the same
+// receipt. The per-scope attribution lives where it can be acted on: in the
+// rows that were marked and the audit row each one produced.
+func (s *Server) recordArtifactCleanupFailure(
+	ctx context.Context,
+	sessionID string,
+	failedScopes []string,
+) (repository.SessionDeletionReceipt, error) {
+	errorCode := artifactCleanupErrorCode(failedScopes)
+	failed := make(map[string]bool, len(failedScopes))
+	for _, scope := range failedScopes {
+		failed[scope] = true
+	}
+	failureCtx := context.WithoutCancel(ctx)
+	if failed[ArtifactScopeSandbox] {
+		if err := s.repo.MarkSessionDeletionSandboxFailure(failureCtx, sessionID, errorCode); err != nil {
+			return repository.SessionDeletionReceipt{}, status.Error(codes.Internal, "record session artifact cleanup failure")
+		}
+	}
+	if failed[ArtifactScopeVault] {
+		if err := s.repo.MarkSessionDeletionVaultFailure(failureCtx, sessionID, errorCode); err != nil {
+			return repository.SessionDeletionReceipt{}, status.Error(codes.Internal, "record session artifact cleanup failure")
+		}
+	}
+	current, err := s.repo.SessionDeletionReceipt(ctx, sessionID)
+	if err != nil {
+		return repository.SessionDeletionReceipt{}, status.Error(codes.Internal, "read session deletion receipt")
+	}
+	return current, nil
+}
+
+// artifactCleanupErrorCode names the one opaque class the receipt reports for a
+// set of failed scopes. A vault-only failure says so, because it is the one a
+// user can act on by closing their editor; anything wider falls back to the
+// general artifact class rather than picking a winner between scopes.
+func artifactCleanupErrorCode(failedScopes []string) string {
+	if len(failedScopes) == 1 && failedScopes[0] == ArtifactScopeVault {
+		return repository.SessionDeletionVaultCleanupFailed
+	}
+	return repository.SessionDeletionSandboxCleanupFailed
+}
+
 func (s *Server) ListSessionDeletionReceipts(ctx context.Context, _ *turingv1.ListSessionDeletionReceiptsRequest) (*turingv1.ListSessionDeletionReceiptsResponse, error) {
 	receipts, err := s.repo.PendingSessionDeletionReceipts(ctx)
 	if err != nil {
@@ -291,22 +397,6 @@ func (s *Server) ListSessionDeletionReceipts(ctx context.Context, _ *turingv1.Li
 		out = append(out, mapSessionDeletionReceipt(receipt))
 	}
 	return &turingv1.ListSessionDeletionReceiptsResponse{Deletions: out}, nil
-}
-
-func (s *Server) removeOwnedArtifactManifestRows(ctx context.Context, sessionID string) error {
-	artifacts, err := s.repo.SessionSandboxArtifacts(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-	for _, artifact := range artifacts {
-		if artifact.Policy != repository.SandboxArtifactPolicyDeleteOnSessionDelete {
-			continue
-		}
-		if err := s.repo.DeleteSandboxArtifact(ctx, artifact.ArtifactID); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *Server) publishSessionDeleted(receipt repository.SessionDeletionReceipt) {
