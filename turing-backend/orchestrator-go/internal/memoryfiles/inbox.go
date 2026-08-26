@@ -1037,14 +1037,10 @@ func (v *Vault) refuseDetachedRejection(ctx context.Context, detached *detachedE
 			Detail:  boundRefusalDetail(reason + ", so it was left alone"),
 		}
 	}
-	unplaced := reason + " and could not be put back under its own name"
-	if placement.restored {
-		unplaced = reason + ", so it was left alone, but a second link to it could not be dropped"
-	}
 	return &StaleContentError{
 		RelPath: detached.clean,
 		Cause:   placement.cause,
-		Detail:  boundRefusalDetail(placement.describe(unplaced)),
+		Detail:  boundRefusalDetail(placement.explain(reason)),
 	}
 }
 

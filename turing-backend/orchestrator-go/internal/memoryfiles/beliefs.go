@@ -375,11 +375,7 @@ func promotedSourceKept(clean string, placement detachedPlacement, reason string
 		}
 		return fmt.Errorf("%q %s, so it was left alone", clean, reason)
 	}
-	unplaced := reason + " and could not be put back under its own name"
-	if placement.restored {
-		unplaced = reason + ", so it was left alone, but a second link to it could not be dropped"
-	}
-	kept := fmt.Errorf("%q: %s", clean, boundRefusalDetail(placement.describe(unplaced)))
+	kept := fmt.Errorf("%q: %s", clean, boundRefusalDetail(placement.explain(reason)))
 	if cause != nil {
 		return fmt.Errorf("%w (%v)", cause, kept)
 	}
@@ -427,13 +423,9 @@ func installedCopyKept(clean string, placement detachedPlacement, reason string)
 	if placement.restored && placement.recoveryRelPath == "" {
 		return fmt.Errorf("%q is no longer the copy this promotion installed: %s, so it was left alone", clean, reason)
 	}
-	unplaced := reason + " and could not be put back under its own name"
-	if placement.restored {
-		unplaced = reason + ", so it was left alone, but a second link to it could not be dropped"
-	}
 	return fmt.Errorf(
 		"%q is no longer the copy this promotion installed: %s",
-		clean, boundRefusalDetail(placement.describe(unplaced)),
+		clean, boundRefusalDetail(placement.explain(reason)),
 	)
 }
 

@@ -91,16 +91,21 @@ func (d *detachedEntry) open() (*os.File, unix.Stat_t, error) {
 	return openConfinedEntry(d.parent, d.staging, d.stagedRelPath())
 }
 
-// objectionToExpectedBytes answers whether the detached entry is the one the
-// caller wrote, and says in a sentence why not when it is not. An empty answer
-// is the only thing that authorises the unlink.
+// objectionToOwnWrite answers whether the detached entry is still the write the
+// caller made, and says in a sentence why not when it is not. An empty answer is
+// the only thing that authorises the unlink.
+//
+// It re-opens the detached entry rather than holding a descriptor from before,
+// which is what distinguishes it from objectionToDetachedEntry next door: a
+// rejection is bound to a candidate it opened before touching anything, and a
+// writer undoing its own work is bound to bytes it wrote and nothing else.
 //
 // Both halves are load-bearing and neither substitutes for the other. The inode
 // says the name was not swapped for a different file; the bytes say nobody
 // rewrote it in place, which is exactly what an editor with the note already
 // open does. A removal authorised by identity alone deletes the user's newer
 // words under the name of the older ones.
-func (d *detachedEntry) objectionToExpectedBytes(ctx context.Context, expected unix.Stat_t, expectedContent string) string {
+func (d *detachedEntry) objectionToOwnWrite(ctx context.Context, expected unix.Stat_t, expectedContent string) string {
 	opened, openedStat, err := d.open()
 	if err != nil {
 		return fmt.Sprintf("it could not be read again before removal (%v)", err)
@@ -253,9 +258,18 @@ func (d *detachedEntry) preserve(recovery detachRecovery, restored bool, cause e
 	return placement
 }
 
-// describe says where the bytes are, in the caller's own words plus this one's
+// explain says where the bytes are, in the caller's own words plus this one's
 // facts. Every branch ends in a place a person can go and look.
-func (p detachedPlacement) describe(reason string) string {
+//
+// The caller supplies only why it declined to delete; how that reads once the
+// file could not go back is this type's business, because it is the only thing
+// that knows whether the name was taken or the tidying afterwards was what
+// failed.
+func (p detachedPlacement) explain(why string) string {
+	reason := why + " and could not be put back under its own name"
+	if p.restored {
+		reason = why + ", so it was left alone, but a second link to it could not be dropped"
+	}
 	switch {
 	case p.recoveryHidden && p.residueErr != nil:
 		return fmt.Sprintf(
@@ -373,14 +387,19 @@ func (v *Vault) removeVerifiedEntry(
 	if detached == nil {
 		return removalMissing, detachedPlacement{}, "", nil
 	}
+	objection := detached.objectionToOwnWrite(ctx, expected, expectedContent)
 	// The file is off its name and nothing has decided yet whether it may go. A
-	// request that has ended here is not a decision, so there is nothing left to
-	// authorise an unlink: the bytes go back first.
-	if err := ctx.Err(); err != nil {
-		reason := "the request ended before the removal could be verified"
-		return removalRefused, detached.putBack(), reason, err
+	// request that has ended by now is not a decision, however the verification
+	// came out: a read that stopped because the caller had gone proves nothing,
+	// and one that finished was answered for somebody who is no longer there.
+	// Either way the bytes go back, and the cancellation is what this reports.
+	//
+	// This is the single place the question is asked, so the branch is the one
+	// a test reaches by cancelling the request at all.
+	if ended := ctx.Err(); ended != nil {
+		return removalRefused, detached.putBack(), "the request ended before the removal could be verified", ended
 	}
-	if objection := detached.objectionToExpectedBytes(ctx, expected, expectedContent); objection != "" {
+	if objection != "" {
 		return removalRefused, detached.putBack(), objection, nil
 	}
 	if err := detached.discard(); err != nil {

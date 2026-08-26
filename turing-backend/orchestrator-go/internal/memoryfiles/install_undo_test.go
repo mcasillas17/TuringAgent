@@ -54,10 +54,10 @@ func TestInstallRollbackRefusesAnEntryRewrittenUnderTheSameInode(t *testing.T) {
 		t.Fatalf("content = %q, want the rewritten note %q", onDisk, rewritten)
 	}
 	if !strings.Contains(err.Error(), "inbox/note.md") {
-		t.Fatalf("the failure does not name the entry it had to leave behind: %v", err)
+		t.Fatalf("the failure does not name the entry it could not undo: %v", err)
 	}
-	if !strings.Contains(err.Error(), "left in place") {
-		t.Fatalf("the failure does not say the entry is still there: %v", err)
+	if !strings.Contains(err.Error(), "did not finish") {
+		t.Fatalf("the failure does not say the undo could not be carried out: %v", err)
 	}
 	if strings.Contains(err.Error(), rewritten) {
 		t.Fatalf("the failure leaked what was in the file: %v", err)
@@ -98,8 +98,8 @@ func TestInstallRollbackOnACancelledRequestKeepsAnEntryRewrittenInPlace(t *testi
 	if string(onDisk) != rewritten {
 		t.Fatalf("content = %q, want the rewritten note %q", onDisk, rewritten)
 	}
-	if !strings.Contains(err.Error(), "left in place") {
-		t.Fatalf("the failure does not say the entry is still there: %v", err)
+	if !strings.Contains(err.Error(), "did not finish") {
+		t.Fatalf("the failure does not say the undo could not be carried out: %v", err)
 	}
 	if strings.Contains(err.Error(), rewritten) {
 		t.Fatalf("the failure leaked what was in the file: %v", err)

@@ -572,6 +572,79 @@ func TestPromotedSourceRemovalRescuesAContestedOriginalIntoAVisibleDraft(t *test
 	}
 }
 
+// The source half of the same-inode rule, through the whole promotion. The user
+// types into Obsidian while the move is in flight: same inode, same length, and
+// every word different. Only the bytes can answer that, and the original is
+// theirs to keep.
+func TestPromotedSourceRemovalRefusesAnOriginalRewrittenUnderTheSameInode(t *testing.T) {
+	var vault *Vault
+	var edited string
+	var rewritten string
+	vault = promotionVault(t, realSyncHooks(), func(phase detachPhase, clean string) {
+		if !inInbox(clean) || phase != detachPhaseBeforeDetach || edited == clean {
+			return
+		}
+		edited = clean
+		overwriteInPlace(t, filepath.Join(vault.Root(), filepath.FromSlash(clean)), rewritten)
+	}, nil)
+
+	candidate := seedBelief(t, vault)
+	// The user's own words, exactly as long as the ones they replaced, so what
+	// refuses here is the hash rather than the read bound above it.
+	rewritten = strings.Repeat("x", len(candidate.Content)-1) + "\n"
+	sourcePath := filepath.Join(vault.Root(), filepath.FromSlash(candidate.RelPath))
+	before := inodeOf(t, sourcePath)
+
+	if err := promoteCandidate(context.Background(), vault, candidate); !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("expected the promotion to be abandoned, got %v", err)
+	}
+	if after := inodeOf(t, sourcePath); after != before {
+		t.Fatalf("the edit changed the inode (%d -> %d), so this proves nothing about the bytes", before, after)
+	}
+	onDisk, readErr := os.ReadFile(sourcePath)
+	if readErr != nil {
+		t.Fatalf("the user's edited candidate was deleted: %v", readErr)
+	}
+	if string(onDisk) != rewritten {
+		t.Fatalf("the user's edit was disturbed: %q", onDisk)
+	}
+	if names := vaultDirEntries(t, vault, BeliefsDirName); len(names) != 0 {
+		t.Fatalf("a belief was promoted from bytes the user had already replaced: %v", names)
+	}
+	requireNoStagingResidueIn(t, vault, InboxDirName)
+}
+
+// An original that stops existing while the move is in flight is not a move this
+// can report as finished: there is nothing left to verify the removal against.
+// The promotion is abandoned whole, so the copy it had installed goes too and
+// the vault is left the way whoever deleted the original left it.
+func TestPromotedSourceRemovalAbandonsTheMoveWhenTheOriginalVanishes(t *testing.T) {
+	var vault *Vault
+	var removed string
+	vault = promotionVault(t, realSyncHooks(), func(phase detachPhase, clean string) {
+		if !inInbox(clean) || phase != detachPhaseBeforeDetach || removed == clean {
+			return
+		}
+		removed = clean
+		if err := os.Remove(filepath.Join(vault.Root(), filepath.FromSlash(clean))); err != nil {
+			t.Errorf("remove the original: %v", err)
+		}
+	}, nil)
+
+	candidate := seedBelief(t, vault)
+	if err := promoteCandidate(context.Background(), vault, candidate); !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("expected the promotion to be abandoned, got %v", err)
+	}
+	if names := vaultDirEntries(t, vault, BeliefsDirName); len(names) != 0 {
+		t.Fatalf("a belief was kept from a move that could never be verified: %v", names)
+	}
+	if names := vaultDirEntries(t, vault, InboxDirName); len(names) != 0 {
+		t.Fatalf("the inbox holds %v after the original was deleted from under the move", names)
+	}
+	requireNoStagingResidueIn(t, vault, InboxDirName)
+	requireNoStagingResidueIn(t, vault, BeliefsDirName)
+}
+
 // A request that ends while the original is off its name is not a verdict about
 // anything. The bytes go back under their own name before the cancellation is
 // what this reports, and the promoted copy is rolled back with it.

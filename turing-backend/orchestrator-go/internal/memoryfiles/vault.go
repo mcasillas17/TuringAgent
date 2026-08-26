@@ -714,7 +714,7 @@ func (v *Vault) installNotCommitted(
 	if undoErr := v.undoInstall(parent, leaf, clean, installed, content); undoErr != nil {
 		// Nothing of the file's contents goes into this: the caller logs it and
 		// may hand it on, and what the entry says is the user's business.
-		return fmt.Errorf("%w (the entry at %q was left in place: %v)", cause, clean, undoErr)
+		return fmt.Errorf("%w (undoing the entry this write installed at %q did not finish: %v)", cause, clean, undoErr)
 	}
 	return cause
 }
@@ -744,11 +744,7 @@ func (v *Vault) undoInstall(parent *os.File, leaf string, clean string, installe
 	if placement.restored && placement.recoveryRelPath == "" {
 		return errors.New(reason)
 	}
-	unplaced := reason + " and could not be put back under its own name"
-	if placement.restored {
-		unplaced = reason + ", so it was left alone, but a second link to it could not be dropped"
-	}
-	return errors.New(boundRefusalDetail(placement.describe(unplaced)))
+	return errors.New(boundRefusalDetail(placement.explain(reason)))
 }
 
 func writeAll(ctx context.Context, writer *os.File, content []byte) error {
