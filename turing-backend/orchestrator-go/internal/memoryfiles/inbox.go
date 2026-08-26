@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -484,13 +485,126 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
 		return confinementError(clean, "candidate is not a regular file")
 	}
-	if mode == RemoveDecidedCandidate {
-		if err := v.requireDecidedInboxEntry(ctx, parent, leaf, clean, request.ExpectedContentHash); err != nil {
+	if mode == RemoveRetiredCandidate {
+		// Turing's own tidying, and deliberately the plain unlink. The outcome
+		// it follows is already recorded elsewhere, there is no decision to
+		// bind it to, and leaving the file behind is the failure it exists to
+		// prevent. It is unreachable as a user's rejection, and it is still
+		// confined: every path above this refuses anything outside inbox/.
+		if err := unix.Unlinkat(int(parent.Fd()), leaf, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+			return fmt.Errorf("remove %q: %w", clean, err)
+		}
+		if err := v.syncDirectory(parent); err != nil {
+			return fmt.Errorf("sync vault directory after removing %q: %w", clean, err)
+		}
+		return ctx.Err()
+	}
+	return v.removeRejectedInboxEntry(ctx, parent, leaf, clean, stat, request.ExpectedContentHash)
+}
+
+// removeRejectedInboxEntry is the user's own rejection, and it deletes the file
+// they were looking at or it deletes nothing.
+//
+// An unlink names a name. Between the read that checked the candidate and the
+// unlink that removes it, the entry under that name can become a different
+// file: Obsidian, a sync client and Turing's own writer all replace a file by
+// writing a new one beside it and renaming over the top, so the window is the
+// ordinary way this vault gets written to, not an exotic race. Removing what is
+// there at unlink time means a rejection can delete a claim about the user that
+// nobody has ever read — the exact opposite of what the decision said.
+//
+// So the deletion is two steps rather than one. The candidate is opened first,
+// and that descriptor is the identity everything afterwards is checked against.
+// Then the entry is detached from its name in one atomic rename into a private
+// staging name inside the same confined directory — the same link-and-stage
+// discipline every create here uses, run backwards. What was detached is then
+// compared against the opened descriptor, and against the decision's bytes
+// where there are any, before anything is unlinked.
+//
+// If it is not the same file, nothing is deleted: the detached entry is put
+// back under its own name with link semantics that refuse to overwrite, and the
+// refusal tells the caller to look again. If the name has been taken in the
+// meantime the file stays under the staging name and the refusal says where it
+// is, because an unreferenced file somebody can still find is recoverable and a
+// deleted one is not.
+func (v *Vault) removeRejectedInboxEntry(
+	ctx context.Context,
+	parent *os.File,
+	leaf string,
+	clean string,
+	named unix.Stat_t,
+	expectedHash string,
+) error {
+	opened, openedStat, err := openConfinedEntry(parent, leaf, clean)
+	switch {
+	case err == nil:
+		defer func() { _ = opened.Close() }()
+	case errors.Is(err, unix.ENOENT), errors.Is(err, os.ErrNotExist):
+		// The user asked for this file not to be there, and it is not there.
+		return nil
+	case expectedHash == "" && (errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM)):
+		// A file the user cannot even open is exactly the file this mode
+		// exists for, and refusing here would leave them with a claim about
+		// themselves they can neither read, accept nor be rid of. The identity
+		// falls back to the entry that was just inspected under the same lock:
+		// weaker than a descriptor, and still enough for the one question the
+		// detach below asks — is what I am deleting what I looked at?
+		openedStat = named
+	default:
+		// Anything else — a symlink that appeared under the name, an entry
+		// that is no longer a regular file — is the barrier doing its job.
+		return err
+	}
+
+	if expectedHash != "" {
+		content, readErr := readEntryContent(ctx, opened, clean)
+		if readErr != nil {
+			return readErr
+		}
+		if err := requireDecidedBytes(clean, true, expectedHash, content); err != nil {
 			return err
 		}
 	}
-	if err := unix.Unlinkat(int(parent.Fd()), leaf, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-		return fmt.Errorf("remove %q: %w", clean, err)
+	v.detachBarrier(detachPhaseBeforeDetach, clean)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	staging, err := reserveStagingName(parent)
+	if err != nil {
+		return fmt.Errorf("stage the removal of %q: %w", clean, err)
+	}
+	if err := unix.Renameat(int(parent.Fd()), leaf, int(parent.Fd()), staging); err != nil {
+		_ = unix.Unlinkat(int(parent.Fd()), staging, 0)
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		return fmt.Errorf("detach %q before removing it: %w", clean, err)
+	}
+
+	detached := ""
+	var detachedStat unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), staging, &detachedStat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		detached = fmt.Sprintf("the detached entry could not be inspected (%v)", err)
+	} else if detachedStat.Dev != openedStat.Dev || detachedStat.Ino != openedStat.Ino {
+		detached = "another file had taken its name"
+	} else if expectedHash != "" && opened != nil {
+		// Same inode, and that is not the same thing as the same bytes: an
+		// editor saving in place keeps the inode, and those are the user's own
+		// newer words. They are held to the decision like everything else.
+		content, readErr := rereadEntryContent(ctx, opened, clean)
+		if readErr != nil {
+			detached = fmt.Sprintf("it could not be read again before removal (%v)", readErr)
+		} else if ContentHash(content) != expectedHash {
+			detached = "it was rewritten in place"
+		}
+	}
+	if detached != "" {
+		return v.restoreDetachedEntry(ctx, parent, leaf, clean, staging, detached)
+	}
+
+	if err := unix.Unlinkat(int(parent.Fd()), staging, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+		return fmt.Errorf("remove the detached %q: %w", clean, err)
 	}
 	if err := v.syncDirectory(parent); err != nil {
 		return fmt.Errorf("sync vault directory after removing %q: %w", clean, err)
@@ -498,24 +612,113 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 	return ctx.Err()
 }
 
-// requireDecidedInboxEntry reads the candidate through the parent descriptor
-// the unlink will use and holds it to the hash the decision named.
+// restoreDetachedEntry puts back a file this deletion detached and then found
+// it had no standing to remove, and reports the refusal either way.
 //
-// A file that has gone in the meantime is not a refusal, for the same reason a
-// missing target never is: the user asked for it not to be there.
-func (v *Vault) requireDecidedInboxEntry(
+// The link refuses to overwrite, which is the whole point: whatever now holds
+// the name is another writer's file and this one may not clobber it. When the
+// name is taken the detached file stays where it is and the message names it,
+// so a person can go and get it. Nothing here deletes anything.
+func (v *Vault) restoreDetachedEntry(
 	ctx context.Context,
 	parent *os.File,
 	leaf string,
 	clean string,
-	expectedHash string,
+	staging string,
+	reason string,
 ) error {
-	content, _, err := v.readConfinedEntry(ctx, parent, leaf, clean, MaxNoteBytes)
-	if err != nil {
-		if errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist) {
-			return nil
+	v.detachBarrier(detachPhaseBeforeRestore, clean)
+	linkErr := unix.Linkat(int(parent.Fd()), staging, int(parent.Fd()), leaf, 0)
+	if linkErr == nil {
+		if err := unix.Unlinkat(int(parent.Fd()), staging, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+			_ = v.syncDirectory(parent)
+			return &StaleContentError{
+				RelPath: clean,
+				Detail: fmt.Sprintf(
+					"%s, so it was left alone; a second copy of it remains at %s/%s",
+					reason, InboxDirName, staging,
+				),
+			}
 		}
-		return err
+		_ = v.syncDirectory(parent)
+		return &StaleContentError{RelPath: clean, Detail: reason + ", so it was left alone"}
 	}
-	return requireDecidedBytes(clean, true, expectedHash, content)
+	_ = v.syncDirectory(parent)
+	return &StaleContentError{
+		RelPath: clean,
+		Detail: fmt.Sprintf(
+			"%s and could not be put back (%v); it is not lost — it is at %s/%s",
+			reason, linkErr, InboxDirName, staging,
+		),
+	}
+}
+
+// openConfinedEntry opens one entry through a parent descriptor without
+// following any link, and answers with the identity of the inode that was
+// opened rather than of the name that opened it. That descriptor is what a
+// deletion checks itself against afterwards.
+func openConfinedEntry(parent *os.File, leaf string, clean string) (*os.File, unix.Stat_t, error) {
+	var opened unix.Stat_t
+	fd, err := unix.Openat(
+		int(parent.Fd()),
+		leaf,
+		unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+		0,
+	)
+	if err != nil {
+		return nil, opened, fmt.Errorf("open %q: %w", clean, err)
+	}
+	file := os.NewFile(uintptr(fd), clean)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, opened, fmt.Errorf("open %q: invalid descriptor", clean)
+	}
+	if err := unix.Fstat(fd, &opened); err != nil {
+		_ = file.Close()
+		return nil, opened, fmt.Errorf("inspect open %q: %w", clean, err)
+	}
+	if opened.Mode&unix.S_IFMT != unix.S_IFREG {
+		_ = file.Close()
+		return nil, opened, confinementError(clean, "candidate is not a regular file")
+	}
+	return file, opened, nil
+}
+
+// readEntryContent reads an already-open candidate under the same bound every
+// other reader here uses.
+func readEntryContent(ctx context.Context, file *os.File, clean string) (string, error) {
+	content, err := readBounded(ctx, file, MaxNoteBytes)
+	if err != nil {
+		return "", fmt.Errorf("read %q: %w", clean, err)
+	}
+	if len(content) > MaxNoteBytes {
+		return "", &LimitError{What: fmt.Sprintf("note %q", clean), Limit: MaxNoteBytes, Got: len(content)}
+	}
+	return string(content), nil
+}
+
+// rereadEntryContent reads the same descriptor again from the start. It is the
+// same inode by construction — a descriptor cannot be re-pointed — which is why
+// this can answer whether the bytes moved without asking the directory anything.
+func rereadEntryContent(ctx context.Context, file *os.File, clean string) (string, error) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", fmt.Errorf("re-read %q: %w", clean, err)
+	}
+	return readEntryContent(ctx, file, clean)
+}
+
+// reserveStagingName takes a random private name inside the candidate's own
+// directory, exclusively, so the detach below has somewhere to move the file
+// that nothing else can be holding. The name is created rather than merely
+// generated: O_EXCL is what makes "unused" a fact instead of a probability.
+func reserveStagingName(parent *os.File) (string, error) {
+	staging, name, err := createStagingFile(parent, 0o600)
+	if err != nil {
+		return "", err
+	}
+	if err := staging.Close(); err != nil {
+		_ = unix.Unlinkat(int(parent.Fd()), name, 0)
+		return "", err
+	}
+	return name, nil
 }

@@ -125,6 +125,31 @@ type Vault struct {
 	// constructor argument for the same reason. Production installs none. A
 	// test installs one to prove the walk never asks for an unbounded listing.
 	readDirNames readDirNamesHook
+	// detach stands inside a rejection's two-step deletion. Production installs
+	// none, and it is a constructor argument for the same reason the others
+	// are.
+	detach detachHook
+}
+
+// detachPhase names where inside a rejection's deletion the barrier is
+// standing. The two moments are the ones another writer can be at: just before
+// the candidate leaves its name, and just before a file that turned out not to
+// be the decided one is put back under it.
+type detachPhase int
+
+const (
+	detachPhaseBeforeDetach detachPhase = iota
+	detachPhaseBeforeRestore
+)
+
+// detachHook is the test-only seam at those moments. Production never has one,
+// so the deletion runs straight through.
+type detachHook func(phase detachPhase, clean string)
+
+func (v *Vault) detachBarrier(phase detachPhase, clean string) {
+	if v.detach != nil {
+		v.detach(phase, clean)
+	}
 }
 
 // readDirNamesHook stands between the walk and one batch of directory entries.
@@ -181,6 +206,23 @@ func openVaultWith(root string, hooks syncHooks, scanRead scanReadHook) (*Vault,
 // openVaultWithListing adds the directory-listing seam alongside it. Both are
 // nil in production, where the walk lists directories itself.
 func openVaultWithListing(root string, hooks syncHooks, scanRead scanReadHook, readDirNames readDirNamesHook) (*Vault, error) {
+	return newVault(root, hooks, scanRead, readDirNames, nil)
+}
+
+// openVaultWithDetachBarrier adds the seam inside a rejection's detach, which
+// only a test supplies. It is what lets a test put another writer between the
+// moment the candidate is read and the moment it leaves its name.
+func openVaultWithDetachBarrier(root string, hooks syncHooks, detach detachHook) (*Vault, error) {
+	return newVault(root, hooks, nil, nil, detach)
+}
+
+func newVault(
+	root string,
+	hooks syncHooks,
+	scanRead scanReadHook,
+	readDirNames readDirNamesHook,
+	detach detachHook,
+) (*Vault, error) {
 	if hooks.file == nil || hooks.directory == nil {
 		return nil, errors.New("vault sync hooks must both be set")
 	}
@@ -211,6 +253,7 @@ func openVaultWithListing(root string, hooks syncHooks, scanRead scanReadHook, r
 		hooks:        hooks,
 		scanRead:     scanRead,
 		readDirNames: readDirNames,
+		detach:       detach,
 	}, nil
 }
 
