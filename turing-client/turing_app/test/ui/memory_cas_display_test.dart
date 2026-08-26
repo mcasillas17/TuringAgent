@@ -113,6 +113,77 @@ void main() {
       );
     });
 
+    testWidgets('keeps the proposal an edited result was composed from', (
+      tester,
+    ) async {
+      final api = _Api()..state = _stateWithProfileEdit();
+      await _pump(tester, api);
+
+      await tester.enterText(
+        _resultEditorFinder(),
+        '# Profile\n\nMine, not composed.\n',
+      );
+      await tester.pumpAndSettle();
+
+      // The user opened the proposal in Obsidian and rewrote it — or a newer
+      // one replaced it. Either way the words in the editor were composed from
+      // the older claim, and the page keeps them; the token they are pinned to
+      // has to stay with them, because an apply that named the newer proposal
+      // would tell the server "I read this" about a claim nobody read.
+      api.state = _stateWithProfileEdit(
+        candidateContent: 'Bikes to work, and swims on Sundays.',
+        candidateHash: 'sha256:proposed-again',
+        profileContent: '# Profile\n\nMoved on.\n',
+        profileHash: 'sha256:profile-moved',
+      );
+      await _tap(tester, find.text('Reject'));
+
+      expect(
+        find.textContaining('proposal still matches sha256:proposed-again'),
+        findsNothing,
+        reason:
+            'the result was not composed from that proposal, and claiming it '
+            'was would have the server accept a decision about unread words',
+      );
+      expect(
+        find.textContaining('proposal still matches sha256:proposed'),
+        findsOneWidget,
+      );
+
+      await _tap(tester, find.text('Apply'));
+      expect(api.profileApplies, hasLength(1));
+      expect(
+        api.profileApplies.single.$4,
+        'sha256:proposed',
+        reason: 'both tokens are the pair this result was composed from',
+      );
+      expect(api.profileApplies.single.$3, 'sha256:profile');
+    });
+
+    testWidgets('moves with an untouched result when the proposal moves', (
+      tester,
+    ) async {
+      final api = _Api()..state = _stateWithProfileEdit();
+      await _pump(tester, api);
+
+      api.state = _stateWithProfileEdit(
+        candidateContent: 'Bikes to work, and swims on Sundays.',
+        candidateHash: 'sha256:proposed-again',
+      );
+      await _tap(tester, find.text('Reject'));
+
+      expect(
+        find.textContaining('proposal still matches sha256:proposed-again'),
+        findsOneWidget,
+        reason:
+            'nothing was typed, so the result is the newer proposal composed '
+            'afresh and is an acceptance of exactly that',
+      );
+
+      await _tap(tester, find.text('Apply'));
+      expect(api.profileApplies.single.$4, 'sha256:proposed-again');
+    });
+
     testWidgets('is the version the persona editor is holding, not the newest', (
       tester,
     ) async {
@@ -224,6 +295,8 @@ MemoryState _stateWithProfileEdit({
   String profileContent = '# Profile\n\nWrites Go and lives in Guadalajara.\n',
   String profileHash = 'sha256:profile',
   String personaHash = 'sha256:persona',
+  String candidateContent = 'Bikes to work every day.',
+  String candidateHash = 'sha256:proposed',
 }) {
   return MemoryState(
     settings: const MemorySettings(
@@ -249,8 +322,8 @@ MemoryState _stateWithProfileEdit({
         candidateId: 'cand-profile',
         kind: MemoryCandidateKind.profileEdit,
         inboxPath: 'inbox/01-bikes.md',
-        content: 'Bikes to work every day.',
-        contentHash: 'sha256:proposed',
+        content: candidateContent,
+        contentHash: candidateHash,
         state: MemoryCandidateState.pending,
         managed: true,
         unavailableReason: MemoryUnavailableReason.none,

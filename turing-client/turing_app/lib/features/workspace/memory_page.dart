@@ -45,20 +45,29 @@ String composeProfileResult(String profile, String proposal) {
 }
 
 /// One profile proposal's resulting document as this build resolved it: the
-/// editor holding the words, and the compare-and-set token its apply will name.
+/// editor holding the words, and the two compare-and-set tokens its apply will
+/// name.
 ///
-/// They are handed out as one value so a caller cannot read the token from a
+/// They are handed out as one value so a caller cannot read a token from a
 /// build where the editor had not been re-seeded yet. Displayed and sent are
-/// the same number by construction, not by call order.
+/// the same numbers by construction, not by call order.
 @immutable
 class _ProfileResultBinding {
   const _ProfileResultBinding({
     required this.controller,
     required this.profileHash,
+    required this.candidateHash,
   });
 
   final TextEditingController controller;
+
+  /// The profile version these words were composed over, and so the document an
+  /// apply of them is an edit of.
   final String profileHash;
+
+  /// The proposal these words were composed from, and so the claim an apply of
+  /// them is an acceptance of.
+  final String candidateHash;
 }
 
 class _MemoryPageState extends State<MemoryPage> {
@@ -88,6 +97,19 @@ class _MemoryPageState extends State<MemoryPage> {
   /// with the token they were actually composed against, the server refuses,
   /// and the user is told to look again.
   final Map<String, String> _profileResultProfileHashes = {};
+
+  /// The proposal each result was composed from, kept for the same reason and
+  /// with the same rule.
+  ///
+  /// A proposal is a file in the user's inbox, and they can rewrite it in
+  /// Obsidian between composing a result and applying it. The words in the
+  /// editor are then an acceptance of the claim as it read when they were
+  /// composed, and nothing else — sending them against the *newer* proposal
+  /// would tell the server "I read this and I accept it" about a claim about
+  /// the user that nobody has read. Sent with the proposal they were actually
+  /// composed from, the server's compare-and-set refuses, and the user is
+  /// shown the new claim before deciding on it.
+  final Map<String, String> _profileResultCandidateHashes = {};
 
   /// The hashes the editors were loaded at. Sent back as the compare-and-set
   /// token, so a save always answers "I am editing *this* version" rather than
@@ -148,23 +170,32 @@ class _MemoryPageState extends State<MemoryPage> {
     final controller = _profileResults.putIfAbsent(candidate.candidateId, () {
       _profileResultSeeds[candidate.candidateId] = seed;
       _profileResultProfileHashes[candidate.candidateId] = profileHash;
+      _profileResultCandidateHashes[candidate.candidateId] =
+          candidate.contentHash;
       return TextEditingController(text: seed);
     });
     if (controller.text == _profileResultSeeds[candidate.candidateId]) {
       // Untouched, so it follows the vault. Re-seeded means re-composed: these
-      // words describe the profile as it reads now, so they are an edit of it
-      // and carry its token.
+      // words are the profile as it reads now plus the proposal as it reads
+      // now, so they are an edit of the one and an acceptance of the other, and
+      // they carry both of those tokens.
       if (controller.text != seed) controller.text = seed;
       _profileResultSeeds[candidate.candidateId] = seed;
       _profileResultProfileHashes[candidate.candidateId] = profileHash;
+      _profileResultCandidateHashes[candidate.candidateId] =
+          candidate.contentHash;
     }
     return _ProfileResultBinding(
       controller: controller,
       // Never whichever read happened most recently: an edited result keeps the
-      // profile it was composed against, so the apply is refused honestly
-      // rather than silently rewriting a document nobody read.
+      // pair it was composed from, so the apply is refused honestly rather than
+      // silently rewriting a document nobody read or accepting a claim nobody
+      // read.
       profileHash:
           _profileResultProfileHashes[candidate.candidateId] ?? profileHash,
+      candidateHash:
+          _profileResultCandidateHashes[candidate.candidateId] ??
+          candidate.contentHash,
     );
   }
 
@@ -178,6 +209,7 @@ class _MemoryPageState extends State<MemoryPage> {
       _profileResults.remove(candidateId)?.dispose();
       _profileResultSeeds.remove(candidateId);
       _profileResultProfileHashes.remove(candidateId);
+      _profileResultCandidateHashes.remove(candidateId);
     }
   }
 
@@ -405,27 +437,30 @@ class _MemoryPageState extends State<MemoryPage> {
               ),
               (message) => _inboxError = message,
             ),
-            onApply: (candidate, result, profileHash) => _mutate(() async {
-              final applied = await widget.apiClient.applyMemoryProfile(
-                candidateId: candidate.candidateId,
-                // The whole resulting document the user reviewed, never the
-                // proposal: the server writes exactly these bytes over
-                // profile.md.
-                content: result,
-                // Compare-and-set against the profile document, not the
-                // proposal: the question an apply asks is whether profile.md
-                // still says what the user was shown beside it. The token
-                // travels from the card that displayed it, so the request and
-                // the sentence under the button cannot name different numbers.
-                expectedContentHash: profileHash,
-                // And the second one, against the proposal this result was
-                // composed from.
-                expectedCandidateHash: candidate.contentHash,
-              );
-              _inboxNotice = applied.cleanupPending
-                  ? l10n.memoryProfileAppliedCleanupPending
-                  : '';
-            }, (message) => _inboxError = message),
+            onApply: (candidate, result, profileHash, candidateHash) => _mutate(
+              () async {
+                final applied = await widget.apiClient.applyMemoryProfile(
+                  candidateId: candidate.candidateId,
+                  // The whole resulting document the user reviewed, never the
+                  // proposal: the server writes exactly these bytes over
+                  // profile.md.
+                  content: result,
+                  // Compare-and-set against the profile document, not the
+                  // proposal: the question an apply asks is whether profile.md
+                  // still says what the user was shown beside it. The token
+                  // travels from the card that displayed it, so the request and
+                  // the sentence under the button cannot name different numbers.
+                  expectedContentHash: profileHash,
+                  // And the second one, against the proposal this result was
+                  // composed from — which is not necessarily the one listed now.
+                  expectedCandidateHash: candidateHash,
+                );
+                _inboxNotice = applied.cleanupPending
+                    ? l10n.memoryProfileAppliedCleanupPending
+                    : '';
+              },
+              (message) => _inboxError = message,
+            ),
             profileResultFor: (candidate) => _profileResultFor(
               candidate,
               state.profile.content,
@@ -493,11 +528,12 @@ class _MemoryBody extends StatelessWidget {
 
   /// The apply carries the reviewed resulting document, which is the whole of
   /// what profile.md will say — not the proposal, which is a fragment of it —
-  /// and the token the card displayed beside it.
+  /// and the two tokens the card displayed beside it.
   final void Function(
     MemoryCandidate candidate,
     String result,
     String profileHash,
+    String candidateHash,
   )
   onApply;
 
@@ -967,6 +1003,7 @@ class _CandidateCard extends StatelessWidget {
     MemoryCandidate candidate,
     String result,
     String profileHash,
+    String candidateHash,
   )
   onApply;
 
@@ -1151,7 +1188,7 @@ class _CandidateCard extends StatelessWidget {
               style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
             Text(
-              l10n.memoryExpectedProposalHash(candidate.contentHash),
+              l10n.memoryExpectedProposalHash(result.candidateHash),
               style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
           ],
@@ -1190,10 +1227,12 @@ class _CandidateCard extends StatelessWidget {
                             : () => onApply(
                                 candidate,
                                 result.controller.text,
-                                // The token this card displayed, handed
+                                // The tokens this card displayed, handed
                                 // straight to the request: one build resolved
-                                // both, so they cannot be two numbers.
+                                // the words and both numbers together, so the
+                                // sentence and the send cannot disagree.
                                 result.profileHash,
+                                result.candidateHash,
                               ),
                         child: Text(l10n.memoryApplyAction),
                       ),
