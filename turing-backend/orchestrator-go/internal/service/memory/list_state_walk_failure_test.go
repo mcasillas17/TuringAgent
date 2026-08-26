@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -24,7 +25,7 @@ func overfillVault(t *testing.T, vault *memoryfiles.Vault) {
 			t.Fatalf("seed filler note %d: %v", index, err)
 		}
 	}
-	if _, err := vault.Scan(t.Context()); !errors.Is(err, memoryfiles.ErrVaultTooLarge) {
+	if _, err := vault.Scan(context.Background()); !errors.Is(err, memoryfiles.ErrVaultTooLarge) {
 		t.Fatalf("the fixture is not over the index bound: %v", err)
 	}
 }
@@ -64,7 +65,7 @@ func TestListMemoryStateStillListsProposalsWhenTheWalkRefuses(t *testing.T) {
 	}
 	if len(sources) != 1 || sources[0] != sessionID {
 		t.Fatalf("provenance sources = %v, want the conversation %q that proposed it", sources, sessionID)
-	}	// The whole-vault walk is a discovery bound; one confined read of one
+	} // The whole-vault walk is a discovery bound; one confined read of one
 	// proposal is not, so this proposal is still readable and the page says
 	// what the file says.
 	if listed.GetContent() != unreachableClaim {

@@ -356,7 +356,6 @@ func withdrawMemoryNotesLosingLastEvidenceTx(ctx context.Context, tx *sql.Tx, se
 	return nil
 }
 
-
 // still exist. A ref naming a deleted session is dropped here rather than
 // attempted: a foreign key failure would abort a heal that is trying to rescue
 // a note the user accepted.
