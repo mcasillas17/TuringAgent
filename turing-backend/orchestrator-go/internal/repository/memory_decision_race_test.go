@@ -44,15 +44,22 @@ func TestPromoteAndRejectRacingOverOneCandidateLeaveExactlyOneWinner(t *testing.
 		var waiting sync.WaitGroup
 		var promoteErr, rejectErr error
 		var note MemoryNote
+		// Both goroutines wait on one gate, so the two decisions really are in
+		// flight together. Launching them back to back would let the first
+		// finish before the second started, and a missing lock would pass.
+		start := make(chan struct{})
 		waiting.Add(2)
 		go func() {
 			defer waiting.Done()
+			<-start
 			note, promoteErr = repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID})
 		}()
 		go func() {
 			defer waiting.Done()
+			<-start
 			rejectErr = repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID})
 		}()
+		close(start)
 		waiting.Wait()
 
 		if promoteErr == nil && rejectErr == nil {
@@ -111,9 +118,11 @@ func TestApplyAndRejectRacingOverOneProfileEditLeaveExactlyOneWinner(t *testing.
 
 		var waiting sync.WaitGroup
 		var applyErr, rejectErr error
+		start := make(chan struct{})
 		waiting.Add(2)
 		go func() {
 			defer waiting.Done()
+			<-start
 			_, applyErr = repo.ApplyMemoryProfileCandidate(ctx(), ApplyMemoryProfileInput{
 				CandidateID:         candidate.CandidateID,
 				ExpectedContentHash: memoryfiles.ContentHash(original),
@@ -122,8 +131,10 @@ func TestApplyAndRejectRacingOverOneProfileEditLeaveExactlyOneWinner(t *testing.
 		}()
 		go func() {
 			defer waiting.Done()
+			<-start
 			rejectErr = repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID})
 		}()
+		close(start)
 		waiting.Wait()
 
 		if applyErr == nil && rejectErr == nil {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -23,15 +24,18 @@ type listRecorder struct {
 	mutex     sync.Mutex
 	requested []int
 	batches   int
+	returned  int
 }
 
 func (r *listRecorder) hook() readDirNamesHook {
 	return func(directory *os.File, count int) ([]string, error) {
+		names, err := directory.Readdirnames(count)
 		r.mutex.Lock()
 		r.requested = append(r.requested, count)
 		r.batches++
+		r.returned += len(names)
 		r.mutex.Unlock()
-		return directory.Readdirnames(count)
+		return names, err
 	}
 }
 
@@ -44,6 +48,38 @@ func (r *listRecorder) unbounded() bool {
 		}
 	}
 	return false
+}
+
+// entriesRead is how many names the walk actually pulled off the disk. It is
+// what separates "bounded batches" from "bounded batches, all of them": a
+// bound consulted only after the whole directory has been enumerated is the
+// unbounded walk wearing a different shape.
+func (r *listRecorder) entriesRead() int {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	return r.returned
+}
+
+// failAfter lists normally until it has handed back count entries, then fails
+// the way a directory that goes unreadable mid-listing does.
+type failingLister struct {
+	mutex     sync.Mutex
+	returned  int
+	failAfter int
+	failure   error
+}
+
+func (f *failingLister) hook() readDirNamesHook {
+	return func(directory *os.File, count int) ([]string, error) {
+		names, err := directory.Readdirnames(count)
+		f.mutex.Lock()
+		defer f.mutex.Unlock()
+		if f.returned >= f.failAfter {
+			return nil, f.failure
+		}
+		f.returned += len(names)
+		return names, err
+	}
 }
 
 func openWalkStubVault(t *testing.T, root string, recorder *listRecorder) *Vault {
@@ -131,7 +167,9 @@ func TestWalkVaultInBatchesStillReportsEveryNoteInOrder(t *testing.T) {
 // after the whole directory has been pulled into memory.
 func TestWalkVaultStopsAtTheBoundWithoutListingTheWholeVault(t *testing.T) {
 	root := newTestVaultRoot(t)
-	seedBeliefFiles(t, root, MaxVaultIndexedFiles+vaultListingBatchSize+5)
+	// Well past the bound, so "stopped early" and "read everything" are far
+	// enough apart that the assertion below cannot be satisfied by luck.
+	seedBeliefFiles(t, root, MaxVaultIndexedFiles+vaultListingBatchSize*3)
 	recorder := &listRecorder{}
 	vault := openWalkStubVault(t, root, recorder)
 
@@ -141,5 +179,52 @@ func TestWalkVaultStopsAtTheBoundWithoutListingTheWholeVault(t *testing.T) {
 	}
 	if recorder.unbounded() {
 		t.Fatalf("the over-large vault was listed unbounded: %v", recorder.requested)
+	}
+	// The refusal has to arrive while the listing is still in progress. A
+	// bound checked after the directory has been enumerated in full is the
+	// memory blow-up this walk exists to avoid, wearing batches as a disguise.
+	// The walk needs the batch that crosses the bound and nothing after it. The
+	// slack is one batch for that crossing plus one for the vault root's own
+	// short listing.
+	ceiling := MaxVaultIndexedFiles + vaultListingBatchSize*2
+	if read := recorder.entriesRead(); read > ceiling {
+		t.Fatalf(
+			"the walk read %d entries before refusing, past the %d it needed; the bound is checked after the listing, not during it",
+			read, ceiling,
+		)
+	}
+}
+
+// Half a listing names half the notes. The entries that did arrive are kept —
+// they were really there — and the area is marked incomplete, because nothing
+// may be concluded from what was not returned. Batching must not turn that into
+// a silently short but "complete" answer.
+func TestWalkVaultReportsABatchThatFailedPartWayThrough(t *testing.T) {
+	root := newTestVaultRoot(t)
+	seedBeliefFiles(t, root, vaultListingBatchSize*2)
+	lister := &failingLister{
+		failAfter: vaultListingBatchSize,
+		failure:   errors.New("the directory stopped answering"),
+	}
+	vault, err := openVaultWithListing(root, realSyncHooks(), nil, lister.hook())
+	if err != nil {
+		t.Fatalf("open vault: %v", err)
+	}
+
+	result, err := vault.Scan(context.Background())
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if result.Completeness.Beliefs.Complete {
+		t.Fatal("a listing that gave out half way was reported as a complete enumeration")
+	}
+	if !strings.Contains(result.Completeness.Beliefs.Reason, "stopped answering") {
+		t.Fatalf("incompleteness reason = %q, want the listing failure", result.Completeness.Beliefs.Reason)
+	}
+	if len(result.Notes) == 0 {
+		t.Fatal("the entries the listing did return were thrown away")
+	}
+	if len(result.Notes) >= vaultListingBatchSize*2 {
+		t.Fatalf("the walk reported %d notes from a listing that failed part way through", len(result.Notes))
 	}
 }

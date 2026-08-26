@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
@@ -172,5 +173,64 @@ func TestStartupHealsABeliefRowLostToACrashWithoutAnyMemoryCall(t *testing.T) {
 	}
 	if note.Path != memoryfiles.BeliefsDirName+"/dark-mode.md" {
 		t.Fatalf("healed note path = %q", note.Path)
+	}
+}
+
+// An install with no vault owes the startup pass nothing. Memory already
+// reports itself unavailable across the whole surface, and refusing to start
+// over a folder the user has not created would take the app down for a feature
+// they are not using.
+func TestStartupWithNoVaultStartsAnyway(t *testing.T) {
+	app, err := New(config.Config{
+		ClientAPIKey: "client",
+		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
+		ApprovalJWTSecret: "approval-secret",
+		DatabasePath:      filepath.Join(t.TempDir(), "turing.db"),
+		MemoryRoot:        filepath.Join(t.TempDir(), "not-created-yet"),
+		OllamaModel:       "llama3.2",
+		OpenAIModel:       "gpt-4o-mini",
+	})
+	if err != nil {
+		t.Fatalf("a missing vault folder stopped the app from starting: %v", err)
+	}
+	t.Cleanup(app.Stop)
+}
+
+// A vault that is there and cannot be reconciled is the other case, and it is
+// fatal. Starting on top of it would serve an index the pass had already
+// decided was wrong, and every later read would inherit that answer without
+// anything saying where it came from.
+func TestStartupFailsClosedOnAVaultItCannotReconcile(t *testing.T) {
+	databasePath, memoryRoot := newVaultBackedPaths(t)
+	beliefs := filepath.Join(memoryRoot, memoryfiles.BeliefsDirName)
+	for index := 0; index <= memoryfiles.MaxVaultIndexedFiles; index++ {
+		noteID, err := memoryfiles.NewNoteID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := "---\nid: \"" + noteID + "\"\nkind: \"belief\"\nmanaged: true\n---\n\nnote\n"
+		if err := os.WriteFile(
+			filepath.Join(beliefs, fmt.Sprintf("note-%05d.md", index)),
+			[]byte(body), 0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	app, err := New(config.Config{
+		ClientAPIKey: "client",
+		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
+		ApprovalJWTSecret: "approval-secret",
+		DatabasePath:      databasePath,
+		MemoryRoot:        memoryRoot,
+		OllamaModel:       "llama3.2",
+		OpenAIModel:       "gpt-4o-mini",
+	})
+	if err == nil {
+		app.Stop()
+		t.Fatal("the app started over a vault the startup pass could not reconcile")
+	}
+	if !strings.Contains(err.Error(), "reconcile memory vault") {
+		t.Fatalf("startup failure = %v, want it to name the reconcile it could not finish", err)
 	}
 }

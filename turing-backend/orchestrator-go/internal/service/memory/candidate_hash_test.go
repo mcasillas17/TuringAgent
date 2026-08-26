@@ -105,6 +105,65 @@ func TestListMemoryStateShowsTheKindTheFileNowDeclares(t *testing.T) {
 	}
 }
 
+// The whole-vault walk is one of two ways a proposal reaches a client. The
+// other is a single confined read, which GetMemoryCandidate and a filtered
+// listing use — and it has to answer with the same text and the same token, or
+// a client that fetched one proposal would be handed a hash the decision then
+// refuses.
+func TestGetMemoryCandidateShowsTheProposalAsTheFileNowReadsIt(t *testing.T) {
+	service, repo, vault, ctx := newMemoryService(t)
+	sessionID := newMemorySession(t, repo, ctx)
+	candidate := seedCandidateRow(t, repo, ctx, sessionID, repository.MemoryCandidateKindBelief, "Dark mode", "The user prefers dark mode.")
+	edited := editInboxFile(t, vault, candidate.InboxPath, "The user prefers dark mode.", "The user prefers light mode.")
+
+	fetched, err := service.GetMemoryCandidate(ctx, &turingv1.GetMemoryCandidateRequest{
+		CandidateId: candidate.CandidateID,
+	})
+	if err != nil {
+		t.Fatalf("GetMemoryCandidate: %v", err)
+	}
+	if !strings.Contains(fetched.GetContent(), "light mode") {
+		t.Fatalf("fetched content = %q, want the file's own words", fetched.GetContent())
+	}
+	if fetched.GetContentHash() != memoryfiles.ContentHash(edited) {
+		t.Fatalf("fetched hash = %q, want a hash of the file as it stands", fetched.GetContentHash())
+	}
+	if fetched.GetCandidateId() != candidate.CandidateID || len(fetched.GetProvenance()) == 0 {
+		t.Fatalf("the row's identity or provenance was lost to the overlay: %+v", fetched)
+	}
+}
+
+// A filtered listing has no walk behind it either, and the kind it filters on
+// has to be the kind the file declares — otherwise a proposal rewritten in the
+// vault is filed under the label Turing gave it rather than the one it now has.
+func TestFilteredListingFiltersOnTheKindTheFileNowDeclares(t *testing.T) {
+	service, repo, vault, ctx := newMemoryService(t)
+	sessionID := newMemorySession(t, repo, ctx)
+	candidate := seedCandidateRow(t, repo, ctx, sessionID, repository.MemoryCandidateKindBelief, "Dark mode", "The user prefers dark mode.")
+	editInboxFile(t, vault, candidate.InboxPath, `kind: "belief"`, `kind: "profile_edit"`)
+
+	beliefs, err := service.ListMemoryCandidates(ctx, &turingv1.ListMemoryCandidatesRequest{
+		State: turingv1.MemoryCandidateState_MEMORY_CANDIDATE_STATE_PENDING,
+		Kind:  turingv1.MemoryCandidateKind_MEMORY_CANDIDATE_KIND_BELIEF,
+	})
+	if err != nil {
+		t.Fatalf("ListMemoryCandidates: %v", err)
+	}
+	if len(beliefs.GetCandidates()) != 0 {
+		t.Fatalf("a proposal the file now calls a profile edit was listed as a belief: %+v", beliefs.GetCandidates())
+	}
+	edits, err := service.ListMemoryCandidates(ctx, &turingv1.ListMemoryCandidatesRequest{
+		State: turingv1.MemoryCandidateState_MEMORY_CANDIDATE_STATE_PENDING,
+		Kind:  turingv1.MemoryCandidateKind_MEMORY_CANDIDATE_KIND_PROFILE_EDIT,
+	})
+	if err != nil {
+		t.Fatalf("ListMemoryCandidates: %v", err)
+	}
+	if len(edits.GetCandidates()) != 1 {
+		t.Fatalf("profile edits = %d, want the rewritten proposal", len(edits.GetCandidates()))
+	}
+}
+
 // A decision names the exact text it was composed against. A promotion carrying
 // a hash the file no longer matches is refused, and the file stays where it is
 // so the user can read what it says now and decide again.

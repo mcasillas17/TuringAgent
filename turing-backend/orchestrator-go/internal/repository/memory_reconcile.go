@@ -886,13 +886,22 @@ func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState
 	if inbox := scanned.completeness.Area(memoryfiles.AreaInbox); !inbox.Complete {
 		return 0, 0, nil
 	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	// A profile edit the user moved into beliefs/ is not a finished promotion:
 	// nothing promoted it, nothing may, and the file is still in the vault. Its
 	// candidate row and its reservation are what let the user move it back or
 	// reject it, so an inbox that no longer holds the path is not evidence
 	// that either is stale. The identity is the link — it travels with the
 	// file, the path does not.
-	held := misplacedProfileEditIdentities(scanned)
+	held, err := profileEditsToRetainTx(ctx, tx, scanned)
+	if err != nil {
+		return 0, 0, err
+	}
 	retain := func(vaultPath string) bool {
 		if len(held) == 0 {
 			return false
@@ -904,11 +913,6 @@ func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState
 		_, misplaced := held[noteID]
 		return misplaced
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	orphans, err := staleRowsTx(ctx, tx, `
 		SELECT id, inbox_path FROM memory_candidates WHERE created_at < ?
@@ -977,19 +981,51 @@ func incompleteVaultAreas(completeness memoryfiles.ScanCompleteness) []MemoryVau
 	return issues
 }
 
-// misplacedProfileEditIdentities names every proposal the walk found sitting
-// under beliefs/. The scan already refuses to index them and says why; this is
-// the same fact in the shape the inbox sweep needs, so the two cannot drift
+// profileEditsToRetainTx names the proposals the inbox sweep must not retire,
+// by identity — the one thing that travels with a file the user moved.
+//
+// When the walk read beliefs/ in full, that is exactly the profile edits it
+// found sitting there: the scan already refuses to index them and says why, and
+// this is the same fact in the shape the sweep needs, so the two cannot drift
 // into disagreeing about which files are still awaiting a decision.
-func misplacedProfileEditIdentities(scanned scannedVault) map[string]struct{} {
+//
+// When it did not, the answer has to be every profile edit still on the books.
+// A folder the walk could not open may be holding one, and "the walk found no
+// misplaced proposal" read off a folder nobody could list is the same mistake
+// as "the note was deleted" read off one — which is why the belief removal is
+// gated on the very same completeness. Retaining too much costs one more pass;
+// retaining too little leaves the user a proposal in their vault with no row
+// saying it was ever proposed, and no way to apply or reject it.
+func profileEditsToRetainTx(ctx context.Context, tx *sql.Tx, scanned scannedVault) (map[string]struct{}, error) {
 	held := map[string]struct{}{}
-	for _, note := range scanned.beliefs {
-		if note.Kind != memoryfiles.KindProfileEdit || note.NoteID == "" {
-			continue
+	if scanned.completeness.Area(memoryfiles.AreaBeliefs).Complete {
+		for _, note := range scanned.beliefs {
+			if note.Kind != memoryfiles.KindProfileEdit || note.NoteID == "" {
+				continue
+			}
+			held[note.NoteID] = struct{}{}
 		}
-		held[note.NoteID] = struct{}{}
+		return held, nil
 	}
-	return held
+	rows, err := tx.QueryContext(ctx, `
+		SELECT inbox_path FROM memory_candidates WHERE kind = ?
+	`, MemoryCandidateKindProfileEdit)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var inboxPath string
+		if err := rows.Scan(&inboxPath); err != nil {
+			return nil, closeRowsWith(rows, err)
+		}
+		if noteID := memoryfiles.NoteIDFromInboxRelPath(inboxPath); noteID != "" {
+			held[noteID] = struct{}{}
+		}
+	}
+	if err := closeRows(rows); err != nil {
+		return nil, err
+	}
+	return held, nil
 }
 
 // staleRowsTx returns the ids of rows whose recorded path is no longer an inbox

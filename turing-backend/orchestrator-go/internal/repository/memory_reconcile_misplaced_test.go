@@ -133,3 +133,48 @@ func TestReconcileStillSweepsABeliefCandidateMovedIntoBeliefs(t *testing.T) {
 		t.Fatalf("OrphanCandidatesRemoved = %d, want the moved belief's candidate retired", report.OrphanCandidatesRemoved)
 	}
 }
+
+// The retention above is built from what the walk found under beliefs/. A walk
+// that could not read all of beliefs/ has not found it — and concluding "no
+// misplaced profile edit" from a folder it could not open is the same mistake
+// as concluding "the note was deleted" from one, which the belief removal
+// already refuses to make.
+//
+// Until beliefs/ can be read in full, a profile edit's candidate and
+// reservation are kept: the file may be sitting in the part nobody could list,
+// and sweeping them would leave the user with a proposal they cannot apply,
+// reject, or find a record of.
+func TestReconcileKeepsAProfileEditCandidateWhileBeliefsCannotBeReadInFull(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	candidate := seedProfileEditCandidate(t, repo)
+	unreadable := filepath.Join(vault.Root(), memoryfiles.BeliefsDirName, "locked")
+	if err := os.MkdirAll(unreadable, 0o700); err != nil {
+		t.Fatalf("prepare %q: %v", unreadable, err)
+	}
+	moveVaultFile(t, vault, candidate.InboxPath,
+		memoryfiles.BeliefsDirName+"/locked/"+filepath.Base(candidate.InboxPath))
+	if err := os.Chmod(unreadable, 0o000); err != nil {
+		t.Fatalf("seal %q: %v", unreadable, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o700) })
+	if os.Geteuid() == 0 {
+		t.Skip("root reads an unreadable directory, so this vault cannot be made partial")
+	}
+
+	report, err := repo.ReconcileMemoryVault(ctx())
+	if err != nil {
+		t.Fatalf("ReconcileMemoryVault: %v", err)
+	}
+	if len(report.Index.IncompleteAreas) == 0 {
+		t.Fatal("the sealed folder did not make beliefs/ incomplete; the case was not reproduced")
+	}
+	if report.OrphanCandidatesRemoved != 0 || report.ReservationsCleared != 0 {
+		t.Fatalf(
+			"reconcile retired %d candidate(s) and %d reservation(s) on a vault it could not read in full",
+			report.OrphanCandidatesRemoved, report.ReservationsCleared,
+		)
+	}
+	if _, err := repo.MemoryCandidateByID(ctx(), candidate.CandidateID); err != nil {
+		t.Fatalf("the candidate for a proposal in an unreadable folder was retired: %v", err)
+	}
+}
