@@ -342,7 +342,7 @@ void main() {
             _candidate(
               candidateId: 'cand-profile',
               kind: MemoryCandidateKind.profileEdit,
-              content: '# Profile\n\nBikes to work.\n',
+              content: 'Bikes to work.',
               contentHash: 'sha256:proposed',
             ),
           ],
@@ -357,11 +357,24 @@ void main() {
         findsWidgets,
         reason: 'the apply is compare-and-set against the profile it read',
       );
+      expect(
+        find.textContaining('sha256:proposed'),
+        findsWidgets,
+        reason: 'and against the proposal the result was composed from',
+      );
 
       await _tap(tester, find.text('Apply'));
 
+      // The whole resulting document, not the fragment: the server replaces
+      // profile.md with exactly what is sent, so sending only the proposal
+      // would erase everything the user had written about themselves.
       expect(api.profileApplies, [
-        ('cand-profile', '# Profile\n\nBikes to work.\n', 'sha256:profile'),
+        (
+          'cand-profile',
+          '# Profile\n\nNothing yet.\n\nBikes to work.\n',
+          'sha256:profile',
+          'sha256:proposed',
+        ),
       ]);
       expect(api.stateReads, 2);
     });
@@ -1215,7 +1228,7 @@ class _MemoryApi extends TuringApi
   final List<bool> enabledCalls = [];
   final List<(String, String)> promotions = [];
   final List<(String, String)> rejections = [];
-  final List<(String, String, String)> profileApplies = [];
+  final List<(String, String, String, String)> profileApplies = [];
   final List<(String, String)> personaSaves = [];
   final List<(String, String)> profileSaves = [];
 
@@ -1253,6 +1266,7 @@ class _MemoryApi extends TuringApi
   Future<MemoryCandidate> promoteMemoryCandidate({
     required String candidateId,
     required String expectedContentHash,
+    String expectedCandidateHash = '',
   }) async {
     if (promoteError case final error?) throw error;
     promotions.add((candidateId, expectedContentHash));
@@ -1266,6 +1280,7 @@ class _MemoryApi extends TuringApi
     required String candidateId,
     required String expectedContentHash,
     String reason = '',
+    String expectedCandidateHash = '',
   }) async {
     rejections.add((candidateId, expectedContentHash));
     return state.candidates.firstWhere(
@@ -1278,8 +1293,14 @@ class _MemoryApi extends TuringApi
     required String candidateId,
     required String content,
     required String expectedContentHash,
+    String expectedCandidateHash = '',
   }) async {
-    profileApplies.add((candidateId, content, expectedContentHash));
+    profileApplies.add((
+      candidateId,
+      content,
+      expectedContentHash,
+      expectedCandidateHash,
+    ));
     return state.profile;
   }
 

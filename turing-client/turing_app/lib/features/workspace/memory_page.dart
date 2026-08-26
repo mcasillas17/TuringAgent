@@ -25,10 +25,40 @@ class MemoryPage extends StatefulWidget {
   State<MemoryPage> createState() => _MemoryPageState();
 }
 
+/// The one rule that turns a proposal into a document.
+///
+/// `ApplyMemoryProfile.content` is the whole resulting profile, so the page has
+/// to compose one — and the composition has to be something the user can look
+/// at and predict: their profile as it stands, then the proposal, separated by
+/// a blank line. Nothing is dropped and nothing is reordered, because the
+/// alternative to a rule they can see is a merge they have to trust.
+///
+/// It is only the starting point. The result is editable, and Apply sends what
+/// the editor holds.
+@visibleForTesting
+String composeProfileResult(String profile, String proposal) {
+  final existing = profile.trimRight();
+  final addition = proposal.trim();
+  if (addition.isEmpty) return profile;
+  if (existing.isEmpty) return '$addition\n';
+  return '$existing\n\n$addition\n';
+}
+
 class _MemoryPageState extends State<MemoryPage> {
   late Future<MemoryState> _state;
   final TextEditingController _persona = TextEditingController();
   final TextEditingController _profile = TextEditingController();
+
+  /// One resulting-profile editor per profile_edit proposal on screen, kept on
+  /// the page rather than inside the card so a re-read does not throw away what
+  /// the user has typed into it.
+  final Map<String, TextEditingController> _profileResults = {};
+
+  /// What each of those editors was seeded with. An editor still holding its
+  /// seed is one the user has not touched, and may be re-seeded when the
+  /// profile or the proposal moves underneath it; one that has drifted holds
+  /// their words and is left alone.
+  final Map<String, String> _profileResultSeeds = {};
 
   /// The hashes the editors were loaded at. Sent back as the compare-and-set
   /// token, so a save always answers "I am editing *this* version" rather than
@@ -59,7 +89,42 @@ class _MemoryPageState extends State<MemoryPage> {
   void dispose() {
     _persona.dispose();
     _profile.dispose();
+    for (final controller in _profileResults.values) {
+      controller.dispose();
+    }
     super.dispose();
+  }
+
+  /// The editor for one profile proposal's resulting document, created and
+  /// seeded on first sight and re-seeded only while the user has not typed
+  /// into it.
+  TextEditingController _profileResultFor(
+    MemoryCandidate candidate,
+    String profile,
+  ) {
+    final seed = composeProfileResult(profile, candidate.content);
+    final controller = _profileResults.putIfAbsent(candidate.candidateId, () {
+      _profileResultSeeds[candidate.candidateId] = seed;
+      return TextEditingController(text: seed);
+    });
+    final previousSeed = _profileResultSeeds[candidate.candidateId];
+    if (previousSeed != seed && controller.text == previousSeed) {
+      controller.text = seed;
+      _profileResultSeeds[candidate.candidateId] = seed;
+    }
+    return controller;
+  }
+
+  /// Forgets the editors for proposals that are no longer on the page. A
+  /// decided proposal is gone from the vault, and keeping its half-edited
+  /// result alive would resurrect it under a reused id.
+  void _retainProfileResults(Iterable<String> liveCandidateIds) {
+    final live = liveCandidateIds.toSet();
+    for (final candidateId in _profileResults.keys.toList()) {
+      if (live.contains(candidateId)) continue;
+      _profileResults.remove(candidateId)?.dispose();
+      _profileResultSeeds.remove(candidateId);
+    }
   }
 
   /// Re-reads the page, and adopts the server's text into the editors the
@@ -128,6 +193,59 @@ class _MemoryPageState extends State<MemoryPage> {
     }
   }
 
+  /// Saves one authored document without losing the keystrokes that landed
+  /// while it was in flight.
+  ///
+  /// A save is not instantaneous, and the editor stays live throughout: the
+  /// user can — and does — keep typing between pressing Save and the server
+  /// answering. The text that was sent is captured here, and on success the
+  /// editor adopts it *as its baseline* rather than as its content. If nothing
+  /// was typed meanwhile, the two are the same and the editor is clean; if
+  /// something was, the newer words stay on screen and stay dirty.
+  ///
+  /// The compare-and-set token moves with the baseline, and only when the
+  /// baseline this save started from is still the one in effect. Those newer
+  /// words were typed on top of the document that was just written, so the next
+  /// save has to name the hash the server just returned — naming the older one
+  /// would have the server refuse an edit that is genuinely based on what is
+  /// now on disk. A re-read landing in the same window replaces the baseline
+  /// with something newer, and then this save's receipt is stale and is
+  /// dropped.
+  Future<void> _saveDocument({
+    required TextEditingController controller,
+    required Future<MemoryDocument> Function(String content, String hash)
+    request,
+    required void Function(String message) onError,
+    required String Function() readAdopted,
+    required void Function(String adopted, String hash) writeAdopted,
+    required String hash,
+  }) async {
+    if (_busy) return;
+    final submitted = controller.text;
+    final submittedAgainst = readAdopted();
+    setState(() {
+      _busy = true;
+      onError('');
+    });
+    try {
+      final saved = await request(submitted, hash);
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        if (readAdopted() == submittedAgainst) {
+          writeAdopted(submitted, saved.contentHash);
+        }
+        _state = _load();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        onError(_describe(error));
+      });
+    }
+  }
+
   static String _describe(Object error) {
     if (error is TuringApiException) return error.message;
     return '$error';
@@ -169,21 +287,33 @@ class _MemoryPageState extends State<MemoryPage> {
               () => widget.apiClient.setMemoryEnabled(enabled: enabled),
               (message) => _settingsError = message,
             ),
-            onSavePersona: () => _mutate(
-              () => widget.apiClient.saveMemoryPersona(
-                content: _persona.text,
-                expectedContentHash: _personaHash,
+            onSavePersona: () => _saveDocument(
+              controller: _persona,
+              hash: _personaHash,
+              request: (content, hash) => widget.apiClient.saveMemoryPersona(
+                content: content,
+                expectedContentHash: hash,
               ),
-              (message) => _personaError = message,
-              adoptPersona: true,
+              onError: (message) => _personaError = message,
+              readAdopted: () => _personaAdopted,
+              writeAdopted: (adopted, savedHash) {
+                _personaAdopted = adopted;
+                _personaHash = savedHash;
+              },
             ),
-            onSaveProfile: () => _mutate(
-              () => widget.apiClient.saveMemoryProfile(
-                content: _profile.text,
-                expectedContentHash: _profileHash,
+            onSaveProfile: () => _saveDocument(
+              controller: _profile,
+              hash: _profileHash,
+              request: (content, hash) => widget.apiClient.saveMemoryProfile(
+                content: content,
+                expectedContentHash: hash,
               ),
-              (message) => _profileError = message,
-              adoptProfile: true,
+              onError: (message) => _profileError = message,
+              readAdopted: () => _profileAdopted,
+              writeAdopted: (adopted, savedHash) {
+                _profileAdopted = adopted;
+                _profileHash = savedHash;
+              },
             ),
             onRereadPersona: () => _reload(adoptPersona: true),
             onRereadProfile: () => _reload(adoptProfile: true),
@@ -191,6 +321,10 @@ class _MemoryPageState extends State<MemoryPage> {
               () => widget.apiClient.promoteMemoryCandidate(
                 candidateId: candidate.candidateId,
                 expectedContentHash: candidate.contentHash,
+                // The same token, named as what it is against the file. The
+                // listing serves the proposal as the vault holds it, so this
+                // is the hash of exactly the words on screen.
+                expectedCandidateHash: candidate.contentHash,
               ),
               (message) => _inboxError = message,
             ),
@@ -198,20 +332,30 @@ class _MemoryPageState extends State<MemoryPage> {
               () => widget.apiClient.rejectMemoryCandidate(
                 candidateId: candidate.candidateId,
                 expectedContentHash: candidate.contentHash,
+                expectedCandidateHash: candidate.contentHash,
               ),
               (message) => _inboxError = message,
             ),
-            onApply: (candidate) => _mutate(
+            onApply: (candidate, result) => _mutate(
               () => widget.apiClient.applyMemoryProfile(
                 candidateId: candidate.candidateId,
-                content: candidate.content,
+                // The whole resulting document the user reviewed, never the
+                // proposal: the server writes exactly these bytes over
+                // profile.md.
+                content: result,
                 // Compare-and-set against the profile document, not the
                 // proposal: the question an apply asks is whether profile.md
                 // still says what the user was shown beside it.
                 expectedContentHash: state.profile.contentHash,
+                // And the second one, against the proposal this result was
+                // composed from.
+                expectedCandidateHash: candidate.contentHash,
               ),
               (message) => _inboxError = message,
             ),
+            profileResultFor: (candidate) =>
+                _profileResultFor(candidate, state.profile.content),
+            onCandidatesBuilt: _retainProfileResults,
           );
         },
       ),
@@ -238,6 +382,8 @@ class _MemoryBody extends StatelessWidget {
     required this.onPromote,
     required this.onReject,
     required this.onApply,
+    required this.profileResultFor,
+    required this.onCandidatesBuilt,
   });
 
   final MemoryState state;
@@ -256,7 +402,19 @@ class _MemoryBody extends StatelessWidget {
   final VoidCallback onRereadProfile;
   final ValueChanged<MemoryCandidate> onPromote;
   final ValueChanged<MemoryCandidate> onReject;
-  final ValueChanged<MemoryCandidate> onApply;
+
+  /// The apply carries the reviewed resulting document, which is the whole of
+  /// what profile.md will say — not the proposal, which is a fragment of it.
+  final void Function(MemoryCandidate candidate, String result) onApply;
+
+  /// The editor holding that document, owned by the page so it survives the
+  /// re-read every write triggers.
+  final TextEditingController Function(MemoryCandidate candidate)
+  profileResultFor;
+
+  /// Told which proposals are on screen, so the page can forget the editors of
+  /// the ones that are not.
+  final ValueChanged<List<String>> onCandidatesBuilt;
 
   /// The server's own row for a tier, if it sent one. A build that has not
   /// heard about a tier renders no row for it rather than an invented one.
@@ -267,12 +425,22 @@ class _MemoryBody extends StatelessWidget {
     return null;
   }
 
+  /// Whether this proposal needs a resulting-profile editor: a decidable
+  /// profile edit and nothing else. A proposal the page will not offer a
+  /// decision on gets no editor, because there is no apply to compose for.
+  static bool _needsProfileResult(MemoryCandidate candidate) =>
+      candidate.decision == MemoryCandidateDecision.applyToProfile;
+
   @override
   Widget build(BuildContext context) {
     final palette = AppColors.of(context);
     final beliefTier = state.tiers
         .where((tier) => tier.tier == MemoryTier.belief)
         .toList();
+    onCandidatesBuilt([
+      for (final candidate in state.candidates)
+        if (_needsProfileResult(candidate)) candidate.candidateId,
+    ]);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -341,12 +509,15 @@ class _MemoryBody extends StatelessWidget {
               child: _CandidateCard(
                 candidate: candidate,
                 profileHash: state.profile.contentHash,
+                profileResult: _needsProfileResult(candidate)
+                    ? profileResultFor(candidate)
+                    : null,
                 l10n: l10n,
                 palette: palette,
                 busy: busy,
                 onPromote: () => onPromote(candidate),
                 onReject: () => onReject(candidate),
-                onApply: () => onApply(candidate),
+                onApply: onApply,
               ),
             ),
         const SizedBox(height: 22),
@@ -658,6 +829,7 @@ class _CandidateCard extends StatelessWidget {
   const _CandidateCard({
     required this.candidate,
     required this.profileHash,
+    required this.profileResult,
     required this.l10n,
     required this.palette,
     required this.busy,
@@ -668,16 +840,22 @@ class _CandidateCard extends StatelessWidget {
 
   final MemoryCandidate candidate;
   final String profileHash;
+
+  /// The resulting-profile editor, for a profile edit this page may apply, and
+  /// null for every other proposal. It is owned by the page: a re-read rebuilds
+  /// this card, and an editor rebuilt with it would lose what the user typed.
+  final TextEditingController? profileResult;
   final AppLocalizations l10n;
   final AppPalette palette;
   final bool busy;
   final VoidCallback onPromote;
   final VoidCallback onReject;
-  final VoidCallback onApply;
+  final void Function(MemoryCandidate candidate, String result) onApply;
 
   @override
   Widget build(BuildContext context) {
-    final isProfileEdit = candidate.kind == MemoryCandidateKind.profileEdit;
+    final decision = candidate.decision;
+    final result = profileResult;
     return _Card(
       palette: palette,
       child: Column(
@@ -759,7 +937,69 @@ class _CandidateCard extends StatelessWidget {
               l10n: l10n,
               palette: palette,
             ),
-          if (isProfileEdit && candidate.isDecidable) ...[
+          // A managed, pending proposal this build cannot classify. No button
+          // is offered, because the page cannot know which RPC the server
+          // would accept — and the reason is said out loud, because a card
+          // with prose and no actions reads as a proposal with nothing to
+          // decide rather than as one this client is too old to decide.
+          if (decision == MemoryCandidateDecision.unsupported) ...[
+            const SizedBox(height: 10),
+            _ErrorLine(message: l10n.memoryProposalUndecidable),
+          ],
+          if (decision == MemoryCandidateDecision.applyToProfile &&
+              result != null) ...[
+            const SizedBox(height: 14),
+            Text(
+              l10n.memoryProfileResultHeading,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: palette.text,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              l10n.memoryProfileResultDescription,
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.45,
+                color: palette.textMuted,
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Plain text in and plain text out. The proposal above it was
+            // written by a model, and nothing on this page interprets it as
+            // markup — least of all the field whose contents become the user's
+            // own document.
+            TextField(
+              key: Key('memory-profile-result-${candidate.candidateId}'),
+              controller: result,
+              maxLines: 8,
+              minLines: 4,
+              keyboardType: TextInputType.multiline,
+              style: const TextStyle(fontSize: 13, height: 1.5),
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            // The hint and the button both follow the editor rather than the
+            // last rebuild, and they do it by listening rather than by holding
+            // state: the page may reseed this controller mid-build when the
+            // profile underneath it moves, and a setState in that window is a
+            // build-time crash.
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: result,
+              builder: (context, value, _) {
+                if (value.text.trim().isNotEmpty) {
+                  return const SizedBox.shrink();
+                }
+                return Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: _ErrorLine(message: l10n.memoryProfileResultEmpty),
+                );
+              },
+            ),
             const SizedBox(height: 6),
             Text(
               l10n.memoryExpectedProfileHash(
@@ -767,18 +1007,41 @@ class _CandidateCard extends StatelessWidget {
               ),
               style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
+            Text(
+              l10n.memoryExpectedProposalHash(candidate.contentHash),
+              style: TextStyle(fontSize: 12, color: palette.textMuted),
+            ),
           ],
-          if (candidate.isDecidable) ...[
+          if (decision == MemoryCandidateDecision.applyToProfile ||
+              decision == MemoryCandidateDecision.promoteToBeliefs) ...[
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
               runSpacing: 4,
               children: [
-                if (isProfileEdit)
-                  FilledButton(
-                    onPressed: busy ? null : onApply,
-                    child: Text(l10n.memoryApplyAction),
-                  )
+                if (decision == MemoryCandidateDecision.applyToProfile)
+                  if (result == null)
+                    // Unreachable in this build — a decidable profile edit is
+                    // always given an editor — and rendered disabled rather
+                    // than omitted so a future caller that forgets one gets a
+                    // dead button instead of an apply with no document.
+                    FilledButton(
+                      onPressed: null,
+                      child: Text(l10n.memoryApplyAction),
+                    )
+                  else
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: result,
+                      builder: (context, value, _) => FilledButton(
+                        // Nothing to apply is not an apply. An empty document
+                        // would replace everything the user has written about
+                        // themselves with nothing.
+                        onPressed: busy || value.text.trim().isEmpty
+                            ? null
+                            : () => onApply(candidate, result.text),
+                        child: Text(l10n.memoryApplyAction),
+                      ),
+                    )
                 else
                   FilledButton(
                     onPressed: busy ? null : onPromote,

@@ -718,6 +718,36 @@ abstract class AppLocalizations {
   /// **'This proposal could not be read in full, so there is nothing here to accept.'**
   String get memoryProposalUnreadable;
 
+  /// No description provided for @memoryProposalUndecidable.
+  ///
+  /// In en, this message translates to:
+  /// **'This proposal is in a shape this version of Turing does not understand, so there is nothing safe to offer here. Open it in your vault, or update Turing.'**
+  String get memoryProposalUndecidable;
+
+  /// No description provided for @memoryProfileResultHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'The profile after applying this'**
+  String get memoryProfileResultHeading;
+
+  /// No description provided for @memoryProfileResultDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'This is what profile.md will say. It starts as your profile with the proposal added; edit it here and Apply writes exactly what you see.'**
+  String get memoryProfileResultDescription;
+
+  /// No description provided for @memoryProfileResultEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Add the text you want profile.md to hold before applying.'**
+  String get memoryProfileResultEmpty;
+
+  /// No description provided for @memoryExpectedProposalHash.
+  ///
+  /// In en, this message translates to:
+  /// **'Applies only while the proposal still matches {hash}.'**
+  String memoryExpectedProposalHash(String hash);
+
   /// No description provided for @memoryExpectedProfileHash.
   ///
   /// In en, this message translates to:

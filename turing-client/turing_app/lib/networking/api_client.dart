@@ -253,10 +253,13 @@ abstract class TuringApi implements RemoteEgressApi {
   }
 
   /// Accepts a proposal as a belief. [expectedContentHash] is compare-and-set
-  /// against the text the user actually read.
+  /// against the row the server holds; [expectedCandidateHash] is
+  /// compare-and-set against the inbox file's own bytes, which is what the user
+  /// was actually shown and what they may have rewritten in their editor.
   Future<MemoryCandidate> promoteMemoryCandidate({
     required String candidateId,
     required String expectedContentHash,
+    String expectedCandidateHash = '',
   }) {
     throw const TuringApiException(
       code: 'memory_unsupported',
@@ -268,6 +271,7 @@ abstract class TuringApi implements RemoteEgressApi {
     required String candidateId,
     required String expectedContentHash,
     String reason = '',
+    String expectedCandidateHash = '',
   }) {
     throw const TuringApiException(
       code: 'memory_unsupported',
@@ -275,13 +279,23 @@ abstract class TuringApi implements RemoteEgressApi {
     );
   }
 
-  /// Applies an accepted `profile_edit` proposal. [expectedContentHash] is
-  /// compare-and-set against the profile document, not against the proposal:
-  /// the question is whether profile.md still says what the user was shown.
+  /// Applies an accepted `profile_edit` proposal.
+  ///
+  /// [content] is the WHOLE resulting profile document as the user reviewed it,
+  /// never the proposal on its own: the server replaces profile.md with exactly
+  /// these bytes, so sending the candidate's fragment would delete everything
+  /// the user has written about themselves.
+  ///
+  /// [expectedContentHash] is compare-and-set against the profile document —
+  /// does profile.md still say what the result was composed over — and
+  /// [expectedCandidateHash] is compare-and-set against the proposal, so the
+  /// result cannot be applied on the authority of a proposal that has since
+  /// changed.
   Future<MemoryDocument> applyMemoryProfile({
     required String candidateId,
     required String content,
     required String expectedContentHash,
+    String expectedCandidateHash = '',
   }) {
     throw const TuringApiException(
       code: 'memory_unsupported',

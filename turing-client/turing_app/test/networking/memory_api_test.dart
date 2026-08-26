@@ -93,15 +93,18 @@ void main() {
     await api.promoteMemoryCandidate(
       candidateId: 'cand-1',
       expectedContentHash: 'sha256:cand',
+      expectedCandidateHash: 'sha256:file-1',
     );
     await api.rejectMemoryCandidate(
       candidateId: 'cand-2',
       expectedContentHash: 'sha256:cand-2',
+      expectedCandidateHash: 'sha256:file-2',
     );
     await api.applyMemoryProfile(
       candidateId: 'cand-3',
       content: '# Profile\n\nApplied.\n',
       expectedContentHash: 'sha256:profile',
+      expectedCandidateHash: 'sha256:file-3',
     );
 
     expect(service.promotions.single.candidateId, 'cand-1');
@@ -109,6 +112,12 @@ void main() {
     expect(service.rejections.single.expectedContentHash, 'sha256:cand-2');
     expect(service.applies.single.candidateId, 'cand-3');
     expect(service.applies.single.expectedContentHash, 'sha256:profile');
+    // The second compare-and-set: the exact inbox bytes the decision was made
+    // against. A client that dropped it would have the server accept a
+    // decision about a proposal that had since been rewritten in the vault.
+    expect(service.promotions.single.expectedCandidateHash, 'sha256:file-1');
+    expect(service.rejections.single.expectedCandidateHash, 'sha256:file-2');
+    expect(service.applies.single.expectedCandidateHash, 'sha256:file-3');
   });
 
   test('setMemoryEnabled toggles memory as a whole', () async {

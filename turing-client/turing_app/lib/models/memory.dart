@@ -262,13 +262,67 @@ class MemoryCandidate {
       unavailableReason != MemoryUnavailableReason.vaultMissing &&
       unavailableReason != MemoryUnavailableReason.vaultUnreadable;
 
+  /// Which decision, if any, this client may offer for this proposal.
+  ///
+  /// Both switches are exhaustive with no `default`, which is the point: a kind
+  /// or a state this build has never heard of lands on
+  /// [MemoryCandidateDecision.unsupported] and is *said*, rather than silently
+  /// falling through to whichever arm happens to be last. A proposal whose kind
+  /// this client cannot read is a proposal it cannot know which RPC the server
+  /// would accept for — offering the wrong one is an action the server refuses,
+  /// and offering nothing without a word is a card the user cannot explain.
+  MemoryCandidateDecision get decision {
+    // A file the user dropped in themselves has no row, so no RPC applies. It
+    // is not unsupported; it is understood, and the answer is that Turing does
+    // not decide it.
+    if (!managed || candidateId.isEmpty) return MemoryCandidateDecision.none;
+    if (!contentIsWhole) return MemoryCandidateDecision.none;
+    switch (state) {
+      case MemoryCandidateState.pending:
+        break;
+      case MemoryCandidateState.promoted:
+      case MemoryCandidateState.rejected:
+      case MemoryCandidateState.withdrawn:
+        return MemoryCandidateDecision.none;
+      case MemoryCandidateState.unspecified:
+        return MemoryCandidateDecision.unsupported;
+    }
+    switch (kind) {
+      case MemoryCandidateKind.belief:
+        return MemoryCandidateDecision.promoteToBeliefs;
+      case MemoryCandidateKind.profileEdit:
+        return MemoryCandidateDecision.applyToProfile;
+      case MemoryCandidateKind.unspecified:
+        return MemoryCandidateDecision.unsupported;
+    }
+  }
+
   /// Whether this client may offer a decision at all: managed by Turing, still
-  /// pending, and shown in full.
+  /// pending, shown in full, and of a kind this build understands.
   bool get isDecidable =>
-      managed &&
-      candidateId.isNotEmpty &&
-      state == MemoryCandidateState.pending &&
-      contentIsWhole;
+      decision == MemoryCandidateDecision.promoteToBeliefs ||
+      decision == MemoryCandidateDecision.applyToProfile;
+}
+
+/// What the page may offer for one proposal.
+///
+/// [unsupported] is deliberately not [none]. "Turing does not decide this file"
+/// and "this build cannot tell what deciding it would mean" are different
+/// facts, and only the second one is something the user should be told about.
+enum MemoryCandidateDecision {
+  /// No decision belongs here: an unmanaged draft, an already-decided proposal,
+  /// or one whose text could not be shown in full.
+  none,
+
+  /// Promote into beliefs, or reject.
+  promoteToBeliefs,
+
+  /// Apply to profile.md, or reject.
+  applyToProfile,
+
+  /// A managed, pending proposal whose kind or state this build cannot name.
+  /// No button is safe, and the card says so.
+  unsupported,
 }
 
 class MemoryState {

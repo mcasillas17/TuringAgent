@@ -932,12 +932,14 @@ class TuringGrpcApi
   Future<MemoryCandidate> promoteMemoryCandidate({
     required String candidateId,
     required String expectedContentHash,
+    String expectedCandidateHash = '',
   }) {
     return _memoryCall(() async {
       final response = await _memory.promoteMemoryCandidate(
         memorypb.PromoteMemoryCandidateRequest(
           candidateId: candidateId,
           expectedContentHash: expectedContentHash,
+          expectedCandidateHash: expectedCandidateHash,
         ),
       );
       return GrpcMappers.memoryCandidateToModel(response.candidate);
@@ -949,6 +951,7 @@ class TuringGrpcApi
     required String candidateId,
     required String expectedContentHash,
     String reason = '',
+    String expectedCandidateHash = '',
   }) {
     return _memoryCall(() async {
       final response = await _memory.rejectMemoryCandidate(
@@ -956,6 +959,7 @@ class TuringGrpcApi
           candidateId: candidateId,
           expectedContentHash: expectedContentHash,
           reason: reason,
+          expectedCandidateHash: expectedCandidateHash,
         ),
       );
       return GrpcMappers.memoryCandidateToModel(response.candidate);
@@ -967,6 +971,7 @@ class TuringGrpcApi
     required String candidateId,
     required String content,
     required String expectedContentHash,
+    String expectedCandidateHash = '',
   }) {
     return _memoryCall(() async {
       final response = await _memory.applyMemoryProfile(
@@ -974,6 +979,7 @@ class TuringGrpcApi
           candidateId: candidateId,
           content: content,
           expectedContentHash: expectedContentHash,
+          expectedCandidateHash: expectedCandidateHash,
         ),
       );
       return GrpcMappers.memoryProfileToModel(response.profile);

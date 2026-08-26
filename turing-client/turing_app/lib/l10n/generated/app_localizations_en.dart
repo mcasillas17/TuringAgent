@@ -366,6 +366,26 @@ class AppLocalizationsEn extends AppLocalizations {
       'This proposal could not be read in full, so there is nothing here to accept.';
 
   @override
+  String get memoryProposalUndecidable =>
+      'This proposal is in a shape this version of Turing does not understand, so there is nothing safe to offer here. Open it in your vault, or update Turing.';
+
+  @override
+  String get memoryProfileResultHeading => 'The profile after applying this';
+
+  @override
+  String get memoryProfileResultDescription =>
+      'This is what profile.md will say. It starts as your profile with the proposal added; edit it here and Apply writes exactly what you see.';
+
+  @override
+  String get memoryProfileResultEmpty =>
+      'Add the text you want profile.md to hold before applying.';
+
+  @override
+  String memoryExpectedProposalHash(String hash) {
+    return 'Applies only while the proposal still matches $hash.';
+  }
+
+  @override
   String memoryExpectedProfileHash(String hash) {
     return 'Applies only while profile.md still matches $hash.';
   }
