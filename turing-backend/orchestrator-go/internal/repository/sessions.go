@@ -70,6 +70,13 @@ type Repository struct {
 	// put the file back and prove the deletion is decided on what is true under
 	// the lock rather than on what the walk saw.
 	memoryOrphanSweepBarrier func()
+	// memoryReservationSweepBarrier, when set (test-only; always nil in
+	// production), runs inside the inbox sweep once a reservation's coordinating
+	// lock is held and before the file and the rows that may still name it are
+	// re-read under it. A test parked there can move the file or the proposal
+	// and prove the release is decided on what is true under the lock rather
+	// than on what the walk saw.
+	memoryReservationSweepBarrier func()
 	// memoryCandidateWriteBarrier, when set (test-only; always nil in
 	// production), runs after a candidate's path is reserved and before the
 	// vault write, so a test can delete the session in exactly that window and

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 )
@@ -1056,7 +1057,7 @@ func (r *Repository) sweepVaultInbox(
 			removed++
 		}
 	}
-	cleared, err := r.releaseStaleReservations(ctx, reservations)
+	cleared, err := r.releaseStaleReservations(ctx, vault, reservations)
 	if err != nil {
 		return removed, cleared, err
 	}
@@ -1231,33 +1232,179 @@ func inboxEntryStillThere(ctx context.Context, vault *memoryfiles.Vault, inboxPa
 }
 
 // releaseStaleReservations clears the manifest rows naming paths the inbox no
-// longer holds.
+// longer holds — each one on what is true when the row is deleted, rather than
+// on what the walk saw go past.
 //
-// They are not taken under a candidate's decision lock, and they do not need
-// to be: a decision that retires a reservation deletes it unconditionally, so
-// the two cannot disagree about the outcome, and a reservation whose file is
-// still in the inbox is never in this list to begin with.
-func (r *Repository) releaseStaleReservations(ctx context.Context, reservations []string) (int, error) {
-	if len(reservations) == 0 {
-		return 0, nil
+// A reservation is the only durable record that a session left bytes in the
+// user's vault. Releasing one whose file is really there leaves that file
+// tracked by nothing: no cleaner can find what no row names, and the user is
+// left with a claim about themselves that nothing in the system can withdraw.
+// So each release is re-decided under the same coordination a decision about
+// that path would hold, and anything the sweep cannot confirm leaves the row
+// standing — a reservation kept one pass too long costs another pass, and one
+// released too early costs the user an untracked note.
+func (r *Repository) releaseStaleReservations(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	reservations []string,
+) (int, error) {
+	cleared := 0
+	for _, artifactID := range reservations {
+		released, err := r.releaseStaleReservation(ctx, vault, artifactID)
+		if err != nil {
+			return cleared, err
+		}
+		if released {
+			cleared++
+		}
 	}
+	return cleared, nil
+}
+
+// releaseStaleReservation deletes one manifest row, under the lock a decision
+// about the proposal naming that path would hold, and only if the path is still
+// held by nobody while that lock is held.
+//
+// Two things can have changed since the walk went past, and each of them is a
+// reason to keep the row. The file may be back: the user moved it, or a
+// promotion rolled its own destination back, and a file in the vault must stay
+// tracked. And a proposal may still name it: a pending row the sweep's own
+// re-check kept, or a 'profile_applying' claim only recoverProfileApplies may
+// end — either way the row describes a path this session is still answerable
+// for, and the manifest is what makes it cleanable.
+//
+// Nothing here takes a database transaction before the lock. SQLite is one
+// connection, so a transaction held while waiting for a candidate lock would
+// deadlock against the decision holding it; the lock is taken first, one
+// candidate at a time, and released before the next reservation is considered.
+func (r *Repository) releaseStaleReservation(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	artifactID string,
+) (bool, error) {
+	vaultPath, err := vaultArtifactPathByID(ctx, r.db, artifactID)
+	if err != nil {
+		return false, err
+	}
+	if vaultPath == "" {
+		// Already gone — a decision retired it while this pass was walking.
+		return false, nil
+	}
+	// The lock is the candidate's, because a proposal's row and its reservation
+	// are moved together by a decision that holds exactly this lock. A path no
+	// row names has no decision that could be in flight for it: a creation
+	// mints a fresh path and cannot reserve one this row still holds.
+	claimant, err := memoryCandidateNamingInboxPath(ctx, r.db, vaultPath, nil)
+	if err != nil {
+		return false, err
+	}
+	if claimant != "" {
+		unlock, lockErr := r.lockMemoryCandidateDecision(ctx, claimant)
+		if lockErr != nil {
+			return false, lockErr
+		}
+		defer unlock()
+	}
+	if r.memoryReservationSweepBarrier != nil {
+		r.memoryReservationSweepBarrier()
+	}
+
+	present, err := inboxEntryStillThere(ctx, vault, vaultPath)
+	if err != nil {
+		return false, err
+	}
+	if present {
+		return false, nil
+	}
+	held, err := memoryCandidateNamingInboxPath(ctx, r.db, vaultPath, []string{
+		MemoryCandidateStatePending,
+		MemoryCandidateStateProfileApplying,
+	})
+	if err != nil {
+		return false, err
+	}
+	if held != "" {
+		return false, nil
+	}
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, artifactID := range reservations {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM vault_artifacts WHERE id = ?`, artifactID); err != nil {
-			return 0, err
-		}
-		if err := recordMemoryReconcileTx(ctx, tx, memoryReservationReleasedAction, artifactID, "inbox_file_missing"); err != nil {
-			return 0, err
-		}
+	result, err := tx.ExecContext(ctx, `DELETE FROM vault_artifacts WHERE id = ?`, artifactID)
+	if err != nil {
+		return false, err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if deleted != 1 {
+		return false, nil
+	}
+	if err := recordMemoryReconcileTx(ctx, tx, memoryReservationReleasedAction, artifactID, "inbox_file_missing"); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return false, err
 	}
-	return len(reservations), nil
+	return true, nil
+}
+
+// vaultArtifactPathByID reads the path one manifest row names, and answers with
+// the empty string for a row that is no longer there. A reservation that has
+// already been retired is not an error: the sweep's worklist was assembled
+// before any of it was acted on.
+func vaultArtifactPathByID(ctx context.Context, q rowQuerier, artifactID string) (string, error) {
+	var vaultPath string
+	err := q.QueryRowContext(ctx, `
+		SELECT vault_path FROM vault_artifacts WHERE id = ?
+	`, artifactID).Scan(&vaultPath)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return vaultPath, nil
+}
+
+// memoryCandidateNamingInboxPath answers which proposal, if any, still names a
+// path. states narrows the answer to the lifecycle states that mean the row is
+// still answerable for the file; a nil states asks about any row at all, which
+// is what picking the lock to take needs.
+//
+// The lowest id wins so the answer is stable across calls. A path can only be
+// named by one live row — the manifest's own path is globally unique and a
+// decided proposal's row is consumed — so the ordering is determinism rather
+// than a choice between real alternatives.
+func memoryCandidateNamingInboxPath(
+	ctx context.Context,
+	q rowQuerier,
+	inboxPath string,
+	states []string,
+) (string, error) {
+	query := `SELECT id FROM memory_candidates WHERE inbox_path = ? ORDER BY id LIMIT 1`
+	args := []any{inboxPath}
+	if len(states) > 0 {
+		placeholders := make([]string, 0, len(states))
+		for _, state := range states {
+			placeholders = append(placeholders, "?")
+			args = append(args, state)
+		}
+		query = `SELECT id FROM memory_candidates WHERE inbox_path = ? AND state IN (` +
+			strings.Join(placeholders, ", ") + `) ORDER BY id LIMIT 1`
+	}
+	var candidateID string
+	err := q.QueryRowContext(ctx, query, args...).Scan(&candidateID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return candidateID, nil
 }
 
 // incompleteVaultAreas turns the walk's own account of what it could read into
