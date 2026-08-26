@@ -454,11 +454,12 @@ func (r *Repository) AdvanceSessionDeletion(ctx context.Context, sessionID strin
 	); err != nil {
 		return SessionDeletionReceipt{}, err
 	}
-	if err := withdrawMemoryNotesLosingLastEvidenceTx(ctx, tx, sessionID); err != nil {
+	withdrawn, err := withdrawMemoryNotesLosingLastEvidenceTx(ctx, tx, sessionID)
+	if err != nil {
 		return SessionDeletionReceipt{}, err
 	}
 	if r.memoryDeletionWithdrawalBarrier != nil {
-		if err := r.memoryDeletionWithdrawalBarrier(); err != nil {
+		if err := r.memoryDeletionWithdrawalBarrier(withdrawn); err != nil {
 			return SessionDeletionReceipt{}, err
 		}
 	}
@@ -942,7 +943,7 @@ func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error 
 	// (`_foreign_keys=on` in the DSN), so this cascades to messages, agent_runs,
 	// and from there to jobs, events, tool_calls and approvals. Hand-deleting
 	// those here would duplicate the schema in Go and drift from it.
-	if err := withdrawMemoryNotesLosingLastEvidenceTx(ctx, tx, sessionID); err != nil {
+	if _, err := withdrawMemoryNotesLosingLastEvidenceTx(ctx, tx, sessionID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID); err != nil {

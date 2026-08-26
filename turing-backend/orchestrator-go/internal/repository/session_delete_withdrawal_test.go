@@ -141,11 +141,23 @@ func TestAdvanceSessionDeletionRollsBackTheWithdrawalWithTheCascade(t *testing.T
 		t.Fatalf("BeginSessionDeletion: %v", err)
 	}
 	failure := errors.New("crash between the withdrawal and the cascade")
-	repo.memoryDeletionWithdrawalBarrier = func() error { return failure }
+	var observed []string
+	repo.memoryDeletionWithdrawalBarrier = func(withdrawn []string) error {
+		observed = withdrawn
+		return failure
+	}
 	if _, err := repo.AdvanceSessionDeletion(ctx(), sessionID, nil); !errors.Is(err, failure) {
 		t.Fatalf("AdvanceSessionDeletion error = %v, want the barrier failure", err)
 	}
 	repo.memoryDeletionWithdrawalBarrier = nil
+
+	// The withdrawal did happen inside the transaction. Without this the
+	// assertions below are satisfied just as well by a transaction that never
+	// withdrew anything, and the atomicity they claim to prove is not proven
+	// by them at all.
+	if len(observed) != 1 || observed[0] != note.NoteID {
+		t.Fatalf("the transaction withdrew %v before it failed, want just %q", observed, note.NoteID)
+	}
 
 	if status := noteStatus(t, repo, note.NoteID); status != MemoryNoteStatusManaged {
 		t.Fatalf("belief status after a rolled-back withdrawal = %q, want %q",
@@ -215,5 +227,91 @@ func TestAdvanceSessionDeletionWithdrawsEachBeliefOnlyOnce(t *testing.T) {
 		SELECT COUNT(*) FROM audit_logs WHERE action = ? AND target = ?
 	`, memoryNoteWithdrawnAction, note.NoteID); got != 1 {
 		t.Fatalf("withdrawal audit rows after two advances = %d, want 1", got)
+	}
+}
+
+// A note whose file already said its citations were withdrawn is indexed
+// `withdrawn` while its live evidence rows are still linked beside it. Deleting
+// the conversation those rows name must leave that note exactly as it is.
+//
+// Nothing about it changes — it is already withdrawn — so writing to it costs
+// two things the rest of this package works to avoid: a second
+// `memory.note.withdrawn` in the trail, which turns one event into two, and an
+// `updated_at` that moves, which tells the user their memory changed because a
+// deletion looked at it.
+func TestAdvanceSessionDeletionLeavesAnAlreadyWithdrawnBeliefAlone(t *testing.T) {
+	repo, _, database := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+	note := mustPromoteTestBelief(t, repo, sessionID, "Bees", "The user keeps bees.")
+
+	// The state a re-index of a file carrying `evidence_withdrawn: true`
+	// produces: the status is already terminal and the citations are still
+	// there.
+	if _, err := database.ExecContext(ctx(), `
+		UPDATE memory_notes SET status = ?, updated_at = ? WHERE id = ?
+	`, MemoryNoteStatusWithdrawn, "2020-01-01T00:00:00.000000000Z", note.NoteID); err != nil {
+		t.Fatalf("mark the note withdrawn: %v", err)
+	}
+	if got := countRows(t, repo,
+		`SELECT COUNT(*) FROM memory_evidence WHERE note_id = ? AND session_id = ?`,
+		note.NoteID, sessionID,
+	); got != 1 {
+		t.Fatalf("evidence rows on the fixture = %d, want the live citation kept", got)
+	}
+
+	if _, err := repo.BeginSessionDeletion(ctx(), sessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+	if _, err := repo.AdvanceSessionDeletion(ctx(), sessionID, nil); err != nil {
+		t.Fatalf("AdvanceSessionDeletion: %v", err)
+	}
+
+	if got := countRows(t, repo, `
+		SELECT COUNT(*) FROM audit_logs WHERE action = ? AND target = ?
+	`, memoryNoteWithdrawnAction, note.NoteID); got != 0 {
+		t.Fatalf("withdrawal audit rows for an already-withdrawn note = %d, want none", got)
+	}
+	var updatedAt string
+	if err := repo.db.QueryRowContext(ctx(),
+		`SELECT updated_at FROM memory_notes WHERE id = ?`, note.NoteID,
+	).Scan(&updatedAt); err != nil {
+		t.Fatalf("read updated_at: %v", err)
+	}
+	if updatedAt != "2020-01-01T00:00:00.000000000Z" {
+		t.Fatalf("updated_at = %q, want the deletion to have left the row untouched", updatedAt)
+	}
+}
+
+// Two citations from one conversation are two rows, and they are one source.
+// A withdrawal that asked "is there another row?" instead of "is there another
+// conversation?" would keep a belief alive on the strength of the very
+// conversation that was just deleted.
+func TestAdvanceSessionDeletionWithdrawsABeliefOneConversationCitedTwice(t *testing.T) {
+	repo, _, database := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+	note := mustPromoteTestBelief(t, repo, sessionID, "Bees", "The user keeps bees.")
+	if _, err := database.ExecContext(ctx(), `
+		INSERT INTO memory_evidence (id, note_id, session_id, excerpt_hash, created_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, "memev-same-session-again", note.NoteID, sessionID, "sha256:excerpt", now()); err != nil {
+		t.Fatalf("insert the second citation: %v", err)
+	}
+
+	if _, err := repo.BeginSessionDeletion(ctx(), sessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+	if _, err := repo.AdvanceSessionDeletion(ctx(), sessionID, nil); err != nil {
+		t.Fatalf("AdvanceSessionDeletion: %v", err)
+	}
+
+	if status := noteStatus(t, repo, note.NoteID); status != MemoryNoteStatusWithdrawn {
+		t.Fatalf("belief status after its only conversation was deleted = %q, want %q",
+			status, MemoryNoteStatusWithdrawn)
+	}
+	// And exactly one event, not one per citation.
+	if got := countRows(t, repo, `
+		SELECT COUNT(*) FROM audit_logs WHERE action = ? AND target = ?
+	`, memoryNoteWithdrawnAction, note.NoteID); got != 1 {
+		t.Fatalf("withdrawal audit rows for a twice-cited belief = %d, want 1", got)
 	}
 }

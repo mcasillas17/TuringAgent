@@ -305,7 +305,11 @@ func upsertMemoryNoteTx(ctx context.Context, tx *sql.Tx, note MemoryNote) error 
 // because one of them was deleted, and withdrawing it early would take a
 // belief the user accepted away over a conversation they were entitled to
 // remove.
-func withdrawMemoryNotesLosingLastEvidenceTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
+// It returns the notes it withdrew, which is what the deletion transaction's
+// test barrier is handed: a barrier that could only say "something ran" would
+// leave the atomicity claim resting on a rollback that looks identical whether
+// this ran at all.
+func withdrawMemoryNotesLosingLastEvidenceTx(ctx context.Context, tx *sql.Tx, sessionID string) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT DISTINCT evidence.note_id
 		FROM memory_evidence evidence
@@ -320,23 +324,23 @@ func withdrawMemoryNotesLosingLastEvidenceTx(ctx context.Context, tx *sql.Tx, se
 		ORDER BY evidence.note_id
 	`, sessionID, MemoryNoteStatusWithdrawn, sessionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var noteIDs []string
 	for rows.Next() {
 		var noteID string
 		if err := rows.Scan(&noteID); err != nil {
 			_ = rows.Close()
-			return err
+			return nil, err
 		}
 		noteIDs = append(noteIDs, noteID)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return err
+		return nil, err
 	}
 	if err := rows.Close(); err != nil {
-		return err
+		return nil, err
 	}
 	// Collected first and written second so the audit says exactly what
 	// changed. A retry after an unfinished completion re-enters with the
@@ -347,13 +351,13 @@ func withdrawMemoryNotesLosingLastEvidenceTx(ctx context.Context, tx *sql.Tx, se
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE memory_notes SET status = ?, updated_at = ? WHERE id = ?
 		`, MemoryNoteStatusWithdrawn, now(), noteID); err != nil {
-			return err
+			return nil, err
 		}
 		if err := recordMemoryReconcileTx(ctx, tx, memoryNoteWithdrawnAction, noteID, "evidence_gone"); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return noteIDs, nil
 }
 
 // still exist. A ref naming a deleted session is dropped here rather than

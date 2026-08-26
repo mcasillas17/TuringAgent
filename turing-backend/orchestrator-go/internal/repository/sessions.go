@@ -103,10 +103,12 @@ type Repository struct {
 	// memoryDeletionWithdrawalBarrier, when set (test-only; always nil in
 	// production), runs inside the session withdrawal transaction after the
 	// beliefs the deleted conversation was the last support for have been
-	// marked withdrawn and before the cascade removes their evidence. A test
-	// parked there can fail the transaction and prove the two commit together
-	// or not at all.
-	memoryDeletionWithdrawalBarrier func() error
+	// marked withdrawn and before the cascade removes their evidence. It is
+	// handed the notes that were withdrawn, so a test parked there can prove
+	// the withdrawal happened *and* that failing the transaction takes it back
+	// — a barrier that only said "something ran" would leave the second claim
+	// resting on a rollback that looks the same whether the first ran at all.
+	memoryDeletionWithdrawalBarrier func(withdrawn []string) error
 	// mcpRegistrySnapshotBarrier, when set (test-only; always nil in
 	// production), is invoked by MCPRegistrySnapshot once its single read
 	// transaction is open and its aggregate tool-byte budget guard has
