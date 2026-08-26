@@ -133,10 +133,12 @@ These are known, bounded, and deliberately not claimed away:
   holding the file open. A crash or a concurrent read mid-write can therefore
   observe a torn `profile.md`; the pinned-file failure posture recovers it as a
   visible parse-error row rather than as silence.
-- **The scan's (mtime, size) cache can serve stale text.** An edit made in the
-  same second that leaves the file the same length may not be noticed until the
-  next change. It affects the search projection only: `memory.read` serves the
-  file, freshly read.
+- **The scan's (inode, mtime, size) cache can serve stale text.** An edit made
+  to the same file in the same second that leaves it the same length may not be
+  noticed until the next change. The inode is part of the key so a rename —
+  which moves a note onto a name another note was holding — is always a miss.
+  It affects the search projection only: `memory.read` serves the file, freshly
+  read.
 - **The 4096-file scan bound degrades search and reconcile only.** A vault past
   it refuses legibly; pinned tiers and enqueue are never blocked by vault size.
 
