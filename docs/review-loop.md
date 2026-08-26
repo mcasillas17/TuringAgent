@@ -703,3 +703,68 @@ one that does nothing and the next reader deletes it.
 `service/memory/decision_deleted_session_test.go` pins the sentence the page
 gets. Removing the active-session read, either side of the lock, or either
 predicate each fails a test.
+
+## Round 11
+
+Reviewers: Grok, GPT-5.6 Terra, Claude Opus 5, Claude Opus 4.8.
+Outcome: one finding, from Opus 5, accepted and fixed. Grok, Terra and Opus 4.8
+each read the whole of the memory work and found nothing.
+
+The finding is round 10's own fix, one layer down. That is the ordinary shape of
+this loop by now: a door gets bound, and the next round asks what happens when
+the binding cannot be checked.
+
+### Opus 5 — a hash-bound rejection fell back to an inode when it could not read
+
+Round 10 gave the hashless door a binding, and it gave it two of them, because
+"a proposal nobody can read" is really two situations. A file whose bytes can be
+read but not parsed is bound to a hash of those bytes. A file nothing can open,
+or one past the size bound, has no bytes at all, and identity — device and inode
+— is the whole of what can be asked about it.
+
+The second binding is weaker on purpose, and it was reachable by accident. When
+the primitive could not open the candidate, it fell back to the entry it had
+just inspected under the same lock and let identity answer alone. That fallback
+was written for the file the pre-check could not open either, and it never asked
+which of the two bindings it was standing in for. So a candidate the pre-check
+*had* hashed, which then lost its permissions, took the weak door: the hash went
+unchecked, the descriptor was never there to re-read after the detach, and the
+only question left was one an inode number answers.
+
+An editor writing new words in place keeps the inode. So the sequence was
+ordinary and the outcome was the one this whole area exists to prevent: the user
+opens a malformed proposal, writes something different into it, something takes
+the permissions off — a sync client, an umask, a repair script — and the
+rejection they issued for the old bytes deletes the new ones. Nobody read those
+words, and there is nothing left to read them from.
+
+Accepted. Inode-only removal is now what an unhashable pre-check gets, and only
+that. A binding to bytes is checked by reading those bytes: if the primitive
+cannot open the candidate, it refuses before anything is detached and says the
+bytes were read once and cannot be read again to check they are the same. The
+same rule stands on the far side of the detach, where a bound hash with no
+descriptor to read it from restores the file and refuses rather than removing on
+an inode match. That second guard is unreachable from the first now, and it is
+kept anyway: it is the last check between a detached file and an unlink, and the
+two exits from that spot must not depend on each other.
+
+Both refusals are `ErrStaleContent`, so the row stays pending and the page tells
+the user to look again — the same sentence any other changed proposal gets,
+because that is what happened.
+
+Tests: `memoryfiles/remove_unreadable_hash_binding_test.go` — a prechecked,
+hashed candidate rewritten in place and closed to every reader, and the same one
+truncated and closed, each refused *before the detach* and with the sentence
+that names the unverifiable binding, the words written in the window intact and
+the inode proved not to have moved; an unopenable replacement, which identity
+goes on refusing; the controls that keep the weak door open where it belongs — a
+file nothing could open at pre-check, untouched, still removed, and the same file
+replaced, still refused by identity; the post-detach guard exercised directly,
+because the path above it now refuses first and a check nothing can reach is one
+the next reader deletes; a hashed candidate grown past the size bound while it
+is still openable, which nothing can refuse before the detach and which the far
+side puts back under its own name rather than unlinking; and a rewrite-and-close
+landing inside the detach window. `repository/memory_unreadable_rejection_test.go` drives the rewrite and
+the permission change through the decision's own barrier and holds the row
+pending and the new bytes on disk. Deleting either guard fails a test, and
+neither is covered only by the other.

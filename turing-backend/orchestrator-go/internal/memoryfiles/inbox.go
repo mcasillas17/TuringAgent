@@ -685,8 +685,10 @@ func (v *Vault) removeRejectedInboxEntry(
 		// exists for, and refusing here would leave them with a claim about
 		// themselves they can neither read, accept nor be rid of. The identity
 		// falls back to the entry that was just inspected under the same lock:
-		// weaker than a descriptor, and still enough for the one question the
-		// detach below asks — is what I am deleting what I looked at?
+		// weaker than a descriptor, and enough only where identity was the
+		// whole binding to begin with. Where the pre-check managed to hash the
+		// bytes, the check below refuses instead — a hash that cannot be
+		// compared is not answered by an inode number.
 		openedStat = named
 	default:
 		// Anything else — a symlink that appeared under the name, an entry
@@ -747,25 +749,9 @@ func (v *Vault) removeRejectedInboxEntry(
 	if err := ctx.Err(); err != nil {
 		return v.restoreDetachedEntry(ctx, parent, leaf, clean, staging, "the request ended before the removal could be verified")
 	}
-	detached := ""
 	var detachedStat unix.Stat_t
-	if err := unix.Fstatat(int(parent.Fd()), staging, &detachedStat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-		detached = fmt.Sprintf("the detached entry could not be inspected (%v)", err)
-	} else if detachedStat.Dev != openedStat.Dev || detachedStat.Ino != openedStat.Ino {
-		detached = "another file had taken its name"
-	} else if boundHash != "" && opened != nil {
-		// Same inode, and that is not the same thing as the same bytes: an
-		// editor saving in place keeps the inode, and those are the user's own
-		// newer words. They are held to the decision — or, for a hashless
-		// rejection, to the bytes the pre-check could not parse — like
-		// everything else.
-		content, readErr := rereadEntryContent(ctx, opened, clean)
-		if readErr != nil {
-			detached = fmt.Sprintf("it could not be read again before removal (%v)", readErr)
-		} else if ContentHash(content) != boundHash {
-			detached = "it was rewritten in place"
-		}
-	}
+	statErr := unix.Fstatat(int(parent.Fd()), staging, &detachedStat, unix.AT_SYMLINK_NOFOLLOW)
+	detached := objectionToDetachedEntry(ctx, clean, boundHash, opened, openedStat, detachedStat, statErr)
 	if detached != "" {
 		return v.restoreDetachedEntry(ctx, parent, leaf, clean, staging, detached)
 	}
@@ -803,7 +789,10 @@ func (v *Vault) removeRejectedInboxEntry(
 // Only two cases arrive here with no bytes to compare — a file nothing can open
 // and a file past the size bound — and both are answered the same way they were
 // answered before: the read fails again, which is itself the proof that the
-// file is still what the pre-check found.
+// file is still what the pre-check found. That licence belongs to the pre-check
+// alone. A candidate whose bytes *were* hashed and which this primitive can no
+// longer open does not inherit it: it is a binding to bytes with no way left to
+// check them, and it is refused rather than decided on identity alone.
 func requireBoundUnreadableEntry(
 	ctx context.Context,
 	clean string,
@@ -820,6 +809,20 @@ func requireBoundUnreadableEntry(
 			"another file has taken its name since it was read, so it was left alone")}
 	}
 	if opened == nil {
+		// Nothing here can open the entry. That is an answer only when the
+		// pre-check could not read it either: then there never were bytes to
+		// be bound to, identity is the whole of the binding, and the file
+		// being unopenable again is itself the proof that it is still what was
+		// found. When the pre-check *did* read the bytes, this is a hashed
+		// binding with no way to check it — and an inode number cannot tell a
+		// rewrite in place from the file that was read, which is precisely the
+		// move a rejection must never delete. So it is refused, and the user
+		// is told to look again rather than having words nobody read thrown
+		// away for them.
+		if identity.hashed {
+			return &StaleContentError{RelPath: clean, Detail: boundRefusalDetail(
+				"its bytes were read once and cannot be read again to check they are still the same bytes, so it was left alone")}
+		}
 		return nil
 	}
 	content, readErr := readEntryContent(ctx, opened, clean)
@@ -840,6 +843,53 @@ func requireBoundUnreadableEntry(
 			"it reads as a proposal now, so it was left alone; read it again and decide about what it says")}
 	}
 	return nil
+}
+
+// objectionToDetachedEntry answers whether the entry a rejection has just taken
+// off its name is the one it is entitled to delete, and says in a sentence why
+// not when it is not. An empty answer is the only thing that authorises the
+// unlink below it.
+//
+// It is a function of its own because it is the last check standing between a
+// detached file and an unlink, and every branch of it has to be reachable by a
+// test on its own terms.
+func objectionToDetachedEntry(
+	ctx context.Context,
+	clean string,
+	boundHash string,
+	opened *os.File,
+	openedStat unix.Stat_t,
+	detachedStat unix.Stat_t,
+	statErr error,
+) string {
+	if statErr != nil {
+		return fmt.Sprintf("the detached entry could not be inspected (%v)", statErr)
+	}
+	if detachedStat.Dev != openedStat.Dev || detachedStat.Ino != openedStat.Ino {
+		return "another file had taken its name"
+	}
+	if boundHash == "" {
+		return ""
+	}
+	if opened == nil {
+		// A binding to bytes is checked by reading those bytes. Without a
+		// descriptor there is nothing to read them from, and the inode match
+		// above is not that check: an editor writing new words in place keeps
+		// the inode. The file goes back.
+		return "it could not be read again before removal (nothing here can open it any more)"
+	}
+	// Same inode, and that is not the same thing as the same bytes: an editor
+	// saving in place keeps the inode, and those are the user's own newer
+	// words. They are held to the decision — or, for a hashless rejection, to
+	// the bytes the pre-check could not parse — like everything else.
+	content, readErr := rereadEntryContent(ctx, opened, clean)
+	if readErr != nil {
+		return fmt.Sprintf("it could not be read again before removal (%v)", readErr)
+	}
+	if ContentHash(content) != boundHash {
+		return "it was rewritten in place"
+	}
+	return ""
 }
 
 // restoreDetachedEntry puts back a file this deletion detached and then found

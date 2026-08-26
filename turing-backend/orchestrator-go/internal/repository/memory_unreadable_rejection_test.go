@@ -117,6 +117,48 @@ func TestHashlessRejectRefusesAProposalRepairedAfterItsPreCheck(t *testing.T) {
 	requireRefusedHashlessRejection(t, repo, vault, candidate, repaired)
 }
 
+// The window again, with the one move that used to get through it. The
+// pre-check could read the proposal's bytes — it just could not parse them — so
+// the removal is bound to a hash of exactly those bytes. Then the user's editor
+// wrote different words in place and something took every permission off the
+// file. The primitive cannot open it any more, and an inode number is not a
+// check on bytes: the words written in that window are a claim about the user
+// nobody has decided about, and they have to survive.
+func TestHashlessRejectRefusesAProposalRewrittenAndClosedAfterItsPreCheck(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	candidate := seedUnreadableCandidate(t, repo, vault)
+	const rewritten = "---\nstill: [broken\n---\n\nWritten after the pre-check, then closed.\n"
+	full := filepath.Join(vault.Root(), filepath.FromSlash(candidate.InboxPath))
+	repo.memoryDecisionFileBarrier = func() {
+		repo.memoryDecisionFileBarrier = nil
+		if err := os.WriteFile(full, []byte(rewritten), 0o600); err != nil {
+			t.Errorf("rewrite the proposal in place: %v", err)
+			return
+		}
+		if err := os.Chmod(full, 0o000); err != nil {
+			t.Errorf("close the proposal to every reader: %v", err)
+		}
+	}
+
+	err := repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID})
+	if !errors.Is(err, memoryfiles.ErrStaleContent) {
+		t.Fatalf("hash-bound rejection of an entry it cannot open = %v, want ErrStaleContent", err)
+	}
+	if chmodErr := os.Chmod(full, 0o600); chmodErr != nil {
+		t.Fatalf("reopen the proposal to read it: %v", chmodErr)
+	}
+	if got := readVaultNote(t, vault, candidate.InboxPath); got != rewritten {
+		t.Fatalf("the file at the candidate path holds %q, want the words written in the window %q", got, rewritten)
+	}
+	row, err := repo.MemoryCandidateByID(ctx(), candidate.CandidateID)
+	if err != nil {
+		t.Fatalf("a refused rejection retired the row: %v", err)
+	}
+	if row.State != MemoryCandidateStatePending {
+		t.Fatalf("a refused rejection left the proposal in %q", row.State)
+	}
+}
+
 // Nothing moved in the window, so the user gets what they asked for: the
 // unreadable proposal leaves the inbox and the row goes with it.
 func TestHashlessRejectStillRemovesAnUntouchedUnreadableProposal(t *testing.T) {
