@@ -1316,6 +1316,10 @@ func (r *Repository) releaseStaleReservation(
 	if present {
 		return false, nil
 	}
+	// Asked again, under the lock this time, and about the states that mean a
+	// proposal is still answerable for the file. The answer above picked which
+	// lock to take and was read before anything was held, so it cannot stand in
+	// for this one.
 	held, err := memoryCandidateNamingInboxPath(ctx, r.db, vaultPath, []string{
 		MemoryCandidateStatePending,
 		MemoryCandidateStateProfileApplying,
