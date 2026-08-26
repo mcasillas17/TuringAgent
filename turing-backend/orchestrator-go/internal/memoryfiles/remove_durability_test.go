@@ -505,8 +505,7 @@ func TestInstallRollbackReportsAContestedEntryItCouldNotFlush(t *testing.T) {
 func TestRefusedDiscardReportsBothTheUnlinkAndTheFlushItCouldNotDo(t *testing.T) {
 	const decided = "the proposal the user read"
 	recorder := &syncRecorder{}
-	var vault *Vault
-	vault = vaultWithRemovalSeams(t, recorder.hooks(), func(phase detachPhase, _ string) {
+	vault := vaultWithRemovalSeams(t, recorder.hooks(), func(phase detachPhase, _ string) {
 		if phase == detachPhaseBeforeVerify {
 			// The verify is about to pass, so the next directory flush is the
 			// one the discard makes after its failed unlink.
