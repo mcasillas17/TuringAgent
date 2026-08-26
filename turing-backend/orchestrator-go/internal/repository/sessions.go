@@ -100,6 +100,13 @@ type Repository struct {
 	// write and before the bookkeeping. It is how a test stages a crash at
 	// each and proves what the next pass makes of what was left.
 	memoryProfileApplyBarrier func(stage string) error
+	// memoryDeletionWithdrawalBarrier, when set (test-only; always nil in
+	// production), runs inside the session withdrawal transaction after the
+	// beliefs the deleted conversation was the last support for have been
+	// marked withdrawn and before the cascade removes their evidence. A test
+	// parked there can fail the transaction and prove the two commit together
+	// or not at all.
+	memoryDeletionWithdrawalBarrier func() error
 	// mcpRegistrySnapshotBarrier, when set (test-only; always nil in
 	// production), is invoked by MCPRegistrySnapshot once its single read
 	// transaction is open and its aggregate tool-byte budget guard has

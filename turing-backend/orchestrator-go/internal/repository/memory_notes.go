@@ -281,7 +281,82 @@ func upsertMemoryNoteTx(ctx context.Context, tx *sql.Tx, note MemoryNote) error 
 	return err
 }
 
-// liveSessionRefsTx filters a note's citations down to the conversations that
+// withdrawMemoryNotesLosingLastEvidenceTx marks every belief the session being
+// deleted was the last support for, inside the transaction that removes it.
+//
+// The vault pass already does this, and doing it here as well is not
+// duplication — it is the difference between a promise the database keeps and
+// one it owes to a filesystem walk. `memory_evidence` cascades with the
+// session, so the moment this transaction commits the citations are gone; the
+// pass that would notice runs afterwards, outside the transaction, and refuses
+// outright on a vault that is unreadable, past the scan bound or simply not
+// attached. Between those two facts sits a claim about the user whose every
+// conversation they deleted, still `managed` in the index, still returned by
+// search, and still readable by identity — which is not a withdrawal at all.
+//
+// Only the index status is written here. The file in the vault keeps its own
+// frontmatter until a pass can rewrite it, because that is a write into the
+// user's folder and it is not something to hold a deletion open for. The index
+// is what search and reads answer from, and it is the half that can be made
+// true transactionally.
+//
+// "No surviving evidence from another session" is asked of the rows rather than
+// of the file: a note two conversations support does not lose its grounding
+// because one of them was deleted, and withdrawing it early would take a
+// belief the user accepted away over a conversation they were entitled to
+// remove.
+func withdrawMemoryNotesLosingLastEvidenceTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT evidence.note_id
+		FROM memory_evidence evidence
+		JOIN memory_notes note ON note.id = evidence.note_id
+		WHERE evidence.session_id = ?
+			AND note.status <> ?
+			AND NOT EXISTS (
+				SELECT 1 FROM memory_evidence surviving
+				WHERE surviving.note_id = evidence.note_id
+					AND surviving.session_id <> ?
+			)
+		ORDER BY evidence.note_id
+	`, sessionID, MemoryNoteStatusWithdrawn, sessionID)
+	if err != nil {
+		return err
+	}
+	var noteIDs []string
+	for rows.Next() {
+		var noteID string
+		if err := rows.Scan(&noteID); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		noteIDs = append(noteIDs, noteID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	// Collected first and written second so the audit says exactly what
+	// changed. A retry after an unfinished completion re-enters with the
+	// evidence already cascaded away, matches nothing, and writes nothing —
+	// a log that counted attempts as withdrawals would be one nobody could
+	// read the real events out of.
+	for _, noteID := range noteIDs {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE memory_notes SET status = ?, updated_at = ? WHERE id = ?
+		`, MemoryNoteStatusWithdrawn, now(), noteID); err != nil {
+			return err
+		}
+		if err := recordMemoryReconcileTx(ctx, tx, memoryNoteWithdrawnAction, noteID, "evidence_gone"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+
 // still exist. A ref naming a deleted session is dropped here rather than
 // attempted: a foreign key failure would abort a heal that is trying to rescue
 // a note the user accepted.
