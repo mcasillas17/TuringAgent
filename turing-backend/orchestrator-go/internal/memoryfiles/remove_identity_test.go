@@ -350,6 +350,43 @@ func TestDecidedRejectionRefusesAFileItCannotRead(t *testing.T) {
 	requireNoStagingResidue(t, vault)
 }
 
+// A request that is cancelled while the file is between names puts it back and
+// says it was cancelled. "It changed since you read it" is the wrong sentence
+// when nothing changed and nobody finished looking — and the file has to be
+// under its own name again either way, because a proposal that vanished from
+// the user's inbox on a cancelled request is a proposal they can never decide.
+func TestRejectionCancelledMidDetachRestoresTheFileAndSaysSo(t *testing.T) {
+	const decided = "the proposal the user read"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	vault := vaultWithDetachBarrier(t, func(phase detachPhase, _ string) {
+		if phase == detachPhaseBeforeVerify {
+			cancel()
+		}
+	})
+	full := writeVaultFile(t, vault, "inbox/note.md", decided)
+
+	err := vault.RemoveInboxNote(ctx, RemoveInboxNoteRequest{
+		RelPath:             "inbox/note.md",
+		Mode:                RemoveDecidedCandidate,
+		ExpectedContentHash: ContentHash(decided),
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected the cancellation to be reported as one, got %v", err)
+	}
+	if errors.Is(err, ErrStaleContent) {
+		t.Fatalf("a cancelled request claimed the file had changed: %v", err)
+	}
+	survived, readErr := os.ReadFile(full)
+	if readErr != nil {
+		t.Fatalf("a cancelled rejection left the proposal off its own name: %v", readErr)
+	}
+	if string(survived) != decided {
+		t.Fatalf("the restored file holds %q, want the proposal %q", survived, decided)
+	}
+	requireNoStagingResidue(t, vault)
+}
+
 // Turing's own tidying keeps the plain, idempotent unlink: it is not a decision
 // about text, the outcome it follows is already recorded elsewhere, and leaving
 // the file behind is the failure. It stays confined to the inbox, which is the

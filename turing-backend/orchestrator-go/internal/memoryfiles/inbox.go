@@ -582,6 +582,7 @@ func (v *Vault) removeRejectedInboxEntry(
 		return fmt.Errorf("detach %q before removing it: %w", clean, err)
 	}
 
+	v.detachBarrier(detachPhaseBeforeVerify, clean)
 	detached := ""
 	var detachedStat unix.Stat_t
 	if err := unix.Fstatat(int(parent.Fd()), staging, &detachedStat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
@@ -641,6 +642,13 @@ func (v *Vault) restoreDetachedEntry(
 			}
 		}
 		_ = v.syncDirectory(parent)
+		// The vault is exactly as it was, so a request that ran out of time or
+		// was cancelled says that rather than making a claim about the file.
+		// "It changed since you read it" is the wrong sentence when nothing
+		// changed and nobody finished looking.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return &StaleContentError{RelPath: clean, Detail: reason + ", so it was left alone"}
 	}
 	_ = v.syncDirectory(parent)

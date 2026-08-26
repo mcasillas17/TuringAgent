@@ -132,13 +132,16 @@ type Vault struct {
 }
 
 // detachPhase names where inside a rejection's deletion the barrier is
-// standing. The two moments are the ones another writer can be at: just before
-// the candidate leaves its name, and just before a file that turned out not to
-// be the decided one is put back under it.
+// standing: just before the candidate leaves its name, just after it has left
+// and before what was detached is checked, and just before a file that turned
+// out not to be the decided one is put back under it. They are the three
+// moments something else — another writer, or a cancelled request — can arrive
+// at while the file is between names.
 type detachPhase int
 
 const (
 	detachPhaseBeforeDetach detachPhase = iota
+	detachPhaseBeforeVerify
 	detachPhaseBeforeRestore
 )
 
