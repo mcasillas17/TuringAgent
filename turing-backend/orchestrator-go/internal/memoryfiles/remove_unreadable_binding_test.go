@@ -278,6 +278,47 @@ func TestBoundHashlessRejectionRefusesAReplacementOfAnUnopenableFile(t *testing.
 	requireNoStagingResidue(t, vault)
 }
 
+// The window the pre-detach check cannot speak for. Everything above rewrites
+// the file before the call; this one rewrites it *inside* the call, after the
+// identity and the bytes have already been agreed and before the entry is off
+// its name. Only the re-read after the detach can refuse here, and it can only
+// do so because the hashless door now carries a hash of its own — the bytes
+// that would not parse — into that check.
+func TestBoundHashlessRejectionRefusesARewriteInsideTheDetachWindow(t *testing.T) {
+	const rewritten = "---\nstill: [broken\n---\n\nWritten while the rejection was mid-flight.\n"
+	var vault *Vault
+	vault = vaultWithDetachBarrier(t, func(phase detachPhase, _ string) {
+		if phase != detachPhaseBeforeDetach {
+			return
+		}
+		// In place, so the inode does not move: identity has already passed and
+		// cannot be what refuses this.
+		full := filepath.Join(vault.Root(), InboxDirName, "note.md")
+		if err := os.WriteFile(full, []byte(rewritten), 0o600); err != nil {
+			t.Errorf("rewrite the proposal mid-flight: %v", err)
+		}
+	})
+	full := writeVaultFile(t, vault, "inbox/note.md", unparseableCandidate)
+	identity := unreadableIdentity(t, vault, "inbox/note.md")
+
+	err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
+		RelPath:    "inbox/note.md",
+		Mode:       RemoveUnreadableCandidate,
+		Unreadable: identity,
+	})
+	if !errors.Is(err, ErrStaleContent) {
+		t.Fatalf("hashless rejection of a rewrite inside the detach window = %v, want ErrStaleContent", err)
+	}
+	survived, readErr := os.ReadFile(full)
+	if readErr != nil {
+		t.Fatalf("a hashless rejection deleted words written while it was in flight: %v", readErr)
+	}
+	if string(survived) != rewritten {
+		t.Fatalf("the file holds %q, want the mid-flight rewrite %q", survived, rewritten)
+	}
+	requireNoStagingResidue(t, vault)
+}
+
 // The case identity alone answers. Both files are past the size bound, so
 // neither can be hashed and neither will ever parse: "still unreadable" is true
 // of the replacement too. Only the inode says these are different bytes, and

@@ -162,6 +162,11 @@ func memoryError(err error, fallback string) error {
 		return status.Error(codes.FailedPrecondition,
 			"the conversation this proposal came from is being deleted, so it can no longer be decided")
 	case errors.Is(err, repository.ErrSessionNotFound):
+		// Unreachable by the cascade — a session row that goes takes its
+		// candidates with it, so the decision refuses as "not found" on the
+		// candidate first. It is mapped anyway because the alternative for a
+		// named refusal is the Internal fallback, which tells the user Turing
+		// broke when what happened is that their conversation is gone.
 		return status.Error(codes.NotFound, "the conversation this proposal came from no longer exists")
 	case errors.Is(err, repository.ErrMemoryCandidateKind):
 		return status.Error(codes.FailedPrecondition, "this memory candidate is not of the kind this decision applies to")

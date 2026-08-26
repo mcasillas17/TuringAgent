@@ -637,15 +637,18 @@ about text and has no entry to be bound to.
 Tests: `memoryfiles/remove_unreadable_binding_test.go` — the readable
 replacement, the second broken file that took the name, the in-place rewrite,
 the proposal repaired in place, the file that arrived after a pre-check that
-found nothing, and the two cases with no bytes to hash at all: an over-sized
-file replaced by another over-sized file, which only identity can refuse, and
-one trimmed back into a proposal, which only the still-unreadable question can.
+found nothing, a rewrite that lands *inside* the detach window, which only the
+re-read after the detach can refuse, and the two cases with no bytes to hash at
+all: an over-sized file replaced by another over-sized file, which only
+identity can refuse, and one trimmed back into a proposal, which only the
+still-unreadable question can.
 `repository/memory_unreadable_rejection_test.go` drives the same window through
 the decision, parked on the barrier between the pre-check and the primitive, and
-holds the row pending and the file where it is. Each of the five checks —
-identity, bytes, still-unreadable, the pre-check that found nothing, and the
-requirement to be bound at all — fails at least one test when it is deleted,
-and none of them is covered only by another.
+holds the row pending and the file where it is. Each of the six checks —
+identity, bytes, still-unreadable, the pre-check that found nothing, the
+requirement to be bound at all, and the bytes carried past the detach — fails
+at least one test when it is deleted, and none of them is covered only by
+another.
 
 ### Opus 4.8 — a decision could act on a conversation being deleted
 
