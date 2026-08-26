@@ -528,6 +528,12 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 // meantime the file stays under the staging name and the refusal says where it
 // is, because an unreferenced file somebody can still find is recoverable and a
 // deleted one is not.
+//
+// A request that ends while the file is between names goes down that same road.
+// Cancellation is not a verdict about the bytes, and a caller that has gone is
+// nobody to delete a claim about the user on behalf of, so the entry is put back
+// — or kept under a name the user can see — before the context error is what
+// this returns.
 func (v *Vault) removeRejectedInboxEntry(
 	ctx context.Context,
 	parent *os.File,
@@ -584,6 +590,20 @@ func (v *Vault) removeRejectedInboxEntry(
 	}
 
 	v.detachBarrier(detachPhaseBeforeVerify, clean)
+	// The file is off its name and nothing has decided yet whether it may go.
+	// A request that has ended here is not a decision, so there is nothing left
+	// to authorise an unlink: the bytes go back under their own name first, and
+	// the cancellation is reported only once they are somewhere the user can
+	// see them again.
+	//
+	// This has to be the primitive's own check rather than a side effect of the
+	// re-read below. A hashless removal — the one door out for a proposal
+	// nobody can read — never re-reads anything, so a cancelled request would
+	// otherwise walk past this point straight into the unlink and delete a
+	// claim about the user on behalf of a caller that had already gone.
+	if err := ctx.Err(); err != nil {
+		return v.restoreDetachedEntry(ctx, parent, leaf, clean, staging, "the request ended before the removal could be verified")
+	}
 	detached := ""
 	var detachedStat unix.Stat_t
 	if err := unix.Fstatat(int(parent.Fd()), staging, &detachedStat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
