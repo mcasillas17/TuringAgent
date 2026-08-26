@@ -27,6 +27,14 @@ enum MemoryCandidateState {
   // The session that produced the candidate was deleted. The candidate is kept
   // so the record does not silently vanish, but it can no longer be promoted.
   MEMORY_CANDIDATE_STATE_WITHDRAWN = 4;
+  // The user accepted this profile edit and the server claimed the apply
+  // before touching profile.md. It is not a decision waiting to be taken: the
+  // decision was taken, and what is unfinished is the write or the bookkeeping
+  // after it. No decision RPC accepts a candidate in this state — in
+  // particular a rejection cannot win once the profile may already carry these
+  // words — and a client renders it as an apply being finished rather than as
+  // a proposal with buttons.
+  MEMORY_CANDIDATE_STATE_PROFILE_APPLYING = 5;
 }
 
 // Whether Turing may rewrite the file. An unmanaged note is one the user has
@@ -99,6 +107,14 @@ message MemoryCandidate {
   // that rendered an unmanaged draft with a Promote button would be offering
   // an action the server refuses.
   bool managed = 14;
+  // True for an inbox file Turing wrote and then lost the record of: a
+  // creation that crashed between the write and its transaction. It is
+  // unmanaged for exactly the same reason a hand-dropped draft is — there is
+  // no row, so no decision RPC applies — but it is not the user's own draft,
+  // and telling them it is would be a lie about who wrote a claim about them.
+  // It is listed rather than deleted, because a file they may already have
+  // read is not something to remove on a guess.
+  bool untracked = 15;
 }
 
 // An accepted memory: a Markdown file in the user's vault.
@@ -268,6 +284,14 @@ message RejectMemoryCandidateRequest {
   // refused. A rejection asks nothing about the kind — it is the user saying no
   // to whatever is there — so a proposal whose frontmatter no longer parses can
   // still be thrown away.
+  //
+  // Optional, and deliberately so. A client that could not read the proposal
+  // has no hash to make a claim with, and sending one it invented — or the
+  // hash of the bytes it failed to parse — would be answering a question it
+  // cannot answer. Empty is that client saying it is making no claim about the
+  // file, which is the one case where a rejection may proceed over a file the
+  // server cannot read either. A non-empty hash against an unreadable file is
+  // still refused: the claim cannot be checked, so it cannot be honoured.
   string expected_candidate_hash = 4;
 }
 
@@ -307,6 +331,13 @@ message ApplyMemoryProfileRequest {
 
 message ApplyMemoryProfileResponse {
   MemoryProfile profile = 1;
+  // True when profile.md now holds `content` and the proposal it came from is
+  // still sitting in the inbox because it could not be removed. The write is
+  // the part that matters and it landed, so this is not a failure — but the
+  // user would otherwise be shown a proposal they have already accepted, with
+  // no explanation, and no decision RPC will take it. Turing's own cleanup
+  // finishes it; saying so is what keeps the page honest in the meantime.
+  bool cleanup_pending = 2;
 }
 
 message GetMemoryPersonaRequest {}

@@ -99,13 +99,27 @@ table in the same change that created it:
   session foreign key with `ON DELETE CASCADE`. Inbox proposals, of both kinds
   (`belief` and `profile_edit`), are machine-owned rows. They are never
   searchable and never active: no tool argument can name `inbox/`, and nothing
-  in it is pinned.
+  in it is pinned. One lifecycle state, `profile_applying`, is not a decision
+  waiting to be taken: it is the claim an apply records — under the
+  per-candidate lock, before `profile.md` is written — carrying the hash of the
+  document it is replacing and the hash of the one it is about to produce, and
+  nothing else. No decision RPC accepts a candidate in that state, so a
+  rejection cannot retire a proposal whose words the user's own document may
+  already carry, and a pass that finds the claim after a crash resolves it by
+  reading `profile.md`: the result hash finishes the apply, the base hash hands
+  the proposal back, and anything else leaves the claim standing rather than
+  guessing. Only hashes are stored; the resulting document lives in the request
+  and in the user's file, never in a row.
 - `memory_evidence` — **cascade_owned**, source `sessions`, cascading from both
   the note and the session. These are the annotations Relaxation 1 demotes.
 - `vault_artifacts` — **cascade_owned**, source `sessions`. A reservation is
   written *before* the candidate file is created, so a crash leaves a row with
   no file, which the idempotent cleaner tolerates, rather than a file no cleaner
-  knows about while the deletion reports complete.
+  knows about while the deletion reports complete. The same rule holds at the
+  other end: an applied proposal whose file could not be removed keeps its
+  reservation, because releasing it beside a file that is still there would
+  leave a claim about the user in their vault with nothing in the manifest
+  naming it.
 - `memory_notes` — **independent**, with Relaxation 1 as its written rationale:
   promoted notes are user-authored files whose lifecycle the user controls, and
   their session provenance cascades separately through `memory_evidence`.

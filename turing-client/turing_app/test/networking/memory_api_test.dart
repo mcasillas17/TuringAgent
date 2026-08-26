@@ -125,6 +125,41 @@ void main() {
     expect(service.rejections.single.expectedContentHash, '');
   });
 
+  test('a proposal nobody could read is rejected with no claim', () async {
+    final service = _MemoryService();
+    final api = await connect(service);
+
+    // The page had nothing to show, so it has nothing to swear to. An empty
+    // token is this client saying it makes no claim about the file, which is
+    // the one case the server takes a rejection over bytes it cannot parse.
+    await api.rejectMemoryCandidate(candidateId: 'cand-unreadable');
+
+    expect(service.rejections.single.candidateId, 'cand-unreadable');
+    expect(service.rejections.single.expectedCandidateHash, '');
+    // ignore: deprecated_member_use_from_same_package
+    expect(service.rejections.single.expectedContentHash, '');
+  });
+
+  test('an apply says whether only the tidying is outstanding', () async {
+    final service = _MemoryService()..cleanupPending = true;
+    final api = await connect(service);
+
+    final applied = await api.applyMemoryProfile(
+      candidateId: 'cand-3',
+      content: '# Profile\n\nApplied.\n',
+      expectedContentHash: 'sha256:profile',
+      expectedCandidateHash: 'sha256:file-3',
+    );
+
+    expect(applied.profile.content, '# Profile\n\nApplied.\n');
+    expect(
+      applied.cleanupPending,
+      isTrue,
+      reason: 'the write landed; what is unfinished is Turing removing the '
+          'proposal, and the page has to be able to say which',
+    );
+  });
+
   test('setMemoryEnabled toggles memory as a whole', () async {
     final service = _MemoryService();
     final api = await connect(service);
@@ -186,6 +221,7 @@ class _MemoryService extends memorygrpc.MemoryServiceBase {
   final List<memorypb.PromoteMemoryCandidateRequest> promotions = [];
   final List<memorypb.RejectMemoryCandidateRequest> rejections = [];
   final List<memorypb.ApplyMemoryProfileRequest> applies = [];
+  bool cleanupPending = false;
   final List<memorypb.SetMemoryEnabledRequest> toggles = [];
   bool refuseSaves = false;
 
@@ -362,6 +398,7 @@ class _MemoryService extends memorygrpc.MemoryServiceBase {
   ) async {
     applies.add(request);
     return memorypb.ApplyMemoryProfileResponse(
+      cleanupPending: cleanupPending,
       profile: memorypb.MemoryProfile(
         content: request.content,
         contentHash: 'sha256:profile-3',

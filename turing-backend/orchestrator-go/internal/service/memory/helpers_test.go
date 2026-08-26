@@ -90,6 +90,20 @@ func newMemoryServiceAt(
 	recorder AuditRecorder,
 ) (*Server, *repository.Repository, *memoryfiles.Vault, context.Context) {
 	t.Helper()
+	service, repo, vault, _, callCtx := newMemoryServiceStack(t, dbPath, root, recorder)
+	return service, repo, vault, callCtx
+}
+
+// newMemoryServiceStack is the same build with the database handed back, for
+// the tests that have to put the store into a state no production path
+// produces on purpose — a candidate file whose row is gone, for one.
+func newMemoryServiceStack(
+	t *testing.T,
+	dbPath string,
+	root string,
+	recorder AuditRecorder,
+) (*Server, *repository.Repository, *memoryfiles.Vault, *db.DB, context.Context) {
+	t.Helper()
 	database, err := db.Open(dbPath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -107,7 +121,7 @@ func newMemoryServiceAt(
 	if recorder == nil {
 		recorder = audit.New(repo)
 	}
-	return New(repo, vault, recorder), repo, vault, context.Background()
+	return New(repo, vault, recorder), repo, vault, database, context.Background()
 }
 
 func newRun(t *testing.T, repo *repository.Repository, ctx context.Context) (string, string) {

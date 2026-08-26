@@ -273,9 +273,16 @@ abstract class TuringApi implements RemoteEgressApi {
   }
 
   /// Refuses a proposal. See [promoteMemoryCandidate] for the token.
+  ///
+  /// [expectedCandidateHash] is optional, and empty is a real answer: a page
+  /// that could not read the proposal has no bytes to swear to, and the server
+  /// takes a rejection with no claim over a file it cannot parse. Sending the
+  /// listing's hash there instead would be refused — a claim cannot be checked
+  /// against bytes nobody could read — leaving the user with a proposal about
+  /// themselves they can neither accept nor throw away.
   Future<MemoryCandidate> rejectMemoryCandidate({
     required String candidateId,
-    required String expectedCandidateHash,
+    String expectedCandidateHash = '',
     String reason = '',
   }) {
     throw const TuringApiException(
@@ -296,7 +303,7 @@ abstract class TuringApi implements RemoteEgressApi {
   /// [expectedCandidateHash] is compare-and-set against the proposal, so the
   /// result cannot be applied on the authority of a proposal that has since
   /// changed.
-  Future<MemoryDocument> applyMemoryProfile({
+  Future<MemoryApplyResult> applyMemoryProfile({
     required String candidateId,
     required String content,
     required String expectedContentHash,

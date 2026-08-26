@@ -140,6 +140,46 @@ void main() {
     expect(model.content, 'a proposal from a newer server');
   });
 
+  test('an untracked inbox file is carried as its own fact', () {
+    // Turing wrote this file and lost the record of it. It is unmanaged, like a
+    // draft the user dropped in — and it is not one, so a client that dropped
+    // the distinction would present a model's claim about the user as
+    // something they wrote themselves.
+    final model = GrpcMappers.memoryCandidateToModel(
+      memorypb.MemoryCandidate(
+        inboxPath: 'inbox/orphan.md',
+        content: 'They bike to work.',
+        untracked: true,
+      ),
+    );
+
+    expect(model.untracked, isTrue);
+    expect(model.managed, isFalse);
+    expect(model.decision, MemoryCandidateDecision.none);
+  });
+
+  test('a claimed apply is carried as a state, not as a pending proposal', () {
+    final model = GrpcMappers.memoryCandidateToModel(
+      memorypb.MemoryCandidate(
+        candidateId: 'cand-applying',
+        kind: memorypb.MemoryCandidateKind.MEMORY_CANDIDATE_KIND_PROFILE_EDIT,
+        inboxPath: 'inbox/profile.md',
+        content: 'They bike to work.',
+        state: memorypb
+            .MemoryCandidateState
+            .MEMORY_CANDIDATE_STATE_PROFILE_APPLYING,
+        managed: true,
+      ),
+    );
+
+    expect(model.state, MemoryCandidateState.profileApplying);
+    expect(
+      model.decision,
+      MemoryCandidateDecision.none,
+      reason: 'the decision was taken; no button belongs on a claimed apply',
+    );
+  });
+
   test('withdrawn provenance keeps its timestamp and its counted evidence', () {
     final note = GrpcMappers.memoryNoteToModel(
       memorypb.MemoryNote(

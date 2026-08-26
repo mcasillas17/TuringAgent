@@ -177,13 +177,32 @@ func (s *Server) readVault(ctx context.Context) (vaultView, error) {
 	for _, path := range report.Index.UnmanagedInboxDrafts {
 		drafts[path] = struct{}{}
 	}
+	// Inbox files Turing wrote and then lost the record of: a creation that
+	// died between the write and its transaction. Nothing in the database
+	// claims them, so no decision RPC will take them — but they are claims
+	// about the user sitting in the user's vault, and leaving them off the
+	// page is the one outcome that makes them invisible as well as undecidable.
+	orphans := make(map[string]struct{}, len(report.Index.OrphanInboxNotes))
+	for _, path := range report.Index.OrphanInboxNotes {
+		orphans[path] = struct{}{}
+	}
 	// What the pass could not account for, by path. A note it stepped over is
 	// still on this page and still readable, and without this it would arrive
 	// looking like every other note while quietly never turning up in search —
 	// which, to the person whose memory it is, is indistinguishable from one
 	// Turing decided to forget.
-	refused := make(map[string]string, len(report.Index.Errors))
+	//
+	// A rename the pass held back lands here for the same reason and is not a
+	// lesser case: the file is in the vault under its new name, the row still
+	// names the old one, and search answers from the row. Rendering it as an
+	// ordinary note would be presenting a stale projection as the current one.
+	refused := make(map[string]string, len(report.Index.Errors)+len(report.Index.ContestedPaths))
 	for _, issue := range report.Index.Errors {
+		if _, already := refused[issue.RelPath]; !already {
+			refused[issue.RelPath] = issue.Reason
+		}
+	}
+	for _, issue := range report.Index.ContestedPaths {
 		if _, already := refused[issue.RelPath]; !already {
 			refused[issue.RelPath] = issue.Reason
 		}
@@ -201,6 +220,10 @@ func (s *Server) readVault(ctx context.Context) (vaultView, error) {
 			inbox[row.RelPath] = row
 			if _, unmanaged := drafts[row.RelPath]; unmanaged {
 				view.candidates = append(view.candidates, unmanagedDraftProto(row))
+				continue
+			}
+			if _, untracked := orphans[row.RelPath]; untracked {
+				view.candidates = append(view.candidates, untrackedInboxProto(row))
 			}
 		}
 	}
@@ -358,6 +381,24 @@ func (s *Server) beliefProto(ctx context.Context, row memoryfiles.NoteRow, refus
 		})
 	}
 	return note
+}
+
+// untrackedInboxProto describes an inbox file Turing wrote and then lost the
+// record of — a creation that died between the write and the transaction that
+// would have described it.
+//
+// It is unmanaged for the same mechanical reason a hand-dropped draft is: there
+// is no row, so there is no candidate id, and every decision RPC refuses it.
+// What it is not is the user's own draft, and the flag says so — telling them
+// they wrote a claim about themselves that a model wrote would be a lie about
+// authorship, and the guidance a client offers for the two is different. The
+// file is listed, never rewritten and never deleted here: the reservation still
+// tracks it, and a file the user may already have read is not something to
+// remove on a guess.
+func untrackedInboxProto(row memoryfiles.NoteRow) *turingv1.MemoryCandidate {
+	candidate := unmanagedDraftProto(row)
+	candidate.Untracked = true
+	return candidate
 }
 
 // unmanagedDraftProto describes a file the user put in the inbox themselves.
@@ -562,7 +603,7 @@ func (s *Server) ApplyMemoryProfile(ctx context.Context, req *turingv1.ApplyMemo
 	if err != nil {
 		return nil, memoryError(err, "read memory candidate failed")
 	}
-	document, err := s.repo.ApplyMemoryProfileCandidate(ctx, repository.ApplyMemoryProfileInput{
+	applied, err := s.repo.ApplyMemoryProfileCandidate(ctx, repository.ApplyMemoryProfileInput{
 		CandidateID: candidate.CandidateID,
 		// The profile's own compare-and-set, and the only place
 		// expected_content_hash still means the profile document.
@@ -576,15 +617,19 @@ func (s *Server) ApplyMemoryProfile(ctx context.Context, req *turingv1.ApplyMemo
 		}
 		return nil, memoryError(err, "apply memory profile failed")
 	}
+	document := applied.Document
 	s.record(ctx, "memory.profile.applied", candidate.CandidateID, map[string]any{"kind": candidate.Kind})
-	return &turingv1.ApplyMemoryProfileResponse{Profile: &turingv1.MemoryProfile{
-		Content:           document.Content,
-		ContentHash:       document.ContentHash,
-		Status:            turingv1.MemoryNoteStatus_MEMORY_NOTE_STATUS_MANAGED,
-		UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE,
-		PinnedTruncated:   document.PinnedTruncated,
-		PinnedBytes:       int32(document.PinnedBytes),
-	}}, nil
+	return &turingv1.ApplyMemoryProfileResponse{
+		CleanupPending: applied.CleanupPending,
+		Profile: &turingv1.MemoryProfile{
+			Content:           document.Content,
+			ContentHash:       document.ContentHash,
+			Status:            turingv1.MemoryNoteStatus_MEMORY_NOTE_STATUS_MANAGED,
+			UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE,
+			PinnedTruncated:   document.PinnedTruncated,
+			PinnedBytes:       int32(document.PinnedBytes),
+		},
+	}, nil
 }
 
 // deprecatedPromoteHash and deprecatedRejectHash read the field this server
@@ -759,6 +804,8 @@ func candidateStateProto(state string) turingv1.MemoryCandidateState {
 	switch state {
 	case repository.MemoryCandidateStatePending:
 		return turingv1.MemoryCandidateState_MEMORY_CANDIDATE_STATE_PENDING
+	case repository.MemoryCandidateStateProfileApplying:
+		return turingv1.MemoryCandidateState_MEMORY_CANDIDATE_STATE_PROFILE_APPLYING
 	case repository.MemoryCandidateStatePromoted:
 		return turingv1.MemoryCandidateState_MEMORY_CANDIDATE_STATE_PROMOTED
 	case repository.MemoryCandidateStateRejected:
@@ -776,6 +823,8 @@ func candidateStateName(state turingv1.MemoryCandidateState) (string, error) {
 		return "", nil
 	case turingv1.MemoryCandidateState_MEMORY_CANDIDATE_STATE_PENDING:
 		return repository.MemoryCandidateStatePending, nil
+	case turingv1.MemoryCandidateState_MEMORY_CANDIDATE_STATE_PROFILE_APPLYING:
+		return repository.MemoryCandidateStateProfileApplying, nil
 	case turingv1.MemoryCandidateState_MEMORY_CANDIDATE_STATE_PROMOTED:
 		return repository.MemoryCandidateStatePromoted, nil
 	case turingv1.MemoryCandidateState_MEMORY_CANDIDATE_STATE_REJECTED:

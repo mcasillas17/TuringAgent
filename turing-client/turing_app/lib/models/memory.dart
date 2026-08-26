@@ -19,6 +19,12 @@ enum MemoryCandidateState {
   /// The conversation that produced the proposal was deleted. The row survives
   /// so the record does not vanish, and it can no longer be decided.
   withdrawn,
+
+  /// The user accepted this profile edit and the server claimed it before
+  /// touching profile.md. The decision has been taken — what is unfinished is
+  /// the write or the bookkeeping after it — so no decision RPC will accept it
+  /// and this client offers none.
+  profileApplying,
 }
 
 /// Whether Turing may rewrite the file.
@@ -147,6 +153,26 @@ class MemoryDocument {
       unavailableReason == MemoryUnavailableReason.vaultMissing;
 }
 
+/// What an accepted profile edit left behind.
+///
+/// The write and the tidying after it are reported separately because they fail
+/// separately, and only one of them is the decision. Once profile.md holds the
+/// document the user reviewed they have been answered; a proposal file the
+/// server could not remove afterwards is Turing's housekeeping, and calling
+/// that a failed apply would tell them their edit did not happen while their
+/// own file says it did.
+class MemoryApplyResult {
+  const MemoryApplyResult({required this.profile, this.cleanupPending = false});
+
+  final MemoryDocument profile;
+
+  /// True when the profile holds the reviewed document and the proposal it came
+  /// from is still in the inbox. The proposal is not decidable any more — no
+  /// RPC will take it — so a page that said nothing would leave the user
+  /// looking at a card they cannot act on.
+  final bool cleanupPending;
+}
+
 /// Where a claim came from, and whether it still stands.
 class MemoryProvenance {
   const MemoryProvenance({
@@ -222,6 +248,7 @@ class MemoryCandidate {
     required this.contentHash,
     required this.state,
     required this.managed,
+    this.untracked = false,
     List<MemoryProvenance> provenance = const [],
     this.promotedNoteId = '',
     this.createdAt,
@@ -245,6 +272,13 @@ class MemoryCandidate {
   /// no row for it and will not move it, so there is no RPC that promotes it —
   /// rendering one would offer an action the server refuses.
   final bool managed;
+
+  /// True for an inbox file Turing wrote and then lost the record of. It is
+  /// unmanaged for the same mechanical reason a hand-dropped draft is, and it
+  /// is not the same thing: this one is a model's claim about the user, and
+  /// presenting it as something they wrote themselves would be a lie about who
+  /// said it.
+  final bool untracked;
   final List<MemoryProvenance> provenance;
   final String promotedNoteId;
   final DateTime? createdAt;
@@ -276,17 +310,24 @@ class MemoryCandidate {
     // is not unsupported; it is understood, and the answer is that Turing does
     // not decide it.
     if (!managed || candidateId.isEmpty) return MemoryCandidateDecision.none;
-    if (!contentIsWhole) return MemoryCandidateDecision.none;
     switch (state) {
       case MemoryCandidateState.pending:
         break;
       case MemoryCandidateState.promoted:
       case MemoryCandidateState.rejected:
       case MemoryCandidateState.withdrawn:
+      case MemoryCandidateState.profileApplying:
         return MemoryCandidateDecision.none;
       case MemoryCandidateState.unspecified:
         return MemoryCandidateDecision.unsupported;
     }
+    // A pending proposal the page could not show whole. Accepting it is off the
+    // table — nobody may accept text they were not shown, and the server needs
+    // the kind, which is a question about bytes nobody can read. Throwing it
+    // away is not: a rejection is the user saying no to whatever is sitting in
+    // their inbox, and it is the only thing standing between them and a claim
+    // about themselves they can neither accept nor be rid of.
+    if (!contentIsWhole) return MemoryCandidateDecision.rejectOnly;
     switch (kind) {
       case MemoryCandidateKind.belief:
         return MemoryCandidateDecision.promoteToBeliefs;
@@ -297,11 +338,22 @@ class MemoryCandidate {
     }
   }
 
-  /// Whether this client may offer a decision at all: managed by Turing, still
-  /// pending, shown in full, and of a kind this build understands.
+  /// Whether this client may offer any decision at all: managed by Turing,
+  /// still pending, and either shown in full or refusable.
   bool get isDecidable =>
       decision == MemoryCandidateDecision.promoteToBeliefs ||
-      decision == MemoryCandidateDecision.applyToProfile;
+      decision == MemoryCandidateDecision.applyToProfile ||
+      decision == MemoryCandidateDecision.rejectOnly;
+
+  /// The compare-and-set a rejection carries.
+  ///
+  /// It is empty for a proposal the page could not show whole, and that is the
+  /// whole point: a hash names bytes the user read, and these are bytes nobody
+  /// read. Sending the listing's hash anyway would make a claim this client
+  /// cannot stand behind — and the server refuses a claim it cannot check
+  /// against a file it cannot parse, which would leave the proposal
+  /// undecidable in both directions.
+  String get rejectionHash => contentIsWhole ? contentHash : '';
 }
 
 /// What the page may offer for one proposal.
@@ -311,7 +363,7 @@ class MemoryCandidate {
 /// facts, and only the second one is something the user should be told about.
 enum MemoryCandidateDecision {
   /// No decision belongs here: an unmanaged draft, an already-decided proposal,
-  /// or one whose text could not be shown in full.
+  /// or an apply the server has already claimed.
   none,
 
   /// Promote into beliefs, or reject.
@@ -319,6 +371,11 @@ enum MemoryCandidateDecision {
 
   /// Apply to profile.md, or reject.
   applyToProfile,
+
+  /// Reject, and nothing else: a managed, pending proposal whose text the page
+  /// could not show whole. There is nothing here to accept, and the file is
+  /// still the user's to throw away.
+  rejectOnly,
 
   /// A managed, pending proposal whose kind or state this build cannot name.
   /// No button is safe, and the card says so.

@@ -39,6 +39,7 @@ const MemoryCandidateState$json = {
     {'1': 'MEMORY_CANDIDATE_STATE_PROMOTED', '2': 2},
     {'1': 'MEMORY_CANDIDATE_STATE_REJECTED', '2': 3},
     {'1': 'MEMORY_CANDIDATE_STATE_WITHDRAWN', '2': 4},
+    {'1': 'MEMORY_CANDIDATE_STATE_PROFILE_APPLYING', '2': 5},
   ],
 };
 
@@ -47,7 +48,8 @@ final $typed_data.Uint8List memoryCandidateStateDescriptor = $convert.base64Deco
     'ChRNZW1vcnlDYW5kaWRhdGVTdGF0ZRImCiJNRU1PUllfQ0FORElEQVRFX1NUQVRFX1VOU1BFQ0'
     'lGSUVEEAASIgoeTUVNT1JZX0NBTkRJREFURV9TVEFURV9QRU5ESU5HEAESIwofTUVNT1JZX0NB'
     'TkRJREFURV9TVEFURV9QUk9NT1RFRBACEiMKH01FTU9SWV9DQU5ESURBVEVfU1RBVEVfUkVKRU'
-    'NURUQQAxIkCiBNRU1PUllfQ0FORElEQVRFX1NUQVRFX1dJVEhEUkFXThAE');
+    'NURUQQAxIkCiBNRU1PUllfQ0FORElEQVRFX1NUQVRFX1dJVEhEUkFXThAEEisKJ01FTU9SWV9D'
+    'QU5ESURBVEVfU1RBVEVfUFJPRklMRV9BUFBMWUlORxAF');
 
 @$core.Deprecated('Use memoryNoteStatusDescriptor instead')
 const MemoryNoteStatus$json = {
@@ -226,6 +228,7 @@ const MemoryCandidate$json = {
       '10': 'unavailableReason'
     },
     {'1': 'managed', '3': 14, '4': 1, '5': 8, '10': 'managed'},
+    {'1': 'untracked', '3': 15, '4': 1, '5': 8, '10': 'untracked'},
   ],
 };
 
@@ -243,7 +246,7 @@ final $typed_data.Uint8List memoryCandidateDescriptor = $convert.base64Decode(
     'xlLnByb3RvYnVmLlRpbWVzdGFtcFIJZGVjaWRlZEF0Eh8KC3BhcnNlX2Vycm9yGAwgASgJUgpw'
     'YXJzZUVycm9yElEKEnVuYXZhaWxhYmxlX3JlYXNvbhgNIAEoDjIiLnR1cmluZy52MS5NZW1vcn'
     'lVbmF2YWlsYWJsZVJlYXNvblIRdW5hdmFpbGFibGVSZWFzb24SGAoHbWFuYWdlZBgOIAEoCFIH'
-    'bWFuYWdlZA==');
+    'bWFuYWdlZBIcCgl1bnRyYWNrZWQYDyABKAhSCXVudHJhY2tlZA==');
 
 @$core.Deprecated('Use memoryNoteDescriptor instead')
 const MemoryNote$json = {
@@ -841,6 +844,7 @@ const ApplyMemoryProfileResponse$json = {
       '6': '.turing.v1.MemoryProfile',
       '10': 'profile'
     },
+    {'1': 'cleanup_pending', '3': 2, '4': 1, '5': 8, '10': 'cleanupPending'},
   ],
 };
 
@@ -848,7 +852,8 @@ const ApplyMemoryProfileResponse$json = {
 final $typed_data.Uint8List applyMemoryProfileResponseDescriptor =
     $convert.base64Decode(
         'ChpBcHBseU1lbW9yeVByb2ZpbGVSZXNwb25zZRIyCgdwcm9maWxlGAEgASgLMhgudHVyaW5nLn'
-        'YxLk1lbW9yeVByb2ZpbGVSB3Byb2ZpbGU=');
+        'YxLk1lbW9yeVByb2ZpbGVSB3Byb2ZpbGUSJwoPY2xlYW51cF9wZW5kaW5nGAIgASgIUg5jbGVh'
+        'bnVwUGVuZGluZw==');
 
 @$core.Deprecated('Use getMemoryPersonaRequestDescriptor instead')
 const GetMemoryPersonaRequest$json = {

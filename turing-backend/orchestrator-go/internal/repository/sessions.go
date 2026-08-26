@@ -72,6 +72,12 @@ type Repository struct {
 	// transaction in exactly that window and prove no note is left holding a
 	// value that is not a vault path.
 	memoryIndexParkBarrier func() error
+	// memoryProfileApplyBarrier, when set (test-only; always nil in
+	// production), runs at the two seams a profile apply can die at: after the
+	// candidate is claimed and before profile.md is written, and after the
+	// write and before the bookkeeping. It is how a test stages a crash at
+	// each and proves what the next pass makes of what was left.
+	memoryProfileApplyBarrier func(stage string) error
 	// mcpRegistrySnapshotBarrier, when set (test-only; always nil in
 	// production), is invoked by MCPRegistrySnapshot once its single read
 	// transaction is open and its aggregate tool-byte budget guard has

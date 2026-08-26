@@ -947,7 +947,7 @@ class TuringGrpcApi
   @override
   Future<MemoryCandidate> rejectMemoryCandidate({
     required String candidateId,
-    required String expectedCandidateHash,
+    String expectedCandidateHash = '',
     String reason = '',
   }) {
     return _memoryCall(() async {
@@ -963,7 +963,7 @@ class TuringGrpcApi
   }
 
   @override
-  Future<MemoryDocument> applyMemoryProfile({
+  Future<MemoryApplyResult> applyMemoryProfile({
     required String candidateId,
     required String content,
     required String expectedContentHash,
@@ -978,7 +978,10 @@ class TuringGrpcApi
           expectedCandidateHash: expectedCandidateHash,
         ),
       );
-      return GrpcMappers.memoryProfileToModel(response.profile);
+      return MemoryApplyResult(
+        profile: GrpcMappers.memoryProfileToModel(response.profile),
+        cleanupPending: response.cleanupPending,
+      );
     });
   }
 

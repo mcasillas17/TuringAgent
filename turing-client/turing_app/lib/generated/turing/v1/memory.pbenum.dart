@@ -59,16 +59,28 @@ class MemoryCandidateState extends $pb.ProtobufEnum {
       MemoryCandidateState._(
           4, _omitEnumNames ? '' : 'MEMORY_CANDIDATE_STATE_WITHDRAWN');
 
+  /// The user accepted this profile edit and the server claimed the apply
+  /// before touching profile.md. It is not a decision waiting to be taken: the
+  /// decision was taken, and what is unfinished is the write or the bookkeeping
+  /// after it. No decision RPC accepts a candidate in this state — in
+  /// particular a rejection cannot win once the profile may already carry these
+  /// words — and a client renders it as an apply being finished rather than as
+  /// a proposal with buttons.
+  static const MemoryCandidateState MEMORY_CANDIDATE_STATE_PROFILE_APPLYING =
+      MemoryCandidateState._(
+          5, _omitEnumNames ? '' : 'MEMORY_CANDIDATE_STATE_PROFILE_APPLYING');
+
   static const $core.List<MemoryCandidateState> values = <MemoryCandidateState>[
     MEMORY_CANDIDATE_STATE_UNSPECIFIED,
     MEMORY_CANDIDATE_STATE_PENDING,
     MEMORY_CANDIDATE_STATE_PROMOTED,
     MEMORY_CANDIDATE_STATE_REJECTED,
     MEMORY_CANDIDATE_STATE_WITHDRAWN,
+    MEMORY_CANDIDATE_STATE_PROFILE_APPLYING,
   ];
 
   static final $core.List<MemoryCandidateState?> _byValue =
-      $pb.ProtobufEnum.$_initByValueList(values, 4);
+      $pb.ProtobufEnum.$_initByValueList(values, 5);
   static MemoryCandidateState? valueOf($core.int value) =>
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 

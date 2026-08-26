@@ -25,12 +25,19 @@ const (
 
 // Candidate states mirror the CHECK constraint on memory_candidates.state.
 // Only 'pending' is a live state; the other three are decisions, and a decided
-// candidate is never reopened.
+// candidate is never reopened. 'profile_applying' is the fifth and is neither:
+// it is the claim an apply takes before it writes profile.md, so the row can
+// say "the user's document may already carry this" on both sides of a crash.
 const (
-	MemoryCandidateStatePending   = "pending"
-	MemoryCandidateStatePromoted  = "promoted"
-	MemoryCandidateStateRejected  = "rejected"
-	MemoryCandidateStateWithdrawn = "withdrawn"
+	MemoryCandidateStatePending = "pending"
+	// MemoryCandidateStateProfileApplying is claimed under the per-candidate
+	// lock before profile.md is touched and released only once the write and
+	// its bookkeeping are both done. No user decision may be taken from it: a
+	// rejection cannot win over a document that may already say these words.
+	MemoryCandidateStateProfileApplying = "profile_applying"
+	MemoryCandidateStatePromoted        = "promoted"
+	MemoryCandidateStateRejected        = "rejected"
+	MemoryCandidateStateWithdrawn       = "withdrawn"
 )
 
 const (
@@ -415,14 +422,22 @@ func (r *Repository) ListMemoryCandidates(ctx context.Context, query MemoryCandi
 	return candidates, rows.Err()
 }
 
-// requireMemoryCandidateTransition is the whole state machine. Only a pending
-// candidate may be decided, and a decision is final: reopening one would let a
-// claim the user already refused come back without them asking for it.
+// requireMemoryCandidateTransition is the whole state machine for a *user
+// decision*. Only a pending candidate may be decided, and a decision is final:
+// reopening one would let a claim the user already refused come back without
+// them asking for it.
+//
+// An apply takes 'profile_applying' from pending like any other decision,
+// because that is what it is — the moment the user accepted it. What no
+// decision may do is come *out* of that state: the recovery pass owns the exit,
+// and it takes it against the profile document rather than against a caller's
+// word. That is why a rejection over a claimed apply lands here and is refused.
 func requireMemoryCandidateTransition(from string, to string) error {
 	allowed := from == MemoryCandidateStatePending &&
 		(to == MemoryCandidateStatePromoted ||
 			to == MemoryCandidateStateRejected ||
-			to == MemoryCandidateStateWithdrawn)
+			to == MemoryCandidateStateWithdrawn ||
+			to == MemoryCandidateStateProfileApplying)
 	if !allowed {
 		return fmt.Errorf("%w: %q cannot become %q", ErrMemoryCandidateInvalidTransition, from, to)
 	}
@@ -431,8 +446,9 @@ func requireMemoryCandidateTransition(from string, to string) error {
 
 func validMemoryCandidateState(state string) bool {
 	switch state {
-	case MemoryCandidateStatePending, MemoryCandidateStatePromoted,
-		MemoryCandidateStateRejected, MemoryCandidateStateWithdrawn:
+	case MemoryCandidateStatePending, MemoryCandidateStateProfileApplying,
+		MemoryCandidateStatePromoted, MemoryCandidateStateRejected,
+		MemoryCandidateStateWithdrawn:
 		return true
 	default:
 		return false

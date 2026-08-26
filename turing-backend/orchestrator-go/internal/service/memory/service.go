@@ -171,6 +171,15 @@ func memoryError(err error, fallback string) error {
 		return status.Error(codes.PermissionDenied, "that path is not somewhere memory may touch")
 	case errors.Is(err, memoryfiles.ErrKind):
 		return status.Error(codes.FailedPrecondition, "this memory candidate is not of the kind this decision applies to")
+	case errors.Is(err, memoryfiles.ErrVaultTooLarge):
+		// Named rather than collapsed into the fallback. This is a bound this
+		// server chose, not a failure it does not recognise, and the caller —
+		// often a model mid-run — can only stop asking if it is told that. The
+		// sentence carries the bound and nothing about the vault: no path, no
+		// count of what is actually in it, nothing read from a note.
+		return status.Errorf(codes.ResourceExhausted,
+			"this vault holds more than %d notes, which is past the bound memory indexing and search run within; prune or split the vault",
+			memoryfiles.MaxVaultIndexedFiles)
 	case errors.As(err, &limit):
 		return status.Errorf(codes.InvalidArgument, "%s exceeds its %d byte limit", limit.What, limit.Limit)
 	case errors.Is(err, context.Canceled):

@@ -115,6 +115,13 @@ type MemoryReconcileReport struct {
 	NotesHealed             int
 	OrphanCandidatesRemoved int
 	ReservationsCleared     int
+	// ProfileAppliesFinalized and ProfileAppliesReset count the applies this
+	// pass resolved: one whose write is provably in profile.md and was
+	// finished, and one whose write provably never happened and was handed
+	// back to the user. A claim the profile cannot answer for is in neither
+	// count and is left standing.
+	ProfileAppliesFinalized int
+	ProfileAppliesReset     int
 }
 
 // memoryVaultState is everything the database knows before a pass acts. It is
@@ -177,11 +184,22 @@ func (r *Repository) RefreshMemoryIndex(ctx context.Context) (MemoryIndexReport,
 // four the plan allows: adopt a belief the user wrote by giving it an identity,
 // and bring a managed note's citations back in line with the sidecar.
 // Everything else it does is in the database — healing a note whose row was
-// lost, retiring a candidate whose inbox entry is gone, and releasing the
-// reservations that tracked them.
+// lost, retiring a candidate whose inbox entry is gone, releasing the
+// reservations that tracked them, and resolving a profile apply a crash caught
+// mid-flight.
 func (r *Repository) ReconcileMemoryVault(ctx context.Context) (MemoryReconcileReport, error) {
 	report := MemoryReconcileReport{}
-	err := r.runVaultPass(ctx, func(vault *memoryfiles.Vault, state memoryVaultState, scanned scannedVault) error {
+	// Before the walk, and outside the vault-wide lock: an apply caught
+	// mid-flight by a crash is resolved by reading one file by name, and it
+	// must be resolvable even when the vault as a whole is too large to walk.
+	// Leaving it until after the pass would mean the sweep below saw a
+	// half-finished apply and drew conclusions from it.
+	finalized, resetClaims, err := r.recoverProfileApplies(ctx)
+	report.ProfileAppliesFinalized, report.ProfileAppliesReset = finalized, resetClaims
+	if err != nil {
+		return MemoryReconcileReport{}, err
+	}
+	err = r.runVaultPass(ctx, func(vault *memoryfiles.Vault, state memoryVaultState, scanned scannedVault) error {
 		var passErr error
 		var adoptionIssues, rewriteIssues []MemoryNoteIssue
 		report.IdentitiesAssigned, adoptionIssues, passErr = assignMissingIdentities(ctx, vault, scanned)

@@ -771,6 +771,12 @@ func TestMemoryProtoContract(t *testing.T) {
 		"MEMORY_CANDIDATE_STATE_PROMOTED":    2,
 		"MEMORY_CANDIDATE_STATE_REJECTED":    3,
 		"MEMORY_CANDIDATE_STATE_WITHDRAWN":   4,
+		// The claim an apply takes before it writes profile.md. It is not a
+		// decision waiting to be taken and not a decision already recorded: it
+		// is the window in which the user's own document may already carry
+		// words nothing has finished accounting for, and a client that could
+		// not name it would render a proposal with buttons the server refuses.
+		"MEMORY_CANDIDATE_STATE_PROFILE_APPLYING": 5,
 	})
 	// The managed/unmanaged distinction a client renders: whether Turing may
 	// rewrite a file the user can also edit by hand in their own vault.
@@ -810,7 +816,13 @@ func TestMemoryProtoContract(t *testing.T) {
 		"candidate_id": 1, "kind": 2, "inbox_path": 3, "content": 4, "content_hash": 5,
 		"state": 6, "provenance": 7, "promoted_note_id": 8, "created_at": 9, "updated_at": 10,
 		"decided_at": 11, "parse_error": 12, "unavailable_reason": 13, "managed": 14,
+		"untracked": 15,
 	})
+	// An inbox file Turing wrote and lost the record of is unmanaged like a
+	// user's own draft and is not the same thing, so it says which it is
+	// rather than leaving a client to present a model's claim about the user
+	// as something they wrote themselves.
+	assertProtoField(t, candidate, "untracked", 15, protoreflect.BoolKind, false, "")
 	// A draft the user dropped into the inbox themselves is listed so they know
 	// Turing can see it, and marked so no client offers to promote it.
 	assertProtoField(t, candidate, "managed", 14, protoreflect.BoolKind, false, "")
@@ -896,6 +908,16 @@ func TestMemoryProtoContract(t *testing.T) {
 	// still the one I accepted?" — and a single token could only ever answer
 	// one of them.
 	assertProtoField(t, apply, "expected_candidate_hash", 4, protoreflect.StringKind, false, "")
+
+	// The response separates the write from the tidying after it. Once
+	// profile.md holds the reviewed document the decision has been taken, and
+	// an apply that could not afterwards remove the proposal must not report
+	// that as a failed edit.
+	applied := file.Messages().ByName("ApplyMemoryProfileResponse")
+	assertProtoFieldMembers(t, applied, map[protoreflect.Name]protoreflect.FieldNumber{
+		"profile": 1, "cleanup_pending": 2,
+	})
+	assertProtoField(t, applied, "cleanup_pending", 2, protoreflect.BoolKind, false, "")
 
 	// A memory tool call names its run and nothing else. No session id, no
 	// path, no scope: the server resolves the conversation from its own tables.

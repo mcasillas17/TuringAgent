@@ -82,6 +82,14 @@ const (
 	// The session that produced the candidate was deleted. The candidate is kept
 	// so the record does not silently vanish, but it can no longer be promoted.
 	MemoryCandidateState_MEMORY_CANDIDATE_STATE_WITHDRAWN MemoryCandidateState = 4
+	// The user accepted this profile edit and the server claimed the apply
+	// before touching profile.md. It is not a decision waiting to be taken: the
+	// decision was taken, and what is unfinished is the write or the bookkeeping
+	// after it. No decision RPC accepts a candidate in this state — in
+	// particular a rejection cannot win once the profile may already carry these
+	// words — and a client renders it as an apply being finished rather than as
+	// a proposal with buttons.
+	MemoryCandidateState_MEMORY_CANDIDATE_STATE_PROFILE_APPLYING MemoryCandidateState = 5
 )
 
 // Enum value maps for MemoryCandidateState.
@@ -92,13 +100,15 @@ var (
 		2: "MEMORY_CANDIDATE_STATE_PROMOTED",
 		3: "MEMORY_CANDIDATE_STATE_REJECTED",
 		4: "MEMORY_CANDIDATE_STATE_WITHDRAWN",
+		5: "MEMORY_CANDIDATE_STATE_PROFILE_APPLYING",
 	}
 	MemoryCandidateState_value = map[string]int32{
-		"MEMORY_CANDIDATE_STATE_UNSPECIFIED": 0,
-		"MEMORY_CANDIDATE_STATE_PENDING":     1,
-		"MEMORY_CANDIDATE_STATE_PROMOTED":    2,
-		"MEMORY_CANDIDATE_STATE_REJECTED":    3,
-		"MEMORY_CANDIDATE_STATE_WITHDRAWN":   4,
+		"MEMORY_CANDIDATE_STATE_UNSPECIFIED":      0,
+		"MEMORY_CANDIDATE_STATE_PENDING":          1,
+		"MEMORY_CANDIDATE_STATE_PROMOTED":         2,
+		"MEMORY_CANDIDATE_STATE_REJECTED":         3,
+		"MEMORY_CANDIDATE_STATE_WITHDRAWN":        4,
+		"MEMORY_CANDIDATE_STATE_PROFILE_APPLYING": 5,
 	}
 )
 
@@ -422,7 +432,15 @@ type MemoryCandidate struct {
 	// and there is no RPC that promotes it — the user moves the file. A client
 	// that rendered an unmanaged draft with a Promote button would be offering
 	// an action the server refuses.
-	Managed       bool `protobuf:"varint,14,opt,name=managed,proto3" json:"managed,omitempty"`
+	Managed bool `protobuf:"varint,14,opt,name=managed,proto3" json:"managed,omitempty"`
+	// True for an inbox file Turing wrote and then lost the record of: a
+	// creation that crashed between the write and its transaction. It is
+	// unmanaged for exactly the same reason a hand-dropped draft is — there is
+	// no row, so no decision RPC applies — but it is not the user's own draft,
+	// and telling them it is would be a lie about who wrote a claim about them.
+	// It is listed rather than deleted, because a file they may already have
+	// read is not something to remove on a guess.
+	Untracked     bool `protobuf:"varint,15,opt,name=untracked,proto3" json:"untracked,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -551,6 +569,13 @@ func (x *MemoryCandidate) GetUnavailableReason() MemoryUnavailableReason {
 func (x *MemoryCandidate) GetManaged() bool {
 	if x != nil {
 		return x.Managed
+	}
+	return false
+}
+
+func (x *MemoryCandidate) GetUntracked() bool {
+	if x != nil {
+		return x.Untracked
 	}
 	return false
 }
@@ -1612,6 +1637,14 @@ type RejectMemoryCandidateRequest struct {
 	// refused. A rejection asks nothing about the kind — it is the user saying no
 	// to whatever is there — so a proposal whose frontmatter no longer parses can
 	// still be thrown away.
+	//
+	// Optional, and deliberately so. A client that could not read the proposal
+	// has no hash to make a claim with, and sending one it invented — or the
+	// hash of the bytes it failed to parse — would be answering a question it
+	// cannot answer. Empty is that client saying it is making no claim about the
+	// file, which is the one case where a rejection may proceed over a file the
+	// server cannot read either. A non-empty hash against an unreadable file is
+	// still refused: the claim cannot be checked, so it cannot be honoured.
 	ExpectedCandidateHash string `protobuf:"bytes,4,opt,name=expected_candidate_hash,json=expectedCandidateHash,proto3" json:"expected_candidate_hash,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
@@ -1846,10 +1879,17 @@ func (x *ApplyMemoryProfileRequest) GetExpectedCandidateHash() string {
 }
 
 type ApplyMemoryProfileResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Profile       *MemoryProfile         `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Profile *MemoryProfile         `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
+	// True when profile.md now holds `content` and the proposal it came from is
+	// still sitting in the inbox because it could not be removed. The write is
+	// the part that matters and it landed, so this is not a failure — but the
+	// user would otherwise be shown a proposal they have already accepted, with
+	// no explanation, and no decision RPC will take it. Turing's own cleanup
+	// finishes it; saying so is what keeps the page honest in the meantime.
+	CleanupPending bool `protobuf:"varint,2,opt,name=cleanup_pending,json=cleanupPending,proto3" json:"cleanup_pending,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ApplyMemoryProfileResponse) Reset() {
@@ -1887,6 +1927,13 @@ func (x *ApplyMemoryProfileResponse) GetProfile() *MemoryProfile {
 		return x.Profile
 	}
 	return nil
+}
+
+func (x *ApplyMemoryProfileResponse) GetCleanupPending() bool {
+	if x != nil {
+		return x.CleanupPending
+	}
+	return false
 }
 
 type GetMemoryPersonaRequest struct {
@@ -2418,7 +2465,7 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"observedAt\x12\x1c\n" +
 	"\twithdrawn\x18\x05 \x01(\bR\twithdrawn\x12=\n" +
 	"\fwithdrawn_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\vwithdrawnAt\x12%\n" +
-	"\x0eevidence_count\x18\a \x01(\x05R\revidenceCount\"\xa1\x05\n" +
+	"\x0eevidence_count\x18\a \x01(\x05R\revidenceCount\"\xbf\x05\n" +
 	"\x0fMemoryCandidate\x12!\n" +
 	"\fcandidate_id\x18\x01 \x01(\tR\vcandidateId\x122\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1e.turing.v1.MemoryCandidateKindR\x04kind\x12\x1d\n" +
@@ -2441,7 +2488,8 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"\vparse_error\x18\f \x01(\tR\n" +
 	"parseError\x12Q\n" +
 	"\x12unavailable_reason\x18\r \x01(\x0e2\".turing.v1.MemoryUnavailableReasonR\x11unavailableReason\x12\x18\n" +
-	"\amanaged\x18\x0e \x01(\bR\amanaged\"\x93\x04\n" +
+	"\amanaged\x18\x0e \x01(\bR\amanaged\x12\x1c\n" +
+	"\tuntracked\x18\x0f \x01(\bR\tuntracked\"\x93\x04\n" +
 	"\n" +
 	"MemoryNote\x12\x17\n" +
 	"\anote_id\x18\x01 \x01(\tR\x06noteId\x12\x12\n" +
@@ -2549,9 +2597,10 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x122\n" +
 	"\x15expected_content_hash\x18\x02 \x01(\tR\x13expectedContentHash\x12!\n" +
 	"\fcandidate_id\x18\x03 \x01(\tR\vcandidateId\x126\n" +
-	"\x17expected_candidate_hash\x18\x04 \x01(\tR\x15expectedCandidateHash\"P\n" +
+	"\x17expected_candidate_hash\x18\x04 \x01(\tR\x15expectedCandidateHash\"y\n" +
 	"\x1aApplyMemoryProfileResponse\x122\n" +
-	"\aprofile\x18\x01 \x01(\v2\x18.turing.v1.MemoryProfileR\aprofile\"\x19\n" +
+	"\aprofile\x18\x01 \x01(\v2\x18.turing.v1.MemoryProfileR\aprofile\x12'\n" +
+	"\x0fcleanup_pending\x18\x02 \x01(\bR\x0ecleanupPending\"\x19\n" +
 	"\x17GetMemoryPersonaRequest\"h\n" +
 	"\x18SaveMemoryPersonaRequest\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x122\n" +
@@ -2583,13 +2632,14 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"\x13MemoryCandidateKind\x12%\n" +
 	"!MEMORY_CANDIDATE_KIND_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cMEMORY_CANDIDATE_KIND_BELIEF\x10\x01\x12&\n" +
-	"\"MEMORY_CANDIDATE_KIND_PROFILE_EDIT\x10\x02*\xd2\x01\n" +
+	"\"MEMORY_CANDIDATE_KIND_PROFILE_EDIT\x10\x02*\xff\x01\n" +
 	"\x14MemoryCandidateState\x12&\n" +
 	"\"MEMORY_CANDIDATE_STATE_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eMEMORY_CANDIDATE_STATE_PENDING\x10\x01\x12#\n" +
 	"\x1fMEMORY_CANDIDATE_STATE_PROMOTED\x10\x02\x12#\n" +
 	"\x1fMEMORY_CANDIDATE_STATE_REJECTED\x10\x03\x12$\n" +
-	" MEMORY_CANDIDATE_STATE_WITHDRAWN\x10\x04*\x9a\x01\n" +
+	" MEMORY_CANDIDATE_STATE_WITHDRAWN\x10\x04\x12+\n" +
+	"'MEMORY_CANDIDATE_STATE_PROFILE_APPLYING\x10\x05*\x9a\x01\n" +
 	"\x10MemoryNoteStatus\x12\"\n" +
 	"\x1eMEMORY_NOTE_STATUS_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aMEMORY_NOTE_STATUS_MANAGED\x10\x01\x12 \n" +

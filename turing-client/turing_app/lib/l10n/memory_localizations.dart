@@ -65,6 +65,8 @@ String localizedMemoryCandidateStateCopy(
       return l10n.memoryCandidateStateRejected;
     case MemoryCandidateState.withdrawn:
       return l10n.memoryCandidateStateWithdrawn;
+    case MemoryCandidateState.profileApplying:
+      return l10n.memoryCandidateStateProfileApplying;
   }
 }
 

@@ -1449,6 +1449,7 @@ class GrpcMappers {
         ),
       ),
       managed: candidate.managed,
+      untracked: candidate.untracked,
       provenance: candidate.provenance.map(memoryProvenanceToModel).toList(),
       promotedNoteId: candidate.promotedNoteId,
       createdAt: candidate.hasCreatedAt()
@@ -1591,6 +1592,10 @@ class GrpcMappers {
         return model_memory.MemoryCandidateState.rejected;
       case memorypb.MemoryCandidateState.MEMORY_CANDIDATE_STATE_WITHDRAWN:
         return model_memory.MemoryCandidateState.withdrawn;
+      case memorypb
+          .MemoryCandidateState
+          .MEMORY_CANDIDATE_STATE_PROFILE_APPLYING:
+        return model_memory.MemoryCandidateState.profileApplying;
       case memorypb.MemoryCandidateState.MEMORY_CANDIDATE_STATE_UNSPECIFIED:
         return model_memory.MemoryCandidateState.unspecified;
     }

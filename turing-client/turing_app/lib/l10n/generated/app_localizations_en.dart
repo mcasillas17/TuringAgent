@@ -268,6 +268,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'The conversation behind this was deleted, so it can no longer be accepted.';
 
   @override
+  String get memoryCandidateStateProfileApplying =>
+      'You accepted this and it is being applied to profile.md. Turing is finishing it; there is nothing to decide here.';
+
+  @override
   String get memoryCandidateKindUnspecified => 'Proposal';
 
   @override
@@ -317,6 +321,22 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get memoryUnmanagedDraftDetail =>
       'Turing did not create this file and will not move it. To accept it, move the file into beliefs/ in your vault.';
+
+  @override
+  String get memoryUntrackedInboxTitle =>
+      'Turing wrote this file and lost track of it';
+
+  @override
+  String get memoryUntrackedInboxDetail =>
+      'Turing wrote this proposal but has no record of it, so it cannot be accepted or rejected here. Read it in your vault and either move it into beliefs/ to keep it, or delete it.';
+
+  @override
+  String get memoryProposalDiscardOnly =>
+      'This proposal could not be read in full, so there is nothing here to accept. You can still throw it away.';
+
+  @override
+  String get memoryProfileAppliedCleanupPending =>
+      'Your profile was updated. The proposal it came from could not be removed from the inbox yet, so it is still listed below; Turing will clear it.';
 
   @override
   String get memoryNoteUnsearchable =>

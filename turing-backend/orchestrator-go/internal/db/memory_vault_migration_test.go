@@ -703,3 +703,84 @@ func TestMemoryCandidateBodyIsBoundedInUTF8Bytes(t *testing.T) {
 		})
 	}
 }
+
+// The apply claim is the row that says "this profile edit may already be in the
+// user's document". Everything about it has to be impossible to write
+// incoherently, because the whole point of it is to be trustworthy after a
+// crash: only a profile edit may hold it, it is meaningless without the hash of
+// the document it was going to produce and the hash of the one it was
+// replacing, and no other state may carry either hash and imply a claim nobody
+// took.
+func TestMemoryCandidateProfileApplyClaimConstraints(t *testing.T) {
+	ctx := context.Background()
+	database := openMemoryVaultDB(t, ctx)
+	insertTestSession(t, ctx, database, "session_apply_claim")
+
+	insert := func(id, kind, state, decidedAt, baseHash, resultHash string) error {
+		var decided, base, result any
+		if decidedAt != "" {
+			decided = decidedAt
+		}
+		if baseHash != "\x00" {
+			base = baseHash
+		}
+		if resultHash != "\x00" {
+			result = resultHash
+		}
+		_, err := database.ExecContext(ctx, `
+			INSERT INTO memory_candidates (
+				id, source_session_id, kind, inbox_path, content_hash, body,
+				evidence_refs_json, state, decided_at, apply_base_hash,
+				apply_result_hash, created_at, updated_at
+			) VALUES (?, 'session_apply_claim', ?, ?, 'hash', 'a claim', '[]', ?, ?, ?, ?,
+				'2026-08-24T00:00:00Z', '2026-08-24T00:00:00Z')`,
+			id, kind, "inbox/"+id+".md", state, decided, base, result)
+		return err
+	}
+	const absent = "\x00"
+
+	for _, refused := range []struct {
+		name       string
+		kind       string
+		state      string
+		decidedAt  string
+		baseHash   string
+		resultHash string
+	}{
+		{"a claim with no result hash", "profile_edit", "profile_applying", "2026-08-24T01:00:00Z", "base", absent},
+		{"a claim with no base hash", "profile_edit", "profile_applying", "2026-08-24T01:00:00Z", absent, "result"},
+		{"a claim with an empty result hash", "profile_edit", "profile_applying", "2026-08-24T01:00:00Z", "base", ""},
+		{"a claim with no decision time", "profile_edit", "profile_applying", "", "base", "result"},
+		{"a pending row carrying a result hash", "profile_edit", "pending", "", absent, "result"},
+		{"a pending row carrying a base hash", "profile_edit", "pending", "", "base", absent},
+		{"a rejected row carrying a claim", "profile_edit", "rejected", "2026-08-24T01:00:00Z", "base", "result"},
+	} {
+		t.Run(refused.name, func(t *testing.T) {
+			id := "cand_bad_" + strings.ReplaceAll(refused.name, " ", "_")
+			if err := insert(id, refused.kind, refused.state, refused.decidedAt,
+				refused.baseHash, refused.resultHash); err == nil {
+				t.Fatalf("%s was accepted", refused.name)
+			}
+		})
+	}
+
+	// A profile edit with no profile to replace yet is the ordinary first-run
+	// case, and its base hash is the empty token the writer already reads as
+	// "I am creating this".
+	if err := insert("cand_claim_ok", "profile_edit", "profile_applying",
+		"2026-08-24T01:00:00Z", "", "result"); err != nil {
+		t.Fatalf("a coherent apply claim over a profile that does not exist yet was refused: %v", err)
+	}
+	if err := insert("cand_pending_ok", "profile_edit", "pending", "", absent, absent); err != nil {
+		t.Fatalf("an ordinary pending profile edit was refused: %v", err)
+	}
+	// And a row Turing recorded as a belief may hold the claim, because the
+	// kind a decision is taken on is the one the candidate *file* declares —
+	// the user may have rewritten the proposal into a profile edit, and this
+	// column only ever recorded what Turing first proposed. The gate that says
+	// no lives where the file can be read; see ApplyMemoryProfileCandidate.
+	if err := insert("cand_claim_rewritten", "belief", "profile_applying",
+		"2026-08-24T01:00:00Z", "base", "result"); err != nil {
+		t.Fatalf("a claim over a proposal the user rewrote was refused: %v", err)
+	}
+}

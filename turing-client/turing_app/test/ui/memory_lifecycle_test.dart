@@ -311,7 +311,7 @@ class _Api extends TuringApi
   @override
   Future<MemoryCandidate> rejectMemoryCandidate({
     required String candidateId,
-    required String expectedCandidateHash,
+    String expectedCandidateHash = '',
     String reason = '',
   }) async {
     if (rejectDelay case final delay?) await Future<void>.delayed(delay);
@@ -319,7 +319,7 @@ class _Api extends TuringApi
   }
 
   @override
-  Future<MemoryDocument> applyMemoryProfile({
+  Future<MemoryApplyResult> applyMemoryProfile({
     required String candidateId,
     required String content,
     required String expectedContentHash,
@@ -331,7 +331,7 @@ class _Api extends TuringApi
       expectedContentHash,
       expectedCandidateHash,
     ));
-    return state.profile;
+    return MemoryApplyResult(profile: state.profile);
   }
 
   @override

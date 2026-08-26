@@ -178,15 +178,18 @@ func TestApplyMemoryProfileCandidateWritesProfileAndConsumesTheRow(t *testing.T)
 		t.Fatalf("CreateMemoryCandidate: %v", err)
 	}
 
-	document, err := repo.ApplyMemoryProfileCandidate(ctx(), ApplyMemoryProfileInput{
+	applied, err := repo.ApplyMemoryProfileCandidate(ctx(), ApplyMemoryProfileInput{
 		CandidateID: candidate.CandidateID,
 		Content:     "# Profile\n\nThe user is a beekeeper.\n",
 	})
 	if err != nil {
 		t.Fatalf("ApplyMemoryProfileCandidate: %v", err)
 	}
-	if document.RelPath != memoryfiles.ProfileFileName {
-		t.Fatalf("profile path = %q", document.RelPath)
+	if applied.CleanupPending {
+		t.Fatal("an apply that finished cleanly reported outstanding tidying")
+	}
+	if applied.Document.RelPath != memoryfiles.ProfileFileName {
+		t.Fatalf("profile path = %q", applied.Document.RelPath)
 	}
 	if got := readVaultNote(t, vault, memoryfiles.ProfileFileName); !strings.Contains(got, "beekeeper") {
 		t.Fatalf("profile content = %q", got)

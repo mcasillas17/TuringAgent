@@ -88,6 +88,12 @@ class _MemoryPageState extends State<MemoryPage> {
   String _profileError = '';
   String _inboxError = '';
 
+  /// Said after an apply whose write landed and whose proposal could not be
+  /// removed. It is not an error — the user's profile holds what they accepted
+  /// — and it is not nothing either: the proposal is still listed below and no
+  /// button on it will work, so the page has to say why.
+  String _inboxNotice = '';
+
   bool get _personaDirty => _persona.text != _personaAdopted;
   bool get _profileDirty => _profile.text != _profileAdopted;
 
@@ -206,6 +212,10 @@ class _MemoryPageState extends State<MemoryPage> {
     setState(() {
       _busy = true;
       onError('');
+      // Cleared before the request, not after it: a notice about the last
+      // apply has nothing to say about this decision, and the apply below sets
+      // it again from what the server just answered.
+      _inboxNotice = '';
     });
     try {
       await request();
@@ -313,6 +323,7 @@ class _MemoryPageState extends State<MemoryPage> {
             personaError: _personaError,
             profileError: _profileError,
             inboxError: _inboxError,
+            inboxNotice: _inboxNotice,
             onToggle: (enabled) => _mutate(
               () => widget.apiClient.setMemoryEnabled(enabled: enabled),
               (message) => _settingsError = message,
@@ -360,12 +371,16 @@ class _MemoryPageState extends State<MemoryPage> {
             onReject: (candidate) => _mutate(
               () => widget.apiClient.rejectMemoryCandidate(
                 candidateId: candidate.candidateId,
-                expectedCandidateHash: candidate.contentHash,
+                // Empty for a proposal the page could not show whole. A hash
+                // names bytes the user read, and a claim about bytes nobody
+                // read is one the server refuses — which would leave them with
+                // a proposal about themselves they cannot get rid of.
+                expectedCandidateHash: candidate.rejectionHash,
               ),
               (message) => _inboxError = message,
             ),
-            onApply: (candidate, result) => _mutate(
-              () => widget.apiClient.applyMemoryProfile(
+            onApply: (candidate, result) => _mutate(() async {
+              final applied = await widget.apiClient.applyMemoryProfile(
                 candidateId: candidate.candidateId,
                 // The whole resulting document the user reviewed, never the
                 // proposal: the server writes exactly these bytes over
@@ -383,9 +398,11 @@ class _MemoryPageState extends State<MemoryPage> {
                 // And the second one, against the proposal this result was
                 // composed from.
                 expectedCandidateHash: candidate.contentHash,
-              ),
-              (message) => _inboxError = message,
-            ),
+              );
+              _inboxNotice = applied.cleanupPending
+                  ? l10n.memoryProfileAppliedCleanupPending
+                  : '';
+            }, (message) => _inboxError = message),
             profileResultFor: (candidate) => _profileResultFor(
               candidate,
               state.profile.content,
@@ -410,6 +427,7 @@ class _MemoryBody extends StatelessWidget {
     required this.personaError,
     required this.profileError,
     required this.inboxError,
+    required this.inboxNotice,
     required this.onToggle,
     required this.onSavePersona,
     required this.onSaveProfile,
@@ -431,6 +449,7 @@ class _MemoryBody extends StatelessWidget {
   final String personaError;
   final String profileError;
   final String inboxError;
+  final String inboxNotice;
   final ValueChanged<bool> onToggle;
   final VoidCallback onSavePersona;
   final VoidCallback onSaveProfile;
@@ -531,6 +550,10 @@ class _MemoryBody extends StatelessWidget {
         if (inboxError.isNotEmpty) ...[
           const SizedBox(height: 8),
           _ErrorLine(message: inboxError),
+        ],
+        if (inboxNotice.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          _StatusLine(text: inboxNotice, tone: AppColors.warning),
         ],
         const SizedBox(height: 10),
         if (state.candidates.isEmpty)
@@ -925,7 +948,16 @@ class _CandidateCard extends StatelessWidget {
             ),
           if (!candidate.contentIsWhole) ...[
             const SizedBox(height: 8),
-            _ErrorLine(message: l10n.memoryProposalUnreadable),
+            // Two different sentences, because they are two different facts. A
+            // proposal still waiting on the user is one they can throw away,
+            // and saying only "there is nothing here to accept" beside a lone
+            // Reject button reads as a dead end rather than as the one action
+            // left. A decided one is neither.
+            _ErrorLine(
+              message: decision == MemoryCandidateDecision.rejectOnly
+                  ? l10n.memoryProposalDiscardOnly
+                  : l10n.memoryProposalUnreadable,
+            ),
           ],
           if (candidate.parseError.isNotEmpty) ...[
             const SizedBox(height: 8),
@@ -950,16 +982,23 @@ class _CandidateCard extends StatelessWidget {
                   : AppColors.warning,
             )
           else ...[
-            // A file the user dropped in themselves. Turing has no row for it,
-            // so there is no RPC to offer — a Promote button here would be an
-            // action the server refuses.
+            // A file with no row behind it. Turing will not move it and every
+            // decision RPC refuses it, so a Promote button here would be an
+            // action the server refuses — but which file it is matters: one the
+            // user dropped in is theirs, and one Turing wrote and lost the
+            // record of is a model's claim about them. Calling the second the
+            // first would be a lie about who said it.
             _StatusLine(
-              text: l10n.memoryUnmanagedDraftTitle,
+              text: candidate.untracked
+                  ? l10n.memoryUntrackedInboxTitle
+                  : l10n.memoryUnmanagedDraftTitle,
               tone: AppColors.warning,
             ),
             const SizedBox(height: 4),
             Text(
-              l10n.memoryUnmanagedDraftDetail,
+              candidate.untracked
+                  ? l10n.memoryUntrackedInboxDetail
+                  : l10n.memoryUnmanagedDraftDetail,
               style: TextStyle(
                 fontSize: 12.5,
                 height: 1.45,
@@ -1049,12 +1088,18 @@ class _CandidateCard extends StatelessWidget {
             ),
           ],
           if (decision == MemoryCandidateDecision.applyToProfile ||
-              decision == MemoryCandidateDecision.promoteToBeliefs) ...[
+              decision == MemoryCandidateDecision.promoteToBeliefs ||
+              decision == MemoryCandidateDecision.rejectOnly) ...[
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
               runSpacing: 4,
               children: [
+                // Nothing to accept on a proposal the page could not show
+                // whole: an acceptance is about text the user read, and this is
+                // text nobody read. The rejection below stays, because a claim
+                // about them that they can neither accept nor throw away is
+                // worse than either.
                 if (decision == MemoryCandidateDecision.applyToProfile)
                   if (result == null)
                     // Unreachable in this build — a decidable profile edit is
@@ -1078,7 +1123,7 @@ class _CandidateCard extends StatelessWidget {
                         child: Text(l10n.memoryApplyAction),
                       ),
                     )
-                else
+                else if (decision == MemoryCandidateDecision.promoteToBeliefs)
                   FilledButton(
                     onPressed: busy ? null : onPromote,
                     child: Text(l10n.memoryPromoteAction),

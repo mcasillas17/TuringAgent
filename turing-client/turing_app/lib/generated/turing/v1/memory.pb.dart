@@ -185,6 +185,7 @@ class MemoryCandidate extends $pb.GeneratedMessage {
     $core.String? parseError,
     MemoryUnavailableReason? unavailableReason,
     $core.bool? managed,
+    $core.bool? untracked,
   }) {
     final result = create();
     if (candidateId != null) result.candidateId = candidateId;
@@ -201,6 +202,7 @@ class MemoryCandidate extends $pb.GeneratedMessage {
     if (parseError != null) result.parseError = parseError;
     if (unavailableReason != null) result.unavailableReason = unavailableReason;
     if (managed != null) result.managed = managed;
+    if (untracked != null) result.untracked = untracked;
     return result;
   }
 
@@ -249,6 +251,7 @@ class MemoryCandidate extends $pb.GeneratedMessage {
         valueOf: MemoryUnavailableReason.valueOf,
         enumValues: MemoryUnavailableReason.values)
     ..aOB(14, _omitFieldNames ? '' : 'managed')
+    ..aOB(15, _omitFieldNames ? '' : 'untracked')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -407,6 +410,22 @@ class MemoryCandidate extends $pb.GeneratedMessage {
   $core.bool hasManaged() => $_has(13);
   @$pb.TagNumber(14)
   void clearManaged() => $_clearField(14);
+
+  /// True for an inbox file Turing wrote and then lost the record of: a
+  /// creation that crashed between the write and its transaction. It is
+  /// unmanaged for exactly the same reason a hand-dropped draft is — there is
+  /// no row, so no decision RPC applies — but it is not the user's own draft,
+  /// and telling them it is would be a lie about who wrote a claim about them.
+  /// It is listed rather than deleted, because a file they may already have
+  /// read is not something to remove on a guess.
+  @$pb.TagNumber(15)
+  $core.bool get untracked => $_getBF(14);
+  @$pb.TagNumber(15)
+  set untracked($core.bool value) => $_setBool(14, value);
+  @$pb.TagNumber(15)
+  $core.bool hasUntracked() => $_has(14);
+  @$pb.TagNumber(15)
+  void clearUntracked() => $_clearField(15);
 }
 
 /// An accepted memory: a Markdown file in the user's vault.
@@ -1997,6 +2016,14 @@ class RejectMemoryCandidateRequest extends $pb.GeneratedMessage {
   /// refused. A rejection asks nothing about the kind — it is the user saying no
   /// to whatever is there — so a proposal whose frontmatter no longer parses can
   /// still be thrown away.
+  ///
+  /// Optional, and deliberately so. A client that could not read the proposal
+  /// has no hash to make a claim with, and sending one it invented — or the
+  /// hash of the bytes it failed to parse — would be answering a question it
+  /// cannot answer. Empty is that client saying it is making no claim about the
+  /// file, which is the one case where a rejection may proceed over a file the
+  /// server cannot read either. A non-empty hash against an unreadable file is
+  /// still refused: the claim cannot be checked, so it cannot be honoured.
   @$pb.TagNumber(4)
   $core.String get expectedCandidateHash => $_getSZ(3);
   @$pb.TagNumber(4)
@@ -2232,9 +2259,11 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
 class ApplyMemoryProfileResponse extends $pb.GeneratedMessage {
   factory ApplyMemoryProfileResponse({
     MemoryProfile? profile,
+    $core.bool? cleanupPending,
   }) {
     final result = create();
     if (profile != null) result.profile = profile;
+    if (cleanupPending != null) result.cleanupPending = cleanupPending;
     return result;
   }
 
@@ -2253,6 +2282,7 @@ class ApplyMemoryProfileResponse extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOM<MemoryProfile>(1, _omitFieldNames ? '' : 'profile',
         subBuilder: MemoryProfile.create)
+    ..aOB(2, _omitFieldNames ? '' : 'cleanupPending')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -2289,6 +2319,21 @@ class ApplyMemoryProfileResponse extends $pb.GeneratedMessage {
   void clearProfile() => $_clearField(1);
   @$pb.TagNumber(1)
   MemoryProfile ensureProfile() => $_ensure(0);
+
+  /// True when profile.md now holds `content` and the proposal it came from is
+  /// still sitting in the inbox because it could not be removed. The write is
+  /// the part that matters and it landed, so this is not a failure — but the
+  /// user would otherwise be shown a proposal they have already accepted, with
+  /// no explanation, and no decision RPC will take it. Turing's own cleanup
+  /// finishes it; saying so is what keeps the page honest in the meantime.
+  @$pb.TagNumber(2)
+  $core.bool get cleanupPending => $_getBF(1);
+  @$pb.TagNumber(2)
+  set cleanupPending($core.bool value) => $_setBool(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasCleanupPending() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearCleanupPending() => $_clearField(2);
 }
 
 class GetMemoryPersonaRequest extends $pb.GeneratedMessage {

@@ -550,6 +550,12 @@ abstract class AppLocalizations {
   /// **'The conversation behind this was deleted, so it can no longer be accepted.'**
   String get memoryCandidateStateWithdrawn;
 
+  /// No description provided for @memoryCandidateStateProfileApplying.
+  ///
+  /// In en, this message translates to:
+  /// **'You accepted this and it is being applied to profile.md. Turing is finishing it; there is nothing to decide here.'**
+  String get memoryCandidateStateProfileApplying;
+
   /// No description provided for @memoryCandidateKindUnspecified.
   ///
   /// In en, this message translates to:
@@ -645,6 +651,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Turing did not create this file and will not move it. To accept it, move the file into beliefs/ in your vault.'**
   String get memoryUnmanagedDraftDetail;
+
+  /// No description provided for @memoryUntrackedInboxTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Turing wrote this file and lost track of it'**
+  String get memoryUntrackedInboxTitle;
+
+  /// No description provided for @memoryUntrackedInboxDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'Turing wrote this proposal but has no record of it, so it cannot be accepted or rejected here. Read it in your vault and either move it into beliefs/ to keep it, or delete it.'**
+  String get memoryUntrackedInboxDetail;
+
+  /// No description provided for @memoryProposalDiscardOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'This proposal could not be read in full, so there is nothing here to accept. You can still throw it away.'**
+  String get memoryProposalDiscardOnly;
+
+  /// No description provided for @memoryProfileAppliedCleanupPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Your profile was updated. The proposal it came from could not be removed from the inbox yet, so it is still listed below; Turing will clear it.'**
+  String get memoryProfileAppliedCleanupPending;
 
   /// No description provided for @memoryNoteUnsearchable.
   ///

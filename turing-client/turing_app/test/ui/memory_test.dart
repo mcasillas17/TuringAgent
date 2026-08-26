@@ -1277,7 +1277,7 @@ class _MemoryApi extends TuringApi
   @override
   Future<MemoryCandidate> rejectMemoryCandidate({
     required String candidateId,
-    required String expectedCandidateHash,
+    String expectedCandidateHash = '',
     String reason = '',
   }) async {
     rejections.add((candidateId, expectedCandidateHash));
@@ -1287,7 +1287,7 @@ class _MemoryApi extends TuringApi
   }
 
   @override
-  Future<MemoryDocument> applyMemoryProfile({
+  Future<MemoryApplyResult> applyMemoryProfile({
     required String candidateId,
     required String content,
     required String expectedContentHash,
@@ -1299,7 +1299,7 @@ class _MemoryApi extends TuringApi
       expectedContentHash,
       expectedCandidateHash,
     ));
-    return state.profile;
+    return MemoryApplyResult(profile: state.profile);
   }
 
   @override

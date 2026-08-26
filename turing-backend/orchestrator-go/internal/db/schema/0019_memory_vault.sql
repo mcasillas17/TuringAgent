@@ -103,12 +103,30 @@ CREATE TABLE memory_candidates (
   ),
   evidence_refs_json TEXT NOT NULL
     CHECK (json_valid(evidence_refs_json) AND json_type(evidence_refs_json) = 'array'),
-  state TEXT NOT NULL CHECK (state IN ('pending', 'promoted', 'rejected', 'withdrawn')),
+  state TEXT NOT NULL CHECK (state IN ('pending', 'profile_applying', 'promoted', 'rejected', 'withdrawn')),
   -- Set only once the candidate leaves 'pending'; promoted_note_id may be set
   -- only by a promotion, and is severed rather than dangling if the note it
   -- produced is later deleted from the vault.
   promoted_note_id TEXT REFERENCES memory_notes(id) ON DELETE SET NULL,
   decided_at TEXT,
+  -- The apply claim: the two hashes a 'profile_applying' row is made of.
+  --
+  -- 'profile_applying' is taken *before* profile.md is written, so it is the
+  -- one fact that is true on both sides of a crash mid-apply. apply_base_hash
+  -- is the document the write was replacing and apply_result_hash is the whole
+  -- document it was going to produce, so a pass that finds the claim afterwards
+  -- can read profile.md and say which side of the write the process died on:
+  -- the result means it landed and the bookkeeping can be finished, the base
+  -- means it provably did not and the proposal goes back to the user, and
+  -- anything else means someone has been in the file since and the claim is
+  -- left standing rather than guessed at. Hashes only — the resulting document
+  -- lives in the request and in the user's file, and is never copied here.
+  --
+  -- apply_base_hash may be the empty string: that is the token the vault's own
+  -- writer reads as "no profile exists yet". apply_result_hash may not, because
+  -- an apply always writes something.
+  apply_base_hash TEXT,
+  apply_result_hash TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (source_session_id, inbox_path),
@@ -116,7 +134,24 @@ CREATE TABLE memory_candidates (
     (state = 'pending' AND decided_at IS NULL) OR
     (state <> 'pending' AND decided_at IS NOT NULL)
   ),
-  CHECK (state = 'promoted' OR promoted_note_id IS NULL)
+  CHECK (state = 'promoted' OR promoted_note_id IS NULL),
+  -- There is deliberately no CHECK tying 'profile_applying' to kind =
+  -- 'profile_edit'. This column records what Turing *proposed*; which decision
+  -- applies is read from the candidate file, because the vault is a vault
+  -- precisely so the user can open a proposal and rewrite it — and a proposal
+  -- they rewrote into a profile edit is one they may apply, whatever the row
+  -- remembers. A CHECK here would enforce the wrong sentence ("Turing proposed
+  -- a profile edit") in place of the one that matters ("the document the user
+  -- accepted was a profile edit"), and would refuse exactly that legitimate
+  -- apply. The real gate is a file read under the per-candidate lock, and it is
+  -- the only writer of this state.
+  CHECK (
+    (state = 'profile_applying' AND
+      apply_base_hash IS NOT NULL AND
+      apply_result_hash IS NOT NULL AND apply_result_hash <> '') OR
+    (state <> 'profile_applying' AND
+      apply_base_hash IS NULL AND apply_result_hash IS NULL)
+  )
 );
 
 CREATE INDEX idx_memory_candidates_state

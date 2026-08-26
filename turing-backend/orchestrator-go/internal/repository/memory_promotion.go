@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
@@ -239,7 +240,7 @@ func (r *Repository) PromoteMemoryCandidate(ctx context.Context, decision Memory
 	if err := linkMemoryEvidenceTx(ctx, tx, note.NoteID, note.ContentHash, live); err != nil {
 		return MemoryNote{}, err
 	}
-	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted); err != nil {
+	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted, true); err != nil {
 		return MemoryNote{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -262,35 +263,94 @@ func promotedNoteStatus(evidenceRefs []string, live []string) string {
 	return MemoryNoteStatusManaged
 }
 
+// ApplyMemoryProfileResult is what an apply leaves behind: the profile as it
+// now stands, and whether the proposal it came from is still sitting in the
+// inbox.
+//
+// The two are reported separately because they fail separately and only one of
+// them is the decision. Once profile.md holds the reviewed document, the user
+// has been answered; a proposal file that could not be removed afterwards is
+// housekeeping, and reporting it as a failed apply would tell them their edit
+// did not land while their own document says otherwise.
+type ApplyMemoryProfileResult struct {
+	Document memoryfiles.ProfileDocument
+	// CleanupPending is true when the write landed but the proposal, its row
+	// or its reservation could not all be retired in the same breath. The
+	// candidate is never left decidable when this is true: what is pending is
+	// Turing's own tidying, not the user's decision.
+	CleanupPending bool
+}
+
+// The two seams a profile apply can die at, named so a test can stage a crash
+// at each. They are strings rather than an enum because the only thing that
+// ever reads them is the test-only barrier.
+const (
+	memoryProfileApplyClaimed = "claimed"
+	memoryProfileApplyWritten = "written"
+)
+
 // ApplyMemoryProfileCandidate writes the user's profile on the authority of a
 // profile_edit candidate, then consumes the candidate.
 //
+// The order is the whole design. Everything that can refuse this apply is
+// asked first — the row's lifecycle, the candidate file's compare-and-set and
+// kind, and the profile's own compare-and-set — and then the candidate is
+// *claimed* into 'profile_applying', carrying the hash of the document about to
+// be written and the hash of the one being replaced. Only then is profile.md
+// touched.
+//
+// That ordering is what makes a crash survivable. Before the claim, nothing has
+// happened and the proposal is still the user's to decide. After it, the row
+// says the user's document may already carry these words, so no rejection can
+// retire the proposal as though they had refused it — and the recovery pass can
+// read profile.md and tell which side of the write the process died on, because
+// it knows both hashes.
+//
 // The profile is a pinned document, not a note: it is never projected into the
-// note index and never becomes searchable memory. The candidate file is
-// removed through the inbox-only primitive, so this path cannot be pointed at
-// anything else.
+// note index and never becomes searchable memory. The candidate file is removed
+// through the inbox-only primitive, so this path cannot be pointed at anything
+// else.
 //
 // It runs under the per-candidate lock for the same reason a promotion does,
 // and the stakes are higher here: without it a rejection could retire the
 // proposal while this call was between its own check and its write, and the
 // user's profile would be rewritten from a claim they had just refused.
-func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input ApplyMemoryProfileInput) (memoryfiles.ProfileDocument, error) {
+func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input ApplyMemoryProfileInput) (ApplyMemoryProfileResult, error) {
 	vault, err := r.memoryVaultOrError()
 	if err != nil {
-		return memoryfiles.ProfileDocument{}, err
+		return ApplyMemoryProfileResult{}, err
 	}
 	unlock, err := r.lockMemoryCandidateDecision(ctx, input.CandidateID)
 	if err != nil {
-		return memoryfiles.ProfileDocument{}, err
+		return ApplyMemoryProfileResult{}, err
 	}
 	defer unlock()
 
-	candidate, err := r.pendingCandidateForDecision(ctx, input.CandidateID, MemoryCandidateStatePromoted)
+	candidate, err := r.pendingCandidateForDecision(ctx, input.CandidateID, MemoryCandidateStateProfileApplying)
 	if err != nil {
-		return memoryfiles.ProfileDocument{}, err
+		return ApplyMemoryProfileResult{}, err
 	}
 	if err := decideAboutCandidateFile(ctx, vault, candidate, input.ExpectedCandidateHash, MemoryCandidateKindProfileEdit); err != nil {
-		return memoryfiles.ProfileDocument{}, err
+		return ApplyMemoryProfileResult{}, err
+	}
+	// The profile's compare-and-set, asked here rather than only inside the
+	// write, because the claim has to record the document it is replacing and
+	// a claim over a document that has already moved is a claim about nothing.
+	// The write asks again, through the descriptor it writes; this is not a
+	// substitute for that check, it is what the claim is made of.
+	base, err := currentProfileHash(ctx, vault, input.ExpectedContentHash)
+	if err != nil {
+		return ApplyMemoryProfileResult{}, err
+	}
+	if err := r.claimProfileApply(ctx, candidate, base, memoryfiles.ContentHash(input.Content)); err != nil {
+		return ApplyMemoryProfileResult{}, err
+	}
+	candidate.State = MemoryCandidateStateProfileApplying
+	if err := r.profileApplyBarrier(memoryProfileApplyClaimed); err != nil {
+		// The claim stands and nothing was written. The recovery pass will
+		// find profile.md still reading as the base hash and hand the proposal
+		// back to the user.
+		return ApplyMemoryProfileResult{}, err
 	}
 
 	document, err := vault.ApplyProfileEdit(ctx, memoryfiles.ApplyProfileEditRequest{
@@ -300,24 +360,111 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 		Content:             input.Content,
 	})
 	if err != nil {
-		return memoryfiles.ProfileDocument{}, err
-	}
-	if err := vault.RemoveInboxNote(ctx, candidate.InboxPath); err != nil {
-		return memoryfiles.ProfileDocument{}, err
+		return ApplyMemoryProfileResult{}, err
 	}
 
+	result := ApplyMemoryProfileResult{Document: document}
+	if barrierErr := r.profileApplyBarrier(memoryProfileApplyWritten); barrierErr != nil {
+		// The write landed. Reporting the failure of what comes after it as a
+		// failed apply would tell the user their edit did not happen while
+		// their own document says it did, so the answer is the truthful one:
+		// applied, tidying outstanding, claim still held so nothing can reject
+		// it in the meantime.
+		log.Printf("memory profile apply left unfinished for %s: %v", candidate.CandidateID, barrierErr)
+		result.CleanupPending = true
+		return result, nil
+	}
+	result.CleanupPending = !r.finishProfileApply(ctx, vault, candidate)
+	return result, nil
+}
+
+// finishProfileApply retires the proposal an apply has already written, and
+// reports whether it got all the way.
+//
+// The file is removed first and the reservation is released only if it went:
+// the reservation is the manifest entry that says these bytes are Turing's to
+// clean up, and dropping it beside a file that is still there would leave the
+// user's vault holding a claim about them that nothing in the system knows
+// about. The row goes either way, because an applied proposal is not one
+// anybody may decide again.
+func (r *Repository) finishProfileApply(ctx context.Context, vault *memoryfiles.Vault, candidate MemoryCandidate) bool {
+	removed := true
+	if err := vault.RemoveInboxNote(ctx, candidate.InboxPath); err != nil {
+		log.Printf("remove applied memory proposal %s: %v", candidate.CandidateID, err)
+		removed = false
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return memoryfiles.ProfileDocument{}, err
+		log.Printf("finish memory profile apply %s: %v", candidate.CandidateID, err)
+		return false
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted); err != nil {
-		return memoryfiles.ProfileDocument{}, err
+	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted, removed); err != nil {
+		log.Printf("finish memory profile apply %s: %v", candidate.CandidateID, err)
+		return false
 	}
 	if err := tx.Commit(); err != nil {
-		return memoryfiles.ProfileDocument{}, err
+		log.Printf("finish memory profile apply %s: %v", candidate.CandidateID, err)
+		return false
 	}
-	return document, nil
+	return removed
+}
+
+func (r *Repository) profileApplyBarrier(stage string) error {
+	if r.memoryProfileApplyBarrier == nil {
+		return nil
+	}
+	return r.memoryProfileApplyBarrier(stage)
+}
+
+// currentProfileHash is the compare-and-set over profile.md, asked before
+// anything is claimed.
+//
+// A profile that is simply not there yet is not a failure: that is the
+// first-run state, and the empty token is the same one the vault's own writer
+// reads as "I am creating this". A profile that exists and could not be read is
+// refused outright — a claim recording a base hash nobody could compute would
+// be a claim the recovery pass could never resolve.
+func currentProfileHash(ctx context.Context, vault *memoryfiles.Vault, expected string) (string, error) {
+	document := vault.EditableProfile(ctx)
+	switch {
+	case document.Available:
+	case document.Reason == memoryfiles.UnavailableVaultMissing:
+		document.ContentHash = ""
+	default:
+		return "", fmt.Errorf("read %s: %s", memoryfiles.ProfileFileName, document.Detail)
+	}
+	if document.ContentHash != expected {
+		return "", &memoryfiles.StaleContentError{RelPath: memoryfiles.ProfileFileName}
+	}
+	return document.ContentHash, nil
+}
+
+// claimProfileApply moves a pending profile edit into 'profile_applying' and
+// records the two hashes the recovery pass reads. The update is guarded on
+// pending, so two applies racing over one proposal are resolved by one of them
+// finding the row already claimed rather than by both writing the profile.
+func (r *Repository) claimProfileApply(ctx context.Context, candidate MemoryCandidate, baseHash string, resultHash string) error {
+	claimedAt := now()
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE memory_candidates
+		SET state = ?, decided_at = ?, updated_at = ?,
+			apply_base_hash = ?, apply_result_hash = ?
+		WHERE id = ? AND state = ?
+	`, MemoryCandidateStateProfileApplying, claimedAt, claimedAt,
+		baseHash, resultHash, candidate.CandidateID, MemoryCandidateStatePending)
+	if err != nil {
+		return err
+	}
+	claimed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if claimed != 1 {
+		return fmt.Errorf("%w: %q cannot become %q",
+			ErrMemoryCandidateInvalidTransition, candidate.State, MemoryCandidateStateProfileApplying)
+	}
+	return nil
 }
 
 // RejectMemoryCandidate refuses a proposal: the file leaves the inbox and the
@@ -358,7 +505,7 @@ func (r *Repository) RejectMemoryCandidate(ctx context.Context, decision MemoryC
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStateRejected); err != nil {
+	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStateRejected, true); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -394,19 +541,32 @@ func (r *Repository) pendingCandidateForDecision(ctx context.Context, candidateI
 	return candidate, nil
 }
 
-// consumeMemoryCandidateTx retires a decided candidate and the reservation that
-// tracked its inbox entry. The delete is guarded on the state it was read in,
-// so two decisions racing cannot both believe they were the one that decided.
+// consumeMemoryCandidateTx retires a decided candidate and, when the file it
+// described is really gone, the reservation that tracked it. The delete is
+// guarded on the state the candidate was read in, so two decisions racing
+// cannot both believe they were the one that decided.
+//
+// releaseReservation is false in exactly one case: an apply whose write landed
+// and whose proposal file could not be removed. The reservation is the manifest
+// entry that says those bytes are Turing's to clean up, so releasing it beside
+// a file that is still there would leave a claim about the user in their vault
+// with nothing in the database naming it.
 //
 // The audit row lands in the same transaction as the decision, for the same
 // reason session deletion records its own: a decision that is recorded
 // separately can be lost while the change it describes survives. It carries the
 // candidate's identity, its kind and the decision — never the claim it made,
-// the file it lived in, or the conversation that produced it.
-func consumeMemoryCandidateTx(ctx context.Context, tx *sql.Tx, candidate MemoryCandidate, decision string) error {
+// the file it lived in, the conversation that produced it, or any hash.
+func consumeMemoryCandidateTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	candidate MemoryCandidate,
+	decision string,
+	releaseReservation bool,
+) error {
 	result, err := tx.ExecContext(ctx, `
 		DELETE FROM memory_candidates WHERE id = ? AND state = ?
-	`, candidate.CandidateID, MemoryCandidateStatePending)
+	`, candidate.CandidateID, candidate.State)
 	if err != nil {
 		return err
 	}
@@ -417,10 +577,12 @@ func consumeMemoryCandidateTx(ctx context.Context, tx *sql.Tx, candidate MemoryC
 	if deleted != 1 {
 		return ErrMemoryCandidateInvalidTransition
 	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM vault_artifacts WHERE session_id = ? AND vault_path = ?
-	`, candidate.SourceSessionID, candidate.InboxPath); err != nil {
-		return err
+	if releaseReservation {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM vault_artifacts WHERE session_id = ? AND vault_path = ?
+		`, candidate.SourceSessionID, candidate.InboxPath); err != nil {
+			return err
+		}
 	}
 	return recordMemoryCandidateDecisionTx(ctx, tx, candidate, decision)
 }
