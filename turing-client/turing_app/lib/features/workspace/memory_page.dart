@@ -70,46 +70,56 @@ class _ProfileResultBinding {
   final String candidateHash;
 }
 
+/// Everything the page holds for one profile proposal's result: the editor, the
+/// words it was seeded with, and the two tokens those words were composed
+/// against.
+///
+/// The seed is how an untouched result is told from an edited one. An editor
+/// still holding its seed is one the user has not typed into, and may be
+/// re-composed when the profile or the proposal moves underneath it; one that
+/// has drifted holds their words and is left alone.
+///
+/// The two tokens travel with the text, not with the page. A result the user
+/// has edited keeps their words when the profile moves underneath it — and it
+/// has to keep these with them, because those words describe a document that is
+/// no longer there. Sending them with the *newer* profile's token would tell
+/// the server "this is an edit of what you have now", and it would be accepted:
+/// whatever the other writer put in profile.md would be gone, silently. The
+/// proposal's token is kept for the same reason: a proposal is a file the user
+/// can rewrite in Obsidian between composing a result and applying it, and
+/// sending these words against the newer one would say "I read this and I
+/// accept it" about a claim nobody has read. Sent with the pair they were
+/// actually composed against, the server refuses and the user is told to look
+/// again.
+class _ProfileResult {
+  _ProfileResult({
+    required this.controller,
+    required this.seed,
+    required this.profileHash,
+    required this.candidateHash,
+  });
+
+  final TextEditingController controller;
+  String seed;
+  String profileHash;
+  String candidateHash;
+}
+
 class _MemoryPageState extends State<MemoryPage> {
   late Future<MemoryState> _state;
   final TextEditingController _persona = TextEditingController();
   final TextEditingController _profile = TextEditingController();
 
-  /// One resulting-profile editor per profile_edit proposal on screen, kept on
-  /// the page rather than inside the card so a re-read does not throw away what
-  /// the user has typed into it.
-  final Map<String, TextEditingController> _profileResults = {};
-
-  /// What each of those editors was seeded with. An editor still holding its
-  /// seed is one the user has not touched, and may be re-seeded when the
-  /// profile or the proposal moves underneath it; one that has drifted holds
-  /// their words and is left alone.
-  final Map<String, String> _profileResultSeeds = {};
-
-  /// The profile compare-and-set token each result was composed against.
+  /// One resulting-profile editor per profile_edit proposal, kept on the page
+  /// rather than inside the card so a re-read does not throw away what the user
+  /// has typed into it.
   ///
-  /// It travels with the text, not with the page. A result the user has edited
-  /// keeps their words when the profile moves underneath it — and it has to
-  /// keep this with them, because those words describe a document that is no
-  /// longer there. Sending them with the *newer* profile's token would tell the
-  /// server "this is an edit of what you have now", and it would be accepted:
-  /// whatever the other writer put in profile.md would be gone, silently. Sent
-  /// with the token they were actually composed against, the server refuses,
-  /// and the user is told to look again.
-  final Map<String, String> _profileResultProfileHashes = {};
-
-  /// The proposal each result was composed from, kept for the same reason and
-  /// with the same rule.
-  ///
-  /// A proposal is a file in the user's inbox, and they can rewrite it in
-  /// Obsidian between composing a result and applying it. The words in the
-  /// editor are then an acceptance of the claim as it read when they were
-  /// composed, and nothing else — sending them against the *newer* proposal
-  /// would tell the server "I read this and I accept it" about a claim about
-  /// the user that nobody has read. Sent with the proposal they were actually
-  /// composed from, the server's compare-and-set refuses, and the user is
-  /// shown the new claim before deciding on it.
-  final Map<String, String> _profileResultCandidateHashes = {};
+  /// One map, not four parallel ones: the words, the seed they were composed
+  /// as, and the two tokens they were composed against are one fact about one
+  /// proposal, and forgetting a proposal has to forget all of it. Kept apart,
+  /// a result could be dropped while the numbers it was composed against stayed
+  /// behind to be handed to whatever arrives under the same id next.
+  final Map<String, _ProfileResult> _profileResults = {};
 
   /// The hashes the editors were loaded at. Sent back as the compare-and-set
   /// token, so a save always answers "I am editing *this* version" rather than
@@ -146,8 +156,8 @@ class _MemoryPageState extends State<MemoryPage> {
   void dispose() {
     _persona.dispose();
     _profile.dispose();
-    for (final controller in _profileResults.values) {
-      controller.dispose();
+    for (final result in _profileResults.values) {
+      result.controller.dispose();
     }
     super.dispose();
   }
@@ -167,49 +177,48 @@ class _MemoryPageState extends State<MemoryPage> {
     String profileHash,
   ) {
     final seed = composeProfileResult(profile, candidate.content);
-    final controller = _profileResults.putIfAbsent(candidate.candidateId, () {
-      _profileResultSeeds[candidate.candidateId] = seed;
-      _profileResultProfileHashes[candidate.candidateId] = profileHash;
-      _profileResultCandidateHashes[candidate.candidateId] =
-          candidate.contentHash;
-      return TextEditingController(text: seed);
-    });
-    if (controller.text == _profileResultSeeds[candidate.candidateId]) {
+    final result = _profileResults.putIfAbsent(
+      candidate.candidateId,
+      () => _ProfileResult(
+        controller: TextEditingController(text: seed),
+        seed: seed,
+        profileHash: profileHash,
+        candidateHash: candidate.contentHash,
+      ),
+    );
+    if (result.controller.text == result.seed) {
       // Untouched, so it follows the vault. Re-seeded means re-composed: these
       // words are the profile as it reads now plus the proposal as it reads
       // now, so they are an edit of the one and an acceptance of the other, and
       // they carry both of those tokens.
-      if (controller.text != seed) controller.text = seed;
-      _profileResultSeeds[candidate.candidateId] = seed;
-      _profileResultProfileHashes[candidate.candidateId] = profileHash;
-      _profileResultCandidateHashes[candidate.candidateId] =
-          candidate.contentHash;
+      if (result.controller.text != seed) result.controller.text = seed;
+      result.seed = seed;
+      result.profileHash = profileHash;
+      result.candidateHash = candidate.contentHash;
     }
     return _ProfileResultBinding(
-      controller: controller,
+      controller: result.controller,
       // Never whichever read happened most recently: an edited result keeps the
       // pair it was composed from, so the apply is refused honestly rather than
       // silently rewriting a document nobody read or accepting a claim nobody
       // read.
-      profileHash:
-          _profileResultProfileHashes[candidate.candidateId] ?? profileHash,
-      candidateHash:
-          _profileResultCandidateHashes[candidate.candidateId] ??
-          candidate.contentHash,
+      profileHash: result.profileHash,
+      candidateHash: result.candidateHash,
     );
   }
 
-  /// Forgets the editors for proposals that are no longer on the page. A
-  /// decided proposal is gone from the vault, and keeping its half-edited
-  /// result alive would resurrect it under a reused id.
+  /// Forgets the results of proposals this page is no longer composing for: the
+  /// ones that left the listing, and the ones the server has decided. Those
+  /// results describe a file that is gone, and keeping one alive would hand it
+  /// to whatever arrives under the same id next.
+  ///
+  /// Only a frame that actually rendered the listing may call this. A loading
+  /// frame has no proposals in it and is not evidence that any of them left.
   void _retainProfileResults(Iterable<String> liveCandidateIds) {
     final live = liveCandidateIds.toSet();
     for (final candidateId in _profileResults.keys.toList()) {
       if (live.contains(candidateId)) continue;
-      _profileResults.remove(candidateId)?.dispose();
-      _profileResultSeeds.remove(candidateId);
-      _profileResultProfileHashes.remove(candidateId);
-      _profileResultCandidateHashes.remove(candidateId);
+      _profileResults.remove(candidateId)?.controller.dispose();
     }
   }
 
@@ -544,8 +553,10 @@ class _MemoryBody extends StatelessWidget {
   final _ProfileResultBinding Function(MemoryCandidate candidate)
   profileResultFor;
 
-  /// Told which proposals are on screen, so the page can forget the editors of
-  /// the ones that are not.
+  /// Told which proposals are still the page's to compose for, so it can
+  /// forget the results of the ones that are not. Every listed proposal the
+  /// server has not decided is on that list, including the ones this frame can
+  /// offer no button for: an editor is kept for a row, not for a button.
   final ValueChanged<List<String>> onCandidatesBuilt;
 
   /// The server's own row for a tier, if it sent one. A build that has not
@@ -563,6 +574,43 @@ class _MemoryBody extends StatelessWidget {
   static bool _needsProfileResult(MemoryCandidate candidate) =>
       candidate.decision == MemoryCandidateDecision.applyToProfile;
 
+  /// Whether a result already composed for this proposal is still that
+  /// proposal's to hold.
+  ///
+  /// The question is about the row, not about what this build can offer for it
+  /// this frame. A vault that stopped being readable, bytes that stopped
+  /// parsing, memory switched off — each of those takes the Apply button away,
+  /// and none of them is a decision about the proposal. The words the user
+  /// typed are still their answer to it, and forgetting them because no button
+  /// can be drawn this frame loses them to a condition that clears on the next
+  /// read: the page would compose a fresh result over whatever the profile and
+  /// the proposal say afterwards, and the apply would carry those newer tokens
+  /// — an edit of a document nobody read, and an acceptance of a claim nobody
+  /// read.
+  ///
+  /// An apply the server has claimed is retained for the same reason: the claim
+  /// is handed back to pending when the write turns out to change nothing, so
+  /// it is not the end of the row either. What is the end of it is a decision —
+  /// promoted, rejected, withdrawn — and a row that leaves the listing
+  /// altogether, which is the other half of the same answer. The switch is
+  /// exhaustive with no `default` so a state added tomorrow has to be sorted
+  /// deliberately rather than silently ending somebody's draft.
+  static bool _retainsProfileResult(MemoryCandidate candidate) {
+    switch (candidate.state) {
+      case MemoryCandidateState.pending:
+      case MemoryCandidateState.profileApplying:
+      // A state this build cannot name is not a decision it has been told
+      // about. Keeping the words costs a text controller; guessing that an
+      // unknown answer means "decided" costs the user what they wrote.
+      case MemoryCandidateState.unspecified:
+        return true;
+      case MemoryCandidateState.promoted:
+      case MemoryCandidateState.rejected:
+      case MemoryCandidateState.withdrawn:
+        return false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = AppColors.of(context);
@@ -571,7 +619,7 @@ class _MemoryBody extends StatelessWidget {
         .toList();
     onCandidatesBuilt([
       for (final candidate in state.candidates)
-        if (_needsProfileResult(candidate)) candidate.candidateId,
+        if (_retainsProfileResult(candidate)) candidate.candidateId,
     ]);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
