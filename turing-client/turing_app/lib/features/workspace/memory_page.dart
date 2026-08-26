@@ -571,6 +571,11 @@ class _MemoryBody extends StatelessWidget {
   /// Whether this proposal needs a resulting-profile editor: a decidable
   /// profile edit and nothing else. A proposal the page will not offer a
   /// decision on gets no editor, because there is no apply to compose for.
+  ///
+  /// Every proposal this answers yes for is one [_retainsProfileResult] also
+  /// answers yes for — an applicable proposal is a pending one — and it has to
+  /// stay that way: an editor created in a frame that then forgets it would be
+  /// disposed as it was drawn.
   static bool _needsProfileResult(MemoryCandidate candidate) =>
       candidate.decision == MemoryCandidateDecision.applyToProfile;
 

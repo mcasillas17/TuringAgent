@@ -895,6 +895,7 @@ cannot name; and the far side, which the same rule has to keep — a proposal th
 was unreadable when it arrived getting nothing invented for it and, once
 readable, a result composed from what is there then; and a decided proposal and
 a delisted one each taking their result with them rather than handing it to the
-proposal that reuses the id. Restoring the old decision-shaped filter fails the
-first four; retaining every listed row fails the decided one; dropping the
-claimed-apply arm fails its own.
+proposal that reuses the id — promoted, rejected and withdrawn each held
+separately, because three arms that share a return are three arms. Restoring the
+old decision-shaped filter fails the first four; retaining every listed row
+fails the decided ones; dropping the claimed-apply arm fails its own.

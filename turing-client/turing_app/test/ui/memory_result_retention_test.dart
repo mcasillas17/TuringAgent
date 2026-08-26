@@ -279,6 +279,46 @@ void main() {
       );
     });
 
+    for (final decided in const {
+      'rejected': MemoryCandidateState.rejected,
+      'withdrawn': MemoryCandidateState.withdrawn,
+    }.entries) {
+      testWidgets('is forgotten when the proposal is ${decided.key}', (
+        tester,
+      ) async {
+        final api = _Api()..state = _stateWithProfileEdit();
+        await _pump(tester, api);
+
+        await tester.enterText(_resultEditorFinder(), 'Mine, not composed.\n');
+        await tester.pumpAndSettle();
+
+        api.state = _stateWithProfileEdit(
+          candidate: _profileEditCandidate(state: decided.value),
+        );
+        await _tap(tester, find.byKey(const Key('memory-persona-reread')));
+        expect(_resultEditorFinder(), findsNothing);
+
+        api.state = _stateWithProfileEdit(
+          candidate: _profileEditCandidate(
+            content: 'Cycles to work, actually.',
+            contentHash: 'sha256:proposed-again',
+          ),
+        );
+        await _tap(tester, find.byKey(const Key('memory-persona-reread')));
+
+        expect(
+          _resultEditor(tester).controller!.text,
+          '# Profile\n\nWrites Go and lives in Guadalajara.\n\n'
+          'Cycles to work, actually.\n',
+          reason: 'a ${decided.key} proposal is over, and so is its result',
+        );
+
+        await _tap(tester, find.text('Apply'));
+
+        expect(api.profileApplies.single.$4, 'sha256:proposed-again');
+      });
+    }
+
     testWidgets('is forgotten when the proposal leaves the listing', (
       tester,
     ) async {
