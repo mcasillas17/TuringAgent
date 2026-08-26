@@ -1149,9 +1149,19 @@ class _CandidateCard extends StatelessWidget {
             // written by a model, and nothing on this page interprets it as
             // markup — least of all the field whose contents become the user's
             // own document.
+            //
+            // Closed while the page is busy, and that is not cosmetic. An
+            // authored document may keep taking keystrokes mid-save because it
+            // is still on screen afterwards to hold them; this editor is not.
+            // A successful apply decides the proposal, the card goes, and
+            // words typed into it after the button was pressed are neither
+            // sent nor kept anywhere the user could find them. A field that
+            // cannot keep what it takes must not take it — and it says so,
+            // rather than swallowing them silently.
             TextField(
               key: Key('memory-profile-result-${candidate.candidateId}'),
               controller: result.controller,
+              enabled: !busy,
               maxLines: 8,
               minLines: 4,
               keyboardType: TextInputType.multiline,

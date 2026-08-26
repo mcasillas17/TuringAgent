@@ -240,6 +240,81 @@ void main() {
     });
   });
 
+  group('typing while an apply is in flight', () {
+    testWidgets('takes no words the apply will not carry', (tester) async {
+      final api = _Api()
+        ..state = _stateWithProfileEdit()
+        ..profileApplyDelay = const Duration(milliseconds: 50);
+      await _pump(tester, api);
+
+      await tester.enterText(_resultEditorFinder(), 'What I reviewed.\n');
+      await tester.pump();
+      await _tapNoSettle(tester, find.text('Apply'));
+
+      // The request is in flight and the whole page is busy. An authored
+      // document may keep taking keystrokes mid-save, because it is still
+      // there afterwards to hold them — this editor is not. A successful apply
+      // decides the proposal, the card leaves the page, and anything typed
+      // into it after the button was pressed goes with it: not sent, not
+      // saved, and nowhere to be found.
+      final duringApply = _resultEditor(tester);
+      expect(
+        duringApply.enabled,
+        isFalse,
+        reason: 'a field that cannot keep what it takes must not take it',
+      );
+      expect(
+        _resultEditable(tester).readOnly,
+        isTrue,
+        reason: 'read-only is what actually keeps a platform keyboard out',
+      );
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Apply'))
+            .onPressed,
+        isNull,
+        reason: 'and the decision is not offered twice',
+      );
+
+      await tester.enterText(_resultEditorFinder(), 'Typed after the apply.\n');
+      await tester.pump();
+      expect(
+        _resultEditor(tester).controller!.text,
+        'What I reviewed.\n',
+        reason: 'nothing typed after the button reached the editor',
+      );
+
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpAndSettle();
+
+      expect(api.profileApplies, hasLength(1));
+      expect(
+        api.profileApplies.single.$2,
+        'What I reviewed.\n',
+        reason: 'the document that was reviewed is the document that was sent',
+      );
+    });
+
+    testWidgets('takes them again once the apply has answered', (tester) async {
+      final api = _Api()
+        ..state = _stateWithProfileEdit()
+        ..profileApplyDelay = const Duration(milliseconds: 50);
+      await _pump(tester, api);
+
+      await _tapNoSettle(tester, find.text('Apply'));
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpAndSettle();
+
+      // The proposal is still listed — this apply changed nothing about the
+      // listing — so the editor is back, and it is an editor again.
+      expect(
+        _resultEditor(tester).enabled,
+        isNot(isFalse),
+        reason: 'the page is not busy any more, so nothing is disabled',
+      );
+    });
+  });
+
   group('typing while a save is in flight', () {
     testWidgets('keeps the keystrokes the user added mid-save', (tester) async {
       final api = _Api()..personaSaveDelay = const Duration(milliseconds: 50);
@@ -308,6 +383,14 @@ Finder _resultEditorFinder() =>
 
 TextField _resultEditor(WidgetTester tester) =>
     tester.widget<TextField>(_resultEditorFinder());
+
+EditableText _resultEditable(WidgetTester tester) => tester.widget<EditableText>(
+  find.descendant(
+    of: _resultEditorFinder(),
+    matching: find.byType(EditableText),
+  ),
+);
+
 
 Future<void> _tap(WidgetTester tester, Finder finder) async {
   await tester.ensureVisible(finder);
@@ -449,6 +532,7 @@ class _Api extends TuringApi
   MemoryState state = _defaultState();
   Duration? personaSaveDelay;
   Duration? profileSaveDelay;
+  Duration? profileApplyDelay;
   final List<(String, String, String, String)> profileApplies = [];
   final List<(String, String)> personaSaves = [];
   final List<(String, String)> profileSaves = [];
@@ -486,6 +570,7 @@ class _Api extends TuringApi
       expectedContentHash,
       expectedCandidateHash,
     ));
+    if (profileApplyDelay case final delay?) await Future<void>.delayed(delay);
     return MemoryApplyResult(profile: state.profile);
   }
 
