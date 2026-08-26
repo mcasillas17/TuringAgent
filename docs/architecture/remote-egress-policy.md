@@ -148,6 +148,20 @@ fresh disclosure. The later run-outcome migration preserves populated
 legacy `egress_decision_invalid` code) as bounded `policy_denied`, with no raw
 diagnostic text in public history.
 
+A decision recorded under an *older* decision version is a different case, and
+it is deliberately not rescued. Migration 0019 keeps such a row exactly as it
+was written, with an empty `memory_snapshot_fingerprint`, because a consent
+given before memory existed disclosed no memory and must never be
+retroactively credited with any. A job still queued under it is refused at
+dispatch by the runtime's shape check — a typed, terminal
+`egress_decision_invalid` that is never retried — and the way forward is the
+person sending the message again under a disclosure they actually read.
+Executing it would run against a disclosure nobody saw; rewriting its version
+would forge that consent with this server's own signature. Failing closed is
+the specified behaviour, pinned by
+`agent-runtime-go/internal/agent/egress_version_skew_test.go` against the
+literal pre-bump number.
+
 ## Background work and audit
 
 Automations cannot inherit interactive consent. A remote effective route
