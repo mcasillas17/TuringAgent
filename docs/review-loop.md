@@ -291,3 +291,191 @@ Tests: `service/memory/malformed_body_withheld_test.go`, asserting all four
 surfaces — the whole page, the unfiltered listing, the filtered listing and the
 single fetch — against one corrupted proposal, and asserting the identity the row
 owns survives on each.
+
+## Round 8
+
+Reviewers: Grok, GPT-5.6 Terra, Claude Opus 5, Claude Opus 4.8.
+Outcome: seven findings. Six accepted and fixed, one rejected with a reason.
+Grok and Terra found nothing.
+
+### Opus 5 — the card read its token before the build that re-aimed it
+
+Round 7 gave a composed profile result a token that travels with the words, so
+a re-read cannot silently re-aim an unsaved edit at a newer document. The card
+asked for the token and the editor separately, in that order, and the re-seed
+happens inside the second call. So on the one build where an untouched result
+was re-composed from a newer profile — the build where the number changes — the
+line said the version the *previous* build composed against while the apply
+carried the new one.
+
+Both cases the page owns had been reasoned about; the ordering between them had
+not. It is the ordinary failure of a rule enforced by call order: correct
+everywhere except the moment it describes.
+
+Accepted, structurally. The editor and its token come back from one call, which
+re-seeds first and answers with what it just decided, and the apply carries the
+token the card was handed rather than looking it up again when the button is
+pressed. There is no second call to order.
+
+Tests: `test/ui/memory_cas_display_test.dart` — an untouched result after the
+profile moves, asserting the number on screen and the number in the request are
+the same one, beside the edited-result case that must not move.
+
+### Opus 4.8 — the proposal half of an apply had no such rule
+
+An apply carries two compare-and-set tokens: one against profile.md, which the
+result is an edit of, and one against the proposal, which the result is an
+acceptance of. Only the first had been given a home that travels with the text.
+The second was read off whichever listing was newest.
+
+A proposal is a file in the user's inbox and they can rewrite it in Obsidian
+between composing a result and applying it. The apply then said "I read this and
+I accept it" about a claim about them that nobody had read, and the server
+accepted it, because the newer proposal is exactly what the request named.
+
+Accepted, under one rule for both: an untouched result is re-composed and adopts
+the pair it was composed from; an edited one keeps its words, its profile
+version and its proposal. The card names both and the apply sends the two it
+named, so where either has moved the server refuses and the user is shown the
+new claim before deciding on it.
+
+Tests: `test/ui/memory_cas_display_test.dart` — an edited result after the
+proposal and the profile both move, asserting the proposal token on screen and
+in the request, and the untouched result that must follow the newer proposal.
+
+### Opus 4.8 — an editor that could not keep what it was given
+
+The two authored documents stay live while a save is in flight on purpose: the
+user keeps typing, the editor is still there when the answer comes back, and the
+newer words stay theirs. Round 4 pinned that. The resulting-profile editor
+beside a proposal inherited the liveness and cannot honour the promise: a
+successful apply decides the proposal, the card leaves the page and the editor
+is disposed with it, so anything typed after the button was pressed was neither
+sent nor kept anywhere the user could find it.
+
+Accepted. The field is closed while the page is busy, and rendered disabled
+rather than merely ignoring input — the state is true, a screen reader can
+report it, and a field that cannot keep what it takes must not take it. The
+decision buttons beside it were already closed for that window.
+
+Tests: `test/ui/memory_apply_test.dart` — a delayed apply, asserting the field
+refuses input while it is in flight, that a keystroke aimed at it lands nowhere,
+that the document sent is the one that was reviewed, and that the editor opens
+again once the request has answered.
+
+### Opus 4.8 — a rejection could delete the file that replaced the one decided
+
+A rejection deletes the proposal the user read. The unlink named a name, and the
+entry under that name between the check and the unlink is not necessarily the
+file that was checked: Obsidian, a sync client and Turing's own writer all
+replace a file by writing a new one beside it and renaming over the top, so the
+window is the ordinary way this vault gets written to rather than an exotic
+race. A newer claim about the user that landed in it was deleted by a decision
+about the older one, and the user was told their rejection succeeded.
+
+Accepted. The deletion is two steps. The candidate is opened first and that
+descriptor is the identity everything afterwards is held to; the entry is then
+detached from its name in one atomic rename into a private staging name inside
+the same confined directory — the link-and-stage discipline every create here
+uses, run backwards. What was detached is compared against the opened descriptor
+and, where the decision named bytes, against those bytes again, before anything
+is unlinked: an editor saving in place keeps the inode, so identity alone would
+call the user's own newer words unchanged.
+
+Where it is not the same file, nothing is deleted. It goes back under its own
+name with link semantics that refuse to overwrite; where the name has been taken
+meanwhile it stays under the staging name and the refusal says where it is. An
+unreferenced file somebody can still find is recoverable and a deleted one is
+not. The hashless door keeps its reason for existing — a proposal nobody can
+parse, or open at all, is still removable on the identity of the entry that was
+inspected — and Turing's own tidying keeps the plain idempotent unlink, still
+confined to the inbox and still unreachable as a user's rejection.
+
+Tests: `memoryfiles/remove_identity_test.go` — a barrier standing at both
+moments another writer can be at, asserting a replacement survives a rejection
+of what it replaced, that the same holds for the hashless malformed path, that
+an in-place rewrite is refused, that a detached file whose name gets taken is
+kept and named, and that the ordinary paths still delete and leave no staging
+behind. Deleting either check fails a test the other does not cover.
+
+### Opus 4.8 — a challenge for a run no worker could execute
+
+The route a prepare validated was built before anything had looked at where the
+frozen tools go, so it said "local model, no egress decision" — which a worker
+built before egress decisions existed satisfies. The tool snapshot was then
+taken from that same pre-decision candidate set, a remote MCP server or an
+integration turned up in it, and the challenge went out. The send that follows
+freezes a decision onto the job, and dispatch will only hand it to a worker that
+can validate one. So the user consented to sending their words to a named
+destination, and the run went into a queue nothing would take it out of.
+
+Accepted. The route is rebuilt and validated a second time, once the egress
+decision requirement is known and the tool snapshot is frozen — and the slice
+that is validated is the slice the challenge signs, so nothing can move between
+the two. A challenge that goes out is a promise the run can happen; where no
+connected worker can execute it the caller gets the routing refusal, which names
+what is missing, instead of a consent dialog for a run that cannot happen. The
+first pass stays, documented as provisional: an unknown model or a tool nobody
+has is a better answer early than one arrived at after reading the vault.
+
+Tests: `service/chat/local_model_remote_tool_route_test.go` — a local model with
+a remote MCP tool and with an integration, against a worker advertising the
+literal pre-memory decision version, asserting the prepare and the send both
+refuse with the routing detail that names the version; against a current worker,
+asserting the challenge is issued and the tools it signs are the ones that were
+validated; and a purely local run that still needs no decision.
+
+### Opus 4.8 — a disclosed tier nobody named, rendered as the one before it
+
+Every other enum on this client is decoded through `decodeClosedEnum`, because a
+closed enum keeps the last value the parser *recognised*: a newer value sent
+after a known one leaves the known one sitting in the field while what the
+server meant is filed away as unknown. The tier on a memory egress disclosure
+was read straight off the field.
+
+So a tier this build has never heard of arrived on the consent dialog as
+whichever tier the bytes before it named — "Persona", under "Memory pinned into
+this run", which tells a person the exact words of their persona document are
+already in the prompt they are about to send to a remote model. The one screen
+whose whole job is to be exact about what leaves the machine was inventing the
+claim.
+
+Accepted. It decodes like the rest. An unnamed tier is unspecified, which the
+dialog already renders as "Memory" and lists under what the tools can reach
+rather than what is pinned — honest about the row, silent about the tier.
+
+Tests: `test/networking/memory_api_test.dart`, driven off raw wire bytes
+carrying a recognised PERSONA followed by a value no released server sends,
+asserting the mapped tier and that the row is not counted as pinned; and a
+dialog test pinning the label and the heading such a row gets.
+
+### Opus 4.8 — jobs queued under the previous decision version. Rejected
+
+A job enqueued before the memory bump keeps its decision through migration 0019,
+and after the upgrade no worker will execute it: the runtime's shape check
+refuses a decision whose version is not the current one, and the run ends
+terminally. The finding proposed rescuing those runs — accepting the older
+version, or bringing the stored decision forward.
+
+Rejected, and the behaviour is unchanged. The plan's acceptance item is "version
+skew fails closed at dispatch — the literal pre-bump number", and migration 0019
+keeps such a row exactly as recorded, with an empty memory snapshot fingerprint,
+precisely because a consent given before memory existed disclosed no memory and
+must never be retroactively credited with any. Both alternatives are worse than
+the failure: executing the run would carry the user's persona and profile under
+a consent that disclosed neither, and rewriting the version would forge that
+consent with this server's own signature. A typed, terminal, never-retried
+refusal is the honest third answer — the person is told, and the way forward is
+sending the message again under a disclosure they actually read.
+
+What was missing was the record. The outcome was implied by a constant
+comparison and a migration comment, and a decision nobody wrote down is
+indistinguishable from an accident the next reader helpfully fixes. So the
+rejection is now falsifiable rather than assumed:
+`agent-runtime-go/internal/agent/egress_version_skew_test.go` holds a job
+carrying the literal pre-bump version refused while the same job at the current
+version passes, and asserts the run it produces is one named, terminal,
+never-retried failure and nothing else; and
+`docs/architecture/remote-egress-policy.md` now says which case a migration
+terminalizes and which is refused at dispatch, beside the TUR-003 paragraph it
+is easy to mistake for.
