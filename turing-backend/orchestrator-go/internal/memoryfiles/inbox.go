@@ -273,6 +273,61 @@ func sanitizeTitle(title string) string {
 	return strings.TrimSpace(builder.String())
 }
 
+// InboxNoteContent is one candidate file exactly as it stands on disk right
+// now: the whole bytes, a hash of exactly those bytes, and what the frontmatter
+// says about them.
+//
+// It is what a decision is verified against. The database row records what
+// Turing wrote; this records what the user is looking at, and when the two
+// disagree the file is the one that counts — the user may have opened the
+// proposal in Obsidian and rewritten the claim before deciding on it.
+type InboxNoteContent struct {
+	RelPath     string
+	Kind        NoteKind
+	Title       string
+	Content     string
+	ContentHash string
+	Body        string
+}
+
+// ReadInboxNote reads one candidate under inbox/ and nowhere else.
+//
+// It takes and releases the path lock for the read alone, so a caller may take
+// it again for the write that follows without deadlocking against itself. The
+// serialisation a decision needs is per-candidate and belongs to its caller;
+// this is only the read.
+func (v *Vault) ReadInboxNote(ctx context.Context, relPath string) (InboxNoteContent, error) {
+	if err := ctx.Err(); err != nil {
+		return InboxNoteContent{}, err
+	}
+	clean, err := requireInboxRelPath(relPath)
+	if err != nil {
+		return InboxNoteContent{}, err
+	}
+	unlock, err := v.locks.lockContext(ctx, v.pathLockKey(clean))
+	if err != nil {
+		return InboxNoteContent{}, err
+	}
+	defer unlock()
+
+	content, _, err := v.readConfinedFile(ctx, clean, MaxNoteBytes)
+	if err != nil {
+		return InboxNoteContent{}, err
+	}
+	parsed, err := ParseNote(clean, content)
+	if err != nil {
+		return InboxNoteContent{}, err
+	}
+	return InboxNoteContent{
+		RelPath:     clean,
+		Kind:        parsed.Kind,
+		Title:       parsed.Title,
+		Content:     content,
+		ContentHash: ContentHash(content),
+		Body:        parsed.Body,
+	}, nil
+}
+
 // RemoveInboxNote is the only deletion primitive in this package. It removes a
 // candidate under inbox/ and refuses everything else, so the rejection RPC and
 // the vault cleaner that will later call it cannot be pointed at a belief, at

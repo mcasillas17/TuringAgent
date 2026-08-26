@@ -890,6 +890,12 @@ func TestMemoryProtoContract(t *testing.T) {
 	// The profile is written only on the authority of a proposal the user is
 	// looking at, so there is a candidate here and never a path.
 	assertProtoField(t, apply, "candidate_id", 3, protoreflect.StringKind, false, "")
+	// The second compare-and-set, over the proposal's own bytes. It is a
+	// separate field from expected_content_hash because the two answer separate
+	// questions — "is the profile still the one I read?" and "is the proposal
+	// still the one I accepted?" — and a single token could only ever answer
+	// one of them.
+	assertProtoField(t, apply, "expected_candidate_hash", 4, protoreflect.StringKind, false, "")
 
 	// A memory tool call names its run and nothing else. No session id, no
 	// path, no scope: the server resolves the conversation from its own tables.
@@ -901,6 +907,15 @@ func TestMemoryProtoContract(t *testing.T) {
 	promote := file.Messages().ByName("PromoteMemoryCandidateRequest")
 	assertProtoField(t, promote, "candidate_id", 1, protoreflect.StringKind, false, "")
 	assertProtoField(t, promote, "expected_content_hash", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, promote, "expected_candidate_hash", 5, protoreflect.StringKind, false, "")
+
+	// Every decision binds itself to the exact inbox bytes the user was shown,
+	// including the refusal: a claim the user did not read is not a claim they
+	// refused.
+	reject := file.Messages().ByName("RejectMemoryCandidateRequest")
+	assertProtoField(t, reject, "candidate_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, reject, "expected_content_hash", 2, protoreflect.StringKind, false, "")
+	assertProtoField(t, reject, "expected_candidate_hash", 4, protoreflect.StringKind, false, "")
 
 	service := file.Services().ByName("MemoryService")
 	if service == nil {

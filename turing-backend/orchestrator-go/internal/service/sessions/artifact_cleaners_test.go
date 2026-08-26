@@ -496,7 +496,7 @@ func TestDeleteSessionWithdrawsPromotedBeliefCitationsOnCompletion(t *testing.T)
 	sessionID, candidate := seedVaultCandidate(t, repo, "bees")
 	server.RegisterArtifactCleaners(NewVaultArtifactCleaner(repo))
 	ctx := context.Background()
-	note, err := repo.PromoteMemoryCandidate(ctx, candidate.CandidateID)
+	note, err := repo.PromoteMemoryCandidate(ctx, repository.MemoryCandidateDecision{CandidateID: candidate.CandidateID})
 	if err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
 	}

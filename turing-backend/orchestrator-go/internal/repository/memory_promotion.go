@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 )
@@ -17,6 +18,128 @@ type ApplyMemoryProfileInput struct {
 	CandidateID         string
 	ExpectedContentHash string
 	Content             string
+	// ExpectedCandidateHash binds the resulting document to the exact proposal
+	// it was composed from. See MemoryCandidateDecision.
+	ExpectedCandidateHash string
+}
+
+// MemoryCandidateDecision is one user decision about one proposal.
+//
+// ExpectedCandidateHash is the compare-and-set token over the candidate file's
+// own bytes, which is a different question from the profile's compare-and-set:
+// this one asks "is the claim still the one I read?", and it is answered
+// against the file rather than the row because the file is what the user was
+// shown and what they may have edited. Empty means the caller is making no
+// claim about the file, which is how a decision taken before the listing
+// carried a hash still works.
+type MemoryCandidateDecision struct {
+	CandidateID           string
+	ExpectedCandidateHash string
+}
+
+// memoryCandidateLocks serialises every decision about one candidate.
+//
+// Process-wide on purpose, for the same reason the vault's path locks are: two
+// Repository values over one database must contend on the same key, or the
+// serialisation is only as good as the number of callers that happen to share
+// an instance. A decision holds it across the whole of read, check, file
+// mutation and transaction, so a promotion and a rejection racing over one
+// proposal cannot both believe they were the one that decided — and the loser
+// finds the row already gone rather than deleting a file the winner just moved.
+var memoryCandidateLocks = newMemoryCandidateLockTable()
+
+type memoryCandidateLockEntry struct {
+	token chan struct{}
+	refs  int
+}
+
+type memoryCandidateLockTable struct {
+	mutex sync.Mutex
+	locks map[string]*memoryCandidateLockEntry
+}
+
+func newMemoryCandidateLockTable() *memoryCandidateLockTable {
+	return &memoryCandidateLockTable{locks: make(map[string]*memoryCandidateLockEntry)}
+}
+
+func (t *memoryCandidateLockTable) lockContext(ctx context.Context, key string) (func(), error) {
+	t.mutex.Lock()
+	entry := t.locks[key]
+	if entry == nil {
+		entry = &memoryCandidateLockEntry{token: make(chan struct{}, 1)}
+		entry.token <- struct{}{}
+		t.locks[key] = entry
+	}
+	entry.refs++
+	t.mutex.Unlock()
+
+	releaseReference := func() {
+		t.mutex.Lock()
+		entry.refs--
+		if entry.refs == 0 && t.locks[key] == entry {
+			delete(t.locks, key)
+		}
+		t.mutex.Unlock()
+	}
+	if err := ctx.Err(); err != nil {
+		releaseReference()
+		return nil, err
+	}
+	select {
+	case <-entry.token:
+		if err := ctx.Err(); err != nil {
+			entry.token <- struct{}{}
+			releaseReference()
+			return nil, err
+		}
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				entry.token <- struct{}{}
+				releaseReference()
+			})
+		}, nil
+	case <-ctx.Done():
+		releaseReference()
+		return nil, ctx.Err()
+	}
+}
+
+// lockMemoryCandidateDecision takes the per-candidate lock. The key is the
+// candidate id alone, which is a globally unique server-minted identifier — so
+// two Repository values in one process contend exactly when they are deciding
+// about the same proposal, and never otherwise.
+func (r *Repository) lockMemoryCandidateDecision(ctx context.Context, candidateID string) (func(), error) {
+	if candidateID == "" {
+		return nil, ErrMemoryCandidateNotFound
+	}
+	return memoryCandidateLocks.lockContext(ctx, candidateID)
+}
+
+// requireUnchangedCandidateFile is the compare-and-set the user's decision
+// rests on, taken against the file rather than the row.
+//
+// An empty expectation is accepted as "I am making no claim about the file",
+// which keeps a caller that never read one working. A file that cannot be read
+// at all is refused rather than treated as unchanged: a decision cannot be
+// verified against bytes nobody has.
+func requireUnchangedCandidateFile(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	candidate MemoryCandidate,
+	expectedHash string,
+) error {
+	if expectedHash == "" {
+		return nil
+	}
+	current, err := vault.ReadInboxNote(ctx, candidate.InboxPath)
+	if err != nil {
+		return err
+	}
+	if current.ContentHash != expectedHash {
+		return fmt.Errorf("%w: %s", ErrMemoryCandidateChanged, candidate.InboxPath)
+	}
+	return nil
 }
 
 // PromoteMemoryCandidate accepts a belief into memory.
@@ -32,13 +155,26 @@ type ApplyMemoryProfileInput struct {
 // state ReconcileMemoryVault knows how to finish. It is deliberately not
 // rolled back by moving the file back: a rollback that fails halfway is how a
 // note the user accepted disappears.
-func (r *Repository) PromoteMemoryCandidate(ctx context.Context, candidateID string) (MemoryNote, error) {
+//
+// The whole of it runs under the per-candidate lock, so the read, the check,
+// the move and the transaction are one decision rather than four steps another
+// decision can step between.
+func (r *Repository) PromoteMemoryCandidate(ctx context.Context, decision MemoryCandidateDecision) (MemoryNote, error) {
 	vault, err := r.memoryVaultOrError()
 	if err != nil {
 		return MemoryNote{}, err
 	}
-	candidate, err := r.pendingCandidateForDecision(ctx, candidateID, MemoryCandidateKindBelief, MemoryCandidateStatePromoted)
+	unlock, err := r.lockMemoryCandidateDecision(ctx, decision.CandidateID)
 	if err != nil {
+		return MemoryNote{}, err
+	}
+	defer unlock()
+
+	candidate, err := r.pendingCandidateForDecision(ctx, decision.CandidateID, MemoryCandidateKindBelief, MemoryCandidateStatePromoted)
+	if err != nil {
+		return MemoryNote{}, err
+	}
+	if err := requireUnchangedCandidateFile(ctx, vault, candidate, decision.ExpectedCandidateHash); err != nil {
 		return MemoryNote{}, err
 	}
 
@@ -110,13 +246,27 @@ func promotedNoteStatus(evidenceRefs []string, live []string) string {
 // note index and never becomes searchable memory. The candidate file is
 // removed through the inbox-only primitive, so this path cannot be pointed at
 // anything else.
+//
+// It runs under the per-candidate lock for the same reason a promotion does,
+// and the stakes are higher here: without it a rejection could retire the
+// proposal while this call was between its own check and its write, and the
+// user's profile would be rewritten from a claim they had just refused.
 func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input ApplyMemoryProfileInput) (memoryfiles.ProfileDocument, error) {
 	vault, err := r.memoryVaultOrError()
 	if err != nil {
 		return memoryfiles.ProfileDocument{}, err
 	}
+	unlock, err := r.lockMemoryCandidateDecision(ctx, input.CandidateID)
+	if err != nil {
+		return memoryfiles.ProfileDocument{}, err
+	}
+	defer unlock()
+
 	candidate, err := r.pendingCandidateForDecision(ctx, input.CandidateID, MemoryCandidateKindProfileEdit, MemoryCandidateStatePromoted)
 	if err != nil {
+		return memoryfiles.ProfileDocument{}, err
+	}
+	if err := requireUnchangedCandidateFile(ctx, vault, candidate, input.ExpectedCandidateHash); err != nil {
 		return memoryfiles.ProfileDocument{}, err
 	}
 
@@ -154,13 +304,26 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 // The file is removed through RemoveInboxNote and nothing else. That primitive
 // refuses every path outside inbox/, which is what keeps a rejection — or a
 // tampered candidate row — from being turned into a way to delete a belief.
-func (r *Repository) RejectMemoryCandidate(ctx context.Context, candidateID string) error {
+//
+// Like the two acceptances, it holds the per-candidate lock across the whole
+// decision, so a rejection racing an acceptance is resolved by one of them
+// finding the row already gone rather than by both acting.
+func (r *Repository) RejectMemoryCandidate(ctx context.Context, decision MemoryCandidateDecision) error {
 	vault, err := r.memoryVaultOrError()
 	if err != nil {
 		return err
 	}
-	candidate, err := r.pendingCandidateForDecision(ctx, candidateID, "", MemoryCandidateStateRejected)
+	unlock, err := r.lockMemoryCandidateDecision(ctx, decision.CandidateID)
 	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	candidate, err := r.pendingCandidateForDecision(ctx, decision.CandidateID, "", MemoryCandidateStateRejected)
+	if err != nil {
+		return err
+	}
+	if err := requireUnchangedCandidateFile(ctx, vault, candidate, decision.ExpectedCandidateHash); err != nil {
 		return err
 	}
 	if err := vault.RemoveInboxNote(ctx, candidate.InboxPath); err != nil {

@@ -151,6 +151,9 @@ func memoryError(err error, fallback string) error {
 		return status.Error(codes.FailedPrecondition, "this memory candidate is not of the kind this decision applies to")
 	case errors.Is(err, repository.ErrMemoryCandidateBody):
 		return status.Error(codes.InvalidArgument, "the proposed memory is empty or too large")
+	case errors.Is(err, repository.ErrMemoryCandidateChanged):
+		return status.Error(codes.FailedPrecondition,
+			"this proposal changed since it was read; read it again and decide on what it says now")
 	case errors.Is(err, repository.ErrMemoryCandidateEvidence),
 		errors.Is(err, repository.ErrMemoryVaultPathMismatch):
 		return status.Error(codes.FailedPrecondition, "this memory candidate is not in a state Turing can act on")

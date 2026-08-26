@@ -394,7 +394,7 @@ func TestAdvanceSessionDeletionRunsCompletionOnceTheRowsAreGone(t *testing.T) {
 func TestSessionDeletionCompletionWithdrawsThePromotedBeliefsCitations(t *testing.T) {
 	repo, vault, _ := newMemoryTestRepo(t)
 	sessionID, candidate := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
-	note, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID)
+	note, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID})
 	if err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
 	}
@@ -454,7 +454,7 @@ func TestCrashHealedBeliefSurvivesTheDeletionOfItsSession(t *testing.T) {
 	sessionID, candidate := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
 	failure := errors.New("crash after the file moved")
 	repo.memoryPromotionBarrier = func() error { return failure }
-	if _, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID); !errors.Is(err, failure) {
+	if _, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID}); !errors.Is(err, failure) {
 		t.Fatalf("PromoteMemoryCandidate error = %v, want the barrier failure", err)
 	}
 	repo.memoryPromotionBarrier = nil
@@ -500,7 +500,7 @@ func TestSessionDeletedBeforeTheHealStillYieldsWithdrawnCitations(t *testing.T) 
 	sessionID, candidate := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
 	failure := errors.New("crash after the file moved")
 	repo.memoryPromotionBarrier = func() error { return failure }
-	if _, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID); !errors.Is(err, failure) {
+	if _, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID}); !errors.Is(err, failure) {
 		t.Fatalf("PromoteMemoryCandidate error = %v, want the barrier failure", err)
 	}
 	repo.memoryPromotionBarrier = nil

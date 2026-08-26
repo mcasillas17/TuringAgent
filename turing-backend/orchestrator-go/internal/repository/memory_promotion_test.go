@@ -29,7 +29,7 @@ func TestPromoteMemoryCandidateMovesTheFileAndConsumesTheRow(t *testing.T) {
 	sessionID := newMemoryTestSession(t, repo)
 	candidate := pendingBeliefCandidate(t, repo, sessionID)
 
-	note, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID)
+	note, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID})
 	if err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestPromoteMemoryCandidateCopiesOnlyTheLiveSourceSession(t *testing.T) {
 	stranger := newMemoryTestSession(t, repo)
 	candidate := pendingBeliefCandidate(t, repo, sessionID)
 
-	note, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID)
+	note, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID})
 	if err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestPromoteMemoryCandidateRefusesWhatItMayNotPromote(t *testing.T) {
 	repo, _, _ := newMemoryTestRepo(t)
 	sessionID := newMemoryTestSession(t, repo)
 
-	if _, err := repo.PromoteMemoryCandidate(ctx(), "memcand_missing"); !errors.Is(err, ErrMemoryCandidateNotFound) {
+	if _, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: "memcand_missing"}); !errors.Is(err, ErrMemoryCandidateNotFound) {
 		t.Fatalf("unknown candidate error = %v, want ErrMemoryCandidateNotFound", err)
 	}
 
@@ -111,7 +111,7 @@ func TestPromoteMemoryCandidateRefusesWhatItMayNotPromote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateMemoryCandidate: %v", err)
 	}
-	if _, err := repo.PromoteMemoryCandidate(ctx(), profileEdit.CandidateID); !errors.Is(err, ErrMemoryCandidateKind) {
+	if _, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: profileEdit.CandidateID}); !errors.Is(err, ErrMemoryCandidateKind) {
 		t.Fatalf("profile edit promotion error = %v, want ErrMemoryCandidateKind", err)
 	}
 
@@ -119,7 +119,7 @@ func TestPromoteMemoryCandidateRefusesWhatItMayNotPromote(t *testing.T) {
 	if _, err := repo.WithdrawMemoryCandidate(ctx(), withdrawn.CandidateID); err != nil {
 		t.Fatalf("WithdrawMemoryCandidate: %v", err)
 	}
-	if _, err := repo.PromoteMemoryCandidate(ctx(), withdrawn.CandidateID); !errors.Is(err, ErrMemoryCandidateInvalidTransition) {
+	if _, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: withdrawn.CandidateID}); !errors.Is(err, ErrMemoryCandidateInvalidTransition) {
 		t.Fatalf("withdrawn promotion error = %v, want ErrMemoryCandidateInvalidTransition", err)
 	}
 }
@@ -134,7 +134,7 @@ func TestPromotionThatFailsAfterTheFileMovedIsHealable(t *testing.T) {
 
 	failure := errors.New("the database went away")
 	repo.memoryPromotionBarrier = func() error { return failure }
-	if _, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID); !errors.Is(err, failure) {
+	if _, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID}); !errors.Is(err, failure) {
 		t.Fatalf("PromoteMemoryCandidate error = %v, want the injected failure", err)
 	}
 	repo.memoryPromotionBarrier = nil
@@ -258,7 +258,7 @@ func TestRejectMemoryCandidateRemovesRowAndFile(t *testing.T) {
 	sessionID := newMemoryTestSession(t, repo)
 	candidate := pendingBeliefCandidate(t, repo, sessionID)
 
-	if err := repo.RejectMemoryCandidate(ctx(), candidate.CandidateID); err != nil {
+	if err := repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID}); err != nil {
 		t.Fatalf("RejectMemoryCandidate: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(vault.Root(), filepath.FromSlash(candidate.InboxPath))); !os.IsNotExist(err) {
@@ -285,7 +285,7 @@ func TestRejectMemoryCandidateRemovesRowAndFile(t *testing.T) {
 	}
 	// Rejection is idempotent for the file but not for the row: a second
 	// rejection has nothing left to decide.
-	if err := repo.RejectMemoryCandidate(ctx(), candidate.CandidateID); !errors.Is(err, ErrMemoryCandidateNotFound) {
+	if err := repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID}); !errors.Is(err, ErrMemoryCandidateNotFound) {
 		t.Fatalf("second rejection error = %v, want ErrMemoryCandidateNotFound", err)
 	}
 }
@@ -305,13 +305,13 @@ func TestRejectMemoryCandidateCannotDeleteOutsideTheInbox(t *testing.T) {
 		t.Fatalf("tamper with the candidate path: %v", err)
 	}
 
-	if err := repo.RejectMemoryCandidate(ctx(), candidate.CandidateID); !errors.Is(err, ErrVaultArtifactPathScope) {
+	if err := repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID}); !errors.Is(err, ErrVaultArtifactPathScope) {
 		t.Fatalf("tampered rejection error = %v, want ErrVaultArtifactPathScope", err)
 	}
 	if _, err := os.Stat(filepath.Join(vault.Root(), "beliefs", "precious.md")); err != nil {
 		t.Fatalf("the belief was deleted through a tampered candidate row: %v", err)
 	}
-	if _, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID); !errors.Is(err, ErrVaultArtifactPathScope) {
+	if _, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID}); !errors.Is(err, ErrVaultArtifactPathScope) {
 		t.Fatalf("tampered promotion error = %v, want ErrVaultArtifactPathScope", err)
 	}
 }
@@ -324,11 +324,11 @@ func TestCandidateDecisionsRecordRedactedAuditRows(t *testing.T) {
 	sessionID := newMemoryTestSession(t, repo)
 
 	promoted := pendingBeliefCandidate(t, repo, sessionID)
-	if _, err := repo.PromoteMemoryCandidate(ctx(), promoted.CandidateID); err != nil {
+	if _, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: promoted.CandidateID}); err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
 	}
 	rejected := pendingBeliefCandidate(t, repo, sessionID)
-	if err := repo.RejectMemoryCandidate(ctx(), rejected.CandidateID); err != nil {
+	if err := repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: rejected.CandidateID}); err != nil {
 		t.Fatalf("RejectMemoryCandidate: %v", err)
 	}
 	withdrawn := pendingBeliefCandidate(t, repo, sessionID)
@@ -376,7 +376,7 @@ func TestPromotionRacingAnIndexRefreshLinksEachCitationOnce(t *testing.T) {
 		_, err := repo.RefreshMemoryIndex(ctx())
 		return err
 	}
-	note, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID)
+	note, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID})
 	repo.memoryPromotionBarrier = nil
 	if err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
@@ -403,7 +403,7 @@ func TestEvidenceExcerptHashDigestsTheSupportedContentNotTheSession(t *testing.T
 	sessionID := newMemoryTestSession(t, repo)
 	candidate := pendingBeliefCandidate(t, repo, sessionID)
 
-	note, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID)
+	note, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID})
 	if err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
 	}

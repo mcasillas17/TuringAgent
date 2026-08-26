@@ -204,7 +204,7 @@ func mustPromoteBelief(t *testing.T, repo *repository.Repository, ctx context.Co
 	if err != nil {
 		t.Fatalf("CreateMemoryCandidate: %v", err)
 	}
-	note, err := repo.PromoteMemoryCandidate(ctx, candidate.CandidateID)
+	note, err := repo.PromoteMemoryCandidate(ctx, repository.MemoryCandidateDecision{CandidateID: candidate.CandidateID})
 	if err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
 	}

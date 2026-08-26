@@ -173,12 +173,17 @@ func (s *Server) readVault(ctx context.Context) (vaultView, error) {
 	for _, path := range report.Index.UnmanagedInboxDrafts {
 		drafts[path] = struct{}{}
 	}
+	// The inbox as the walk just read it, keyed by path. A managed proposal's
+	// row records what Turing wrote; this is what the file says now, and the
+	// two are not the same thing the moment the user opens the vault.
+	inbox := make(map[string]memoryfiles.NoteRow, len(scan.Notes))
 	for _, row := range scan.Notes {
 		switch row.Area {
 		case memoryfiles.AreaBeliefs:
 			view.notes = append(view.notes, s.beliefProto(ctx, row))
 			view.beliefs++
 		case memoryfiles.AreaInbox:
+			inbox[row.RelPath] = row
 			if _, unmanaged := drafts[row.RelPath]; unmanaged {
 				view.candidates = append(view.candidates, unmanagedDraftProto(row))
 			}
@@ -193,11 +198,84 @@ func (s *Server) readVault(ctx context.Context) (vaultView, error) {
 	if err != nil {
 		return view, err
 	}
+	for _, candidate := range managed {
+		overlayCandidateFile(candidate, inbox)
+	}
 	view.candidates = append(view.candidates, managed...)
 	sort.SliceStable(view.candidates, func(i int, j int) bool {
 		return view.candidates[i].GetInboxPath() < view.candidates[j].GetInboxPath()
 	})
 	return view, nil
+}
+
+// overlayCandidateFile makes a listed proposal say what its file says.
+//
+// The database row is Turing's record of what it proposed; the file is what the
+// user is looking at, and the vault is a vault precisely so they can open it
+// and rewrite the claim before deciding. Serving the row's copy would show one
+// text and carry the decision against another — and the hash the client sends
+// back is compared against the file, so a stale hash would refuse every
+// decision the page offered.
+//
+// Only content, hash and kind come from the file. Identity, provenance, source
+// and lifecycle are the row's, because the file cannot know them.
+func overlayCandidateFile(candidate *turingv1.MemoryCandidate, inbox map[string]memoryfiles.NoteRow) {
+	row, found := inbox[candidate.GetInboxPath()]
+	if !found {
+		// The row names a file the walk did not find. Reconcile retires such a
+		// row when it can see the whole inbox, so this is the narrow window
+		// where it cannot yet — and a proposal whose text nobody can read is
+		// not one to offer a decision on.
+		candidate.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING
+		return
+	}
+	if row.ParseError != "" {
+		candidate.Content = row.Content
+		candidate.ContentHash = row.ContentHash
+		candidate.ParseError = row.ParseError
+		candidate.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_CONTENT_PARSE_FAILED
+		return
+	}
+	candidate.Content = candidateBodyText(row.Body)
+	candidate.ContentHash = row.ContentHash
+	candidate.Kind = candidateKindProto(string(row.Kind))
+}
+
+// candidateBodyText is the claim as the user reads it, without the blank line
+// the note renderer puts between the frontmatter and the body or the newline it
+// ends the file with. Those two are the file's shape, not the proposal's words,
+// and a client that showed them would render every proposal with a leading
+// blank line the model never wrote. Nothing inside the claim is touched.
+func candidateBodyText(body string) string {
+	return strings.Trim(body, "\r\n")
+}
+
+// overlayCandidatesFromVault is the same rule as overlayCandidateFile for the
+// reads that have no whole-vault walk to draw on: one confined read per
+// proposal, bounded by the listing ceiling above it.
+//
+// It exists so every path that serves a managed proposal serves the same text
+// and the same token. A read that skipped it would hand the client the row's
+// hash, which the decision then compares against the file and refuses — a page
+// whose buttons never work.
+func (s *Server) overlayCandidatesFromVault(ctx context.Context, candidates []*turingv1.MemoryCandidate) {
+	if s.vault == nil {
+		return
+	}
+	for _, candidate := range candidates {
+		if !candidate.GetManaged() {
+			continue
+		}
+		note, err := s.vault.ReadInboxNote(ctx, candidate.GetInboxPath())
+		if err != nil {
+			candidate.UnavailableReason = unavailableProto(memoryfiles.UnavailableReasonFor(err), false)
+			candidate.ParseError = err.Error()
+			continue
+		}
+		candidate.Content = candidateBodyText(note.Body)
+		candidate.ContentHash = note.ContentHash
+		candidate.Kind = candidateKindProto(string(note.Kind))
+	}
 }
 
 func (s *Server) beliefProto(ctx context.Context, row memoryfiles.NoteRow) *turingv1.MemoryNote {
@@ -303,8 +381,15 @@ func (s *Server) ListMemoryCandidates(ctx context.Context, req *turingv1.ListMem
 			return nil, viewErr
 		}
 		candidates = view.candidates
-	} else if candidates, err = s.listCandidates(ctx, query); err != nil {
-		return nil, err
+	} else {
+		if candidates, err = s.listCandidates(ctx, query); err != nil {
+			return nil, err
+		}
+		// A filtered listing has no whole-vault walk behind it, so the same
+		// "the file is what the user is looking at" rule is applied one
+		// proposal at a time. The kind filter below then reads the kind the
+		// file declares rather than the one the row remembers.
+		s.overlayCandidatesFromVault(ctx, candidates)
 	}
 	if kind != turingv1.MemoryCandidateKind_MEMORY_CANDIDATE_KIND_UNSPECIFIED {
 		filtered := make([]*turingv1.MemoryCandidate, 0, len(candidates))
@@ -349,7 +434,9 @@ func (s *Server) GetMemoryCandidate(ctx context.Context, req *turingv1.GetMemory
 	if err != nil {
 		return nil, memoryError(err, "read memory candidate failed")
 	}
-	return candidateProto(candidate), nil
+	proposal := candidateProto(candidate)
+	s.overlayCandidatesFromVault(ctx, []*turingv1.MemoryCandidate{proposal})
+	return proposal, nil
 }
 
 // PromoteMemoryCandidate accepts a belief.
@@ -380,7 +467,10 @@ func (s *Server) PromoteMemoryCandidate(ctx context.Context, req *turingv1.Promo
 	if candidate.Kind != repository.MemoryCandidateKindBelief {
 		return nil, status.Error(codes.FailedPrecondition, "this is a profile edit; apply it to the profile instead")
 	}
-	note, err := s.repo.PromoteMemoryCandidate(ctx, candidate.CandidateID)
+	note, err := s.repo.PromoteMemoryCandidate(ctx, repository.MemoryCandidateDecision{
+		CandidateID:           candidate.CandidateID,
+		ExpectedCandidateHash: req.GetExpectedCandidateHash(),
+	})
 	if err != nil {
 		return nil, memoryError(err, "promote memory candidate failed")
 	}
@@ -413,7 +503,10 @@ func (s *Server) RejectMemoryCandidate(ctx context.Context, req *turingv1.Reject
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.RejectMemoryCandidate(ctx, candidate.CandidateID); err != nil {
+	if err := s.repo.RejectMemoryCandidate(ctx, repository.MemoryCandidateDecision{
+		CandidateID:           candidate.CandidateID,
+		ExpectedCandidateHash: req.GetExpectedCandidateHash(),
+	}); err != nil {
 		return nil, memoryError(err, "reject memory candidate failed")
 	}
 	decided := candidateProto(candidate)
@@ -446,9 +539,10 @@ func (s *Server) ApplyMemoryProfile(ctx context.Context, req *turingv1.ApplyMemo
 		return nil, status.Error(codes.FailedPrecondition, "this is a belief; promote it instead")
 	}
 	document, err := s.repo.ApplyMemoryProfileCandidate(ctx, repository.ApplyMemoryProfileInput{
-		CandidateID:         candidate.CandidateID,
-		ExpectedContentHash: req.GetExpectedContentHash(),
-		Content:             req.GetContent(),
+		CandidateID:           candidate.CandidateID,
+		ExpectedContentHash:   req.GetExpectedContentHash(),
+		Content:               req.GetContent(),
+		ExpectedCandidateHash: req.GetExpectedCandidateHash(),
 	})
 	if err != nil {
 		return nil, memoryError(err, "apply memory profile failed")

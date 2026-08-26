@@ -80,7 +80,7 @@ func mustPromoteTestBelief(t *testing.T, repo *Repository, sessionID string, tit
 	if err != nil {
 		t.Fatalf("CreateMemoryCandidate: %v", err)
 	}
-	note, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID)
+	note, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID})
 	if err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
 	}

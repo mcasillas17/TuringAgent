@@ -76,6 +76,15 @@ var (
 	// because the alternative is a file in the user's vault that the manifest
 	// does not name.
 	ErrMemoryVaultPathMismatch = errors.New("memory vault write did not land on the reserved path")
+	// ErrMemoryCandidateChanged refuses a decision composed against text the
+	// candidate file no longer holds.
+	//
+	// It is checked against the file's own bytes, read again at decision time
+	// and inside the same serialisation as the mutation, because the row
+	// records what Turing wrote and the user may have rewritten the proposal in
+	// their editor since. Accepting the decision anyway would apply their
+	// "yes" to a claim they never read.
+	ErrMemoryCandidateChanged = errors.New("the memory candidate changed since it was read")
 )
 
 // MemoryCandidate is one proposal waiting in the vault inbox. Everything that

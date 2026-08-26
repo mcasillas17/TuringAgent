@@ -266,7 +266,7 @@ func TestMemoryCandidateIsInertToSearchAndReadUntilItIsPromoted(t *testing.T) {
 	}
 
 	// The user accepts it. Now — and only now — it is memory.
-	note, err := repo.PromoteMemoryCandidate(ctx, candidateID)
+	note, err := repo.PromoteMemoryCandidate(ctx, repository.MemoryCandidateDecision{CandidateID: candidateID})
 	if err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
 	}

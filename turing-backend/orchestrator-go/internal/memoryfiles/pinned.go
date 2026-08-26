@@ -113,6 +113,13 @@ func (v *Vault) loadPinned(ctx context.Context, relPath string, limit int, gate 
 	return document
 }
 
+// UnavailableReasonFor classifies a failed vault read into the reason a client
+// renders. It is exported because callers outside the pinned loader — the
+// candidate reads, which fetch one inbox file at a time — have to answer the
+// same question in the same words, and two spellings of "why is this empty" is
+// exactly the ambiguity UnavailableReason exists to remove.
+func UnavailableReasonFor(err error) UnavailableReason { return unavailableReasonFor(err) }
+
 func unavailableReasonFor(err error) UnavailableReason {
 	switch {
 	case errors.Is(err, ErrTooLarge):

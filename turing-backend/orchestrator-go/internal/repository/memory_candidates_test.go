@@ -350,11 +350,11 @@ func TestNoDecisionLeavesADecidedCandidateRowBehind(t *testing.T) {
 	sessionID := newMemoryTestSession(t, repo)
 
 	promoted := pendingBeliefCandidate(t, repo, sessionID)
-	if _, err := repo.PromoteMemoryCandidate(ctx(), promoted.CandidateID); err != nil {
+	if _, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: promoted.CandidateID}); err != nil {
 		t.Fatalf("PromoteMemoryCandidate: %v", err)
 	}
 	rejected := pendingBeliefCandidate(t, repo, sessionID)
-	if err := repo.RejectMemoryCandidate(ctx(), rejected.CandidateID); err != nil {
+	if err := repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: rejected.CandidateID}); err != nil {
 		t.Fatalf("RejectMemoryCandidate: %v", err)
 	}
 
@@ -617,10 +617,10 @@ func TestMemoryDecisionsRefuseForgedEvidence(t *testing.T) {
 		`, forgery, candidate.CandidateID); err != nil {
 			t.Fatalf("forge the candidate's provenance: %v", err)
 		}
-		if _, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID); !errors.Is(err, ErrMemoryCandidateEvidence) {
+		if _, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID}); !errors.Is(err, ErrMemoryCandidateEvidence) {
 			t.Fatalf("promotion of %s error = %v, want ErrMemoryCandidateEvidence", forgery, err)
 		}
-		if err := repo.RejectMemoryCandidate(ctx(), candidate.CandidateID); !errors.Is(err, ErrMemoryCandidateEvidence) {
+		if err := repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID}); !errors.Is(err, ErrMemoryCandidateEvidence) {
 			t.Fatalf("rejection of %s error = %v, want ErrMemoryCandidateEvidence", forgery, err)
 		}
 	}
@@ -674,7 +674,7 @@ func TestPoisonedEvidenceRefsFailLoudlyInsteadOfPromotingWithLessProvenance(t *t
 			if _, err := repo.ListMemoryCandidates(ctx(), MemoryCandidateQuery{Limit: 10}); !errors.Is(err, ErrMemoryCandidateEvidence) {
 				t.Fatalf("listing error = %v, want ErrMemoryCandidateEvidence", err)
 			}
-			if _, err := repo.PromoteMemoryCandidate(ctx(), candidate.CandidateID); !errors.Is(err, ErrMemoryCandidateEvidence) {
+			if _, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID}); !errors.Is(err, ErrMemoryCandidateEvidence) {
 				t.Fatalf("promotion error = %v, want ErrMemoryCandidateEvidence", err)
 			}
 			if _, err := os.Stat(filepath.Join(vault.Root(), filepath.FromSlash(candidate.InboxPath))); err != nil {
