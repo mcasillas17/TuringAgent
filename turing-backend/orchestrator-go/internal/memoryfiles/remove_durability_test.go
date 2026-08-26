@@ -126,6 +126,9 @@ func TestRefusedRejectionKeepsTheStagingNameWhenTheRestoreCannotBeFlushed(t *tes
 	if held != rewritten {
 		t.Fatalf("the staging entry holds %q, want the detached bytes", held)
 	}
+	if drafts := recoveryDrafts(t, vault); len(drafts) != 0 {
+		t.Fatalf("a file already under its own name was published a second time as %v", drafts)
+	}
 	stale := requireBoundedRefusal(t, err, rewritten)
 	if !strings.Contains(stale.Detail, staged) {
 		t.Fatalf("the refusal does not name the copy it left behind: %q", stale.Detail)
@@ -366,5 +369,72 @@ func TestInstallRollbackReportsAPreservedEntryItCouldNotFlush(t *testing.T) {
 	}
 	if _, readErr := os.ReadFile(full); readErr != nil {
 		t.Fatalf("the entry is not back under its own name: %v", readErr)
+	}
+}
+
+// The flush underneath a preserved entry, which is the one placement that never
+// gets a second chance: the name is taken, the bytes are staying under the
+// reserved name, and if the directory holding it does not reach the disk then
+// "it is at ..." is a guess. A rollback that swallows that fsync tells the user
+// where their file is on the strength of nothing.
+func TestInstallRollbackReportsAContestedEntryItCouldNotFlush(t *testing.T) {
+	const existing = "a belief the user already had"
+	const contender = "a belief another writer put under the name"
+	recorder := &syncRecorder{}
+	var vault *Vault
+	vault = vaultWithRemovalSeams(t, recorder.hooks(), func(phase detachPhase, clean string) {
+		if !inBeliefs(clean) {
+			return
+		}
+		switch phase {
+		case detachPhaseBeforeDetach:
+			rewriteInPlace(t, vault, clean, "the words the user typed while the install was in flight")
+		case detachPhaseBeforeRestore:
+			takeTheName(t, vault, clean, contender)
+			// The link is about to fail, so the only flush this restore makes
+			// is the one that answers for where the bytes were left.
+			recorder.setFailDirectorySyncNumber(1)
+		}
+	}, nil, nil)
+
+	parent, err := os.Open(filepath.Join(vault.Root(), BeliefsDirName))
+	if err != nil {
+		t.Fatalf("open beliefs: %v", err)
+	}
+	defer func() { _ = parent.Close() }()
+
+	full := filepath.Join(vault.Root(), BeliefsDirName, "installed.md")
+	if err := os.WriteFile(full, []byte(existing), 0o600); err != nil {
+		t.Fatalf("write the installed copy: %v", err)
+	}
+	var installed unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), "installed.md", &installed, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		t.Fatalf("inspect the installed copy: %v", err)
+	}
+
+	undoErr := vault.undoInstall(parent, "installed.md", "beliefs/installed.md", installed, existing)
+	if undoErr == nil {
+		t.Fatal("the undo removed an entry it could not prove it installed")
+	}
+	staged, held := stagingResidueContent(t, vault, BeliefsDirName)
+	if !strings.Contains(undoErr.Error(), staged) {
+		t.Fatalf("the undo does not name where it left the bytes: %v", undoErr)
+	}
+	if !strings.Contains(undoErr.Error(), "flush") {
+		t.Fatalf("the undo does not say the placement was never flushed: %v", undoErr)
+	}
+	if held == "" {
+		t.Fatal("the reserved name holds nothing")
+	}
+	if onName, readErr := os.ReadFile(full); readErr != nil || string(onName) != contender {
+		t.Fatalf("the file that took the name was disturbed: %q, %v", onName, readErr)
+	}
+	// Nothing under beliefs/ was published for a file this rollback could not
+	// prove was its own: an indexed note there is a belief the user is told
+	// Turing holds.
+	for _, name := range vaultDirEntries(t, vault, BeliefsDirName) {
+		if !strings.HasPrefix(name, stagingPrefix) && name != "installed.md" {
+			t.Fatalf("the rollback published %q under beliefs/", name)
+		}
 	}
 }

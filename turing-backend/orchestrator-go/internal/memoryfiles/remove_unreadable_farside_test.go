@@ -225,3 +225,49 @@ func TestHashlessRejectionCancelledWhileReclassifyingReportsTheCancellation(t *t
 	}
 	requireNoStagingResidue(t, vault)
 }
+
+// The reopen is a second look at the directory, so it asks the identity
+// question again rather than inheriting the answer from the stat above it. The
+// reserved name is random but it is not secret — anything that can list the
+// vault directory can read it — so an entry that has been swapped under it
+// between the stat and the open is a file this rejection never looked at.
+//
+// It is exercised directly: the two moments are consecutive statements in the
+// production path, and a check that can only be reached by winning a race is a
+// check the next reader deletes. What this pins is the order — identity before
+// state — because the entry here is perfectly readable, and answering "it can
+// be read now" would be answering about somebody else's file.
+func TestReopenedUnreadableEntryIsCheckedForIdentityBeforeState(t *testing.T) {
+	vault := newTestVault(t)
+	writeVaultFile(t, vault, "inbox/note.md", "a proposal anybody can read")
+	detached := detachForTest(t, vault, "inbox/note.md")
+	moved := detachedIdentity(t, detached)
+	moved.Ino++
+
+	objection := detached.objectionToReopenedUnreadableEntry(
+		context.Background(), unreadableFailureUnopenable, moved,
+	)
+	if !strings.Contains(objection, "taken its name") {
+		t.Fatalf("the reopened entry was judged on its state rather than its identity: %q", objection)
+	}
+}
+
+// A read that stops because the request behind it ended says nothing about the
+// file. Reporting it as "unreadable in a different way" would turn a
+// cancellation into a claim that something wrote to the user's proposal, and
+// the caller would be told to go and look at a change that never happened.
+//
+// The predicate is exercised on its own because the primitive refuses a
+// cancelled request before it ever gets here; this is the guard for a context
+// that ends *during* the far-side read, which no test can schedule from
+// outside.
+func TestUnreadableStateObjectionReportsAnEndedRequestAsItself(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := unreadableStateObjection(ctx, unreadableFailureUnopenable, nil); got != endedBeforeVerification {
+		t.Fatalf("a cancelled verification says %q, want it reported as the request ending", got)
+	}
+	if got := unreadableStateObjection(ctx, unreadableFailureUnopenable, os.ErrPermission); got != endedBeforeVerification {
+		t.Fatalf("a cancelled verification says %q, want it reported as the request ending", got)
+	}
+}
