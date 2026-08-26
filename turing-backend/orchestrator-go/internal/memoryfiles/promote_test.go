@@ -448,7 +448,11 @@ func TestPromoteToBeliefsKeepsThePromotedCopyWhenOnlyTheFinalSyncFails(t *testin
 // load-bearing: if the copy it installed is already gone there is nothing to
 // undo, and if the name now holds a different inode it belongs to whoever put
 // it there — undoing a promotion must never turn into deleting a user's note.
+//
+// The same-inode half of that rule has a test of its own next door, against an
+// editor that saved over the copy in place.
 func TestRemoveInstalledCopyOnlyRemovesTheFileItInstalled(t *testing.T) {
+	const installed = "installed by this promotion\n"
 	vault := newTestVault(t)
 	parent, leaf, err := vault.openParent(context.Background(), "beliefs/rolled-back.md", false)
 	if err != nil {
@@ -457,11 +461,11 @@ func TestRemoveInstalledCopyOnlyRemovesTheFileItInstalled(t *testing.T) {
 	defer func() { _ = parent.Close() }()
 
 	full := filepath.Join(vault.Root(), BeliefsDirName, leaf)
-	if err := os.WriteFile(full, []byte("installed by this promotion\n"), 0o600); err != nil {
+	if err := os.WriteFile(full, []byte(installed), 0o600); err != nil {
 		t.Fatalf("write the installed copy: %v", err)
 	}
-	var installed unix.Stat_t
-	if err := unix.Fstatat(int(parent.Fd()), leaf, &installed, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+	var stat unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), leaf, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		t.Fatalf("stat the installed copy: %v", err)
 	}
 
@@ -472,7 +476,7 @@ func TestRemoveInstalledCopyOnlyRemovesTheFileItInstalled(t *testing.T) {
 	if err := os.WriteFile(full, []byte("the user's own note\n"), 0o600); err != nil {
 		t.Fatalf("write the user's file: %v", err)
 	}
-	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", installed, ContentHash("installed by this promotion\n")); err == nil {
+	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", stat, installed); err == nil {
 		t.Fatal("expected the rollback to refuse a name it no longer owns")
 	}
 	onDisk, readErr := os.ReadFile(full)
@@ -482,23 +486,14 @@ func TestRemoveInstalledCopyOnlyRemovesTheFileItInstalled(t *testing.T) {
 	if string(onDisk) != "the user's own note\n" {
 		t.Fatalf("content = %q", onDisk)
 	}
+	requireNoStagingResidueIn(t, vault, BeliefsDirName)
 
 	// A copy that is already gone is not an error: the undo has nothing to do.
 	if err := os.Remove(full); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", installed, ContentHash("installed by this promotion\n")); err != nil {
+	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", stat, installed); err != nil {
 		t.Fatalf("a missing copy is nothing to undo: %v", err)
 	}
-}
-
-func TestInstalledCopyMatchRequiresTheBytesAsWellAsTheInode(t *testing.T) {
-	installed := unix.Stat_t{Dev: 7, Ino: 11}
-	current := installed
-	if installedCopyMatches(installed, current, "sha256:installed", "sha256:replacement") {
-		t.Fatal("inode reuse made different bytes look like the copy this promotion installed")
-	}
-	if !installedCopyMatches(installed, current, "sha256:installed", "sha256:installed") {
-		t.Fatal("the exact installed copy was not recognized")
-	}
+	requireNoStagingResidueIn(t, vault, BeliefsDirName)
 }

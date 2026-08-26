@@ -126,9 +126,15 @@ func promoteCandidate(ctx context.Context, vault *Vault, candidate InboxNote) er
 // would delete them. This exercises the production function, not the predicate
 // underneath it: drop the hash from either and this must fail.
 func TestPromotionRollbackRefusesACopyRewrittenUnderTheSameInode(t *testing.T) {
+	// The same length on purpose. A rewrite that is also a different size is
+	// caught by the read bound before the hash is ever consulted, and this test
+	// exists to hold the hash itself.
 	const installed = "installed by this promotion\n"
-	const rewritten = "the user's own words, typed over it\n"
+	const rewritten = "the user typed over it here\n"
 	vault := newTestVault(t)
+	if len(rewritten) != len(installed) {
+		t.Fatalf("the fixtures differ in length (%d vs %d), so this proves nothing about the bytes", len(rewritten), len(installed))
+	}
 	parent, leaf, err := vault.openParent(context.Background(), "beliefs/rolled-back.md", false)
 	if err != nil {
 		t.Fatalf("open beliefs: %v", err)
@@ -149,7 +155,7 @@ func TestPromotionRollbackRefusesACopyRewrittenUnderTheSameInode(t *testing.T) {
 		t.Fatalf("the in-place edit changed the inode (%d -> %d), so this proves nothing", stat.Ino, after)
 	}
 
-	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", stat, ContentHash(installed)); err == nil {
+	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", stat, installed); err == nil {
 		t.Fatal("the rollback accepted an inode carrying bytes this promotion never installed")
 	}
 	onDisk, readErr := os.ReadFile(full)
@@ -160,6 +166,87 @@ func TestPromotionRollbackRefusesACopyRewrittenUnderTheSameInode(t *testing.T) {
 		t.Fatalf("content = %q, want the rewritten note %q", onDisk, rewritten)
 	}
 	requireNoStagingResidueIn(t, vault, BeliefsDirName)
+}
+
+// The other half of the same licence. Identical bytes are not the same file: a
+// different inode under the name is another writer's, it may have links,
+// descriptors and a history of its own, and this promotion did not put it there.
+// The hash cannot see that at all, so the inode check is what answers it.
+func TestPromotionRollbackRefusesACopyReplacedByAnIdenticalFile(t *testing.T) {
+	const installed = "installed by this promotion\n"
+	vault := newTestVault(t)
+	parent, leaf, err := vault.openParent(context.Background(), "beliefs/rolled-back.md", false)
+	if err != nil {
+		t.Fatalf("open beliefs: %v", err)
+	}
+	defer func() { _ = parent.Close() }()
+
+	full := filepath.Join(vault.Root(), BeliefsDirName, leaf)
+	if err := os.WriteFile(full, []byte(installed), 0o600); err != nil {
+		t.Fatalf("write the installed copy: %v", err)
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), leaf, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		t.Fatalf("stat the installed copy: %v", err)
+	}
+
+	replaceVaultEntry(t, vault, "beliefs/rolled-back.md", installed)
+	if after := inodeOf(t, full); after == uint64(stat.Ino) {
+		t.Fatalf("the replacement kept inode %d, so this proves nothing about identity", after)
+	}
+
+	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", stat, installed); err == nil {
+		t.Fatal("the rollback deleted a file it never installed because the bytes happened to match")
+	}
+	onDisk, readErr := os.ReadFile(full)
+	if readErr != nil {
+		t.Fatalf("the rollback deleted another writer's file: %v", readErr)
+	}
+	if string(onDisk) != installed {
+		t.Fatalf("content = %q", onDisk)
+	}
+	requireNoStagingResidueIn(t, vault, BeliefsDirName)
+}
+
+// The same rule on the inbox side, through the whole promotion: the original is
+// removed because it is the file that was promoted, and a byte-identical file
+// that took its name is not that file.
+func TestPromotedSourceRemovalRefusesAnOriginalReplacedByAnIdenticalFile(t *testing.T) {
+	var vault *Vault
+	var replaced string
+	vault = promotionVault(t, realSyncHooks(), func(phase detachPhase, clean string) {
+		if !inInbox(clean) || phase != detachPhaseBeforeDetach || replaced == clean {
+			return
+		}
+		replaced = clean
+		content, err := os.ReadFile(filepath.Join(vault.Root(), filepath.FromSlash(clean)))
+		if err != nil {
+			t.Errorf("read the original: %v", err)
+			return
+		}
+		replaceVaultEntry(t, vault, clean, string(content))
+	}, nil)
+
+	candidate := seedBelief(t, vault)
+	sourcePath := filepath.Join(vault.Root(), filepath.FromSlash(candidate.RelPath))
+	before := inodeOf(t, sourcePath)
+	if err := promoteCandidate(context.Background(), vault, candidate); !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("expected the promotion to be abandoned, got %v", err)
+	}
+	if after := inodeOf(t, sourcePath); after == before {
+		t.Fatalf("the replacement kept inode %d, so this proves nothing about identity", after)
+	}
+	onDisk, readErr := os.ReadFile(sourcePath)
+	if readErr != nil {
+		t.Fatalf("another writer's file was deleted: %v", readErr)
+	}
+	if string(onDisk) != candidate.Content {
+		t.Fatalf("the replacement was disturbed: %q", onDisk)
+	}
+	if names := vaultDirEntries(t, vault, BeliefsDirName); len(names) != 0 {
+		t.Fatalf("a belief was kept from a move that was abandoned: %v", names)
+	}
+	requireNoStagingResidueIn(t, vault, InboxDirName)
 }
 
 // A replacement that arrives before the copy leaves its name must be put back,
@@ -507,6 +594,9 @@ func TestPromotedSourceRemovalRestoresTheOriginalWhenTheRequestIsCancelled(t *te
 	err := promoteCandidate(ctx, vault, candidate)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected the cancellation to be reported, got %v", err)
+	}
+	if errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("a cancelled request claimed the candidate had changed: %v", err)
 	}
 	if !saw[detachPhaseBeforeVerify] {
 		t.Fatal("the source removal never had the original off its name")

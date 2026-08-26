@@ -637,7 +637,12 @@ func createStagingFile(parent *os.File, mode uint32) (*os.File, string, error) {
 // not installed by this call. That is why a failed parent fsync unlinks the
 // entry it just made — the name would be visible but uncommitted, while the
 // caller has just been told the write did not happen.
-func (v *Vault) installStagedFile(ctx context.Context, parent *os.File, leaf string, content string) error {
+//
+// The one thing that outranks that contract is the user's own text. The undo
+// below removes the entry this call linked and nothing else, and when it cannot
+// prove that, it leaves the file alone and says so in the error the caller is
+// already returning.
+func (v *Vault) installStagedFile(ctx context.Context, parent *os.File, leaf string, clean string, content string) error {
 	staging, stagingName, err := createStagingFile(parent, 0o600)
 	if err != nil {
 		return fmt.Errorf("stage vault write: %w", err)
@@ -670,41 +675,80 @@ func (v *Vault) installStagedFile(ctx context.Context, parent *os.File, leaf str
 	}
 	if err := unix.Linkat(int(parent.Fd()), stagingName, int(parent.Fd()), leaf, 0); err != nil {
 		if errors.Is(err, unix.EEXIST) {
-			return fmt.Errorf("install %q: %w", leaf, ErrAlreadyExists)
+			return fmt.Errorf("install %q: %w", clean, ErrAlreadyExists)
 		}
-		return fmt.Errorf("install %q: %w", leaf, err)
+		return fmt.Errorf("install %q: %w", clean, err)
 	}
 	if err := unix.Unlinkat(int(parent.Fd()), stagingName, 0); err != nil {
 		removeStaging = false
-		v.undoInstall(parent, leaf, staged)
-		return fmt.Errorf("remove vault staging file: %w", err)
+		return v.installNotCommitted(parent, leaf, clean, staged, content,
+			fmt.Errorf("remove vault staging file: %w", err))
 	}
 	removeStaging = false
 	if err := v.syncDirectory(parent); err != nil {
-		v.undoInstall(parent, leaf, staged)
-		return fmt.Errorf("sync vault directory after install: %w", err)
+		return v.installNotCommitted(parent, leaf, clean, staged, content,
+			fmt.Errorf("sync vault directory after install: %w", err))
 	}
 	if err := ctx.Err(); err != nil {
-		v.undoInstall(parent, leaf, staged)
-		return err
+		return v.installNotCommitted(parent, leaf, clean, staged, content, err)
 	}
 	return nil
 }
 
-// undoInstall removes a name this call linked, and only if it is still that
-// exact inode. It is best-effort by design: the error the caller is already
-// returning is the one worth reporting, and a failure to undo leaves a visible
-// file rather than a silent one.
-func (v *Vault) undoInstall(parent *os.File, leaf string, installed unix.Stat_t) {
-	var current unix.Stat_t
-	if err := unix.Fstatat(int(parent.Fd()), leaf, &current, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-		return
+// installNotCommitted undoes an install that could not be committed and answers
+// with the failure the caller was already going to report.
+//
+// The undo is best effort by design: the write failed either way, and that is
+// the sentence worth returning. What the caller is *also* told is whether the
+// entry is still on disk — an install that says it did not happen and left a
+// file behind is a fact somebody has to be able to act on, and a rollback that
+// quietly could not run is the one thing nobody can see.
+func (v *Vault) installNotCommitted(
+	parent *os.File,
+	leaf string,
+	clean string,
+	installed unix.Stat_t,
+	content string,
+	cause error,
+) error {
+	if undoErr := v.undoInstall(parent, leaf, clean, installed, content); undoErr != nil {
+		// Nothing of the file's contents goes into this: the caller logs it and
+		// may hand it on, and what the entry says is the user's business.
+		return fmt.Errorf("%w (the entry at %q was left in place: %v)", cause, clean, undoErr)
 	}
-	if current.Dev != installed.Dev || current.Ino != installed.Ino {
-		return
+	return cause
+}
+
+// undoInstall removes the name this call linked, and only when the entry under
+// it is still both that inode and the bytes this call wrote there.
+//
+// Identity alone is not the same question. An editor that already had the note
+// open saves in place, which keeps the inode and replaces every word, so an
+// inode-only undo answers a failed write by deleting the user's text. And the
+// name itself is not held still either, which is why the entry is detached
+// first and verified off its name: what this unlinks is the entry it checked,
+// never whatever the name pointed at afterwards.
+//
+// A failure to undo leaves a visible file rather than a silent one, and is
+// reported so the caller can say so.
+func (v *Vault) undoInstall(parent *os.File, leaf string, clean string, installed unix.Stat_t, content string) error {
+	outcome, placement, reason, err := v.removeVerifiedEntry(
+		context.Background(), parent, leaf, clean, installed, content,
+	)
+	if err != nil {
+		return err
 	}
-	_ = unix.Unlinkat(int(parent.Fd()), leaf, 0)
-	_ = v.syncDirectory(parent)
+	if outcome != removalRefused {
+		return nil
+	}
+	if placement.restored && placement.recoveryRelPath == "" {
+		return errors.New(reason)
+	}
+	unplaced := reason + " and could not be put back under its own name"
+	if placement.restored {
+		unplaced = reason + ", so it was left alone, but a second link to it could not be dropped"
+	}
+	return errors.New(boundRefusalDetail(placement.describe(unplaced)))
 }
 
 func writeAll(ctx context.Context, writer *os.File, content []byte) error {

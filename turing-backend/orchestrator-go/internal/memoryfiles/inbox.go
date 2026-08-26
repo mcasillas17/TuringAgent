@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"strings"
 	"time"
 	"unicode"
@@ -144,7 +143,7 @@ func (v *Vault) createInboxNoteAt(ctx context.Context, relPath string, content s
 	}
 	defer func() { _ = parent.Close() }()
 
-	if err := v.installStagedFile(ctx, parent, leaf, content); err != nil {
+	if err := v.installStagedFile(ctx, parent, leaf, clean, content); err != nil {
 		return "", err
 	}
 	if err := v.syncAncestors(ctx, clean); err != nil {
@@ -755,7 +754,7 @@ func (v *Vault) removeRejectedInboxEntry(
 	boundHash := expectedHash
 	boundFailure := unreadableFailureNone
 	if expectedHash != "" {
-		content, readErr := readEntryContent(ctx, opened, clean)
+		content, readErr := readEntryContent(ctx, opened, clean, MaxNoteBytes)
 		if readErr != nil {
 			return readErr
 		}
@@ -775,24 +774,14 @@ func (v *Vault) removeRejectedInboxEntry(
 			boundFailure = request.Unreadable.failure
 		}
 	}
-	v.detachBarrier(detachPhaseBeforeDetach, clean)
-	if err := ctx.Err(); err != nil {
+	detached, err := v.detachEntry(ctx, parent, leaf, clean)
+	if err != nil {
 		return err
 	}
-
-	staging, err := reserveStagingName(parent)
-	if err != nil {
-		return fmt.Errorf("stage the removal of %q: %w", clean, err)
+	if detached == nil {
+		// The user asked for this file not to be there, and it is not there.
+		return nil
 	}
-	if err := unix.Renameat(int(parent.Fd()), leaf, int(parent.Fd()), staging); err != nil {
-		_ = unix.Unlinkat(int(parent.Fd()), staging, 0)
-		if errors.Is(err, unix.ENOENT) {
-			return nil
-		}
-		return fmt.Errorf("detach %q before removing it: %w", clean, err)
-	}
-
-	v.detachBarrier(detachPhaseBeforeVerify, clean)
 	// The file is off its name and nothing has decided yet whether it may go.
 	// A request that has ended here is not a decision, so there is nothing left
 	// to authorise an unlink: the bytes go back under their own name first, and
@@ -805,28 +794,20 @@ func (v *Vault) removeRejectedInboxEntry(
 	// otherwise walk past this point straight into the unlink and delete a
 	// claim about the user on behalf of a caller that had already gone.
 	if err := ctx.Err(); err != nil {
-		return v.restoreDetachedEntry(ctx, parent, leaf, clean, staging, "the request ended before the removal could be verified")
+		return v.refuseDetachedRejection(ctx, detached, "the request ended before the removal could be verified")
 	}
-	var detachedStat unix.Stat_t
-	statErr := unix.Fstatat(int(parent.Fd()), staging, &detachedStat, unix.AT_SYMLINK_NOFOLLOW)
-	detached := objectionToDetachedEntry(ctx, clean, boundHash, boundFailure, opened, openedStat, detachedStat, statErr)
-	if detached != "" {
-		return v.restoreDetachedEntry(ctx, parent, leaf, clean, staging, detached)
+	detachedStat, statErr := detached.stat()
+	objection := objectionToDetachedEntry(ctx, clean, boundHash, boundFailure, opened, openedStat, detachedStat, statErr)
+	if objection != "" {
+		return v.refuseDetachedRejection(ctx, detached, objection)
 	}
 
-	if err := unix.Unlinkat(int(parent.Fd()), staging, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+	if err := detached.discard(); err != nil {
 		// The identity check passed, so these are the bytes the user asked to
 		// be rid of — and the unlink that would have done it failed. The
 		// rejection did not happen, and the sentence says where the file
 		// actually is rather than leaving a detached entry unaccounted for.
-		_ = v.syncDirectory(parent)
-		return fmt.Errorf(
-			"remove the detached %q: %w; it is at %s/%s",
-			clean, err, path.Dir(clean), staging,
-		)
-	}
-	if err := v.syncDirectory(parent); err != nil {
-		return fmt.Errorf("sync vault directory after removing %q: %w", clean, err)
+		return err
 	}
 	return ctx.Err()
 }
@@ -896,7 +877,7 @@ func requireBoundUnreadableEntry(
 		}
 		return nil
 	}
-	content, readErr := readEntryContent(ctx, opened, clean)
+	content, readErr := readEntryContent(ctx, opened, clean, MaxNoteBytes)
 	if readErr != nil {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1029,134 +1010,42 @@ func objectionToDetachedUnreadableEntry(
 	}
 }
 
-// restoreDetachedEntry puts back a file this deletion detached and then found
-// it had no standing to remove, and reports the refusal either way.
-//
-// The link refuses to overwrite, which is the whole point: whatever now holds
-// the name is another writer's file and this one may not clobber it. Nothing
-// here deletes anything.
+// refuseDetachedRejection puts back a file this rejection detached and then
+// found it had no standing to remove, and phrases the refusal either way.
 //
 // Where the name cannot be taken back the bytes still have to go somewhere a
 // person will find them, and the private staging name is not that place: it
 // begins with a dot, the vault walk skips dot entries, and a claim about the
 // user that is on disk and on no page is indistinguishable from a deleted one
-// to everybody except a forensic reader. So the file is linked under a name
-// this server mints and the walk indexes — visible in the next scan, on the
-// next ListMemoryState, and deletable by the user like any other file in their
-// inbox. Only when that fails too does it stay staged, and then the refusal
-// says exactly where it is.
-func (v *Vault) restoreDetachedEntry(
-	ctx context.Context,
-	parent *os.File,
-	leaf string,
-	clean string,
-	staging string,
-	reason string,
-) error {
-	v.detachBarrier(detachPhaseBeforeRestore, clean)
-	linkErr := v.linkDetached(parent, staging, leaf)
-	if linkErr != nil {
-		return v.refuseAndPreserve(parent, clean, staging, reason+" and could not be put back under its own name", linkErr)
-	}
-	if err := unix.Unlinkat(int(parent.Fd()), staging, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-		// The file is back where it belongs; a second link to it under a name
-		// nothing shows is not. Making that copy visible is the same rule as
-		// above — a duplicate the user can see and delete beats one they
-		// cannot.
-		return v.refuseAndPreserve(parent, clean, staging, reason+", so it was left alone, but a second link to it could not be dropped", err)
-	}
-	_ = v.syncDirectory(parent)
-	// The vault is exactly as it was, so a request that ran out of time or
-	// was cancelled says that rather than making a claim about the file.
-	// "It changed since you read it" is the wrong sentence when nothing
-	// changed and nobody finished looking.
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return &StaleContentError{RelPath: clean, Detail: boundRefusalDetail(reason + ", so it was left alone")}
-}
-
-// refuseAndPreserve is the one exit for a detached file that could not go back
-// under its own name. It never unlinks: it moves the bytes somewhere visible if
-// it can, and says where they are if it cannot.
-func (v *Vault) refuseAndPreserve(
-	parent *os.File,
-	clean string,
-	staging string,
-	reason string,
-	cause error,
-) error {
-	directory := path.Dir(clean)
-	recovery, rescueErr := v.rescueDetachedEntry(parent, staging)
-	if recovery == "" {
+// to everybody except a forensic reader. So an inbox entry is linked under a
+// name this server mints and the walk indexes — visible in the next scan, on
+// the next ListMemoryState, and deletable by the user like any other file in
+// their inbox. Only when that fails too does it stay staged, and then the
+// refusal says exactly where it is.
+func (v *Vault) refuseDetachedRejection(ctx context.Context, detached *detachedEntry, reason string) error {
+	placement := detached.putBack()
+	if placement.restored && placement.recoveryRelPath == "" {
+		// The vault is exactly as it was, so a request that ran out of time or
+		// was cancelled says that rather than making a claim about the file.
+		// "It changed since you read it" is the wrong sentence when nothing
+		// changed and nobody finished looking.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return &StaleContentError{
-			RelPath: clean,
-			Cause:   cause,
-			Detail: boundRefusalDetail(fmt.Sprintf(
-				"%s (%v), and no recovery name could be taken for it (%v); it is not lost — it is at %s/%s",
-				reason, cause, rescueErr, directory, staging,
-			)),
+			RelPath: detached.clean,
+			Detail:  boundRefusalDetail(reason + ", so it was left alone"),
 		}
 	}
-	if rescueErr != nil {
-		// The visible name exists and holds the bytes; only the tidying after
-		// it failed. Both names are reported, because both are on disk.
-		return &StaleContentError{
-			RelPath: clean,
-			Cause:   cause,
-			Detail: boundRefusalDetail(fmt.Sprintf(
-				"%s (%v); it is not lost — it was kept for recovery at %s/%s, and a copy remains at %s/%s (%v)",
-				reason, cause, directory, recovery, directory, staging, rescueErr,
-			)),
-		}
+	unplaced := reason + " and could not be put back under its own name"
+	if placement.restored {
+		unplaced = reason + ", so it was left alone, but a second link to it could not be dropped"
 	}
 	return &StaleContentError{
-		RelPath: clean,
-		Cause:   cause,
-		Detail: boundRefusalDetail(fmt.Sprintf(
-			"%s (%v); it is not lost — it was kept for recovery at %s/%s",
-			reason, cause, directory, recovery,
-		)),
+		RelPath: detached.clean,
+		Cause:   placement.cause,
+		Detail:  boundRefusalDetail(placement.describe(unplaced)),
 	}
-}
-
-// rescueDetachedEntry moves bytes this deletion is holding out of the private
-// staging name and under a visible one in the same confined directory.
-//
-// The name is minted rather than derived from anything in the file: a rescued
-// entry may be a claim about the user nobody has read, and a name built from
-// its contents would publish some of it into a directory listing. The link
-// refuses to overwrite and a taken name is retried, so a rescue can never
-// clobber another rescue or anything else the user has.
-//
-// The order is what makes it durable: link, flush, then drop the staging name,
-// then flush again. A crash anywhere in it leaves the bytes reachable under at
-// least one name, which is the property the whole path exists for.
-func (v *Vault) rescueDetachedEntry(parent *os.File, staging string) (string, error) {
-	for attempt := 0; attempt < 16; attempt++ {
-		name, err := RecoveryDraftFileName()
-		if err != nil {
-			return "", err
-		}
-		linkErr := v.linkDetached(parent, staging, name)
-		if errors.Is(linkErr, unix.EEXIST) {
-			continue
-		}
-		if linkErr != nil {
-			return "", linkErr
-		}
-		if err := v.syncDirectory(parent); err != nil {
-			return name, err
-		}
-		if err := unix.Unlinkat(int(parent.Fd()), staging, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-			return name, err
-		}
-		if err := v.syncDirectory(parent); err != nil {
-			return name, err
-		}
-		return name, nil
-	}
-	return "", errors.New("could not allocate a recovery name")
 }
 
 // RecoveryDraftFileName mints the visible name a rescued file is kept under.
@@ -1237,15 +1126,20 @@ func openConfinedEntry(parent *os.File, leaf string, clean string) (*os.File, un
 	return file, opened, nil
 }
 
-// readEntryContent reads an already-open candidate under the same bound every
-// other reader here uses.
-func readEntryContent(ctx context.Context, file *os.File, clean string) (string, error) {
-	content, err := readBounded(ctx, file, MaxNoteBytes)
+// readEntryContent reads an already-open entry under a stated bound, and
+// refuses an over-bound file outright rather than answering with a prefix of it.
+//
+// The bound is a parameter because the two readers here are asking different
+// questions. A candidate is read against what this package will hold in memory
+// at all; a rollback re-reading its own write is asking whether these are still
+// exactly those bytes, and anything longer already answers no.
+func readEntryContent(ctx context.Context, file *os.File, clean string, limit int) (string, error) {
+	content, err := readBounded(ctx, file, limit)
 	if err != nil {
 		return "", fmt.Errorf("read %q: %w", clean, err)
 	}
-	if len(content) > MaxNoteBytes {
-		return "", &LimitError{What: fmt.Sprintf("note %q", clean), Limit: MaxNoteBytes, Got: len(content)}
+	if len(content) > limit {
+		return "", &LimitError{What: fmt.Sprintf("note %q", clean), Limit: limit, Got: len(content)}
 	}
 	return string(content), nil
 }
@@ -1257,21 +1151,5 @@ func rereadEntryContent(ctx context.Context, file *os.File, clean string) (strin
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return "", fmt.Errorf("re-read %q: %w", clean, err)
 	}
-	return readEntryContent(ctx, file, clean)
-}
-
-// reserveStagingName takes a random private name inside the candidate's own
-// directory, exclusively, so the detach below has somewhere to move the file
-// that nothing else can be holding. The name is created rather than merely
-// generated: O_EXCL is what makes "unused" a fact instead of a probability.
-func reserveStagingName(parent *os.File) (string, error) {
-	staging, name, err := createStagingFile(parent, 0o600)
-	if err != nil {
-		return "", err
-	}
-	if err := staging.Close(); err != nil {
-		_ = unix.Unlinkat(int(parent.Fd()), name, 0)
-		return "", err
-	}
-	return name, nil
+	return readEntryContent(ctx, file, clean, MaxNoteBytes)
 }

@@ -25,10 +25,16 @@ import (
 // The sync-failure rollback, against an editor that saved in place. Identity
 // says yes here and the bytes say no, and the bytes are the user's.
 func TestInstallRollbackRefusesAnEntryRewrittenUnderTheSameInode(t *testing.T) {
-	const rewritten = "the user's own words, typed over it\n"
+	// The same length as what the call writes, so what refuses here is the hash
+	// rather than the read bound above it.
+	const written = "the note this call wrote\n"
+	const rewritten = "the user's own words hey\n"
 	recorder := &syncRecorder{}
 	vault := openTestVault(t, newTestVaultRoot(t), recorder.hooks())
 	full := filepath.Join(vault.Root(), InboxDirName, "note.md")
+	if len(rewritten) != len(written) {
+		t.Fatalf("the fixtures differ in length (%d vs %d), so this proves nothing about the bytes", len(rewritten), len(written))
+	}
 
 	var once sync.Once
 	recorder.setBeforeDirectorySync(func() {
@@ -36,7 +42,7 @@ func TestInstallRollbackRefusesAnEntryRewrittenUnderTheSameInode(t *testing.T) {
 	})
 	recorder.setFailDirectorySyncNumber(1)
 
-	_, err := vault.createInboxNoteAt(context.Background(), "inbox/note.md", "the note this call wrote\n")
+	_, err := vault.createInboxNoteAt(context.Background(), "inbox/note.md", written)
 	if err == nil {
 		t.Fatal("expected the failed directory fsync to fail the create")
 	}
@@ -62,12 +68,16 @@ func TestInstallRollbackRefusesAnEntryRewrittenUnderTheSameInode(t *testing.T) {
 // The same rollback, reached the other way: the write finished and the request
 // did not. A caller that has gone is nobody to delete the user's words for.
 func TestInstallRollbackOnACancelledRequestKeepsAnEntryRewrittenInPlace(t *testing.T) {
-	const rewritten = "the user's own words, typed over it\n"
+	const written = "the note this call wrote\n"
+	const rewritten = "the user's own words hey\n"
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	recorder := &syncRecorder{}
 	vault := openTestVault(t, newTestVaultRoot(t), recorder.hooks())
 	full := filepath.Join(vault.Root(), InboxDirName, "note.md")
+	if len(rewritten) != len(written) {
+		t.Fatalf("the fixtures differ in length (%d vs %d), so this proves nothing about the bytes", len(rewritten), len(written))
+	}
 
 	var once sync.Once
 	recorder.setBeforeDirectorySync(func() {
@@ -77,7 +87,7 @@ func TestInstallRollbackOnACancelledRequestKeepsAnEntryRewrittenInPlace(t *testi
 		})
 	})
 
-	_, err := vault.createInboxNoteAt(ctx, "inbox/note.md", "the note this call wrote\n")
+	_, err := vault.createInboxNoteAt(ctx, "inbox/note.md", written)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected the cancellation to be reported, got %v", err)
 	}
@@ -149,5 +159,70 @@ func TestInstallRollbackRemovesTheEntryItInstalled(t *testing.T) {
 	}
 	if names := vaultDirEntries(t, vault, InboxDirName); len(names) != 0 {
 		t.Fatalf("a create that reported failure left %v behind", names)
+	}
+}
+
+// The same install runs into beliefs/ during a promotion, and there the visible
+// recovery name is the wrong answer: the walk indexes it, so a file this call
+// could not even prove was its own would be reconciled into memory as a belief
+// the user never accepted. Under beliefs/ the bytes stay under the reserved name
+// the walk steps over, and the failure says where they are.
+func TestInstallRollbackKeepsAContestedBeliefOutOfTheIndex(t *testing.T) {
+	const replacement = "a belief the user wrote themselves\n"
+	const contender = "a third file, under the same name\n"
+	recorder := &syncRecorder{}
+	var vault *Vault
+	barrier := func(phase detachPhase, clean string) {
+		if !inBeliefs(clean) {
+			return
+		}
+		switch phase {
+		case detachPhaseBeforeDetach:
+			replaceVaultEntry(t, vault, clean, replacement)
+		case detachPhaseBeforeRestore:
+			takeTheName(t, vault, clean, contender)
+		}
+	}
+	created, err := openVaultWithDetachSeams(newTestVaultRoot(t), recorder.hooks(), barrier, nil)
+	if err != nil {
+		t.Fatalf("open vault: %v", err)
+	}
+	vault = created
+	candidate := seedBelief(t, vault)
+	// Sync 1 is the beliefs folder the copy is linked into, which is the fsync
+	// that makes the install committed at all.
+	recorder.setFailDirectorySyncNumber(1)
+
+	promoteErr := promoteCandidate(context.Background(), vault, candidate)
+	if promoteErr == nil {
+		t.Fatal("expected the failed directory fsync to fail the promotion")
+	}
+	for _, name := range vaultDirEntries(t, vault, BeliefsDirName) {
+		if IsRecoveryDraftName(name) {
+			t.Fatalf("a belief nobody accepted was published under the indexed name %q", name)
+		}
+	}
+	staged := stagingResidueIn(t, vault, BeliefsDirName)
+	if len(staged) != 1 {
+		t.Fatalf("expected the contested file to be kept under one reserved name, found %v", staged)
+	}
+	kept, readErr := os.ReadFile(filepath.Join(vault.Root(), BeliefsDirName, staged[0]))
+	if readErr != nil || string(kept) != replacement {
+		t.Fatalf("the reserved name holds %q, want the detached replacement %q (%v)", kept, replacement, readErr)
+	}
+	if !strings.Contains(promoteErr.Error(), staged[0]) {
+		t.Fatalf("the failure does not name where the file was kept: %v", promoteErr)
+	}
+	if strings.Contains(promoteErr.Error(), replacement) {
+		t.Fatalf("the failure leaked what was in the file: %v", promoteErr)
+	}
+	scan, scanErr := vault.Scan(context.Background())
+	if scanErr != nil {
+		t.Fatalf("scan the vault: %v", scanErr)
+	}
+	for _, note := range scan.Notes {
+		if note.RelPath == BeliefsDirName+"/"+staged[0] {
+			t.Fatalf("the reserved recovery entry was indexed as an active belief: %+v", note)
+		}
 	}
 }

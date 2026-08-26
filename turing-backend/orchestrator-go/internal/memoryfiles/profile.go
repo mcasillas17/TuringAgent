@@ -174,7 +174,7 @@ func (v *Vault) writePinnedDocumentWithCompareAndSet(ctx context.Context, target
 			if expectedHash != "" {
 				return &StaleContentError{RelPath: target, Detail: "the document no longer exists"}
 			}
-			if err := v.installStagedFile(ctx, parent, leaf, content); err != nil {
+			if err := v.installStagedFile(ctx, parent, leaf, target, content); err != nil {
 				return err
 			}
 			return v.syncAncestors(ctx, target)

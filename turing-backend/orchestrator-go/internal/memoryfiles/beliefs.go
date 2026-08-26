@@ -165,7 +165,7 @@ func (v *Vault) PromoteToBeliefs(ctx context.Context, request PromoteToBeliefsRe
 		return BeliefNote{}, err
 	}
 	defer func() { _ = destinationParent.Close() }()
-	if err := v.installStagedFile(ctx, destinationParent, destinationLeaf, content); err != nil {
+	if err := v.installStagedFile(ctx, destinationParent, destinationLeaf, destination, content); err != nil {
 		return BeliefNote{}, err
 	}
 	// Remembered before anything else can touch the name, so a rollback removes
@@ -179,7 +179,7 @@ func (v *Vault) PromoteToBeliefs(ctx context.Context, request PromoteToBeliefsRe
 		// Nothing has been removed yet, so the promotion can still be undone
 		// whole: a failure before the source is unlinked leaves the vault the
 		// way the user left it.
-		rollbackErr := v.removeInstalledCopy(destinationParent, destinationLeaf, destination, installed, ContentHash(content))
+		rollbackErr := v.removeInstalledCopy(destinationParent, destinationLeaf, destination, installed, content)
 		if rollbackErr != nil {
 			return BeliefNote{}, fmt.Errorf(
 				"sync vault hierarchy after promoting to %q: %w (the copy at %q could not be removed either: %v)",
@@ -196,7 +196,7 @@ func (v *Vault) PromoteToBeliefs(ctx context.Context, request PromoteToBeliefsRe
 			// is left in the state the user can actually see.
 			return BeliefNote{}, fmt.Errorf("promoted %q to %q, but removing the original did not finish cleanly: %w", source, destination, err)
 		}
-		rollbackErr := v.removeInstalledCopy(destinationParent, destinationLeaf, destination, installed, ContentHash(content))
+		rollbackErr := v.removeInstalledCopy(destinationParent, destinationLeaf, destination, installed, content)
 		return BeliefNote{}, promotionAbandoned(source, destination, err, rollbackErr)
 	}
 	return BeliefNote{
@@ -282,6 +282,19 @@ func checkPromotableShape(source string, mode PromotionMode, parsed ParsedNote) 
 // has to be able to act on this: their edit is still in the inbox, and the
 // half-promoted copy either went away or is named here so they can delete it.
 func promotionAbandoned(source string, destination string, cause error, rollbackErr error) error {
+	if endedRequest(cause) {
+		// Nobody decided anything. The request ran out while the move was in
+		// flight, the original is back under its own name, and "it changed
+		// while you were promoting it" would be telling the user about an edit
+		// that never happened.
+		if rollbackErr != nil {
+			return fmt.Errorf(
+				"the promotion of %q ended before it could finish: %w; the promoted copy of the older text at %q could not be removed (%v) — delete it or promote again",
+				source, cause, destination, rollbackErr,
+			)
+		}
+		return cause
+	}
 	if rollbackErr != nil {
 		return fmt.Errorf(
 			"%q changed while it was being promoted (%v); the original was left alone, but the promoted copy of the older text at %q could not be removed (%v) — delete it or re-read and promote again: %w",
@@ -294,15 +307,31 @@ func promotionAbandoned(source string, destination string, cause error, rollback
 	)
 }
 
+// endedRequest reports whether a failure is really the request going away
+// rather than an answer about the file. The two lead to opposite sentences, and
+// the vault is untouched in both — so the one that says the user's own text
+// moved has to be reserved for when it did.
+func endedRequest(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
 // unlinkPromotedSource removes the source of a move only if it is still, byte
 // for byte, the file that was promoted, and reports whether it actually went
 // away.
 //
 // Inode identity alone is not enough. Obsidian saves in place, so a sentence the
 // user typed between the read and the unlink lands under the same inode, and an
-// inode-only check would call that unchanged and delete their words. Anything
-// this cannot confirm — a read error, a new inode, different bytes — is treated
-// as changed, because the cost of being wrong is the user's own text.
+// inode-only check would call that unchanged and delete their words. Neither is
+// checking the name enough: the entry under a name can be swapped between the
+// check and the unlink, so the file leaves its name first and what is verified
+// afterwards is the entry that was detached. Anything this cannot confirm — a
+// read error, a new inode, different bytes — is treated as changed, because the
+// cost of being wrong is the user's own text.
+//
+// A source it may not delete goes back under its own name, and when the name has
+// been taken it is kept under a visible recovery draft: an inbox draft nobody
+// has read is exactly what the user's inbox is for, and one they can see is one
+// they can act on.
 //
 // The removed flag is what keeps the caller's rollback honest: once the source
 // is gone the move has happened, and a later failure must not be answered by
@@ -314,33 +343,47 @@ func (v *Vault) unlinkPromotedSource(ctx context.Context, clean string, expected
 	}
 	defer func() { _ = parent.Close() }()
 
-	current, currentStat, err := v.readConfinedEntry(ctx, parent, leaf, clean, MaxNoteBytes)
-	if err != nil {
-		return false, fmt.Errorf("re-read %q before removing it: %w", clean, err)
+	outcome, placement, reason, err := v.removeVerifiedEntry(
+		ctx, parent, leaf, clean, expected, promoted,
+	)
+	switch outcome {
+	case removalMissing:
+		if err != nil {
+			return false, err
+		}
+		// Nothing was detached and nothing was deleted. The original stopped
+		// being there while this held its lock, so the move it was the source
+		// of is abandoned rather than reported as one that happened.
+		return false, fmt.Errorf("%q is no longer there", clean)
+	case removalRefused:
+		return false, promotedSourceKept(clean, placement, reason, err)
+	default:
+		if err != nil {
+			return true, err
+		}
+		return true, ctx.Err()
 	}
-	if currentStat.Dev != expected.Dev || currentStat.Ino != expected.Ino {
-		return false, fmt.Errorf("%q is no longer the same file", clean)
+}
+
+// promotedSourceKept says what happened to an original this move was not
+// entitled to delete: it is back under its own name, or it is somewhere the user
+// can find it, and the sentence says which.
+func promotedSourceKept(clean string, placement detachedPlacement, reason string, cause error) error {
+	if placement.restored && placement.recoveryRelPath == "" {
+		if cause != nil {
+			return cause
+		}
+		return fmt.Errorf("%q %s, so it was left alone", clean, reason)
 	}
-	if ContentHash(current) != ContentHash(promoted) {
-		return false, fmt.Errorf("%q holds different bytes than the ones that were promoted", clean)
+	unplaced := reason + " and could not be put back under its own name"
+	if placement.restored {
+		unplaced = reason + ", so it was left alone, but a second link to it could not be dropped"
 	}
-	// The name is re-checked against the fd that was just read, so the unlink
-	// below removes the inode whose bytes were compared rather than whatever
-	// arrived under that name in between.
-	var named unix.Stat_t
-	if err := unix.Fstatat(int(parent.Fd()), leaf, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-		return false, fmt.Errorf("inspect %q before removing it: %w", clean, err)
+	kept := fmt.Errorf("%q: %s", clean, boundRefusalDetail(placement.describe(unplaced)))
+	if cause != nil {
+		return fmt.Errorf("%w (%v)", cause, kept)
 	}
-	if named.Dev != currentStat.Dev || named.Ino != currentStat.Ino {
-		return false, fmt.Errorf("%q was replaced under its own name", clean)
-	}
-	if err := unix.Unlinkat(int(parent.Fd()), leaf, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-		return false, fmt.Errorf("remove %q after promoting it: %w", clean, err)
-	}
-	if err := v.syncDirectory(parent); err != nil {
-		return true, fmt.Errorf("sync vault directory after removing %q: %w", clean, err)
-	}
-	return true, ctx.Err()
+	return kept
 }
 
 // removeInstalledCopy undoes the destination half of a promotion that could not
@@ -351,37 +394,47 @@ func (v *Vault) unlinkPromotedSource(ctx context.Context, clean string, expected
 // It takes no context on purpose. This is the compensating half of a mutation
 // that already happened, and abandoning it because a caller's deadline expired
 // would leave behind exactly the file it exists to remove.
-func (v *Vault) removeInstalledCopy(parent *os.File, leaf string, clean string, installed unix.Stat_t, installedHash string) error {
-	currentContent, current, err := v.readConfinedEntry(context.Background(), parent, leaf, clean, MaxNoteBytes)
+//
+// What it will not do is delete a file it cannot prove it installed. The copy
+// leaves its name first and is then checked, off that name, against both the
+// inode this promotion linked and the bytes it wrote — an editor saving in place
+// keeps the inode, and those words are the user's. Anything else goes back.
+//
+// When the name has been taken in the meantime the bytes stay under the reserved
+// private name the detach put them under, and the refusal names it. That is the
+// one place under beliefs/ they may be kept: the vault walk steps over reserved
+// names, so nothing downstream reconciles them into memory, and publishing a
+// file this could not prove was its own under an indexed name would fabricate a
+// belief the user never accepted.
+func (v *Vault) removeInstalledCopy(parent *os.File, leaf string, clean string, installed unix.Stat_t, installedContent string) error {
+	outcome, placement, reason, err := v.removeVerifiedEntry(
+		context.Background(), parent, leaf, clean, installed, installedContent,
+	)
 	if err != nil {
-		if errors.Is(err, unix.ENOENT) {
-			return nil
-		}
-		return fmt.Errorf("inspect the promoted copy at %q: %w", clean, err)
+		return err
 	}
-	if !installedCopyMatches(installed, current, installedHash, ContentHash(currentContent)) {
-		return fmt.Errorf("%q is no longer the copy this promotion installed", clean)
+	if outcome != removalRefused {
+		// Either the copy went away or it was never there, and a copy that is
+		// already gone is nothing to undo.
+		return nil
 	}
-	var named unix.Stat_t
-	if err := unix.Fstatat(int(parent.Fd()), leaf, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-		return fmt.Errorf("re-inspect the promoted copy at %q: %w", clean, err)
-	}
-	if named.Dev != current.Dev || named.Ino != current.Ino {
-		return fmt.Errorf("%q was replaced before the promotion rollback", clean)
-	}
-	if err := unix.Unlinkat(int(parent.Fd()), leaf, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-		return fmt.Errorf("remove the promoted copy at %q: %w", clean, err)
-	}
-	if err := v.syncDirectory(parent); err != nil {
-		return fmt.Errorf("sync vault directory after removing the promoted copy at %q: %w", clean, err)
-	}
-	return nil
+	return installedCopyKept(clean, placement, reason)
 }
 
-func installedCopyMatches(installed unix.Stat_t, current unix.Stat_t, installedHash string, currentHash string) bool {
-	return current.Dev == installed.Dev &&
-		current.Ino == installed.Ino &&
-		currentHash == installedHash
+// installedCopyKept says where a file this rollback was not entitled to delete
+// actually is. It never reports one as removed.
+func installedCopyKept(clean string, placement detachedPlacement, reason string) error {
+	if placement.restored && placement.recoveryRelPath == "" {
+		return fmt.Errorf("%q is no longer the copy this promotion installed: %s, so it was left alone", clean, reason)
+	}
+	unplaced := reason + " and could not be put back under its own name"
+	if placement.restored {
+		unplaced = reason + ", so it was left alone, but a second link to it could not be dropped"
+	}
+	return fmt.Errorf(
+		"%q is no longer the copy this promotion installed: %s",
+		clean, boundRefusalDetail(placement.describe(unplaced)),
+	)
 }
 
 // unopenableEntryError marks a read that failed because the entry could not be
