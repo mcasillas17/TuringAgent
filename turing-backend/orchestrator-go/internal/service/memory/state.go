@@ -177,6 +177,17 @@ func (s *Server) readVault(ctx context.Context) (vaultView, error) {
 	for _, path := range report.Index.UnmanagedInboxDrafts {
 		drafts[path] = struct{}{}
 	}
+	// What the pass could not account for, by path. A note it stepped over is
+	// still on this page and still readable, and without this it would arrive
+	// looking like every other note while quietly never turning up in search —
+	// which, to the person whose memory it is, is indistinguishable from one
+	// Turing decided to forget.
+	refused := make(map[string]string, len(report.Index.Errors))
+	for _, issue := range report.Index.Errors {
+		if _, already := refused[issue.RelPath]; !already {
+			refused[issue.RelPath] = issue.Reason
+		}
+	}
 	// The inbox as the walk just read it, keyed by path. A managed proposal's
 	// row records what Turing wrote; this is what the file says now, and the
 	// two are not the same thing the moment the user opens the vault.
@@ -184,7 +195,7 @@ func (s *Server) readVault(ctx context.Context) (vaultView, error) {
 	for _, row := range scan.Notes {
 		switch row.Area {
 		case memoryfiles.AreaBeliefs:
-			view.notes = append(view.notes, s.beliefProto(ctx, row))
+			view.notes = append(view.notes, s.beliefProto(ctx, row, refused[row.RelPath]))
 			view.beliefs++
 		case memoryfiles.AreaInbox:
 			inbox[row.RelPath] = row
@@ -282,7 +293,15 @@ func (s *Server) overlayCandidatesFromVault(ctx context.Context, candidates []*t
 	}
 }
 
-func (s *Server) beliefProto(ctx context.Context, row memoryfiles.NoteRow) *turingv1.MemoryNote {
+// beliefProto renders one belief. refusal is what the writing pass said about
+// this file, if it said anything: the pass may have read the note perfectly
+// well and still been unable to give it an identity or bring its citations
+// back in line, and that is the difference between a note that is memory and a
+// note that is only a file. It is carried on the same line the client already
+// shows for a note something is structurally wrong with, and only when the
+// scan itself had nothing to say — the scan looked at the bytes, this looked at
+// what could be done with them, and the first is the more specific answer.
+func (s *Server) beliefProto(ctx context.Context, row memoryfiles.NoteRow, refusal string) *turingv1.MemoryNote {
 	note := &turingv1.MemoryNote{
 		NoteId:            row.NoteID,
 		Path:              row.RelPath,
@@ -297,6 +316,10 @@ func (s *Server) beliefProto(ctx context.Context, row memoryfiles.NoteRow) *turi
 	}
 	if row.ParseError != "" {
 		note.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_CONTENT_PARSE_FAILED
+	} else if refusal != "" {
+		// No unavailable reason: the note is right there and readable. What is
+		// missing is its place in the index, and the line says which.
+		note.ParseError = refusal
 	}
 	if row.NoteID == "" {
 		return note
