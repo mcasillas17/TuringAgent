@@ -33,6 +33,14 @@ const (
 var (
 	// ErrMemoryNoteNotFound reports a note identity with no row in the index.
 	ErrMemoryNoteNotFound = errors.New("memory note not found")
+	// ErrMemoryNoteWithdrawn refuses a read of a note the index does not
+	// answer from. It is the read-side half of the withdrawal search already
+	// performs: a note whose conversations were deleted is kept, because the
+	// user accepted it, but nothing may answer with it as if it were still
+	// grounded — including a caller that still holds its identity from before
+	// the withdrawal.
+	ErrMemoryNoteWithdrawn = errors.New("memory note is not in a state a read answers from")
+
 	// ErrMemorySearchQuery refuses a search whose bounds are outside what this
 	// repository will run. A refusal is deliberate: silently clamping a limit
 	// makes a caller believe it saw everything.

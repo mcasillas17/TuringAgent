@@ -70,6 +70,14 @@ func startAppOver(t *testing.T, databasePath string, memoryRoot string) *App {
 // exact state a crash would have left.
 func openStagedRepository(t *testing.T, databasePath string, memoryRoot string) *repository.Repository {
 	t.Helper()
+	repo, _ := openStagedRepositoryAndDB(t, databasePath, memoryRoot)
+	return repo
+}
+
+// openStagedRepositoryAndDB is the same staging with the handle exposed, for a
+// test that has to damage the database itself rather than the vault.
+func openStagedRepositoryAndDB(t *testing.T, databasePath string, memoryRoot string) (*repository.Repository, *db.DB) {
+	t.Helper()
 	database, err := db.Open(databasePath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -84,7 +92,7 @@ func openStagedRepository(t *testing.T, databasePath string, memoryRoot string) 
 		t.Fatalf("open vault: %v", err)
 	}
 	repo.SetMemoryVault(vault)
-	return repo
+	return repo, database
 }
 
 func auditActionCount(t *testing.T, repo *repository.Repository, action string) int {
@@ -196,26 +204,34 @@ func TestStartupWithNoVaultStartsAnyway(t *testing.T) {
 	t.Cleanup(app.Stop)
 }
 
-// A vault that is there and cannot be reconciled is the other case, and it is
-// fatal. Starting on top of it would serve an index the pass had already
-// decided was wrong, and every later read would inherit that answer without
-// anything saying where it came from.
-func TestStartupFailsClosedOnAVaultItCannotReconcile(t *testing.T) {
+// A vault that is there and a database that cannot answer for it is the other
+// case, and it is fatal. Starting on top of it would serve an index the pass
+// had already decided was wrong, and every later read would inherit that answer
+// without anything saying where it came from.
+//
+// The inconsistency here is a real one rather than a bounded refusal: a
+// database restored without its note index, which is what a partial backup or
+// an interrupted copy leaves behind. A vault merely too large to scan is
+// deliberately *not* this case — see the over-bound tests, which require the
+// app to boot.
+func TestStartupFailsClosedOnADatabaseThatCannotAnswerForTheVault(t *testing.T) {
 	databasePath, memoryRoot := newVaultBackedPaths(t)
-	beliefs := filepath.Join(memoryRoot, memoryfiles.BeliefsDirName)
-	for index := 0; index <= memoryfiles.MaxVaultIndexedFiles; index++ {
-		noteID, err := memoryfiles.NewNoteID()
-		if err != nil {
-			t.Fatal(err)
-		}
-		body := "---\nid: \"" + noteID + "\"\nkind: \"belief\"\nmanaged: true\n---\n\nnote\n"
-		if err := os.WriteFile(
-			filepath.Join(beliefs, fmt.Sprintf("note-%05d.md", index)),
-			[]byte(body), 0o600,
-		); err != nil {
-			t.Fatal(err)
-		}
+	staged, database := openStagedRepositoryAndDB(t, databasePath, memoryRoot)
+	noteID, err := memoryfiles.NewNoteID()
+	if err != nil {
+		t.Fatal(err)
 	}
+	belief := "---\nid: \"" + noteID + "\"\nkind: \"belief\"\nmanaged: true\n---\n\nnote\n"
+	if err := os.WriteFile(
+		filepath.Join(memoryRoot, memoryfiles.BeliefsDirName, "note.md"),
+		[]byte(belief), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := staged.ReconcileMemoryVault(context.Background()); err != nil {
+		t.Fatalf("the staged vault was not reconcilable before the damage: %v", err)
+	}
+	dropMemoryNoteIndex(t, database)
 
 	app, err := New(config.Config{
 		ClientAPIKey: "client",
@@ -232,5 +248,29 @@ func TestStartupFailsClosedOnAVaultItCannotReconcile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "reconcile memory vault") {
 		t.Fatalf("startup failure = %v, want it to name the reconcile it could not finish", err)
+	}
+}
+
+// dropMemoryNoteIndex removes the note index and the FTS structures that hang
+// off it, leaving the migration ledger claiming they are there — the shape a
+// database restored from a partial backup actually has.
+func dropMemoryNoteIndex(t *testing.T, database *db.DB) {
+	t.Helper()
+	connection, err := database.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("pin a connection: %v", err)
+	}
+	defer func() { _ = connection.Close() }()
+	for _, statement := range []string{
+		`PRAGMA foreign_keys = OFF`,
+		`DROP TRIGGER memory_notes_fts_ai`,
+		`DROP TRIGGER memory_notes_fts_ad`,
+		`DROP TRIGGER memory_notes_fts_au`,
+		`DROP TABLE memory_notes_fts`,
+		`DROP TABLE memory_notes`,
+	} {
+		if _, err := connection.ExecContext(context.Background(), statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
 	}
 }
