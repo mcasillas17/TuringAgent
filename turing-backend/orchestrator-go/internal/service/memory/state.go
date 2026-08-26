@@ -41,6 +41,18 @@ func (s *Server) ListMemoryState(ctx context.Context, _ *turingv1.ListMemoryStat
 		Candidates: []*turingv1.MemoryCandidate{},
 	}
 	if s.vault == nil {
+		// A proposal the last run left in the inbox is still waiting on the
+		// user, so it stays on the page: dropping it would say there is
+		// nothing to decide when there is. What the page cannot do is speak
+		// for the file — the row is Turing's record of what it wrote, kept for
+		// the audit trail, not a second copy to serve when the vault the words
+		// actually live in is unreachable.
+		candidates, err := s.listCandidates(ctx, repository.MemoryCandidateQuery{Limit: maxCandidateListing})
+		if err != nil {
+			return nil, err
+		}
+		s.overlayCandidatesFromVault(ctx, candidates)
+		response.Candidates = candidates
 		response.Profile = &turingv1.MemoryProfile{
 			UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING,
 		}
@@ -264,7 +276,7 @@ func overlayCandidateFile(candidate *turingv1.MemoryCandidate, inbox map[string]
 		// row when it can see the whole inbox, so this is the narrow window
 		// where it cannot yet — and a proposal whose text nobody can read is
 		// not one to offer a decision on.
-		candidate.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING
+		withholdCandidateBody(candidate, turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING)
 		return
 	}
 	if row.ParseError != "" {
@@ -296,17 +308,25 @@ func candidateBodyText(body string) string {
 // and the same token. A read that skipped it would hand the client the row's
 // hash, which the decision then compares against the file and refuses — a page
 // whose buttons never work.
+//
+// A vault that is not attached at all takes the same answer rather than a
+// typed refusal, so one rule covers every surface: the proposal is still listed
+// and still identifiable, and the one thing withheld is what only the file can
+// say. Refusing the call outright would take the whole inbox off the page over
+// a folder that is merely unreachable, and telling the user nothing is waiting
+// is the one answer that is not true.
 func (s *Server) overlayCandidatesFromVault(ctx context.Context, candidates []*turingv1.MemoryCandidate) {
-	if s.vault == nil {
-		return
-	}
 	for _, candidate := range candidates {
 		if !candidate.GetManaged() {
 			continue
 		}
+		if s.vault == nil {
+			withholdCandidateBody(candidate, turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING)
+			continue
+		}
 		note, err := s.vault.ReadInboxNote(ctx, candidate.GetInboxPath())
 		if err != nil {
-			candidate.UnavailableReason = unavailableProto(memoryfiles.UnavailableReasonFor(err), false)
+			withholdCandidateBody(candidate, unavailableProto(memoryfiles.UnavailableReasonFor(err), false))
 			candidate.ParseError = err.Error()
 			continue
 		}
@@ -314,6 +334,23 @@ func (s *Server) overlayCandidatesFromVault(ctx context.Context, candidates []*t
 		candidate.ContentHash = note.ContentHash
 		candidate.Kind = candidateKindProto(string(note.Kind))
 	}
+}
+
+// withholdCandidateBody leaves a proposal on the page and takes its claim off
+// it: no text, and no compare-and-set token.
+//
+// The row still holds both, because a decision has to be auditable against
+// what Turing originally wrote. Neither is an answer to "what is in the user's
+// inbox right now" — the vault is a vault precisely so they can rewrite it —
+// and serving the row's copy would show text nobody can confirm is still there
+// above a hash the decision compares against a file the server cannot open, so
+// every button the page offered would be refused. What is left is what the row
+// genuinely knows: which proposal this is, where it lives, and why it cannot
+// be read.
+func withholdCandidateBody(candidate *turingv1.MemoryCandidate, reason turingv1.MemoryUnavailableReason) {
+	candidate.Content = ""
+	candidate.ContentHash = ""
+	candidate.UnavailableReason = reason
 }
 
 // beliefProto renders one belief. refusal is what the writing pass said about
@@ -476,8 +513,16 @@ func (s *Server) ListMemoryCandidates(ctx context.Context, req *turingv1.ListMem
 	if err != nil {
 		return nil, memoryError(err, "read memory settings failed")
 	}
-	if !enabled {
+	// The same order the settings row uses. Memory being off is a decision the
+	// user made and the one thing here they can change; a vault that is not
+	// attached is a fact about a folder, and it is what the listing says when
+	// nothing outranks it — because every proposal in this response is one
+	// nobody could read.
+	switch {
+	case !enabled:
 		response.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_DISABLED
+	case s.vault == nil:
+		response.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING
 	}
 	return response, nil
 }
