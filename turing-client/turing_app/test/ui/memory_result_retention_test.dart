@@ -173,6 +173,32 @@ void main() {
 
       expect(_resultEditor(tester).controller!.text, 'Mine, not composed.\n');
     });
+
+    testWidgets('survives a proposal state this build cannot name', (
+      tester,
+    ) async {
+      final api = _Api()..state = _stateWithProfileEdit();
+      await _pump(tester, api);
+
+      await tester.enterText(_resultEditorFinder(), 'Mine, not composed.\n');
+      await tester.pumpAndSettle();
+
+      // A newer server answering with a state this build has never heard of is
+      // not a server saying the proposal was decided. Reading it as one would
+      // end somebody's draft over a word nobody here can read.
+      api.state = _stateWithProfileEdit(
+        candidate: _profileEditCandidate(
+          state: MemoryCandidateState.unspecified,
+        ),
+      );
+      await _tap(tester, find.byKey(const Key('memory-persona-reread')));
+      expect(_resultEditorFinder(), findsNothing);
+
+      api.state = _stateWithProfileEdit();
+      await _tap(tester, find.byKey(const Key('memory-persona-reread')));
+
+      expect(_resultEditor(tester).controller!.text, 'Mine, not composed.\n');
+    });
   });
 
   group('a proposal that never had a result', () {
