@@ -221,10 +221,17 @@ type detachedPlacement struct {
 	// cause is the failure that stopped the restore, carried rather than only
 	// described so a caller can match on it.
 	cause error
-	// residueRelPath and residueErr name a second copy still on disk under the
-	// reserved name, because the rescue linked it but could not tidy up.
+	// residueRelPath and residueErr name a second link to the entry that this
+	// restore did not clear away cleanly, and what stopped it.
 	residueRelPath string
 	residueErr     error
+	// residueRemains says which of the two that is. A link the unlink refused
+	// to drop is on disk now and somebody can go and look at it. A link that
+	// was dropped without the drop reaching the disk is not there at all until
+	// a crash brings it back. Reporting the second as the first sends a person
+	// after a file that is not there, which is the same class of untruth as
+	// reporting a refusal as a removal.
+	residueRemains bool
 	// flushErr is a directory fsync that failed after the bytes were placed. It
 	// does not move them anywhere; it means the placement this describes is not
 	// known to have survived a crash, and a caller that says where a file is
@@ -290,7 +297,12 @@ func (d *detachedEntry) putBack() detachedPlacement {
 		// named, not a rescue to be published: a visible copy of a claim that
 		// is already in the inbox is the same proposal twice, and the user
 		// would have to decide about both.
-		placement := detachedPlacement{restored: true, residueRelPath: d.stagedRelPath(), residueErr: err}
+		placement := detachedPlacement{
+			restored:       true,
+			residueRelPath: d.stagedRelPath(),
+			residueErr:     err,
+			residueRemains: true,
+		}
 		if flushErr := d.vault.syncDirectory(d.parent); flushErr != nil {
 			placement.flushErr = flushErr
 		}
@@ -320,7 +332,7 @@ func (d *detachedEntry) preserve(recovery detachRecovery, cause error) detachedP
 		placement.recoveryHidden = true
 		return placement
 	}
-	name, rescueErr := d.vault.rescueDetachedEntry(d.parent, d.staging)
+	name, staged, rescueErr := d.vault.rescueDetachedEntry(d.parent, d.staging)
 	if name == "" {
 		placement.recoveryRelPath = d.stagedRelPath()
 		placement.recoveryHidden = true
@@ -330,9 +342,12 @@ func (d *detachedEntry) preserve(recovery detachRecovery, cause error) detachedP
 	placement.recoveryRelPath = vaultRelPath(path.Dir(d.clean), name)
 	if rescueErr != nil {
 		// The visible name exists and holds the bytes; only the tidying after
-		// it failed. Both names are reported, because both are on disk.
+		// it failed. The reserved name is reported either way, and staged says
+		// whether it is a link somebody can find today or one a crash can
+		// bring back.
 		placement.residueRelPath = d.stagedRelPath()
 		placement.residueErr = rescueErr
+		placement.residueRemains = staged
 	}
 	return placement
 }
@@ -352,7 +367,7 @@ func (p detachedPlacement) explain(why string) string {
 		)
 	}
 	if p.restored {
-		return p.explainResidue(why + ", so it was left alone, but a second link to it could not be dropped")
+		return p.note(p.withResidue(why + ", so it was left alone"))
 	}
 	reason := why + " and could not be put back under its own name"
 	switch {
@@ -366,27 +381,30 @@ func (p detachedPlacement) explain(why string) string {
 			"%s (%v); it is not lost — it was kept for recovery at %s, where nothing indexes it as a note",
 			reason, p.cause, p.recoveryRelPath,
 		))
-	case p.residueRelPath != "":
-		return p.note(fmt.Sprintf(
-			"%s (%v); it is not lost — it was kept for recovery at %s, and a copy remains at %s (%v)",
-			reason, p.cause, p.recoveryRelPath, p.residueRelPath, p.residueErr,
-		))
 	default:
-		return p.note(fmt.Sprintf(
+		return p.note(p.withResidue(fmt.Sprintf(
 			"%s (%v); it is not lost — it was kept for recovery at %s",
 			reason, p.cause, p.recoveryRelPath,
-		))
+		)))
 	}
 }
 
-// explainResidue phrases the restore that worked and the duplicate it could not
-// clear away. The file is where it belongs either way; what is being reported
-// is a second name for it that somebody may find later.
-func (p detachedPlacement) explainResidue(reason string) string {
-	if p.residueRelPath == "" {
-		return p.note(reason)
+// withResidue adds the second link this restore did not clear away, in the
+// tense it is actually in. There are two of those and they send a person to
+// different places: one is a file to go and look at, the other is a name that
+// is gone until a crash brings it back.
+func (p detachedPlacement) withResidue(sentence string) string {
+	switch {
+	case p.residueRelPath == "":
+		return sentence
+	case p.residueRemains:
+		return fmt.Sprintf("%s, but a second link to it could not be dropped (%v); that link is at %s", sentence, p.residueErr, p.residueRelPath)
+	default:
+		return fmt.Sprintf(
+			"%s; the second link at %s was dropped, but that removal was not flushed (%v), so the name can come back after a crash",
+			sentence, p.residueRelPath, p.residueErr,
+		)
 	}
-	return p.note(fmt.Sprintf("%s (%v); a second link to it remains at %s", reason, p.residueErr, p.residueRelPath))
 }
 
 // note appends the one fact that qualifies every other sentence here: the
@@ -411,31 +429,36 @@ func (p detachedPlacement) note(sentence string) string {
 // The order is what makes it durable: link, flush, then drop the staging name,
 // then flush again. A crash anywhere in it leaves the bytes reachable under at
 // least one name, which is the property the whole path exists for.
-func (v *Vault) rescueDetachedEntry(parent *os.File, staging string) (string, error) {
+//
+// The second answer is whether the staging name is still a link on disk. It is
+// not a detail: a caller reporting where a file is has to know the difference
+// between a reserved name somebody can go and open and one this call dropped
+// without the drop reaching the disk.
+func (v *Vault) rescueDetachedEntry(parent *os.File, staging string) (string, bool, error) {
 	for attempt := 0; attempt < 16; attempt++ {
 		name, err := RecoveryDraftFileName()
 		if err != nil {
-			return "", err
+			return "", true, err
 		}
 		linkErr := v.linkDetached(parent, staging, name)
 		if errors.Is(linkErr, unix.EEXIST) {
 			continue
 		}
 		if linkErr != nil {
-			return "", linkErr
+			return "", true, linkErr
 		}
 		if err := v.syncDirectory(parent); err != nil {
-			return name, err
+			return name, true, err
 		}
 		if err := v.unlinkStaging(parent, staging); err != nil && !errors.Is(err, unix.ENOENT) {
-			return name, err
+			return name, true, err
 		}
 		if err := v.syncDirectory(parent); err != nil {
-			return name, err
+			return name, false, err
 		}
-		return name, nil
+		return name, false, nil
 	}
-	return "", errors.New("could not allocate a recovery name")
+	return "", true, errors.New("could not allocate a recovery name")
 }
 
 // reserveStagingName takes a random private name inside the entry's own
