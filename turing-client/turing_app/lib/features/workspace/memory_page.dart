@@ -1017,7 +1017,14 @@ class _CandidateCard extends StatelessWidget {
           // would accept — and the reason is said out loud, because a card
           // with prose and no actions reads as a proposal with nothing to
           // decide rather than as one this client is too old to decide.
-          if (decision == MemoryCandidateDecision.unsupported) ...[
+          //
+          // Only where the reason line above had nothing to say. A card that
+          // already reports the vault could not be read must not also claim
+          // the proposal is in a shape this build does not understand: the
+          // shape is fine, the vault is gone, and only one of those sentences
+          // is true.
+          if (decision == MemoryCandidateDecision.unsupported &&
+              candidate.reasonIsSilent) ...[
             const SizedBox(height: 10),
             _ErrorLine(message: l10n.memoryProposalUndecidable),
           ],

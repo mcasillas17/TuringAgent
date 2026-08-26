@@ -289,12 +289,51 @@ class MemoryCandidate {
 
   /// Whether the user is being shown the whole proposal. A decision about text
   /// the page could not display is not a decision.
+  ///
+  /// This is a whitelist, and that is the point. The server answers NONE to say
+  /// "nothing is wrong", and only that answer means the bytes on this card are
+  /// the bytes in the user's inbox. Listing the failures instead would let a
+  /// reason a newer server invents — one this build decodes as [unspecified]
+  /// because it has never heard of it — fall through as health, and the page
+  /// would offer to accept text nobody read on the strength of not recognising
+  /// the problem.
   bool get contentIsWhole =>
-      parseError.isEmpty &&
-      unavailableReason != MemoryUnavailableReason.contentParseFailed &&
-      unavailableReason != MemoryUnavailableReason.contentTooLarge &&
-      unavailableReason != MemoryUnavailableReason.vaultMissing &&
-      unavailableReason != MemoryUnavailableReason.vaultUnreadable;
+      parseError.isEmpty && unavailableReason == MemoryUnavailableReason.none;
+
+  /// True when the reason says nothing a person can act on: the server reported
+  /// health, or reported something this build cannot name. It is what lets a
+  /// card say "this build cannot decide this" only where no better sentence is
+  /// already on it.
+  bool get reasonIsSilent =>
+      unavailableReason == MemoryUnavailableReason.none ||
+      unavailableReason == MemoryUnavailableReason.unspecified;
+
+  /// Whether a proposal the page could not show whole is still one this client
+  /// knows the server can throw away.
+  ///
+  /// A rejection removes the file, so it needs the vault. Both arms below are
+  /// the same situation — the vault is open, the file is in it, and only its
+  /// contents defeated the reader — which is exactly when a removal by name
+  /// still works and is the only way out that proposal has.
+  ///
+  /// Everything else is closed, including a reason this build cannot name. The
+  /// switch is exhaustive with no `default` so a value added tomorrow has to be
+  /// classified deliberately: guessing that an unknown problem is a safe one is
+  /// how a client offers to delete a file over a condition nobody has thought
+  /// about yet.
+  bool get _rejectionIsSafe {
+    switch (unavailableReason) {
+      case MemoryUnavailableReason.contentParseFailed:
+      case MemoryUnavailableReason.contentTooLarge:
+        return true;
+      case MemoryUnavailableReason.none:
+      case MemoryUnavailableReason.unspecified:
+      case MemoryUnavailableReason.disabled:
+      case MemoryUnavailableReason.vaultMissing:
+      case MemoryUnavailableReason.vaultUnreadable:
+        return false;
+    }
+  }
 
   /// Which decision, if any, this client may offer for this proposal.
   ///
@@ -324,10 +363,15 @@ class MemoryCandidate {
     // A pending proposal the page could not show whole. Accepting it is off the
     // table — nobody may accept text they were not shown, and the server needs
     // the kind, which is a question about bytes nobody can read. Throwing it
-    // away is not: a rejection is the user saying no to whatever is sitting in
-    // their inbox, and it is the only thing standing between them and a claim
-    // about themselves they can neither accept nor be rid of.
-    if (!contentIsWhole) return MemoryCandidateDecision.rejectOnly;
+    // away is offered only where this build knows the server still can: a
+    // rejection is the one thing standing between the user and a claim about
+    // themselves they can neither accept nor be rid of, and offering it where
+    // it would be refused replaces that with a button that does nothing.
+    if (!contentIsWhole) {
+      return _rejectionIsSafe
+          ? MemoryCandidateDecision.rejectOnly
+          : MemoryCandidateDecision.unsupported;
+    }
     switch (kind) {
       case MemoryCandidateKind.belief:
         return MemoryCandidateDecision.promoteToBeliefs;
@@ -373,12 +417,15 @@ enum MemoryCandidateDecision {
   applyToProfile,
 
   /// Reject, and nothing else: a managed, pending proposal whose text the page
-  /// could not show whole. There is nothing here to accept, and the file is
-  /// still the user's to throw away.
+  /// could not show whole, for a reason this build knows leaves the file itself
+  /// reachable. There is nothing here to accept, and the file is still the
+  /// user's to throw away.
   rejectOnly,
 
-  /// A managed, pending proposal whose kind or state this build cannot name.
-  /// No button is safe, and the card says so.
+  /// A managed, pending proposal this build cannot safely offer anything for:
+  /// its kind or state has no name here, its vault is out of reach so even a
+  /// rejection would be refused, or the server gave a reason this build has
+  /// never heard of. No button is safe, and the card says so.
   unsupported,
 }
 

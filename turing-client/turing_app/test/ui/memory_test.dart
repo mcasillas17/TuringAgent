@@ -502,6 +502,78 @@ void main() {
         findsNothing,
         reason: 'nobody accepts text they were never shown',
       );
+      expect(
+        find.text('Reject'),
+        findsOneWidget,
+        reason: 'the file is in the vault, and throwing it away is the way out',
+      );
+    });
+
+    // Round 5. The server stopped serving the database's copy of a proposal
+    // whose file it could not open, so this is what the page is handed: the
+    // proposal is still there, and its words are not.
+    testWidgets('a proposal with no vault behind it shows no body and no '
+        'buttons', (tester) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          candidates: [
+            _candidate(
+              content: '',
+              contentHash: '',
+              unavailableReason: MemoryUnavailableReason.vaultMissing,
+            ),
+          ],
+        );
+      await _pumpMemory(tester, api);
+
+      expect(find.text('inbox/01-bikes.md'), findsOneWidget);
+      expect(
+        find.textContaining('They bike to work every day.'),
+        findsNothing,
+        reason: 'the words live in a vault nobody can currently open',
+      );
+      // Every decision RPC needs the vault — a rejection removes the file —
+      // so no button here is one the server could honour.
+      expect(find.text('Promote'), findsNothing);
+      expect(find.text('Apply'), findsNothing);
+      expect(find.text('Reject'), findsNothing);
+      expect(
+        find.textContaining('nothing here to accept'),
+        findsOneWidget,
+        reason: 'a card with no actions and no word reads as nothing to decide',
+      );
+      expect(
+        find.textContaining('throw it away'),
+        findsNothing,
+        reason: 'a rejection needs the vault this card is missing',
+      );
+      expect(
+        find.textContaining('does not understand'),
+        findsNothing,
+        reason: 'the shape is fine; it is the vault that is gone',
+      );
+    });
+
+    // A reason a newer server invented. The card must fail closed and say so,
+    // rather than treating "not one of the four problems I know" as health.
+    testWidgets('a proposal whose trouble this build cannot name offers '
+        'nothing', (tester) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          candidates: [
+            _candidate(
+              content: '',
+              contentHash: '',
+              unavailableReason: MemoryUnavailableReason.unspecified,
+            ),
+          ],
+        );
+      await _pumpMemory(tester, api);
+
+      expect(find.text('Promote'), findsNothing);
+      expect(find.text('Apply'), findsNothing);
+      expect(find.text('Reject'), findsNothing);
+      expect(find.textContaining('does not understand'), findsOneWidget);
     });
   });
 
