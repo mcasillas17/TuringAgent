@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -360,9 +361,17 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 		Content:             input.Content,
 	})
 	if err != nil {
-		return ApplyMemoryProfileResult{}, err
+		// A claim whose write was refused is resolved here rather than left for
+		// the recovery pass, because the pass may no longer be able to resolve
+		// it. The base hash is read before the claim and the write's own
+		// compare-and-set reads the document again, so a second writer — another
+		// apply, or the user's own hand-authored save — can move profile.md
+		// between the two. The claim is then over a document that reads as
+		// neither of its hashes, which is exactly the case recovery refuses to
+		// guess about, and the proposal would sit claimed and undecidable
+		// forever. Nothing was written, so nothing is owed: it goes back.
+		return ApplyMemoryProfileResult{}, r.abandonProfileApplyClaim(ctx, vault, candidate, base, err)
 	}
-
 	result := ApplyMemoryProfileResult{Document: document}
 	if barrierErr := r.profileApplyBarrier(memoryProfileApplyWritten); barrierErr != nil {
 		// The write landed. Reporting the failure of what comes after it as a
@@ -415,6 +424,55 @@ func (r *Repository) profileApplyBarrier(stage string) error {
 		return nil
 	}
 	return r.memoryProfileApplyBarrier(stage)
+}
+
+// abandonProfileApplyClaim gives a claim back when the write it was taken for
+// provably never happened, and returns the caller's own failure either way.
+//
+// "Provably" has two forms, and both are answered from the vault rather than
+// from optimism. A compare-and-set refusal is the strong one: that check runs
+// before a single byte is written, so a stale error is proof on its own,
+// whatever the document says by the time this reads it. Otherwise the document
+// itself is asked, against the base hash the claim recorded — the same question
+// the recovery pass asks, so the two can never disagree about one apply.
+//
+// Anything else — a document that is neither, a read that failed, a reset that
+// failed — keeps the claim. A claim held is a proposal nothing can reject while
+// its outcome is unknown, which is the safe side of this to be wrong on.
+func (r *Repository) abandonProfileApplyClaim(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	candidate MemoryCandidate,
+	baseHash string,
+	cause error,
+) error {
+	if !profileApplyLeftNothingBehind(ctx, vault, baseHash, cause) {
+		return cause
+	}
+	if err := r.resetProfileApplyClaim(ctx, candidate); err != nil {
+		log.Printf("hand back refused memory profile apply %s: %v", candidate.CandidateID, err)
+	}
+	return cause
+}
+
+func profileApplyLeftNothingBehind(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	baseHash string,
+	cause error,
+) bool {
+	if errors.Is(cause, memoryfiles.ErrStaleContent) {
+		return true
+	}
+	document := vault.EditableProfile(ctx)
+	switch {
+	case document.Available:
+		return document.ContentHash == baseHash
+	case document.Reason == memoryfiles.UnavailableVaultMissing:
+		return baseHash == ""
+	default:
+		return false
+	}
 }
 
 // currentProfileHash is the compare-and-set over profile.md, asked before

@@ -408,3 +408,60 @@ func auditPayloads(t *testing.T, database *db.DB) string {
 	}
 	return builder.String()
 }
+
+// The window the claim itself opens: profile.md is read to record the base
+// hash, and the compare-and-set inside the write reads it again. A second
+// writer — another apply, or the user's own hand-authored save — can move the
+// document between the two, and then the write is refused before a single byte
+// is written.
+//
+// Left alone, that claim is unresolvable forever: profile.md reads as neither
+// the document the apply was replacing nor the one it was going to produce, so
+// the recovery pass has nothing to conclude from, and every decision RPC
+// refuses a claimed candidate. The user would be left with a proposal about
+// themselves stuck mid-apply that no button can clear.
+//
+// A refusal that provably wrote nothing is not a claim worth holding, so it is
+// given back where it was taken: under the same lock, in the same call.
+func TestAnApplyRefusedAfterItsClaimHandsTheProposalBack(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+	writeVaultNote(t, vault, memoryfiles.ProfileFileName, "# Profile\n\nWritten already.\n")
+	candidate := profileEditCandidate(t, repo, sessionID)
+
+	// Somebody else writes profile.md in the window between the claim and the
+	// write. Neither hash the claim recorded describes the document now.
+	repo.memoryProfileApplyBarrier = func(stage string) error {
+		if stage == memoryProfileApplyClaimed {
+			writeVaultNote(t, vault, memoryfiles.ProfileFileName, "# Profile\n\nSomebody else got here first.\n")
+		}
+		return nil
+	}
+	_, err := repo.ApplyMemoryProfileCandidate(ctx(), ApplyMemoryProfileInput{
+		CandidateID:         candidate.CandidateID,
+		ExpectedContentHash: memoryfiles.ContentHash("# Profile\n\nWritten already.\n"),
+		Content:             "# Profile\n\nThe user is a beekeeper.\n",
+	})
+	repo.memoryProfileApplyBarrier = nil
+	if !errors.Is(err, memoryfiles.ErrStaleContent) {
+		t.Fatalf("apply error = %v, want ErrStaleContent", err)
+	}
+	if got := readVaultNote(t, vault, memoryfiles.ProfileFileName); got != "# Profile\n\nSomebody else got here first.\n" {
+		t.Fatalf("profile = %q, want the other writer's document untouched", got)
+	}
+	if got := candidateState(t, repo, candidate.CandidateID); got != MemoryCandidateStatePending {
+		t.Fatalf("state = %q, want a refused apply to leave the proposal decidable", got)
+	}
+
+	// And the reconcile pass agrees there is nothing left to resolve.
+	report, err := repo.ReconcileMemoryVault(ctx())
+	if err != nil {
+		t.Fatalf("ReconcileMemoryVault: %v", err)
+	}
+	if report.ProfileAppliesFinalized != 0 || report.ProfileAppliesReset != 0 {
+		t.Fatalf("recovery = %+v, want no claim left for it to find", report)
+	}
+	if err := repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: candidate.CandidateID}); err != nil {
+		t.Fatalf("rejecting the proposal a refused apply handed back: %v", err)
+	}
+}
