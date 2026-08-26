@@ -1122,6 +1122,23 @@ class _CandidateCard extends StatelessWidget {
               tone: _reasonTone(candidate.unavailableReason),
             ),
           ],
+          // A file the server cannot open is the one card here with no action
+          // on it at all: it cannot be shown, it cannot be accepted, and it
+          // cannot be thrown away either — a removal has to prove which entry
+          // it is removing, and proving that needs a file something can open.
+          // Saying only "this could not be read from the vault" beside no
+          // buttons is a dead end; this is the way out of it, and it is one
+          // the user can take without Turing.
+          if (candidate.managed &&
+              candidate.state == MemoryCandidateState.pending &&
+              candidate.unavailableReason ==
+                  MemoryUnavailableReason.vaultUnreadable) ...[
+            const SizedBox(height: 8),
+            _StatusLine(
+              text: l10n.memoryProposalUnopenable,
+              tone: palette.textMuted,
+            ),
+          ],
           const SizedBox(height: 10),
           if (candidate.managed)
             _StatusLine(

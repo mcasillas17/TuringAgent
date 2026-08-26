@@ -322,22 +322,27 @@ func (d *detachedEntry) putBack() detachedPlacement {
 // preserve is the one exit for bytes that could not go back under their own
 // name. It never unlinks: it moves them somewhere findable if it may, and says
 // where they are if it may not.
+//
+// Both roads can end under the reserved staging name — one by design, one when
+// the rescue could not take a visible one — and they owe the same fsync. The
+// detach that put the bytes there was a rename, and a rename lives in the
+// directory's page cache: without the flush, "it is at ..." names a place a
+// crash can take away, with the entry back under the name the same sentence
+// says it left. So the flush happens before the placement is described, and a
+// flush that fails is carried rather than dropped, because the caller is about
+// to send somebody to that name.
 func (d *detachedEntry) preserve(recovery detachRecovery, cause error) detachedPlacement {
 	placement := detachedPlacement{cause: cause}
 	if recovery == recoverUnderReservedName {
-		if flushErr := d.vault.syncDirectory(d.parent); flushErr != nil {
-			placement.flushErr = flushErr
-		}
-		placement.recoveryRelPath = d.stagedRelPath()
-		placement.recoveryHidden = true
-		return placement
+		return d.stayStaged(placement)
 	}
 	name, staged, rescueErr := d.vault.rescueDetachedEntry(d.parent, d.staging)
 	if name == "" {
-		placement.recoveryRelPath = d.stagedRelPath()
-		placement.recoveryHidden = true
+		// No visible name was ever linked, so nothing has moved: the bytes are
+		// exactly where the detach left them, and this is the same placement
+		// the reserved road above makes.
 		placement.residueErr = rescueErr
-		return placement
+		return d.stayStaged(placement)
 	}
 	placement.recoveryRelPath = vaultRelPath(path.Dir(d.clean), name)
 	if rescueErr != nil {
@@ -349,6 +354,19 @@ func (d *detachedEntry) preserve(recovery detachRecovery, cause error) detachedP
 		placement.residueErr = rescueErr
 		placement.residueRemains = staged
 	}
+	return placement
+}
+
+// stayStaged records that the bytes are staying under the reserved name, and
+// flushes the directory that holds it first. It is one function because the two
+// roads that end here have to be indistinguishable afterwards: a caller reading
+// a placement cannot tell which one it came from, and must not need to.
+func (d *detachedEntry) stayStaged(placement detachedPlacement) detachedPlacement {
+	if flushErr := d.vault.syncDirectory(d.parent); flushErr != nil {
+		placement.flushErr = flushErr
+	}
+	placement.recoveryRelPath = d.stagedRelPath()
+	placement.recoveryHidden = true
 	return placement
 }
 
@@ -525,10 +543,25 @@ func (v *Vault) removeVerifiedEntry(
 	// This is the single place the question is asked, so the branch is the one
 	// a test reaches by cancelling the request at all.
 	if ended := ctx.Err(); ended != nil {
-		return removalRefused, detached.putBack(), "the request ended before the removal could be verified", ended
+		placement := detached.putBack()
+		return removalRefused, placement, endedBeforeVerification,
+			endedRemoval(clean, placement, endedBeforeVerification, ended)
 	}
 	if objection != "" {
-		return removalRefused, detached.putBack(), objection, nil
+		placement := detached.putBack()
+		// And the same question again, because the restore is where a request
+		// most often runs out: it is three directory operations and up to
+		// three fsyncs long, and a deadline that expires inside it arrives
+		// after the check above and before this answer is chosen. Reporting
+		// the objection then would tell a caller that had already gone that
+		// the user's own file had moved — a claim about the vault made on
+		// nobody's behalf, and one a retry loop matching on staleness would go
+		// round again on.
+		if ended := ctx.Err(); ended != nil {
+			return removalRefused, placement, objection,
+				endedRemoval(clean, placement, objection, ended)
+		}
+		return removalRefused, placement, objection, nil
 	}
 	if err := detached.discard(); err != nil {
 		// The name is gone either way, so the caller must not treat this as a
@@ -536,4 +569,20 @@ func (v *Vault) removeVerifiedEntry(
 		return removalDone, detachedPlacement{}, "", err
 	}
 	return removalDone, detachedPlacement{}, "", nil
+}
+
+// endedRemoval is the cancellation a compensating removal answers with, carrying
+// where it left the bytes.
+//
+// Both halves travel together and neither may be dropped. What a caller matches
+// on is the context error — the request is what ended, and nothing about the
+// file was decided — and what rides along is the bounded, content-free sentence
+// about where the bytes are, because a caller that has gone still leaves an
+// operator who has to find the file.
+func endedRemoval(clean string, placement detachedPlacement, reason string, ended error) error {
+	detail := boundRefusalDetail(reason + ", so it was left alone")
+	if !placement.clean() {
+		detail = boundRefusalDetail(placement.explain(reason))
+	}
+	return &EndedRequestError{RelPath: clean, Detail: detail, Cause: ended}
 }

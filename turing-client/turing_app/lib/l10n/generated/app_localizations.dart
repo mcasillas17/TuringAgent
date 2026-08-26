@@ -748,6 +748,12 @@ abstract class AppLocalizations {
   /// **'This proposal could not be read in full, so there is nothing here to accept.'**
   String get memoryProposalUnreadable;
 
+  /// No description provided for @memoryProposalUnopenable.
+  ///
+  /// In en, this message translates to:
+  /// **'Turing cannot open this file at all, so it can neither show what it says nor throw it away for you: removing it safely means proving which file is being removed, and that needs a file Turing can open. Make it readable in your vault — or delete it there — and Turing will catch up.'**
+  String get memoryProposalUnopenable;
+
   /// No description provided for @memoryProposalUndecidable.
   ///
   /// In en, this message translates to:

@@ -145,36 +145,47 @@ func TestReopenedUnreadableEntryAnswersAboutItselfAndNotTheNameItLeft(t *testing
 	}
 }
 
-// The far side is a check of its own, reachable on its own terms. A detached
-// entry whose identity is not the one the removal was bound to is refused even
-// when it refuses to be read in exactly the same way — identity and state are
-// two questions, and answering one of them twice is not answering both.
+// The far side is a check of its own, and identity is the half it must never
+// borrow from the stat above it. Here a readable file of somebody else's takes
+// the reserved name between that stat and the open: the reopen succeeds, so
+// there is a descriptor and a state answer to be had — and the state answer is
+// about the wrong file. Identity is asked first, against the inode that was
+// actually opened, and the swap is refused as what it is.
 func TestDetachedUnreadableEntryOfAnotherIdentityIsRefused(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root, where no file is unreadable")
 	}
-	const replacement = "a different file nobody can open either"
+	const arrival = "a different file, readable, under the reserved name"
 	var vault *Vault
+	var detached *detachedEntry
 	vault = vaultWithDetachBarrier(t, func(phase detachPhase, _ string) {
-		if phase != detachPhaseBeforeDetach {
+		if phase != detachPhaseBeforeReopen {
 			return
 		}
-		replaceInboxEntry(t, vault, "inbox/note.md", replacement)
-		closeToEveryReader(t, filepath.Join(vault.Root(), InboxDirName, "note.md"))
+		inbox := filepath.Join(vault.Root(), InboxDirName)
+		decoy := filepath.Join(inbox, "decoy-in-flight")
+		if err := os.WriteFile(decoy, []byte(arrival), 0o600); err != nil {
+			t.Errorf("write the arriving file: %v", err)
+			return
+		}
+		if err := os.Rename(decoy, filepath.Join(inbox, detached.staging)); err != nil {
+			t.Errorf("rename it over the reserved name: %v", err)
+		}
 	})
 	full := writeVaultFile(t, vault, "inbox/note.md", "unreadable, unparseable, unwanted")
 	closeToEveryReader(t, full)
-	identity := unhashableIdentity(t, vault, "inbox/note.md")
+	detached = detachForTest(t, vault, "inbox/note.md")
+	identity := detachedIdentity(t, detached)
 
-	err := rejectUnreadable(vault, "inbox/note.md", identity)
-	if err == nil {
-		t.Fatal("a hashless rejection deleted an entry that was not the one it was bound to")
+	objection := detached.objectionToReopenedUnreadableEntry(
+		context.Background(), unreadableFailureUnopenable, identity,
+	)
+	if !strings.Contains(objection, "taken its name") {
+		t.Fatalf("the far side says %q, want it refused as another file", objection)
 	}
-	requireRefusalSays(t, err, "taken its name")
-	if got := closedFileContent(t, full); got != replacement {
-		t.Fatalf("the replacement holds %q, want it untouched", got)
+	if held, readErr := os.ReadFile(filepath.Join(vault.Root(), InboxDirName, detached.staging)); readErr != nil || string(held) != arrival {
+		t.Fatalf("the file that took the reserved name was disturbed: %q, %v", held, readErr)
 	}
-	requireNoStagingResidue(t, vault)
 }
 
 // A cancelled request that arrives while the candidate is off its name is still

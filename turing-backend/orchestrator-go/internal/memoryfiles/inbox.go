@@ -825,22 +825,29 @@ func (v *Vault) removeRejectedInboxEntry(
 // a proposal now, and a proposal is decided about by reading it.
 //
 // Only two cases arrive here with no bytes to compare — a file nothing can open
-// and a file past the size bound — and both are answered the same way they were
-// answered before: the read fails again, which is itself the proof that the
-// file is still what the pre-check found. That licence belongs to the pre-check
-// alone. A candidate whose bytes *were* hashed and which this primitive can no
-// longer open does not inherit it: it is a binding to bytes with no way left to
-// check them, and it is refused rather than decided on identity alone.
+// and a file past the size bound — and they are answered differently, because
+// only one of them can still be proved. A file past the bound opens: there is a
+// descriptor, its identity is the entry's own, and a read that fails the same
+// way it failed before is that entry saying so. A file nothing can open has no
+// descriptor and no way to get one, and a second failure to open says nothing
+// about which inode is under the name — a different file, unreadable in the
+// same way, gives the same answer. That one is refused, and the refusal says
+// the one thing that would change it.
 //
-// That licence is also narrower than "it did not read". It is for the file the
-// pre-check answered about, in the state it answered about it in, so the read
-// has to fail again in the same broad way: a candidate nothing could open which
-// this primitive can open, or one past the bound which is now under it, is a
-// file something has written to since. And if the bytes can be read now the
-// refusal is flat, whether or not they parse. Nobody has ever read them — the
-// pre-check could not, so nothing was shown to the user and nothing was bound,
-// and there is no hash to hold them to and no reader who could say they are
-// what was rejected. A rejection is a verdict on words somebody saw.
+// That is narrower than the licence this door used to carry, and deliberately.
+// It means a proposal nothing can open cannot be thrown away until it can be
+// opened. The alternative is deleting bytes on the strength of a failure, which
+// is how a rejection ends up removing a file nobody ever held a descriptor to.
+//
+// The licence that remains is also narrower than "it did not read". It is for
+// the file the pre-check answered about, in the state it answered about it in,
+// so the read has to fail again in the same broad way: a candidate past the
+// bound which is now under it is a file something has written to since. And if
+// the bytes can be read now the refusal is flat, whether or not they parse.
+// Nobody has ever read them — the pre-check could not, so nothing was shown to
+// the user and nothing was bound, and there is no hash to hold them to and no
+// reader who could say they are what was rejected. A rejection is a verdict on
+// words somebody saw.
 func requireBoundUnreadableEntry(
 	ctx context.Context,
 	clean string,
@@ -857,16 +864,18 @@ func requireBoundUnreadableEntry(
 			"another file has taken its name since it was read, so it was left alone")}
 	}
 	if opened == nil {
-		// Nothing here can open the entry. That is an answer only when the
-		// pre-check could not read it either: then there never were bytes to
-		// be bound to, identity is the whole of the binding, and the file
-		// being unopenable again is itself the proof that it is still what was
-		// found. When the pre-check *did* read the bytes, this is a hashed
-		// binding with no way to check it — and an inode number cannot tell a
-		// rewrite in place from the file that was read, which is precisely the
-		// move a rejection must never delete. So it is refused, and the user
-		// is told to look again rather than having words nobody read thrown
-		// away for them.
+		// Nothing here can open the entry, and every removal in this package
+		// is authorised by a descriptor whose own identity is checked. Without
+		// one there is nothing that says which inode a name points at, and an
+		// unlink names a name.
+		//
+		// The two ways of arriving here differ only in what is being given up.
+		// A hashed binding has bytes it cannot compare, and an inode number
+		// cannot tell a rewrite in place from the file that was read — which
+		// is precisely the move a rejection must never delete. A binding to no
+		// bytes at all has nothing but the identity, and a second failure to
+		// open is not a fact about identity: it is the same answer a different
+		// file of the same kind would give. Both are refused.
 		if identity.hashed {
 			return &StaleContentError{RelPath: clean, Detail: boundRefusalDetail(
 				"its bytes were read once and cannot be read again to check they are still the same bytes, so it was left alone")}
@@ -874,7 +883,12 @@ func requireBoundUnreadableEntry(
 		if identity.failure != unreadableFailureUnopenable {
 			return staleUnreadableFailureChange(clean)
 		}
-		return nil
+		// Refused here rather than after the detach. The answer cannot change
+		// on the far side — an entry that opens there has become readable, or
+		// refuses in a way it did not refuse before, and both of those are
+		// refusals too — so a removal with no standing has no business taking
+		// the user's bytes off their name to find that out.
+		return unprovableEntryRefusal(clean)
 	}
 	content, readErr := readEntryContent(ctx, opened, clean, MaxNoteBytes)
 	if readErr != nil {
@@ -919,6 +933,23 @@ func staleUnreadableFailureChange(clean string) error {
 func staleUnreadableBecameReadable(clean string) error {
 	return &StaleContentError{RelPath: clean, Detail: boundRefusalDetail(
 		"nothing could read it when it was rejected and it can be read now, so nobody has seen what it says; it was left alone")}
+}
+
+// unprovableEntryRefusal is the answer for a proposal nothing here can open.
+//
+// It is a refusal of its own kind rather than "the file changed since it was
+// read", because nothing changed: the file is exactly where it was and says
+// exactly what it said, and what is missing is any way to prove that an unlink
+// would take that entry and not another. It carries ErrStaleContent too, so
+// every caller that already handles a refused decision keeps handling it, and
+// the sentence names the one thing the user can do about it.
+func unprovableEntryRefusal(clean string) error {
+	return &StaleContentError{
+		RelPath: clean,
+		Cause:   ErrUnprovableEntry,
+		Detail: boundRefusalDetail(
+			unprovableDetachedEntry + ", so it was left alone; make it readable in your vault and reject it again"),
+	}
 }
 
 // objectionToDetachedEntry answers whether the entry a rejection has just taken
@@ -976,24 +1007,26 @@ func (d *detachedEntry) objectionToDetachedEntry(
 }
 
 // objectionToDetachedUnreadableEntry is the far side of the detach for the
-// removal that has no bytes to compare: a proposal nothing could read, being
+// removal that has no bytes to compare: a proposal past the size bound, being
 // thrown away on its identity and on its going on refusing to be read.
 //
-// The identity question is already answered above. This asks the other half.
-// Where the removal opened a descriptor before the detach it asks that, because
-// a descriptor is the same inode whatever has happened to the name. Where it
-// could not open one at all — the file nothing could open, which is exactly the
-// case this door exists for — it opens the detached entry through the reserved
-// name it is now under and asks there.
+// The identity question is already answered above — for the name the stat
+// found. This asks the other half, and asks it through a descriptor, because
+// that is the only thing that answers both at once. Where the removal opened
+// one before the detach it uses that, since a descriptor is the same inode
+// whatever has happened to the name. Where it could not open one at all it goes
+// and opens the detached entry through the reserved name it is now under, and
+// an open that fails there is not an answer: it is the absence of one.
 //
-// That second path is the one this guard used to skip. "No descriptor" was read
-// as "nothing to check", so a proposal whose permissions came back inside the
-// detach window was deleted on an inode number, with nobody having read a word
-// of it. Permissions coming back is a sync client finishing a copy, an editor
-// releasing a file, or the user doing what Turing told them and making their
-// proposal readable. A file that has become readable is a file somebody wrote
-// to inside the window: it goes back. So does one that fails in a way it did
-// not fail before.
+// That second path is the one this guard used to get wrong twice over. First it
+// skipped the reopen entirely — "no descriptor" was read as "nothing to check",
+// so a proposal whose permissions came back inside the detach window was
+// deleted on an inode number with nobody having read a word of it. Then, with
+// the reopen in place, a failed reopen was read as agreement: still unopenable,
+// same class, unlink. But the class is a property of the file, not of the name,
+// and any file of the same class under that name gives the same answer. What
+// authorises a removal here is a descriptor whose own identity matches, and
+// nothing else.
 func (d *detachedEntry) objectionToDetachedUnreadableEntry(
 	ctx context.Context,
 	boundFailure unreadableFailure,
@@ -1019,9 +1052,20 @@ func (d *detachedEntry) objectionToDetachedUnreadableEntry(
 // reserved name it is under and asks it the near side's question again.
 //
 // The identity check is repeated against the reopened inode rather than assumed
-// from the stat above: this is the one path where the answer is a deletion of
-// bytes nobody has read, and an entry that is not the one the pre-check named
-// is not this rejection's to remove however it refuses to be read.
+// from the stat above. The two are separate syscalls, and the reserved name is
+// random but not secret: anything that can list the vault directory can read it
+// and rename over it. So an entry that has been swapped under it between the
+// stat and the open is a file this rejection never looked at, and the only
+// thing that can tell the difference is a descriptor.
+//
+// Which is why an open that fails is never an authorisation. It leaves this
+// with no descriptor and so with no answer to either question: not what the
+// entry is, and not whether the name still holds what the stat found. The bytes
+// go back, and the caller says what would make a removal possible. In
+// production the primitive above refuses a hashless rejection it cannot open
+// before anything is detached, so this is the second lock on that door rather
+// than the one the user meets — and it is the lock that has to hold if the
+// reasoning above it is ever changed.
 func (d *detachedEntry) objectionToReopenedUnreadableEntry(
 	ctx context.Context,
 	boundFailure unreadableFailure,
@@ -1041,10 +1085,7 @@ func (d *detachedEntry) objectionToReopenedUnreadableEntry(
 		if boundFailure != unreadableFailureUnopenable {
 			return "it is unreadable in a different way than when it was read, so something has written to it since"
 		}
-		// Still nothing can open it, and it is still the entry that was
-		// detached: the licence the weak door was built for, and the user's
-		// only way out of a claim they can neither read nor be rid of.
-		return ""
+		return unprovableDetachedEntry
 	}
 	defer func() { _ = reopened.Close() }()
 	if reopenedStat.Dev != expected.Dev || reopenedStat.Ino != expected.Ino {
@@ -1121,12 +1162,20 @@ func (v *Vault) refuseDetachedRejection(ctx context.Context, detached *detachedE
 	if ended := ctx.Err(); ended != nil {
 		return &EndedRequestError{RelPath: detached.clean, Detail: detail, Cause: ended}
 	}
-	if placement.clean() {
+	// An entry nothing could open is not a claim that the file changed, and it
+	// is answered as itself wherever it is discovered. The sentence is one
+	// constant with one producer on each side of the detach, so matching on it
+	// is matching on the branch that wrote it.
+	cause := placement.failure()
+	if reason == unprovableDetachedEntry {
+		cause = errors.Join(cause, ErrUnprovableEntry)
+	}
+	if cause == nil {
 		return &StaleContentError{RelPath: detached.clean, Detail: detail}
 	}
 	return &StaleContentError{
 		RelPath: detached.clean,
-		Cause:   placement.failure(),
+		Cause:   cause,
 		Detail:  detail,
 	}
 }

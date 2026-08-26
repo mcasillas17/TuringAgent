@@ -36,6 +36,15 @@ const (
 // been kept under.
 const promotionSourceChangedMessage = "this proposal changed while it was being promoted; read it again and decide on what it says now"
 
+// unprovableEntryMessage is what a caller is told when a rejection was refused
+// because nothing could open the file it names.
+//
+// It is the one refusal here that ends in an instruction, because it is the one
+// the user can clear themselves and the only one that otherwise has no way
+// forward: the proposal cannot be shown, cannot be accepted, and cannot be
+// thrown away either. It names no path and repeats no word of the file.
+const unprovableEntryMessage = "Turing could not open this proposal to check it is still the same file, so it left it alone; make the file readable in your vault and reject it again"
+
 // AuditRecorder is the redacted trail a user action leaves behind.
 //
 // Two methods, because memory writes two different kinds of row. Record is for
@@ -202,6 +211,21 @@ func memoryError(err error, fallback string) error {
 		return status.Error(codes.FailedPrecondition, "this memory candidate is not in a state Turing can act on")
 	case errors.Is(err, repository.ErrMemoryCandidateQuery), errors.Is(err, repository.ErrMemorySearchQuery):
 		return status.Error(codes.InvalidArgument, "the memory query is outside the bounds this server will run")
+	case errors.Is(err, memoryfiles.ErrUnprovableEntry):
+		// A rejection the vault refused because it could not open the file at
+		// all. This is placed above the stale-content case on purpose: the
+		// refusal carries that sentinel too — to every caller it is one more
+		// decision that left the proposal where it was — and "the file changed
+		// since it was read" would be false here and unactionable. Nothing
+		// changed; there is no descriptor, so nothing can prove which entry an
+		// unlink would take, and re-reading would send the user round a loop
+		// that cannot end.
+		//
+		// FailedPrecondition rather than Aborted for the same reason: this is
+		// not a race to retry, it is a state of the file, and the sentence
+		// names the one thing that changes it. It says nothing about the vault
+		// — no path, no reserved name, nothing read from the file.
+		return status.Error(codes.FailedPrecondition, unprovableEntryMessage)
 	case errors.Is(err, memoryfiles.ErrStaleContent):
 		return status.Error(codes.Aborted, "the file changed since it was read; re-read it and decide again")
 	case errors.Is(err, memoryfiles.ErrSourceChanged):

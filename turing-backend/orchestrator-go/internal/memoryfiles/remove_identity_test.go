@@ -249,32 +249,41 @@ func TestHashlessRejectionRemovesAFileTooLargeToRead(t *testing.T) {
 	requireNoStagingResidue(t, vault)
 }
 
-// A proposal the user cannot even open is exactly what the hashless mode is
-// for: a claim about them they can neither read nor accept, and refusing to
-// delete it would leave them with no way out at all. It is still deleted on the
-// identity of the entry that was inspected, so the barrier holds.
-func TestHashlessRejectionRemovesAFileNobodyCanOpen(t *testing.T) {
+// A proposal the user cannot even open is what the hashless mode was built for
+// — a claim about them they can neither read nor accept — and it is the one
+// case the mode cannot finish. Every removal here is authorised by a descriptor
+// whose own identity is checked, an unlink names a name, and a second failure
+// to open says nothing about which entry a name holds. So the file stays, and
+// the refusal says what would let it go.
+func TestHashlessRejectionRefusesAFileNobodyCanOpen(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root, where no file is unreadable")
 	}
+	const unread = "unreadable, unparseable, unwanted"
 	vault := newTestVault(t)
-	full := writeVaultFile(t, vault, "inbox/note.md", "unreadable, unparseable, unwanted")
+	full := writeVaultFile(t, vault, "inbox/note.md", unread)
 	if err := os.Chmod(full, 0o000); err != nil {
 		t.Fatalf("close the file to every reader: %v", err)
 	}
 	identity := unreadableIdentity(t, vault, "inbox/note.md")
 
-	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
+	err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
 		RelPath:    "inbox/note.md",
 		Mode:       RemoveUnreadableCandidate,
 		Unreadable: identity,
-	}); err != nil {
-		t.Fatalf("remove the unopenable proposal: %v", err)
+	})
+	if !errors.Is(err, ErrUnprovableEntry) {
+		t.Fatalf("rejection of an unopenable proposal = %v, want it refused as unprovable", err)
 	}
-	if _, err := os.Lstat(full); !os.IsNotExist(err) {
-		t.Fatalf("expected the unopenable proposal to be gone, got %v", err)
+	if _, statErr := os.Lstat(full); statErr != nil {
+		t.Fatalf("the proposal was removed by a rejection that could not prove what it held: %v", statErr)
 	}
 	requireNoStagingResidue(t, vault)
+	// The way out is the sentence, not the button: the user opens the file up
+	// and rejects it again.
+	if !strings.Contains(err.Error(), "readable") {
+		t.Fatalf("the refusal does not say what would let the file go: %v", err)
+	}
 }
 
 // A rejection that named bytes is held to them, and bytes nobody can read are

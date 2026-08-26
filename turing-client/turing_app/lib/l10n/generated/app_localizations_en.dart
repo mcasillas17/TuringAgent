@@ -386,6 +386,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'This proposal could not be read in full, so there is nothing here to accept.';
 
   @override
+  String get memoryProposalUnopenable =>
+      'Turing cannot open this file at all, so it can neither show what it says nor throw it away for you: removing it safely means proving which file is being removed, and that needs a file Turing can open. Make it readable in your vault — or delete it there — and Turing will catch up.';
+
+  @override
   String get memoryProposalUndecidable =>
       'This proposal is in a shape this version of Turing does not understand, so there is nothing safe to offer here. Open it in your vault, or update Turing.';
 
