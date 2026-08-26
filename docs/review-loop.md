@@ -819,3 +819,82 @@ detached guard directly for all three of its answers.
 decision's own barrier and holds the row pending with the new bytes on disk.
 Every branch of both guards, and the classifier under them, fails a test when
 deleted.
+
+## Round 12
+
+Reviewers: Grok, GPT-5.6 Terra, Claude Opus 5, Claude Opus 4.8.
+Outcome: one finding, from Opus 5, accepted and fixed. Grok, Terra and Opus 4.8
+each read the whole of the memory work and found nothing.
+
+Every round so far has been about the server's side of a decision: which bytes a
+removal is bound to, which version an apply names, which conversation a job was
+queued under. This one is about the client's, and it is the same question asked
+of a text field — what is a half-written answer bound to, and what is allowed to
+end it.
+
+### Opus 5 — a draft was kept for the button, not for the proposal
+
+The memory page composes the resulting profile document for a profile proposal:
+the user's profile as it stands, then the proposal, in an editor they can edit
+before applying. The editor lives on the page rather than in the card so a
+re-read — and every write triggers one — does not throw away what they typed.
+Which editors survive a re-read was decided by asking each listed proposal
+whether the page would offer an Apply for it, and forgetting the rest.
+
+That is not the same question as whether the proposal is still there, and the
+difference is where the user's words go. The listing withholds a proposal's
+content for reasons that have nothing to do with deciding it: the vault stopped
+being readable, the bytes stopped parsing, the file grew past the size bound,
+memory was switched off. The row is still listed — the server keeps its own
+record of what it wrote — but the card can offer no Apply, because nobody may
+accept text they were not shown. Under the old rule that frame forgot the
+result. Then the vault opened again, and the page composed a fresh one over
+whatever the profile and the proposal said by that point.
+
+Two things were lost there, and only one of them is visible. The words are the
+obvious one. The other is the pair of compare-and-set tokens the words were
+composed against, which the page keeps precisely so an edited result is refused
+rather than silently applied: sent with the *newer* profile's token an apply
+says "this is an edit of what you have now" and is accepted, and whatever the
+other writer put in profile.md is gone; sent with the newer proposal's token it
+says "I read this and I accept it" about a claim nobody has read. Re-composing
+from scratch produced exactly those newer tokens, so the round-8 guarantee held
+only for as long as the vault stayed readable.
+
+Accepted. Retention now asks about the row. Every listed proposal the server has
+not decided keeps its result, including the ones a given frame can draw no
+button for. An apply the server has claimed keeps it too: that claim is handed
+back to pending when the write turns out to change nothing, so it is not the end
+of the row either. A candidate state this build cannot name keeps it as well —
+an unknown answer is not a decision anybody has been told about, and reading it
+as one ends a draft over a word nobody here can read. What does end a result is
+a decision, promoted or rejected or withdrawn, or the row leaving the listing;
+both still dispose, so nothing is handed to whatever arrives under the same id
+next. The switch over candidate states is exhaustive with no `default`, so a
+state added tomorrow has to be sorted deliberately.
+
+Two things the fix deliberately does not change. A proposal that could not be
+read is still given no editor: results are composed only where an Apply is
+offered, so an unreadable candidate that never had one does not acquire one
+while it is unreadable, and the one it eventually gets is composed from what is
+on screen at that point. And only a frame that actually rendered the listing may
+forget anything — the loading frame between a write and its re-read has no
+proposals in it and is not evidence that any of them left.
+
+The four parallel maps behind all this are now one map of one record. The words,
+the seed they were composed as, and the two tokens they were composed against
+are one fact about one proposal; kept apart, a result could be dropped while the
+numbers it was composed against stayed behind for the next id.
+
+Tests: `memory_result_retention_test.dart` — typed words and both original
+tokens surviving a vault that shuts mid-read and opens onto a moved profile and
+a rewritten proposal, with the apply then carrying the old pair so the server is
+the one that refuses; the same across memory being switched off and back on,
+across an apply claim handed back to pending, and across a state this build
+cannot name; and the far side, which the same rule has to keep — a proposal that
+was unreadable when it arrived getting nothing invented for it and, once
+readable, a result composed from what is there then; and a decided proposal and
+a delisted one each taking their result with them rather than handing it to the
+proposal that reuses the id. Restoring the old decision-shaped filter fails the
+first four; retaining every listed row fails the decided one; dropping the
+claimed-apply arm fails its own.
