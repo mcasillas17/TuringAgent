@@ -30,6 +30,12 @@ const MaxProfileEditBytes = MaxAuthoredDocumentBytes
 type StaleContentError struct {
 	RelPath string
 	Detail  string
+	// Cause is the failure underneath a refusal that had one — the link that
+	// would not be made, the entry that could not be inspected. It is carried
+	// rather than only described so a caller can match on it: a refusal whose
+	// real reason is EIO and one whose real reason is another writer are the
+	// same sentence to a person and different facts to an operator.
+	Cause error
 }
 
 func (e *StaleContentError) Error() string {
@@ -39,7 +45,14 @@ func (e *StaleContentError) Error() string {
 	return fmt.Sprintf("%s: %s: %v", e.RelPath, e.Detail, ErrStaleContent)
 }
 
-func (e *StaleContentError) Unwrap() error { return ErrStaleContent }
+// Unwrap answers with both, so errors.Is finds the sentinel every caller
+// already matches on and the cause the operator needs.
+func (e *StaleContentError) Unwrap() []error {
+	if e.Cause == nil {
+		return []error{ErrStaleContent}
+	}
+	return []error{ErrStaleContent, e.Cause}
+}
 
 // ApplyProfileEditRequest applies one reviewed profile_edit candidate to
 // profile.md. Content is the whole resulting document, because the user may

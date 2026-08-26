@@ -383,20 +383,51 @@ is unlinked: an editor saving in place keeps the inode, so identity alone would
 call the user's own newer words unchanged.
 
 Where it is not the same file, nothing is deleted. It goes back under its own
-name with link semantics that refuse to overwrite; where the name has been taken
-meanwhile it stays under the staging name and the refusal says where it is. An
-unreferenced file somebody can still find is recoverable and a deleted one is
-not. The hashless door keeps its reason for existing — a proposal nobody can
-parse, or open at all, is still removable on the identity of the entry that was
-inspected — and Turing's own tidying keeps the plain idempotent unlink, still
-confined to the inbox and still unreachable as a user's rejection.
+name with link semantics that refuse to overwrite. An unreferenced file somebody
+can still find is recoverable and a deleted one is not. The hashless door keeps
+its reason for existing — a proposal nobody can parse, or open at all, is still
+removable on the identity of the entry that was inspected — and Turing's own
+tidying keeps the plain idempotent unlink, still confined to the inbox and still
+unreachable as a user's rejection.
 
 Tests: `memoryfiles/remove_identity_test.go` — a barrier standing at both
 moments another writer can be at, asserting a replacement survives a rejection
 of what it replaced, that the same holds for the hashless malformed path, that
-an in-place rewrite is refused, that a detached file whose name gets taken is
-kept and named, and that the ordinary paths still delete and leave no staging
-behind. Deleting either check fails a test the other does not cover.
+an in-place rewrite is refused, and that the ordinary paths still delete and
+leave no staging behind. Deleting either check fails a test the other does not
+cover.
+
+Two residuals of that fix are now closed. The first: when the name had been
+taken meanwhile, the bytes were left under the private staging name and the
+refusal merely said where they were. That name is dot-prefixed, and the vault
+walk skips dot entries on purpose — so an unread claim about the user sat on
+disk but on no page, in a directory the user was never told to look in. It is
+now moved instead to a visible confined name the server mints,
+`recovered-inbox-draft-<ULID>.md`: linked with the same no-clobber semantics,
+fsynced, and only then unstaged, so a crash at any point leaves the bytes under
+at least one name. The name is deliberately uncorrelatable to any candidate row,
+so the next scan surfaces it as an unmanaged draft the user can read, keep or
+delete — the recovery is something they can act on rather than something they
+are told about. The refusal itself is bounded and says only that a draft was
+recovered and where; it never carries the text, because a refusal is logged and
+the whole point is that these bytes are the user's.
+
+The second: only the taken-name case was ever exercised, so a link failing for
+any other reason — a full disk, a lost permission, a vanished directory — was
+untested on a path whose job is to not lose data. The link is now behind a seam
+a test supplies, addressed by the name being linked to, so a test can fail the
+restore alone or fail everything. Under either, nothing is unlinked, the state
+left behind is deterministic, and the error reaches the user. The cleaner still
+goes nowhere near this: it neither detaches nor links, and the staging prefix
+stays reserved and unnameable from outside.
+
+Tests: `memoryfiles/remove_recovery_test.go` and
+`service/memory/rejection_recovery_state_test.go` — the rescue under a contested
+name, the recovered draft appearing in the next scan and in `ListMemoryState`
+correlated to nothing, an outright link failure losing neither the bytes nor the
+error, the refusal clipped on a rune boundary, the staging prefix still skipped
+and still refused as a name, the cleaner's plain unlink untouched, and the
+ordinary rejections still leaving neither staging nor a draft behind.
 
 ### Opus 4.8 — a challenge for a run no worker could execute
 

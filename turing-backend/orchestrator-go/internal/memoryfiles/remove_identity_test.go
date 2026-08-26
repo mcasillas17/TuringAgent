@@ -174,66 +174,10 @@ func TestRejectionRefusesAnInPlaceRewriteOfTheDecidedProposal(t *testing.T) {
 	requireNoStagingResidue(t, vault)
 }
 
-// The contested case: the replacement is detached, and by the time it is put
-// back somebody has taken the name. Nothing may be deleted here — the file is
-// the only copy of whatever it says — so it stays under the staging name and
-// the refusal says where it is.
-func TestRejectionKeepsADetachedReplacementItCannotPutBack(t *testing.T) {
-	const decided = "the proposal the user read"
-	const replacement = "a newer claim nobody has read yet"
-	var vault *Vault
-	vault = vaultWithDetachBarrier(t, func(phase detachPhase, _ string) {
-		switch phase {
-		case detachPhaseBeforeDetach:
-			replaceInboxEntry(t, vault, "inbox/note.md", replacement)
-		case detachPhaseBeforeRestore:
-			// A third writer takes the name while the replacement is off it.
-			if err := os.WriteFile(
-				filepath.Join(vault.Root(), InboxDirName, "note.md"),
-				[]byte("a third file, under the same name"),
-				0o600,
-			); err != nil {
-				t.Fatalf("contest the name: %v", err)
-			}
-		}
-	})
-	full := writeVaultFile(t, vault, "inbox/note.md", decided)
-
-	err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
-		RelPath:             "inbox/note.md",
-		Mode:                RemoveDecidedCandidate,
-		ExpectedContentHash: ContentHash(decided),
-	})
-	if err == nil {
-		t.Fatal("expected a refusal when the detached file could not be put back")
-	}
-	if !errors.Is(err, ErrStaleContent) {
-		t.Fatalf("expected a stale-content refusal, got %v", err)
-	}
-	contender, readErr := os.ReadFile(full)
-	if readErr != nil || string(contender) != "a third file, under the same name" {
-		t.Fatalf("the file that took the name was disturbed: %q, %v", contender, readErr)
-	}
-	staged := ""
-	for _, name := range inboxEntries(t, vault) {
-		if strings.HasPrefix(name, stagingPrefix) {
-			staged = name
-		}
-	}
-	if staged == "" {
-		t.Fatal("the detached replacement was deleted instead of being kept where it could be found")
-	}
-	kept, readErr := os.ReadFile(filepath.Join(vault.Root(), InboxDirName, staged))
-	if readErr != nil {
-		t.Fatalf("read the kept replacement: %v", readErr)
-	}
-	if string(kept) != replacement {
-		t.Fatalf("the kept file holds %q, want the replacement %q", kept, replacement)
-	}
-	if !strings.Contains(err.Error(), staged) {
-		t.Fatalf("the refusal does not say where the file was left: %v", err)
-	}
-}
+// The contested case — the replacement is detached, and by the time it is put
+// back somebody has taken the name — is in remove_recovery_test.go. Nothing may
+// be deleted there, and where the bytes go is the whole question, so the
+// assertion lives beside the rest of the recovery discipline.
 
 // The ordinary path, with nothing racing it: the decided file goes, and the
 // detach leaves nothing behind.

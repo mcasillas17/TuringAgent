@@ -49,6 +49,22 @@ const (
 	// linked into place. It begins with a dot so the vault walk skips it and so
 	// the reserved-name check below refuses it as a caller-supplied component.
 	stagingPrefix = ".turing-memory-"
+
+	// recoveryDraftPrefix names a file a rejection detached, found it had no
+	// standing to delete, and could not put back under its own name.
+	//
+	// It deliberately does *not* begin with a dot. The staging name does, which
+	// is right for a file that is mid-write and wrong for the only copy of a
+	// claim about the user: the walk skips dot entries, so bytes left under one
+	// are on disk and on no page — not in a scan, not in the inbox listing, not
+	// anywhere the person whose memory it is would look. A name the walk
+	// indexes is what makes "it is recoverable" a fact rather than a promise
+	// that someone will go reading folders Turing never mentions.
+	//
+	// The word in front of the identity is what keeps this from reading back as
+	// a proposal: NoteIDFromFileName takes the segment before the first hyphen,
+	// so a name shaped like this one answers "" and correlates to no row.
+	recoveryDraftPrefix = "recovered-inbox-draft-"
 )
 
 var (
@@ -129,6 +145,16 @@ type Vault struct {
 	// none, and it is a constructor argument for the same reason the others
 	// are.
 	detach detachHook
+	// link stands in for the no-clobber link a rejection uses to put a detached
+	// entry back, or to place it under a visible recovery name. Production
+	// installs none.
+	//
+	// It exists because the branches that matter most here are the ones no test
+	// can arrange from outside: a link that fails with EIO, ENOSPC or EMLINK is
+	// where a file is closest to being lost, and code that has never been run
+	// is not a guarantee. It is a constructor argument for the same reason the
+	// others are.
+	link linkHook
 }
 
 // detachPhase names where inside a rejection's deletion the barrier is
@@ -153,6 +179,26 @@ func (v *Vault) detachBarrier(phase detachPhase, clean string) {
 	if v.detach != nil {
 		v.detach(phase, clean)
 	}
+}
+
+// linkHook stands between a rejection and one no-clobber link. target is the
+// name being linked *to*, so a test can fail the restore without failing the
+// rescue that follows it, or fail both. link is the real Linkat, so a hook may
+// fail or delegate without reimplementing the confined call.
+type linkHook func(target string, link func() error) error
+
+// linkDetached makes one hard link inside the candidate's own directory,
+// through the seam when a test installed one. It never overwrites: an EEXIST
+// here means the target name is held by another writer's file, and clobbering
+// it is the one thing this whole path exists to avoid.
+func (v *Vault) linkDetached(parent *os.File, staging string, target string) error {
+	link := func() error {
+		return unix.Linkat(int(parent.Fd()), staging, int(parent.Fd()), target, 0)
+	}
+	if v.link == nil {
+		return link()
+	}
+	return v.link(target, link)
 }
 
 // readDirNamesHook stands between the walk and one batch of directory entries.
@@ -209,14 +255,20 @@ func openVaultWith(root string, hooks syncHooks, scanRead scanReadHook) (*Vault,
 // openVaultWithListing adds the directory-listing seam alongside it. Both are
 // nil in production, where the walk lists directories itself.
 func openVaultWithListing(root string, hooks syncHooks, scanRead scanReadHook, readDirNames readDirNamesHook) (*Vault, error) {
-	return newVault(root, hooks, scanRead, readDirNames, nil)
+	return newVault(root, hooks, scanRead, readDirNames, nil, nil)
 }
 
 // openVaultWithDetachBarrier adds the seam inside a rejection's detach, which
 // only a test supplies. It is what lets a test put another writer between the
 // moment the candidate is read and the moment it leaves its name.
 func openVaultWithDetachBarrier(root string, hooks syncHooks, detach detachHook) (*Vault, error) {
-	return newVault(root, hooks, nil, nil, detach)
+	return newVault(root, hooks, nil, nil, detach, nil)
+}
+
+// openVaultWithDetachSeams adds the link seam alongside it, so a test can also
+// fail the no-clobber link a refused rejection depends on.
+func openVaultWithDetachSeams(root string, hooks syncHooks, detach detachHook, link linkHook) (*Vault, error) {
+	return newVault(root, hooks, nil, nil, detach, link)
 }
 
 func newVault(
@@ -225,6 +277,7 @@ func newVault(
 	scanRead scanReadHook,
 	readDirNames readDirNamesHook,
 	detach detachHook,
+	link linkHook,
 ) (*Vault, error) {
 	if hooks.file == nil || hooks.directory == nil {
 		return nil, errors.New("vault sync hooks must both be set")
@@ -257,6 +310,7 @@ func newVault(
 		scanRead:     scanRead,
 		readDirNames: readDirNames,
 		detach:       detach,
+		link:         link,
 	}, nil
 }
 
