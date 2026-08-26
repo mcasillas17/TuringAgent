@@ -472,7 +472,7 @@ func TestRemoveInstalledCopyOnlyRemovesTheFileItInstalled(t *testing.T) {
 	if err := os.WriteFile(full, []byte("the user's own note\n"), 0o600); err != nil {
 		t.Fatalf("write the user's file: %v", err)
 	}
-	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", installed); err == nil {
+	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", installed, ContentHash("installed by this promotion\n")); err == nil {
 		t.Fatal("expected the rollback to refuse a name it no longer owns")
 	}
 	onDisk, readErr := os.ReadFile(full)
@@ -487,7 +487,18 @@ func TestRemoveInstalledCopyOnlyRemovesTheFileItInstalled(t *testing.T) {
 	if err := os.Remove(full); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", installed); err != nil {
+	if err := vault.removeInstalledCopy(parent, leaf, "beliefs/rolled-back.md", installed, ContentHash("installed by this promotion\n")); err != nil {
 		t.Fatalf("a missing copy is nothing to undo: %v", err)
+	}
+}
+
+func TestInstalledCopyMatchRequiresTheBytesAsWellAsTheInode(t *testing.T) {
+	installed := unix.Stat_t{Dev: 7, Ino: 11}
+	current := installed
+	if installedCopyMatches(installed, current, "sha256:installed", "sha256:replacement") {
+		t.Fatal("inode reuse made different bytes look like the copy this promotion installed")
+	}
+	if !installedCopyMatches(installed, current, "sha256:installed", "sha256:installed") {
+		t.Fatal("the exact installed copy was not recognized")
 	}
 }

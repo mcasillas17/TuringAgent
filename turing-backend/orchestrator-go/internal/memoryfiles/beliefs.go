@@ -179,7 +179,7 @@ func (v *Vault) PromoteToBeliefs(ctx context.Context, request PromoteToBeliefsRe
 		// Nothing has been removed yet, so the promotion can still be undone
 		// whole: a failure before the source is unlinked leaves the vault the
 		// way the user left it.
-		rollbackErr := v.removeInstalledCopy(destinationParent, destinationLeaf, destination, installed)
+		rollbackErr := v.removeInstalledCopy(destinationParent, destinationLeaf, destination, installed, ContentHash(content))
 		if rollbackErr != nil {
 			return BeliefNote{}, fmt.Errorf(
 				"sync vault hierarchy after promoting to %q: %w (the copy at %q could not be removed either: %v)",
@@ -196,7 +196,7 @@ func (v *Vault) PromoteToBeliefs(ctx context.Context, request PromoteToBeliefsRe
 			// is left in the state the user can actually see.
 			return BeliefNote{}, fmt.Errorf("promoted %q to %q, but removing the original did not finish cleanly: %w", source, destination, err)
 		}
-		rollbackErr := v.removeInstalledCopy(destinationParent, destinationLeaf, destination, installed)
+		rollbackErr := v.removeInstalledCopy(destinationParent, destinationLeaf, destination, installed, ContentHash(content))
 		return BeliefNote{}, promotionAbandoned(source, destination, err, rollbackErr)
 	}
 	return BeliefNote{
@@ -351,16 +351,23 @@ func (v *Vault) unlinkPromotedSource(ctx context.Context, clean string, expected
 // It takes no context on purpose. This is the compensating half of a mutation
 // that already happened, and abandoning it because a caller's deadline expired
 // would leave behind exactly the file it exists to remove.
-func (v *Vault) removeInstalledCopy(parent *os.File, leaf string, clean string, installed unix.Stat_t) error {
-	var current unix.Stat_t
-	if err := unix.Fstatat(int(parent.Fd()), leaf, &current, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+func (v *Vault) removeInstalledCopy(parent *os.File, leaf string, clean string, installed unix.Stat_t, installedHash string) error {
+	currentContent, current, err := v.readConfinedEntry(context.Background(), parent, leaf, clean, MaxNoteBytes)
+	if err != nil {
 		if errors.Is(err, unix.ENOENT) {
 			return nil
 		}
 		return fmt.Errorf("inspect the promoted copy at %q: %w", clean, err)
 	}
-	if current.Dev != installed.Dev || current.Ino != installed.Ino {
+	if !installedCopyMatches(installed, current, installedHash, ContentHash(currentContent)) {
 		return fmt.Errorf("%q is no longer the copy this promotion installed", clean)
+	}
+	var named unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), leaf, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return fmt.Errorf("re-inspect the promoted copy at %q: %w", clean, err)
+	}
+	if named.Dev != current.Dev || named.Ino != current.Ino {
+		return fmt.Errorf("%q was replaced before the promotion rollback", clean)
 	}
 	if err := unix.Unlinkat(int(parent.Fd()), leaf, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 		return fmt.Errorf("remove the promoted copy at %q: %w", clean, err)
@@ -369,6 +376,12 @@ func (v *Vault) removeInstalledCopy(parent *os.File, leaf string, clean string, 
 		return fmt.Errorf("sync vault directory after removing the promoted copy at %q: %w", clean, err)
 	}
 	return nil
+}
+
+func installedCopyMatches(installed unix.Stat_t, current unix.Stat_t, installedHash string, currentHash string) bool {
+	return current.Dev == installed.Dev &&
+		current.Ino == installed.Ino &&
+		currentHash == installedHash
 }
 
 // unopenableEntryError marks a read that failed because the entry could not be
