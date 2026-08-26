@@ -60,6 +60,14 @@ type RoutingRequirements struct {
 	MinimumWorkerMaxConcurrentRuns int
 	ExternalAgent                  bool
 	ExternalAgentCredentialRef     string
+	// RemoteEgressDecision is true when the job carries a frozen egress
+	// decision of any shape — a remote model, an external agent, or a local
+	// model whose tools reach a remote MCP server or an integration. The
+	// worker that executes it has to be able to validate one, and the
+	// destination of the *model* says nothing about whether it does: an
+	// Ollama run calling a remote tool sends the user's tool arguments off
+	// the machine exactly as a remote model sends their message.
+	RemoteEgressDecision bool
 }
 
 type RoutingModelCapability struct {
@@ -843,6 +851,11 @@ func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMes
 		SelectedTools:                  append([]string(nil), input.SelectedTools...),
 		RequiredContextTokens:          input.RequiredContextTokens,
 		MinimumWorkerMaxConcurrentRuns: input.MinimumWorkerMaxConcurrentRuns,
+		// Read from the raw input rather than the normalized decision, which
+		// is built later: routing has to be validated against the destination
+		// this message actually has, and a caller that supplied a decision is
+		// asking for a worker that can validate one whatever shape it takes.
+		RemoteEgressDecision: input.EgressDecision != nil,
 	}}
 	routedAgent, routed, err := sessionExternalAgentTx(ctx, tx, input.SessionID)
 	if err != nil {
@@ -1386,6 +1399,7 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 			MinimumWorkerMaxConcurrentRuns: candidate.MinimumWorkerMaxConcurrentRuns,
 			ExternalAgent:                  candidate.ExternalAgent != nil,
 			ExternalAgentCredentialRef:     externalAgentCredentialRef,
+			RemoteEgressDecision:           candidate.EgressDecision != nil,
 		}) {
 			continue
 		}
@@ -1468,6 +1482,7 @@ func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []a
 		return "", nil
 	}
 	const externalAgentType = `json_type(j.payload_json, '$.externalAgent')`
+	const egressDecisionType = `json_type(j.payload_json, '$.egressDecision')`
 	var destinations []string
 	var args []any
 	egressAware := capabilities.RemoteEgressDecisionVersion >= RunEgressDecisionVersion
@@ -1505,6 +1520,16 @@ func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []a
 			1
 		) <= ?`
 	args = append(args, capabilities.MaxConcurrentRuns)
+	if !egressAware {
+		// Every job carrying a decision, not only the ones whose *model* is
+		// remote. A local model calling a remote MCP server or an integration
+		// carries the same frozen decision, and a worker that cannot validate
+		// one would claim the job and then fail it at execution time — a
+		// terminal failure the user sees, where waiting for a worker that can
+		// run it is invisible and correct.
+		filter += `
+		AND COALESCE(` + egressDecisionType + `, 'null') <> 'object'`
+	}
 	if len(capabilities.Tools) == 0 {
 		filter += `
 		AND NOT EXISTS (
@@ -1596,6 +1621,7 @@ func (r *Repository) ListPendingRoutingWorkPage(
 		if payload.ExternalAgent != nil {
 			item.Requirements.ExternalAgentCredentialRef = payload.ExternalAgent.CredentialRef
 		}
+		item.Requirements.RemoteEgressDecision = payload.EgressDecision != nil
 		work = append(work, item)
 	}
 	if err := rows.Err(); err != nil {

@@ -14,12 +14,17 @@ import (
 // person who has to act on it is the one holding the vault open.
 var ErrStaleContent = errors.New("the file changed since it was read; re-read it and apply the edit again")
 
-// MaxProfileEditBytes bounds what an accepted profile_edit may write. It is
-// exactly the candidate body limit, because the text being applied is a
-// candidate's own claim about the user: a body over 16 KiB is refused when the
-// candidate is created, and applying one would launder that same over-limit
-// text into the user's document through the back door.
-const MaxProfileEditBytes = MaxCandidateBodyBytes
+// MaxProfileEditBytes bounds what an accepted profile_edit may write. The
+// content of an apply is the *whole resulting profile* the user reviewed, not
+// the candidate's own claim — so it is bounded exactly like a hand-authored
+// save: by what this package can read back. Binding it to the 16 KiB candidate
+// body instead made every profile longer than one proposal permanently
+// un-appliable, which is the trap MaxAuthoredDocumentBytes exists to avoid.
+//
+// The candidate body stays at MaxCandidateBodyBytes and is still refused there:
+// a model cannot launder an over-limit claim in through this door, because the
+// claim never reaches this bound — the document the user composed does.
+const MaxProfileEditBytes = MaxAuthoredDocumentBytes
 
 // StaleContentError names the file whose compare-and-set failed.
 type StaleContentError struct {

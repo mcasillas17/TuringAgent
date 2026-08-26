@@ -259,11 +259,31 @@ const (
 	pendingRoutingRefreshTimeout = 5 * time.Second
 )
 
+// routeNeedsEgressAwareWorker answers the one question the version gate is
+// about: does this job carry a frozen egress decision the worker will have to
+// validate?
+//
+// A remote model and an external agent always do. So does a local model whose
+// selected tools reach a remote MCP server or an integration — the run keeps
+// the model on the machine and still sends the user's tool arguments off it,
+// under the same decision. Gating on the model's destination alone let a
+// pre-decision worker claim that job and fail it at execution time, which the
+// user sees as a run that died rather than as a run still waiting.
+//
+// RemoteEgressDecision alone would be enough for every job the enqueue path
+// builds; the other two are kept so a requirements value assembled without it
+// still fails closed.
+func routeNeedsEgressAwareWorker(route repository.RoutingRequirements) bool {
+	return route.RemoteEgressDecision ||
+		route.ModelProvider == "openai_compatible" ||
+		route.ExternalAgent
+}
+
 func workerCapabilitiesSupportRoute(capabilities *registeredWorkerCapabilities, route repository.RoutingRequirements) bool {
 	if capabilities == nil {
 		return false
 	}
-	if (route.ModelProvider == "openai_compatible" || route.ExternalAgent) &&
+	if routeNeedsEgressAwareWorker(route) &&
 		capabilities.remoteEgressDecisionVersion < repository.RunEgressDecisionVersion {
 		return false
 	}
@@ -435,7 +455,7 @@ func (s *Server) EgressToolNames(route repository.RoutingRequirements) []string 
 		if _, ok := capabilities.agentIDs[route.AgentID]; !ok {
 			return false
 		}
-		if (route.ModelProvider == "openai_compatible" || route.ExternalAgent) &&
+		if routeNeedsEgressAwareWorker(route) &&
 			capabilities.remoteEgressDecisionVersion < repository.RunEgressDecisionVersion {
 			return false
 		}
@@ -722,7 +742,7 @@ func (s *Server) ValidateRouting(ctx context.Context, route repository.RoutingRe
 			s.availableAgentIDs(),
 		)
 	}
-	if route.ModelProvider == "openai_compatible" || route.ExternalAgent {
+	if routeNeedsEgressAwareWorker(route) {
 		candidates = filterRoutingCandidates(candidates, func(capabilities *registeredWorkerCapabilities) bool {
 			return capabilities.remoteEgressDecisionVersion >= repository.RunEgressDecisionVersion
 		})

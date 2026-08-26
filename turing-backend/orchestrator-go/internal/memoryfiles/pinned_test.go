@@ -149,11 +149,14 @@ func TestTruncationNoticeReportsTheBytesActuallyKept(t *testing.T) {
 	}
 }
 
-// A profile edit is the text of a candidate, and a candidate body is bounded at
-// 16 KiB precisely so a claim about the user is never silently cut in half.
-// Letting the apply write more than that would launder an over-limit body
-// through the one primitive that writes the user's own document.
-func TestApplyProfileEditIsBoundedByTheCandidateBodyLimit(t *testing.T) {
+// A profile edit writes the whole resulting profile, which is the user's own
+// document — so it is bounded by what this package can read back, exactly like
+// a hand-authored save. A document saved past that ceiling would be reported
+// unreadable forever, which is a trap rather than a limit.
+//
+// The candidate body's own 16 KiB bound is not weakened by this: it is enforced
+// where the claim is created, and the text bounded here is not that claim.
+func TestApplyProfileEditIsBoundedByTheAuthoredDocumentLimit(t *testing.T) {
 	vault := newTestVault(t)
 	candidate := seedProfileEditCandidate(t, vault)
 	writeVaultFile(t, vault, ProfileFileName, "original")
@@ -167,12 +170,12 @@ func TestApplyProfileEditIsBoundedByTheCandidateBodyLimit(t *testing.T) {
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("expected an over-limit profile edit to be refused, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "16384") {
+	if !strings.Contains(err.Error(), "524288") {
 		t.Fatalf("refusal %q does not name the limit", err.Error())
 	}
 }
 
-func TestApplyProfileEditAcceptsContentExactlyAtTheCandidateBodyLimit(t *testing.T) {
+func TestApplyProfileEditAcceptsContentExactlyAtTheAuthoredDocumentLimit(t *testing.T) {
 	vault := newTestVault(t)
 	candidate := seedProfileEditCandidate(t, vault)
 	writeVaultFile(t, vault, ProfileFileName, "original")

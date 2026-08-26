@@ -689,6 +689,13 @@ const PromoteMemoryCandidateRequest$json = {
       '6': '.turing.v1.MemoryTier',
       '10': 'targetTier'
     },
+    {
+      '1': 'expected_candidate_hash',
+      '3': 5,
+      '4': 1,
+      '5': 9,
+      '10': 'expectedCandidateHash'
+    },
   ],
 };
 
@@ -697,7 +704,8 @@ final $typed_data.Uint8List promoteMemoryCandidateRequestDescriptor = $convert.b
     'Ch1Qcm9tb3RlTWVtb3J5Q2FuZGlkYXRlUmVxdWVzdBIhCgxjYW5kaWRhdGVfaWQYASABKAlSC2'
     'NhbmRpZGF0ZUlkEjIKFWV4cGVjdGVkX2NvbnRlbnRfaGFzaBgCIAEoCVITZXhwZWN0ZWRDb250'
     'ZW50SGFzaBIlCg5lZGl0ZWRfY29udGVudBgDIAEoCVINZWRpdGVkQ29udGVudBI2Cgt0YXJnZX'
-    'RfdGllchgEIAEoDjIVLnR1cmluZy52MS5NZW1vcnlUaWVyUgp0YXJnZXRUaWVy');
+    'RfdGllchgEIAEoDjIVLnR1cmluZy52MS5NZW1vcnlUaWVyUgp0YXJnZXRUaWVyEjYKF2V4cGVj'
+    'dGVkX2NhbmRpZGF0ZV9oYXNoGAUgASgJUhVleHBlY3RlZENhbmRpZGF0ZUhhc2g=');
 
 @$core.Deprecated('Use promoteMemoryCandidateResponseDescriptor instead')
 const PromoteMemoryCandidateResponse$json = {
@@ -742,15 +750,22 @@ const RejectMemoryCandidateRequest$json = {
       '10': 'expectedContentHash'
     },
     {'1': 'reason', '3': 3, '4': 1, '5': 9, '10': 'reason'},
+    {
+      '1': 'expected_candidate_hash',
+      '3': 4,
+      '4': 1,
+      '5': 9,
+      '10': 'expectedCandidateHash'
+    },
   ],
 };
 
 /// Descriptor for `RejectMemoryCandidateRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List rejectMemoryCandidateRequestDescriptor =
-    $convert.base64Decode(
-        'ChxSZWplY3RNZW1vcnlDYW5kaWRhdGVSZXF1ZXN0EiEKDGNhbmRpZGF0ZV9pZBgBIAEoCVILY2'
-        'FuZGlkYXRlSWQSMgoVZXhwZWN0ZWRfY29udGVudF9oYXNoGAIgASgJUhNleHBlY3RlZENvbnRl'
-        'bnRIYXNoEhYKBnJlYXNvbhgDIAEoCVIGcmVhc29u');
+final $typed_data.Uint8List rejectMemoryCandidateRequestDescriptor = $convert.base64Decode(
+    'ChxSZWplY3RNZW1vcnlDYW5kaWRhdGVSZXF1ZXN0EiEKDGNhbmRpZGF0ZV9pZBgBIAEoCVILY2'
+    'FuZGlkYXRlSWQSMgoVZXhwZWN0ZWRfY29udGVudF9oYXNoGAIgASgJUhNleHBlY3RlZENvbnRl'
+    'bnRIYXNoEhYKBnJlYXNvbhgDIAEoCVIGcmVhc29uEjYKF2V4cGVjdGVkX2NhbmRpZGF0ZV9oYX'
+    'NoGAQgASgJUhVleHBlY3RlZENhbmRpZGF0ZUhhc2g=');
 
 @$core.Deprecated('Use rejectMemoryCandidateResponseDescriptor instead')
 const RejectMemoryCandidateResponse$json = {
@@ -795,6 +810,13 @@ const ApplyMemoryProfileRequest$json = {
       '10': 'expectedContentHash'
     },
     {'1': 'candidate_id', '3': 3, '4': 1, '5': 9, '10': 'candidateId'},
+    {
+      '1': 'expected_candidate_hash',
+      '3': 4,
+      '4': 1,
+      '5': 9,
+      '10': 'expectedCandidateHash'
+    },
   ],
 };
 
@@ -802,7 +824,8 @@ const ApplyMemoryProfileRequest$json = {
 final $typed_data.Uint8List applyMemoryProfileRequestDescriptor = $convert.base64Decode(
     'ChlBcHBseU1lbW9yeVByb2ZpbGVSZXF1ZXN0EhgKB2NvbnRlbnQYASABKAlSB2NvbnRlbnQSMg'
     'oVZXhwZWN0ZWRfY29udGVudF9oYXNoGAIgASgJUhNleHBlY3RlZENvbnRlbnRIYXNoEiEKDGNh'
-    'bmRpZGF0ZV9pZBgDIAEoCVILY2FuZGlkYXRlSWQ=');
+    'bmRpZGF0ZV9pZBgDIAEoCVILY2FuZGlkYXRlSWQSNgoXZXhwZWN0ZWRfY2FuZGlkYXRlX2hhc2'
+    'gYBCABKAlSFWV4cGVjdGVkQ2FuZGlkYXRlSGFzaA==');
 
 @$core.Deprecated('Use applyMemoryProfileResponseDescriptor instead')
 const ApplyMemoryProfileResponse$json = {

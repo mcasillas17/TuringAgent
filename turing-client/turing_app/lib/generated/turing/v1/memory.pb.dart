@@ -1682,6 +1682,7 @@ class PromoteMemoryCandidateRequest extends $pb.GeneratedMessage {
     $core.String? expectedContentHash,
     $core.String? editedContent,
     $3.MemoryTier? targetTier,
+    $core.String? expectedCandidateHash,
   }) {
     final result = create();
     if (candidateId != null) result.candidateId = candidateId;
@@ -1689,6 +1690,8 @@ class PromoteMemoryCandidateRequest extends $pb.GeneratedMessage {
       result.expectedContentHash = expectedContentHash;
     if (editedContent != null) result.editedContent = editedContent;
     if (targetTier != null) result.targetTier = targetTier;
+    if (expectedCandidateHash != null)
+      result.expectedCandidateHash = expectedCandidateHash;
     return result;
   }
 
@@ -1713,6 +1716,7 @@ class PromoteMemoryCandidateRequest extends $pb.GeneratedMessage {
         defaultOrMaker: $3.MemoryTier.MEMORY_TIER_UNSPECIFIED,
         valueOf: $3.MemoryTier.valueOf,
         enumValues: $3.MemoryTier.values)
+    ..aOS(5, _omitFieldNames ? '' : 'expectedCandidateHash')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1779,6 +1783,21 @@ class PromoteMemoryCandidateRequest extends $pb.GeneratedMessage {
   $core.bool hasTargetTier() => $_has(3);
   @$pb.TagNumber(4)
   void clearTargetTier() => $_clearField(4);
+
+  /// Compare-and-set against the inbox file's own bytes, read again at decision
+  /// time. expected_content_hash is checked against the database row, which is
+  /// what Turing wrote; this one is checked against what the file says now, so a
+  /// proposal the user edited in Obsidian between the listing and the decision
+  /// is refused instead of promoted as the text they were shown. Empty means the
+  /// caller is not making a claim about the file.
+  @$pb.TagNumber(5)
+  $core.String get expectedCandidateHash => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set expectedCandidateHash($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasExpectedCandidateHash() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearExpectedCandidateHash() => $_clearField(5);
 }
 
 class PromoteMemoryCandidateResponse extends $pb.GeneratedMessage {
@@ -1864,12 +1883,15 @@ class RejectMemoryCandidateRequest extends $pb.GeneratedMessage {
     $core.String? candidateId,
     $core.String? expectedContentHash,
     $core.String? reason,
+    $core.String? expectedCandidateHash,
   }) {
     final result = create();
     if (candidateId != null) result.candidateId = candidateId;
     if (expectedContentHash != null)
       result.expectedContentHash = expectedContentHash;
     if (reason != null) result.reason = reason;
+    if (expectedCandidateHash != null)
+      result.expectedCandidateHash = expectedCandidateHash;
     return result;
   }
 
@@ -1889,6 +1911,7 @@ class RejectMemoryCandidateRequest extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'candidateId')
     ..aOS(2, _omitFieldNames ? '' : 'expectedContentHash')
     ..aOS(3, _omitFieldNames ? '' : 'reason')
+    ..aOS(4, _omitFieldNames ? '' : 'expectedCandidateHash')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1942,6 +1965,19 @@ class RejectMemoryCandidateRequest extends $pb.GeneratedMessage {
   $core.bool hasReason() => $_has(2);
   @$pb.TagNumber(3)
   void clearReason() => $_clearField(3);
+
+  /// Compare-and-set against the inbox file's own bytes. See
+  /// PromoteMemoryCandidateRequest.expected_candidate_hash: a rejection is a
+  /// decision about a claim, and a claim the user did not read is not one they
+  /// refused.
+  @$pb.TagNumber(4)
+  $core.String get expectedCandidateHash => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set expectedCandidateHash($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasExpectedCandidateHash() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearExpectedCandidateHash() => $_clearField(4);
 }
 
 class RejectMemoryCandidateResponse extends $pb.GeneratedMessage {
@@ -2054,12 +2090,15 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
     $core.String? content,
     $core.String? expectedContentHash,
     $core.String? candidateId,
+    $core.String? expectedCandidateHash,
   }) {
     final result = create();
     if (content != null) result.content = content;
     if (expectedContentHash != null)
       result.expectedContentHash = expectedContentHash;
     if (candidateId != null) result.candidateId = candidateId;
+    if (expectedCandidateHash != null)
+      result.expectedCandidateHash = expectedCandidateHash;
     return result;
   }
 
@@ -2079,6 +2118,7 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'content')
     ..aOS(2, _omitFieldNames ? '' : 'expectedContentHash')
     ..aOS(3, _omitFieldNames ? '' : 'candidateId')
+    ..aOS(4, _omitFieldNames ? '' : 'expectedCandidateHash')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -2104,6 +2144,9 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
       $pb.GeneratedMessage.$_defaultFor<ApplyMemoryProfileRequest>(create);
   static ApplyMemoryProfileRequest? _defaultInstance;
 
+  /// The whole resulting profile document, as the user reviewed it — never the
+  /// proposal on its own. A client that sent the candidate's fragment here
+  /// would be asking the server to replace the user's profile with a paragraph.
   @$pb.TagNumber(1)
   $core.String get content => $_getSZ(0);
   @$pb.TagNumber(1)
@@ -2135,6 +2178,20 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
   $core.bool hasCandidateId() => $_has(2);
   @$pb.TagNumber(3)
   void clearCandidateId() => $_clearField(3);
+
+  /// Compare-and-set against the candidate file's own bytes. See
+  /// PromoteMemoryCandidateRequest.expected_candidate_hash: this binds the
+  /// resulting document to the exact proposal it was composed from, so a
+  /// proposal edited in the vault after the user read it cannot be applied as
+  /// though they had accepted the new words.
+  @$pb.TagNumber(4)
+  $core.String get expectedCandidateHash => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set expectedCandidateHash($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasExpectedCandidateHash() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearExpectedCandidateHash() => $_clearField(4);
 }
 
 class ApplyMemoryProfileResponse extends $pb.GeneratedMessage {

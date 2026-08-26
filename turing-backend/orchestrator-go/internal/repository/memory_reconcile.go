@@ -886,6 +886,24 @@ func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState
 	if inbox := scanned.completeness.Area(memoryfiles.AreaInbox); !inbox.Complete {
 		return 0, 0, nil
 	}
+	// A profile edit the user moved into beliefs/ is not a finished promotion:
+	// nothing promoted it, nothing may, and the file is still in the vault. Its
+	// candidate row and its reservation are what let the user move it back or
+	// reject it, so an inbox that no longer holds the path is not evidence
+	// that either is stale. The identity is the link — it travels with the
+	// file, the path does not.
+	held := misplacedProfileEditIdentities(scanned)
+	retain := func(vaultPath string) bool {
+		if len(held) == 0 {
+			return false
+		}
+		noteID := memoryfiles.NoteIDFromInboxRelPath(vaultPath)
+		if noteID == "" {
+			return false
+		}
+		_, misplaced := held[noteID]
+		return misplaced
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, 0, err
@@ -894,7 +912,7 @@ func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState
 
 	orphans, err := staleRowsTx(ctx, tx, `
 		SELECT id, inbox_path FROM memory_candidates WHERE created_at < ?
-	`, scanned.inboxPaths, state.anchor)
+	`, scanned.inboxPaths, retain, state.anchor)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -920,7 +938,7 @@ func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState
 	reservations, err := staleRowsTx(ctx, tx, `
 		SELECT id, vault_path FROM vault_artifacts
 		WHERE finalized_at IS NOT NULL AND finalized_at < ?
-	`, scanned.inboxPaths, state.anchor)
+	`, scanned.inboxPaths, retain, state.anchor)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -959,9 +977,34 @@ func incompleteVaultAreas(completeness memoryfiles.ScanCompleteness) []MemoryVau
 	return issues
 }
 
+// misplacedProfileEditIdentities names every proposal the walk found sitting
+// under beliefs/. The scan already refuses to index them and says why; this is
+// the same fact in the shape the inbox sweep needs, so the two cannot drift
+// into disagreeing about which files are still awaiting a decision.
+func misplacedProfileEditIdentities(scanned scannedVault) map[string]struct{} {
+	held := map[string]struct{}{}
+	for _, note := range scanned.beliefs {
+		if note.Kind != memoryfiles.KindProfileEdit || note.NoteID == "" {
+			continue
+		}
+		held[note.NoteID] = struct{}{}
+	}
+	return held
+}
+
 // staleRowsTx returns the ids of rows whose recorded path is no longer an inbox
 // entry. The query is a fixed code constant and every value is bound.
-func staleRowsTx(ctx context.Context, tx *sql.Tx, query string, present map[string]struct{}, args ...any) ([]string, error) {
+//
+// retain is the one exception: a row whose file the walk found elsewhere in the
+// vault is not stale, and the caller is the only thing that can say so.
+func staleRowsTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	query string,
+	present map[string]struct{},
+	retain func(string) bool,
+	args ...any,
+) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -973,6 +1016,9 @@ func staleRowsTx(ctx context.Context, tx *sql.Tx, query string, present map[stri
 			return nil, closeRowsWith(rows, err)
 		}
 		if _, found := present[path]; found {
+			continue
+		}
+		if retain != nil && retain(path) {
 			continue
 		}
 		stale = append(stale, id)

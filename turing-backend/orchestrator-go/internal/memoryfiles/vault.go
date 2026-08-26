@@ -109,7 +109,16 @@ type Vault struct {
 	// goroutines, and a seam assignable on a live value would be a data race on
 	// the pass that reads the user's memory.
 	scanRead scanReadHook
+	// readDirNames wraps one bounded batch of a directory listing, and is a
+	// constructor argument for the same reason. Production installs none. A
+	// test installs one to prove the walk never asks for an unbounded listing.
+	readDirNames readDirNamesHook
 }
+
+// readDirNamesHook stands between the walk and one batch of directory entries.
+// count is always positive: the walk's whole discipline is that it consults its
+// bounds between batches, which it cannot do if the listing arrives all at once.
+type readDirNamesHook func(directory *os.File, count int) ([]string, error)
 
 // scanReadHook stands between a scan and one note's bytes. read is the real
 // confined read, so a hook may fail, delay or delegate without reimplementing
@@ -154,6 +163,12 @@ func openVault(root string, hooks syncHooks) (*Vault, error) {
 
 // openVaultWith adds the scan read seam, which only a test supplies.
 func openVaultWith(root string, hooks syncHooks, scanRead scanReadHook) (*Vault, error) {
+	return openVaultWithListing(root, hooks, scanRead, nil)
+}
+
+// openVaultWithListing adds the directory-listing seam alongside it. Both are
+// nil in production, where the walk lists directories itself.
+func openVaultWithListing(root string, hooks syncHooks, scanRead scanReadHook, readDirNames readDirNamesHook) (*Vault, error) {
 	if hooks.file == nil || hooks.directory == nil {
 		return nil, errors.New("vault sync hooks must both be set")
 	}
@@ -179,10 +194,11 @@ func openVaultWith(root string, hooks syncHooks, scanRead scanReadHook) (*Vault,
 		return nil, fmt.Errorf("resolve vault root: %w", err)
 	}
 	return &Vault{
-		root:     filepath.Clean(resolved),
-		locks:    processPathLocks,
-		hooks:    hooks,
-		scanRead: scanRead,
+		root:         filepath.Clean(resolved),
+		locks:        processPathLocks,
+		hooks:        hooks,
+		scanRead:     scanRead,
+		readDirNames: readDirNames,
 	}, nil
 }
 

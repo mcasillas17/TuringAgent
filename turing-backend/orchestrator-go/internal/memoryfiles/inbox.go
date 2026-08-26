@@ -189,6 +189,31 @@ func InboxNoteRelPath(noteID string, title string) string {
 	return InboxDirName + "/" + noteFileName(noteID, sanitizeTitle(title))
 }
 
+// NoteIDFromInboxRelPath reads back the identity InboxNoteRelPath put into a
+// name, and answers "" for anything it did not produce.
+//
+// It exists so a caller holding a stored inbox path can ask whether a file it
+// found elsewhere in the vault is the same note — the frontmatter identity
+// travels with the file when the user moves it, the path does not. It is a
+// question about identity only: nothing here turns the answer back into a path.
+func NoteIDFromInboxRelPath(relPath string) string {
+	if !strings.HasPrefix(relPath, InboxDirName+"/") {
+		return ""
+	}
+	name := strings.TrimPrefix(relPath, InboxDirName+"/")
+	if strings.Contains(name, "/") || !strings.HasSuffix(name, ".md") {
+		return ""
+	}
+	name = strings.TrimSuffix(name, ".md")
+	if index := strings.Index(name, "-"); index >= 0 {
+		name = name[:index]
+	}
+	if validateNoteID(name) != nil {
+		return ""
+	}
+	return name
+}
+
 // ContentHash is the compare-and-set token used across this package.
 func ContentHash(content string) string {
 	sum := sha256.Sum256([]byte(content))

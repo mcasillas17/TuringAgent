@@ -24,7 +24,7 @@ type DiscoveredTool struct {
 //
 // The list lives here because three different layers ask the same question —
 // the upsert that writes the rows, the capability filter that decides what a
-// worker may see, and the trigger in schema/0020_memory_pseudo_server.sql that
+// worker may see, and the trigger in schema/0019_memory_vault.sql that
 // refuses everything else with a NULL server. A name added to one and not the
 // others is a tool that registers and then vanishes.
 func IsPseudoServerName(serverName string) bool {

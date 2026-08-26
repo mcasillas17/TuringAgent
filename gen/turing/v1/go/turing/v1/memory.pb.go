@@ -1453,8 +1453,15 @@ type PromoteMemoryCandidateRequest struct {
 	// Optional user edit accepted in place of the proposed content.
 	EditedContent string     `protobuf:"bytes,3,opt,name=edited_content,json=editedContent,proto3" json:"edited_content,omitempty"`
 	TargetTier    MemoryTier `protobuf:"varint,4,opt,name=target_tier,json=targetTier,proto3,enum=turing.v1.MemoryTier" json:"target_tier,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Compare-and-set against the inbox file's own bytes, read again at decision
+	// time. expected_content_hash is checked against the database row, which is
+	// what Turing wrote; this one is checked against what the file says now, so a
+	// proposal the user edited in Obsidian between the listing and the decision
+	// is refused instead of promoted as the text they were shown. Empty means the
+	// caller is not making a claim about the file.
+	ExpectedCandidateHash string `protobuf:"bytes,5,opt,name=expected_candidate_hash,json=expectedCandidateHash,proto3" json:"expected_candidate_hash,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *PromoteMemoryCandidateRequest) Reset() {
@@ -1515,6 +1522,13 @@ func (x *PromoteMemoryCandidateRequest) GetTargetTier() MemoryTier {
 	return MemoryTier_MEMORY_TIER_UNSPECIFIED
 }
 
+func (x *PromoteMemoryCandidateRequest) GetExpectedCandidateHash() string {
+	if x != nil {
+		return x.ExpectedCandidateHash
+	}
+	return ""
+}
+
 type PromoteMemoryCandidateResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Candidate     *MemoryCandidate       `protobuf:"bytes,1,opt,name=candidate,proto3" json:"candidate,omitempty"`
@@ -1572,8 +1586,13 @@ type RejectMemoryCandidateRequest struct {
 	CandidateId         string                 `protobuf:"bytes,1,opt,name=candidate_id,json=candidateId,proto3" json:"candidate_id,omitempty"`
 	ExpectedContentHash string                 `protobuf:"bytes,2,opt,name=expected_content_hash,json=expectedContentHash,proto3" json:"expected_content_hash,omitempty"`
 	Reason              string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Compare-and-set against the inbox file's own bytes. See
+	// PromoteMemoryCandidateRequest.expected_candidate_hash: a rejection is a
+	// decision about a claim, and a claim the user did not read is not one they
+	// refused.
+	ExpectedCandidateHash string `protobuf:"bytes,4,opt,name=expected_candidate_hash,json=expectedCandidateHash,proto3" json:"expected_candidate_hash,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *RejectMemoryCandidateRequest) Reset() {
@@ -1623,6 +1642,13 @@ func (x *RejectMemoryCandidateRequest) GetExpectedContentHash() string {
 func (x *RejectMemoryCandidateRequest) GetReason() string {
 	if x != nil {
 		return x.Reason
+	}
+	return ""
+}
+
+func (x *RejectMemoryCandidateRequest) GetExpectedCandidateHash() string {
+	if x != nil {
+		return x.ExpectedCandidateHash
 	}
 	return ""
 }
@@ -1708,17 +1734,26 @@ func (*GetMemoryProfileRequest) Descriptor() ([]byte, []int) {
 }
 
 type ApplyMemoryProfileRequest struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	Content string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The whole resulting profile document, as the user reviewed it — never the
+	// proposal on its own. A client that sent the candidate's fragment here
+	// would be asking the server to replace the user's profile with a paragraph.
+	Content string `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
 	// Compare-and-set against MemoryProfile.content_hash. Empty means the caller
 	// expects no profile to exist yet.
 	ExpectedContentHash string `protobuf:"bytes,2,opt,name=expected_content_hash,json=expectedContentHash,proto3" json:"expected_content_hash,omitempty"`
 	// The pending profile_edit candidate this apply acts on. Turing writes
 	// profile.md only on the authority of a proposal the user is looking at, so
 	// there is no path here and no way to write the profile without one.
-	CandidateId   string `protobuf:"bytes,3,opt,name=candidate_id,json=candidateId,proto3" json:"candidate_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	CandidateId string `protobuf:"bytes,3,opt,name=candidate_id,json=candidateId,proto3" json:"candidate_id,omitempty"`
+	// Compare-and-set against the candidate file's own bytes. See
+	// PromoteMemoryCandidateRequest.expected_candidate_hash: this binds the
+	// resulting document to the exact proposal it was composed from, so a
+	// proposal edited in the vault after the user read it cannot be applied as
+	// though they had accepted the new words.
+	ExpectedCandidateHash string `protobuf:"bytes,4,opt,name=expected_candidate_hash,json=expectedCandidateHash,proto3" json:"expected_candidate_hash,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *ApplyMemoryProfileRequest) Reset() {
@@ -1768,6 +1803,13 @@ func (x *ApplyMemoryProfileRequest) GetExpectedContentHash() string {
 func (x *ApplyMemoryProfileRequest) GetCandidateId() string {
 	if x != nil {
 		return x.CandidateId
+	}
+	return ""
+}
+
+func (x *ApplyMemoryProfileRequest) GetExpectedCandidateHash() string {
+	if x != nil {
+		return x.ExpectedCandidateHash
 	}
 	return ""
 }
@@ -2453,27 +2495,30 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"candidates\x12Q\n" +
 	"\x12unavailable_reason\x18\x02 \x01(\x0e2\".turing.v1.MemoryUnavailableReasonR\x11unavailableReason\">\n" +
 	"\x19GetMemoryCandidateRequest\x12!\n" +
-	"\fcandidate_id\x18\x01 \x01(\tR\vcandidateId\"\xd5\x01\n" +
+	"\fcandidate_id\x18\x01 \x01(\tR\vcandidateId\"\x8d\x02\n" +
 	"\x1dPromoteMemoryCandidateRequest\x12!\n" +
 	"\fcandidate_id\x18\x01 \x01(\tR\vcandidateId\x122\n" +
 	"\x15expected_content_hash\x18\x02 \x01(\tR\x13expectedContentHash\x12%\n" +
 	"\x0eedited_content\x18\x03 \x01(\tR\reditedContent\x126\n" +
 	"\vtarget_tier\x18\x04 \x01(\x0e2\x15.turing.v1.MemoryTierR\n" +
-	"targetTier\"\x85\x01\n" +
+	"targetTier\x126\n" +
+	"\x17expected_candidate_hash\x18\x05 \x01(\tR\x15expectedCandidateHash\"\x85\x01\n" +
 	"\x1ePromoteMemoryCandidateResponse\x128\n" +
 	"\tcandidate\x18\x01 \x01(\v2\x1a.turing.v1.MemoryCandidateR\tcandidate\x12)\n" +
-	"\x04note\x18\x02 \x01(\v2\x15.turing.v1.MemoryNoteR\x04note\"\x8d\x01\n" +
+	"\x04note\x18\x02 \x01(\v2\x15.turing.v1.MemoryNoteR\x04note\"\xc5\x01\n" +
 	"\x1cRejectMemoryCandidateRequest\x12!\n" +
 	"\fcandidate_id\x18\x01 \x01(\tR\vcandidateId\x122\n" +
 	"\x15expected_content_hash\x18\x02 \x01(\tR\x13expectedContentHash\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"Y\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x126\n" +
+	"\x17expected_candidate_hash\x18\x04 \x01(\tR\x15expectedCandidateHash\"Y\n" +
 	"\x1dRejectMemoryCandidateResponse\x128\n" +
 	"\tcandidate\x18\x01 \x01(\v2\x1a.turing.v1.MemoryCandidateR\tcandidate\"\x19\n" +
-	"\x17GetMemoryProfileRequest\"\x8c\x01\n" +
+	"\x17GetMemoryProfileRequest\"\xc4\x01\n" +
 	"\x19ApplyMemoryProfileRequest\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x122\n" +
 	"\x15expected_content_hash\x18\x02 \x01(\tR\x13expectedContentHash\x12!\n" +
-	"\fcandidate_id\x18\x03 \x01(\tR\vcandidateId\"P\n" +
+	"\fcandidate_id\x18\x03 \x01(\tR\vcandidateId\x126\n" +
+	"\x17expected_candidate_hash\x18\x04 \x01(\tR\x15expectedCandidateHash\"P\n" +
 	"\x1aApplyMemoryProfileResponse\x122\n" +
 	"\aprofile\x18\x01 \x01(\v2\x18.turing.v1.MemoryProfileR\aprofile\"\x19\n" +
 	"\x17GetMemoryPersonaRequest\"h\n" +
