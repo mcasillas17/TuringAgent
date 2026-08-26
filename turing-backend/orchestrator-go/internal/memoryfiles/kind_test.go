@@ -73,17 +73,79 @@ func TestPromoteToBeliefsRefusesAnUnrecognisedKindAsAParseError(t *testing.T) {
 	}
 }
 
+// Both doors are shown a profile edit that satisfies everything that door asks
+// of a file's shape — a managed candidate Turing wrote for the first, a draft
+// with no managed marker for the second — so the only thing left refusing them
+// is the rule that is actually about profile edits.
+//
+// What is asserted is where the file ended up, not what the error said. Delete
+// that rule and this test fails because a profile edit is sitting in beliefs/,
+// which is the failure worth having: an edit the user proposed to their own
+// document would have become a claim Turing holds about them.
 func TestPromoteToBeliefsRefusesAProfileEditThroughEitherDoor(t *testing.T) {
-	vault := newTestVault(t)
-	candidate := seedCandidate(t, vault, KindProfileEdit, "Call me Miguel", "The user goes by Miguel.")
+	doors := []struct {
+		name   string
+		mode   PromotionMode
+		source func(*testing.T, *Vault) string
+	}{
+		{
+			name: "as the managed candidate it is",
+			mode: PromoteManagedCandidate,
+			source: func(t *testing.T, vault *Vault) string {
+				t.Helper()
+				return seedCandidate(t, vault, KindProfileEdit, "Call me Miguel", "The user goes by Miguel.").RelPath
+			},
+		},
+		{
+			name: "as a draft the user dropped in themselves",
+			mode: PromoteUnmanagedDraft,
+			source: func(t *testing.T, vault *Vault) string {
+				t.Helper()
+				writeVaultFile(t, vault, "inbox/by-hand.md", "---\nkind: \"profile_edit\"\n---\nCall me Miguel.\n")
+				return "inbox/by-hand.md"
+			},
+		},
+	}
+	for _, door := range doors {
+		t.Run(door.name, func(t *testing.T) {
+			vault := newTestVault(t)
+			source := door.source(t, vault)
 
-	for _, mode := range []PromotionMode{PromoteManagedCandidate, PromoteUnmanagedDraft} {
-		_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-			SourceRelPath: candidate.RelPath,
-			Mode:          mode,
+			_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
+				SourceRelPath: source,
+				Mode:          door.mode,
+			})
+			// Reported rather than fatal, so the assertions that say where the
+			// file actually is still run: the failure this test exists to
+			// produce is "a profile edit is in beliefs/", not "the error read
+			// differently".
+			if !errors.Is(err, ErrKind) {
+				t.Errorf("mode %q: a profile edit is not a belief, got %v", door.mode, err)
+			}
+			entries, readErr := os.ReadDir(filepath.Join(vault.Root(), BeliefsDirName))
+			if readErr != nil {
+				t.Fatalf("read beliefs: %v", readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("mode %q: a profile edit was filed as a belief: %v", door.mode, entries[0].Name())
+			}
+			if _, err := os.Lstat(filepath.Join(vault.Root(), filepath.FromSlash(source))); err != nil {
+				t.Fatalf("mode %q: the refused profile edit left the inbox: %v", door.mode, err)
+			}
 		})
+	}
+}
+
+// The parser refuses a kind it cannot read before promotion ever sees it, which
+// is why no vault fixture can reach this branch. It is still checked here,
+// against the gate itself: "the parser would have caught it" is a property of
+// today's caller, and a gate that would promote an unrecognised kind if it were
+// ever handed one is one caller away from doing it.
+func TestPromotableShapeRefusesAKindNoParserWouldProduce(t *testing.T) {
+	for _, mode := range []PromotionMode{PromoteManagedCandidate, PromoteUnmanagedDraft} {
+		err := checkPromotable("inbox/note.md", mode, ParsedNote{Kind: NoteKind("observation")})
 		if !errors.Is(err, ErrKind) {
-			t.Fatalf("mode %q: a profile edit is not a belief, got %v", mode, err)
+			t.Fatalf("mode %q: an unrecognised kind must be refused, got %v", mode, err)
 		}
 	}
 }

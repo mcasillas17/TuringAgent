@@ -196,23 +196,58 @@ var ErrSourceChanged = errors.New("the candidate changed while it was being prom
 
 // checkPromotable is the kind gate, run against the file's own frontmatter
 // rather than against what the caller claimed.
+//
+// It answers two different questions in a fixed order, and they are kept apart
+// on purpose. Shape first: is this the kind of file the door the caller named
+// is for — one Turing wrote and labelled, or one the user dropped in with no
+// label at all. Then the one prohibition: profile_edit is a kind this package
+// recognises, accepts from a model, and files under inbox/ like any other
+// candidate, and it still may never become a belief.
+//
+// Neither shape rule mentions profile_edit, so refusing one is the job of a
+// single line rather than a side effect of two others. That is what makes the
+// prohibition testable: delete it and a profile edit is promoted, through
+// either door, instead of being refused by a rule that meant something else.
 func checkPromotable(source string, mode PromotionMode, parsed ParsedNote) error {
+	if err := checkPromotableShape(source, mode, parsed); err != nil {
+		return err
+	}
 	if parsed.Kind == KindProfileEdit {
 		return fmt.Errorf("%q declares kind %q and cannot be promoted to %s/: %w", source, parsed.Kind, BeliefsDirName, ErrKind)
 	}
+	return nil
+}
+
+// checkPromotableShape decides only whether the file came through the right
+// door. Which of the recognised kinds may become a belief is not its question.
+func checkPromotableShape(source string, mode PromotionMode, parsed ParsedNote) error {
 	switch mode {
 	case PromoteManagedCandidate:
-		if parsed.Kind != KindBelief {
+		// What makes a file a managed candidate is that it declares a kind
+		// this package can read. A file with no kind is a hand-written draft
+		// and belongs to the other door; a kind that is not one of the two is
+		// a file this package will not act on at all.
+		if !parsed.Kind.Valid() {
 			return fmt.Errorf(
-				"%q does not declare kind %q, so it cannot be promoted as a managed candidate; a file the user dropped in %s/ themselves is promoted with mode %q: %w",
-				source, KindBelief, InboxDirName, PromoteUnmanagedDraft, ErrKind,
+				"%q does not declare a kind this vault recognises (%s), so it cannot be promoted as a managed candidate; a file the user dropped in %s/ themselves is promoted with mode %q: %w",
+				source, knownNoteKinds(), InboxDirName, PromoteUnmanagedDraft, ErrKind,
 			)
 		}
 	case PromoteUnmanagedDraft:
-		if parsed.Kind != "" {
+		// An unmanaged draft is a file with no candidate row behind it, so a
+		// file that declares kind: belief is a managed candidate at the wrong
+		// door — and one that declares a kind nothing here reads is not a
+		// promotable draft either.
+		if parsed.Kind == KindBelief {
 			return fmt.Errorf(
 				"%q declares kind %q, so it is a managed candidate and is promoted with mode %q, not as an unmanaged draft: %w",
 				source, parsed.Kind, PromoteManagedCandidate, ErrKind,
+			)
+		}
+		if parsed.Kind != "" && !parsed.Kind.Valid() {
+			return fmt.Errorf(
+				"%q declares kind %q, which is not one of %s, so it cannot be promoted at all: %w",
+				source, parsed.Kind, knownNoteKinds(), ErrKind,
 			)
 		}
 		if parsed.Managed {

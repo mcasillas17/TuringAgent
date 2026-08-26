@@ -28,9 +28,16 @@ type Repository struct {
 	// memoryVaultMutex serialises whole-vault passes. A file-writing reconcile
 	// and an index refresh both derive their answer from one scan, and two
 	// passes interleaving would let one write the projection of bytes the
-	// other is in the middle of rewriting. It is held across the scan and the
-	// index transaction, never across an unrelated call.
+	// other is in the middle of rewriting. It is taken in exactly one place,
+	// runVaultPass, and held across the scan and the index transaction, never
+	// across an unrelated call.
 	memoryVaultMutex sync.Mutex
+	// memoryVaultPassBarrier, when set (test-only; always nil in production),
+	// runs inside a whole-vault pass: after the short state transaction has
+	// closed and before the walk begins. A test can park one pass there and
+	// prove that no other pass — read-only or writing — is inside the vault at
+	// the same time, and that no database transaction is held while it is.
+	memoryVaultPassBarrier func()
 	// memoryReconcileScanAnchor overrides the timestamp a pass treats as "when
 	// this walk started" (test-only; always empty in production). It lets a
 	// test place a row on either side of the anchor without racing a clock.

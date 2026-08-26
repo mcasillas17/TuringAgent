@@ -146,63 +146,92 @@ type scannedVault struct {
 // note carries no identity, that two files claim one, or that a frontmatter
 // block no longer parses — and it reports all three rather than fixing them,
 // because fixing them means writing to files the user has open in their editor.
+//
+// Read-only is about the vault, not about the pass. It still walks the whole
+// vault and still rewrites the index from what it saw, so it runs under the
+// same vault-wide lock as the writing pass: see runVaultPass.
 func (r *Repository) RefreshMemoryIndex(ctx context.Context) (MemoryIndexReport, error) {
-	vault, err := r.memoryVaultOrError()
+	var report MemoryIndexReport
+	err := r.runVaultPass(ctx, func(_ *memoryfiles.Vault, state memoryVaultState, scanned scannedVault) error {
+		var applyErr error
+		report, applyErr = r.applyMemoryIndex(ctx, state, scanned)
+		return applyErr
+	})
 	if err != nil {
 		return MemoryIndexReport{}, err
 	}
-	r.memoryVaultMutex.Lock()
-	defer r.memoryVaultMutex.Unlock()
-
-	state, scanned, err := r.readVaultAndState(ctx, vault)
-	if err != nil {
-		return MemoryIndexReport{}, err
-	}
-	return r.applyMemoryIndex(ctx, state, scanned)
+	return report, nil
 }
 
 // ReconcileMemoryVault is the pass that is allowed to write.
 //
-// It runs at startup, after a deletion, and when a caller asks for it, under a
-// vault-wide lock so two passes can never rewrite the same note from two
-// different views of it. Its file writes are the four the plan allows: adopt a
-// belief the user wrote by giving it an identity, and bring a managed note's
-// citations back in line with the sidecar. Everything else it does is in the
-// database — healing a note whose row was lost, retiring a candidate whose
-// inbox entry is gone, and releasing the reservations that tracked them.
+// It runs at startup, after a deletion, and when a caller asks for it, under
+// the same vault-wide lock as the read-only refresh so two passes can never
+// rewrite the same note from two different views of it. Its file writes are the
+// four the plan allows: adopt a belief the user wrote by giving it an identity,
+// and bring a managed note's citations back in line with the sidecar.
+// Everything else it does is in the database — healing a note whose row was
+// lost, retiring a candidate whose inbox entry is gone, and releasing the
+// reservations that tracked them.
 func (r *Repository) ReconcileMemoryVault(ctx context.Context) (MemoryReconcileReport, error) {
-	vault, err := r.memoryVaultOrError()
+	report := MemoryReconcileReport{}
+	err := r.runVaultPass(ctx, func(vault *memoryfiles.Vault, state memoryVaultState, scanned scannedVault) error {
+		var passErr error
+		if report.IdentitiesAssigned, passErr = assignMissingIdentities(ctx, vault, scanned); passErr != nil {
+			return passErr
+		}
+		// The index runs before the citations are rewritten, not after.
+		// Healing a note is what gives it a sidecar in the first place, and a
+		// rewrite driven by a sidecar that does not exist yet would leave the
+		// file citing a conversation the heal has already refused to link —
+		// converging only on the pass after this one.
+		if report.Index, passErr = r.applyMemoryIndex(ctx, state, scanned); passErr != nil {
+			return passErr
+		}
+		report.NotesHealed = report.Index.Healed
+		if report.RefsRewritten, passErr = r.rewriteRefsFromSidecar(ctx, vault, scanned); passErr != nil {
+			return passErr
+		}
+		report.OrphanCandidatesRemoved, report.ReservationsCleared, passErr = r.sweepVaultInbox(ctx, state, scanned)
+		return passErr
+	})
 	if err != nil {
 		return MemoryReconcileReport{}, err
+	}
+	return report, nil
+}
+
+// runVaultPass is the one door both whole-vault passes go through, and the one
+// place the vault-wide lock is taken.
+//
+// Two passes are not allowed to be inside the vault at the same time, and that
+// is as true of the read-only refresh as it is of the writing reconcile: a
+// refresh derives the whole index from one walk, so a reconcile assigning
+// identities and rewriting citations underneath it would have it index bytes
+// that no longer exist and then delete the rows for notes that do. Holding the
+// lock in one shared place is deliberate — a second pass added later inherits
+// the serialisation instead of having to remember it.
+//
+// The lock covers the state read, the walk, and whatever the caller does with
+// the two. It never covers an unrelated call, and the database transaction the
+// state read opens is closed before the walk starts: SQLite must not be held
+// open across a filesystem crawl of a vault the user may be editing.
+func (r *Repository) runVaultPass(
+	ctx context.Context,
+	act func(*memoryfiles.Vault, memoryVaultState, scannedVault) error,
+) error {
+	vault, err := r.memoryVaultOrError()
+	if err != nil {
+		return err
 	}
 	r.memoryVaultMutex.Lock()
 	defer r.memoryVaultMutex.Unlock()
 
 	state, scanned, err := r.readVaultAndState(ctx, vault)
 	if err != nil {
-		return MemoryReconcileReport{}, err
+		return err
 	}
-
-	report := MemoryReconcileReport{}
-	if report.IdentitiesAssigned, err = assignMissingIdentities(ctx, vault, scanned); err != nil {
-		return MemoryReconcileReport{}, err
-	}
-	// The index runs before the citations are rewritten, not after. Healing a
-	// note is what gives it a sidecar in the first place, and a rewrite driven
-	// by a sidecar that does not exist yet would leave the file citing a
-	// conversation the heal has already refused to link — converging only on
-	// the pass after this one.
-	if report.Index, err = r.applyMemoryIndex(ctx, state, scanned); err != nil {
-		return MemoryReconcileReport{}, err
-	}
-	report.NotesHealed = report.Index.Healed
-	if report.RefsRewritten, err = r.rewriteRefsFromSidecar(ctx, vault, scanned); err != nil {
-		return MemoryReconcileReport{}, err
-	}
-	if report.OrphanCandidatesRemoved, report.ReservationsCleared, err = r.sweepVaultInbox(ctx, state, scanned); err != nil {
-		return MemoryReconcileReport{}, err
-	}
-	return report, nil
+	return act(vault, state, scanned)
 }
 
 // readVaultAndState captures the database's view and then walks the vault. The
@@ -215,6 +244,12 @@ func (r *Repository) readVaultAndState(ctx context.Context, vault *memoryfiles.V
 	}
 	if err := r.loadMemoryVaultState(ctx, &state); err != nil {
 		return memoryVaultState{}, scannedVault{}, err
+	}
+	// The seam sits here, between the closed state transaction and the walk:
+	// inside the vault-wide lock, holding no database transaction. A test
+	// parked here is a pass that is provably in the middle of the vault.
+	if r.memoryVaultPassBarrier != nil {
+		r.memoryVaultPassBarrier()
 	}
 	result, err := vault.Scan(ctx)
 	if err != nil {
