@@ -153,6 +153,16 @@ func memoryError(err error, fallback string) error {
 			"the conversations behind this memory were deleted, so it is no longer answered with")
 	case errors.Is(err, repository.ErrMemoryCandidateInvalidTransition):
 		return status.Error(codes.FailedPrecondition, "this memory candidate has already been decided")
+	case errors.Is(err, repository.ErrSessionDeleting):
+		// The inbox may be a page the user opened before they deleted the
+		// conversation, so pressing accept or reject on a stale card is an
+		// ordinary thing to do rather than a fault. It is a precondition: the
+		// conversation this claim came out of is being withdrawn, and
+		// everything it was the only support for is going with it.
+		return status.Error(codes.FailedPrecondition,
+			"the conversation this proposal came from is being deleted, so it can no longer be decided")
+	case errors.Is(err, repository.ErrSessionNotFound):
+		return status.Error(codes.NotFound, "the conversation this proposal came from no longer exists")
 	case errors.Is(err, repository.ErrMemoryCandidateKind):
 		return status.Error(codes.FailedPrecondition, "this memory candidate is not of the kind this decision applies to")
 	case errors.Is(err, repository.ErrMemoryCandidateBody):

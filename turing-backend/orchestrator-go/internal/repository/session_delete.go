@@ -132,7 +132,22 @@ const scrubSessionAuditPayloadsSQL = `
 // BeginSessionDeletion makes a session immediately unavailable to ordinary
 // reads and later advances use the durable receipt rather than starting a
 // second withdrawal.
+//
+// It takes the session's decision lock for exactly this transaction. A decision
+// about one of the session's memory proposals holds that same lock across its
+// whole mutation window — the file it moves and the profile it writes — so the
+// two can never interleave: either the decision finishes and this withdraws
+// what it produced, or this flips the state first and every decision after it
+// is refused before it has touched anything. The lock is released here, before
+// any cleaner or vault reconcile runs, because holding it across a filesystem
+// walk is how a withdrawal and a pass wedge against each other.
 func (r *Repository) BeginSessionDeletion(ctx context.Context, sessionID string) (SessionDeletionReceipt, error) {
+	unlockSession, err := lockSessionDecision(ctx, sessionID)
+	if err != nil {
+		return SessionDeletionReceipt{}, err
+	}
+	defer unlockSession()
+
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return SessionDeletionReceipt{}, err

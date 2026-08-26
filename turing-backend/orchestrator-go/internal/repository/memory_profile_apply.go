@@ -151,7 +151,11 @@ func (r *Repository) finalizeRecoveredApply(ctx context.Context, vault *memoryfi
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted, removed); err != nil {
+	// Crash recovery, and deliberately not gated on the source session. The
+	// words are already in the user's own profile; the row is the only thing
+	// that records it, and refusing to finish would leave a proposal claimed
+	// and undecidable until the cascade happened to remove it.
+	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted, removed, false); err != nil {
 		return err
 	}
 	return tx.Commit()

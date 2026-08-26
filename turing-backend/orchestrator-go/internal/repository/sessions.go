@@ -484,9 +484,9 @@ func validateSession(session Session) error {
 	return nil
 }
 
-func requireActiveSessionTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
+func requireActiveSessionTx(ctx context.Context, q rowQuerier, sessionID string) error {
 	var deletionState string
-	err := tx.QueryRowContext(ctx, `SELECT deletion_state FROM sessions WHERE id = ?`, sessionID).Scan(&deletionState)
+	err := q.QueryRowContext(ctx, `SELECT deletion_state FROM sessions WHERE id = ?`, sessionID).Scan(&deletionState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrSessionNotFound
 	}
