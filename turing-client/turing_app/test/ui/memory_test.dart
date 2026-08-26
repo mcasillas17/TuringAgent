@@ -575,6 +575,37 @@ void main() {
       );
     });
 
+    // Round 18. A file Turing cannot open is one it can neither show nor
+    // remove: proving which entry an unlink would take needs a descriptor, and
+    // there is none. So this card offers no button at all — and a card with no
+    // button and no way forward is a dead end unless it says what to do.
+    testWidgets('a proposal Turing cannot open says what would make it '
+        'decidable', (tester) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          candidates: [
+            _candidate(
+              content: '',
+              contentHash: '',
+              unavailableReason: MemoryUnavailableReason.vaultUnreadable,
+            ),
+          ],
+        );
+      await _pumpMemory(tester, api);
+
+      expect(find.text('Promote'), findsNothing);
+      expect(
+        find.text('Reject'),
+        findsNothing,
+        reason: 'the server cannot prove what a removal would remove',
+      );
+      expect(
+        find.textContaining('readable'),
+        findsWidgets,
+        reason: 'a file Turing cannot open has to be opened before it can go',
+      );
+    });
+
     // Round 5. The server stopped serving the database's copy of a proposal
     // whose file it could not open, so this is what the page is handed: the
     // proposal is still there, and its words are not.

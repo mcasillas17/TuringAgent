@@ -184,31 +184,38 @@ func TestBoundHashlessRejectionRefusesAnUnopenableReplacementOfAHashedCandidate(
 	requireNoStagingResidue(t, vault)
 }
 
-// The control, and the reason the fallback exists at all. Here the pre-check
-// itself could not open the file, so there never were bytes to be bound to and
-// identity is not a weakened check but the whole of the one available. Nothing
-// moved, and the user gets rid of the claim they can neither read nor accept.
-func TestBoundHashlessRejectionRemovesAnUnopenableCandidateItsPreCheckCouldNotHash(t *testing.T) {
+// The fallback the weak door was built for, and the reason it is no longer a
+// deletion. The pre-check itself could not open the file, so there never were
+// bytes to be bound to and identity is the whole of what was available — and an
+// identity nothing can open again is one nothing can check. There is no
+// descriptor here and no way to get one, so the rejection refuses and says so.
+//
+// The proposal stays exactly where it is, which is the point: the bytes are a
+// claim about the user that nobody has read, and an unlink authorised by a
+// second failure to open is an unlink nothing stands behind.
+func TestBoundHashlessRejectionRefusesAnUnopenableCandidateItsPreCheckCouldNotHash(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root, where no file is unreadable")
 	}
+	const unread = "unreadable, unparseable, unwanted"
 	vault := newTestVault(t)
-	full := writeVaultFile(t, vault, "inbox/note.md", "unreadable, unparseable, unwanted")
+	full := writeVaultFile(t, vault, "inbox/note.md", unread)
 	closeToEveryReader(t, full)
 	identity := unreadableIdentity(t, vault, "inbox/note.md")
 	if identity.hashed {
 		t.Fatal("a file nothing could open came back with a hash of its bytes")
 	}
 
-	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
+	err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
 		RelPath:    "inbox/note.md",
 		Mode:       RemoveUnreadableCandidate,
 		Unreadable: identity,
-	}); err != nil {
-		t.Fatalf("hashless rejection of an unopenable proposal nothing changed = %v, want it removed", err)
+	})
+	if !errors.Is(err, ErrUnprovableEntry) {
+		t.Fatalf("hashless rejection of an unopenable proposal = %v, want it refused as unprovable", err)
 	}
-	if _, err := os.Lstat(full); !os.IsNotExist(err) {
-		t.Fatalf("the proposal the user could not read is still there: %v", err)
+	if got := closedFileContent(t, full); got != unread {
+		t.Fatalf("the proposal holds %q, want it left alone", got)
 	}
 	requireNoStagingResidue(t, vault)
 }
@@ -310,11 +317,13 @@ func TestDetachedHashBindingRefusesAnEntryThatCannotBeReadAgain(t *testing.T) {
 	}
 }
 
-// And the control beside it, which is no longer a shortcut. There is no
-// descriptor here — this is the file nothing could open — so the check goes and
-// opens the detached entry under its reserved name and asks it the same
-// question the pre-check asked. Still nothing can open it, and it is still the
-// entry that was detached: the licence holds and the user gets rid of the claim.
+// And the far side of that same case, exercised directly because the primitive
+// now refuses it first. There is no descriptor here — this is the file nothing
+// could open — so the check goes and opens the detached entry under its
+// reserved name and asks it the same question the pre-check asked. It cannot
+// open it either, and that is not an answer: a failed open says nothing about
+// which inode is under a name, so the entry goes back rather than being
+// unlinked on the strength of a second failure.
 func TestDetachedIdentityBindingIsCheckedAgainstTheEntryItDetached(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root, where no file is unreadable")
@@ -327,8 +336,8 @@ func TestDetachedIdentityBindingIsCheckedAgainstTheEntryItDetached(t *testing.T)
 
 	if objection := detached.objectionToDetachedEntry(
 		context.Background(), "", unreadableFailureUnopenable, nil, identity,
-	); objection != "" {
-		t.Fatalf("an unhashable removal of the entry it was bound to was refused: %q", objection)
+	); !strings.Contains(objection, unprovableDetachedEntry) {
+		t.Fatalf("an unhashable removal with no descriptor says %q, want it refused", objection)
 	}
 	moved := identity
 	moved.Ino++

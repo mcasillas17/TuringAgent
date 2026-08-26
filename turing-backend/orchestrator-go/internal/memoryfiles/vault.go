@@ -91,6 +91,22 @@ var (
 	// ErrTooLarge refuses over-limit content instead of silently truncating it.
 	ErrTooLarge = errors.New("content exceeds its limit")
 
+	// ErrUnprovableEntry refuses a removal that has no way left to prove what
+	// it would delete.
+	//
+	// It is the answer for a proposal nothing can open. Every removal here is
+	// authorised by a descriptor whose own identity is checked — a name says
+	// which entry it points at only until the next rename, and a second failure
+	// to open is not a fact about which inode is under a name. So a rejection
+	// bound to nothing but "this entry, and nothing could read it" cannot
+	// delete anything while nothing can open it, and it says so rather than
+	// pretending the file changed.
+	//
+	// It travels beside ErrStaleContent rather than instead of it: to every
+	// caller this is one more refusal that leaves the proposal exactly where it
+	// was, and only the sentence a person reads is different.
+	ErrUnprovableEntry = errors.New("the entry could not be opened to prove what a removal would remove")
+
 	// ErrAlreadyExists is real exclusivity: the final name was already taken.
 	ErrAlreadyExists = errors.New("file already exists")
 )
@@ -165,19 +181,31 @@ type Vault struct {
 	// is one this code can unlink in — so without a seam it is code nobody has
 	// ever run. It is a constructor argument like the others.
 	unlink unlinkHook
+	// recoveryName stands in for the minting of one visible recovery name.
+	// Production installs none.
+	//
+	// It exists because the mint is the one way a rescue can fail before it
+	// has touched the directory at all, and a name comes from the system's
+	// entropy: no arrangement of files makes it fail. The branch it reaches is
+	// the one where the bytes stay under the reserved staging name, which is a
+	// placement this package has to be able to say something durable about.
+	// It is a constructor argument like the others.
+	recoveryName recoveryNameHook
 }
 
 // detachPhase names where inside a rejection's deletion the barrier is
 // standing: just before the candidate leaves its name, just after it has left
-// and before what was detached is checked, and just before a file that turned
-// out not to be the decided one is put back under it. They are the three
-// moments something else — another writer, or a cancelled request — can arrive
-// at while the file is between names.
+// and before what was detached is checked, just before the detached entry is
+// opened through its reserved name, and just before a file that turned out not
+// to be the decided one is put back under it. They are the moments something
+// else — another writer, or a cancelled request — can arrive at while the file
+// is between names.
 type detachPhase int
 
 const (
 	detachPhaseBeforeDetach detachPhase = iota
 	detachPhaseBeforeVerify
+	detachPhaseBeforeReopen
 	detachPhaseBeforeRestore
 )
 
@@ -230,6 +258,19 @@ func (v *Vault) unlinkStaging(parent *os.File, name string) error {
 		return unlink()
 	}
 	return v.unlink(name, unlink)
+}
+
+// recoveryNameHook stands between a rescue and one minted recovery name. mint
+// is the real minter, so a hook may fail or delegate without reimplementing it.
+type recoveryNameHook func(mint func() (string, error)) (string, error)
+
+// mintRecoveryName takes the visible name a rescued file will be kept under,
+// through the seam when a test installed one.
+func (v *Vault) mintRecoveryName() (string, error) {
+	if v.recoveryName == nil {
+		return RecoveryDraftFileName()
+	}
+	return v.recoveryName(RecoveryDraftFileName)
 }
 
 // readDirNamesHook stands between the walk and one batch of directory entries.
@@ -286,20 +327,20 @@ func openVaultWith(root string, hooks syncHooks, scanRead scanReadHook) (*Vault,
 // openVaultWithListing adds the directory-listing seam alongside it. Both are
 // nil in production, where the walk lists directories itself.
 func openVaultWithListing(root string, hooks syncHooks, scanRead scanReadHook, readDirNames readDirNamesHook) (*Vault, error) {
-	return newVault(root, hooks, scanRead, readDirNames, nil, nil, nil)
+	return newVault(root, hooks, scanRead, readDirNames, nil, nil, nil, nil)
 }
 
 // openVaultWithDetachBarrier adds the seam inside a rejection's detach, which
 // only a test supplies. It is what lets a test put another writer between the
 // moment the candidate is read and the moment it leaves its name.
 func openVaultWithDetachBarrier(root string, hooks syncHooks, detach detachHook) (*Vault, error) {
-	return newVault(root, hooks, nil, nil, detach, nil, nil)
+	return newVault(root, hooks, nil, nil, detach, nil, nil, nil)
 }
 
 // openVaultWithDetachSeams adds the link seam alongside it, so a test can also
 // fail the no-clobber link a refused rejection depends on.
 func openVaultWithDetachSeams(root string, hooks syncHooks, detach detachHook, link linkHook) (*Vault, error) {
-	return newVault(root, hooks, nil, nil, detach, link, nil)
+	return newVault(root, hooks, nil, nil, detach, link, nil, nil)
 }
 
 // openVaultWithRemovalSeams adds the unlink seam alongside those, so a test can
@@ -313,7 +354,20 @@ func openVaultWithRemovalSeams(
 	link linkHook,
 	unlink unlinkHook,
 ) (*Vault, error) {
-	return newVault(root, hooks, nil, nil, detach, link, unlink)
+	return newVault(root, hooks, nil, nil, detach, link, unlink, nil)
+}
+
+// openVaultWithRescueSeams adds the recovery-name seam alongside all of them,
+// so a test can fail a rescue before it has a name to link to at all.
+func openVaultWithRescueSeams(
+	root string,
+	hooks syncHooks,
+	detach detachHook,
+	link linkHook,
+	unlink unlinkHook,
+	recoveryName recoveryNameHook,
+) (*Vault, error) {
+	return newVault(root, hooks, nil, nil, detach, link, unlink, recoveryName)
 }
 
 func newVault(
@@ -324,6 +378,7 @@ func newVault(
 	detach detachHook,
 	link linkHook,
 	unlink unlinkHook,
+	recoveryName recoveryNameHook,
 ) (*Vault, error) {
 	if hooks.file == nil || hooks.directory == nil {
 		return nil, errors.New("vault sync hooks must both be set")
@@ -358,6 +413,7 @@ func newVault(
 		detach:       detach,
 		link:         link,
 		unlink:       unlink,
+		recoveryName: recoveryName,
 	}, nil
 }
 

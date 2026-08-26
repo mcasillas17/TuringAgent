@@ -436,7 +436,7 @@ func (p detachedPlacement) note(sentence string) string {
 // without the drop reaching the disk.
 func (v *Vault) rescueDetachedEntry(parent *os.File, staging string) (string, bool, error) {
 	for attempt := 0; attempt < 16; attempt++ {
-		name, err := RecoveryDraftFileName()
+		name, err := v.mintRecoveryName()
 		if err != nil {
 			return "", true, err
 		}

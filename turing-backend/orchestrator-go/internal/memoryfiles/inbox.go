@@ -1027,6 +1027,7 @@ func (d *detachedEntry) objectionToReopenedUnreadableEntry(
 	boundFailure unreadableFailure,
 	expected unix.Stat_t,
 ) string {
+	d.vault.detachBarrier(detachPhaseBeforeReopen, d.clean)
 	reopened, reopenedStat, openErr := d.open()
 	if openErr != nil {
 		if ended := ctx.Err(); ended != nil {
@@ -1058,6 +1059,18 @@ func (d *detachedEntry) objectionToReopenedUnreadableEntry(
 // caller turns it into the cancellation rather than into a claim about the
 // vault.
 const endedBeforeVerification = "the request ended before the removal could be verified"
+
+// unprovableDetachedEntry is the one refusal here that is not a claim about the
+// file having changed. Nothing can open the entry, so nothing can say which
+// inode a name points at, and a removal that cannot prove what it would delete
+// does not delete.
+//
+// It is a constant because two places have to produce exactly this sentence —
+// the check before anything is detached and the descriptor recheck on the far
+// side — and because the caller turns it into a refusal of its own kind rather
+// than into "the file changed since it was read", which would send the user
+// back to look at a change that never happened.
+const unprovableDetachedEntry = "nothing here can open it to prove it is still the entry that was read"
 
 // unreadableStateObjection compares how the entry refuses to be read now with
 // how it refused when the user was told it could not be read.
