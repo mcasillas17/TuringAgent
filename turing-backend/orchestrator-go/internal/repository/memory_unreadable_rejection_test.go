@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
@@ -157,6 +158,38 @@ func TestHashlessRejectRefusesAProposalRewrittenAndClosedAfterItsPreCheck(t *tes
 	if row.State != MemoryCandidateStatePending {
 		t.Fatalf("a refused rejection left the proposal in %q", row.State)
 	}
+}
+
+// The other binding across that same window, and the weaker one. This
+// proposal was past the size bound when the decision read it, so there were no
+// bytes to hash and no bytes to show: the user was told the file could not be
+// read, not what it said. Then it was trimmed in place — same inode — into
+// something a reader can get through. It still will not parse, which is not the
+// point: those words arrived after the pre-check and nobody has read them, so
+// the rejection the user issued for a file nobody could read is not a decision
+// about them.
+func TestHashlessRejectRefusesAnUnreadableProposalTrimmedIntoReadableBytes(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+	candidate, err := repo.CreateMemoryCandidate(ctx(), CreateMemoryCandidateInput{
+		SessionID: sessionID, Kind: MemoryCandidateKindBelief,
+		Title: "Dark mode", Body: "The user prefers dark mode.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeVaultNote(t, vault, candidate.InboxPath, strings.Repeat("x", memoryfiles.MaxNoteBytes+1))
+
+	const trimmed = "---\nstill: [broken\n---\n\nTrimmed after the pre-check, still unparseable.\n"
+	repo.memoryDecisionFileBarrier = func() {
+		repo.memoryDecisionFileBarrier = nil
+		full := filepath.Join(vault.Root(), filepath.FromSlash(candidate.InboxPath))
+		if writeErr := os.WriteFile(full, []byte(trimmed), 0o600); writeErr != nil {
+			t.Errorf("trim the proposal in place: %v", writeErr)
+		}
+	}
+
+	requireRefusedHashlessRejection(t, repo, vault, candidate, trimmed)
 }
 
 // Nothing moved in the window, so the user gets what they asked for: the
