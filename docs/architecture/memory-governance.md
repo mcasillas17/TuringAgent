@@ -159,6 +159,17 @@ These are known, bounded, and deliberately not claimed away:
   refused every decision about it.
 - **The 4096-file scan bound degrades search and reconcile only.** A vault past
   it refuses legibly; pinned tiers and enqueue are never blocked by vault size.
+- **A proposal nothing can open cannot be rejected from the app.** Every
+  removal here is authorised by a descriptor whose own identity is checked,
+  because an unlink names a name and the entry under a name can be replaced
+  between the check and the removal. A file with no permissions yields no
+  descriptor, and a second failure to open is not evidence about which entry a
+  name holds — a different file, unreadable in the same way, answers
+  identically. So the rejection refuses, says which file and why, and names the
+  way out: make it readable in the vault, or delete it there, which needs no
+  permission on the file itself. This is scoped to the one case that cannot be
+  opened at all; a proposal past the size bound opens, proves itself, and is
+  still removable.
 
 ### What the amendment does not touch
 

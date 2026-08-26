@@ -111,7 +111,7 @@ func stageAnInboxRefusal(
 	failure rescueFailure,
 	recorder *syncRecorder,
 	arm func(recorder *syncRecorder),
-) (error, *Vault, uint64) {
+) (*Vault, uint64, error) {
 	t.Helper()
 	const decided = "the proposal the user read"
 	const replacement = "a newer claim nobody has read yet"
@@ -136,7 +136,7 @@ func stageAnInboxRefusal(
 	if !errors.Is(err, ErrStaleContent) {
 		t.Fatalf("rejection = %v, want a stale-content refusal", err)
 	}
-	return err, vault, inbox
+	return vault, inbox, err
 }
 
 // requireStagedBytes holds the reserved name to actually holding the detached
@@ -162,7 +162,7 @@ func TestARefusalThatKeepsBytesStagedFlushesTheDirectoryFirst(t *testing.T) {
 	for _, failure := range rescueFailures() {
 		t.Run(failure.name, func(t *testing.T) {
 			recorder := &syncRecorder{}
-			err, vault, inbox := stageAnInboxRefusal(t, failure, recorder, func(*syncRecorder) {})
+			vault, inbox, err := stageAnInboxRefusal(t, failure, recorder, func(*syncRecorder) {})
 
 			staged := requireStagedBytes(t, vault, replacement)
 			if !recorder.syncedDirectory(inbox) {
@@ -190,7 +190,7 @@ func TestARefusalThatKeepsBytesStagedSaysWhenItCouldNotFlush(t *testing.T) {
 	for _, failure := range rescueFailures() {
 		t.Run(failure.name, func(t *testing.T) {
 			recorder := &syncRecorder{}
-			err, vault, _ := stageAnInboxRefusal(t, failure, recorder, func(recorder *syncRecorder) {
+			vault, _, err := stageAnInboxRefusal(t, failure, recorder, func(recorder *syncRecorder) {
 				// The restore's link is about to fail, so the only directory
 				// fsync left in this call is the one that answers for where
 				// the bytes were left.
