@@ -372,6 +372,54 @@ type UnreadableCandidateEntry struct {
 	// door with no bytes to hash, and are held to their identity alone.
 	rawHash string
 	hashed  bool
+	// failure is the broad way the pre-check's read failed, and it is the
+	// second half of what an unhashed binding is bound to. Identity says this
+	// is the same entry; this says it is still in the state the pre-check
+	// answered about. It is meaningless when hashed is set, because then the
+	// binding is to bytes.
+	failure unreadableFailure
+}
+
+// unreadableFailure names the broad way a candidate refused to be read.
+//
+// A hashless rejection with no bytes behind it is a licence to delete a file
+// nobody has read, and it is granted because the alternative is leaving the
+// user stuck with a claim about themselves they can neither read nor be rid
+// of. What makes it safe is that the file goes on refusing to be read in the
+// same broad way — that refusal, repeated under the primitive's own lock, is
+// the whole of the evidence that these are still the bytes nobody saw. Coarse
+// on purpose: EACCES and EPERM are one answer, and no distinction finer than
+// this is one a user could act on.
+type unreadableFailure uint8
+
+const (
+	// unreadableFailureNone is a read that did not fail, and authorises
+	// nothing.
+	unreadableFailureNone unreadableFailure = iota
+	// unreadableFailureUnopenable is an entry nothing could open.
+	unreadableFailureUnopenable
+	// unreadableFailureOverLimit is an entry that opened and is past the bound
+	// every reader here works under.
+	unreadableFailureOverLimit
+	// unreadableFailureUnreadable is an entry that opened and whose bytes
+	// could not be read anyway.
+	unreadableFailureUnreadable
+)
+
+// classifyUnreadableFailure sorts a failed read into the class an unhashed
+// binding is held to.
+func classifyUnreadableFailure(err error) unreadableFailure {
+	var unopenable *unopenableEntryError
+	switch {
+	case err == nil:
+		return unreadableFailureNone
+	case errors.Is(err, ErrTooLarge):
+		return unreadableFailureOverLimit
+	case errors.As(err, &unopenable):
+		return unreadableFailureUnopenable
+	default:
+		return unreadableFailureUnreadable
+	}
 }
 
 // Bound reports whether this identity came from a pre-check that really failed
@@ -461,13 +509,17 @@ func (v *Vault) ReadInboxCandidate(ctx context.Context, relPath string) (InboxCa
 		return InboxCandidateReading{}, readErr
 	default:
 		// Unopenable, or past the size bound: the bytes cannot be hashed, and
-		// the entry that was inspected is the whole identity there is.
+		// the entry that was inspected is the whole identity there is. The way
+		// it refused to be read is carried with it, because that refusal
+		// repeating is the only evidence the primitive will have that these
+		// are still the bytes nobody has seen.
 		return InboxCandidateReading{
 			Unreadable: UnreadableCandidateEntry{
 				bound:   true,
 				present: true,
 				device:  uint64(stat.Dev),
 				inode:   uint64(stat.Ino),
+				failure: classifyUnreadableFailure(readErr),
 			},
 			ReadErr: readErr,
 		}, nil
@@ -701,6 +753,7 @@ func (v *Vault) removeRejectedInboxEntry(
 	// pre-check could not parse. It is empty only when nobody could read the
 	// file at all, and then identity is all there is.
 	boundHash := expectedHash
+	boundFailure := unreadableFailureNone
 	if expectedHash != "" {
 		content, readErr := readEntryContent(ctx, opened, clean)
 		if readErr != nil {
@@ -715,6 +768,11 @@ func (v *Vault) removeRejectedInboxEntry(
 		}
 		if request.Unreadable.hashed {
 			boundHash = request.Unreadable.rawHash
+		} else {
+			// No bytes were ever read, so what crosses the detach is the way
+			// the file refused to be read. The far side asks the same question
+			// the near side did.
+			boundFailure = request.Unreadable.failure
 		}
 	}
 	v.detachBarrier(detachPhaseBeforeDetach, clean)
@@ -751,7 +809,7 @@ func (v *Vault) removeRejectedInboxEntry(
 	}
 	var detachedStat unix.Stat_t
 	statErr := unix.Fstatat(int(parent.Fd()), staging, &detachedStat, unix.AT_SYMLINK_NOFOLLOW)
-	detached := objectionToDetachedEntry(ctx, clean, boundHash, opened, openedStat, detachedStat, statErr)
+	detached := objectionToDetachedEntry(ctx, clean, boundHash, boundFailure, opened, openedStat, detachedStat, statErr)
 	if detached != "" {
 		return v.restoreDetachedEntry(ctx, parent, leaf, clean, staging, detached)
 	}
@@ -793,6 +851,16 @@ func (v *Vault) removeRejectedInboxEntry(
 // alone. A candidate whose bytes *were* hashed and which this primitive can no
 // longer open does not inherit it: it is a binding to bytes with no way left to
 // check them, and it is refused rather than decided on identity alone.
+//
+// That licence is also narrower than "it did not read". It is for the file the
+// pre-check answered about, in the state it answered about it in, so the read
+// has to fail again in the same broad way: a candidate nothing could open which
+// this primitive can open, or one past the bound which is now under it, is a
+// file something has written to since. And if the bytes can be read now the
+// refusal is flat, whether or not they parse. Nobody has ever read them — the
+// pre-check could not, so nothing was shown to the user and nothing was bound,
+// and there is no hash to hold them to and no reader who could say they are
+// what was rejected. A rejection is a verdict on words somebody saw.
 func requireBoundUnreadableEntry(
 	ctx context.Context,
 	clean string,
@@ -823,6 +891,9 @@ func requireBoundUnreadableEntry(
 			return &StaleContentError{RelPath: clean, Detail: boundRefusalDetail(
 				"its bytes were read once and cannot be read again to check they are still the same bytes, so it was left alone")}
 		}
+		if identity.failure != unreadableFailureUnopenable {
+			return staleUnreadableFailureChange(clean)
+		}
 		return nil
 	}
 	content, readErr := readEntryContent(ctx, opened, clean)
@@ -830,11 +901,20 @@ func requireBoundUnreadableEntry(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// Still unreadable, for the same kind of reason it was unreadable
-		// before, and it is still the same entry.
+		// Still unreadable, and still the same entry. For a binding to bytes
+		// that is as far as this check goes, and the far side of the detach
+		// answers the rest. For a binding to no bytes at all it has to be
+		// unreadable the same way it was, or something has written to the file
+		// since the user was told it could not be read.
+		if !identity.hashed && classifyUnreadableFailure(readErr) != identity.failure {
+			return staleUnreadableFailureChange(clean)
+		}
 		return nil
 	}
-	if identity.hashed && ContentHash(content) != identity.rawHash {
+	if !identity.hashed {
+		return staleUnreadableBecameReadable(clean)
+	}
+	if ContentHash(content) != identity.rawHash {
 		return &StaleContentError{RelPath: clean, Detail: boundRefusalDetail(
 			"it was rewritten in place since it was read, so it was left alone")}
 	}
@@ -845,6 +925,22 @@ func requireBoundUnreadableEntry(
 	return nil
 }
 
+// staleUnreadableFailureChange is the refusal for an entry that refuses to be
+// read in a different way than it refused before. It is the same file by
+// identity, and it is not in the state the rejection was issued about.
+func staleUnreadableFailureChange(clean string) error {
+	return &StaleContentError{RelPath: clean, Detail: boundRefusalDetail(
+		"it is unreadable in a different way than when it was read, so something has written to it since; it was left alone")}
+}
+
+// staleUnreadableBecameReadable is the refusal for the file this guard exists
+// for: nothing could read it when it was rejected and something can read it
+// now, so whatever it says is something nobody has seen.
+func staleUnreadableBecameReadable(clean string) error {
+	return &StaleContentError{RelPath: clean, Detail: boundRefusalDetail(
+		"nothing could read it when it was rejected and it can be read now, so nobody has seen what it says; it was left alone")}
+}
+
 // objectionToDetachedEntry answers whether the entry a rejection has just taken
 // off its name is the one it is entitled to delete, and says in a sentence why
 // not when it is not. An empty answer is the only thing that authorises the
@@ -853,10 +949,17 @@ func requireBoundUnreadableEntry(
 // It is a function of its own because it is the last check standing between a
 // detached file and an unlink, and every branch of it has to be reachable by a
 // test on its own terms.
+//
+// It asks whichever question the near side of the detach asked. A removal bound
+// to bytes re-reads them. A removal bound to nothing but "this entry, and
+// nothing could read it" asks the file again whether it still cannot be read,
+// and in the same broad way — the two guards have to agree, or the detach
+// window becomes the one place where bytes nobody has seen may be deleted.
 func objectionToDetachedEntry(
 	ctx context.Context,
 	clean string,
 	boundHash string,
+	boundFailure unreadableFailure,
 	opened *os.File,
 	openedStat unix.Stat_t,
 	detachedStat unix.Stat_t,
@@ -869,7 +972,7 @@ func objectionToDetachedEntry(
 		return "another file had taken its name"
 	}
 	if boundHash == "" {
-		return ""
+		return objectionToDetachedUnreadableEntry(ctx, clean, boundFailure, opened)
 	}
 	if opened == nil {
 		// A binding to bytes is checked by reading those bytes. Without a
@@ -890,6 +993,40 @@ func objectionToDetachedEntry(
 		return "it was rewritten in place"
 	}
 	return ""
+}
+
+// objectionToDetachedUnreadableEntry is the far side of the detach for the
+// removal that has no bytes to compare: a proposal nothing could read, being
+// thrown away on its identity and on its going on refusing to be read.
+//
+// The identity question is already answered above. This asks the other half,
+// against the descriptor this removal opened before the detach — the same
+// descriptor, so the same inode, whatever has happened to the name. A file that
+// has become readable inside the window is a file somebody wrote to inside the
+// window, and nobody has read a word of it: it goes back. So does one that
+// fails in a way it did not fail before.
+func objectionToDetachedUnreadableEntry(
+	ctx context.Context,
+	clean string,
+	boundFailure unreadableFailure,
+	opened *os.File,
+) string {
+	if boundFailure == unreadableFailureNone || opened == nil {
+		// Nothing was ever opened here, so there is nothing to re-read and
+		// nothing this could ask. Identity was the whole binding and it has
+		// already answered — that is the file nothing could open, which is the
+		// one case the weak door was built for.
+		return ""
+	}
+	_, readErr := rereadEntryContent(ctx, opened, clean)
+	switch {
+	case readErr == nil:
+		return "nothing could read it when it was rejected and it can be read now, so nobody has seen what it says"
+	case classifyUnreadableFailure(readErr) != boundFailure:
+		return "it is unreadable in a different way than when it was read, so something has written to it since"
+	default:
+		return ""
+	}
 }
 
 // restoreDetachedEntry puts back a file this deletion detached and then found

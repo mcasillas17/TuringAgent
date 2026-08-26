@@ -259,7 +259,7 @@ func TestDetachedHashBindingRefusesAnEntryThatCannotBeReadAgain(t *testing.T) {
 	stat.Dev = 7
 	stat.Ino = 42
 
-	objection := objectionToDetachedEntry(context.Background(), "inbox/note.md", "a-hash-of-bytes-somebody-read", nil, stat, stat, nil)
+	objection := objectionToDetachedEntry(context.Background(), "inbox/note.md", "a-hash-of-bytes-somebody-read", unreadableFailureNone, nil, stat, stat, nil)
 	if objection == "" {
 		t.Fatal("a removal bound to bytes it cannot read again was allowed to delete the file on an inode match alone")
 	}
@@ -272,20 +272,68 @@ func TestDetachedHashBindingRefusesAnEntryThatCannotBeReadAgain(t *testing.T) {
 }
 
 // And the control beside it: with nothing to compare, identity is the whole
-// binding and it is enough. This is the file nothing could ever open.
+// binding and it is enough. This is the file nothing could ever open — no
+// descriptor here, so nothing to ask, and the entry it was bound to is the
+// entry it detached.
 func TestDetachedIdentityBindingIsEnoughWhenThereWereNoBytesToHash(t *testing.T) {
 	var stat unix.Stat_t
 	stat.Dev = 7
 	stat.Ino = 42
 
-	if objection := objectionToDetachedEntry(context.Background(), "inbox/note.md", "", nil, stat, stat, nil); objection != "" {
+	if objection := objectionToDetachedEntry(context.Background(), "inbox/note.md", "", unreadableFailureUnopenable, nil, stat, stat, nil); objection != "" {
 		t.Fatalf("an unhashable removal of the entry it was bound to was refused: %q", objection)
 	}
 	var moved unix.Stat_t
 	moved.Dev = 7
 	moved.Ino = 43
-	if objection := objectionToDetachedEntry(context.Background(), "inbox/note.md", "", nil, stat, moved, nil); objection == "" {
+	if objection := objectionToDetachedEntry(context.Background(), "inbox/note.md", "", unreadableFailureUnopenable, nil, stat, moved, nil); objection == "" {
 		t.Fatal("an unhashable removal deleted an entry that was not the one it was bound to")
+	}
+}
+
+// The far side of the detach for a removal bound to no bytes at all, exercised
+// directly. The path above it refuses most of these first, and a guard that is
+// only ever reached through another guard is one the next reader deletes: these
+// two have to be able to fail on their own terms.
+//
+// The descriptor is the one the removal opened before the detach, so it is the
+// same inode however the name has been used since. What it is asked is the
+// question the near side asked: can this be read now, and if not, is it
+// unreadable the same way it was.
+func TestDetachedUnreadableBindingChecksTheFileStillWillNotRead(t *testing.T) {
+	var stat unix.Stat_t
+	stat.Dev = 7
+	stat.Ino = 42
+	detached := func(t *testing.T, failure unreadableFailure, content string) string {
+		t.Helper()
+		full := filepath.Join(t.TempDir(), "detached")
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			t.Fatalf("write the detached entry: %v", err)
+		}
+		opened, err := os.Open(full)
+		if err != nil {
+			t.Fatalf("open the detached entry: %v", err)
+		}
+		defer func() { _ = opened.Close() }()
+		return objectionToDetachedEntry(context.Background(), "inbox/note.md", "", failure, opened, stat, stat, nil)
+	}
+
+	// It could not be read when it was rejected and it can be read now. Those
+	// words arrived after the pre-check and nobody has seen them.
+	objection := detached(t, unreadableFailureUnopenable, unparseableCandidate)
+	if !strings.Contains(objection, "it can be read now") {
+		t.Fatalf("a removal bound to a file nobody could read deleted bytes it could read: %q", objection)
+	}
+	// It is unreadable, but not the way it was: it was too big to read and now
+	// nothing can be got out of it at all, or the other way about.
+	objection = detached(t, unreadableFailureUnopenable, strings.Repeat("x", MaxNoteBytes+1))
+	if !strings.Contains(objection, "unreadable in a different way") {
+		t.Fatalf("a removal bound to an unopenable file deleted an over-sized one: %q", objection)
+	}
+	// And the control: still past the bound, as it was, so the user gets rid
+	// of the claim they can neither read nor accept.
+	if objection := detached(t, unreadableFailureOverLimit, strings.Repeat("x", MaxNoteBytes+1)); objection != "" {
+		t.Fatalf("a removal of the over-sized file it was bound to was refused: %q", objection)
 	}
 }
 

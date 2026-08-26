@@ -371,6 +371,19 @@ func (v *Vault) removeInstalledCopy(parent *os.File, leaf string, clean string, 
 	return nil
 }
 
+// unopenableEntryError marks a read that failed because the entry could not be
+// opened at all, as opposed to one that failed while its bytes were being read.
+// Nothing outside this package sees the difference — the message and the errno
+// underneath are unchanged, and errors.Is answers exactly as before — but a
+// hashless rejection is bound to the broad way its candidate refused to be
+// read, and "nothing can open it" and "it is too big to read" are not the same
+// refusal by a file in the same state.
+type unopenableEntryError struct{ err error }
+
+func (e *unopenableEntryError) Error() string { return e.err.Error() }
+
+func (e *unopenableEntryError) Unwrap() error { return e.err }
+
 // readConfinedFile reads one vault entry through the descriptor walk. It
 // refuses a symlink and anything that is not a regular file, and it refuses an
 // over-limit file outright rather than returning a prefix of it.
@@ -406,7 +419,7 @@ func (v *Vault) readConfinedEntry(ctx context.Context, parent *os.File, leaf str
 	}
 	fd, err := unix.Openat(int(parent.Fd()), leaf, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return "", stat, fmt.Errorf("open %q: %w", clean, err)
+		return "", stat, &unopenableEntryError{err: fmt.Errorf("open %q: %w", clean, err)}
 	}
 	file := os.NewFile(uintptr(fd), clean)
 	if file == nil {

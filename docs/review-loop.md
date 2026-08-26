@@ -768,3 +768,54 @@ landing inside the detach window. `repository/memory_unreadable_rejection_test.g
 the permission change through the decision's own barrier and holds the row
 pending and the new bytes on disk. Deleting either guard fails a test, and
 neither is covered only by the other.
+
+### Adjacent, closed before round 12 — the weak door asked its question too loosely
+
+Round 11's fix sorted the hashless door into its two bindings and made the
+strong one refuse when it could not be checked. Closing that raised the
+obvious next question, which is what the weak one is actually checking. Its
+licence reads "this entry, and still unreadable", and the second half of it was
+barely asked: any failed read counted, and a read that *succeeded* counted too
+as long as the bytes still would not parse.
+
+That last clause is the hole. A candidate nothing could open, or one past the
+size bound, has no bytes anywhere in the decision: the pre-check could not read
+them, so the user was shown a failure rather than a claim, and nothing was
+bound. If the file can be read by the time the primitive looks, something wrote
+to it in the window — and a rejection issued about a file nobody could read is
+not a verdict on words that arrived afterwards. Whether those words parse is
+beside the point; nobody has seen them either way. The same goes for a file that
+fails differently than it failed before: unopenable and then over-limit, or the
+other way about, is a file something has written to under a name whose inode
+never moved.
+
+Accepted. The pre-check now carries the broad class of its own failure — nothing
+could open it, it is past the bound, its bytes would not come out — alongside
+the identity, and the removal proceeds only where the fresh confined read under
+the primitive's lock fails the same way again. Readable is a flat refusal.
+A different class is a refusal. The classes are deliberately coarse: EACCES and
+EPERM are one answer, because no finer distinction is one a user could act on.
+Both refusals are `ErrStaleContent`, and both name what actually happened — "it
+can be read now, so nobody has seen what it says" rather than the generic
+sentence about changed content, which is true but tells the user nothing.
+
+The far side of the detach asks the identical question through the descriptor
+the removal already holds, because a guard that only one side enforces makes the
+detach window the one place where bytes nobody has read may be deleted. Neither
+side is reachable only through the other: the near side refuses before the file
+is ever taken off its name, and the far side is exercised both through a file
+trimmed mid-flight and directly.
+
+Tests: `memoryfiles/remove_unreadable_class_binding_test.go` — an over-limit
+candidate trimmed into readable-but-malformed bytes, an unopenable one opened
+back up and rewritten, an unopenable one grown past the bound, and an over-limit
+one closed to every reader, each refused *before the detach*, with the sentence
+that names why, the bytes intact and the inode proved not to have moved; the
+trim landing inside the detach window, which the far side puts back; and the
+control that keeps the door open — still past the bound under the same identity,
+still removed. `memoryfiles/remove_unreadable_hash_binding_test.go` exercises the
+detached guard directly for all three of its answers.
+`repository/memory_unreadable_rejection_test.go` drives the trim through the
+decision's own barrier and holds the row pending with the new bytes on disk.
+Every branch of both guards, and the classifier under them, fails a test when
+deleted.

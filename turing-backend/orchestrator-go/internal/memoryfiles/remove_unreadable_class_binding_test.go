@@ -38,6 +38,23 @@ func unhashableIdentity(t *testing.T, vault *Vault, relPath string) UnreadableCa
 	return identity
 }
 
+// vaultRefusingBeforeAnyDetach opens a vault that reports whether the removal
+// ever took the file off its name. Every refusal below is one the check before
+// the detach owes an answer to: the guard on the far side would catch these
+// too, and a guard that is only ever reached through another guard is one the
+// next reader deletes. A rejection with no standing has no business moving the
+// user's bytes around to discover it has none.
+func vaultRefusingBeforeAnyDetach(t *testing.T) (*Vault, *bool) {
+	t.Helper()
+	detached := false
+	vault := vaultWithDetachBarrier(t, func(phase detachPhase, _ string) {
+		if phase == detachPhaseBeforeDetach {
+			detached = true
+		}
+	})
+	return vault, &detached
+}
+
 func rejectUnreadable(vault *Vault, relPath string, identity UnreadableCandidateEntry) error {
 	return vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
 		RelPath:    relPath,
@@ -65,18 +82,31 @@ func requireRefusedAndKept(t *testing.T, vault *Vault, full string, err error, w
 	requireNoStagingResidue(t, vault)
 }
 
+// requireRefusalSays holds a refusal to the sentence that names what actually
+// happened. "It changed since you read it" is not an answer a user can act on
+// when the change is that the file can be read at all now.
+func requireRefusalSays(t *testing.T, err error, want string) {
+	t.Helper()
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("the refusal says %v, want it to say %q", err, want)
+	}
+}
+
+// requireNothingWasDetached holds a refusal to the near side of the detach.
+func requireNothingWasDetached(t *testing.T, detached *bool) {
+	t.Helper()
+	if *detached {
+		t.Fatal("a rejection with no standing still took the file off its name")
+	}
+}
+
 // The finding. The pre-check found a file past the size bound, so it hashed
 // nothing and bound the rejection to identity alone. The user then trimmed it
 // in place — same inode — and what is there now can be read. It still will not
 // parse, which used to be enough to delete it, and it must not be: nobody has
 // ever read those bytes, and there is nothing to compare them against.
 func TestBoundHashlessRejectionRefusesAnUnhashableCandidateThatBecameReadable(t *testing.T) {
-	detached := false
-	vault := vaultWithDetachBarrier(t, func(phase detachPhase, _ string) {
-		if phase == detachPhaseBeforeDetach {
-			detached = true
-		}
-	})
+	vault, detached := vaultRefusingBeforeAnyDetach(t)
 	full := writeVaultFile(t, vault, "inbox/note.md", strings.Repeat("x", MaxNoteBytes+1))
 	identity := unhashableIdentity(t, vault, "inbox/note.md")
 	dev, ino := entryIdentity(t, full)
@@ -88,12 +118,8 @@ func TestBoundHashlessRejectionRefusesAnUnhashableCandidateThatBecameReadable(t 
 
 	err := rejectUnreadable(vault, "inbox/note.md", identity)
 	requireRefusedAndKept(t, vault, full, err, trimmed, dev, ino)
-	if !strings.Contains(err.Error(), "can be read now") {
-		t.Fatalf("the refusal does not say the bytes can be read now: %v", err)
-	}
-	if detached {
-		t.Fatal("a rejection with no standing still took the file off its name")
-	}
+	requireRefusalSays(t, err, "can be read now")
+	requireNothingWasDetached(t, detached)
 }
 
 // The same rule reached from the other unhashable case. Nothing could open the
@@ -104,7 +130,7 @@ func TestBoundHashlessRejectionRefusesAnUnopenableCandidateThatBecameReadable(t 
 	if os.Geteuid() == 0 {
 		t.Skip("running as root, where no file is unreadable")
 	}
-	vault := newTestVault(t)
+	vault, detached := vaultRefusingBeforeAnyDetach(t)
 	full := writeVaultFile(t, vault, "inbox/note.md", "unreadable, unparseable, unwanted")
 	closeToEveryReader(t, full)
 	identity := unhashableIdentity(t, vault, "inbox/note.md")
@@ -120,6 +146,8 @@ func TestBoundHashlessRejectionRefusesAnUnopenableCandidateThatBecameReadable(t 
 
 	err := rejectUnreadable(vault, "inbox/note.md", identity)
 	requireRefusedAndKept(t, vault, full, err, rewritten, dev, ino)
+	requireRefusalSays(t, err, "can be read now")
+	requireNothingWasDetached(t, detached)
 }
 
 // A different failure class is a different file state, and the licence was for
@@ -130,7 +158,7 @@ func TestBoundHashlessRejectionRefusesAnUnopenableCandidateThatGrewPastTheBound(
 	if os.Geteuid() == 0 {
 		t.Skip("running as root, where no file is unreadable")
 	}
-	vault := newTestVault(t)
+	vault, detached := vaultRefusingBeforeAnyDetach(t)
 	full := writeVaultFile(t, vault, "inbox/note.md", "unreadable, unparseable, unwanted")
 	closeToEveryReader(t, full)
 	identity := unhashableIdentity(t, vault, "inbox/note.md")
@@ -146,6 +174,8 @@ func TestBoundHashlessRejectionRefusesAnUnopenableCandidateThatGrewPastTheBound(
 
 	err := rejectUnreadable(vault, "inbox/note.md", identity)
 	requireRefusedAndKept(t, vault, full, err, grown, dev, ino)
+	requireRefusalSays(t, err, "unreadable in a different way")
+	requireNothingWasDetached(t, detached)
 }
 
 // And the reverse crossing. The pre-check could open the file and found it past
@@ -155,7 +185,7 @@ func TestBoundHashlessRejectionRefusesAnOverLimitCandidateNothingCanOpen(t *test
 	if os.Geteuid() == 0 {
 		t.Skip("running as root, where no file is unreadable")
 	}
-	vault := newTestVault(t)
+	vault, detached := vaultRefusingBeforeAnyDetach(t)
 	full := writeVaultFile(t, vault, "inbox/note.md", strings.Repeat("x", MaxNoteBytes+1))
 	identity := unhashableIdentity(t, vault, "inbox/note.md")
 	dev, ino := entryIdentity(t, full)
@@ -168,6 +198,8 @@ func TestBoundHashlessRejectionRefusesAnOverLimitCandidateNothingCanOpen(t *test
 
 	err := rejectUnreadable(vault, "inbox/note.md", identity)
 	requireRefusedAndKept(t, vault, full, err, closed, dev, ino)
+	requireRefusalSays(t, err, "unreadable in a different way")
+	requireNothingWasDetached(t, detached)
 }
 
 // The far side of the detach, where the pre-detach check has already said yes.
@@ -193,6 +225,7 @@ func TestBoundHashlessRejectionRefusesAnUnhashableCandidateTrimmedInsideTheDetac
 
 	err := rejectUnreadable(vault, "inbox/note.md", identity)
 	requireRefusedAndKept(t, vault, full, err, trimmed, dev, ino)
+	requireRefusalSays(t, err, "can be read now")
 }
 
 // The control that keeps the weak door open where it belongs. The file was past
