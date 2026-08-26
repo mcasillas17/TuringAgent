@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
 	"sort"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
@@ -221,7 +222,7 @@ func (r *Repository) ReconcileMemoryVault(ctx context.Context) (MemoryReconcileR
 		}
 		report.Index.Errors = append(report.Index.Errors, adoptionIssues...)
 		report.Index.Errors = append(report.Index.Errors, rewriteIssues...)
-		report.OrphanCandidatesRemoved, report.ReservationsCleared, passErr = r.sweepVaultInbox(ctx, state, scanned)
+		report.OrphanCandidatesRemoved, report.ReservationsCleared, passErr = r.sweepVaultInbox(ctx, vault, state, scanned)
 		return passErr
 	})
 	if err != nil {
@@ -1009,13 +1010,71 @@ func removeVanishedNotesTx(
 // Both are also inferred from absence, so both are gated on the walk having
 // read the inbox in full. An inbox the walk could not enumerate holds every
 // candidate it ever did, as far as anyone here knows.
-func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState, scanned scannedVault) (int, int, error) {
+//
+// "Its file is gone" is also what a decision in flight looks like from here. A
+// promotion moves the note out of inbox/ and only then records it; a rejection
+// unlinks it and only then retires the row. A pass that read the gap as an
+// orphan would delete the row the decision is about to update, and the user
+// would be told their acceptance failed while their own vault says it happened.
+// So each candidate is retired under the *same* per-candidate lock every
+// decision holds, and the row, the anchor and the file are all re-read under it
+// — the walk's view is a snapshot, and only what is true under the lock decides
+// a deletion.
+//
+// Lock order, and it is one-directional on purpose: the vault-wide pass lock is
+// taken first (in runVaultPass), then a candidate's decision lock, then the
+// vault's own path locks inside the primitives. A decision takes the last two
+// and never the first, so the two directions can never meet in a cycle.
+//
+// The other half of that rule is about SQLite rather than mutexes: the pool is
+// one connection, so this must hold no database transaction while it waits for
+// a candidate lock. The collection below therefore runs in a transaction that
+// is closed before a single lock is taken, and each retirement opens its own.
+// The cost is that the sweep is no longer one transaction; the deletions are
+// idempotent and each pass re-derives its worklist, so a crash between them
+// converges on the next pass.
+func (r *Repository) sweepVaultInbox(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	state memoryVaultState,
+	scanned scannedVault,
+) (int, int, error) {
 	if inbox := scanned.completeness.Area(memoryfiles.AreaInbox); !inbox.Complete {
 		return 0, 0, nil
 	}
-	tx, err := r.db.BeginTx(ctx, nil)
+	orphans, reservations, err := r.collectVaultInboxStale(ctx, state, scanned)
 	if err != nil {
 		return 0, 0, err
+	}
+	removed := 0
+	for _, candidateID := range orphans {
+		retired, err := r.retireOrphanCandidate(ctx, vault, candidateID, state.anchor)
+		if err != nil {
+			return removed, 0, err
+		}
+		if retired {
+			removed++
+		}
+	}
+	cleared, err := r.releaseStaleReservations(ctx, reservations)
+	if err != nil {
+		return removed, cleared, err
+	}
+	return removed, cleared, nil
+}
+
+// collectVaultInboxStale reads the worklist and nothing else: which candidate
+// rows and which reservations name a path the walk did not find. It is a
+// proposal, not a decision — every row it names is re-examined under its own
+// lock before anything is deleted.
+func (r *Repository) collectVaultInboxStale(
+	ctx context.Context,
+	state memoryVaultState,
+	scanned scannedVault,
+) ([]string, []string, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -1027,7 +1086,7 @@ func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState
 	// file, the path does not.
 	held, err := profileEditsToRetainTx(ctx, tx, scanned)
 	if err != nil {
-		return 0, 0, err
+		return nil, nil, err
 	}
 	retain := func(vaultPath string) bool {
 		if len(held) == 0 {
@@ -1045,15 +1104,7 @@ func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState
 		SELECT id, inbox_path FROM memory_candidates WHERE created_at < ?
 	`, scanned.inboxPaths, retain, state.anchor)
 	if err != nil {
-		return 0, 0, err
-	}
-	for _, candidateID := range orphans {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM memory_candidates WHERE id = ?`, candidateID); err != nil {
-			return 0, 0, err
-		}
-		if err := recordMemoryReconcileTx(ctx, tx, memoryCandidateOrphanedAction, candidateID, "inbox_file_missing"); err != nil {
-			return 0, 0, err
-		}
+		return nil, nil, err
 	}
 
 	// A reservation is taken before the bytes exist, so its own age says
@@ -1071,20 +1122,142 @@ func (r *Repository) sweepVaultInbox(ctx context.Context, state memoryVaultState
 		WHERE finalized_at IS NOT NULL AND finalized_at < ?
 	`, scanned.inboxPaths, retain, state.anchor)
 	if err != nil {
-		return 0, 0, err
+		return nil, nil, err
 	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return orphans, reservations, nil
+}
+
+// retireOrphanCandidate deletes one candidate row, under the lock a decision
+// about that candidate would hold, and only if it is still an orphan while the
+// lock is held.
+//
+// Everything it re-checks is something a decision can have changed since the
+// walk went past. The row may be gone, because the decision that emptied the
+// inbox entry finished and consumed it. It may have become a *claim* — an apply
+// in 'profile_applying' says the user's profile may already carry these words,
+// and a claim outlives the lock on purpose so it can survive a crash, so only
+// recoverProfileApplies may end it; the file being gone is what a claim whose
+// write landed looks like, not an orphan. It may be newer than the anchor, if
+// the identifier was reused by something this pass never saw. And the file
+// itself may be back: the user moved it, or a promotion rolled its own
+// destination back.
+//
+// Anything this cannot confirm counts as "still there". Deleting a row for a
+// file that exists strands a claim about the user in their own vault with
+// nothing naming it; keeping one for a file that is really gone costs one more
+// pass.
+func (r *Repository) retireOrphanCandidate(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	candidateID string,
+	anchor string,
+) (bool, error) {
+	unlock, err := r.lockMemoryCandidateDecision(ctx, candidateID)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	if r.memoryOrphanSweepBarrier != nil {
+		r.memoryOrphanSweepBarrier()
+	}
+
+	current, err := memoryCandidateByIDTx(ctx, r.db, candidateID)
+	if err != nil {
+		if errors.Is(err, ErrMemoryCandidateNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if current.State == MemoryCandidateStateProfileApplying || current.CreatedAt >= anchor {
+		return false, nil
+	}
+	present, err := inboxEntryStillThere(ctx, vault, current.InboxPath)
+	if err != nil {
+		return false, err
+	}
+	if present {
+		return false, nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `
+		DELETE FROM memory_candidates WHERE id = ? AND state = ?
+	`, candidateID, current.State)
+	if err != nil {
+		return false, err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if deleted != 1 {
+		return false, nil
+	}
+	if err := recordMemoryReconcileTx(ctx, tx, memoryCandidateOrphanedAction, candidateID, "inbox_file_missing"); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// inboxEntryStillThere answers the one question the sweep needs about a file,
+// through the confined reader every other caller uses rather than by reaching
+// into the vault's directory itself.
+//
+// Only "the entry is not there" counts as absent. A note that will not parse,
+// one past the read ceiling, a symlink somebody dropped in its place — all of
+// them are a file the user can see in their vault, and a row naming it is not
+// stale.
+func inboxEntryStillThere(ctx context.Context, vault *memoryfiles.Vault, inboxPath string) (bool, error) {
+	if _, err := vault.ReadInboxNote(ctx, inboxPath); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return true, nil
+	}
+	return true, nil
+}
+
+// releaseStaleReservations clears the manifest rows naming paths the inbox no
+// longer holds.
+//
+// They are not taken under a candidate's decision lock, and they do not need
+// to be: a decision that retires a reservation deletes it unconditionally, so
+// the two cannot disagree about the outcome, and a reservation whose file is
+// still in the inbox is never in this list to begin with.
+func (r *Repository) releaseStaleReservations(ctx context.Context, reservations []string) (int, error) {
+	if len(reservations) == 0 {
+		return 0, nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
 	for _, artifactID := range reservations {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM vault_artifacts WHERE id = ?`, artifactID); err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 		if err := recordMemoryReconcileTx(ctx, tx, memoryReservationReleasedAction, artifactID, "inbox_file_missing"); err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, 0, err
+		return 0, err
 	}
-	return len(orphans), len(reservations), nil
+	return len(reservations), nil
 }
 
 // incompleteVaultAreas turns the walk's own account of what it could read into
