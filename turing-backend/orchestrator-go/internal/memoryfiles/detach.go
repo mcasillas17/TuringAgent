@@ -133,7 +133,7 @@ func (d *detachedEntry) objectionToOwnWrite(ctx context.Context, expected unix.S
 // A failure says where the bytes actually are, so a detached file is never left
 // unaccounted for in a sentence that reports it gone.
 func (d *detachedEntry) discard() error {
-	if err := unix.Unlinkat(int(d.parent.Fd()), d.staging, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+	if err := d.vault.unlinkStaging(d.parent, d.staging); err != nil && !errors.Is(err, unix.ENOENT) {
 		_ = d.vault.syncDirectory(d.parent)
 		return fmt.Errorf("remove the detached %q: %w; it is at %s", d.clean, err, d.stagedRelPath())
 	}
@@ -219,7 +219,7 @@ func (d *detachedEntry) putBack() detachedPlacement {
 	if linkErr := d.vault.linkDetached(d.parent, d.staging, d.leaf); linkErr != nil {
 		return d.preserve(recovery, false, linkErr)
 	}
-	if err := unix.Unlinkat(int(d.parent.Fd()), d.staging, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+	if err := d.vault.unlinkStaging(d.parent, d.staging); err != nil && !errors.Is(err, unix.ENOENT) {
 		// The file is back where it belongs; a second link to it under a name
 		// nothing shows is not. Making that copy findable is the same rule as
 		// everywhere else here — a duplicate the user can see beats one they
@@ -322,7 +322,7 @@ func (v *Vault) rescueDetachedEntry(parent *os.File, staging string) (string, er
 		if err := v.syncDirectory(parent); err != nil {
 			return name, err
 		}
-		if err := unix.Unlinkat(int(parent.Fd()), staging, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+		if err := v.unlinkStaging(parent, staging); err != nil && !errors.Is(err, unix.ENOENT) {
 			return name, err
 		}
 		if err := v.syncDirectory(parent); err != nil {

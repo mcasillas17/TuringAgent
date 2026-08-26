@@ -155,6 +155,16 @@ type Vault struct {
 	// is not a guarantee. It is a constructor argument for the same reason the
 	// others are.
 	link linkHook
+	// unlink stands in for the removal of a reserved staging name, on every
+	// path that drops one. Production installs none.
+	//
+	// It exists for the same reason the link seam does, and for one more: a
+	// staging name that will not go away is the case where a restore has to
+	// decide between reporting a duplicate and pretending there is none. That
+	// branch cannot be reached from outside — a directory a test can write to
+	// is one this code can unlink in — so without a seam it is code nobody has
+	// ever run. It is a constructor argument like the others.
+	unlink unlinkHook
 }
 
 // detachPhase names where inside a rejection's deletion the barrier is
@@ -199,6 +209,27 @@ func (v *Vault) linkDetached(parent *os.File, staging string, target string) err
 		return link()
 	}
 	return v.link(target, link)
+}
+
+// unlinkHook stands between this package and one removal of a reserved staging
+// name. name is the name being unlinked, so a test can fail exactly the drop it
+// is about. unlink is the real Unlinkat, so a hook may fail or delegate without
+// reimplementing the confined call.
+type unlinkHook func(name string, unlink func() error) error
+
+// unlinkStaging removes one reserved staging name inside a confined directory,
+// through the seam when a test installed one.
+//
+// Every caller treats ENOENT as success, because a name that is already gone is
+// the outcome each of them wanted.
+func (v *Vault) unlinkStaging(parent *os.File, name string) error {
+	unlink := func() error {
+		return unix.Unlinkat(int(parent.Fd()), name, 0)
+	}
+	if v.unlink == nil {
+		return unlink()
+	}
+	return v.unlink(name, unlink)
 }
 
 // readDirNamesHook stands between the walk and one batch of directory entries.
@@ -255,20 +286,34 @@ func openVaultWith(root string, hooks syncHooks, scanRead scanReadHook) (*Vault,
 // openVaultWithListing adds the directory-listing seam alongside it. Both are
 // nil in production, where the walk lists directories itself.
 func openVaultWithListing(root string, hooks syncHooks, scanRead scanReadHook, readDirNames readDirNamesHook) (*Vault, error) {
-	return newVault(root, hooks, scanRead, readDirNames, nil, nil)
+	return newVault(root, hooks, scanRead, readDirNames, nil, nil, nil)
 }
 
 // openVaultWithDetachBarrier adds the seam inside a rejection's detach, which
 // only a test supplies. It is what lets a test put another writer between the
 // moment the candidate is read and the moment it leaves its name.
 func openVaultWithDetachBarrier(root string, hooks syncHooks, detach detachHook) (*Vault, error) {
-	return newVault(root, hooks, nil, nil, detach, nil)
+	return newVault(root, hooks, nil, nil, detach, nil, nil)
 }
 
 // openVaultWithDetachSeams adds the link seam alongside it, so a test can also
 // fail the no-clobber link a refused rejection depends on.
 func openVaultWithDetachSeams(root string, hooks syncHooks, detach detachHook, link linkHook) (*Vault, error) {
-	return newVault(root, hooks, nil, nil, detach, link)
+	return newVault(root, hooks, nil, nil, detach, link, nil)
+}
+
+// openVaultWithRemovalSeams adds the unlink seam alongside those, so a test can
+// fail the drop of a reserved staging name — the one step whose failure decides
+// whether a restore is reported as clean or as a duplicate the caller has to
+// name.
+func openVaultWithRemovalSeams(
+	root string,
+	hooks syncHooks,
+	detach detachHook,
+	link linkHook,
+	unlink unlinkHook,
+) (*Vault, error) {
+	return newVault(root, hooks, nil, nil, detach, link, unlink)
 }
 
 func newVault(
@@ -278,6 +323,7 @@ func newVault(
 	readDirNames readDirNamesHook,
 	detach detachHook,
 	link linkHook,
+	unlink unlinkHook,
 ) (*Vault, error) {
 	if hooks.file == nil || hooks.directory == nil {
 		return nil, errors.New("vault sync hooks must both be set")
@@ -311,6 +357,7 @@ func newVault(
 		readDirNames: readDirNames,
 		detach:       detach,
 		link:         link,
+		unlink:       unlink,
 	}, nil
 }
 
