@@ -318,6 +318,8 @@ class _MemoryPageState extends State<MemoryPage> {
             l10n: l10n,
             persona: _persona,
             profile: _profile,
+            personaHash: _personaHash,
+            profileHash: _profileHash,
             busy: _busy,
             settingsError: _settingsError,
             personaError: _personaError,
@@ -408,6 +410,8 @@ class _MemoryPageState extends State<MemoryPage> {
               state.profile.content,
               state.profile.contentHash,
             ),
+            profileResultHashFor: (candidate) =>
+                _profileResultHashFor(candidate, state.profile.contentHash),
             onCandidatesBuilt: _retainProfileResults,
           );
         },
@@ -422,6 +426,8 @@ class _MemoryBody extends StatelessWidget {
     required this.l10n,
     required this.persona,
     required this.profile,
+    required this.personaHash,
+    required this.profileHash,
     required this.busy,
     required this.settingsError,
     required this.personaError,
@@ -437,6 +443,7 @@ class _MemoryBody extends StatelessWidget {
     required this.onReject,
     required this.onApply,
     required this.profileResultFor,
+    required this.profileResultHashFor,
     required this.onCandidatesBuilt,
   });
 
@@ -444,6 +451,14 @@ class _MemoryBody extends StatelessWidget {
   final AppLocalizations l10n;
   final TextEditingController persona;
   final TextEditingController profile;
+
+  /// The compare-and-set tokens the editors were loaded at, which is what a
+  /// save will name. They are not `state.persona.contentHash` and
+  /// `state.profile.contentHash` the moment an editor holds unsaved words: a
+  /// re-read leaves a dirty editor its text and its token, so the newest hash
+  /// on the page describes a document the user is not editing.
+  final String personaHash;
+  final String profileHash;
   final bool busy;
   final String settingsError;
   final String personaError;
@@ -466,6 +481,13 @@ class _MemoryBody extends StatelessWidget {
   /// re-read every write triggers.
   final TextEditingController Function(MemoryCandidate candidate)
   profileResultFor;
+
+  /// The profile compare-and-set token one proposal's apply will carry.
+  ///
+  /// The card displays it and the request sends it, and they are the same
+  /// number or the sentence under the button explains a refusal with a token
+  /// nobody sent.
+  final String Function(MemoryCandidate candidate) profileResultHashFor;
 
   /// Told which proposals are on screen, so the page can forget the editors of
   /// the ones that are not.
@@ -513,6 +535,7 @@ class _MemoryBody extends StatelessWidget {
           heading: l10n.memoryPersonaHeading,
           description: l10n.memoryPersonaDescription,
           document: state.persona,
+          editingHash: personaHash,
           vaultConfigured: state.settings.vaultRoot.isNotEmpty,
           controller: persona,
           editorKey: const Key('memory-persona-editor'),
@@ -532,6 +555,7 @@ class _MemoryBody extends StatelessWidget {
           heading: l10n.memoryProfileHeading,
           description: l10n.memoryProfileDescription,
           document: state.profile,
+          editingHash: profileHash,
           vaultConfigured: state.settings.vaultRoot.isNotEmpty,
           controller: profile,
           editorKey: const Key('memory-profile-editor'),
@@ -567,7 +591,7 @@ class _MemoryBody extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 12),
               child: _CandidateCard(
                 candidate: candidate,
-                profileHash: state.profile.contentHash,
+                profileHash: profileResultHashFor(candidate),
                 profileResult: _needsProfileResult(candidate)
                     ? profileResultFor(candidate)
                     : null,
@@ -703,6 +727,7 @@ class _DocumentCard extends StatelessWidget {
     required this.heading,
     required this.description,
     required this.document,
+    required this.editingHash,
     required this.vaultConfigured,
     required this.controller,
     required this.editorKey,
@@ -720,6 +745,17 @@ class _DocumentCard extends StatelessWidget {
   final String heading;
   final String description;
   final MemoryDocument document;
+
+  /// The compare-and-set token this editor was loaded at, and the one a save
+  /// will name.
+  ///
+  /// Deliberately not [MemoryDocument.contentHash]. A re-read leaves an editor
+  /// the user has typed into both its text and the token that text was composed
+  /// against, so the document beside it may already describe a newer version
+  /// nobody in this editor is editing. Showing that newer number would put a
+  /// sentence on screen that explains a refusal with a token the save never
+  /// sent — the one thing this line exists to do.
+  final String editingHash;
 
   /// Whether a vault is open at all, from `settings.vaultRoot`.
   ///
@@ -805,14 +841,14 @@ class _DocumentCard extends StatelessWidget {
               style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
           ],
-          if (document.contentHash.isNotEmpty) ...[
+          if (editingHash.isNotEmpty) ...[
             const SizedBox(height: 4),
             // The version this editor is holding. It is what a save is
             // compare-and-set against, so it is the one number that explains a
             // refusal — and it is a document hash, never the egress snapshot
             // fingerprint, which is a binding token and stays off screen.
             SelectableText(
-              l10n.memoryEditingVersion(document.contentHash),
+              l10n.memoryEditingVersion(editingHash),
               style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
           ],
@@ -1207,8 +1243,13 @@ class _NoteCard extends StatelessWidget {
             const SizedBox(height: 8),
             _ErrorLine(message: note.parseError),
           ],
-          if (note.unavailableReason != MemoryUnavailableReason.none &&
-              note.unavailableReason != MemoryUnavailableReason.unspecified)
+          if (note.unavailableReason != MemoryUnavailableReason.none)
+            // Everything except the server saying nothing is wrong, including
+            // its saying nothing at all. An unanswered read rendered as a blank
+            // line is one the user reads as a healthy note, and a reason this
+            // build has never heard of arrives here as exactly that silence —
+            // so it gets the "the server did not say" sentence rather than
+            // none.
             _StatusLine(
               text: localizedMemoryUnavailableCopy(
                 l10n,

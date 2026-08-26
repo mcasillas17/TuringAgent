@@ -197,6 +197,72 @@ void main() {
         reason: 'a note that failed to parse is not in the index',
       );
     });
+
+    testWidgets('says a note nobody accounted for is not being found', (
+      tester,
+    ) async {
+      // UNSPECIFIED is what this build decodes any reason a newer server
+      // invents into, and it is also the server literally not answering. Either
+      // way nothing has said this note is in the index — so the page must not
+      // render it as an ordinary belief Turing can find, and it must put the
+      // unanswered read into words rather than leaving the line blank.
+      final api = _MemoryApi()
+        ..state = _state(
+          notes: [
+            MemoryNote(
+              noteId: 'note-unknown',
+              path: 'beliefs/unknown.md',
+              title: 'Unaccounted',
+              content: 'They keep bees.',
+              contentHash: 'sha256:unknown',
+              status: MemoryNoteStatus.managed,
+              tier: MemoryTier.belief,
+              unavailableReason: MemoryUnavailableReason.unspecified,
+            ),
+          ],
+        );
+      await _pumpMemory(tester, api);
+
+      expect(find.text('Unaccounted'), findsOneWidget);
+      expect(
+        find.textContaining('not searchable'),
+        findsWidgets,
+        reason: 'nothing said this note is in the index',
+      );
+      expect(
+        find.textContaining('The server did not say'),
+        findsWidgets,
+        reason: 'silence about the reason reads as a healthy note',
+      );
+    });
+
+    testWidgets('a withdrawn note is not offered as something Turing finds', (
+      tester,
+    ) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          notes: [
+            MemoryNote(
+              noteId: 'note-withdrawn',
+              path: 'beliefs/withdrawn.md',
+              title: 'Withdrawn',
+              content: 'They keep bees.',
+              contentHash: 'sha256:withdrawn',
+              status: MemoryNoteStatus.withdrawn,
+              tier: MemoryTier.belief,
+              unavailableReason: MemoryUnavailableReason.none,
+            ),
+          ],
+        );
+      await _pumpMemory(tester, api);
+
+      expect(find.text('Withdrawn'), findsOneWidget);
+      expect(
+        find.textContaining('not searchable'),
+        findsWidgets,
+        reason: 'search does not answer from a withdrawn note',
+      );
+    });
   });
 
   group('the persona and profile editors', () {

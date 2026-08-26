@@ -230,12 +230,27 @@ class MemoryNote {
   final String parseError;
   final MemoryUnavailableReason unavailableReason;
 
-  /// A note the vault could not parse is not in the search index, and saying so
-  /// is the difference between "Turing has not used this" and silence.
+  /// Whether Turing can actually find this note when it searches memory.
+  ///
+  /// This is a whitelist, and that is the point. The server answers NONE to say
+  /// "nothing is wrong", and only that answer means anything read this note.
+  /// [MemoryUnavailableReason.unspecified] is not a quieter version of it: it
+  /// is the server not saying, and it is also what this build decodes any
+  /// reason a newer server invents into. Accepting it would render a note
+  /// nobody could account for as an ordinary, findable belief — and would
+  /// suppress the one line telling the user their memory is not being found,
+  /// on the strength of not recognising the problem.
+  ///
+  /// The status is the same allowlist the server's own search predicate uses:
+  /// a note Turing may rewrite and one the user has taken over are memory they
+  /// have, and search answers from those two and nothing else. A withdrawn note
+  /// is kept because they accepted it, and is never answered with; a status
+  /// from a newer build is one this page cannot claim anything about.
   bool get isIndexable =>
       parseError.isEmpty &&
-      (unavailableReason == MemoryUnavailableReason.none ||
-          unavailableReason == MemoryUnavailableReason.unspecified);
+      unavailableReason == MemoryUnavailableReason.none &&
+      (status == MemoryNoteStatus.managed ||
+          status == MemoryNoteStatus.unmanaged);
 }
 
 /// A proposed memory awaiting the user's decision.
