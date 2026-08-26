@@ -123,6 +123,9 @@ func (v *Vault) RewriteFrontmatterRefs(ctx context.Context, request RewriteFront
 	if len(updated) > MaxNoteBytes {
 		return RewrittenNote{}, &LimitError{What: fmt.Sprintf("note %q after the rewrite", clean), Limit: MaxNoteBytes, Got: len(updated)}
 	}
+	if err := verifyRewrittenNote(clean, current, updated, request); err != nil {
+		return RewrittenNote{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return RewrittenNote{}, err
 	}
@@ -149,6 +152,87 @@ func (v *Vault) RewriteFrontmatterRefs(ctx context.Context, request RewriteFront
 		ContentHash: ContentHash(updated),
 		Changed:     true,
 	}, nil
+}
+
+// verifyRewrittenNote is the last thing between a splice and the user's file.
+//
+// Everything above it works on byte ranges: it locates one value, replaces it,
+// and leaves the rest of the note alone. That is what keeps a user's key order,
+// comments and quoting intact, and it is also why a splice can only ever be as
+// correct as its idea of where the value ended and what may legally stand in
+// its place. A frontmatter shape nobody anticipated — an anchor declared on the
+// value another key aliases, a layout this package has not met — turns a
+// faithful splice into a note that no longer reads back.
+//
+// So the spliced note is parsed whole, through the same lenient reader every
+// other caller uses, and asked whether it says what the rewrite meant it to
+// say. A note that does not is refused before a byte is written: the user keeps
+// the file they had, and the refusal is per-note, which is what every caller of
+// this primitive already expects.
+//
+// It is deliberately not a schema. Keys this package has never heard of are
+// none of its business, and a vault the user annotates is full of them; the
+// only things checked are the two fields the request asked for and the prose
+// the splice was never supposed to touch.
+func verifyRewrittenNote(relPath string, current string, updated string, request RewriteFrontmatterRefsRequest) error {
+	parsed, err := ParseNote(relPath, updated)
+	if err != nil {
+		if _, before := ParseNote(relPath, current); before != nil {
+			// The note did not read back before this rewrite either — a kind
+			// this package does not recognise, say — so the splice is not what
+			// broke it, and refusing here would make exactly those notes the
+			// ones a withdrawal can never reach. The guard is about this
+			// package's own splice, not about vetting the user's file.
+			return nil
+		}
+		return noteParseError(relPath, "the rewritten frontmatter would not read back: %v", err)
+	}
+	if request.NoteID != "" && parsed.ID != request.NoteID {
+		return noteParseError(relPath, "the rewritten frontmatter does not carry the identity it was given")
+	}
+	switch {
+	case request.Withdrawn:
+		if !parsed.Withdrawn {
+			return noteParseError(relPath, "the rewritten frontmatter does not read as withdrawn")
+		}
+	case request.Refs != nil:
+		if parsed.Withdrawn || !equalOrderedStrings(parsed.Refs, readableRefs(request.Refs)) {
+			return noteParseError(relPath, "the rewritten frontmatter does not carry the citations it was given")
+		}
+	}
+	before, err := splitFrontmatterAt(relPath, current)
+	if err != nil {
+		return err
+	}
+	if parsed.Body != before.Body {
+		return noteParseError(relPath, "the rewrite would have changed the note's own text")
+	}
+	return nil
+}
+
+// readableRefs is the list a rewrite can expect to read back, given the one it
+// was handed. The reader drops blank citations, so comparing against the raw
+// request would refuse a write that was in fact faithful.
+func readableRefs(refs []string) []string {
+	readable := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if trimmed := strings.TrimSpace(ref); trimmed != "" {
+			readable = append(readable, trimmed)
+		}
+	}
+	return readable
+}
+
+func equalOrderedStrings(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func spliceNoteFrontmatter(relPath string, content string, request RewriteFrontmatterRefsRequest) (string, error) {
@@ -219,6 +303,10 @@ func spliceFrontmatterKeys(relPath string, raw string, newline string, request R
 	return updated, nil
 }
 
+// nestedIndentWidth is how far past its key a value is indented when the key's
+// own column is all this package has to go on.
+const nestedIndentWidth = 2
+
 // valueStyle carries how the existing value was written, so the replacement
 // lands in the same shape the user's file already uses.
 type valueStyle struct {
@@ -229,6 +317,9 @@ type valueStyle struct {
 	separator string
 	// indent is the column the first block item starts at, minus one.
 	indent int
+	// keyIndent is the column the mapping key starts at, minus one. It is what
+	// decides where a non-inline value may legally begin; see scalarPad.
+	keyIndent int
 	// appended is true when the key did not exist and the rendering is being
 	// added at the end of the frontmatter.
 	appended bool
@@ -240,11 +331,33 @@ type valueStyle struct {
 	trailing string
 }
 
-func (s valueStyle) renderScalar(value string) string {
-	if s.inline && !s.appended {
-		return s.separator + value + s.trailing + s.newline
+// scalarPad is the indentation a non-inline scalar or flow value has to add to
+// what the replaced range already leaves in front of it.
+//
+// A block sequence is the one value YAML lets sit at its own key's column —
+// `refs:` followed by `- "sess"` at the left margin is the specification's
+// standard form and what most editors emit. Nothing else may: a scalar there is
+// read as the *next key*, so writing the withdrawal marker at the sequence's
+// column hands the user a note their own editor can no longer open. So a
+// replacement that is not a block sequence is pushed past the key, and the
+// value's own column is kept whenever the user had already put it there — which
+// is every note this package writes itself.
+func (s valueStyle) scalarPad() int {
+	if s.indent > s.keyIndent {
+		return 0
 	}
-	return value + s.newline
+	return s.keyIndent + nestedIndentWidth - s.indent
+}
+
+func (s valueStyle) renderScalar(value string) string {
+	switch {
+	case s.appended:
+		return value + s.newline
+	case s.inline:
+		return s.separator + value + s.trailing + s.newline
+	default:
+		return strings.Repeat(" ", s.scalarPad()) + value + s.newline
+	}
 }
 
 func (s valueStyle) renderSequence(items []string) string {
@@ -252,10 +365,15 @@ func (s valueStyle) renderSequence(items []string) string {
 		if len(items) == 0 {
 			return "[]" + s.newline
 		}
-		return s.newline + strings.Repeat(" ", 2) + renderBlockSequence(items, 2, s.newline)
+		return s.newline + strings.Repeat(" ", nestedIndentWidth) + renderBlockSequence(items, nestedIndentWidth, s.newline)
 	}
 	if s.inline {
 		return s.separator + renderFlowSequence(items) + s.trailing + s.newline
+	}
+	if len(items) == 0 {
+		// `[]` is a flow value rather than a block sequence, so it is indented
+		// like a scalar for exactly the reason scalarPad gives.
+		return strings.Repeat(" ", s.scalarPad()) + "[]" + s.newline
 	}
 	return renderBlockSequence(items, s.indent, s.newline)
 }
@@ -333,9 +451,10 @@ func spliceFrontmatterValue(relPath string, raw string, key string, newline stri
 		return "", noteParseError(relPath, "frontmatter key %q spans an unreadable range", key)
 	}
 	style := valueStyle{
-		inline:  keyNode.Line == valueNode.Line,
-		indent:  valueNode.Column - 1,
-		newline: newline,
+		inline:    keyNode.Line == valueNode.Line,
+		indent:    valueNode.Column - 1,
+		keyIndent: keyNode.Column - 1,
+		newline:   newline,
 	}
 	if style.inline && (start == 0 || raw[start-1] != ' ') {
 		style.separator = " "
