@@ -376,9 +376,12 @@ func (s *Server) beliefProto(ctx context.Context, row memoryfiles.NoteRow, refus
 	}
 	if row.ParseError != "" {
 		note.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_CONTENT_PARSE_FAILED
-	} else if refusal != "" {
-		// No unavailable reason: the note is right there and readable. What is
-		// missing is its place in the index, and the line says which.
+	}
+	if refusal != "" {
+		// What the pass said about this file, which is the parse error plus
+		// whatever the pass alone knows — that a proposal is still tracked at
+		// an inbox path this file's name came from, for one. It is never less
+		// than the scan's own sentence, so preferring it can only add.
 		note.ParseError = refusal
 	}
 	if row.NoteID == "" {

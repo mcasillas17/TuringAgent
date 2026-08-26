@@ -201,7 +201,29 @@ func NoteIDFromInboxRelPath(relPath string) string {
 		return ""
 	}
 	name := strings.TrimPrefix(relPath, InboxDirName+"/")
-	if strings.Contains(name, "/") || !strings.HasSuffix(name, ".md") {
+	if strings.Contains(name, "/") {
+		return ""
+	}
+	return NoteIDFromFileName(name)
+}
+
+// NoteIDFromFileName reads the identity out of a name this server minted,
+// wherever in the vault that name has since ended up, and answers "" for any
+// name it did not mint.
+//
+// It is the one correlation available when a file cannot be read at all. A
+// note's frontmatter identity is the link that survives a move, but a file
+// whose frontmatter will not parse — or that is too long to read — has no
+// frontmatter anyone can consult, and the caller still has to decide whether a
+// row naming a missing inbox entry is stale. The minted prefix of the name is
+// the only thing left that this server, rather than the file's contents, is the
+// author of.
+//
+// It answers about the name and nothing else. A name is not proof of what is
+// inside the file, which is why the one caller uses it to *retain* lifecycle
+// state and never to consume any.
+func NoteIDFromFileName(name string) string {
+	if !strings.HasSuffix(name, ".md") {
 		return ""
 	}
 	name = strings.TrimSuffix(name, ".md")

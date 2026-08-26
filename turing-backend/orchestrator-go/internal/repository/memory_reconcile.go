@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"path"
 	"sort"
 	"strings"
 
@@ -615,6 +617,7 @@ func (r *Repository) applyMemoryIndex(ctx context.Context, state memoryVaultStat
 	// whose name has to be left alone.
 	writable := make([]memoryfiles.NoteRow, 0, len(scanned.beliefs))
 	scannedIDs := map[string]struct{}{}
+	proposalPaths := proposalPathsByIdentity(state.candidatePaths)
 	for _, note := range scanned.beliefs {
 		if note.NoteID != "" {
 			// Recorded even for a note this pass refuses to index: an identity
@@ -624,7 +627,10 @@ func (r *Repository) applyMemoryIndex(ctx context.Context, state memoryVaultStat
 		}
 		switch {
 		case note.ParseError != "":
-			report.Errors = append(report.Errors, MemoryNoteIssue{RelPath: note.RelPath, Reason: note.ParseError})
+			report.Errors = append(report.Errors, MemoryNoteIssue{
+				RelPath: note.RelPath,
+				Reason:  note.ParseError + trackedProposalHint(note.RelPath, proposalPaths),
+			})
 		case !note.Indexable:
 			// Today every unindexable note also carries a parse error — a
 			// contested identity is reported as one — so this is a second
@@ -1432,32 +1438,118 @@ func incompleteVaultAreas(completeness memoryfiles.ScanCompleteness) []MemoryVau
 	return issues
 }
 
+// proposalPathsByIdentity keys the inbox paths the database is tracking by the
+// identity this server minted into each of them, so a file found under another
+// name elsewhere in the vault can be recognised without reading it.
+func proposalPathsByIdentity(candidatePaths map[string]struct{}) map[string]string {
+	byIdentity := make(map[string]string, len(candidatePaths))
+	for inboxPath := range candidatePaths {
+		if identity := memoryfiles.NoteIDFromInboxRelPath(inboxPath); identity != "" {
+			byIdentity[identity] = inboxPath
+		}
+	}
+	return byIdentity
+}
+
+// trackedProposalHint is the sentence a user needs beside a file the pass could
+// not read: this is not a stray note, a proposal Turing wrote is still tracked
+// at a path in the inbox, and putting the file back there is what makes it
+// decidable again.
+//
+// It is said off the minted name alone, because a file that will not parse has
+// no contents anyone can consult — and it names the inbox path rather than
+// claiming what the file is, because the name is evidence about where the file
+// came from and never about what is inside it now.
+func trackedProposalHint(relPath string, proposalPaths map[string]string) string {
+	if len(proposalPaths) == 0 {
+		return ""
+	}
+	identity := memoryfiles.NoteIDFromFileName(path.Base(relPath))
+	if identity == "" {
+		return ""
+	}
+	inboxPath, tracked := proposalPaths[identity]
+	if !tracked || inboxPath == relPath {
+		return ""
+	}
+	return fmt.Sprintf(
+		"; a proposal Turing wrote is still tracked at %q — move this file back there to decide on it",
+		inboxPath,
+	)
+}
+
 // profileEditsToRetainTx names the proposals the inbox sweep must not retire,
 // by identity — the one thing that travels with a file the user moved.
 //
-// When the walk read beliefs/ in full, that is exactly the profile edits it
-// found sitting there: the scan already refuses to index them and says why, and
-// this is the same fact in the shape the sweep needs, so the two cannot drift
-// into disagreeing about which files are still awaiting a decision.
+// When the walk read beliefs/ in full, that is the profile edits it found
+// sitting there — the scan already refuses to index them and says why, and this
+// is the same fact in the shape the sweep needs, so the two cannot drift into
+// disagreeing about which files are still awaiting a decision — plus every
+// proposal a file the walk could not classify may be. A frontmatter that will
+// not parse and a file past the read ceiling both arrive carrying no kind and
+// no identity, so the file's own words cannot say which proposal it is, or that
+// it is not one. What is left is the identity this server minted into the name,
+// which travels with the file exactly as the frontmatter does and is the one
+// part of the file this server, rather than its contents, is the author of.
 //
-// When it did not, the answer has to be every profile edit still on the books.
-// A folder the walk could not open may be holding one, and "the walk found no
-// misplaced proposal" read off a folder nobody could list is the same mistake
-// as "the note was deleted" read off one — which is why the belief removal is
-// gated on the very same completeness. Retaining too much costs one more pass;
-// retaining too little leaves the user a proposal in their vault with no row
-// saying it was ever proposed, and no way to apply or reject it.
+// A name that carries no minted identity cannot be correlated at all, and that
+// is the ambiguous case rather than the negative one: the answer widens to
+// every profile edit still on the books until the file can be read.
+//
+// When the walk did not read beliefs/ in full, the answer is that same widening
+// for the same reason. A folder the walk could not open may be holding one, and
+// "the walk found no misplaced proposal" read off a folder nobody could list is
+// the same mistake as "the note was deleted" read off one — which is why the
+// belief removal is gated on the very same completeness. Retaining too much
+// costs one more pass; retaining too little leaves the user a proposal in their
+// vault with no row saying it was ever proposed, and no way to apply or reject
+// it.
 func profileEditsToRetainTx(ctx context.Context, tx *sql.Tx, scanned scannedVault) (map[string]struct{}, error) {
+	if !scanned.completeness.Area(memoryfiles.AreaBeliefs).Complete {
+		return profileEditIdentitiesTx(ctx, tx)
+	}
 	held := map[string]struct{}{}
-	if scanned.completeness.Area(memoryfiles.AreaBeliefs).Complete {
-		for _, note := range scanned.beliefs {
-			if note.Kind != memoryfiles.KindProfileEdit || note.NoteID == "" {
-				continue
+	minted := map[string]struct{}{}
+	uncorrelated := false
+	for _, note := range scanned.beliefs {
+		if note.NoteID == "" && !note.Indexable {
+			// Read but not understood, or not read at all. Correlate it back
+			// to the proposal that would have produced this name, and widen to
+			// all of them when nothing can.
+			if identity := memoryfiles.NoteIDFromFileName(path.Base(note.RelPath)); identity != "" {
+				minted[identity] = struct{}{}
+			} else {
+				uncorrelated = true
 			}
+			continue
+		}
+		if note.Kind == memoryfiles.KindProfileEdit && note.NoteID != "" {
 			held[note.NoteID] = struct{}{}
 		}
+	}
+	if !uncorrelated && len(minted) == 0 {
 		return held, nil
 	}
+	// The correlation is checked against the proposals rather than trusted on
+	// its own. A name is not proof of what is in a file, so a minted identity
+	// that names no profile edit retains nothing — and a belief candidate the
+	// user moved is still swept, which is the crash-heal the plan asks for.
+	proposals, err := profileEditIdentitiesTx(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	for identity := range proposals {
+		if _, correlated := minted[identity]; correlated || uncorrelated {
+			held[identity] = struct{}{}
+		}
+	}
+	return held, nil
+}
+
+// profileEditIdentitiesTx is every profile edit still on the books, by the
+// identity minted into its inbox name.
+func profileEditIdentitiesTx(ctx context.Context, tx *sql.Tx) (map[string]struct{}, error) {
+	held := map[string]struct{}{}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT inbox_path FROM memory_candidates WHERE kind = ?
 	`, MemoryCandidateKindProfileEdit)

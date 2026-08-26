@@ -142,3 +142,52 @@ func TestCreateInboxNoteRefusesDuplicateIdentity(t *testing.T) {
 		t.Fatalf("second CreateInboxNote error = %v, want ErrAlreadyExists", err)
 	}
 }
+
+// NoteIDFromFileName is the only correlation left when a file cannot be read
+// at all: the identity this server minted into its name, wherever the user has
+// since moved that name to.
+//
+// It answers about the name and nothing else, so it has to answer "" for every
+// name this server did not mint. Its one caller uses the answer to retain
+// lifecycle state, and a false positive there is a row kept one pass too long —
+// but a shape it accepted loosely would be a rule the user's own filenames
+// could reach into.
+func TestNoteIDFromFileNameOnlyReadsAMintedName(t *testing.T) {
+	noteID, err := NewNoteID()
+	if err != nil {
+		t.Fatalf("mint note id: %v", err)
+	}
+	for _, name := range []string{noteID + ".md", noteID + "-prefers-dark-mode.md"} {
+		if got := NoteIDFromFileName(name); got != noteID {
+			t.Fatalf("NoteIDFromFileName(%q) = %q, want %q", name, got, noteID)
+		}
+	}
+	for _, name := range []string{
+		"",
+		"about-me.md",
+		noteID,
+		noteID + ".markdown",
+		noteID + "x-notes.md",
+		strings.ToLower(noteID) + ".md",
+		"prefix-" + noteID + ".md",
+	} {
+		if got := NoteIDFromFileName(name); got != "" {
+			t.Fatalf("NoteIDFromFileName(%q) = %q, want no identity", name, got)
+		}
+	}
+	// The inbox reader is the same rule with the inbox's own prefix in front
+	// of it, so the two can never disagree about which file is which note.
+	relPath := InboxNoteRelPath(noteID, "Prefers dark mode")
+	if got := NoteIDFromInboxRelPath(relPath); got != noteID {
+		t.Fatalf("NoteIDFromInboxRelPath(%q) = %q, want %q", relPath, got, noteID)
+	}
+	for _, relPath := range []string{
+		BeliefsDirName + "/" + noteID + ".md",
+		InboxDirName + "/nested/" + noteID + ".md",
+		noteID + ".md",
+	} {
+		if got := NoteIDFromInboxRelPath(relPath); got != "" {
+			t.Fatalf("NoteIDFromInboxRelPath(%q) = %q, want no identity", relPath, got)
+		}
+	}
+}
