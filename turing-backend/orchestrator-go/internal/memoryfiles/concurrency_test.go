@@ -30,10 +30,9 @@ func TestApplyProfileEditSerialisesConcurrentWritersOnTheSamePath(t *testing.T) 
 	// Every writer gets its own candidate, so the only path they contend on is
 	// profile.md itself. Sharing one candidate would serialise them on the
 	// candidate's lock and hide a target lock that does nothing.
-	candidates := make([]string, 0, writers)
+	candidates := make([]InboxNote, 0, writers)
 	for writer := 0; writer < writers; writer++ {
-		candidate := seedCandidate(t, vault, KindProfileEdit, fmt.Sprintf("Edit %d", writer), fmt.Sprintf("Proposal %d.", writer))
-		candidates = append(candidates, candidate.RelPath)
+		candidates = append(candidates, seedCandidate(t, vault, KindProfileEdit, fmt.Sprintf("Edit %d", writer), fmt.Sprintf("Proposal %d.", writer)))
 	}
 
 	var start sync.WaitGroup
@@ -48,10 +47,11 @@ func TestApplyProfileEditSerialisesConcurrentWritersOnTheSamePath(t *testing.T) 
 			content := fmt.Sprintf("# Profile\n\nWriter %d won.\n", writer)
 			start.Wait()
 			_, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-				CandidateRelPath:    candidates[writer],
-				TargetRelPath:       ProfileFileName,
-				ExpectedContentHash: expected,
-				Content:             content,
+				CandidateRelPath:      candidates[writer].RelPath,
+				TargetRelPath:         ProfileFileName,
+				ExpectedContentHash:   expected,
+				ExpectedCandidateHash: candidates[writer].ContentHash,
+				Content:               content,
 			})
 			results <- err
 			if err == nil {

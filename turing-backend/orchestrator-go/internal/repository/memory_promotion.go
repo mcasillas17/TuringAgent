@@ -144,27 +144,44 @@ func (r *Repository) lockMemoryCandidateDecision(ctx context.Context, candidateI
 // refusing to let them throw away a proposal whose frontmatter no longer parses
 // would leave them with a file they can neither accept nor be rid of. It still
 // honours a compare-and-set they did supply.
+//
+// What it returns is the hash of the bytes it actually read, and that is what
+// the primitive below it is bound to — not the caller's token, which may be
+// empty, and not the row's, which is history. The two are the same value
+// whenever the caller supplied one; what matters is that the primitive is given
+// a name for the bytes even when the caller gave none. An empty answer means
+// one thing only: the file could not be read at all, at a door that allows it.
 func decideAboutCandidateFile(
 	ctx context.Context,
 	vault *memoryfiles.Vault,
 	candidate MemoryCandidate,
 	expectedHash string,
 	requiredKind string,
-) error {
+) (string, error) {
 	current, err := vault.ReadInboxNote(ctx, candidate.InboxPath)
 	if err != nil {
 		if requiredKind == "" && expectedHash == "" {
-			return nil
+			return "", nil
 		}
-		return err
+		return "", err
 	}
 	if expectedHash != "" && current.ContentHash != expectedHash {
-		return fmt.Errorf("%w: %s", ErrMemoryCandidateChanged, candidate.InboxPath)
+		return "", fmt.Errorf("%w: %s", ErrMemoryCandidateChanged, candidate.InboxPath)
 	}
 	if requiredKind != "" && string(current.Kind) != requiredKind {
-		return fmt.Errorf("%w: the file declares %q", ErrMemoryCandidateKind, string(current.Kind))
+		return "", fmt.Errorf("%w: the file declares %q", ErrMemoryCandidateKind, string(current.Kind))
 	}
-	return nil
+	return current.ContentHash, nil
+}
+
+// decisionFileBarrier is the seam between a decision's pre-check and the
+// primitive that acts on it — the window ReadInboxNote opens by giving the
+// vault's path lock back before the primitive takes it again. It is nil in
+// production and never does anything else.
+func (r *Repository) decisionFileBarrier() {
+	if r.memoryDecisionFileBarrier != nil {
+		r.memoryDecisionFileBarrier()
+	}
 }
 
 // PromoteMemoryCandidate accepts a belief into memory.
@@ -199,14 +216,17 @@ func (r *Repository) PromoteMemoryCandidate(ctx context.Context, decision Memory
 	if err != nil {
 		return MemoryNote{}, err
 	}
-	if err := decideAboutCandidateFile(ctx, vault, candidate, decision.ExpectedCandidateHash, MemoryCandidateKindBelief); err != nil {
+	decided, err := decideAboutCandidateFile(ctx, vault, candidate, decision.ExpectedCandidateHash, MemoryCandidateKindBelief)
+	if err != nil {
 		return MemoryNote{}, err
 	}
+	r.decisionFileBarrier()
 
 	belief, err := vault.PromoteToBeliefs(ctx, memoryfiles.PromoteToBeliefsRequest{
-		SourceRelPath: candidate.InboxPath,
-		Mode:          memoryfiles.PromoteManagedCandidate,
-		Kind:          memoryfiles.KindBelief,
+		SourceRelPath:       candidate.InboxPath,
+		Mode:                memoryfiles.PromoteManagedCandidate,
+		Kind:                memoryfiles.KindBelief,
+		ExpectedContentHash: decided,
 	})
 	if err != nil {
 		return MemoryNote{}, err
@@ -331,9 +351,11 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 	if err != nil {
 		return ApplyMemoryProfileResult{}, err
 	}
-	if err := decideAboutCandidateFile(ctx, vault, candidate, input.ExpectedCandidateHash, MemoryCandidateKindProfileEdit); err != nil {
+	decided, err := decideAboutCandidateFile(ctx, vault, candidate, input.ExpectedCandidateHash, MemoryCandidateKindProfileEdit)
+	if err != nil {
 		return ApplyMemoryProfileResult{}, err
 	}
+	r.decisionFileBarrier()
 	// The profile's compare-and-set, asked here rather than only inside the
 	// write, because the claim has to record the document it is replacing and
 	// a claim over a document that has already moved is a claim about nothing.
@@ -355,10 +377,11 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 	}
 
 	document, err := vault.ApplyProfileEdit(ctx, memoryfiles.ApplyProfileEditRequest{
-		CandidateRelPath:    candidate.InboxPath,
-		TargetRelPath:       memoryfiles.ProfileFileName,
-		ExpectedContentHash: input.ExpectedContentHash,
-		Content:             input.Content,
+		CandidateRelPath:      candidate.InboxPath,
+		TargetRelPath:         memoryfiles.ProfileFileName,
+		ExpectedContentHash:   input.ExpectedContentHash,
+		ExpectedCandidateHash: decided,
+		Content:               input.Content,
 	})
 	if err != nil {
 		// A claim whose write was refused is resolved here rather than left for
@@ -398,7 +421,7 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 // anybody may decide again.
 func (r *Repository) finishProfileApply(ctx context.Context, vault *memoryfiles.Vault, candidate MemoryCandidate) bool {
 	removed := true
-	if err := vault.RemoveInboxNote(ctx, candidate.InboxPath); err != nil {
+	if err := vault.RemoveInboxNote(ctx, retiredCandidateRemoval(candidate.InboxPath)); err != nil {
 		log.Printf("remove applied memory proposal %s: %v", candidate.CandidateID, err)
 		removed = false
 	}
@@ -551,10 +574,12 @@ func (r *Repository) RejectMemoryCandidate(ctx context.Context, decision MemoryC
 	if err != nil {
 		return err
 	}
-	if err := decideAboutCandidateFile(ctx, vault, candidate, decision.ExpectedCandidateHash, ""); err != nil {
+	decided, err := decideAboutCandidateFile(ctx, vault, candidate, decision.ExpectedCandidateHash, "")
+	if err != nil {
 		return err
 	}
-	if err := vault.RemoveInboxNote(ctx, candidate.InboxPath); err != nil {
+	r.decisionFileBarrier()
+	if err := vault.RemoveInboxNote(ctx, rejectionRemoval(candidate.InboxPath, decided)); err != nil {
 		return err
 	}
 
@@ -567,6 +592,43 @@ func (r *Repository) RejectMemoryCandidate(ctx context.Context, decision MemoryC
 		return err
 	}
 	return tx.Commit()
+}
+
+// rejectionRemoval turns what the pre-check managed to read into the removal a
+// rejection is allowed to make.
+//
+// A proposal that read back is deleted by name: the primitive is handed the
+// hash of exactly those bytes and refuses if the file has moved since, which is
+// the user being told to look again rather than having something they did not
+// read thrown away for them. A proposal that could not be read at all has no
+// such name — nothing could parse it to produce one — and the deletion says so
+// by name instead, which is the only way out that file has.
+func rejectionRemoval(inboxPath string, decidedHash string) memoryfiles.RemoveInboxNoteRequest {
+	if decidedHash == "" {
+		return memoryfiles.RemoveInboxNoteRequest{
+			RelPath: inboxPath,
+			Mode:    memoryfiles.RemoveUnreadableCandidate,
+		}
+	}
+	return memoryfiles.RemoveInboxNoteRequest{
+		RelPath:             inboxPath,
+		Mode:                memoryfiles.RemoveDecidedCandidate,
+		ExpectedContentHash: decidedHash,
+	}
+}
+
+// retiredCandidateRemoval names Turing's own tidying: bytes whose outcome is
+// already recorded somewhere else — an applied profile edit whose write landed,
+// a candidate no row will ever describe, a file the session cleaner's manifest
+// still names. None of them is a user deciding about text, so none of them has
+// a hash to name, and leaving the file behind would be the failure rather than
+// the safe side. It is separate from a rejection by name, so nothing can reach
+// a hashless deletion by way of a decision.
+func retiredCandidateRemoval(inboxPath string) memoryfiles.RemoveInboxNoteRequest {
+	return memoryfiles.RemoveInboxNoteRequest{
+		RelPath: inboxPath,
+		Mode:    memoryfiles.RemoveRetiredCandidate,
+	}
 }
 
 // pendingCandidateForDecision loads a candidate and checks everything the *row*

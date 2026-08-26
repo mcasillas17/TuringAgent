@@ -485,7 +485,7 @@ func TestAVacatedPathCannotBeAVaultPathAndNamesOneNote(t *testing.T) {
 		// Asked of the vault itself rather than of a copy of its rules: the
 		// guarantee is that this value can never come back as a real file.
 		var confinement *memoryfiles.ConfinementError
-		if err := vault.RemoveInboxNote(ctx(), parked); !errors.As(err, &confinement) {
+		if err := vault.RemoveInboxNote(ctx(), memoryfiles.RemoveInboxNoteRequest{RelPath: parked, Mode: memoryfiles.RemoveRetiredCandidate}); !errors.As(err, &confinement) {
 			t.Fatalf("the vault did not refuse the parked value %q outright: %v", parked, err)
 		}
 		if !strings.Contains(parked, "\x00") {

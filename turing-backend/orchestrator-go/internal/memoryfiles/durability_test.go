@@ -70,8 +70,9 @@ func TestPromoteToBeliefsFsyncsThePromotedNoteAndItsDirectories(t *testing.T) {
 	candidate := seedCandidate(t, vault, KindBelief, "Prefers dark mode", "The user prefers dark mode.")
 
 	promoted, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath: candidate.RelPath,
-		Kind:          KindBelief,
+		SourceRelPath:       candidate.RelPath,
+		Kind:                KindBelief,
+		ExpectedContentHash: candidate.ContentHash,
 	})
 	if err != nil {
 		t.Fatalf("promote to beliefs: %v", err)
@@ -121,8 +122,9 @@ func TestPromoteToBeliefsLeavesNothingBehindWhenTheHierarchySyncFails(t *testing
 	recorder.setFailDirectorySyncNumber(2)
 
 	if _, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath: candidate.RelPath,
-		Mode:          PromoteManagedCandidate,
+		SourceRelPath:       candidate.RelPath,
+		Mode:                PromoteManagedCandidate,
+		ExpectedContentHash: candidate.ContentHash,
 	}); err == nil {
 		t.Fatal("expected the failed hierarchy fsync to fail the promotion")
 	}

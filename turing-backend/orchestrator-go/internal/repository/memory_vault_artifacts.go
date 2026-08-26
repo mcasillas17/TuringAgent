@@ -524,7 +524,7 @@ func removeVaultArtifactFile(ctx context.Context, vault *memoryfiles.Vault, arti
 	if _, err := validateVaultInboxPath(artifact.VaultPath); err != nil {
 		return "vault_path_scope", ErrVaultArtifactPathScope
 	}
-	if err := vault.RemoveInboxNote(ctx, artifact.VaultPath); err != nil {
+	if err := vault.RemoveInboxNote(ctx, retiredCandidateRemoval(artifact.VaultPath)); err != nil {
 		return "vault_remove_failed", ErrVaultArtifactRemoveFailed
 	}
 	return "", nil

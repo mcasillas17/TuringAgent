@@ -23,7 +23,7 @@ func writeVaultFile(t *testing.T, vault *Vault, relPath string, content string) 
 func TestRemoveInboxNoteDeletesUnderInbox(t *testing.T) {
 	vault := newTestVault(t)
 	full := writeVaultFile(t, vault, "inbox/note.md", "candidate")
-	if err := vault.RemoveInboxNote(context.Background(), "inbox/note.md"); err != nil {
+	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{RelPath: "inbox/note.md", Mode: RemoveRetiredCandidate}); err != nil {
 		t.Fatalf("remove inbox note: %v", err)
 	}
 	if _, err := os.Lstat(full); !os.IsNotExist(err) {
@@ -33,7 +33,7 @@ func TestRemoveInboxNoteDeletesUnderInbox(t *testing.T) {
 
 func TestRemoveInboxNoteToleratesMissingTarget(t *testing.T) {
 	vault := newTestVault(t)
-	if err := vault.RemoveInboxNote(context.Background(), "inbox/never-existed.md"); err != nil {
+	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{RelPath: "inbox/never-existed.md", Mode: RemoveRetiredCandidate}); err != nil {
 		t.Fatalf("expected a missing candidate to be tolerated for idempotent cleanup, got %v", err)
 	}
 }
@@ -44,7 +44,7 @@ func TestRemoveInboxNoteToleratesMissingInboxDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open vault: %v", err)
 	}
-	if err := vault.RemoveInboxNote(context.Background(), "inbox/note.md"); err != nil {
+	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{RelPath: "inbox/note.md", Mode: RemoveRetiredCandidate}); err != nil {
 		t.Fatalf("expected a missing inbox to be tolerated, got %v", err)
 	}
 }
@@ -57,7 +57,7 @@ func TestRemoveInboxNoteRefusesEverythingOutsideInbox(t *testing.T) {
 
 	refused := append([]string{"beliefs/kept.md"}, escapingRelPathValues()...)
 	for _, relPath := range refused {
-		err := vault.RemoveInboxNote(context.Background(), relPath)
+		err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{RelPath: relPath, Mode: RemoveRetiredCandidate})
 		if err == nil {
 			t.Fatalf("expected removeInboxNote to refuse %q", relPath)
 		}
@@ -82,7 +82,7 @@ func TestRemoveInboxNoteRefusesSymlink(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
-	if err := vault.RemoveInboxNote(context.Background(), "inbox/link.md"); err == nil {
+	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{RelPath: "inbox/link.md", Mode: RemoveRetiredCandidate}); err == nil {
 		t.Fatal("expected a symlinked candidate to be refused")
 	}
 	if _, err := os.Lstat(outside); err != nil {
@@ -99,7 +99,7 @@ func TestRemoveInboxNoteRefusesDirectory(t *testing.T) {
 	if err := os.MkdirAll(nested, 0o700); err != nil {
 		t.Fatalf("make nested dir: %v", err)
 	}
-	if err := vault.RemoveInboxNote(context.Background(), "inbox/folder"); err == nil {
+	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{RelPath: "inbox/folder", Mode: RemoveRetiredCandidate}); err == nil {
 		t.Fatal("expected a directory to be refused")
 	}
 	if _, err := os.Lstat(nested); err != nil {
@@ -112,7 +112,7 @@ func TestRemoveInboxNoteSyncsTheParentDirectory(t *testing.T) {
 	vault := openTestVault(t, newTestVaultRoot(t), recorder.hooks())
 	writeVaultFile(t, vault, "inbox/note.md", "candidate")
 	inbox := inodeOf(t, filepath.Join(vault.Root(), InboxDirName))
-	if err := vault.RemoveInboxNote(context.Background(), "inbox/note.md"); err != nil {
+	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{RelPath: "inbox/note.md", Mode: RemoveRetiredCandidate}); err != nil {
 		t.Fatalf("remove inbox note: %v", err)
 	}
 	if !recorder.syncedDirectory(inbox) {
@@ -125,7 +125,7 @@ func TestRemoveInboxNoteHonoursContextCancellation(t *testing.T) {
 	writeVaultFile(t, vault, "inbox/note.md", "candidate")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := vault.RemoveInboxNote(ctx, "inbox/note.md"); !errors.Is(err, context.Canceled) {
+	if err := vault.RemoveInboxNote(ctx, RemoveInboxNoteRequest{RelPath: "inbox/note.md", Mode: RemoveRetiredCandidate}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
 	}
 }

@@ -55,6 +55,18 @@ type PromoteToBeliefsRequest struct {
 	// Kind is the kind the caller believes the candidate has. The primitive
 	// checks the file's own frontmatter too and refuses on either.
 	Kind NoteKind
+	// ExpectedContentHash binds the move to the exact bytes the decision was
+	// made about, checked against the read this primitive does under its own
+	// path lock and immediately before the file moves.
+	//
+	// It is required at the managed door and optional at the draft one, and the
+	// asymmetry is the difference between the two. A managed candidate is
+	// always decided from a listing that carried its hash, and the caller's own
+	// read of it released the path lock before this call took it — so the only
+	// check that can speak for the bytes being moved is this one. A file the
+	// user dropped into inbox/ themselves was never listed as a proposal, so
+	// there is no hash anybody could have shown them.
+	ExpectedContentHash string
 }
 
 // BeliefNote is an accepted note as it exists under beliefs/.
@@ -108,6 +120,12 @@ func (v *Vault) PromoteToBeliefs(ctx context.Context, request PromoteToBeliefsRe
 
 	content, sourceStat, err := v.readConfinedFile(ctx, source, MaxNoteBytes)
 	if err != nil {
+		return BeliefNote{}, err
+	}
+	// The compare-and-set, against the bytes this primitive just read under the
+	// lock it is holding through the move. A caller's earlier read let go of
+	// that lock, and the user has the vault open in their editor.
+	if err := requireDecidedBytes(source, mode == PromoteManagedCandidate, request.ExpectedContentHash, content); err != nil {
 		return BeliefNote{}, err
 	}
 	parsed, err := ParseNote(source, content)

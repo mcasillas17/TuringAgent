@@ -369,9 +369,10 @@ func TestReconcileHealsAPromotionThatCrashedAfterTheFileMoved(t *testing.T) {
 
 	// The file half of a promotion, with no database half at all.
 	promoted, err := vault.PromoteToBeliefs(ctx(), memoryfiles.PromoteToBeliefsRequest{
-		SourceRelPath: candidate.InboxPath,
-		Mode:          memoryfiles.PromoteManagedCandidate,
-		Kind:          memoryfiles.KindBelief,
+		SourceRelPath:       candidate.InboxPath,
+		Mode:                memoryfiles.PromoteManagedCandidate,
+		Kind:                memoryfiles.KindBelief,
+		ExpectedContentHash: candidate.ContentHash,
 	})
 	if err != nil {
 		t.Fatalf("PromoteToBeliefs: %v", err)

@@ -182,10 +182,11 @@ func TestApplyProfileEditAcceptsContentExactlyAtTheAuthoredDocumentLimit(t *test
 	content := strings.Repeat("a", MaxProfileEditBytes)
 
 	applied, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath:    candidate.RelPath,
-		TargetRelPath:       ProfileFileName,
-		ExpectedContentHash: ContentHash("original"),
-		Content:             content,
+		CandidateRelPath:      candidate.RelPath,
+		TargetRelPath:         ProfileFileName,
+		ExpectedContentHash:   ContentHash("original"),
+		ExpectedCandidateHash: candidate.ContentHash,
+		Content:               content,
 	})
 	if err != nil {
 		t.Fatalf("content exactly at the limit must be accepted: %v", err)
@@ -201,8 +202,9 @@ func TestPromoteToBeliefsAcceptsANoteExactlyAtTheReadCeiling(t *testing.T) {
 	writeVaultFile(t, vault, "inbox/big.md", front+strings.Repeat("a", MaxNoteBytes-len(front)))
 
 	if _, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath: "inbox/big.md",
-		Mode:          PromoteManagedCandidate,
+		SourceRelPath:       "inbox/big.md",
+		Mode:                PromoteManagedCandidate,
+		ExpectedContentHash: vaultFileHash(t, vault, "inbox/big.md"),
 	}); err != nil {
 		t.Fatalf("a note exactly at the read ceiling must promote: %v", err)
 	}

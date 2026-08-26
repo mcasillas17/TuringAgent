@@ -42,10 +42,11 @@ func TestApplyProfileEditAcceptsASmallProposalOverALongProfile(t *testing.T) {
 	result := long + "\nGoes by Miguel.\n"
 
 	applied, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath:    candidate.RelPath,
-		TargetRelPath:       ProfileFileName,
-		ExpectedContentHash: ContentHash(long),
-		Content:             result,
+		CandidateRelPath:      candidate.RelPath,
+		TargetRelPath:         ProfileFileName,
+		ExpectedContentHash:   ContentHash(long),
+		ExpectedCandidateHash: candidate.ContentHash,
+		Content:               result,
 	})
 	if err != nil {
 		t.Fatalf("apply a small proposal over a long profile: %v", err)
@@ -71,10 +72,11 @@ func TestApplyProfileEditAcceptsADocumentJustUnderTheReadCeiling(t *testing.T) {
 	result := "# Profile\n" + strings.Repeat("a", MaxAuthoredDocumentBytes-len("# Profile\n"))
 
 	if _, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath:    candidate.RelPath,
-		TargetRelPath:       ProfileFileName,
-		ExpectedContentHash: ContentHash("# Profile\n"),
-		Content:             result,
+		CandidateRelPath:      candidate.RelPath,
+		TargetRelPath:         ProfileFileName,
+		ExpectedContentHash:   ContentHash("# Profile\n"),
+		ExpectedCandidateHash: candidate.ContentHash,
+		Content:               result,
 	}); err != nil {
 		t.Fatalf("apply a document at the read ceiling: %v", err)
 	}
@@ -92,10 +94,11 @@ func TestApplyProfileEditRefusesADocumentPastTheReadCeiling(t *testing.T) {
 	writeVaultFile(t, vault, ProfileFileName, "# Profile\n")
 
 	_, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath:    candidate.RelPath,
-		TargetRelPath:       ProfileFileName,
-		ExpectedContentHash: ContentHash("# Profile\n"),
-		Content:             strings.Repeat("a", MaxAuthoredDocumentBytes+1),
+		CandidateRelPath:      candidate.RelPath,
+		TargetRelPath:         ProfileFileName,
+		ExpectedContentHash:   ContentHash("# Profile\n"),
+		ExpectedCandidateHash: candidate.ContentHash,
+		Content:               strings.Repeat("a", MaxAuthoredDocumentBytes+1),
 	})
 	var overLimit *LimitError
 	if !errors.As(err, &overLimit) {

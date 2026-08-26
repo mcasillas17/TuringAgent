@@ -50,7 +50,15 @@ type ApplyProfileEditRequest struct {
 	// ExpectedContentHash is the compare-and-set token. Empty means the caller
 	// expects no profile to exist yet.
 	ExpectedContentHash string
-	Content             string
+	// ExpectedCandidateHash is the other compare-and-set, and it names a
+	// different document: the proposal in inbox/ this apply is drawing its
+	// authority from. It is required, and it is checked against the read this
+	// primitive does under the candidate's own path lock, immediately before
+	// the profile is written — the caller's earlier read gave that lock back,
+	// and rewriting the user's profile on the authority of a proposal they have
+	// since rewritten is the failure this closes.
+	ExpectedCandidateHash string
+	Content               string
 }
 
 // ProfileDocument is profile.md as it stands after an apply. ContentHash covers
@@ -99,6 +107,12 @@ func (v *Vault) ApplyProfileEdit(ctx context.Context, request ApplyProfileEditRe
 
 	candidateContent, _, err := v.readConfinedFile(ctx, candidate, MaxNoteBytes)
 	if err != nil {
+		return ProfileDocument{}, err
+	}
+	// Bound to the proposal the user decided about, against the bytes read
+	// under the lock this call is holding — and before the target lock, so a
+	// refusal here has touched nothing at all.
+	if err := requireDecidedBytes(candidate, true, request.ExpectedCandidateHash, candidateContent); err != nil {
 		return ProfileDocument{}, err
 	}
 	parsed, err := ParseNote(candidate, candidateContent)

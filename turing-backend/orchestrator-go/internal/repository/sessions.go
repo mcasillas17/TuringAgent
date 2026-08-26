@@ -55,6 +55,15 @@ type Repository struct {
 	// that would record it, so a test can prove what a failure in that window
 	// leaves behind and that reconcile can finish it.
 	memoryPromotionBarrier func() error
+	// memoryDecisionFileBarrier, when set (test-only; always nil in
+	// production), runs after a decision's own pre-check has read the candidate
+	// file and given the vault's path lock back, and before the primitive that
+	// mutates takes that lock again. That gap is the one window the pre-check
+	// cannot speak for — the user has the vault open in their editor — so a
+	// test parked there can rewrite the proposal and prove it is the
+	// primitive's own compare-and-set, not the pre-check above it, that
+	// refuses.
+	memoryDecisionFileBarrier func()
 	// memoryCandidateWriteBarrier, when set (test-only; always nil in
 	// production), runs after a candidate's path is reserved and before the
 	// vault write, so a test can delete the session in exactly that window and

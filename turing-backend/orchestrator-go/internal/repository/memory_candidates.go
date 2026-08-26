@@ -314,7 +314,7 @@ func (r *Repository) abandonWrittenCandidate(ctx context.Context, vault *memoryf
 	// hold the caller open indefinitely.
 	removal, cancel := context.WithTimeout(context.WithoutCancel(ctx), abandonedCandidateRemovalTimeout)
 	defer cancel()
-	return errors.Join(cause, vault.RemoveInboxNote(removal, relPath))
+	return errors.Join(cause, vault.RemoveInboxNote(removal, retiredCandidateRemoval(relPath)))
 }
 
 // WithdrawMemoryCandidate retires a proposal without deciding it.

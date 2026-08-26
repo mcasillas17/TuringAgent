@@ -60,6 +60,18 @@ var (
 	// ErrKind refuses a candidate whose kind does not match the primitive.
 	ErrKind = errors.New("candidate kind is not allowed for this operation")
 
+	// ErrUnboundDecision refuses a mutation that says neither which bytes it is
+	// acting on nor, by name, why it cannot.
+	//
+	// Every decision primitive here reads the candidate under its own path lock
+	// and then moves, applies or deletes it. The caller's earlier read released
+	// that lock, so the compare-and-set has to be made against the read this
+	// package did — and a caller that supplies no token is asking for the
+	// mutation to be applied to whatever happens to be on disk. That is refused
+	// rather than defaulted, and the two cases where no token can exist have
+	// modes of their own.
+	ErrUnboundDecision = errors.New("this mutation is not bound to the bytes it acts on")
+
 	// ErrTooLarge refuses over-limit content instead of silently truncating it.
 	ErrTooLarge = errors.New("content exceeds its limit")
 

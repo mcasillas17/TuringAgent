@@ -31,8 +31,9 @@ func TestPromoteToBeliefsMovesTheFileIntoBeliefs(t *testing.T) {
 	candidate := seedCandidate(t, vault, KindBelief, "Prefers dark mode", "The user prefers dark mode.")
 
 	promoted, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath: candidate.RelPath,
-		Kind:          KindBelief,
+		SourceRelPath:       candidate.RelPath,
+		Kind:                KindBelief,
+		ExpectedContentHash: candidate.ContentHash,
 	})
 	if err != nil {
 		t.Fatalf("promote to beliefs: %v", err)
@@ -81,8 +82,9 @@ func TestPromoteToBeliefsRefusesProfileEditDeclaredAsBelief(t *testing.T) {
 	// The caller lies about the kind. The primitive reads the file's own
 	// frontmatter, so the lie changes nothing.
 	_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath: candidate.RelPath,
-		Kind:          KindBelief,
+		SourceRelPath:       candidate.RelPath,
+		Kind:                KindBelief,
+		ExpectedContentHash: candidate.ContentHash,
 	})
 	if !errors.Is(err, ErrKind) {
 		t.Fatalf("expected the file's own kind to refuse the promotion, got %v", err)
@@ -139,9 +141,10 @@ func TestPromoteToBeliefsHonoursAnExplicitDestination(t *testing.T) {
 	candidate := seedCandidate(t, vault, KindBelief, "Prefers dark mode", "The user prefers dark mode.")
 
 	promoted, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath:      candidate.RelPath,
-		DestinationRelPath: "beliefs/preferences/dark-mode.md",
-		Kind:               KindBelief,
+		SourceRelPath:       candidate.RelPath,
+		DestinationRelPath:  "beliefs/preferences/dark-mode.md",
+		Kind:                KindBelief,
+		ExpectedContentHash: candidate.ContentHash,
 	})
 	if err != nil {
 		t.Fatalf("promote to beliefs: %v", err)
@@ -160,9 +163,10 @@ func TestPromoteToBeliefsIsExclusiveAndLeavesTheSourceIntact(t *testing.T) {
 	writeVaultFile(t, vault, "beliefs/taken.md", "already here")
 
 	_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath:      candidate.RelPath,
-		DestinationRelPath: "beliefs/taken.md",
-		Kind:               KindBelief,
+		SourceRelPath:       candidate.RelPath,
+		DestinationRelPath:  "beliefs/taken.md",
+		Kind:                KindBelief,
+		ExpectedContentHash: candidate.ContentHash,
 	})
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("expected an exclusivity refusal, got %v", err)
@@ -214,9 +218,10 @@ func TestPromoteToBeliefsRefusesSymlinkedDestination(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 	if _, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath:      candidate.RelPath,
-		DestinationRelPath: "beliefs/link.md",
-		Kind:               KindBelief,
+		SourceRelPath:       candidate.RelPath,
+		DestinationRelPath:  "beliefs/link.md",
+		Kind:                KindBelief,
+		ExpectedContentHash: candidate.ContentHash,
 	}); err == nil {
 		t.Fatal("expected a symlinked destination to be refused")
 	}
@@ -255,8 +260,9 @@ func TestPromoteToBeliefsRefusesAnUnparsableSource(t *testing.T) {
 	vault := newTestVault(t)
 	writeVaultFile(t, vault, "inbox/broken.md", "---\nkind: \"belief\nunclosed\n")
 	_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath: "inbox/broken.md",
-		Kind:          KindBelief,
+		SourceRelPath:       "inbox/broken.md",
+		Kind:                KindBelief,
+		ExpectedContentHash: vaultFileHash(t, vault, "inbox/broken.md"),
 	})
 	if !errors.Is(err, ErrNoteParse) {
 		t.Fatalf("expected a per-note parse refusal, got %v", err)
@@ -328,8 +334,9 @@ func TestPromoteToBeliefsRefusesWhenTheSourceIsEditedUnderTheSameInode(t *testin
 	})
 
 	_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath: candidate.RelPath,
-		Kind:          KindBelief,
+		SourceRelPath:       candidate.RelPath,
+		Kind:                KindBelief,
+		ExpectedContentHash: candidate.ContentHash,
 	})
 	if err == nil {
 		t.Fatal("expected a source edited mid-promotion to refuse")
@@ -378,8 +385,9 @@ func TestPromoteToBeliefsRefusesWhenTheSourceIsReplacedMidPromotion(t *testing.T
 	})
 
 	_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath: candidate.RelPath,
-		Kind:          KindBelief,
+		SourceRelPath:       candidate.RelPath,
+		Kind:                KindBelief,
+		ExpectedContentHash: candidate.ContentHash,
 	})
 	if err == nil {
 		t.Fatal("expected a replaced source to refuse")
@@ -417,8 +425,9 @@ func TestPromoteToBeliefsKeepsThePromotedCopyWhenOnlyTheFinalSyncFails(t *testin
 	recorder.setFailDirectorySyncNumber(3)
 
 	_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath: candidate.RelPath,
-		Mode:          PromoteManagedCandidate,
+		SourceRelPath:       candidate.RelPath,
+		Mode:                PromoteManagedCandidate,
+		ExpectedContentHash: candidate.ContentHash,
 	})
 	if err == nil {
 		t.Fatal("a failed fsync must be reported, not swallowed")

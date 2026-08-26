@@ -220,6 +220,32 @@ func ContentHash(content string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// requireDecidedBytes is the compare-and-set every decision primitive makes
+// against its own read, immediately before it mutates.
+//
+// It is one function rather than three copies so the rule reads the same at
+// every door: a decision that names bytes is held to them, a door that requires
+// naming them refuses a decision that does not, and nothing is ever applied to
+// whatever happens to be on disk.
+//
+// The repository above this makes the same check earlier, and that one is for
+// the user's benefit — it turns "the file moved" into a decision-shaped refusal
+// before anything is claimed. It cannot be the authority: its read takes the
+// path lock and gives it straight back, and the primitive takes it again. This
+// check is inside the lock the mutation happens under.
+func requireDecidedBytes(relPath string, required bool, expectedHash string, content string) error {
+	if expectedHash == "" {
+		if required {
+			return fmt.Errorf("%q was not named by the decision acting on it: %w", relPath, ErrUnboundDecision)
+		}
+		return nil
+	}
+	if ContentHash(content) != expectedHash {
+		return &StaleContentError{RelPath: relPath}
+	}
+	return nil
+}
+
 func noteFileName(noteID string, title string) string {
 	slug := titleSlug(title)
 	if slug == "" {
@@ -328,21 +354,86 @@ func (v *Vault) ReadInboxNote(ctx context.Context, relPath string) (InboxNoteCon
 	}, nil
 }
 
+// InboxRemovalMode names why a candidate file is being deleted, and with it
+// whether the deletion has to say which bytes it is deleting.
+//
+// There is one door that deletes text a user decided about, and it is held to
+// naming that text. The other two exist because in their cases no such name can
+// exist, and both have to be asked for explicitly: an unstated mode is the
+// strict door, so a caller that forgets is refused rather than quietly given
+// the permissive one.
+type InboxRemovalMode string
+
+const (
+	// RemoveDecidedCandidate is the user saying no to a proposal they read.
+	// ExpectedContentHash is required and is checked against this primitive's
+	// own read, under its own lock, immediately before the unlink.
+	RemoveDecidedCandidate InboxRemovalMode = "decided_candidate"
+
+	// RemoveUnreadableCandidate is the user throwing away a proposal whose
+	// frontmatter nobody could read. There is no hash to name, because nothing
+	// could parse the file to produce one, and refusing the deletion would
+	// leave them with a file they can neither accept nor be rid of.
+	RemoveUnreadableCandidate InboxRemovalMode = "unreadable_candidate"
+
+	// RemoveRetiredCandidate is Turing's own tidying: bytes whose outcome is
+	// already recorded elsewhere — an applied profile edit, a candidate no row
+	// will ever describe, a file the session cleaner's manifest names. It is
+	// idempotent and hashless because it is not a decision about text; the
+	// decision already happened, and leaving the file behind would be the
+	// failure. It is deliberately not reachable as a user's rejection.
+	RemoveRetiredCandidate InboxRemovalMode = "retired_candidate"
+)
+
+// RemoveInboxNoteRequest is one candidate deletion. Mode defaults to
+// RemoveDecidedCandidate, so the strict door is the one a caller gets by saying
+// nothing and the hashless ones have to be named.
+type RemoveInboxNoteRequest struct {
+	RelPath             string
+	Mode                InboxRemovalMode
+	ExpectedContentHash string
+}
+
 // RemoveInboxNote is the only deletion primitive in this package. It removes a
 // candidate under inbox/ and refuses everything else, so the rejection RPC and
-// the vault cleaner that will later call it cannot be pointed at a belief, at
-// persona.md, or at anything outside the vault.
+// the vault cleaner that call it cannot be pointed at a belief, at persona.md,
+// or at anything outside the vault.
 //
-// A missing target is not an error: cleanup has to be idempotent, because the
-// caller may be retrying after a crash that already did the work.
-func (v *Vault) RemoveInboxNote(ctx context.Context, relPath string) error {
+// A missing target is not an error, whatever the mode: cleanup has to be
+// idempotent because the caller may be retrying after a crash that already did
+// the work, and a decided rejection whose file has already gone has nothing
+// left to protect.
+//
+// A decided rejection that finds the file still there reads it under this
+// primitive's own lock and compares it to the hash the decision named, then
+// unlinks the inode whose bytes it just compared. The caller's earlier read
+// released the lock this one holds; without the check here, a proposal the user
+// rewrote between the two would be deleted as though they had read it.
+func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequest) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	clean, err := requireInboxRelPath(relPath)
+	clean, err := requireInboxRelPath(request.RelPath)
 	if err != nil {
 		return err
 	}
+	mode := request.Mode
+	if mode == "" {
+		mode = RemoveDecidedCandidate
+	}
+	switch mode {
+	case RemoveDecidedCandidate:
+		if request.ExpectedContentHash == "" {
+			return fmt.Errorf(
+				"a rejection of %q must name the bytes it deletes; a proposal that cannot be read at all is removed with mode %q: %w",
+				clean, RemoveUnreadableCandidate, ErrUnboundDecision,
+			)
+		}
+	case RemoveUnreadableCandidate, RemoveRetiredCandidate:
+	default:
+		return fmt.Errorf("inbox removal mode %q is not recognised: %w", request.Mode, ErrUnboundDecision)
+	}
+
 	unlock, err := v.locks.lockContext(ctx, v.pathLockKey(clean))
 	if err != nil {
 		return err
@@ -371,6 +462,11 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, relPath string) error {
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
 		return confinementError(clean, "candidate is not a regular file")
 	}
+	if mode == RemoveDecidedCandidate {
+		if err := v.requireDecidedInboxEntry(ctx, parent, leaf, clean, request.ExpectedContentHash); err != nil {
+			return err
+		}
+	}
 	if err := unix.Unlinkat(int(parent.Fd()), leaf, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 		return fmt.Errorf("remove %q: %w", clean, err)
 	}
@@ -378,4 +474,26 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, relPath string) error {
 		return fmt.Errorf("sync vault directory after removing %q: %w", clean, err)
 	}
 	return ctx.Err()
+}
+
+// requireDecidedInboxEntry reads the candidate through the parent descriptor
+// the unlink will use and holds it to the hash the decision named.
+//
+// A file that has gone in the meantime is not a refusal, for the same reason a
+// missing target never is: the user asked for it not to be there.
+func (v *Vault) requireDecidedInboxEntry(
+	ctx context.Context,
+	parent *os.File,
+	leaf string,
+	clean string,
+	expectedHash string,
+) error {
+	content, _, err := v.readConfinedEntry(ctx, parent, leaf, clean, MaxNoteBytes)
+	if err != nil {
+		if errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return requireDecidedBytes(clean, true, expectedHash, content)
 }

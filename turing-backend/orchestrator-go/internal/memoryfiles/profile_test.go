@@ -35,10 +35,11 @@ func TestApplyProfileEditUpdatesProfileInPlace(t *testing.T) {
 	before := inodeOf(t, profilePath)
 
 	applied, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath:    candidate.RelPath,
-		TargetRelPath:       ProfileFileName,
-		ExpectedContentHash: ContentHash("# Profile\n\nOld text.\n"),
-		Content:             "# Profile\n\nGoes by Miguel.\n",
+		CandidateRelPath:      candidate.RelPath,
+		TargetRelPath:         ProfileFileName,
+		ExpectedContentHash:   ContentHash("# Profile\n\nOld text.\n"),
+		ExpectedCandidateHash: candidate.ContentHash,
+		Content:               "# Profile\n\nGoes by Miguel.\n",
 	})
 	if err != nil {
 		t.Fatalf("apply profile edit: %v", err)
@@ -65,10 +66,11 @@ func TestApplyProfileEditTruncatesLeftoverBytes(t *testing.T) {
 	profilePath := writeVaultFile(t, vault, ProfileFileName, original)
 
 	if _, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath:    candidate.RelPath,
-		TargetRelPath:       ProfileFileName,
-		ExpectedContentHash: ContentHash(original),
-		Content:             "short\n",
+		CandidateRelPath:      candidate.RelPath,
+		TargetRelPath:         ProfileFileName,
+		ExpectedContentHash:   ContentHash(original),
+		ExpectedCandidateHash: candidate.ContentHash,
+		Content:               "short\n",
 	}); err != nil {
 		t.Fatalf("apply profile edit: %v", err)
 	}
@@ -88,10 +90,11 @@ func TestApplyProfileEditRefusesAStaleHashWithoutLosingUserText(t *testing.T) {
 	profilePath := writeVaultFile(t, vault, ProfileFileName, userText)
 
 	_, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath:    candidate.RelPath,
-		TargetRelPath:       ProfileFileName,
-		ExpectedContentHash: ContentHash("# Profile\n\nWhat Turing read a minute ago.\n"),
-		Content:             "# Profile\n\nWhat Turing wanted to write.\n",
+		CandidateRelPath:      candidate.RelPath,
+		TargetRelPath:         ProfileFileName,
+		ExpectedContentHash:   ContentHash("# Profile\n\nWhat Turing read a minute ago.\n"),
+		ExpectedCandidateHash: candidate.ContentHash,
+		Content:               "# Profile\n\nWhat Turing wanted to write.\n",
 	})
 	if err == nil {
 		t.Fatal("expected a stale compare-and-set to be refused")
@@ -120,9 +123,10 @@ func TestApplyProfileEditCreatesProfileWhenAbsentAndNoHashExpected(t *testing.T)
 	candidate := seedProfileEditCandidate(t, vault)
 
 	applied, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath: candidate.RelPath,
-		TargetRelPath:    ProfileFileName,
-		Content:          "# Profile\n\nFirst ever.\n",
+		CandidateRelPath:      candidate.RelPath,
+		TargetRelPath:         ProfileFileName,
+		ExpectedCandidateHash: candidate.ContentHash,
+		Content:               "# Profile\n\nFirst ever.\n",
 	})
 	if err != nil {
 		t.Fatalf("apply profile edit: %v", err)
@@ -144,10 +148,11 @@ func TestApplyProfileEditRefusesAMissingProfileWhenAHashWasExpected(t *testing.T
 	candidate := seedProfileEditCandidate(t, vault)
 
 	_, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath:    candidate.RelPath,
-		TargetRelPath:       ProfileFileName,
-		ExpectedContentHash: ContentHash("something"),
-		Content:             "# Profile\n",
+		CandidateRelPath:      candidate.RelPath,
+		TargetRelPath:         ProfileFileName,
+		ExpectedContentHash:   ContentHash("something"),
+		ExpectedCandidateHash: candidate.ContentHash,
+		Content:               "# Profile\n",
 	})
 	if !errors.Is(err, ErrStaleContent) {
 		t.Fatalf("expected a stale-content refusal for a vanished profile, got %v", err)
@@ -196,10 +201,11 @@ func TestApplyProfileEditRefusesABeliefCandidate(t *testing.T) {
 	writeVaultFile(t, vault, ProfileFileName, "original")
 
 	_, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath:    candidate.RelPath,
-		TargetRelPath:       ProfileFileName,
-		ExpectedContentHash: ContentHash("original"),
-		Content:             "rewritten",
+		CandidateRelPath:      candidate.RelPath,
+		TargetRelPath:         ProfileFileName,
+		ExpectedContentHash:   ContentHash("original"),
+		ExpectedCandidateHash: candidate.ContentHash,
+		Content:               "rewritten",
 	})
 	if !errors.Is(err, ErrKind) {
 		t.Fatalf("expected a belief candidate to be refused, got %v", err)
@@ -219,10 +225,11 @@ func TestApplyProfileEditRefusesACandidateWithoutADeclaredKind(t *testing.T) {
 	writeVaultFile(t, vault, ProfileFileName, "original")
 
 	_, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath:    "inbox/hand.md",
-		TargetRelPath:       ProfileFileName,
-		ExpectedContentHash: ContentHash("original"),
-		Content:             "rewritten",
+		CandidateRelPath:      "inbox/hand.md",
+		TargetRelPath:         ProfileFileName,
+		ExpectedContentHash:   ContentHash("original"),
+		ExpectedCandidateHash: vaultFileHash(t, vault, "inbox/hand.md"),
+		Content:               "rewritten",
 	})
 	if !errors.Is(err, ErrKind) {
 		t.Fatalf("expected an undeclared candidate kind to be refused, got %v", err)
@@ -259,9 +266,10 @@ func TestApplyProfileEditRefusesASymlinkedProfile(t *testing.T) {
 		t.Fatalf("symlink profile: %v", err)
 	}
 	if _, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath: candidate.RelPath,
-		TargetRelPath:    ProfileFileName,
-		Content:          "written through the link",
+		CandidateRelPath:      candidate.RelPath,
+		TargetRelPath:         ProfileFileName,
+		ExpectedCandidateHash: candidate.ContentHash,
+		Content:               "written through the link",
 	}); err == nil {
 		t.Fatal("expected a symlinked profile.md to be refused")
 	}
@@ -283,10 +291,11 @@ func TestApplyProfileEditFsyncsTheFileAndItsParent(t *testing.T) {
 	root := inodeOf(t, vault.Root())
 
 	if _, err := vault.ApplyProfileEdit(context.Background(), ApplyProfileEditRequest{
-		CandidateRelPath:    candidate.RelPath,
-		TargetRelPath:       ProfileFileName,
-		ExpectedContentHash: ContentHash("original"),
-		Content:             "rewritten",
+		CandidateRelPath:      candidate.RelPath,
+		TargetRelPath:         ProfileFileName,
+		ExpectedContentHash:   ContentHash("original"),
+		ExpectedCandidateHash: candidate.ContentHash,
+		Content:               "rewritten",
 	}); err != nil {
 		t.Fatalf("apply profile edit: %v", err)
 	}

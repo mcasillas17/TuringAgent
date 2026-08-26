@@ -23,9 +23,10 @@ func TestPromoteToBeliefsAcceptsAManagedBeliefCandidate(t *testing.T) {
 	candidate := seedCandidate(t, vault, KindBelief, "Prefers dark mode", "The user prefers dark mode.")
 
 	promoted, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath: candidate.RelPath,
-		Mode:          PromoteManagedCandidate,
-		Kind:          KindBelief,
+		SourceRelPath:       candidate.RelPath,
+		Mode:                PromoteManagedCandidate,
+		Kind:                KindBelief,
+		ExpectedContentHash: candidate.ContentHash,
 	})
 	if err != nil {
 		t.Fatalf("a managed belief candidate is exactly what this door is for: %v", err)
@@ -40,8 +41,9 @@ func TestPromoteToBeliefsRefusesAManagedCandidateWithNoKind(t *testing.T) {
 	writeVaultFile(t, vault, "inbox/managed.md", "---\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\nmanaged: true\n---\nA claim about the user.\n")
 
 	_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-		SourceRelPath: "inbox/managed.md",
-		Mode:          PromoteManagedCandidate,
+		SourceRelPath:       "inbox/managed.md",
+		Mode:                PromoteManagedCandidate,
+		ExpectedContentHash: vaultFileHash(t, vault, "inbox/managed.md"),
 	})
 	if !errors.Is(err, ErrKind) {
 		t.Fatalf("a managed promotion needs an explicit belief kind, got %v", err)
@@ -57,8 +59,9 @@ func TestPromoteToBeliefsRefusesAnUnrecognisedKindAsAParseError(t *testing.T) {
 
 	for _, mode := range []PromotionMode{PromoteManagedCandidate, PromoteUnmanagedDraft} {
 		_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-			SourceRelPath: "inbox/unknown-kind.md",
-			Mode:          mode,
+			SourceRelPath:       "inbox/unknown-kind.md",
+			Mode:                mode,
+			ExpectedContentHash: vaultFileHash(t, vault, "inbox/unknown-kind.md"),
 		})
 		if !errors.Is(err, ErrNoteParse) {
 			t.Fatalf("mode %q: an unreadable kind must be a parse error, not a silent empty kind, got %v", mode, err)
@@ -112,8 +115,9 @@ func TestPromoteToBeliefsRefusesAProfileEditThroughEitherDoor(t *testing.T) {
 			source := door.source(t, vault)
 
 			_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-				SourceRelPath: source,
-				Mode:          door.mode,
+				SourceRelPath:       source,
+				Mode:                door.mode,
+				ExpectedContentHash: vaultFileHash(t, vault, source),
 			})
 			// Reported rather than fatal, so the assertions that say where the
 			// file actually is still run: the failure this test exists to
@@ -156,9 +160,10 @@ func TestPromoteToBeliefsRefusesAKindlessDraftWithoutTheUnmanagedMode(t *testing
 
 	for _, mode := range []PromotionMode{"", PromoteManagedCandidate} {
 		_, err := vault.PromoteToBeliefs(context.Background(), PromoteToBeliefsRequest{
-			SourceRelPath: "inbox/hand.md",
-			Mode:          mode,
-			Kind:          KindBelief,
+			SourceRelPath:       "inbox/hand.md",
+			Mode:                mode,
+			Kind:                KindBelief,
+			ExpectedContentHash: vaultFileHash(t, vault, "inbox/hand.md"),
 		})
 		if !errors.Is(err, ErrKind) {
 			t.Fatalf("mode %q: a kindless draft must not promote as a managed candidate, got %v", mode, err)

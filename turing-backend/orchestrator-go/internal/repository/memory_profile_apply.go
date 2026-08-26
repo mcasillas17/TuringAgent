@@ -142,7 +142,7 @@ func (r *Repository) recoverOneProfileApply(
 // rule the live path follows, for the same reason.
 func (r *Repository) finalizeRecoveredApply(ctx context.Context, vault *memoryfiles.Vault, candidate MemoryCandidate) error {
 	removed := true
-	if err := vault.RemoveInboxNote(ctx, candidate.InboxPath); err != nil {
+	if err := vault.RemoveInboxNote(ctx, retiredCandidateRemoval(candidate.InboxPath)); err != nil {
 		log.Printf("remove applied memory proposal %s: %v", candidate.CandidateID, err)
 		removed = false
 	}
