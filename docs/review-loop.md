@@ -583,3 +583,120 @@ still evicted when the file leaves. `service/memory/list_state_candidate_cache_t
 drives it through the RPCs: the listing returns the rewritten words and a new
 hash, and the rejection carrying that hash is accepted and removes the file.
 Letting the inbox be served again fails both.
+
+## Round 10
+
+Reviewers: Grok, GPT-5.6 Terra, Claude Opus 5, Claude Opus 4.8.
+Outcome: two findings, both from Opus 4.8, both accepted and fixed. Grok, Terra
+and Opus 5 each read the whole of the memory work and found nothing.
+
+Three clean reads is not a clean round. The point of a round is whether the code
+that ships was reviewed and survived, and this round changed code — twice, in
+the two places a decision touches the user's own files. So the count of
+consecutive clean rounds resets to zero here rather than counting three of the
+four reviewers and calling it settled. What the three clean reads are worth is
+recorded above, and it is not nothing: it is why both findings are narrow.
+
+### Opus 4.8 — a hashless rejection deleted whatever was under the name
+
+Round 3 gave a proposal nobody can parse a way out of the inbox, because a claim
+about the user they can neither read, accept nor be rid of is worse than a
+deletion. Round 8 made every rejection two steps and bound the decided one to
+its bytes. What nobody bound was the hashless door itself.
+
+A decision's pre-check reads the candidate under the vault's per-path lock and
+gives that lock back; the primitive takes it again and unlinks. Every other door
+closes that window with a compare-and-set. This one had nothing to compare —
+that is the whole reason it exists — so it deleted the entry that was under
+the name when it looked, not the entry the pre-check had failed on. Obsidian,
+a sync client and Turing's own writer all replace a file by writing a new one
+beside it and renaming over the top, so the window is the ordinary way this
+vault gets written to. What could disappear was a proposal the user had just
+repaired, or a newer claim about them that nobody had ever read.
+
+Accepted. The pre-check now says which entry it failed on and the removal is
+held to it. `ReadInboxCandidate` answers with either the parsed proposal or
+an opaque `UnreadableCandidateEntry` — device, inode, and a hash of the bytes
+that would not parse when there were any — which only that call can mint,
+which cannot be forged by a caller, and which never crosses a wire: it carries
+the identity and the bytes of a claim about the user nobody has read, and a
+hash handed out is a token somebody could hand back. `RemoveUnreadableCandidate`
+requires one, and before anything is detached it asks three questions. Same
+entry: a replacement is a new inode, whether it parses or is broken in some new
+way of its own. Same bytes: a rewrite keeps the inode and moves the hash. Still
+unreadable: a proposal the user repaired reads as a proposal now, and a proposal
+is decided about by reading it. Only a file nothing can open and one past the
+size bound arrive with no bytes to compare, and both are answered the way they
+always were — the read fails again, which is itself the proof.
+
+The client is untouched. It still sends an empty hash for a proposal it could
+not render, because the binding is the server's own and was never the user's to
+supply. Turing's tidying keeps the plain idempotent unlink; it is not a decision
+about text and has no entry to be bound to.
+
+Tests: `memoryfiles/remove_unreadable_binding_test.go` — the readable
+replacement, the second broken file that took the name, the in-place rewrite,
+the proposal repaired in place, the file that arrived after a pre-check that
+found nothing, and the two cases with no bytes to hash at all: an over-sized
+file replaced by another over-sized file, which only identity can refuse, and
+one trimmed back into a proposal, which only the still-unreadable question can.
+`repository/memory_unreadable_rejection_test.go` drives the same window through
+the decision, parked on the barrier between the pre-check and the primitive, and
+holds the row pending and the file where it is. Each of the five checks —
+identity, bytes, still-unreadable, the pre-check that found nothing, and the
+requirement to be bound at all — fails at least one test when it is deleted,
+and none of them is covered only by another.
+
+### Opus 4.8 — a decision could act on a conversation being deleted
+
+A candidate belongs to the conversation that produced it. Deleting that
+conversation withdraws every belief it was the last support for, cascades the
+rows, and hands the vault to a cleaner. A decision about one of its proposals
+was none of that work's business and asked it nothing: the row's lifecycle was
+checked, the file was checked, and the session was never read at all.
+
+So the two ran side by side over the same rows. A promotion could turn an
+unreviewed claim into a belief out of a conversation the user had just asked to
+be rid of — and the cascade behind it would then strip the evidence, leaving a
+note that reads as grounded in something nobody can look at. A rejection could
+untrack the file the cleaner was about to look for. And an apply could rewrite
+`profile.md` on the authority of a session already being withdrawn, which is the
+one that does not wash out: the proposal, its row and the conversation all
+disappear, and the words stay in a pinned document that goes into every future
+run under nothing at all.
+
+Accepted. A decision now takes the source session's own lock and reads it as
+active under both locks, and holds them across the file it moves, the profile it
+writes and the transaction that records it. The order is candidate, then
+session, and it is the only order this package takes them in:
+`BeginSessionDeletion` takes the session alone, for the transaction that flips
+the state and nothing more, and releases it long before any cleaner or vault
+reconcile — holding a
+lock across a filesystem walk is how two passes wedge against each other. So
+there are two outcomes and no third. The decision got there first, finishes, and
+the withdrawal that waited then withdraws what it produced under ordinary
+semantics. Or the withdrawal got there first, and every decision after it is
+refused before it has touched a file or a document.
+
+The transition SQL carries the same predicate, so a decision can only ever be
+recorded against a conversation that still exists and is not being withdrawn,
+whatever happens to the lock above it. Crash recovery for an apply whose write
+already landed is the one deliberate exception, and it is one because those
+words are already in the user's own profile and the row is the only thing that
+says so. The refusal reaches the page as a precondition with a sentence rather
+than as an internal error: an inbox opened before the conversation was deleted
+is an ordinary thing to press a button on.
+
+Tests: `repository/memory_decision_session_deletion_test.go` — promote, apply
+and reject each refused after the withdrawal begins, asserting no belief, no
+profile write, the proposal still in the inbox and its reservation still
+tracked, and a reconcile pass afterwards that finds nothing to heal into a note;
+the other ordering, with a withdrawal parked against a decision in flight,
+proving it waits, that it does not deadlock, and that the belief it then
+withdraws is kept and marked withdrawn; and all four racing for real, repeatedly
+and under `-race`. The two SQL predicates are exercised on their own with the
+lock bypassed, because a guard nobody can make fail is indistinguishable from
+one that does nothing and the next reader deletes it.
+`service/memory/decision_deleted_session_test.go` pins the sentence the page
+gets. Removing the active-session read, either side of the lock, or either
+predicate each fails a test.
