@@ -524,6 +524,13 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 		MinimumWorkerMaxConcurrentRuns: input.MinimumWorkerMaxConcurrentRuns,
 		ExternalAgent:                  routed, ExternalAgentCredentialRef: externalCredentialRef,
 	}
+	// A first pass, on what is known before anything has looked at where the
+	// frozen tools go. It is worth making early — an unknown model or a tool no
+	// worker has is a better answer than one arrived at after reading the vault
+	// — but it is provisional by construction: this route says nothing yet
+	// about whether the run will carry an egress decision, and a worker too old
+	// to validate one satisfies it. The authoritative check is below, once that
+	// is known.
 	if s.runtime != nil {
 		if err := s.runtime.ValidateRouting(ctx, route); err != nil {
 			return nil, err
@@ -568,6 +575,32 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 	}
 	if !providerEgress && len(resolved.RemoteMCPServers) == 0 && len(resolved.IntegrationEndpoints) == 0 {
 		return nil, nil
+	}
+	// Everything the enqueue will freeze is now known, so the route is rebuilt
+	// on it and validated again — and this is the one that decides whether a
+	// challenge is issued at all.
+	//
+	// Two things are added that the first pass could not know. The decision:
+	// this run will carry one, of whatever shape, and the worker that executes
+	// it has to be able to validate one. A local model calling a remote MCP
+	// server or an integration carries exactly the decision a remote model
+	// does — the user's tool arguments and results leave the machine either
+	// way — so gating on the model's destination let a pre-decision worker look
+	// like a home for this run when the dispatch it is queued for will never
+	// hand it one. And the tools: the snapshot below is the slice that goes
+	// into the signed challenge, so it is the slice validated here rather than
+	// a second reading of the registry that could have moved in between.
+	//
+	// A challenge that goes out is a promise that the run it describes can
+	// happen. Where no connected worker can execute it the caller gets the
+	// routing refusal — which names what is missing — instead of a consent
+	// dialog for a run that would sit in the queue forever.
+	route.SelectedTools = resolved.SelectedTools
+	route.RemoteEgressDecision = true
+	if s.runtime != nil {
+		if err := s.runtime.ValidateRouting(ctx, route); err != nil {
+			return nil, err
+		}
 	}
 	if providerEgress {
 		endpoint, parseErr := backendegress.ParseKeyedEndpoint(rawEndpoint)
