@@ -178,6 +178,25 @@ func (s *Server) readVault(ctx context.Context) (vaultView, error) {
 		}
 		view.reason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_UNREADABLE
 		view.detail = "the vault could not be read; open it and check the folder is readable"
+		// A walk that refused says nothing about what is waiting in the inbox.
+		// The proposals are rows, they are still pending, and answering with an
+		// empty list would tell the user there is nothing to decide about
+		// themselves while a claim about them sits in their vault waiting on
+		// them — which is the one answer that is not true.
+		//
+		// They are served the way every other read with no whole-vault walk
+		// behind it serves them: one confined read per proposal. A folder too
+		// large to index or too damaged to enumerate is not a file nobody can
+		// open, and the read that a decision performs is this same read — so
+		// the page shows the words the decision will be checked against, or it
+		// shows nothing and says why.
+		candidates, err := s.listCandidates(ctx, repository.MemoryCandidateQuery{Limit: maxCandidateListing})
+		if err != nil {
+			return view, err
+		}
+		s.overlayCandidatesFromVault(ctx, candidates)
+		view.candidates = candidates
+		sortCandidatesByInboxPath(view.candidates)
 		return view, nil
 	}
 	if !scan.Completeness.Beliefs.Complete || !scan.Completeness.Inbox.Complete {
@@ -249,13 +268,36 @@ func (s *Server) readVault(ctx context.Context) (vaultView, error) {
 		return view, err
 	}
 	for _, candidate := range managed {
-		overlayCandidateFile(candidate, inbox)
+		overlayCandidateFile(candidate, inbox, unseenInboxReason(scan.Completeness.Inbox))
 	}
 	view.candidates = append(view.candidates, managed...)
-	sort.SliceStable(view.candidates, func(i int, j int) bool {
-		return view.candidates[i].GetInboxPath() < view.candidates[j].GetInboxPath()
-	})
+	sortCandidatesByInboxPath(view.candidates)
 	return view, nil
+}
+
+// sortCandidatesByInboxPath is the one order the inbox is presented in, so a
+// page redrawn after a failed walk does not reshuffle itself under the user.
+func sortCandidatesByInboxPath(candidates []*turingv1.MemoryCandidate) {
+	sort.SliceStable(candidates, func(i int, j int) bool {
+		return candidates[i].GetInboxPath() < candidates[j].GetInboxPath()
+	})
+}
+
+// unseenInboxReason says what it means that the walk did not find a proposal's
+// file.
+//
+// Over a complete listing it means the file is not there: reconcile retires
+// such a row once it can see the whole inbox, and this is the narrow window
+// before it has. Over a listing the walk could not finish it means nobody
+// looked — the file may be sitting in the folder untouched — and reporting it
+// as missing would put a sentence on the page that the server has no grounds
+// for. Both withhold the body; only one of them is entitled to say the file is
+// gone.
+func unseenInboxReason(inbox memoryfiles.AreaScan) turingv1.MemoryUnavailableReason {
+	if inbox.Complete {
+		return turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING
+	}
+	return turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_UNREADABLE
 }
 
 // overlayCandidateFile makes a listed proposal say what its file says.
@@ -269,21 +311,33 @@ func (s *Server) readVault(ctx context.Context) (vaultView, error) {
 //
 // Only content, hash and kind come from the file. Identity, provenance, source
 // and lifecycle are the row's, because the file cannot know them.
-func overlayCandidateFile(candidate *turingv1.MemoryCandidate, inbox map[string]memoryfiles.NoteRow) {
+//
+// unseen is what it means that the walk did not turn this proposal's file up,
+// which depends on whether the walk could see the whole inbox.
+func overlayCandidateFile(
+	candidate *turingv1.MemoryCandidate,
+	inbox map[string]memoryfiles.NoteRow,
+	unseen turingv1.MemoryUnavailableReason,
+) {
 	row, found := inbox[candidate.GetInboxPath()]
 	if !found {
-		// The row names a file the walk did not find. Reconcile retires such a
-		// row when it can see the whole inbox, so this is the narrow window
-		// where it cannot yet — and a proposal whose text nobody can read is
-		// not one to offer a decision on.
-		withholdCandidateBody(candidate, turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING)
+		// The walk did not find this proposal's file. Either it is not there,
+		// or the walk could not finish looking — a proposal whose text nobody
+		// read is not one to offer a decision on in either case.
+		withholdCandidateBody(candidate, unseen)
 		return
 	}
 	if row.ParseError != "" {
-		candidate.Content = row.Content
-		candidate.ContentHash = row.ContentHash
+		// The bytes are in the vault and they are not a note. What the row
+		// holds is what Turing wrote before the user opened the file, so
+		// serving it here would show text the file no longer says above a
+		// token taken over bytes nobody could parse — and every decision the
+		// page then offered would be checked against the file and refused.
+		// The same answer every other read gives for the same file: identity,
+		// path and lifecycle kept, text and token withheld, and the parse
+		// failure said out loud.
+		withholdCandidateBody(candidate, turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_CONTENT_PARSE_FAILED)
 		candidate.ParseError = row.ParseError
-		candidate.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_CONTENT_PARSE_FAILED
 		return
 	}
 	candidate.Content = candidateBodyText(row.Body)
