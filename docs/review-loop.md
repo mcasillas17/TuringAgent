@@ -156,3 +156,138 @@ than something it silently omits.
 Tests: `service/runtime/memory_job_test.go`. Mutation-covered field by field —
 dropping each of `persona_id`, `display_name`, `profile_id`, `body`,
 `content_hash` and `withheld` fails a test that the previous file passed.
+
+## Round 7
+
+Reviewers: Grok, GPT-5.6 Terra, Claude Opus 5, Claude Opus 4.8.
+Outcome: five findings, all accepted and fixed. Grok found two.
+
+### Grok — withdrawal was owed to a filesystem pass that may never run
+
+Deleting a conversation removes the evidence rows that ground the beliefs it
+produced; the cascade does that transactionally. What marked the belief itself
+withdrawn was the reconcile pass that runs *afterwards*, outside the
+transaction, over the whole vault — and that pass refuses outright on a vault
+past the scan bound, on one it cannot enumerate, and on one that is not attached
+at all. The rows go either way, because removing them is the half of the promise
+the user asked for and it is never held hostage to a folder.
+
+Between those two facts sat a claim about the user whose every conversation they
+had deleted: still `managed` in the index, still returned by search, and still
+readable by identity — which is exactly the door round 3 closed for a model that
+saw a belief before its conversation went. It is not a withdrawal if the only
+thing that performs it is a pass that may never run.
+
+Accepted. The index status is now written inside the deletion transaction, for
+exactly the notes this conversation was the last support for. "Last support" is
+asked of the rows rather than of the file: a belief two conversations ground
+does not lose its grounding because one of them was deleted, and withdrawing it
+early would take a memory the user accepted away over a conversation they were
+entitled to remove. The file's own frontmatter is still the completion pass's
+job — that is a write into the user's folder, and it is not something to hold a
+deletion open for — but the half search and reads answer from commits with the
+cascade or not at all.
+
+Tests: `session_delete_withdrawal_test.go`, over a vault deliberately pushed past
+the index bound so the completion provably cannot run; for the belief a second
+conversation still supports, which stays until the last one goes; for a belief
+one conversation cited twice, which is one source and not two; for the retry
+after an unfinished completion, which withdraws nothing a second time; for a
+note already withdrawn with its citations still linked, which is left untouched
+rather than re-written and re-logged; and for the rollback, where the barrier
+reports what it withdrew so the test says the withdrawal happened before it says
+the failure took it back. Four separate mutations are covered.
+
+### Grok — a walk that refused answered with an empty inbox
+
+`readVault` returned early on a scan failure with no candidates at all, so the
+whole page and the unfiltered listing told the user nothing was waiting on them
+while pending proposals sat in their vault. A vault one note over the index
+bound, or one folder the walk could not enumerate, was enough — and "there is
+nothing to decide about you" is the one answer that is not true.
+
+Accepted. The failure now falls back to the rule every read with no whole-vault
+walk behind it already uses: the rows are listed, and each proposal is read once
+through the confined reader. A folder too large to index is not a file nobody can
+open, and that one read is the same read the decision performs — so the page
+shows the words the decision will be checked against, or it shows nothing and
+says why. The page, the unfiltered listing and the single fetch now agree.
+
+Beside it, a proposal the walk merely did not get to no longer claims the file is
+gone. Absence means the file is not there only over a listing that finished;
+over one that did not, nobody looked, and the page says the folder could not be
+read instead.
+
+Tests: `service/memory/list_state_walk_failure_test.go` — over-bound vault on
+both listings, list and fetch asserted token for token, an inbox nobody can open,
+and the incomplete-walk classification.
+
+### Terra — an unknown note availability read as a findable belief
+
+`MemoryNote.isIndexable` accepted the server saying nothing is wrong *and* the
+server not saying. The second is also what this build decodes any reason a newer
+server invents into, so a note nobody could account for rendered as an ordinary
+belief — and the line that would have told the user their memory is not being
+found was suppressed by the very condition that made it unfindable. Round 5 made
+the same test on a proposal a whitelist; the note beside it was still a
+blacklist.
+
+Accepted, and widened to the status while there. The server's own search
+predicate answers from `managed` and `unmanaged` and from nothing else, so the
+page now says a note is findable on exactly those terms: a withdrawn belief is
+kept and no longer implied to be searchable, a status from a newer build claims
+nothing, and a reason with no name here gets the "the server did not say"
+sentence rather than a blank line.
+
+Tests: `test/models/memory_unknown_note_test.dart`, driven off raw wire bytes
+carrying an enum value no released server sends in the reason field and in the
+status field, plus a whitelist assertion over every value of both; and two
+inbox-page widget tests for the unnamed reason and the withdrawn note.
+
+### Opus 5 — the page explained a refusal with a token nobody sent
+
+A compare-and-set token on screen is there to explain a refusal: the user is told
+this applies only while the document still matches X, the server refuses because
+it does not, and the sentence only helps if X is what was sent. Round 4 made a
+composed profile result keep the token it was composed against, precisely so a
+re-read cannot re-aim an unsaved edit at a newer document. The card beside it
+went on printing whichever profile hash was read most recently, and the persona
+and profile editors printed the document's newest hash while a save carries the
+one the editor was loaded at.
+
+So the page showed the true state of affairs — the save will be refused — and
+named the wrong number for it. A user comparing what they were shown against what
+the server complained about would find they do not match, and nothing on the page
+would explain why.
+
+Accepted. The proposal card now names the token its own apply will carry, and
+each editor names the version it is holding. An untouched editor still follows
+the document, because a re-read does adopt it.
+
+Tests: `test/ui/memory_cas_display_test.dart` — an edited result and both dirty
+editors after the vault moves underneath them, each asserting the number on the
+screen and the number in the request are the same one, plus the untouched editor
+that must still follow.
+
+### Opus 4.8 — unparseable bytes were served as the proposal, out of the row
+
+Round 5 established one rule for a proposal whose file could not be read:
+identity, path and lifecycle kept, text and token withheld. The parse-failure
+branch of the walk-backed overlay predated it and did the opposite — it served
+the database row's copy of the text and the row's hash. The row is Turing's
+record of what it wrote before the user opened the file; the file is what the
+user is looking at. So the card showed text the file no longer says, above a
+token taken over bytes nobody could parse, and the decision compares that token
+against the file and refuses. Two of the four surfaces did this and two did not.
+
+Accepted. One rule now covers a proposal nobody could read whatever defeated the
+reader — an absent vault, a refused file, or bytes that are not a note. The parse
+detail stays, because it is what tells the user which file to open and fix, and
+nothing in it is the file's contents. The rejection makes no claim about bytes
+and still works, which matters most here: it is the only way out a proposal in
+this state has.
+
+Tests: `service/memory/malformed_body_withheld_test.go`, asserting all four
+surfaces — the whole page, the unfiltered listing, the filtered listing and the
+single fetch — against one corrupted proposal, and asserting the identity the row
+owns survives on each.
