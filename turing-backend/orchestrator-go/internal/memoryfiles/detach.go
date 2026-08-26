@@ -131,10 +131,18 @@ func (d *detachedEntry) objectionToOwnWrite(ctx context.Context, expected unix.S
 // reaches it only after proving what it is about to remove.
 //
 // A failure says where the bytes actually are, so a detached file is never left
-// unaccounted for in a sentence that reports it gone.
+// unaccounted for in a sentence that reports it gone. The flush after a failed
+// unlink is part of that sentence rather than a formality: if it fails too, the
+// name the bytes are under is not one a crash is guaranteed to keep, and a
+// caller pointing somebody at that name has to know.
 func (d *detachedEntry) discard() error {
 	if err := d.vault.unlinkStaging(d.parent, d.staging); err != nil && !errors.Is(err, unix.ENOENT) {
-		_ = d.vault.syncDirectory(d.parent)
+		if flushErr := d.vault.syncDirectory(d.parent); flushErr != nil {
+			return fmt.Errorf(
+				"remove the detached %q: %w; it is at %s, and the vault directory could not be flushed either (%v)",
+				d.clean, err, d.stagedRelPath(), flushErr,
+			)
+		}
 		return fmt.Errorf("remove the detached %q: %w; it is at %s", d.clean, err, d.stagedRelPath())
 	}
 	if err := d.vault.syncDirectory(d.parent); err != nil {
@@ -186,9 +194,23 @@ func recoveryFor(clean string) detachRecovery {
 // detachedPlacement says where the bytes of a detached entry ended up once the
 // deletion decided it had no standing to remove them. It never says "deleted",
 // because nothing on this path deletes.
+//
+// Every field exists because some caller has to be able to say a true sentence
+// about a file it is holding. A restore that could not be flushed, a staging
+// link that would not go away and a recovery name whose directory never reached
+// the disk are three different facts, and collapsing them into "restored" is
+// how a refusal ends up promising a tidiness nobody checked.
 type detachedPlacement struct {
-	// restored reports whether the bytes are back under their own name.
+	// restored reports whether the bytes are back under their own name and
+	// that link has reached the disk. It is never set on the strength of a
+	// link alone: a link this process can see and a link a crash would see are
+	// not the same thing.
 	restored bool
+	// linkedBack reports the in-between state: the entry is under its own name
+	// as far as this process is concerned, and the flush that would make that
+	// true after a crash failed. The staging name is deliberately still there,
+	// so the bytes are reachable whichever way the directory lands.
+	linkedBack bool
 	// recoveryRelPath names the other place the bytes were kept: the only place
 	// when restored is false, and a duplicate that could not be dropped when it
 	// is true. It is empty exactly when the restore was clean.
@@ -203,6 +225,29 @@ type detachedPlacement struct {
 	// reserved name, because the rescue linked it but could not tidy up.
 	residueRelPath string
 	residueErr     error
+	// flushErr is a directory fsync that failed after the bytes were placed. It
+	// does not move them anywhere; it means the placement this describes is not
+	// known to have survived a crash, and a caller that says where a file is
+	// owes the reader that.
+	flushErr error
+}
+
+// clean reports whether the entry is back under its own name with nothing left
+// to say about it. Every caller that phrases a plain "it was left alone" asks
+// this rather than reading restored on its own, because a restore with a
+// duplicate beside it or an fsync missing underneath it is not that sentence.
+func (p detachedPlacement) clean() bool {
+	return p.restored && !p.linkedBack &&
+		p.recoveryRelPath == "" && p.residueRelPath == "" &&
+		p.cause == nil && p.residueErr == nil && p.flushErr == nil
+}
+
+// failure is every reason this placement is not a clean restore, as one error a
+// caller can match on. The sentence says what happened to a person; this is
+// what an operator greps for, and EIO, ENOSPC and "another writer took the
+// name" are the same sentence and different problems.
+func (p detachedPlacement) failure() error {
+	return errors.Join(p.cause, p.residueErr, p.flushErr)
 }
 
 // putBack returns a detached entry to its own name, and says where the bytes
@@ -213,30 +258,64 @@ type detachedPlacement struct {
 // bytes go instead is not a caller's choice — it follows from the area the entry
 // is in, so no caller can ask for a file to be published somewhere publishing it
 // would be a lie.
+//
+// The order is the same one the rescue next door keeps, and for the same
+// reason: link, flush, drop, flush. A rename and a link both live in the
+// directory's page cache until an fsync, so dropping the staging name before
+// the restore is on disk is the one ordering in which a crash can leave the
+// bytes reachable from no name at all. Every step that fails is reported rather
+// than swallowed — a caller that has to tell the user where their file is
+// cannot do it from a placement that guessed.
 func (d *detachedEntry) putBack() detachedPlacement {
 	recovery := recoveryFor(d.clean)
 	d.vault.detachBarrier(detachPhaseBeforeRestore, d.clean)
 	if linkErr := d.vault.linkDetached(d.parent, d.staging, d.leaf); linkErr != nil {
-		return d.preserve(recovery, false, linkErr)
+		return d.preserve(recovery, linkErr)
+	}
+	if flushErr := d.vault.syncDirectory(d.parent); flushErr != nil {
+		// Both names hold the entry and neither is known to be durable. The
+		// staging one stays exactly where it is: it is the name the detach
+		// already put the bytes under, and dropping it now to tidy up would
+		// trade the one link a crash might still find for one it might not.
+		return detachedPlacement{
+			linkedBack:      true,
+			cause:           flushErr,
+			recoveryRelPath: d.stagedRelPath(),
+			recoveryHidden:  true,
+		}
 	}
 	if err := d.vault.unlinkStaging(d.parent, d.staging); err != nil && !errors.Is(err, unix.ENOENT) {
-		// The file is back where it belongs; a second link to it under a name
-		// nothing shows is not. Making that copy findable is the same rule as
-		// everywhere else here — a duplicate the user can see beats one they
-		// cannot.
-		return d.preserve(recovery, true, err)
+		// The entry is durably back under its own name, so what is left is a
+		// second link to a file the user already has. That is residue to be
+		// named, not a rescue to be published: a visible copy of a claim that
+		// is already in the inbox is the same proposal twice, and the user
+		// would have to decide about both.
+		placement := detachedPlacement{restored: true, residueRelPath: d.stagedRelPath(), residueErr: err}
+		if flushErr := d.vault.syncDirectory(d.parent); flushErr != nil {
+			placement.flushErr = flushErr
+		}
+		return placement
 	}
-	_ = d.vault.syncDirectory(d.parent)
-	return detachedPlacement{restored: true}
+	placement := detachedPlacement{restored: true}
+	if flushErr := d.vault.syncDirectory(d.parent); flushErr != nil {
+		// The restore is on disk; dropping the duplicate is not. After a crash
+		// the staging name can come back, so it is named rather than assumed
+		// gone.
+		placement.residueRelPath = d.stagedRelPath()
+		placement.residueErr = flushErr
+	}
+	return placement
 }
 
 // preserve is the one exit for bytes that could not go back under their own
 // name. It never unlinks: it moves them somewhere findable if it may, and says
 // where they are if it may not.
-func (d *detachedEntry) preserve(recovery detachRecovery, restored bool, cause error) detachedPlacement {
-	placement := detachedPlacement{restored: restored, cause: cause}
+func (d *detachedEntry) preserve(recovery detachRecovery, cause error) detachedPlacement {
+	placement := detachedPlacement{cause: cause}
 	if recovery == recoverUnderReservedName {
-		_ = d.vault.syncDirectory(d.parent)
+		if flushErr := d.vault.syncDirectory(d.parent); flushErr != nil {
+			placement.flushErr = flushErr
+		}
 		placement.recoveryRelPath = d.stagedRelPath()
 		placement.recoveryHidden = true
 		return placement
@@ -263,35 +342,61 @@ func (d *detachedEntry) preserve(recovery detachRecovery, restored bool, cause e
 //
 // The caller supplies only why it declined to delete; how that reads once the
 // file could not go back is this type's business, because it is the only thing
-// that knows whether the name was taken or the tidying afterwards was what
-// failed.
+// that knows whether the name was taken, the tidying afterwards was what
+// failed, or the directory never reached the disk.
 func (p detachedPlacement) explain(why string) string {
-	reason := why + " and could not be put back under its own name"
-	if p.restored {
-		reason = why + ", so it was left alone, but a second link to it could not be dropped"
+	if p.linkedBack {
+		return fmt.Sprintf(
+			"%s and was put back under its own name, but the vault directory could not be flushed (%v), so that is not known to have survived a crash; it is not lost — it is also at %s",
+			why, p.cause, p.recoveryRelPath,
+		)
 	}
+	if p.restored {
+		return p.explainResidue(why + ", so it was left alone, but a second link to it could not be dropped")
+	}
+	reason := why + " and could not be put back under its own name"
 	switch {
 	case p.recoveryHidden && p.residueErr != nil:
-		return fmt.Sprintf(
+		return p.note(fmt.Sprintf(
 			"%s (%v), and no recovery name could be taken for it (%v); it is not lost — it is at %s",
 			reason, p.cause, p.residueErr, p.recoveryRelPath,
-		)
+		))
 	case p.recoveryHidden:
-		return fmt.Sprintf(
+		return p.note(fmt.Sprintf(
 			"%s (%v); it is not lost — it was kept for recovery at %s, where nothing indexes it as a note",
 			reason, p.cause, p.recoveryRelPath,
-		)
+		))
 	case p.residueRelPath != "":
-		return fmt.Sprintf(
+		return p.note(fmt.Sprintf(
 			"%s (%v); it is not lost — it was kept for recovery at %s, and a copy remains at %s (%v)",
 			reason, p.cause, p.recoveryRelPath, p.residueRelPath, p.residueErr,
-		)
+		))
 	default:
-		return fmt.Sprintf(
+		return p.note(fmt.Sprintf(
 			"%s (%v); it is not lost — it was kept for recovery at %s",
 			reason, p.cause, p.recoveryRelPath,
-		)
+		))
 	}
+}
+
+// explainResidue phrases the restore that worked and the duplicate it could not
+// clear away. The file is where it belongs either way; what is being reported
+// is a second name for it that somebody may find later.
+func (p detachedPlacement) explainResidue(reason string) string {
+	if p.residueRelPath == "" {
+		return p.note(reason)
+	}
+	return p.note(fmt.Sprintf("%s (%v); a second link to it remains at %s", reason, p.residueErr, p.residueRelPath))
+}
+
+// note appends the one fact that qualifies every other sentence here: the
+// directory holding these names never reached the disk, so what was just said
+// is true of this process and not yet of a crash.
+func (p detachedPlacement) note(sentence string) string {
+	if p.flushErr == nil {
+		return sentence
+	}
+	return fmt.Sprintf("%s; the vault directory could not be flushed afterwards (%v), so that placement is not known to have survived a crash", sentence, p.flushErr)
 }
 
 // rescueDetachedEntry moves bytes a deletion is holding out of the private

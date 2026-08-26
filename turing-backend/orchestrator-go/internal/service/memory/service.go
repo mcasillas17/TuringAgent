@@ -25,6 +25,17 @@ const (
 	ToolRemember = "memory.remember"
 )
 
+// promotionSourceChangedMessage is what a caller is told when a promotion was
+// abandoned because the candidate stopped being the file that was read.
+//
+// It is one sentence for every way that can happen — another writer took the
+// name, an editor saved over it in place, the original could not be taken off
+// its name at all — because those differ only in detail the caller cannot act
+// on, and the detail is exactly what must not be handed out: the vault's own
+// sentence names the candidate's path and the reserved name a copy may have
+// been kept under.
+const promotionSourceChangedMessage = "this proposal changed while it was being promoted; read it again and decide on what it says now"
+
 // AuditRecorder is the redacted trail a user action leaves behind.
 //
 // Two methods, because memory writes two different kinds of row. Record is for
@@ -134,11 +145,22 @@ func (s *Server) recordForRun(ctx context.Context, runID string, action string, 
 // politeness: the errors underneath carry file paths, parser output and, in the
 // candidate layer, the claim itself — none of which belongs in a status a model
 // or a log will see.
+//
+// The order is part of the mapping. A request that ended is answered as that
+// first, whatever else its error also matches: the vault's refusals carry the
+// cancellation alongside where they left the user's bytes, and answering "the
+// file changed since it was read" to a caller that had already gone would
+// invent a change to the user's vault and send a retry loop round again on the
+// strength of it.
 func memoryError(err error, fallback string) error {
 	var limit *memoryfiles.LimitError
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, context.Canceled):
+		return status.Error(codes.Canceled, "the memory request was cancelled")
+	case errors.Is(err, context.DeadlineExceeded):
+		return status.Error(codes.DeadlineExceeded, "the memory request ran out of time")
 	case errors.Is(err, repository.ErrMemoryVaultUnavailable):
 		return status.Error(codes.FailedPrecondition, "the memory vault is not available")
 	case errors.Is(err, repository.ErrMemoryCandidateNotFound):
@@ -182,6 +204,18 @@ func memoryError(err error, fallback string) error {
 		return status.Error(codes.InvalidArgument, "the memory query is outside the bounds this server will run")
 	case errors.Is(err, memoryfiles.ErrStaleContent):
 		return status.Error(codes.Aborted, "the file changed since it was read; re-read it and decide again")
+	case errors.Is(err, memoryfiles.ErrSourceChanged):
+		// A promotion the vault abandoned because the candidate stopped being
+		// the file that was read. Aborted rather than the Internal fallback:
+		// nothing broke, the user's proposal is still in their inbox, and the
+		// caller — often a model mid-run — can only do the right thing if it is
+		// told that reading it again is the way forward.
+		//
+		// The sentence is fixed and says nothing about the vault. The error
+		// underneath names the candidate's path, the reserved name a copy may
+		// have been kept under and whatever the filesystem said, and all three
+		// are for this server's log.
+		return status.Error(codes.Aborted, promotionSourceChangedMessage)
 	case errors.Is(err, memoryfiles.ErrConfinement):
 		return status.Error(codes.PermissionDenied, "that path is not somewhere memory may touch")
 	case errors.Is(err, memoryfiles.ErrKind):
@@ -197,10 +231,6 @@ func memoryError(err error, fallback string) error {
 			memoryfiles.MaxVaultIndexedFiles)
 	case errors.As(err, &limit):
 		return status.Errorf(codes.InvalidArgument, "%s exceeds its %d byte limit", limit.What, limit.Limit)
-	case errors.Is(err, context.Canceled):
-		return status.Error(codes.Canceled, "the memory request was cancelled")
-	case errors.Is(err, context.DeadlineExceeded):
-		return status.Error(codes.DeadlineExceeded, "the memory request ran out of time")
 	default:
 		return status.Error(codes.Internal, fallback)
 	}

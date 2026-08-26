@@ -794,10 +794,9 @@ func (v *Vault) removeRejectedInboxEntry(
 	// otherwise walk past this point straight into the unlink and delete a
 	// claim about the user on behalf of a caller that had already gone.
 	if err := ctx.Err(); err != nil {
-		return v.refuseDetachedRejection(ctx, detached, "the request ended before the removal could be verified")
+		return v.refuseDetachedRejection(ctx, detached, endedBeforeVerification)
 	}
-	detachedStat, statErr := detached.stat()
-	objection := objectionToDetachedEntry(ctx, clean, boundHash, boundFailure, opened, openedStat, detachedStat, statErr)
+	objection := detached.objectionToDetachedEntry(ctx, boundHash, boundFailure, opened, openedStat)
 	if objection != "" {
 		return v.refuseDetachedRejection(ctx, detached, objection)
 	}
@@ -927,25 +926,25 @@ func staleUnreadableBecameReadable(clean string) error {
 // not when it is not. An empty answer is the only thing that authorises the
 // unlink below it.
 //
-// It is a function of its own because it is the last check standing between a
-// detached file and an unlink, and every branch of it has to be reachable by a
-// test on its own terms.
+// It is a method on the detached entry because the entry is what it asks about.
+// The name is gone; what is left is a reserved private name inside the same
+// confined directory, and that is reachable — so a check that has nothing else
+// to go on can still go and look, instead of concluding that a question it
+// cannot ask has been answered.
 //
 // It asks whichever question the near side of the detach asked. A removal bound
 // to bytes re-reads them. A removal bound to nothing but "this entry, and
 // nothing could read it" asks the file again whether it still cannot be read,
 // and in the same broad way — the two guards have to agree, or the detach
 // window becomes the one place where bytes nobody has seen may be deleted.
-func objectionToDetachedEntry(
+func (d *detachedEntry) objectionToDetachedEntry(
 	ctx context.Context,
-	clean string,
 	boundHash string,
 	boundFailure unreadableFailure,
 	opened *os.File,
 	openedStat unix.Stat_t,
-	detachedStat unix.Stat_t,
-	statErr error,
 ) string {
+	detachedStat, statErr := d.stat()
 	if statErr != nil {
 		return fmt.Sprintf("the detached entry could not be inspected (%v)", statErr)
 	}
@@ -953,7 +952,7 @@ func objectionToDetachedEntry(
 		return "another file had taken its name"
 	}
 	if boundHash == "" {
-		return objectionToDetachedUnreadableEntry(ctx, clean, boundFailure, opened)
+		return d.objectionToDetachedUnreadableEntry(ctx, boundFailure, opened, openedStat)
 	}
 	if opened == nil {
 		// A binding to bytes is checked by reading those bytes. Without a
@@ -966,7 +965,7 @@ func objectionToDetachedEntry(
 	// saving in place keeps the inode, and those are the user's own newer
 	// words. They are held to the decision — or, for a hashless rejection, to
 	// the bytes the pre-check could not parse — like everything else.
-	content, readErr := rereadEntryContent(ctx, opened, clean)
+	content, readErr := rereadEntryContent(ctx, opened, d.clean)
 	if readErr != nil {
 		return fmt.Sprintf("it could not be read again before removal (%v)", readErr)
 	}
@@ -980,26 +979,96 @@ func objectionToDetachedEntry(
 // removal that has no bytes to compare: a proposal nothing could read, being
 // thrown away on its identity and on its going on refusing to be read.
 //
-// The identity question is already answered above. This asks the other half,
-// against the descriptor this removal opened before the detach — the same
-// descriptor, so the same inode, whatever has happened to the name. A file that
-// has become readable inside the window is a file somebody wrote to inside the
-// window, and nobody has read a word of it: it goes back. So does one that
-// fails in a way it did not fail before.
-func objectionToDetachedUnreadableEntry(
+// The identity question is already answered above. This asks the other half.
+// Where the removal opened a descriptor before the detach it asks that, because
+// a descriptor is the same inode whatever has happened to the name. Where it
+// could not open one at all — the file nothing could open, which is exactly the
+// case this door exists for — it opens the detached entry through the reserved
+// name it is now under and asks there.
+//
+// That second path is the one this guard used to skip. "No descriptor" was read
+// as "nothing to check", so a proposal whose permissions came back inside the
+// detach window was deleted on an inode number, with nobody having read a word
+// of it. Permissions coming back is a sync client finishing a copy, an editor
+// releasing a file, or the user doing what Turing told them and making their
+// proposal readable. A file that has become readable is a file somebody wrote
+// to inside the window: it goes back. So does one that fails in a way it did
+// not fail before.
+func (d *detachedEntry) objectionToDetachedUnreadableEntry(
 	ctx context.Context,
-	clean string,
 	boundFailure unreadableFailure,
 	opened *os.File,
+	expected unix.Stat_t,
 ) string {
-	if boundFailure == unreadableFailureNone || opened == nil {
-		// Nothing was ever opened here, so there is nothing to re-read and
-		// nothing this could ask. Identity was the whole binding and it has
-		// already answered — that is the file nothing could open, which is the
-		// one case the weak door was built for.
+	if boundFailure == unreadableFailureNone {
+		// Nothing recorded how this file refused to be read, so there is no
+		// state to hold it to. Unreachable from the primitive above, which
+		// refuses a binding like this before anything is detached, and a
+		// refusal rather than a shrug because the alternative is a deletion
+		// authorised by an absence.
+		return "nothing recorded how it refused to be read, so there is nothing left to check it against"
+	}
+	if opened == nil {
+		return d.objectionToReopenedUnreadableEntry(ctx, boundFailure, expected)
+	}
+	_, readErr := rereadEntryContent(ctx, opened, d.clean)
+	return unreadableStateObjection(ctx, boundFailure, readErr)
+}
+
+// objectionToReopenedUnreadableEntry opens the detached entry through the
+// reserved name it is under and asks it the near side's question again.
+//
+// The identity check is repeated against the reopened inode rather than assumed
+// from the stat above: this is the one path where the answer is a deletion of
+// bytes nobody has read, and an entry that is not the one the pre-check named
+// is not this rejection's to remove however it refuses to be read.
+func (d *detachedEntry) objectionToReopenedUnreadableEntry(
+	ctx context.Context,
+	boundFailure unreadableFailure,
+	expected unix.Stat_t,
+) string {
+	reopened, reopenedStat, openErr := d.open()
+	if openErr != nil {
+		if ended := ctx.Err(); ended != nil {
+			return endedBeforeVerification
+		}
+		if errors.Is(openErr, ErrConfinement) {
+			// Not a regular file any more. Nothing about that is the state the
+			// pre-check answered about, and this package does not remove it.
+			return fmt.Sprintf("it is no longer an entry this vault will act on (%v)", openErr)
+		}
+		if boundFailure != unreadableFailureUnopenable {
+			return "it is unreadable in a different way than when it was read, so something has written to it since"
+		}
+		// Still nothing can open it, and it is still the entry that was
+		// detached: the licence the weak door was built for, and the user's
+		// only way out of a claim they can neither read nor be rid of.
 		return ""
 	}
-	_, readErr := rereadEntryContent(ctx, opened, clean)
+	defer func() { _ = reopened.Close() }()
+	if reopenedStat.Dev != expected.Dev || reopenedStat.Ino != expected.Ino {
+		return "another file had taken its name"
+	}
+	_, readErr := readEntryContent(ctx, reopened, d.stagedRelPath(), MaxNoteBytes)
+	return unreadableStateObjection(ctx, boundFailure, readErr)
+}
+
+// endedBeforeVerification is the one sentence every branch here uses for a
+// request that went away mid-check. It is not a verdict about the file, and the
+// caller turns it into the cancellation rather than into a claim about the
+// vault.
+const endedBeforeVerification = "the request ended before the removal could be verified"
+
+// unreadableStateObjection compares how the entry refuses to be read now with
+// how it refused when the user was told it could not be read.
+//
+// A request that ended is answered as itself: a read that stopped because the
+// caller had gone says nothing about the file, and calling that "unreadable in
+// a different way" would report a cancellation as a change to the user's vault.
+func unreadableStateObjection(ctx context.Context, boundFailure unreadableFailure, readErr error) string {
+	if ended := ctx.Err(); ended != nil {
+		return endedBeforeVerification
+	}
 	switch {
 	case readErr == nil:
 		return "nothing could read it when it was rejected and it can be read now, so nobody has seen what it says"
@@ -1022,25 +1091,30 @@ func objectionToDetachedUnreadableEntry(
 // the next ListMemoryState, and deletable by the user like any other file in
 // their inbox. Only when that fails too does it stay staged, and then the
 // refusal says exactly where it is.
+//
+// A request that has ended by the time the file is back is answered as the
+// cancellation it is, whichever of those places the bytes ended up in. That is
+// one rule rather than a special case for the tidy branch: "the file changed
+// since it was read" is a claim about the user's vault, and a caller that has
+// gone is nobody to make it on behalf of. What the cancellation carries is
+// where the bytes are, so an operator reading the log still knows — the words
+// go in the error, never into the status a caller sees.
 func (v *Vault) refuseDetachedRejection(ctx context.Context, detached *detachedEntry, reason string) error {
 	placement := detached.putBack()
-	if placement.restored && placement.recoveryRelPath == "" {
-		// The vault is exactly as it was, so a request that ran out of time or
-		// was cancelled says that rather than making a claim about the file.
-		// "It changed since you read it" is the wrong sentence when nothing
-		// changed and nobody finished looking.
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return &StaleContentError{
-			RelPath: detached.clean,
-			Detail:  boundRefusalDetail(reason + ", so it was left alone"),
-		}
+	detail := boundRefusalDetail(reason + ", so it was left alone")
+	if !placement.clean() {
+		detail = boundRefusalDetail(placement.explain(reason))
+	}
+	if ended := ctx.Err(); ended != nil {
+		return &EndedRequestError{RelPath: detached.clean, Detail: detail, Cause: ended}
+	}
+	if placement.clean() {
+		return &StaleContentError{RelPath: detached.clean, Detail: detail}
 	}
 	return &StaleContentError{
 		RelPath: detached.clean,
-		Cause:   placement.cause,
-		Detail:  boundRefusalDetail(placement.explain(reason)),
+		Cause:   placement.failure(),
+		Detail:  detail,
 	}
 }
 

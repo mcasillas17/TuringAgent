@@ -253,13 +253,52 @@ func TestBoundHashlessRejectionRefusesAnUnopenableReplacementOfAnUnhashableCandi
 // ahead" but a refusal that puts the file back.
 //
 // The guard is exercised directly because the path above it now refuses first,
-// and a check nothing can reach is a check the next reader deletes.
-func TestDetachedHashBindingRefusesAnEntryThatCannotBeReadAgain(t *testing.T) {
-	var stat unix.Stat_t
-	stat.Dev = 7
-	stat.Ino = 42
+// and a check nothing can reach is a check the next reader deletes. It is
+// exercised against a real detached entry, because that is what the production
+// check inspects: the entry under the reserved name, not a number a test made
+// up.
 
-	objection := objectionToDetachedEntry(context.Background(), "inbox/note.md", "a-hash-of-bytes-somebody-read", unreadableFailureNone, nil, stat, stat, nil)
+// detachForTest takes an inbox entry off its name exactly as a rejection does,
+// so the far-side checks can be run on their own terms against something that
+// is really off its name.
+func detachForTest(t *testing.T, vault *Vault, relPath string) *detachedEntry {
+	t.Helper()
+	clean, err := requireInboxRelPath(relPath)
+	if err != nil {
+		t.Fatalf("confine %q: %v", relPath, err)
+	}
+	parent, leaf, err := vault.openParent(context.Background(), clean, false)
+	if err != nil {
+		t.Fatalf("open the parent of %q: %v", clean, err)
+	}
+	t.Cleanup(func() { _ = parent.Close() })
+	detached, err := vault.detachEntry(context.Background(), parent, leaf, clean)
+	if err != nil || detached == nil {
+		t.Fatalf("detach %q: %v", clean, err)
+	}
+	return detached
+}
+
+// detachedIdentity is what the entry says about itself once it is off its name.
+// Every far-side check starts from it, so a test that wants to reach the state
+// questions has to pass it rather than invent one.
+func detachedIdentity(t *testing.T, detached *detachedEntry) unix.Stat_t {
+	t.Helper()
+	stat, err := detached.stat()
+	if err != nil {
+		t.Fatalf("inspect the detached entry: %v", err)
+	}
+	return stat
+}
+
+func TestDetachedHashBindingRefusesAnEntryThatCannotBeReadAgain(t *testing.T) {
+	vault := newTestVault(t)
+	writeVaultFile(t, vault, "inbox/note.md", "the proposal the user read")
+	detached := detachForTest(t, vault, "inbox/note.md")
+
+	objection := detached.objectionToDetachedEntry(
+		context.Background(), "a-hash-of-bytes-somebody-read", unreadableFailureNone, nil, detachedIdentity(t, detached),
+	)
 	if objection == "" {
 		t.Fatal("a removal bound to bytes it cannot read again was allowed to delete the file on an inode match alone")
 	}
@@ -271,51 +310,77 @@ func TestDetachedHashBindingRefusesAnEntryThatCannotBeReadAgain(t *testing.T) {
 	}
 }
 
-// And the control beside it: with nothing to compare, identity is the whole
-// binding and it is enough. This is the file nothing could ever open — no
-// descriptor here, so nothing to ask, and the entry it was bound to is the
-// entry it detached.
-func TestDetachedIdentityBindingIsEnoughWhenThereWereNoBytesToHash(t *testing.T) {
-	var stat unix.Stat_t
-	stat.Dev = 7
-	stat.Ino = 42
+// And the control beside it, which is no longer a shortcut. There is no
+// descriptor here — this is the file nothing could open — so the check goes and
+// opens the detached entry under its reserved name and asks it the same
+// question the pre-check asked. Still nothing can open it, and it is still the
+// entry that was detached: the licence holds and the user gets rid of the claim.
+func TestDetachedIdentityBindingIsCheckedAgainstTheEntryItDetached(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, where no file is unreadable")
+	}
+	vault := newTestVault(t)
+	full := writeVaultFile(t, vault, "inbox/note.md", "unreadable, unparseable, unwanted")
+	closeToEveryReader(t, full)
+	detached := detachForTest(t, vault, "inbox/note.md")
+	identity := detachedIdentity(t, detached)
 
-	if objection := objectionToDetachedEntry(context.Background(), "inbox/note.md", "", unreadableFailureUnopenable, nil, stat, stat, nil); objection != "" {
+	if objection := detached.objectionToDetachedEntry(
+		context.Background(), "", unreadableFailureUnopenable, nil, identity,
+	); objection != "" {
 		t.Fatalf("an unhashable removal of the entry it was bound to was refused: %q", objection)
 	}
-	var moved unix.Stat_t
-	moved.Dev = 7
-	moved.Ino = 43
-	if objection := objectionToDetachedEntry(context.Background(), "inbox/note.md", "", unreadableFailureUnopenable, nil, stat, moved, nil); objection == "" {
+	moved := identity
+	moved.Ino++
+	if objection := detached.objectionToDetachedEntry(
+		context.Background(), "", unreadableFailureUnopenable, nil, moved,
+	); objection == "" {
 		t.Fatal("an unhashable removal deleted an entry that was not the one it was bound to")
+	}
+	// And the state question the reopen exists to ask: the permissions come
+	// back while the entry is off its name, so what is behind it can be read
+	// and nobody has read it.
+	staged := filepath.Join(vault.Root(), InboxDirName, detached.staging)
+	if err := os.Chmod(staged, 0o600); err != nil {
+		t.Fatalf("open the detached entry back up: %v", err)
+	}
+	objection := detached.objectionToDetachedEntry(
+		context.Background(), "", unreadableFailureUnopenable, nil, identity,
+	)
+	if !strings.Contains(objection, "it can be read now") {
+		t.Fatalf("the reopened entry was deleted on an inode match alone: %q", objection)
 	}
 }
 
 // The far side of the detach for a removal bound to no bytes at all, exercised
-// directly. The path above it refuses most of these first, and a guard that is
-// only ever reached through another guard is one the next reader deletes: these
-// two have to be able to fail on their own terms.
+// directly through the descriptor the removal opened before the detach. The
+// path above it refuses most of these first, and a guard that is only ever
+// reached through another guard is one the next reader deletes: these have to
+// be able to fail on their own terms.
 //
-// The descriptor is the one the removal opened before the detach, so it is the
-// same inode however the name has been used since. What it is asked is the
-// question the near side asked: can this be read now, and if not, is it
-// unreadable the same way it was.
+// The descriptor is the one the removal opened, so it is the same inode however
+// the name has been used since. What it is asked is the question the near side
+// asked: can this be read now, and if not, is it unreadable the same way it was.
 func TestDetachedUnreadableBindingChecksTheFileStillWillNotRead(t *testing.T) {
-	var stat unix.Stat_t
-	stat.Dev = 7
-	stat.Ino = 42
 	detached := func(t *testing.T, failure unreadableFailure, content string) string {
 		t.Helper()
-		full := filepath.Join(t.TempDir(), "detached")
-		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
-			t.Fatalf("write the detached entry: %v", err)
-		}
-		opened, err := os.Open(full)
+		vault := newTestVault(t)
+		writeVaultFile(t, vault, "inbox/note.md", content)
+		parent, leaf, err := vault.openParent(context.Background(), "inbox/note.md", false)
 		if err != nil {
-			t.Fatalf("open the detached entry: %v", err)
+			t.Fatalf("open the inbox: %v", err)
+		}
+		defer func() { _ = parent.Close() }()
+		opened, openedStat, err := openConfinedEntry(parent, leaf, "inbox/note.md")
+		if err != nil {
+			t.Fatalf("open the candidate: %v", err)
 		}
 		defer func() { _ = opened.Close() }()
-		return objectionToDetachedEntry(context.Background(), "inbox/note.md", "", failure, opened, stat, stat, nil)
+		entry, err := vault.detachEntry(context.Background(), parent, leaf, "inbox/note.md")
+		if err != nil || entry == nil {
+			t.Fatalf("detach the candidate: %v", err)
+		}
+		return entry.objectionToDetachedEntry(context.Background(), "", failure, opened, openedStat)
 	}
 
 	// It could not be read when it was rejected and it can be read now. Those

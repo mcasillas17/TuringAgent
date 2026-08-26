@@ -788,7 +788,7 @@ func (v *Vault) undoInstall(parent *os.File, leaf string, clean string, installe
 	if outcome != removalRefused {
 		return nil
 	}
-	if placement.restored && placement.recoveryRelPath == "" {
+	if placement.clean() {
 		return errors.New(reason)
 	}
 	return errors.New(boundRefusalDetail(placement.explain(reason)))

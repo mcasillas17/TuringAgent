@@ -369,7 +369,7 @@ func (v *Vault) unlinkPromotedSource(ctx context.Context, clean string, expected
 // entitled to delete: it is back under its own name, or it is somewhere the user
 // can find it, and the sentence says which.
 func promotedSourceKept(clean string, placement detachedPlacement, reason string, cause error) error {
-	if placement.restored && placement.recoveryRelPath == "" {
+	if placement.clean() {
 		if cause != nil {
 			return cause
 		}
@@ -420,7 +420,7 @@ func (v *Vault) removeInstalledCopy(parent *os.File, leaf string, clean string, 
 // installedCopyKept says where a file this rollback was not entitled to delete
 // actually is. It never reports one as removed.
 func installedCopyKept(clean string, placement detachedPlacement, reason string) error {
-	if placement.restored && placement.recoveryRelPath == "" {
+	if placement.clean() {
 		return fmt.Errorf("%q is no longer the copy this promotion installed: %s, so it was left alone", clean, reason)
 	}
 	return fmt.Errorf(

@@ -54,6 +54,39 @@ func (e *StaleContentError) Unwrap() []error {
 	return []error{ErrStaleContent, e.Cause}
 }
 
+// EndedRequestError is a mutation abandoned because the request behind it had
+// already ended, together with where the bytes it was holding ended up.
+//
+// It exists because those two facts have to travel together and neither may be
+// dropped. The cancellation is the answer — a caller that has gone is nobody to
+// delete a claim about the user on behalf of, and nothing about the file was
+// decided — so what a caller matches on is context.Canceled or
+// context.DeadlineExceeded and nothing else. Reporting it as stale content
+// instead would tell whoever asks next that the user's vault moved, which is an
+// invention, and would send a retry loop round again on the strength of it.
+//
+// The detail is the other half: when the restore was contested the bytes are
+// under a recovery name, and a cancellation that did not say so would leave a
+// file nobody knows about. It is bounded and content-free by construction —
+// every caller builds it through boundRefusalDetail — and it stays in the error
+// for the log. The status a caller sees carries the cancellation alone.
+type EndedRequestError struct {
+	RelPath string
+	Detail  string
+	// Cause is the context error this request ended with, and the only thing
+	// errors.Is finds here. There is deliberately no ErrStaleContent beside it.
+	Cause error
+}
+
+func (e *EndedRequestError) Error() string {
+	if e.Detail == "" {
+		return fmt.Sprintf("%s: %v", e.RelPath, e.Cause)
+	}
+	return fmt.Sprintf("%s: %s: %v", e.RelPath, e.Detail, e.Cause)
+}
+
+func (e *EndedRequestError) Unwrap() error { return e.Cause }
+
 // ApplyProfileEditRequest applies one reviewed profile_edit candidate to
 // profile.md. Content is the whole resulting document, because the user may
 // have edited the proposal before accepting it.
