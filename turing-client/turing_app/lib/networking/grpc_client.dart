@@ -48,6 +48,7 @@ import '../models/skill.dart';
 import '../models/telemetry.dart';
 import '../models/tool_descriptor.dart';
 import '../models/turing_event.dart';
+import '../utils/protobuf_enum.dart';
 import 'api_client.dart';
 
 const _startupUnaryTimeout = Duration(seconds: 10);
@@ -458,7 +459,7 @@ class TuringGrpcApi
               noteId: note.noteId,
               title: note.title,
               vaultPath: note.vaultPath,
-              tier: _memoryEgressTierFromProto(note.tier),
+              tier: _memoryEgressTierFromProto(note),
               bodyMayBeSent: note.bodyMayBeSent,
             ),
           )
@@ -471,7 +472,23 @@ class TuringGrpcApi
   /// A tier this build does not recognise is reported as unspecified rather
   /// than guessed at. The dialog says "memory" for it, which is true, instead
   /// of naming a tier the server never claimed.
-  static MemoryEgressTier _memoryEgressTierFromProto(commonpb.MemoryTier tier) {
+  ///
+  /// Decoded from the whole message, not from the field alone. A closed enum
+  /// keeps the last value the parser *recognised*, so a newer tier arriving
+  /// after a known one leaves the known one sitting in the field while the
+  /// value the server actually meant is filed away as unknown. Reading the
+  /// field would put "Persona — already in this prompt" on a consent dialog
+  /// over a row the server never described that way, which is the one sentence
+  /// this screen must never invent.
+  static MemoryEgressTier _memoryEgressTierFromProto(
+    commonpb.MemoryEgressDisclosure note,
+  ) {
+    final tier = decodeClosedEnum(
+      message: note,
+      fieldNumber: 4,
+      readValue: () => note.tier,
+      unknownValue: commonpb.MemoryTier.MEMORY_TIER_UNSPECIFIED,
+    );
     switch (GrpcMappers.memoryTierToModel(tier)) {
       case MemoryTier.persona:
         return MemoryEgressTier.persona;

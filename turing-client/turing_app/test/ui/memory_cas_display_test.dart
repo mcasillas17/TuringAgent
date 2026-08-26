@@ -184,67 +184,69 @@ void main() {
       expect(api.profileApplies.single.$4, 'sha256:proposed-again');
     });
 
-    testWidgets('is the version the persona editor is holding, not the newest', (
-      tester,
-    ) async {
-      final api = _Api()..state = _stateWithProfileEdit();
-      await _pump(tester, api);
+    testWidgets(
+      'is the version the persona editor is holding, not the newest',
+      (tester) async {
+        final api = _Api()..state = _stateWithProfileEdit();
+        await _pump(tester, api);
 
-      await tester.enterText(
-        find.byKey(const Key('memory-persona-editor')),
-        '# Persona\n\nBe warmer.\n',
-      );
-      await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('memory-persona-editor')),
+          '# Persona\n\nBe warmer.\n',
+        );
+        await tester.pumpAndSettle();
 
-      // The vault moved under the unsaved edit, and the page re-read.
-      api.state = _stateWithProfileEdit(personaHash: 'sha256:persona-moved');
-      await _tap(tester, find.text('Reject'));
+        // The vault moved under the unsaved edit, and the page re-read.
+        api.state = _stateWithProfileEdit(personaHash: 'sha256:persona-moved');
+        await _tap(tester, find.text('Reject'));
 
-      expect(
-        find.textContaining('Editing version sha256:persona-moved'),
-        findsNothing,
-        reason:
-            'the editor still holds the older version; a save will name that '
-            'one and be refused, and this line is what explains why',
-      );
-      expect(
-        find.textContaining('Editing version sha256:persona'),
-        findsOneWidget,
-      );
+        expect(
+          find.textContaining('Editing version sha256:persona-moved'),
+          findsNothing,
+          reason:
+              'the editor still holds the older version; a save will name that '
+              'one and be refused, and this line is what explains why',
+        );
+        expect(
+          find.textContaining('Editing version sha256:persona'),
+          findsOneWidget,
+        );
 
-      await _tap(tester, find.byKey(const Key('memory-persona-save')));
-      expect(api.personaSaves, hasLength(1));
-      expect(api.personaSaves.single.$2, 'sha256:persona');
-    });
+        await _tap(tester, find.byKey(const Key('memory-persona-save')));
+        expect(api.personaSaves, hasLength(1));
+        expect(api.personaSaves.single.$2, 'sha256:persona');
+      },
+    );
 
-    testWidgets('is the version the profile editor is holding, not the newest', (
-      tester,
-    ) async {
-      final api = _Api()..state = _stateWithProfileEdit();
-      await _pump(tester, api);
+    testWidgets(
+      'is the version the profile editor is holding, not the newest',
+      (tester) async {
+        final api = _Api()..state = _stateWithProfileEdit();
+        await _pump(tester, api);
 
-      await tester.enterText(
-        find.byKey(const Key('memory-profile-editor')),
-        '# Profile\n\nMy own words.\n',
-      );
-      await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('memory-profile-editor')),
+          '# Profile\n\nMy own words.\n',
+        );
+        await tester.pumpAndSettle();
 
-      api.state = _stateWithProfileEdit(profileHash: 'sha256:profile-moved');
-      await _tap(tester, find.text('Reject'));
+        api.state = _stateWithProfileEdit(profileHash: 'sha256:profile-moved');
+        await _tap(tester, find.text('Reject'));
 
-      expect(
-        find.textContaining('Editing version sha256:profile-moved'),
-        findsNothing,
-      );
-      expect(
-        find.textContaining('Editing version sha256:profile'),
-        findsOneWidget,
-      );
+        expect(
+          find.textContaining('Editing version sha256:profile-moved'),
+          findsNothing,
+        );
+        expect(
+          find.textContaining('Editing version sha256:profile'),
+          findsOneWidget,
+        );
 
-      await _tap(tester, find.byKey(const Key('memory-profile-save')));
-      expect(api.profileSaves, hasLength(1));
-      expect(api.profileSaves.single.$2, 'sha256:profile');
-    });
+        await _tap(tester, find.byKey(const Key('memory-profile-save')));
+        expect(api.profileSaves, hasLength(1));
+        expect(api.profileSaves.single.$2, 'sha256:profile');
+      },
+    );
 
     testWidgets('follows an untouched editor when the document moves', (
       tester,

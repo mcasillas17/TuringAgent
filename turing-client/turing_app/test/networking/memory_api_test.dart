@@ -39,31 +39,34 @@ void main() {
     );
   }
 
-  test('listMemoryState maps settings, documents, tiers and proposals', () async {
-    final api = await connect(_MemoryService());
+  test(
+    'listMemoryState maps settings, documents, tiers and proposals',
+    () async {
+      final api = await connect(_MemoryService());
 
-    final state = await api.listMemoryState();
+      final state = await api.listMemoryState();
 
-    expect(state.settings.enabled, isTrue);
-    expect(state.settings.vaultRoot, '/memory');
-    expect(state.settings.vaultWritable, isTrue);
-    expect(state.persona.content, '# Persona\n\nBe direct.\n');
-    expect(state.persona.contentHash, 'sha256:persona');
-    expect(state.persona.status, MemoryNoteStatus.unmanaged);
-    expect(state.profile.contentHash, 'sha256:profile');
-    expect(state.profile.unavailableReason, MemoryUnavailableReason.none);
-    expect(state.tiers.map((tier) => tier.tier), [
-      MemoryTier.persona,
-      MemoryTier.profile,
-      MemoryTier.belief,
-    ]);
-    expect(state.notes.single.title, 'Ada');
-    expect(state.notes.single.provenance.single.withdrawn, isTrue);
-    expect(state.candidates.single.candidateId, 'cand-1');
-    expect(state.candidates.single.managed, isTrue);
-    expect(state.candidates.single.content, 'They bike to work.');
-    expect(state.candidates.single.createdAt, isNotNull);
-  });
+      expect(state.settings.enabled, isTrue);
+      expect(state.settings.vaultRoot, '/memory');
+      expect(state.settings.vaultWritable, isTrue);
+      expect(state.persona.content, '# Persona\n\nBe direct.\n');
+      expect(state.persona.contentHash, 'sha256:persona');
+      expect(state.persona.status, MemoryNoteStatus.unmanaged);
+      expect(state.profile.contentHash, 'sha256:profile');
+      expect(state.profile.unavailableReason, MemoryUnavailableReason.none);
+      expect(state.tiers.map((tier) => tier.tier), [
+        MemoryTier.persona,
+        MemoryTier.profile,
+        MemoryTier.belief,
+      ]);
+      expect(state.notes.single.title, 'Ada');
+      expect(state.notes.single.provenance.single.withdrawn, isTrue);
+      expect(state.candidates.single.candidateId, 'cand-1');
+      expect(state.candidates.single.managed, isTrue);
+      expect(state.candidates.single.content, 'They bike to work.');
+      expect(state.candidates.single.createdAt, isNotNull);
+    },
+  );
 
   test('the pinned documents are saved under compare-and-set', () async {
     final service = _MemoryService();
@@ -80,7 +83,10 @@ void main() {
 
     expect(service.personaSaves.single.content, '# Persona\n\nBe warmer.\n');
     expect(service.personaSaves.single.expectedContentHash, 'sha256:persona');
-    expect(service.profileSaves.single.content, '# Profile\n\nBikes to work.\n');
+    expect(
+      service.profileSaves.single.content,
+      '# Profile\n\nBikes to work.\n',
+    );
     expect(service.profileSaves.single.expectedContentHash, 'sha256:profile');
     expect(persona.content, '# Persona\n\nBe warmer.\n');
     expect(profile.content, '# Profile\n\nBikes to work.\n');
@@ -155,7 +161,8 @@ void main() {
     expect(
       applied.cleanupPending,
       isTrue,
-      reason: 'the write landed; what is unfinished is Turing removing the '
+      reason:
+          'the write landed; what is unfinished is Turing removing the '
           'proposal, and the page has to be able to say which',
     );
   });
@@ -176,22 +183,21 @@ void main() {
     expect(settings.unavailableReason, MemoryUnavailableReason.disabled);
   });
 
-  test('a refused save arrives as a typed exception, not a raw gRPC error', () async {
-    final api = await connect(_MemoryService()..refuseSaves = true);
+  test(
+    'a refused save arrives as a typed exception, not a raw gRPC error',
+    () async {
+      final api = await connect(_MemoryService()..refuseSaves = true);
 
-    await expectLater(
-      api.saveMemoryPersona(content: 'text', expectedContentHash: 'stale'),
-      throwsA(
-        isA<TuringApiException>()
-            .having((error) => error.code, 'code', 'failed_precondition')
-            .having(
-              (error) => error.message,
-              'message',
-              contains('re-read'),
-            ),
-      ),
-    );
-  });
+      await expectLater(
+        api.saveMemoryPersona(content: 'text', expectedContentHash: 'stale'),
+        throwsA(
+          isA<TuringApiException>()
+              .having((error) => error.code, 'code', 'failed_precondition')
+              .having((error) => error.message, 'message', contains('re-read')),
+        ),
+      );
+    },
+  );
 
   test('prepareRemoteEgress maps every disclosed memory field', () async {
     final api = await connect(_MemoryDisclosureChatService());
@@ -213,6 +219,38 @@ void main() {
     expect(disclosure.memoryNotes[1].tier, MemoryEgressTier.belief);
     expect(disclosure.memoryNotes[1].bodyMayBeSent, isFalse);
   });
+
+  test(
+    'a disclosed tier this build cannot name is not the one beside it',
+    () async {
+      final api = await connect(_UnknownTierChatService());
+
+      final disclosure = await api.prepareRemoteEgress(
+        sessionId: 'session-1',
+        content: 'hello',
+        modelProvider: 'openai_compatible',
+        idempotencyKey: 'idem-1',
+      );
+
+      expect(disclosure, isNotNull);
+      expect(
+        disclosure!.memoryNotes.single.tier,
+        MemoryEgressTier.unspecified,
+        reason:
+            'protobuf keeps the last value it recognised, so a newer tier sent '
+            'after a known one leaves the known one in the field — reading it '
+            'would put a definite claim on screen the server never made',
+      );
+      expect(
+        disclosure.pinnedMemory,
+        isEmpty,
+        reason:
+            'a tier nobody here can name is not a promise that these exact words '
+            'are already in the prompt',
+      );
+      expect(disclosure.toolReachableMemory, hasLength(1));
+    },
+  );
 }
 
 class _MemoryService extends memorygrpc.MemoryServiceBase {
@@ -445,13 +483,68 @@ class _MemoryService extends memorygrpc.MemoryServiceBase {
   Future<memorypb.ListMemoryToolsResponse> listMemoryTools(
     grpc.ServiceCall call,
     memorypb.ListMemoryToolsRequest request,
-  ) async => throw grpc.GrpcError.permissionDenied('memory tool discovery is internal');
+  ) async => throw grpc.GrpcError.permissionDenied(
+    'memory tool discovery is internal',
+  );
 
   @override
   Future<memorypb.CallMemoryToolResponse> callMemoryTool(
     grpc.ServiceCall call,
     memorypb.CallMemoryToolRequest request,
-  ) async => throw grpc.GrpcError.permissionDenied('memory tool dispatch is internal');
+  ) async =>
+      throw grpc.GrpcError.permissionDenied('memory tool dispatch is internal');
+}
+
+/// A disclosure whose memory tier is a value no released server sends.
+///
+/// The recognised PERSONA is on the wire first, so the unknown value is
+/// isolated to the one field under test and the decoder is put in exactly the
+/// position that matters: the generated field still reads PERSONA, and only the
+/// unknown varint beside it says that is not what the server meant.
+class _UnknownTierChatService extends chatgrpc.ChatServiceBase {
+  @override
+  Future<chatpb.PrepareRemoteEgressResponse> prepareRemoteEgress(
+    grpc.ServiceCall call,
+    chatpb.PrepareRemoteEgressRequest request,
+  ) async {
+    return chatpb.PrepareRemoteEgressResponse(
+      disclosure: commonpb.RemoteEgressDisclosure(
+        challenge: 'challenge',
+        provider: commonpb.ModelProvider.MODEL_PROVIDER_OPENAI_COMPATIBLE,
+        model: 'remote-model',
+        endpoint: 'https://models.example/v1',
+        endpointHost: 'models.example',
+        dataCategories: [
+          commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_MEMORY_PROFILE,
+        ],
+        expiresAt: timestamppb.Timestamp.fromDateTime(
+          DateTime.utc(2026, 8, 24, 12),
+        ),
+        memoryProfileMayBeSent: true,
+        memoryNotes: [
+          commonpb.MemoryEgressDisclosure.fromBuffer(const [
+            // title field 2, "persona.md"
+            0x12, 0x0a, 0x70, 0x65, 0x72, 0x73, 0x6f, 0x6e, 0x61, 0x2e, 0x6d,
+            0x64,
+            // vault_path field 3, "persona.md"
+            0x1a, 0x0a, 0x70, 0x65, 0x72, 0x73, 0x6f, 0x6e, 0x61, 0x2e, 0x6d,
+            0x64,
+            0x20, 0x01, // tier field 4, recognised PERSONA
+            0x20, 0x7f, // tier field 4, unknown value 127
+            0x28, 0x01, // body_may_be_sent field 5, true
+          ]),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Stream<chatpb.ChatStreamEvent> sendMessage(
+    grpc.ServiceCall call,
+    chatpb.SendMessageRequest request,
+  ) async* {
+    throw grpc.GrpcError.unimplemented('not exercised by this test');
+  }
 }
 
 class _MemoryDisclosureChatService extends chatgrpc.ChatServiceBase {

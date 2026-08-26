@@ -367,6 +367,48 @@ void main() {
       expect(find.textContaining('somewhere/new.md'), findsWidgets);
     });
 
+    testWidgets('an unknown tier is labelled as memory, not as a tier', (
+      tester,
+    ) async {
+      final disclosure = RemoteEgressDisclosure(
+        challenge: 'challenge',
+        provider: 'openai_compatible',
+        model: 'remote',
+        endpoint: 'https://models.example/v1',
+        endpointHost: 'models.example',
+        dataCategories: const [EgressDataCategory.memoryProfile],
+        expiresAt: DateTime.utc(2026, 8, 24),
+        memoryProfileMayBeSent: true,
+        memoryNotes: const [
+          MemoryEgressDisclosure(
+            noteId: '',
+            title: 'Something newer',
+            vaultPath: 'somewhere/new.md',
+            tier: MemoryEgressTier.unspecified,
+            bodyMayBeSent: true,
+          ),
+        ],
+      );
+
+      await _open(tester, disclosure);
+
+      // The row is named and its words are declared sendable — both true, both
+      // the server's own claims. What is withheld is the tier, because nothing
+      // here knows it. "Persona" would be a promise about which of the user's
+      // documents this is, made up by a client that has never heard of it.
+      expect(find.text('Memory · Something newer'), findsOneWidget);
+      expect(find.textContaining('Persona'), findsNothing);
+      expect(find.textContaining('Profile'), findsNothing);
+      expect(find.textContaining('Belief'), findsNothing);
+      expect(
+        find.textContaining('the memory tools can reach'),
+        findsOneWidget,
+        reason:
+            'an unnamed tier is disclosed under the weaker of the two '
+            'headings, because the stronger one is a claim about the prompt',
+      );
+    });
+
     testWidgets('a bare memory server name is not offered as a tool', (
       tester,
     ) async {
