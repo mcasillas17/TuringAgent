@@ -199,8 +199,10 @@ func (t *completenessTracker) snapshot() ScanCompleteness { return t.completenes
 //
 // Accepted residual: two writes to the *same file* in the same second that
 // leave it exactly the same length look identical here, so a cache keyed on it
-// can serve one stale search result. Reads by belief identity always go to
-// disk, so the stale window is confined to discovery.
+// can serve one stale search result. It is confined to belief discovery on
+// purpose. Reads by belief identity always go to disk, and the inbox is never
+// served from the cache at all, so nothing a user decides about is ever answered
+// from a remembered parse.
 type NoteMetadata struct {
 	ModTimeUnix int64
 	SizeBytes   int64
@@ -214,6 +216,11 @@ type NoteMetadata struct {
 //
 // Entries hold the note exactly as it parsed, before anything the vault decides
 // across files. Nothing whose answer depends on another note is stored here.
+//
+// What it stores and what it will serve are two different questions. Every path
+// a pass sees is recorded, because the record is also how a path that stops
+// being seen is evicted; only beliefs are ever answered from it. See
+// cacheMayServe.
 type MetadataCache struct {
 	mutex   sync.RWMutex
 	entries map[string]cacheEntry
@@ -277,7 +284,7 @@ func (c *MetadataCache) Drop(relPath string) {
 // rather than a second implementation that can drift from this one.
 
 func (c *MetadataCache) reusableRow(candidate scanCandidate) (NoteRow, bool) {
-	if c == nil {
+	if c == nil || !cacheMayServe(candidate.area) {
 		return NoteRow{}, false
 	}
 	c.mutex.RLock()
@@ -286,10 +293,34 @@ func (c *MetadataCache) reusableRow(candidate scanCandidate) (NoteRow, bool) {
 	if !ok || !entry.hasNote {
 		return NoteRow{}, false
 	}
+	if !cacheMayServe(entry.note.Area) {
+		return NoteRow{}, false
+	}
 	if !sameCachedFile(entry.metadata, candidate.metadata()) {
 		return NoteRow{}, false
 	}
 	return entry.note, true
+}
+
+// cacheMayServe says which areas a remembered parse is allowed to answer for.
+//
+// The inbox is not one of them, and that is a governance rule rather than a
+// performance choice. This cache accepts one named residual: two writes to the
+// same file in the same second, at the same length, are indistinguishable to
+// it, so a pass can serve the earlier words. Over beliefs that is a stale
+// search result, self-correcting on the next change, and it was argued for on
+// those terms.
+//
+// A candidate is not a search result. Its bytes are rendered on the page the
+// user decides from, its hash is the token that decision carries, and the
+// decision itself is a compare-and-set against the file under the vault's own
+// lock. Serving a remembered parse there shows the user one proposal and makes
+// the server refuse every decision about it — and re-reading the page hands
+// back the same refused token, so the proposal is undecidable for as long as
+// the entry lives. Reading the inbox afresh on every pass is what keeps the
+// residual to discovery, where it belongs.
+func cacheMayServe(area VaultArea) bool {
+	return area != AreaInbox
 }
 
 func (c *MetadataCache) putScanned(relPath string, note NoteRow) {
@@ -351,8 +382,13 @@ func (v *Vault) Scan(ctx context.Context) (ScanResult, error) {
 }
 
 // ScanWithCache is the same pass with a cache the caller keeps between runs. A
-// note whose modification time and length are unchanged is not re-read or
+// belief whose modification time and length are unchanged is not re-read or
 // re-parsed; it is served from what the last pass already read.
+//
+// An inbox candidate never is. It is read, parsed and hashed on every pass,
+// because it is the text a user is about to decide about and the hash their
+// decision will carry — see cacheMayServe for why that is not the same kind of
+// answer as a search hit.
 //
 // Only a verdict the pass reached about a file's own bytes is cached. A read
 // that failed — a cancelled context, an entry that vanished or could not be

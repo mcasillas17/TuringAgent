@@ -288,3 +288,91 @@ func TestScanWithCacheIsSafeUnderConcurrentScans(t *testing.T) {
 		t.Fatalf("cache holds %d entries, more than the vault can contain", cache.Len())
 	}
 }
+
+// The candidate content used below. It is a managed proposal, which is what
+// makes the two rewrites the same length and the reuse question a real one.
+const cachedCandidateShape = "---\nid: %q\nkind: \"belief\"\nmanaged: true\n---\n%s\n"
+
+// A cache that can serve a candidate is a cache that can strand one.
+//
+// The residual this cache is documented to accept — two writes to the same file
+// in the same second, at the same length — is a stale *search result*, and that
+// is survivable because the next pass corrects it and nothing irreversible
+// hangs off it. It is not survivable on a proposal. The listing serves the
+// candidate's bytes and its hash, the decision is a compare-and-set against the
+// file, and the file is the one thing that is not stale — so a cached candidate
+// puts words on the page that the decision then refuses, on every press, for as
+// long as the entry lives. The user is told to look again at a proposal they
+// are already looking at.
+//
+// So the residual is confined to belief discovery, where it was argued for.
+// Every pass reads, parses and hashes the inbox afresh.
+func TestScanWithCacheNeverServesACandidateFromTheCache(t *testing.T) {
+	vault := newTestVault(t)
+	belief := "---\nid: \"01ARZ3NDEKTSV4RRFFQ69G5FAV\"\n---\nfirst\n"
+	candidate := fmt.Sprintf(cachedCandidateShape, "01ARZ3NDEKTSV4RRFFQ69G5FAW", "first")
+	writeVaultFile(t, vault, "beliefs/note.md", belief)
+	writeVaultFile(t, vault, "inbox/note.md", candidate)
+	cache := NewMetadataCache()
+
+	if _, err := vault.ScanWithCache(context.Background(), cache); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+
+	// The one edit a (mtime, size) cache cannot see, made to both files at
+	// once: same inode, same second, same length, different words.
+	staleBelief := strings.Replace(belief, "first", "third", 1)
+	rewrittenCandidate := fmt.Sprintf(cachedCandidateShape, "01ARZ3NDEKTSV4RRFFQ69G5FAW", "third")
+	rewriteKeepingMetadata(t, vaultPath(t, vault, "beliefs/note.md"), staleBelief)
+	rewriteKeepingMetadata(t, vaultPath(t, vault, "inbox/note.md"), rewrittenCandidate)
+
+	second, err := vault.ScanWithCache(context.Background(), cache)
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	proposal := noteByPath(t, second, "inbox/note.md")
+	if proposal.Content != rewrittenCandidate {
+		t.Fatalf("the pass served a cached proposal: content = %q, want the file's own bytes", proposal.Content)
+	}
+	if proposal.ContentHash != ContentHash(rewrittenCandidate) {
+		t.Fatalf("the pass served a cached hash: %q, want the hash of what is on disk", proposal.ContentHash)
+	}
+	if proposal.Body != "third\n" {
+		t.Fatalf("the proposal was not parsed again: body = %q", proposal.Body)
+	}
+
+	// The belief keeps the residual it was given. Turning the cache off for the
+	// inbox is not turning it off.
+	if got := noteByPath(t, second, "beliefs/note.md").Content; got != belief {
+		t.Fatalf("belief content = %q, want the cached parse the residual is documented to serve", got)
+	}
+}
+
+// Not serving a candidate is not the same as forgetting it. The cache still
+// records what the pass saw at that path, because the entries it keeps are also
+// how a deleted note is noticed and evicted — and a path that is never recorded
+// is a path nothing can be evicted from.
+func TestScanWithCacheStillRecordsCandidatesItWillNotServe(t *testing.T) {
+	vault := newTestVault(t)
+	relPath := "inbox/note.md"
+	writeVaultFile(t, vault, relPath, fmt.Sprintf(cachedCandidateShape, "01ARZ3NDEKTSV4RRFFQ69G5FAW", "first"))
+	cache := NewMetadataCache()
+
+	result, err := vault.ScanWithCache(context.Background(), cache)
+	if err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if !cache.Fresh(relPath, noteMetadataOf(noteByPath(t, result, relPath))) {
+		t.Fatal("the pass kept no record of the candidate it read")
+	}
+
+	if err := os.Remove(vaultPath(t, vault, relPath)); err != nil {
+		t.Fatalf("remove the candidate: %v", err)
+	}
+	if _, err := vault.ScanWithCache(context.Background(), cache); err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if _, ok := cache.Get(relPath); ok {
+		t.Fatal("a deleted candidate is still cached; a later reader would resurrect it")
+	}
+}

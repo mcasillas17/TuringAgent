@@ -151,8 +151,12 @@ These are known, bounded, and deliberately not claimed away:
   to the same file in the same second that leaves it the same length may not be
   noticed until the next change. The inode is part of the key so a rename —
   which moves a note onto a name another note was holding — is always a miss.
-  It affects the search projection only: `memory.read` serves the file, freshly
-  read.
+  It affects belief search and index discovery only: `memory.read` serves the
+  file, freshly read, and the inbox is never answered from the cache at all.
+  Every pass reads, parses and hashes each candidate again, because a candidate
+  is the text a user decides about and the hash their decision carries, and a
+  remembered parse there would show one proposal on the page while the server
+  refused every decision about it.
 - **The 4096-file scan bound degrades search and reconcile only.** A vault past
   it refuses legibly; pinned tiers and enqueue are never blocked by vault size.
 
