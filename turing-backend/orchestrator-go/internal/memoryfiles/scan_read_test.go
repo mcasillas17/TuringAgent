@@ -179,7 +179,7 @@ func TestScanWithCacheRetriesAFailedReadOnAnUnchangedFile(t *testing.T) {
 	if unreadable.ParseError == "" {
 		t.Fatal("a note that could not be read was reported without a reason")
 	}
-	if _, reusable := cache.reusableRow(relPath, unreadable.ModTimeUnix, unreadable.SizeBytes); reusable {
+	if _, reusable := cache.reusableRow(scanCandidateFor(unreadable)); reusable {
 		t.Fatal("a failed read was cached; the next pass would reuse a verdict the read never reached")
 	}
 
@@ -197,7 +197,7 @@ func TestScanWithCacheRetriesAFailedReadOnAnUnchangedFile(t *testing.T) {
 	if note.Content != scannedNote {
 		t.Fatalf("the retry did not read the file: %q", note.Content)
 	}
-	if _, reusable := cache.reusableRow(relPath, note.ModTimeUnix, note.SizeBytes); !reusable {
+	if _, reusable := cache.reusableRow(scanCandidateFor(note)); !reusable {
 		t.Fatal("the successful retry was not cached")
 	}
 }
@@ -275,5 +275,17 @@ func TestScanWithCacheKeepsAnOverLimitNoteCachedUntilTheFileChanges(t *testing.T
 	}
 	if got := stub.readCount(relPath); got != 1 {
 		t.Fatalf("an unchanged over-limit note was read from disk again: %d reads", got)
+	}
+}
+
+// scanCandidateFor asks the cache about the exact file a pass just reported, in
+// the shape a walk would present it.
+func scanCandidateFor(note NoteRow) scanCandidate {
+	return scanCandidate{
+		relPath:     note.RelPath,
+		area:        note.Area,
+		modTimeUnix: note.ModTimeUnix,
+		sizeBytes:   note.SizeBytes,
+		inodeNumber: note.InodeNumber,
 	}
 }

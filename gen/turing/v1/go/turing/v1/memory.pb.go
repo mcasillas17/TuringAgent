@@ -1446,19 +1446,33 @@ func (x *GetMemoryCandidateRequest) GetCandidateId() string {
 type PromoteMemoryCandidateRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	CandidateId string                 `protobuf:"bytes,1,opt,name=candidate_id,json=candidateId,proto3" json:"candidate_id,omitempty"`
-	// Compare-and-set against MemoryCandidate.content_hash: a decision composed
-	// against text that has since changed is refused, not applied to the new
-	// text the user never read.
+	// Deprecated: the older spelling of expected_candidate_hash, and checked
+	// against exactly the same thing. It once named the database row's copy of
+	// the proposal, which made every proposal the user edited in their vault
+	// permanently undecidable — the listing can only ever serve the file's hash,
+	// and the row's was the only one that would be accepted. It is still honoured
+	// when expected_candidate_hash is empty, so a client built before the split
+	// is not left with no compare-and-set at all. New clients send
+	// expected_candidate_hash.
+	//
+	// Deprecated: Marked as deprecated in turing/v1/memory.proto.
 	ExpectedContentHash string `protobuf:"bytes,2,opt,name=expected_content_hash,json=expectedContentHash,proto3" json:"expected_content_hash,omitempty"`
 	// Optional user edit accepted in place of the proposed content.
 	EditedContent string     `protobuf:"bytes,3,opt,name=edited_content,json=editedContent,proto3" json:"edited_content,omitempty"`
 	TargetTier    MemoryTier `protobuf:"varint,4,opt,name=target_tier,json=targetTier,proto3,enum=turing.v1.MemoryTier" json:"target_tier,omitempty"`
-	// Compare-and-set against the inbox file's own bytes, read again at decision
-	// time. expected_content_hash is checked against the database row, which is
-	// what Turing wrote; this one is checked against what the file says now, so a
-	// proposal the user edited in Obsidian between the listing and the decision
-	// is refused instead of promoted as the text they were shown. Empty means the
-	// caller is not making a claim about the file.
+	// Compare-and-set against the candidate file's own bytes as they read now,
+	// re-read at decision time inside the same serialisation as the mutation.
+	//
+	// This is the only candidate compare-and-set there is. It names the file
+	// rather than the row because the file is what every listing serves and what
+	// the user was shown — the vault is a vault so they can open a proposal and
+	// rewrite it — so a proposal edited between the listing and the decision is
+	// refused instead of promoted as text they never read. Empty means the caller
+	// is making no claim about the file.
+	//
+	// Which decision applies is read from the same bytes: a proposal the file now
+	// declares a profile_edit is not promoted into beliefs/, whatever the row
+	// remembers Turing having proposed.
 	ExpectedCandidateHash string `protobuf:"bytes,5,opt,name=expected_candidate_hash,json=expectedCandidateHash,proto3" json:"expected_candidate_hash,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
@@ -1501,6 +1515,7 @@ func (x *PromoteMemoryCandidateRequest) GetCandidateId() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in turing/v1/memory.proto.
 func (x *PromoteMemoryCandidateRequest) GetExpectedContentHash() string {
 	if x != nil {
 		return x.ExpectedContentHash
@@ -1582,14 +1597,21 @@ func (x *PromoteMemoryCandidateResponse) GetNote() *MemoryNote {
 }
 
 type RejectMemoryCandidateRequest struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	CandidateId         string                 `protobuf:"bytes,1,opt,name=candidate_id,json=candidateId,proto3" json:"candidate_id,omitempty"`
-	ExpectedContentHash string                 `protobuf:"bytes,2,opt,name=expected_content_hash,json=expectedContentHash,proto3" json:"expected_content_hash,omitempty"`
-	Reason              string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
-	// Compare-and-set against the inbox file's own bytes. See
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	CandidateId string                 `protobuf:"bytes,1,opt,name=candidate_id,json=candidateId,proto3" json:"candidate_id,omitempty"`
+	// Deprecated: the older spelling of expected_candidate_hash, honoured only
+	// when that field is empty. See
+	// PromoteMemoryCandidateRequest.expected_content_hash.
+	//
+	// Deprecated: Marked as deprecated in turing/v1/memory.proto.
+	ExpectedContentHash string `protobuf:"bytes,2,opt,name=expected_content_hash,json=expectedContentHash,proto3" json:"expected_content_hash,omitempty"`
+	Reason              string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	// Compare-and-set against the candidate file's own bytes. See
 	// PromoteMemoryCandidateRequest.expected_candidate_hash: a rejection is a
 	// decision about a claim, and a claim the user did not read is not one they
-	// refused.
+	// refused. A rejection asks nothing about the kind — it is the user saying no
+	// to whatever is there — so a proposal whose frontmatter no longer parses can
+	// still be thrown away.
 	ExpectedCandidateHash string `protobuf:"bytes,4,opt,name=expected_candidate_hash,json=expectedCandidateHash,proto3" json:"expected_candidate_hash,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
@@ -1632,6 +1654,7 @@ func (x *RejectMemoryCandidateRequest) GetCandidateId() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in turing/v1/memory.proto.
 func (x *RejectMemoryCandidateRequest) GetExpectedContentHash() string {
 	if x != nil {
 		return x.ExpectedContentHash
@@ -1739,12 +1762,20 @@ type ApplyMemoryProfileRequest struct {
 	// proposal on its own. A client that sent the candidate's fragment here
 	// would be asking the server to replace the user's profile with a paragraph.
 	Content string `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
-	// Compare-and-set against MemoryProfile.content_hash. Empty means the caller
-	// expects no profile to exist yet.
+	// Compare-and-set against MemoryProfile.content_hash — the profile document
+	// this apply is replacing, and nothing else. This is the one request where
+	// expected_content_hash still names a document rather than a candidate.
+	//
+	// It must be the hash the resulting document was *composed against*, which is
+	// not always the most recent one read: a client holding a result the user has
+	// edited, over a profile that has since moved, has to send the older token and
+	// be refused, rather than pair those words with a document they never saw.
+	// Empty means the caller expects no profile to exist yet.
 	ExpectedContentHash string `protobuf:"bytes,2,opt,name=expected_content_hash,json=expectedContentHash,proto3" json:"expected_content_hash,omitempty"`
 	// The pending profile_edit candidate this apply acts on. Turing writes
 	// profile.md only on the authority of a proposal the user is looking at, so
-	// there is no path here and no way to write the profile without one.
+	// there is no path here and no way to write the profile without one. Whether
+	// it is a profile_edit is read from the candidate file, not from the row.
 	CandidateId string `protobuf:"bytes,3,opt,name=candidate_id,json=candidateId,proto3" json:"candidate_id,omitempty"`
 	// Compare-and-set against the candidate file's own bytes. See
 	// PromoteMemoryCandidateRequest.expected_candidate_hash: this binds the
@@ -2495,20 +2526,20 @@ const file_turing_v1_memory_proto_rawDesc = "" +
 	"candidates\x12Q\n" +
 	"\x12unavailable_reason\x18\x02 \x01(\x0e2\".turing.v1.MemoryUnavailableReasonR\x11unavailableReason\">\n" +
 	"\x19GetMemoryCandidateRequest\x12!\n" +
-	"\fcandidate_id\x18\x01 \x01(\tR\vcandidateId\"\x8d\x02\n" +
+	"\fcandidate_id\x18\x01 \x01(\tR\vcandidateId\"\x91\x02\n" +
 	"\x1dPromoteMemoryCandidateRequest\x12!\n" +
-	"\fcandidate_id\x18\x01 \x01(\tR\vcandidateId\x122\n" +
-	"\x15expected_content_hash\x18\x02 \x01(\tR\x13expectedContentHash\x12%\n" +
+	"\fcandidate_id\x18\x01 \x01(\tR\vcandidateId\x126\n" +
+	"\x15expected_content_hash\x18\x02 \x01(\tB\x02\x18\x01R\x13expectedContentHash\x12%\n" +
 	"\x0eedited_content\x18\x03 \x01(\tR\reditedContent\x126\n" +
 	"\vtarget_tier\x18\x04 \x01(\x0e2\x15.turing.v1.MemoryTierR\n" +
 	"targetTier\x126\n" +
 	"\x17expected_candidate_hash\x18\x05 \x01(\tR\x15expectedCandidateHash\"\x85\x01\n" +
 	"\x1ePromoteMemoryCandidateResponse\x128\n" +
 	"\tcandidate\x18\x01 \x01(\v2\x1a.turing.v1.MemoryCandidateR\tcandidate\x12)\n" +
-	"\x04note\x18\x02 \x01(\v2\x15.turing.v1.MemoryNoteR\x04note\"\xc5\x01\n" +
+	"\x04note\x18\x02 \x01(\v2\x15.turing.v1.MemoryNoteR\x04note\"\xc9\x01\n" +
 	"\x1cRejectMemoryCandidateRequest\x12!\n" +
-	"\fcandidate_id\x18\x01 \x01(\tR\vcandidateId\x122\n" +
-	"\x15expected_content_hash\x18\x02 \x01(\tR\x13expectedContentHash\x12\x16\n" +
+	"\fcandidate_id\x18\x01 \x01(\tR\vcandidateId\x126\n" +
+	"\x15expected_content_hash\x18\x02 \x01(\tB\x02\x18\x01R\x13expectedContentHash\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x126\n" +
 	"\x17expected_candidate_hash\x18\x04 \x01(\tR\x15expectedCandidateHash\"Y\n" +
 	"\x1dRejectMemoryCandidateResponse\x128\n" +

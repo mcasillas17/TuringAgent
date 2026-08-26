@@ -93,7 +93,8 @@ void main() {
       expect(
         api.profileApplies.single.$3,
         'sha256:profile-moved',
-        reason: 'a re-seeded result is an edit of the profile it was re-seeded '
+        reason:
+            'a re-seeded result is an edit of the profile it was re-seeded '
             'from',
       );
     });
@@ -304,16 +305,14 @@ class _Api extends TuringApi
   @override
   Future<MemoryCandidate> promoteMemoryCandidate({
     required String candidateId,
-    required String expectedContentHash,
-    String expectedCandidateHash = '',
+    required String expectedCandidateHash,
   }) async => _profileEditCandidate();
 
   @override
   Future<MemoryCandidate> rejectMemoryCandidate({
     required String candidateId,
-    required String expectedContentHash,
+    required String expectedCandidateHash,
     String reason = '',
-    String expectedCandidateHash = '',
   }) async {
     if (rejectDelay case final delay?) await Future<void>.delayed(delay);
     return _profileEditCandidate();

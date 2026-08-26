@@ -268,7 +268,7 @@ func TestScanIsSafeUnderConcurrentUse(t *testing.T) {
 					ContentHash: note.ContentHash,
 				})
 				_, _ = cache.Get(note.RelPath)
-				_ = cache.Fresh(note.RelPath, note.ModTimeUnix, note.SizeBytes)
+				_ = cache.Fresh(note.RelPath, noteMetadataOf(note))
 			}
 			if _, err := vault.CreateInboxNote(context.Background(), CreateInboxNoteRequest{
 				Kind:  KindBelief,
@@ -298,17 +298,20 @@ func TestScanIsSafeUnderConcurrentUse(t *testing.T) {
 
 func TestMetadataCacheReportsFreshness(t *testing.T) {
 	cache := NewMetadataCache()
-	cache.Put("beliefs/note.md", NoteMetadata{ModTimeUnix: 100, SizeBytes: 42, ContentHash: "sha256:x"})
-	if !cache.Fresh("beliefs/note.md", 100, 42) {
+	cache.Put("beliefs/note.md", NoteMetadata{ModTimeUnix: 100, SizeBytes: 42, InodeNumber: 7, ContentHash: "sha256:x"})
+	if !cache.Fresh("beliefs/note.md", NoteMetadata{ModTimeUnix: 100, SizeBytes: 42, InodeNumber: 7}) {
 		t.Fatal("expected an unchanged entry to be fresh")
 	}
-	if cache.Fresh("beliefs/note.md", 101, 42) {
+	if cache.Fresh("beliefs/note.md", NoteMetadata{ModTimeUnix: 101, SizeBytes: 42, InodeNumber: 7}) {
 		t.Fatal("a newer mtime must invalidate the entry")
 	}
-	if cache.Fresh("beliefs/note.md", 100, 43) {
+	if cache.Fresh("beliefs/note.md", NoteMetadata{ModTimeUnix: 100, SizeBytes: 43, InodeNumber: 7}) {
 		t.Fatal("a different size must invalidate the entry")
 	}
-	if cache.Fresh("beliefs/missing.md", 100, 42) {
+	if cache.Fresh("beliefs/note.md", NoteMetadata{ModTimeUnix: 100, SizeBytes: 42, InodeNumber: 8}) {
+		t.Fatal("a different file at the same name, length and time reported fresh")
+	}
+	if cache.Fresh("beliefs/missing.md", NoteMetadata{ModTimeUnix: 100, SizeBytes: 42, InodeNumber: 7}) {
 		t.Fatal("an unknown path is never fresh")
 	}
 }

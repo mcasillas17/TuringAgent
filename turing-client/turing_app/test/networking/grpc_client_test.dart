@@ -1339,10 +1339,7 @@ void main() {
 
     expect(service.listMcpServersCallCount, 1);
     expect(snapshot.registryDegraded, isTrue);
-    expect(
-      snapshot.registryDegradationReason,
-      'too many servers registered',
-    );
+    expect(snapshot.registryDegradationReason, 'too many servers registered');
   });
 
   test('listMcpServers maps an unset registry_degraded onto false and an '

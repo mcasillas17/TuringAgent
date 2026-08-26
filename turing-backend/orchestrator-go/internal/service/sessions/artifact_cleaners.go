@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
@@ -119,11 +120,22 @@ type memoryVaultReconciler interface {
 // so an unattached vault is a completed obligation rather than a withdrawal
 // that can never finish — treating it as a failure would leave every deletion
 // on such an install permanently retryable over a promise it already kept.
+//
+// A vault past the scan bound is the same shape of answer, and the cost of
+// getting it wrong is higher. Retrying cannot make the vault smaller, so a
+// deletion held open on it is held open forever: the receipt stays pending, the
+// reconcile ticker refires it every interval for the life of the process, and
+// the user is told their conversation is still being deleted when its rows are
+// already gone. The bounded pass is reported where the vault is reported —
+// through the memory surface, on every read — rather than by wedging the
+// withdrawal.
+//
 // Every other failure is returned, and keeps the receipt retryable.
 func NewMemoryReconcileCompletion(reconciler memoryVaultReconciler) repository.SessionDeletionCompletion {
 	return func(ctx context.Context) error {
 		if _, err := reconciler.ReconcileMemoryVault(ctx); err != nil &&
-			!errors.Is(err, repository.ErrMemoryVaultUnavailable) {
+			!errors.Is(err, repository.ErrMemoryVaultUnavailable) &&
+			!errors.Is(err, memoryfiles.ErrVaultTooLarge) {
 			return err
 		}
 		return nil

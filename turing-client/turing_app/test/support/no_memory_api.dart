@@ -24,15 +24,13 @@ mixin NoMemoryApi {
 
   Future<MemoryCandidate> promoteMemoryCandidate({
     required String candidateId,
-    required String expectedContentHash,
-    String expectedCandidateHash = '',
+    required String expectedCandidateHash,
   }) async => throw UnimplementedError('this test does not exercise memory');
 
   Future<MemoryCandidate> rejectMemoryCandidate({
     required String candidateId,
-    required String expectedContentHash,
+    required String expectedCandidateHash,
     String reason = '',
-    String expectedCandidateHash = '',
   }) async => throw UnimplementedError('this test does not exercise memory');
 
   Future<MemoryDocument> applyMemoryProfile({

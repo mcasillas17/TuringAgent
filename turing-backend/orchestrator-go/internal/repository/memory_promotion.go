@@ -10,28 +10,33 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 )
 
-// ApplyMemoryProfileInput carries a reviewed profile edit. Content is the whole
-// resulting document rather than a patch, because the user may have edited the
-// proposal before accepting it, and ExpectedContentHash is the compare-and-set
-// token that keeps two accepted edits from silently overwriting each other.
+// ApplyMemoryProfileInput carries a reviewed profile edit.
+//
+// Content is the whole resulting document rather than a patch, because the user
+// may have edited the proposal before accepting it.
+//
+// The two hashes name two different documents and are not interchangeable.
+// ExpectedContentHash is the compare-and-set over *profile.md* — "is the
+// document I am replacing still the one I was shown?" — and keeps two accepted
+// edits from silently overwriting each other. ExpectedCandidateHash is the
+// compare-and-set over the *candidate file*, and binds the resulting document
+// to the exact proposal it was composed from. See MemoryCandidateDecision.
 type ApplyMemoryProfileInput struct {
-	CandidateID         string
-	ExpectedContentHash string
-	Content             string
-	// ExpectedCandidateHash binds the resulting document to the exact proposal
-	// it was composed from. See MemoryCandidateDecision.
+	CandidateID           string
+	ExpectedContentHash   string
+	Content               string
 	ExpectedCandidateHash string
 }
 
 // MemoryCandidateDecision is one user decision about one proposal.
 //
 // ExpectedCandidateHash is the compare-and-set token over the candidate file's
-// own bytes, which is a different question from the profile's compare-and-set:
-// this one asks "is the claim still the one I read?", and it is answered
-// against the file rather than the row because the file is what the user was
-// shown and what they may have edited. Empty means the caller is making no
-// claim about the file, which is how a decision taken before the listing
-// carried a hash still works.
+// own bytes as they read *now*, which is the only candidate compare-and-set
+// there is. It is answered against the file rather than the row because the
+// file is what the user was shown, what every listing serves, and what they may
+// have rewritten in their editor since Turing proposed it. Empty means the
+// caller is making no claim about the file, which is how a decision taken
+// before the listing carried a hash still works.
 type MemoryCandidateDecision struct {
 	CandidateID           string
 	ExpectedCandidateHash string
@@ -116,28 +121,46 @@ func (r *Repository) lockMemoryCandidateDecision(ctx context.Context, candidateI
 	return memoryCandidateLocks.lockContext(ctx, candidateID)
 }
 
-// requireUnchangedCandidateFile is the compare-and-set the user's decision
-// rests on, taken against the file rather than the row.
+// decideAboutCandidateFile reads the proposal as it stands *now* and answers
+// the two questions every decision rests on: is this still the text the user
+// read, and is this still the kind of thing this decision is for.
 //
-// An empty expectation is accepted as "I am making no claim about the file",
-// which keeps a caller that never read one working. A file that cannot be read
-// at all is refused rather than treated as unchanged: a decision cannot be
-// verified against bytes nobody has.
-func requireUnchangedCandidateFile(
+// Both are answered against the file rather than the row, and for the same
+// reason. The row is Turing's record of what it proposed; the file is what the
+// vault holds, what every listing serves, and what the user may have rewritten
+// in their editor — and a vault is a vault precisely so they can. Deciding on
+// the row would refuse every proposal they edited (its hash moved) and would
+// promote into beliefs/ a proposal they had rewritten into a profile edit.
+//
+// The read is unconditional, because the kind has to come from somewhere even
+// when the caller made no claim about the bytes. A file that cannot be read or
+// parsed is refused rather than treated as unchanged: neither question can be
+// answered against bytes nobody has.
+//
+// requiredKind is empty for a rejection. A rejection is the user saying no to
+// whatever is there, so it needs neither the kind nor a readable file — and
+// refusing to let them throw away a proposal whose frontmatter no longer parses
+// would leave them with a file they can neither accept nor be rid of. It still
+// honours a compare-and-set they did supply.
+func decideAboutCandidateFile(
 	ctx context.Context,
 	vault *memoryfiles.Vault,
 	candidate MemoryCandidate,
 	expectedHash string,
+	requiredKind string,
 ) error {
-	if expectedHash == "" {
-		return nil
-	}
 	current, err := vault.ReadInboxNote(ctx, candidate.InboxPath)
 	if err != nil {
+		if requiredKind == "" && expectedHash == "" {
+			return nil
+		}
 		return err
 	}
-	if current.ContentHash != expectedHash {
+	if expectedHash != "" && current.ContentHash != expectedHash {
 		return fmt.Errorf("%w: %s", ErrMemoryCandidateChanged, candidate.InboxPath)
+	}
+	if requiredKind != "" && string(current.Kind) != requiredKind {
+		return fmt.Errorf("%w: the file declares %q", ErrMemoryCandidateKind, string(current.Kind))
 	}
 	return nil
 }
@@ -170,11 +193,11 @@ func (r *Repository) PromoteMemoryCandidate(ctx context.Context, decision Memory
 	}
 	defer unlock()
 
-	candidate, err := r.pendingCandidateForDecision(ctx, decision.CandidateID, MemoryCandidateKindBelief, MemoryCandidateStatePromoted)
+	candidate, err := r.pendingCandidateForDecision(ctx, decision.CandidateID, MemoryCandidateStatePromoted)
 	if err != nil {
 		return MemoryNote{}, err
 	}
-	if err := requireUnchangedCandidateFile(ctx, vault, candidate, decision.ExpectedCandidateHash); err != nil {
+	if err := decideAboutCandidateFile(ctx, vault, candidate, decision.ExpectedCandidateHash, MemoryCandidateKindBelief); err != nil {
 		return MemoryNote{}, err
 	}
 
@@ -262,11 +285,11 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 	}
 	defer unlock()
 
-	candidate, err := r.pendingCandidateForDecision(ctx, input.CandidateID, MemoryCandidateKindProfileEdit, MemoryCandidateStatePromoted)
+	candidate, err := r.pendingCandidateForDecision(ctx, input.CandidateID, MemoryCandidateStatePromoted)
 	if err != nil {
 		return memoryfiles.ProfileDocument{}, err
 	}
-	if err := requireUnchangedCandidateFile(ctx, vault, candidate, input.ExpectedCandidateHash); err != nil {
+	if err := decideAboutCandidateFile(ctx, vault, candidate, input.ExpectedCandidateHash, MemoryCandidateKindProfileEdit); err != nil {
 		return memoryfiles.ProfileDocument{}, err
 	}
 
@@ -319,11 +342,11 @@ func (r *Repository) RejectMemoryCandidate(ctx context.Context, decision MemoryC
 	}
 	defer unlock()
 
-	candidate, err := r.pendingCandidateForDecision(ctx, decision.CandidateID, "", MemoryCandidateStateRejected)
+	candidate, err := r.pendingCandidateForDecision(ctx, decision.CandidateID, MemoryCandidateStateRejected)
 	if err != nil {
 		return err
 	}
-	if err := requireUnchangedCandidateFile(ctx, vault, candidate, decision.ExpectedCandidateHash); err != nil {
+	if err := decideAboutCandidateFile(ctx, vault, candidate, decision.ExpectedCandidateHash, ""); err != nil {
 		return err
 	}
 	if err := vault.RemoveInboxNote(ctx, candidate.InboxPath); err != nil {
@@ -341,20 +364,23 @@ func (r *Repository) RejectMemoryCandidate(ctx context.Context, decision MemoryC
 	return tx.Commit()
 }
 
-// pendingCandidateForDecision loads a candidate and checks everything a
-// decision depends on before any file is touched: that it exists, that it is
-// the kind this decision is for, that the lifecycle allows the move, that the
-// provenance stored beside it is the one the server derived, and that the path
-// stored beside it is still an inbox path. The last two are not redundant with
-// the layers below — they turn a tampered row into a typed refusal instead of
-// a forged citation or a primitive's confinement error.
-func (r *Repository) pendingCandidateForDecision(ctx context.Context, candidateID string, kind string, to string) (MemoryCandidate, error) {
+// pendingCandidateForDecision loads a candidate and checks everything the *row*
+// can answer for before any file is touched: that it exists, that the lifecycle
+// allows the move, that the provenance stored beside it is the one the server
+// derived, and that the path stored beside it is still an inbox path. The last
+// two are not redundant with the layers below — they turn a tampered row into a
+// typed refusal instead of a forged citation or a primitive's confinement
+// error.
+//
+// The kind is deliberately not among them. A row records what Turing proposed;
+// which decision applies is a question about the file the user is looking at,
+// and it is asked in decideAboutCandidateFile, under the same lock and against
+// the same bytes as the compare-and-set. What the row keeps owning is what only
+// it knows: identity, source session, provenance and lifecycle.
+func (r *Repository) pendingCandidateForDecision(ctx context.Context, candidateID string, to string) (MemoryCandidate, error) {
 	candidate, err := memoryCandidateByIDTx(ctx, r.db, candidateID)
 	if err != nil {
 		return MemoryCandidate{}, err
-	}
-	if kind != "" && candidate.Kind != kind {
-		return MemoryCandidate{}, fmt.Errorf("%w: candidate is a %s", ErrMemoryCandidateKind, candidate.Kind)
 	}
 	if err := requireMemoryCandidateTransition(candidate.State, to); err != nil {
 		return MemoryCandidate{}, err

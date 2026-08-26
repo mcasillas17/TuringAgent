@@ -256,10 +256,15 @@ abstract class TuringApi implements RemoteEgressApi {
   /// against the row the server holds; [expectedCandidateHash] is
   /// compare-and-set against the inbox file's own bytes, which is what the user
   /// was actually shown and what they may have rewritten in their editor.
+  /// Accepts a belief.
+  ///
+  /// [expectedCandidateHash] is the compare-and-set over the candidate file as
+  /// the listing served it. There is only one candidate compare-and-set: the
+  /// request's older `expected_content_hash` named the same file and is
+  /// deprecated on the wire, so nothing here sends it.
   Future<MemoryCandidate> promoteMemoryCandidate({
     required String candidateId,
-    required String expectedContentHash,
-    String expectedCandidateHash = '',
+    required String expectedCandidateHash,
   }) {
     throw const TuringApiException(
       code: 'memory_unsupported',
@@ -267,11 +272,11 @@ abstract class TuringApi implements RemoteEgressApi {
     );
   }
 
+  /// Refuses a proposal. See [promoteMemoryCandidate] for the token.
   Future<MemoryCandidate> rejectMemoryCandidate({
     required String candidateId,
-    required String expectedContentHash,
+    required String expectedCandidateHash,
     String reason = '',
-    String expectedCandidateHash = '',
   }) {
     throw const TuringApiException(
       code: 'memory_unsupported',

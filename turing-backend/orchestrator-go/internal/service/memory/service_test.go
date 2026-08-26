@@ -148,11 +148,13 @@ func TestMemoryPromotionAcceptsOnlyABeliefAndOnlyTheTextTheUserRead(t *testing.T
 		t.Fatalf("CreateMemoryCandidate: %v", err)
 	}
 
-	// A decision composed against text that has since changed is refused.
+	// A decision composed against text that has since changed is refused. The
+	// token names the candidate file, so the refusal is the file's — the same
+	// FailedPrecondition every other decision about moved bytes answers with.
 	if _, err := service.PromoteMemoryCandidate(ctx, &turingv1.PromoteMemoryCandidateRequest{
 		CandidateId: belief.CandidateID, ExpectedContentHash: "sha256:stale",
-	}); status.Code(err) != codes.Aborted {
-		t.Fatalf("stale promotion error = %v, want Aborted", err)
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("stale promotion error = %v, want FailedPrecondition", err)
 	}
 	// A profile edit is not a belief and is never promoted into beliefs/.
 	if _, err := service.PromoteMemoryCandidate(ctx, &turingv1.PromoteMemoryCandidateRequest{
@@ -206,8 +208,8 @@ func TestMemoryRejectionRemovesBothTheRowAndTheFile(t *testing.T) {
 	}
 	if _, err := service.RejectMemoryCandidate(ctx, &turingv1.RejectMemoryCandidateRequest{
 		CandidateId: candidate.CandidateID, ExpectedContentHash: "sha256:stale",
-	}); status.Code(err) != codes.Aborted {
-		t.Fatalf("stale rejection error = %v, want Aborted", err)
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("stale rejection error = %v, want FailedPrecondition", err)
 	}
 
 	rejected, err := service.RejectMemoryCandidate(ctx, &turingv1.RejectMemoryCandidateRequest{

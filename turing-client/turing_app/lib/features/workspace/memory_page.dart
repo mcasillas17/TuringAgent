@@ -60,6 +60,18 @@ class _MemoryPageState extends State<MemoryPage> {
   /// their words and is left alone.
   final Map<String, String> _profileResultSeeds = {};
 
+  /// The profile compare-and-set token each result was composed against.
+  ///
+  /// It travels with the text, not with the page. A result the user has edited
+  /// keeps their words when the profile moves underneath it — and it has to
+  /// keep this with them, because those words describe a document that is no
+  /// longer there. Sending them with the *newer* profile's token would tell the
+  /// server "this is an edit of what you have now", and it would be accepted:
+  /// whatever the other writer put in profile.md would be gone, silently. Sent
+  /// with the token they were actually composed against, the server refuses,
+  /// and the user is told to look again.
+  final Map<String, String> _profileResultProfileHashes = {};
+
   /// The hashes the editors were loaded at. Sent back as the compare-and-set
   /// token, so a save always answers "I am editing *this* version" rather than
   /// "whatever is there now".
@@ -101,18 +113,29 @@ class _MemoryPageState extends State<MemoryPage> {
   TextEditingController _profileResultFor(
     MemoryCandidate candidate,
     String profile,
+    String profileHash,
   ) {
     final seed = composeProfileResult(profile, candidate.content);
     final controller = _profileResults.putIfAbsent(candidate.candidateId, () {
       _profileResultSeeds[candidate.candidateId] = seed;
+      _profileResultProfileHashes[candidate.candidateId] = profileHash;
       return TextEditingController(text: seed);
     });
     final previousSeed = _profileResultSeeds[candidate.candidateId];
     if (previousSeed != seed && controller.text == previousSeed) {
       controller.text = seed;
       _profileResultSeeds[candidate.candidateId] = seed;
+      // Re-seeded means re-composed: these words describe the profile as it
+      // reads now, so they are an edit of it and carry its token.
+      _profileResultProfileHashes[candidate.candidateId] = profileHash;
     }
     return controller;
+  }
+
+  /// The profile token an apply of one proposal has to name: the one its result
+  /// was composed against, never whichever read happened most recently.
+  String _profileResultHashFor(MemoryCandidate candidate, String fallback) {
+    return _profileResultProfileHashes[candidate.candidateId] ?? fallback;
   }
 
   /// Forgets the editors for proposals that are no longer on the page. A
@@ -124,6 +147,7 @@ class _MemoryPageState extends State<MemoryPage> {
       if (live.contains(candidateId)) continue;
       _profileResults.remove(candidateId)?.dispose();
       _profileResultSeeds.remove(candidateId);
+      _profileResultProfileHashes.remove(candidateId);
     }
   }
 
@@ -142,6 +166,12 @@ class _MemoryPageState extends State<MemoryPage> {
     bool adoptProfile = false,
   }) async {
     final state = await widget.apiClient.listMemoryState();
+    // A read is not instantaneous, and the user may have left the page while
+    // it was in flight. Everything below writes into text controllers this
+    // State owns and has already disposed, which is a use-after-dispose the
+    // framework normally swallows — the FutureBuilder that asked for this read
+    // is gone too, so the error it throws has nowhere to be reported.
+    if (!mounted) return state;
     if (adoptPersona || !_personaDirty) {
       _persona.text = state.persona.content;
       _personaAdopted = state.persona.content;
@@ -320,10 +350,9 @@ class _MemoryPageState extends State<MemoryPage> {
             onPromote: (candidate) => _mutate(
               () => widget.apiClient.promoteMemoryCandidate(
                 candidateId: candidate.candidateId,
-                expectedContentHash: candidate.contentHash,
-                // The same token, named as what it is against the file. The
-                // listing serves the proposal as the vault holds it, so this
-                // is the hash of exactly the words on screen.
+                // The listing serves the proposal as the vault holds it, so
+                // this is the hash of exactly the words on screen — and the
+                // only compare-and-set a decision has.
                 expectedCandidateHash: candidate.contentHash,
               ),
               (message) => _inboxError = message,
@@ -331,7 +360,6 @@ class _MemoryPageState extends State<MemoryPage> {
             onReject: (candidate) => _mutate(
               () => widget.apiClient.rejectMemoryCandidate(
                 candidateId: candidate.candidateId,
-                expectedContentHash: candidate.contentHash,
                 expectedCandidateHash: candidate.contentHash,
               ),
               (message) => _inboxError = message,
@@ -345,16 +373,24 @@ class _MemoryPageState extends State<MemoryPage> {
                 content: result,
                 // Compare-and-set against the profile document, not the
                 // proposal: the question an apply asks is whether profile.md
-                // still says what the user was shown beside it.
-                expectedContentHash: state.profile.contentHash,
+                // still says what the user was shown beside it. The token is
+                // the one this result was composed against, which is not the
+                // same as the newest one read whenever the user has edited it.
+                expectedContentHash: _profileResultHashFor(
+                  candidate,
+                  state.profile.contentHash,
+                ),
                 // And the second one, against the proposal this result was
                 // composed from.
                 expectedCandidateHash: candidate.contentHash,
               ),
               (message) => _inboxError = message,
             ),
-            profileResultFor: (candidate) =>
-                _profileResultFor(candidate, state.profile.content),
+            profileResultFor: (candidate) => _profileResultFor(
+              candidate,
+              state.profile.content,
+              state.profile.contentHash,
+            ),
             onCandidatesBuilt: _retainProfileResults,
           );
         },

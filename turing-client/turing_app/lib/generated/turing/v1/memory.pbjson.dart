@@ -678,7 +678,8 @@ const PromoteMemoryCandidateRequest$json = {
       '3': 2,
       '4': 1,
       '5': 9,
-      '10': 'expectedContentHash'
+      '8': {'3': true},
+      '10': 'expectedContentHash',
     },
     {'1': 'edited_content', '3': 3, '4': 1, '5': 9, '10': 'editedContent'},
     {
@@ -702,10 +703,10 @@ const PromoteMemoryCandidateRequest$json = {
 /// Descriptor for `PromoteMemoryCandidateRequest`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List promoteMemoryCandidateRequestDescriptor = $convert.base64Decode(
     'Ch1Qcm9tb3RlTWVtb3J5Q2FuZGlkYXRlUmVxdWVzdBIhCgxjYW5kaWRhdGVfaWQYASABKAlSC2'
-    'NhbmRpZGF0ZUlkEjIKFWV4cGVjdGVkX2NvbnRlbnRfaGFzaBgCIAEoCVITZXhwZWN0ZWRDb250'
-    'ZW50SGFzaBIlCg5lZGl0ZWRfY29udGVudBgDIAEoCVINZWRpdGVkQ29udGVudBI2Cgt0YXJnZX'
-    'RfdGllchgEIAEoDjIVLnR1cmluZy52MS5NZW1vcnlUaWVyUgp0YXJnZXRUaWVyEjYKF2V4cGVj'
-    'dGVkX2NhbmRpZGF0ZV9oYXNoGAUgASgJUhVleHBlY3RlZENhbmRpZGF0ZUhhc2g=');
+    'NhbmRpZGF0ZUlkEjYKFWV4cGVjdGVkX2NvbnRlbnRfaGFzaBgCIAEoCUICGAFSE2V4cGVjdGVk'
+    'Q29udGVudEhhc2gSJQoOZWRpdGVkX2NvbnRlbnQYAyABKAlSDWVkaXRlZENvbnRlbnQSNgoLdG'
+    'FyZ2V0X3RpZXIYBCABKA4yFS50dXJpbmcudjEuTWVtb3J5VGllclIKdGFyZ2V0VGllchI2Chdl'
+    'eHBlY3RlZF9jYW5kaWRhdGVfaGFzaBgFIAEoCVIVZXhwZWN0ZWRDYW5kaWRhdGVIYXNo');
 
 @$core.Deprecated('Use promoteMemoryCandidateResponseDescriptor instead')
 const PromoteMemoryCandidateResponse$json = {
@@ -747,7 +748,8 @@ const RejectMemoryCandidateRequest$json = {
       '3': 2,
       '4': 1,
       '5': 9,
-      '10': 'expectedContentHash'
+      '8': {'3': true},
+      '10': 'expectedContentHash',
     },
     {'1': 'reason', '3': 3, '4': 1, '5': 9, '10': 'reason'},
     {
@@ -763,9 +765,9 @@ const RejectMemoryCandidateRequest$json = {
 /// Descriptor for `RejectMemoryCandidateRequest`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List rejectMemoryCandidateRequestDescriptor = $convert.base64Decode(
     'ChxSZWplY3RNZW1vcnlDYW5kaWRhdGVSZXF1ZXN0EiEKDGNhbmRpZGF0ZV9pZBgBIAEoCVILY2'
-    'FuZGlkYXRlSWQSMgoVZXhwZWN0ZWRfY29udGVudF9oYXNoGAIgASgJUhNleHBlY3RlZENvbnRl'
-    'bnRIYXNoEhYKBnJlYXNvbhgDIAEoCVIGcmVhc29uEjYKF2V4cGVjdGVkX2NhbmRpZGF0ZV9oYX'
-    'NoGAQgASgJUhVleHBlY3RlZENhbmRpZGF0ZUhhc2g=');
+    'FuZGlkYXRlSWQSNgoVZXhwZWN0ZWRfY29udGVudF9oYXNoGAIgASgJQgIYAVITZXhwZWN0ZWRD'
+    'b250ZW50SGFzaBIWCgZyZWFzb24YAyABKAlSBnJlYXNvbhI2ChdleHBlY3RlZF9jYW5kaWRhdG'
+    'VfaGFzaBgEIAEoCVIVZXhwZWN0ZWRDYW5kaWRhdGVIYXNo');
 
 @$core.Deprecated('Use rejectMemoryCandidateResponseDescriptor instead')
 const RejectMemoryCandidateResponse$json = {

@@ -522,15 +522,26 @@ func (a *App) Stop() {
 // An install with no vault attached, or one whose folder is not there, owes
 // nothing: memory already reports itself unavailable through the whole surface,
 // and refusing to start over a folder the user has not created would take the
-// app down for a feature they are not using. Every other failure is a vault
-// that exists and could not be reconciled — starting on top of that would serve
-// an index the pass had already decided was wrong — so it is fatal and legible.
+// app down for a feature they are not using.
+//
+// A vault past the scan bound is the same kind of answer and is tolerated for
+// the same reason. The bound exists so a very large vault cannot stall the app;
+// making it stop the app from starting at all would be the exact outcome it was
+// put there to prevent. What it costs is real and confined: indexing and search
+// are degraded until the vault is smaller, the pass says so every time it runs,
+// and the two pinned documents — opened by name, with no walk behind them — are
+// untouched, so persona, profile and every conversation still work.
+//
+// Every other failure is a vault that exists and a database that could not be
+// brought into line with it. Starting on top of that would serve an index the
+// pass had already decided was wrong, so it is fatal and legible.
 func reconcileMemoryVaultAtStartup(repo *repository.Repository) error {
 	_, err := repo.ReconcileMemoryVault(context.Background())
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, repository.ErrMemoryVaultUnavailable),
+		errors.Is(err, memoryfiles.ErrVaultTooLarge),
 		errors.Is(err, os.ErrNotExist),
 		errors.Is(err, unix.ENOENT):
 		log.Printf("memory vault reconcile skipped: %v", err)

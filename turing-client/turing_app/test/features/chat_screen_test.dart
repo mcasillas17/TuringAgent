@@ -1973,78 +1973,75 @@ void main() {
   // than reinserting the card at the assistant row's OWN index (which sat
   // there before the artifact existed), or it lands above the artifact —
   // exactly backward from the live path's own ordering.
-  testWidgets(
-    'a startup-buffered terminal state drains after a same-run tool '
-    'artifact, not above it',
-    (tester) async {
-      final apiClient = _FakeApiClient()
-        ..initialMessages = [
-          Message(
-            messageId: 'msg_asst_a',
-            runId: 'run_a',
-            role: 'assistant',
-            content: '',
-            sequence: 1,
-            createdAt: _fixedDate,
-          ),
-        ];
-      final terminalState = _runState(
-        runId: 'run_a',
-        assistantMessageId: 'msg_asst_a',
-        stateVersion: 1,
-        lifecycle: RunLifecycle.cancelled,
-      );
-      final syncEvents = [
-        _event(
-          type: 'message.delta',
+  testWidgets('a startup-buffered terminal state drains after a same-run tool '
+      'artifact, not above it', (tester) async {
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_asst_a',
+          runId: 'run_a',
+          role: 'assistant',
+          content: '',
           sequence: 1,
-          payload: const {'messageId': 'msg_asst_a', 'delta': 'Before tool.'},
-        ),
-        _event(
-          type: 'tool.call.completed',
-          sequence: 2,
-          runId: 'run_a',
-          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
-        ),
-        _event(
-          type: 'agent.run.cancelled',
-          sequence: 3,
-          runId: 'run_a',
-          runState: terminalState,
-          payload: const {},
+          createdAt: _fixedDate,
         ),
       ];
+    final terminalState = _runState(
+      runId: 'run_a',
+      assistantMessageId: 'msg_asst_a',
+      stateVersion: 1,
+      lifecycle: RunLifecycle.cancelled,
+    );
+    final syncEvents = [
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: const {'messageId': 'msg_asst_a', 'delta': 'Before tool.'},
+      ),
+      _event(
+        type: 'tool.call.completed',
+        sequence: 2,
+        runId: 'run_a',
+        payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+      _event(
+        type: 'agent.run.cancelled',
+        sequence: 3,
+        runId: 'run_a',
+        runState: terminalState,
+        payload: const {},
+      ),
+    ];
 
-      await tester.pumpWidget(
-        MaterialApp(
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: ChatScreen(
-            sessionId: 'sess_1',
-            apiClient: apiClient,
-            eventSource: _SynchronousDeliveryEventSource.events(syncEvents),
-          ),
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _SynchronousDeliveryEventSource.events(syncEvents),
         ),
-      );
-      await tester.pump();
-      await tester.pump();
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
 
-      expect(find.text('Before tool.'), findsOneWidget);
-      expect(find.byType(ToolCallCard), findsOneWidget);
-      expect(find.byType(RunCancelledCard), findsOneWidget);
-      expect(
-        tester.getTopLeft(find.byType(RunCancelledCard)).dy,
-        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
-        reason:
-            'the tool artifact was already live on screen by the time the '
-            'startup buffer drained; the drained card must land after it, '
-            'not immediately after the assistant row at the index the '
-            'artifact did not yet occupy when the row was first inserted',
-      );
+    expect(find.text('Before tool.'), findsOneWidget);
+    expect(find.byType(ToolCallCard), findsOneWidget);
+    expect(find.byType(RunCancelledCard), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byType(RunCancelledCard)).dy,
+      greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+      reason:
+          'the tool artifact was already live on screen by the time the '
+          'startup buffer drained; the drained card must land after it, '
+          'not immediately after the assistant row at the index the '
+          'artifact did not yet occupy when the row was first inserted',
+    );
 
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-  );
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets(
     'startup buffer overflow coalesces one newest-page resync without detached cards',
@@ -2790,10 +2787,7 @@ void main() {
         _event(
           type: 'message.delta',
           sequence: 1,
-          payload: const {
-            'messageId': 'msg_asst',
-            'delta': 'Before notice.',
-          },
+          payload: const {'messageId': 'msg_asst', 'delta': 'Before notice.'},
         ),
       );
       await tester.pump();
@@ -2999,130 +2993,124 @@ void main() {
   // this run's card would land immediately beside the assistant row —
   // ABOVE the tool artifact — instead of walking past it. Reintroducing
   // that classification-dependent artifact walking must fail this test.
-  testWidgets(
-    'a live terminal event for a run already marked historical by an '
-    'earlier resync still lands after a tool artifact',
-    (tester) async {
-      final events = StreamController<TuringEvent>(sync: true);
-      final apiClient = _FakeApiClient()
-        ..initialMessages = [
-          Message(
-            messageId: 'msg_asst',
-            runId: 'run_1',
-            role: 'assistant',
-            content: '',
-            sequence: 1,
-            createdAt: _fixedDate,
-            runState: _runState(
-              stateVersion: 1,
-              lifecycle: RunLifecycle.running,
-            ),
-          ),
-        ];
-
-      await tester.pumpWidget(
-        MaterialApp(
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: ChatScreen(
-            sessionId: 'sess_1',
-            apiClient: apiClient,
-            eventSource: _FakeEventSource(events.stream),
-          ),
-        ),
-      );
-      await tester.pump();
-
-      events.add(
-        _event(
-          type: 'message.delta',
-          sequence: 1,
-          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
-        ),
-      );
-      await tester.pump();
-      events.add(
-        _event(
-          type: 'tool.call.completed',
-          sequence: 2,
-          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
-        ),
-      );
-      await tester.pump();
-
-      // A coalesced resync whose own row carries NO `RunState` at all —
-      // `pageResult.stateResult` is null, so the reconciler's held
-      // v1/running state for run_1 never advances. The row's now-
-      // displayable content alone is enough to mark run_1 into
-      // `_completedHistoryRunIds` via `_ingestMessagePage`'s duplicate-row
-      // branch — the one thing this test needs from it.
-      apiClient.initialMessages = [
+  testWidgets('a live terminal event for a run already marked historical by an '
+      'earlier resync still lands after a tool artifact', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
         Message(
           messageId: 'msg_asst',
           runId: 'run_1',
           role: 'assistant',
-          content: 'Before tool.',
+          content: '',
           sequence: 1,
           createdAt: _fixedDate,
+          runState: _runState(stateVersion: 1, lifecycle: RunLifecycle.running),
         ),
       ];
-      events.add(
-        _event(
-          type: 'agent.run.state_changed',
-          sequence: 3,
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 2,
+        payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
+
+    // A coalesced resync whose own row carries NO `RunState` at all —
+    // `pageResult.stateResult` is null, so the reconciler's held
+    // v1/running state for run_1 never advances. The row's now-
+    // displayable content alone is enough to mark run_1 into
+    // `_completedHistoryRunIds` via `_ingestMessagePage`'s duplicate-row
+    // branch — the one thing this test needs from it.
+    apiClient.initialMessages = [
+      Message(
+        messageId: 'msg_asst',
+        runId: 'run_1',
+        role: 'assistant',
+        content: 'Before tool.',
+        sequence: 1,
+        createdAt: _fixedDate,
+      ),
+    ];
+    events.add(
+      _event(
+        type: 'agent.run.state_changed',
+        sequence: 3,
+        runId: 'run_unloaded',
+        runState: _runState(
           runId: 'run_unloaded',
-          runState: _runState(
-            runId: 'run_unloaded',
-            assistantMessageId: 'msg_unloaded',
-            stateVersion: 1,
-            lifecycle: RunLifecycle.queued,
-          ),
-          payload: const {},
+          assistantMessageId: 'msg_unloaded',
+          stateVersion: 1,
+          lifecycle: RunLifecycle.queued,
         ),
-      );
-      await tester.pump();
-      await tester.pump();
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
 
-      // The LATER live terminal event for run_1 itself. By now run_1 is in
-      // `_completedHistoryRunIds` (see above), so `_isHistoricalRunEvent`
-      // classifies THIS very event as historical too — even though it
-      // carries a genuine, higher-version `RunState` arriving live, never
-      // through `_ingestMessagePage` at all.
-      events.add(
-        _event(
-          type: 'agent.run.failed',
-          sequence: 4,
-          runState: _runState(
-            stateVersion: 2,
-            lifecycle: RunLifecycle.failed,
-            outcomeReason: RunOutcomeReason.toolFailure,
-            hasDisplayableContent: true,
-          ),
-          payload: const {},
+    // The LATER live terminal event for run_1 itself. By now run_1 is in
+    // `_completedHistoryRunIds` (see above), so `_isHistoricalRunEvent`
+    // classifies THIS very event as historical too — even though it
+    // carries a genuine, higher-version `RunState` arriving live, never
+    // through `_ingestMessagePage` at all.
+    events.add(
+      _event(
+        type: 'agent.run.failed',
+        sequence: 4,
+        runState: _runState(
+          stateVersion: 2,
+          lifecycle: RunLifecycle.failed,
+          outcomeReason: RunOutcomeReason.toolFailure,
+          hasDisplayableContent: true,
         ),
-      );
-      await tester.pump();
-      await tester.pump();
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
 
-      expect(find.text('Before tool.'), findsOneWidget);
-      expect(find.byType(ToolCallCard), findsOneWidget);
-      expect(find.byType(RunFailureCard), findsOneWidget);
-      expect(
-        tester.getTopLeft(find.byType(RunFailureCard)).dy,
-        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
-        reason:
-            'a live event this screen itself classifies as historical must '
-            'still position its card via the same unconditional artifact '
-            'walk as any other caller — conditional historical placement '
-            'must not put the card before the same-run tool artifact just '
-            'because a run happens to already be historical for an '
-            'unrelated reason',
-      );
+    expect(find.text('Before tool.'), findsOneWidget);
+    expect(find.byType(ToolCallCard), findsOneWidget);
+    expect(find.byType(RunFailureCard), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byType(RunFailureCard)).dy,
+      greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+      reason:
+          'a live event this screen itself classifies as historical must '
+          'still position its card via the same unconditional artifact '
+          'walk as any other caller — conditional historical placement '
+          'must not put the card before the same-run tool artifact just '
+          'because a run happens to already be historical for an '
+          'unrelated reason',
+    );
 
-      await tester.pumpWidget(const SizedBox.shrink());
-      unawaited(events.close());
-    },
-  );
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
 
   // Reachable regression coverage (F10): the "duplicate, not-accepted
   // resync" test below reaches this same production shape but explicitly
@@ -3266,134 +3254,130 @@ void main() {
   // no-op leaves the card — already correctly positioned by the earlier
   // LIVE acceptance — undisturbed after run_1's own tool artifact, rather
   // than the duplicate-row branch quietly moving or dropping it.
-  testWidgets(
-    'a duplicate, not-accepted resync is a no-op that leaves an '
-    "already-correct card undisturbed after its run's own tool artifact",
-    (tester) async {
-      final events = StreamController<TuringEvent>(sync: true);
-      final apiClient = _FakeApiClient()
-        ..initialMessages = [
-          Message(
-            messageId: 'msg_asst',
-            runId: 'run_1',
-            role: 'assistant',
-            content: '',
-            sequence: 1,
-            createdAt: _fixedDate,
-            runState: _runState(
-              stateVersion: 1,
-              lifecycle: RunLifecycle.running,
-            ),
-          ),
-        ];
-
-      await tester.pumpWidget(
-        MaterialApp(
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: ChatScreen(
-            sessionId: 'sess_1',
-            apiClient: apiClient,
-            eventSource: _FakeEventSource(events.stream),
-          ),
-        ),
-      );
-      await tester.pump();
-
-      events.add(
-        _event(
-          type: 'message.delta',
-          sequence: 1,
-          payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
-        ),
-      );
-      await tester.pump();
-      events.add(
-        _event(
-          type: 'tool.call.completed',
-          sequence: 2,
-          payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
-        ),
-      );
-      await tester.pump();
-
-      // The one, genuine acceptance: a LIVE terminal event advances run_1
-      // from v1/running to v2/failed, correctly positioning its card after
-      // the tool artifact already on screen — exactly like the live-path
-      // baseline test above.
-      final terminalState = _runState(
-        stateVersion: 2,
-        lifecycle: RunLifecycle.failed,
-        outcomeReason: RunOutcomeReason.toolFailure,
-        hasDisplayableContent: true,
-      );
-      events.add(
-        _event(
-          type: 'agent.run.failed',
-          sequence: 3,
-          runState: terminalState,
-          payload: const {},
-        ),
-      );
-      await tester.pump();
-
-      expect(find.byType(RunFailureCard), findsOneWidget);
-      expect(
-        tester.getTopLeft(find.byType(RunFailureCard)).dy,
-        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
-        reason: 'sanity: the live acceptance above must already be correct',
-      );
-
-      // A coalesced resync whose own row offers back the IDENTICAL v2/
-      // failed state (same object) alongside the same already-displayed
-      // content — a `duplicate` outcome, not accepted: one of the three
-      // non-accepted outcomes (`duplicate`, `stale`, `inconsistent`) a
-      // non-null `stateResult` can carry, exercising
-      // `_ingestMessagePage`'s duplicate-row `_syncRunStateCardPresenceForContent`
-      // call for the `duplicate` case.
-      apiClient.initialMessages = [
+  testWidgets('a duplicate, not-accepted resync is a no-op that leaves an '
+      "already-correct card undisturbed after its run's own tool artifact", (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final apiClient = _FakeApiClient()
+      ..initialMessages = [
         Message(
           messageId: 'msg_asst',
           runId: 'run_1',
           role: 'assistant',
-          content: 'Before tool.',
+          content: '',
           sequence: 1,
           createdAt: _fixedDate,
-          runState: terminalState,
+          runState: _runState(stateVersion: 1, lifecycle: RunLifecycle.running),
         ),
       ];
-      events.add(
-        _event(
-          type: 'agent.run.state_changed',
-          sequence: 4,
-          runId: 'run_unloaded',
-          runState: _runState(
-            runId: 'run_unloaded',
-            assistantMessageId: 'msg_unloaded',
-            stateVersion: 1,
-            lifecycle: RunLifecycle.queued,
-          ),
-          payload: const {},
+
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
         ),
-      );
-      await tester.pump();
-      await tester.pump();
+      ),
+    );
+    await tester.pump();
 
-      expect(find.text('Before tool.'), findsOneWidget);
-      expect(find.byType(ToolCallCard), findsOneWidget);
-      expect(find.byType(RunFailureCard), findsOneWidget);
-      expect(
-        tester.getTopLeft(find.byType(RunFailureCard)).dy,
-        greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
-        reason:
-            'a duplicate, not-accepted resync round must not disturb the '
-            "run's already-correctly-positioned card",
-      );
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: const {'messageId': 'msg_asst', 'delta': 'Before tool.'},
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'tool.call.completed',
+        sequence: 2,
+        payload: const {'toolCallId': 'call_1', 'toolName': 'system.time'},
+      ),
+    );
+    await tester.pump();
 
-      await tester.pumpWidget(const SizedBox.shrink());
-      unawaited(events.close());
-    },
-  );
+    // The one, genuine acceptance: a LIVE terminal event advances run_1
+    // from v1/running to v2/failed, correctly positioning its card after
+    // the tool artifact already on screen — exactly like the live-path
+    // baseline test above.
+    final terminalState = _runState(
+      stateVersion: 2,
+      lifecycle: RunLifecycle.failed,
+      outcomeReason: RunOutcomeReason.toolFailure,
+      hasDisplayableContent: true,
+    );
+    events.add(
+      _event(
+        type: 'agent.run.failed',
+        sequence: 3,
+        runState: terminalState,
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(RunFailureCard), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byType(RunFailureCard)).dy,
+      greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+      reason: 'sanity: the live acceptance above must already be correct',
+    );
+
+    // A coalesced resync whose own row offers back the IDENTICAL v2/
+    // failed state (same object) alongside the same already-displayed
+    // content — a `duplicate` outcome, not accepted: one of the three
+    // non-accepted outcomes (`duplicate`, `stale`, `inconsistent`) a
+    // non-null `stateResult` can carry, exercising
+    // `_ingestMessagePage`'s duplicate-row `_syncRunStateCardPresenceForContent`
+    // call for the `duplicate` case.
+    apiClient.initialMessages = [
+      Message(
+        messageId: 'msg_asst',
+        runId: 'run_1',
+        role: 'assistant',
+        content: 'Before tool.',
+        sequence: 1,
+        createdAt: _fixedDate,
+        runState: terminalState,
+      ),
+    ];
+    events.add(
+      _event(
+        type: 'agent.run.state_changed',
+        sequence: 4,
+        runId: 'run_unloaded',
+        runState: _runState(
+          runId: 'run_unloaded',
+          assistantMessageId: 'msg_unloaded',
+          stateVersion: 1,
+          lifecycle: RunLifecycle.queued,
+        ),
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Before tool.'), findsOneWidget);
+    expect(find.byType(ToolCallCard), findsOneWidget);
+    expect(find.byType(RunFailureCard), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byType(RunFailureCard)).dy,
+      greaterThan(tester.getTopLeft(find.byType(ToolCallCard)).dy),
+      reason:
+          'a duplicate, not-accepted resync round must not disturb the '
+          "run's already-correctly-positioned card",
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
 
   // Boundary (F10 contract): the SAME turn-scoped stop `_runStateCardInsertionIndex`
   // already proves for a later, other-run TOOL artifact (the sibling test
@@ -4500,9 +4484,7 @@ void main() {
       // `MessageSendUnconfirmedCard` and restore the composer/retry draft.
       // Durable identity already proved this send was accepted; this
       // stale rejection must change nothing observable.
-      sendGate.completeError(
-        const GrpcError.unavailable('no backend'),
-      );
+      sendGate.completeError(const GrpcError.unavailable('no backend'));
       await tester.pump();
       await tester.pump();
 
@@ -4555,208 +4537,206 @@ void main() {
     },
   );
 
-  testWidgets(
-    'an adopted send\'s later ambiguous rejection must not force the '
-    'scroll position back to the bottom while the user is reading older '
-    'history',
-    (tester) async {
-      final events = StreamController<TuringEvent>(sync: true);
-      final sendGate = Completer<Map<String, dynamic>>();
-      final history = List<Message>.generate(60, (index) {
-        return Message(
-          messageId: 'msg_history_$index',
-          role: index.isEven ? 'user' : 'assistant',
-          content:
-              'history message $index padding this conversation with enough '
-              'content that the list must scroll to reach the newest row',
-          sequence: index + 1,
-          createdAt: _fixedDate,
-        );
-      });
-      final apiClient = _FakeApiClient()
-        ..sendMessagePending = sendGate
-        ..initialMessages = List<Message>.of(history);
+  testWidgets('an adopted send\'s later ambiguous rejection must not force the '
+      'scroll position back to the bottom while the user is reading older '
+      'history', (tester) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final sendGate = Completer<Map<String, dynamic>>();
+    final history = List<Message>.generate(60, (index) {
+      return Message(
+        messageId: 'msg_history_$index',
+        role: index.isEven ? 'user' : 'assistant',
+        content:
+            'history message $index padding this conversation with enough '
+            'content that the list must scroll to reach the newest row',
+        sequence: index + 1,
+        createdAt: _fixedDate,
+      );
+    });
+    final apiClient = _FakeApiClient()
+      ..sendMessagePending = sendGate
+      ..initialMessages = List<Message>.of(history);
 
-      await tester.pumpWidget(
-        MaterialApp(
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: ChatScreen(
-            sessionId: 'sess_1',
-            apiClient: apiClient,
-            eventSource: _FakeEventSource(events.stream),
-          ),
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: apiClient,
+          eventSource: _FakeEventSource(events.stream),
         ),
-      );
-      await tester.pump();
-      await tester.pump();
-      // Let the initial-load scroll-to-bottom animation finish (see
-      // `_loadInitialMessages`) so the viewport starts at the bottom, the
-      // same as every other assertion below assumes.
-      await tester.pump(const Duration(milliseconds: 200));
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    // Let the initial-load scroll-to-bottom animation finish (see
+    // `_loadInitialMessages`) so the viewport starts at the bottom, the
+    // same as every other assertion below assumes.
+    await tester.pump(const Duration(milliseconds: 200));
 
-      final scrollController =
-          tester.widget<ListView>(find.byType(ListView)).controller!;
-      expect(
-        scrollController.position.maxScrollExtent,
-        greaterThan(0),
-        reason:
-            'enough history must be loaded that the list is actually '
-            'scrollable, or scrolling away from the bottom below would '
-            'prove nothing',
-      );
+    final scrollController = tester
+        .widget<ListView>(find.byType(ListView))
+        .controller!;
+    expect(
+      scrollController.position.maxScrollExtent,
+      greaterThan(0),
+      reason:
+          'enough history must be loaded that the list is actually '
+          'scrollable, or scrolling away from the bottom below would '
+          'prove nothing',
+    );
 
-      // The send RPC below never resolves during this test — [sendGate] is
-      // only ever completed with an error, at the very end. Everything
-      // that happens before that must happen while it is still pending.
-      await tester.enterText(find.byType(TextField), 'possibly durable send');
-      await tester.tap(find.byIcon(Icons.send));
-      await tester.pump();
-      // Let this send's own scroll-to-bottom animation finish so the new
-      // bubble is actually laid out within `ListView.builder`'s lazily
-      // built range before asserting on it.
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(find.text('possibly durable send'), findsOneWidget);
+    // The send RPC below never resolves during this test — [sendGate] is
+    // only ever completed with an error, at the very end. Everything
+    // that happens before that must happen while it is still pending.
+    await tester.enterText(find.byType(TextField), 'possibly durable send');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+    // Let this send's own scroll-to-bottom animation finish so the new
+    // bubble is actually laid out within `ListView.builder`'s lazily
+    // built range before asserting on it.
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('possibly durable send'), findsOneWidget);
 
-      // A resync/live page adopts this exact optimistic bubble onto a
-      // durable message/run identity WHILE the still-pending `sendMessage`
-      // RPC has not resolved yet — same race as the "durable-identity
-      // adoption" test above, but now with enough history behind it that
-      // the user can meaningfully scroll away afterwards.
-      apiClient.initialMessages = [
-        ...history,
-        Message(
-          messageId: 'msg_user_durable',
-          role: 'user',
-          content: 'possibly durable send',
-          sequence: history.length + 1,
-          createdAt: _fixedDate,
+    // A resync/live page adopts this exact optimistic bubble onto a
+    // durable message/run identity WHILE the still-pending `sendMessage`
+    // RPC has not resolved yet — same race as the "durable-identity
+    // adoption" test above, but now with enough history behind it that
+    // the user can meaningfully scroll away afterwards.
+    apiClient.initialMessages = [
+      ...history,
+      Message(
+        messageId: 'msg_user_durable',
+        role: 'user',
+        content: 'possibly durable send',
+        sequence: history.length + 1,
+        createdAt: _fixedDate,
+      ),
+      Message(
+        messageId: 'msg_asst_durable',
+        runId: 'run_1',
+        role: 'assistant',
+        content: '',
+        sequence: history.length + 2,
+        createdAt: _fixedDate,
+        runState: _runState(
+          userMessageId: 'msg_user_durable',
+          assistantMessageId: 'msg_asst_durable',
+          stateVersion: 1,
+          lifecycle: RunLifecycle.queued,
         ),
-        Message(
-          messageId: 'msg_asst_durable',
-          runId: 'run_1',
-          role: 'assistant',
-          content: '',
-          sequence: history.length + 2,
-          createdAt: _fixedDate,
-          runState: _runState(
-            userMessageId: 'msg_user_durable',
-            assistantMessageId: 'msg_asst_durable',
-            stateVersion: 1,
-            lifecycle: RunLifecycle.queued,
-          ),
+      ),
+    ];
+    events.add(
+      _event(
+        type: 'agent.run.queued',
+        sequence: 1,
+        runState: _runState(
+          userMessageId: 'msg_user_durable',
+          assistantMessageId: 'msg_asst_durable',
+          stateVersion: 1,
+          lifecycle: RunLifecycle.queued,
         ),
-      ];
-      events.add(
-        _event(
-          type: 'agent.run.queued',
-          sequence: 1,
-          runState: _runState(
-            userMessageId: 'msg_user_durable',
-            assistantMessageId: 'msg_asst_durable',
-            stateVersion: 1,
-            lifecycle: RunLifecycle.queued,
-          ),
-          payload: const {},
-        ),
-      );
-      await tester.pump();
-      await tester.pump();
-      // Let the resync's own (legitimate, out-of-scope) scroll-to-bottom
-      // animation finish before reading the scroll position below.
-      await tester.pump(const Duration(milliseconds: 200));
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    // Let the resync's own (legitimate, out-of-scope) scroll-to-bottom
+    // animation finish before reading the scroll position below.
+    await tester.pump(const Duration(milliseconds: 200));
 
-      expect(
-        find.text('possibly durable send'),
-        findsOneWidget,
-        reason: 'the resync must have adopted the optimistic bubble already',
-      );
-      expect(find.text('Queued'), findsOneWidget);
-      expect(find.byType(MessageSendUnconfirmedCard), findsNothing);
-      expect(
-        scrollController.position.pixels,
-        scrollController.position.maxScrollExtent,
-        reason:
-            'the adoption resync itself legitimately scrolls to the bottom '
-            '(see _reloadNewestPage) — unrelated, existing behaviour this '
-            'test does not challenge',
-      );
+    expect(
+      find.text('possibly durable send'),
+      findsOneWidget,
+      reason: 'the resync must have adopted the optimistic bubble already',
+    );
+    expect(find.text('Queued'), findsOneWidget);
+    expect(find.byType(MessageSendUnconfirmedCard), findsNothing);
+    expect(
+      scrollController.position.pixels,
+      scrollController.position.maxScrollExtent,
+      reason:
+          'the adoption resync itself legitimately scrolls to the bottom '
+          '(see _reloadNewestPage) — unrelated, existing behaviour this '
+          'test does not challenge',
+    );
 
-      // The user now scrolls AWAY from the bottom to read older history.
-      // This is the state the rejection below must not disturb.
-      scrollController.jumpTo(0);
-      await tester.pump();
-      expect(
-        scrollController.position.pixels,
-        0,
-        reason:
-            'sanity check that the manual scroll away from the bottom '
-            'actually took effect before the rejection below',
-      );
+    // The user now scrolls AWAY from the bottom to read older history.
+    // This is the state the rejection below must not disturb.
+    scrollController.jumpTo(0);
+    await tester.pump();
+    expect(
+      scrollController.position.pixels,
+      0,
+      reason:
+          'sanity check that the manual scroll away from the bottom '
+          'actually took effect before the rejection below',
+    );
 
-      // Now the ORIGINAL, still-pending `sendMessage` RPC for this same
-      // attempt finally settles — with an ambiguous rejection of exactly
-      // the kind that (absent adoption) would render
-      // `MessageSendUnconfirmedCard` and restore the composer/retry draft.
-      // Durable identity already proved this send was accepted, so the
-      // catch's early return makes no other visible change here — it must
-      // not yank the user back to the bottom either.
-      sendGate.completeError(const GrpcError.unavailable('no backend'));
-      await tester.pump();
-      await tester.pump();
-      // If a scroll-to-bottom were (wrongly) triggered, give its animation
-      // every chance to run before asserting it did not move anything.
-      await tester.pump(const Duration(milliseconds: 200));
+    // Now the ORIGINAL, still-pending `sendMessage` RPC for this same
+    // attempt finally settles — with an ambiguous rejection of exactly
+    // the kind that (absent adoption) would render
+    // `MessageSendUnconfirmedCard` and restore the composer/retry draft.
+    // Durable identity already proved this send was accepted, so the
+    // catch's early return makes no other visible change here — it must
+    // not yank the user back to the bottom either.
+    sendGate.completeError(const GrpcError.unavailable('no backend'));
+    await tester.pump();
+    await tester.pump();
+    // If a scroll-to-bottom were (wrongly) triggered, give its animation
+    // every chance to run before asserting it did not move anything.
+    await tester.pump(const Duration(milliseconds: 200));
 
-      expect(
-        scrollController.position.pixels,
-        0,
-        reason:
-            'a rejection that changes nothing else on screen must not '
-            'scroll the user away from the older history they were '
-            'reading',
-      );
+    expect(
+      scrollController.position.pixels,
+      0,
+      reason:
+          'a rejection that changes nothing else on screen must not '
+          'scroll the user away from the older history they were '
+          'reading',
+    );
 
-      // With the no-forced-scroll invariant proven above, navigate back to
-      // the bottom manually (this is a virtualized `ListView.builder` — a
-      // row scrolled out of range is not built at all, so it cannot be
-      // asserted on from off-screen) to check the same content invariants
-      // the original adoption-race test covers: no duplicate bubble, no
-      // stale warning/failure card, and no restored composer draft.
-      scrollController.jumpTo(scrollController.position.maxScrollExtent);
-      await tester.pump();
-      expect(
-        find.text('possibly durable send'),
-        findsOneWidget,
-        reason:
-            'still exactly the one adopted, durable bubble — no duplicate '
-            'and no restored composer copy',
-      );
-      expect(
-        find.byType(MessageSendUnconfirmedCard),
-        findsNothing,
-        reason:
-            'durable identity already proved this send was accepted; a '
-            'later rejection of the same pending RPC must not warn',
-      );
-      expect(find.byType(MessageSendFailureCard), findsNothing);
-      expect(
-        tester.widget<TextField>(find.byType(TextField)).controller?.text,
-        '',
-        reason:
-            'the composer must not be restored to the sent text — that '
-            'text was already durably accepted',
-      );
-      expect(
-        find.text('Queued'),
-        findsOneWidget,
-        reason: 'the durable run state card must still render correctly',
-      );
+    // With the no-forced-scroll invariant proven above, navigate back to
+    // the bottom manually (this is a virtualized `ListView.builder` — a
+    // row scrolled out of range is not built at all, so it cannot be
+    // asserted on from off-screen) to check the same content invariants
+    // the original adoption-race test covers: no duplicate bubble, no
+    // stale warning/failure card, and no restored composer draft.
+    scrollController.jumpTo(scrollController.position.maxScrollExtent);
+    await tester.pump();
+    expect(
+      find.text('possibly durable send'),
+      findsOneWidget,
+      reason:
+          'still exactly the one adopted, durable bubble — no duplicate '
+          'and no restored composer copy',
+    );
+    expect(
+      find.byType(MessageSendUnconfirmedCard),
+      findsNothing,
+      reason:
+          'durable identity already proved this send was accepted; a '
+          'later rejection of the same pending RPC must not warn',
+    );
+    expect(find.byType(MessageSendFailureCard), findsNothing);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller?.text,
+      '',
+      reason:
+          'the composer must not be restored to the sent text — that '
+          'text was already durably accepted',
+    );
+    expect(
+      find.text('Queued'),
+      findsOneWidget,
+      reason: 'the durable run state card must still render correctly',
+    );
 
-      await tester.pumpWidget(const SizedBox.shrink());
-      unawaited(events.close());
-    },
-  );
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
 
   testWidgets(
     'an ambiguous send rejection that is NOT adopted still inserts its '
@@ -4799,8 +4779,9 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
 
-      final scrollController =
-          tester.widget<ListView>(find.byType(ListView)).controller!;
+      final scrollController = tester
+          .widget<ListView>(find.byType(ListView))
+          .controller!;
       expect(scrollController.position.maxScrollExtent, greaterThan(0));
 
       await tester.enterText(find.byType(TextField), 'never adopted send');

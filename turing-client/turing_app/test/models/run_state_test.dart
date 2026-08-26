@@ -185,35 +185,32 @@ void main() {
     expect(GrpcMappers.runStateToModel(state), isNull);
   });
 
-  test(
-    'accepts a run state whose state_updated_at nanos sit exactly at the '
-    'documented upper bound',
-    () {
-      final state = protoState();
-      state.stateUpdatedAt.nanos = 999999999;
+  test('accepts a run state whose state_updated_at nanos sit exactly at the '
+      'documented upper bound', () {
+    final state = protoState();
+    state.stateUpdatedAt.nanos = 999999999;
 
-      final mapped = GrpcMappers.runStateToModel(state);
+    final mapped = GrpcMappers.runStateToModel(state);
 
-      expect(mapped, isNotNull);
-      // protobuf's Timestamp.toDateTime() (and DateTime itself) only resolve
-      // to microseconds, so the maximum valid nanos value truncates rather
-      // than rounds: ...999999999ns becomes ...999999us, one microsecond
-      // short of the next second, not the next second itself.
-      expect(
-        mapped?.stateUpdatedAt,
-        DateTime.utc(2026, 8, 21, 1, 2, 3, 999, 999),
-      );
-      // The nanos edit changes nothing else about the snapshot.
-      expect(mapped?.runId, 'run_1');
-      expect(mapped?.userMessageId, 'msg_user');
-      expect(mapped?.assistantMessageId, 'msg_assistant');
-      expect(mapped?.lifecycle, RunLifecycle.failed);
-      expect(mapped?.outcomeReason, RunOutcomeReason.providerFailure);
-      expect(mapped?.stateVersion, 7);
-      expect(mapped?.finishedAt, finishedAt);
-      expect(mapped?.hasDisplayableContent, isTrue);
-    },
-  );
+    expect(mapped, isNotNull);
+    // protobuf's Timestamp.toDateTime() (and DateTime itself) only resolve
+    // to microseconds, so the maximum valid nanos value truncates rather
+    // than rounds: ...999999999ns becomes ...999999us, one microsecond
+    // short of the next second, not the next second itself.
+    expect(
+      mapped?.stateUpdatedAt,
+      DateTime.utc(2026, 8, 21, 1, 2, 3, 999, 999),
+    );
+    // The nanos edit changes nothing else about the snapshot.
+    expect(mapped?.runId, 'run_1');
+    expect(mapped?.userMessageId, 'msg_user');
+    expect(mapped?.assistantMessageId, 'msg_assistant');
+    expect(mapped?.lifecycle, RunLifecycle.failed);
+    expect(mapped?.outcomeReason, RunOutcomeReason.providerFailure);
+    expect(mapped?.stateVersion, 7);
+    expect(mapped?.finishedAt, finishedAt);
+    expect(mapped?.hasDisplayableContent, isTrue);
+  });
 
   test(
     'rejects a run state whose state_updated_at seconds exceed 9999-12-31T23:59:59Z',
@@ -313,34 +310,28 @@ void main() {
     expect(GrpcMappers.runStateToModel(state), isNull);
   });
 
-  test(
-    'accepts a run state whose present finished_at nanos sit exactly at the '
-    'documented upper bound',
-    () {
-      final state = protoState();
-      state.finishedAt.nanos = 999999999;
+  test('accepts a run state whose present finished_at nanos sit exactly at the '
+      'documented upper bound', () {
+    final state = protoState();
+    state.finishedAt.nanos = 999999999;
 
-      final mapped = GrpcMappers.runStateToModel(state);
+    final mapped = GrpcMappers.runStateToModel(state);
 
-      expect(mapped, isNotNull);
-      // Same truncation as state_updated_at above: ...999999999ns becomes
-      // ...999999us, not the next second, because DateTime has no
-      // nanosecond field to round into.
-      expect(
-        mapped?.finishedAt,
-        DateTime.utc(2026, 8, 21, 1, 2, 4, 999, 999),
-      );
-      // The nanos edit changes nothing else about the snapshot.
-      expect(mapped?.runId, 'run_1');
-      expect(mapped?.userMessageId, 'msg_user');
-      expect(mapped?.assistantMessageId, 'msg_assistant');
-      expect(mapped?.lifecycle, RunLifecycle.failed);
-      expect(mapped?.outcomeReason, RunOutcomeReason.providerFailure);
-      expect(mapped?.stateVersion, 7);
-      expect(mapped?.stateUpdatedAt, updatedAt);
-      expect(mapped?.hasDisplayableContent, isTrue);
-    },
-  );
+    expect(mapped, isNotNull);
+    // Same truncation as state_updated_at above: ...999999999ns becomes
+    // ...999999us, not the next second, because DateTime has no
+    // nanosecond field to round into.
+    expect(mapped?.finishedAt, DateTime.utc(2026, 8, 21, 1, 2, 4, 999, 999));
+    // The nanos edit changes nothing else about the snapshot.
+    expect(mapped?.runId, 'run_1');
+    expect(mapped?.userMessageId, 'msg_user');
+    expect(mapped?.assistantMessageId, 'msg_assistant');
+    expect(mapped?.lifecycle, RunLifecycle.failed);
+    expect(mapped?.outcomeReason, RunOutcomeReason.providerFailure);
+    expect(mapped?.stateVersion, 7);
+    expect(mapped?.stateUpdatedAt, updatedAt);
+    expect(mapped?.hasDisplayableContent, isTrue);
+  });
 
   test(
     'rejects a run state whose finished_at seconds exceed 9999-12-31T23:59:59Z',
@@ -453,137 +444,122 @@ void main() {
   // reason this client cannot actually identify. It must render the same
   // generic outcome-unavailable copy any other lifecycle uses for an
   // unknown outcome.
-  test(
-    'completed run with unknown outcome and no content renders generic '
-    'outcome-unavailable copy, not completed-no-content',
-    () async {
-      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
-      final copy = localizedRunStateCopy(
-        l10n,
-        RunState(
-          runId: 'run_1',
-          userMessageId: 'msg_user',
-          assistantMessageId: 'msg_assistant',
-          lifecycle: RunLifecycle.completed,
-          outcomeReason: RunOutcomeReason.unknown,
-          stateVersion: 1,
-          stateUpdatedAt: updatedAt,
-          finishedAt: finishedAt,
-          hasDisplayableContent: false,
-        ),
-      );
+  test('completed run with unknown outcome and no content renders generic '
+      'outcome-unavailable copy, not completed-no-content', () async {
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    final copy = localizedRunStateCopy(
+      l10n,
+      RunState(
+        runId: 'run_1',
+        userMessageId: 'msg_user',
+        assistantMessageId: 'msg_assistant',
+        lifecycle: RunLifecycle.completed,
+        outcomeReason: RunOutcomeReason.unknown,
+        stateVersion: 1,
+        stateUpdatedAt: updatedAt,
+        finishedAt: finishedAt,
+        hasDisplayableContent: false,
+      ),
+    );
 
-      expect(copy.title, 'Outcome unavailable');
-      expect(copy.detail, 'This app cannot identify why the run ended.');
-    },
-  );
+    expect(copy.title, 'Outcome unavailable');
+    expect(copy.detail, 'This app cannot identify why the run ended.');
+  });
 
-  test(
-    'completed run with legacyUnknown outcome and no content renders '
-    'generic outcome-unavailable copy, not completed-no-content',
-    () async {
-      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
-      final copy = localizedRunStateCopy(
-        l10n,
-        RunState(
-          runId: 'run_1',
-          userMessageId: 'msg_user',
-          assistantMessageId: 'msg_assistant',
-          lifecycle: RunLifecycle.completed,
-          outcomeReason: RunOutcomeReason.legacyUnknown,
-          stateVersion: 1,
-          stateUpdatedAt: updatedAt,
-          finishedAt: finishedAt,
-          hasDisplayableContent: false,
-        ),
-      );
+  test('completed run with legacyUnknown outcome and no content renders '
+      'generic outcome-unavailable copy, not completed-no-content', () async {
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    final copy = localizedRunStateCopy(
+      l10n,
+      RunState(
+        runId: 'run_1',
+        userMessageId: 'msg_user',
+        assistantMessageId: 'msg_assistant',
+        lifecycle: RunLifecycle.completed,
+        outcomeReason: RunOutcomeReason.legacyUnknown,
+        stateVersion: 1,
+        stateUpdatedAt: updatedAt,
+        finishedAt: finishedAt,
+        hasDisplayableContent: false,
+      ),
+    );
 
-      expect(copy.title, 'Outcome unavailable');
-      expect(copy.detail, 'This app cannot identify why the run ended.');
-    },
-  );
+    expect(copy.title, 'Outcome unavailable');
+    expect(copy.detail, 'This app cannot identify why the run ended.');
+  });
 
   // Controls: the known no-content outcomes keep their existing canonical
   // completed copy exactly as before — only the unknown/legacyUnknown
   // branch order changes.
-  test(
-    'completed run with explicit completed-no-content outcome keeps '
-    'canonical completed-no-content copy',
-    () async {
-      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
-      final copy = localizedRunStateCopy(
-        l10n,
-        RunState(
-          runId: 'run_1',
-          userMessageId: 'msg_user',
-          assistantMessageId: 'msg_assistant',
-          lifecycle: RunLifecycle.completed,
-          outcomeReason: RunOutcomeReason.completedNoContent,
-          stateVersion: 1,
-          stateUpdatedAt: updatedAt,
-          finishedAt: finishedAt,
-          hasDisplayableContent: false,
-        ),
-      );
+  test('completed run with explicit completed-no-content outcome keeps '
+      'canonical completed-no-content copy', () async {
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    final copy = localizedRunStateCopy(
+      l10n,
+      RunState(
+        runId: 'run_1',
+        userMessageId: 'msg_user',
+        assistantMessageId: 'msg_assistant',
+        lifecycle: RunLifecycle.completed,
+        outcomeReason: RunOutcomeReason.completedNoContent,
+        stateVersion: 1,
+        stateUpdatedAt: updatedAt,
+        finishedAt: finishedAt,
+        hasDisplayableContent: false,
+      ),
+    );
 
-      expect(copy.title, 'Completed');
-      expect(copy.detail, 'No assistant response was recorded.');
-    },
-  );
+    expect(copy.title, 'Completed');
+    expect(copy.detail, 'No assistant response was recorded.');
+  });
 
-  test(
-    'completed run with no outcome reason (none) and no content keeps '
-    'canonical completed-no-content copy',
-    () async {
-      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
-      final copy = localizedRunStateCopy(
-        l10n,
-        RunState(
-          runId: 'run_1',
-          userMessageId: 'msg_user',
-          assistantMessageId: 'msg_assistant',
-          lifecycle: RunLifecycle.completed,
-          outcomeReason: RunOutcomeReason.none,
-          stateVersion: 1,
-          stateUpdatedAt: updatedAt,
-          finishedAt: finishedAt,
-          hasDisplayableContent: false,
-        ),
-      );
+  test('completed run with no outcome reason (none) and no content keeps '
+      'canonical completed-no-content copy', () async {
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    final copy = localizedRunStateCopy(
+      l10n,
+      RunState(
+        runId: 'run_1',
+        userMessageId: 'msg_user',
+        assistantMessageId: 'msg_assistant',
+        lifecycle: RunLifecycle.completed,
+        outcomeReason: RunOutcomeReason.none,
+        stateVersion: 1,
+        stateUpdatedAt: updatedAt,
+        finishedAt: finishedAt,
+        hasDisplayableContent: false,
+      ),
+    );
 
-      expect(copy.title, 'Completed');
-      expect(copy.detail, 'No assistant response was recorded.');
-    },
-  );
+    expect(copy.title, 'Completed');
+    expect(copy.detail, 'No assistant response was recorded.');
+  });
 
   // Control: actual displayable content present alongside an unknown
   // outcome still keeps the canonical completed copy — the unknown-outcome
   // branch only applies while no displayable content backs it, so this
   // never suppresses or replaces a real assistant bubble's copy.
-  test(
-    'completed run with unknown outcome but displayable content keeps '
-    'canonical completed copy',
-    () async {
-      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
-      final copy = localizedRunStateCopy(
-        l10n,
-        RunState(
-          runId: 'run_1',
-          userMessageId: 'msg_user',
-          assistantMessageId: 'msg_assistant',
-          lifecycle: RunLifecycle.completed,
-          outcomeReason: RunOutcomeReason.unknown,
-          stateVersion: 1,
-          stateUpdatedAt: updatedAt,
-          finishedAt: finishedAt,
-          hasDisplayableContent: true,
-        ),
-      );
+  test('completed run with unknown outcome but displayable content keeps '
+      'canonical completed copy', () async {
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    final copy = localizedRunStateCopy(
+      l10n,
+      RunState(
+        runId: 'run_1',
+        userMessageId: 'msg_user',
+        assistantMessageId: 'msg_assistant',
+        lifecycle: RunLifecycle.completed,
+        outcomeReason: RunOutcomeReason.unknown,
+        stateVersion: 1,
+        stateUpdatedAt: updatedAt,
+        finishedAt: finishedAt,
+        hasDisplayableContent: true,
+      ),
+    );
 
-      expect(copy.title, 'Completed');
-      expect(copy.detail, 'The assistant response is complete.');
-    },
-  );
+    expect(copy.title, 'Completed');
+    expect(copy.detail, 'The assistant response is complete.');
+  });
 
   test('every lifecycle and outcome has localized safe copy', () async {
     final l10n = await AppLocalizations.delegate.load(const Locale('en'));
@@ -618,20 +594,17 @@ void main() {
   // {unknown, legacyUnknown, internalFailure} and this test catches it,
   // where a test that only checked unknown/legacyUnknown individually
   // would not.
-  test(
-    'exactly unknown and legacyUnknown use the generic outcome-unavailable '
-    'copy',
-    () {
-      final reasonsUsingUnavailableCopy = RunOutcomeReason.values
-          .where((reason) => reason.usesOutcomeUnavailableCopy)
-          .toSet();
+  test('exactly unknown and legacyUnknown use the generic outcome-unavailable '
+      'copy', () {
+    final reasonsUsingUnavailableCopy = RunOutcomeReason.values
+        .where((reason) => reason.usesOutcomeUnavailableCopy)
+        .toSet();
 
-      expect(reasonsUsingUnavailableCopy, {
-        RunOutcomeReason.unknown,
-        RunOutcomeReason.legacyUnknown,
-      });
-    },
-  );
+    expect(reasonsUsingUnavailableCopy, {
+      RunOutcomeReason.unknown,
+      RunOutcomeReason.legacyUnknown,
+    });
+  });
 
   test('absent legacy state has neutral no-response copy', () async {
     final l10n = await AppLocalizations.delegate.load(const Locale('en'));

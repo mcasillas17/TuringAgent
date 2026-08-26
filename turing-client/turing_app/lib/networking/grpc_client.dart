@@ -931,14 +931,12 @@ class TuringGrpcApi
   @override
   Future<MemoryCandidate> promoteMemoryCandidate({
     required String candidateId,
-    required String expectedContentHash,
-    String expectedCandidateHash = '',
+    required String expectedCandidateHash,
   }) {
     return _memoryCall(() async {
       final response = await _memory.promoteMemoryCandidate(
         memorypb.PromoteMemoryCandidateRequest(
           candidateId: candidateId,
-          expectedContentHash: expectedContentHash,
           expectedCandidateHash: expectedCandidateHash,
         ),
       );
@@ -949,15 +947,13 @@ class TuringGrpcApi
   @override
   Future<MemoryCandidate> rejectMemoryCandidate({
     required String candidateId,
-    required String expectedContentHash,
+    required String expectedCandidateHash,
     String reason = '',
-    String expectedCandidateHash = '',
   }) {
     return _memoryCall(() async {
       final response = await _memory.rejectMemoryCandidate(
         memorypb.RejectMemoryCandidateRequest(
           candidateId: candidateId,
-          expectedContentHash: expectedContentHash,
           reason: reason,
           expectedCandidateHash: expectedCandidateHash,
         ),

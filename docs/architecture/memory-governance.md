@@ -68,7 +68,9 @@ The consequences, stated rather than implied:
   A promoted belief therefore never cites deleted evidence for longer than the
   deletion takes, and the client shows it as unevidenced. The *content*
   persists. That is the relaxation, and it is the only place a "fact" outlives
-  its originating session.
+  its originating session. What does not persist is its standing to be answered
+  with: a withdrawn note is refused by search *and* by a read of its identity,
+  so a model still holding the id from before the deletion cannot retrieve it.
 
 ### Relaxation 2 — vault beliefs defer the revision chain
 

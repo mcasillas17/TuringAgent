@@ -1430,9 +1430,8 @@ class GrpcMappers {
           message: candidate,
           fieldNumber: 2,
           readValue: () => candidate.kind,
-          unknownValue: memorypb
-              .MemoryCandidateKind
-              .MEMORY_CANDIDATE_KIND_UNSPECIFIED,
+          unknownValue:
+              memorypb.MemoryCandidateKind.MEMORY_CANDIDATE_KIND_UNSPECIFIED,
         ),
       ),
       inboxPath: candidate.inboxPath,
@@ -1443,9 +1442,8 @@ class GrpcMappers {
           message: candidate,
           fieldNumber: 6,
           readValue: () => candidate.state,
-          unknownValue: memorypb
-              .MemoryCandidateState
-              .MEMORY_CANDIDATE_STATE_UNSPECIFIED,
+          unknownValue:
+              memorypb.MemoryCandidateState.MEMORY_CANDIDATE_STATE_UNSPECIFIED,
         ),
       ),
       managed: candidate.managed,
@@ -1483,9 +1481,8 @@ class GrpcMappers {
           message: provenance,
           fieldNumber: 1,
           readValue: () => provenance.kind,
-          unknownValue: memorypb
-              .MemoryProvenanceKind
-              .MEMORY_PROVENANCE_KIND_UNSPECIFIED,
+          unknownValue:
+              memorypb.MemoryProvenanceKind.MEMORY_PROVENANCE_KIND_UNSPECIFIED,
         ),
       ),
       sourceSessionId: provenance.sourceSessionId,

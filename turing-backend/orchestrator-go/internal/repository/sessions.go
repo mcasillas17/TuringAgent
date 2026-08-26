@@ -25,6 +25,14 @@ type Repository struct {
 	// attaches one, and every memory method refuses rather than pretending
 	// there is nothing to remember.
 	memoryVault *memoryfiles.Vault
+	// memoryScanCache is what the last whole-vault pass read, kept so the next
+	// one does not open every note again to learn nothing changed. It belongs
+	// to the vault it was filled from and is replaced whenever one is
+	// attached: the same relative path under a different root is a different
+	// file, and serving one for the other would be serving another vault's
+	// memory. It is read and written only under memoryVaultMutex, and has a
+	// mutex of its own for the concurrent readers inside one pass.
+	memoryScanCache *memoryfiles.MetadataCache
 	// memoryVaultMutex serialises whole-vault passes. A file-writing reconcile
 	// and an index refresh both derive their answer from one scan, and two
 	// passes interleaving would let one write the projection of bytes the

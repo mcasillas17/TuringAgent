@@ -945,7 +945,10 @@ void main() {
       );
       expect(personaSave.onPressed, isNull);
       expect(profileSave.onPressed, isNull);
-      expect(find.textContaining('Open or configure a vault'), findsNWidgets(2));
+      expect(
+        find.textContaining('Open or configure a vault'),
+        findsNWidgets(2),
+      );
     });
   });
 
@@ -976,7 +979,10 @@ void main() {
         editor.controller?.text,
         '# Persona\n\nEvery byte of it, all the way down.\n',
       );
-      expect(find.textContaining('Open the vault to read the rest'), findsNothing);
+      expect(
+        find.textContaining('Open the vault to read the rest'),
+        findsNothing,
+      );
       expect(find.textContaining('4096'), findsWidgets);
       expect(find.textContaining('reach'), findsWidgets);
     });
@@ -1265,11 +1271,10 @@ class _MemoryApi extends TuringApi
   @override
   Future<MemoryCandidate> promoteMemoryCandidate({
     required String candidateId,
-    required String expectedContentHash,
-    String expectedCandidateHash = '',
+    required String expectedCandidateHash,
   }) async {
     if (promoteError case final error?) throw error;
-    promotions.add((candidateId, expectedContentHash));
+    promotions.add((candidateId, expectedCandidateHash));
     return state.candidates.firstWhere(
       (candidate) => candidate.candidateId == candidateId,
     );
@@ -1278,11 +1283,10 @@ class _MemoryApi extends TuringApi
   @override
   Future<MemoryCandidate> rejectMemoryCandidate({
     required String candidateId,
-    required String expectedContentHash,
+    required String expectedCandidateHash,
     String reason = '',
-    String expectedCandidateHash = '',
   }) async {
-    rejections.add((candidateId, expectedContentHash));
+    rejections.add((candidateId, expectedCandidateHash));
     return state.candidates.firstWhere(
       (candidate) => candidate.candidateId == candidateId,
     );

@@ -1679,6 +1679,7 @@ class GetMemoryCandidateRequest extends $pb.GeneratedMessage {
 class PromoteMemoryCandidateRequest extends $pb.GeneratedMessage {
   factory PromoteMemoryCandidateRequest({
     $core.String? candidateId,
+    @$core.Deprecated('This field is deprecated.')
     $core.String? expectedContentHash,
     $core.String? editedContent,
     $3.MemoryTier? targetTier,
@@ -1753,15 +1754,24 @@ class PromoteMemoryCandidateRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearCandidateId() => $_clearField(1);
 
-  /// Compare-and-set against MemoryCandidate.content_hash: a decision composed
-  /// against text that has since changed is refused, not applied to the new
-  /// text the user never read.
+  /// Deprecated: the older spelling of expected_candidate_hash, and checked
+  /// against exactly the same thing. It once named the database row's copy of
+  /// the proposal, which made every proposal the user edited in their vault
+  /// permanently undecidable — the listing can only ever serve the file's hash,
+  /// and the row's was the only one that would be accepted. It is still honoured
+  /// when expected_candidate_hash is empty, so a client built before the split
+  /// is not left with no compare-and-set at all. New clients send
+  /// expected_candidate_hash.
+  @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(2)
   $core.String get expectedContentHash => $_getSZ(1);
+  @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(2)
   set expectedContentHash($core.String value) => $_setString(1, value);
+  @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(2)
   $core.bool hasExpectedContentHash() => $_has(1);
+  @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(2)
   void clearExpectedContentHash() => $_clearField(2);
 
@@ -1784,12 +1794,19 @@ class PromoteMemoryCandidateRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(4)
   void clearTargetTier() => $_clearField(4);
 
-  /// Compare-and-set against the inbox file's own bytes, read again at decision
-  /// time. expected_content_hash is checked against the database row, which is
-  /// what Turing wrote; this one is checked against what the file says now, so a
-  /// proposal the user edited in Obsidian between the listing and the decision
-  /// is refused instead of promoted as the text they were shown. Empty means the
-  /// caller is not making a claim about the file.
+  /// Compare-and-set against the candidate file's own bytes as they read now,
+  /// re-read at decision time inside the same serialisation as the mutation.
+  ///
+  /// This is the only candidate compare-and-set there is. It names the file
+  /// rather than the row because the file is what every listing serves and what
+  /// the user was shown — the vault is a vault so they can open a proposal and
+  /// rewrite it — so a proposal edited between the listing and the decision is
+  /// refused instead of promoted as text they never read. Empty means the caller
+  /// is making no claim about the file.
+  ///
+  /// Which decision applies is read from the same bytes: a proposal the file now
+  /// declares a profile_edit is not promoted into beliefs/, whatever the row
+  /// remembers Turing having proposed.
   @$pb.TagNumber(5)
   $core.String get expectedCandidateHash => $_getSZ(4);
   @$pb.TagNumber(5)
@@ -1881,6 +1898,7 @@ class PromoteMemoryCandidateResponse extends $pb.GeneratedMessage {
 class RejectMemoryCandidateRequest extends $pb.GeneratedMessage {
   factory RejectMemoryCandidateRequest({
     $core.String? candidateId,
+    @$core.Deprecated('This field is deprecated.')
     $core.String? expectedContentHash,
     $core.String? reason,
     $core.String? expectedCandidateHash,
@@ -1948,12 +1966,19 @@ class RejectMemoryCandidateRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearCandidateId() => $_clearField(1);
 
+  /// Deprecated: the older spelling of expected_candidate_hash, honoured only
+  /// when that field is empty. See
+  /// PromoteMemoryCandidateRequest.expected_content_hash.
+  @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(2)
   $core.String get expectedContentHash => $_getSZ(1);
+  @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(2)
   set expectedContentHash($core.String value) => $_setString(1, value);
+  @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(2)
   $core.bool hasExpectedContentHash() => $_has(1);
+  @$core.Deprecated('This field is deprecated.')
   @$pb.TagNumber(2)
   void clearExpectedContentHash() => $_clearField(2);
 
@@ -1966,10 +1991,12 @@ class RejectMemoryCandidateRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(3)
   void clearReason() => $_clearField(3);
 
-  /// Compare-and-set against the inbox file's own bytes. See
+  /// Compare-and-set against the candidate file's own bytes. See
   /// PromoteMemoryCandidateRequest.expected_candidate_hash: a rejection is a
   /// decision about a claim, and a claim the user did not read is not one they
-  /// refused.
+  /// refused. A rejection asks nothing about the kind — it is the user saying no
+  /// to whatever is there — so a proposal whose frontmatter no longer parses can
+  /// still be thrown away.
   @$pb.TagNumber(4)
   $core.String get expectedCandidateHash => $_getSZ(3);
   @$pb.TagNumber(4)
@@ -2156,8 +2183,15 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(1)
   void clearContent() => $_clearField(1);
 
-  /// Compare-and-set against MemoryProfile.content_hash. Empty means the caller
-  /// expects no profile to exist yet.
+  /// Compare-and-set against MemoryProfile.content_hash — the profile document
+  /// this apply is replacing, and nothing else. This is the one request where
+  /// expected_content_hash still names a document rather than a candidate.
+  ///
+  /// It must be the hash the resulting document was *composed against*, which is
+  /// not always the most recent one read: a client holding a result the user has
+  /// edited, over a profile that has since moved, has to send the older token and
+  /// be refused, rather than pair those words with a document they never saw.
+  /// Empty means the caller expects no profile to exist yet.
   @$pb.TagNumber(2)
   $core.String get expectedContentHash => $_getSZ(1);
   @$pb.TagNumber(2)
@@ -2169,7 +2203,8 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
 
   /// The pending profile_edit candidate this apply acts on. Turing writes
   /// profile.md only on the authority of a proposal the user is looking at, so
-  /// there is no path here and no way to write the profile without one.
+  /// there is no path here and no way to write the profile without one. Whether
+  /// it is a profile_edit is read from the candidate file, not from the row.
   @$pb.TagNumber(3)
   $core.String get candidateId => $_getSZ(2);
   @$pb.TagNumber(3)

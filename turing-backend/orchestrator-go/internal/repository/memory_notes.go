@@ -124,6 +124,15 @@ func (r *Repository) MemoryNoteByID(ctx context.Context, noteID string) (MemoryN
 // whatever path comes back against its own beliefs gate before opening
 // anything. The bytes come from the file, never from the projection, because
 // the user may have edited the note since the last pass.
+//
+// The index row also decides *whether* there is anything to serve. Search
+// already answers only from notes that are managed or unmanaged; a read has to
+// hold the same line, because a model that saw a belief before its conversation
+// was deleted still has the identity in its context and could hand it straight
+// back here. Withdrawing a memory from discovery and leaving it readable by id
+// is not withdrawing it. The check is stated as "this is a status a read
+// answers from" rather than "this is not withdrawn", so a status this build
+// does not recognise fails closed too.
 func (r *Repository) ReadMemoryBelief(ctx context.Context, noteID string) (memoryfiles.BeliefDocument, error) {
 	vault, err := r.memoryVaultOrError()
 	if err != nil {
@@ -136,9 +145,20 @@ func (r *Repository) ReadMemoryBelief(ctx context.Context, noteID string) (memor
 	if err != nil {
 		return memoryfiles.BeliefDocument{}, err
 	}
+	if !memoryNoteStatusIsReadable(note.Status) {
+		return memoryfiles.BeliefDocument{}, fmt.Errorf("%w: %s", ErrMemoryNoteWithdrawn, note.Status)
+	}
 	return vault.ReadBeliefByID(ctx, noteID, func(requested string) (string, bool) {
 		return resolveMemoryBeliefPath(noteID, note.Path, requested)
 	})
+}
+
+// memoryNoteStatusIsReadable is the allowlist, not a denylist. Two statuses are
+// memory the user has: one Turing wrote and may rewrite, and one they wrote
+// themselves. Everything else — a withdrawal, a status from a newer build, a
+// damaged row — is something a read must not answer from.
+func memoryNoteStatusIsReadable(status string) bool {
+	return status == MemoryNoteStatusManaged || status == MemoryNoteStatusUnmanaged
 }
 
 // resolveMemoryBeliefPath answers the vault's path question for exactly one

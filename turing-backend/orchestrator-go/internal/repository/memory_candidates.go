@@ -90,6 +90,14 @@ var (
 // MemoryCandidate is one proposal waiting in the vault inbox. Everything that
 // identifies it — its id, its path, the session that produced it — is derived
 // by the server; the model supplies only the claim and its title.
+//
+// Kind, ContentHash and Body are a record of what Turing wrote, not a
+// description of what the file says now: the vault is a vault so the user can
+// open a proposal and rewrite it, and the moment they do, these three are
+// history. Nothing decides anything on them. Every listing overlays them from
+// the file, and every decision re-reads the file under its own lock. What the
+// row keeps owning is what only it can know — identity, source session,
+// provenance and lifecycle.
 type MemoryCandidate struct {
 	CandidateID     string
 	SourceSessionID string
@@ -128,8 +136,20 @@ type MemoryCandidateQuery struct {
 
 // SetMemoryVault attaches the vault this repository reads and writes notes
 // through. It is set once at startup, like the skill store beside it.
+//
+// The scan cache is replaced rather than kept, because it is a cache of one
+// vault's files: the same relative path under a different root is a different
+// note, and a warm entry carried across would let a new vault be served with an
+// old one's words. It is taken under the vault-wide pass lock so a pass already
+// inside the vault finishes against the cache it started with.
 func (r *Repository) SetMemoryVault(vault *memoryfiles.Vault) {
+	r.memoryVaultMutex.Lock()
+	defer r.memoryVaultMutex.Unlock()
 	r.memoryVault = vault
+	r.memoryScanCache = nil
+	if vault != nil {
+		r.memoryScanCache = memoryfiles.NewMetadataCache()
+	}
 }
 
 func (r *Repository) memoryVaultOrError() (*memoryfiles.Vault, error) {

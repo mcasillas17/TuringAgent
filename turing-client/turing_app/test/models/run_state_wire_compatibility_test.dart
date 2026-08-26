@@ -72,36 +72,33 @@ void main() {
   // the same generic outcome-unavailable copy every other unknown outcome
   // gets — never the specific completed-no-content copy, which would
   // misrepresent an outcome this client cannot actually identify.
-  test(
-    'raw wire completed lifecycle with unknown future outcome renders '
-    'generic outcome-unavailable copy, not completed-no-content',
-    () async {
-      final proto = commonpb.RunState.fromBuffer(const [
-        0x0a, 0x05, 0x72, 0x75, 0x6e, 0x5f, 0x31, // run_id "run_1"
-        0x20, 0x06, // lifecycle field 4, recognized COMPLETED
-        0x28, 0x7f, // outcome_reason field 5, unrecognized future value 127
-        0x30, 0x01, // state_version field 6
-        0x3a, 0x00, // state_updated_at field 7, explicit zero-valued Timestamp
-        // has_displayable_content (field 9) omitted: defaults to false.
-      ]);
+  test('raw wire completed lifecycle with unknown future outcome renders '
+      'generic outcome-unavailable copy, not completed-no-content', () async {
+    final proto = commonpb.RunState.fromBuffer(const [
+      0x0a, 0x05, 0x72, 0x75, 0x6e, 0x5f, 0x31, // run_id "run_1"
+      0x20, 0x06, // lifecycle field 4, recognized COMPLETED
+      0x28, 0x7f, // outcome_reason field 5, unrecognized future value 127
+      0x30, 0x01, // state_version field 6
+      0x3a, 0x00, // state_updated_at field 7, explicit zero-valued Timestamp
+      // has_displayable_content (field 9) omitted: defaults to false.
+    ]);
 
-      expect(proto.lifecycle, commonpb.RunLifecycle.RUN_LIFECYCLE_COMPLETED);
+    expect(proto.lifecycle, commonpb.RunLifecycle.RUN_LIFECYCLE_COMPLETED);
 
-      final state = GrpcMappers.runStateToModel(proto);
+    final state = GrpcMappers.runStateToModel(proto);
 
-      expect(state?.lifecycle, RunLifecycle.completed);
-      expect(state?.outcomeReason, RunOutcomeReason.unknown);
-      expect(state?.hasDisplayableContent, isFalse);
+    expect(state?.lifecycle, RunLifecycle.completed);
+    expect(state?.outcomeReason, RunOutcomeReason.unknown);
+    expect(state?.hasDisplayableContent, isFalse);
 
-      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
-      final copy = localizedRunStateCopy(l10n, state!);
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    final copy = localizedRunStateCopy(l10n, state!);
 
-      expect(copy.title, 'Outcome unavailable');
-      expect(copy.detail, 'This app cannot identify why the run ended.');
-      expect(copy.title, isNot('Completed'));
-      expect(copy.detail, isNot('No assistant response was recorded.'));
-    },
-  );
+    expect(copy.title, 'Outcome unavailable');
+    expect(copy.detail, 'This app cannot identify why the run ended.');
+    expect(copy.title, isNot('Completed'));
+    expect(copy.detail, isNot('No assistant response was recorded.'));
+  });
 
   test('raw wire values do not panic or render their integer', () async {
     final proto = commonpb.RunState.fromBuffer(const [

@@ -36,6 +36,16 @@ func rewriteKeepingMetadata(t *testing.T, path string, content string) {
 	}
 }
 
+// noteMetadataOf is the cheap identity of a note the walk already read, in the
+// shape the cache compares against.
+func noteMetadataOf(note NoteRow) NoteMetadata {
+	return NoteMetadata{
+		ModTimeUnix: note.ModTimeUnix,
+		SizeBytes:   note.SizeBytes,
+		InodeNumber: note.InodeNumber,
+	}
+}
+
 func noteByPath(t *testing.T, result ScanResult, relPath string) NoteRow {
 	t.Helper()
 	for _, note := range result.Notes {
@@ -107,7 +117,7 @@ func TestScanWithCacheRereadsANoteWhoseLengthChanged(t *testing.T) {
 	if note.Title != "Now titled" {
 		t.Fatalf("the note was not reparsed: title = %q", note.Title)
 	}
-	if !cache.Fresh(relPath, note.ModTimeUnix, note.SizeBytes) {
+	if !cache.Fresh(relPath, noteMetadataOf(note)) {
 		t.Fatal("the cache was not updated with what the rescan read")
 	}
 }

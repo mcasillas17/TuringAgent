@@ -76,6 +76,10 @@ type NoteRow struct {
 	Indexable   bool
 	ModTimeUnix int64
 	SizeBytes   int64
+	// InodeNumber is which file this is, as opposed to which name it had. A
+	// rename moves bytes to a name another note used to hold, and modification
+	// time and length alone cannot tell the new occupant from the old one.
+	InodeNumber int64
 }
 
 // SkippedEntry records something the walk deliberately did not index, so the
@@ -188,13 +192,19 @@ func (t *completenessTracker) snapshot() ScanCompleteness { return t.completenes
 
 // NoteMetadata is the cheap identity of a file's contents.
 //
-// Accepted residual: two writes in the same second that leave the file exactly
-// the same length look identical here, so a cache keyed on it can serve one
-// stale search result. Reads by belief identity always go to disk, so the stale
-// window is confined to discovery.
+// The inode is part of it, not decoration. A batch rename in Obsidian moves
+// every note onto the name the next one was holding, and modification time and
+// length alone would let the cache answer for a name with the note that used to
+// live there — which is how a rename turns into two notes swapping their words.
+//
+// Accepted residual: two writes to the *same file* in the same second that
+// leave it exactly the same length look identical here, so a cache keyed on it
+// can serve one stale search result. Reads by belief identity always go to
+// disk, so the stale window is confined to discovery.
 type NoteMetadata struct {
 	ModTimeUnix int64
 	SizeBytes   int64
+	InodeNumber int64
 	ContentHash string
 }
 
@@ -236,9 +246,17 @@ func (c *MetadataCache) Get(relPath string) (NoteMetadata, bool) {
 }
 
 // Fresh reports whether a cached entry still matches what the filesystem says.
-func (c *MetadataCache) Fresh(relPath string, modTimeUnix int64, sizeBytes int64) bool {
+func (c *MetadataCache) Fresh(relPath string, current NoteMetadata) bool {
 	metadata, ok := c.Get(relPath)
-	return ok && metadata.ModTimeUnix == modTimeUnix && metadata.SizeBytes == sizeBytes
+	return ok && sameCachedFile(metadata, current)
+}
+
+// sameCachedFile is the one comparison the cache turns on: the same file, at
+// the same length, unmodified since it was read.
+func sameCachedFile(cached NoteMetadata, current NoteMetadata) bool {
+	return cached.InodeNumber == current.InodeNumber &&
+		cached.ModTimeUnix == current.ModTimeUnix &&
+		cached.SizeBytes == current.SizeBytes
 }
 
 func (c *MetadataCache) Len() int {
@@ -258,17 +276,17 @@ func (c *MetadataCache) Drop(relPath string) {
 // scanning without one is the same code path with the caching turned off
 // rather than a second implementation that can drift from this one.
 
-func (c *MetadataCache) reusableRow(relPath string, modTimeUnix int64, sizeBytes int64) (NoteRow, bool) {
+func (c *MetadataCache) reusableRow(candidate scanCandidate) (NoteRow, bool) {
 	if c == nil {
 		return NoteRow{}, false
 	}
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-	entry, ok := c.entries[relPath]
+	entry, ok := c.entries[candidate.relPath]
 	if !ok || !entry.hasNote {
 		return NoteRow{}, false
 	}
-	if entry.metadata.ModTimeUnix != modTimeUnix || entry.metadata.SizeBytes != sizeBytes {
+	if !sameCachedFile(entry.metadata, candidate.metadata()) {
 		return NoteRow{}, false
 	}
 	return entry.note, true
@@ -284,6 +302,7 @@ func (c *MetadataCache) putScanned(relPath string, note NoteRow) {
 		metadata: NoteMetadata{
 			ModTimeUnix: note.ModTimeUnix,
 			SizeBytes:   note.SizeBytes,
+			InodeNumber: note.InodeNumber,
 			ContentHash: note.ContentHash,
 		},
 		note:    note,
@@ -312,6 +331,15 @@ type scanCandidate struct {
 	area        VaultArea
 	modTimeUnix int64
 	sizeBytes   int64
+	inodeNumber int64
+}
+
+func (c scanCandidate) metadata() NoteMetadata {
+	return NoteMetadata{
+		ModTimeUnix: c.modTimeUnix,
+		SizeBytes:   c.sizeBytes,
+		InodeNumber: c.inodeNumber,
+	}
 }
 
 // Scan walks the vault with Lstat at every step, never Stat, so a symlink is
@@ -356,7 +384,7 @@ func (v *Vault) ScanWithCache(ctx context.Context, cache *MetadataCache) (ScanRe
 			return ScanResult{}, err
 		}
 		seen[candidate.relPath] = struct{}{}
-		row, reused := cache.reusableRow(candidate.relPath, candidate.modTimeUnix, candidate.sizeBytes)
+		row, reused := cache.reusableRow(candidate)
 		if !reused {
 			cacheable := false
 			row, cacheable, err = v.scanNoteRow(ctx, candidate)
@@ -493,6 +521,7 @@ func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandid
 					area:        areaOf(relPath),
 					modTimeUnix: stat.Mtim.Sec,
 					sizeBytes:   stat.Size,
+					inodeNumber: int64(stat.Ino),
 				})
 				// Checked inside the batch loop, not after the listing: this is
 				// what keeps the walk from reading a directory it has already
@@ -667,6 +696,7 @@ func unreadableNoteRow(candidate scanCandidate, err error) NoteRow {
 		Status:      NoteStatusError,
 		ModTimeUnix: candidate.modTimeUnix,
 		SizeBytes:   candidate.sizeBytes,
+		InodeNumber: candidate.inodeNumber,
 		ParseError: fmt.Sprintf(
 			"the note could not be read on this pass and will be read again on the next one: %v", err,
 		),
@@ -686,6 +716,7 @@ func (v *Vault) readNoteRow(ctx context.Context, candidate scanCandidate) (NoteR
 		Status:      NoteStatusError,
 		ModTimeUnix: candidate.modTimeUnix,
 		SizeBytes:   candidate.sizeBytes,
+		InodeNumber: candidate.inodeNumber,
 	}
 	content, stat, err := v.readScannedNote(ctx, candidate.relPath)
 	if err != nil {
@@ -700,6 +731,7 @@ func (v *Vault) readNoteRow(ctx context.Context, candidate scanCandidate) (NoteR
 		// moment the user trims the note it is read again.
 		row.ModTimeUnix = stat.Mtim.Sec
 		row.SizeBytes = stat.Size
+		row.InodeNumber = int64(stat.Ino)
 		row.ParseError = err.Error()
 		return row, nil
 	}
@@ -707,6 +739,7 @@ func (v *Vault) readNoteRow(ctx context.Context, candidate scanCandidate) (NoteR
 	row.ContentHash = ContentHash(content)
 	row.ModTimeUnix = stat.Mtim.Sec
 	row.SizeBytes = stat.Size
+	row.InodeNumber = int64(stat.Ino)
 
 	parsed, err := ParseNote(candidate.relPath, content)
 	if err != nil {

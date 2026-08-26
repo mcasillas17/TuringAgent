@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"sort"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
@@ -79,8 +80,13 @@ type MemoryIndexReport struct {
 	// reports them; only the file-writing pass may adopt one.
 	AwaitingIdentity []string
 	DuplicateNoteIDs []string
-	Errors           []MemoryNoteIssue
-	Skipped          []MemoryNoteIssue
+	// Errors names every note this pass could not account for: one it could
+	// not read or parse, and — in the writing pass — one it could not write.
+	// A file the pass gave up on is one the user has to know about, because a
+	// note that silently fails to appear in search is indistinguishable, to
+	// them, from one Turing decided to forget.
+	Errors  []MemoryNoteIssue
+	Skipped []MemoryNoteIssue
 	// UnmanagedInboxDrafts lists files the user dropped into the inbox
 	// themselves. They are theirs, and nothing here touches them.
 	UnmanagedInboxDrafts []string
@@ -177,7 +183,9 @@ func (r *Repository) ReconcileMemoryVault(ctx context.Context) (MemoryReconcileR
 	report := MemoryReconcileReport{}
 	err := r.runVaultPass(ctx, func(vault *memoryfiles.Vault, state memoryVaultState, scanned scannedVault) error {
 		var passErr error
-		if report.IdentitiesAssigned, passErr = assignMissingIdentities(ctx, vault, scanned); passErr != nil {
+		var adoptionIssues, rewriteIssues []MemoryNoteIssue
+		report.IdentitiesAssigned, adoptionIssues, passErr = assignMissingIdentities(ctx, vault, scanned)
+		if passErr != nil {
 			return passErr
 		}
 		// The index runs before the citations are rewritten, not after.
@@ -189,9 +197,12 @@ func (r *Repository) ReconcileMemoryVault(ctx context.Context) (MemoryReconcileR
 			return passErr
 		}
 		report.NotesHealed = report.Index.Healed
-		if report.RefsRewritten, passErr = r.rewriteRefsFromSidecar(ctx, vault, scanned); passErr != nil {
+		report.RefsRewritten, rewriteIssues, passErr = r.rewriteRefsFromSidecar(ctx, vault, scanned)
+		if passErr != nil {
 			return passErr
 		}
+		report.Index.Errors = append(report.Index.Errors, adoptionIssues...)
+		report.Index.Errors = append(report.Index.Errors, rewriteIssues...)
 		report.OrphanCandidatesRemoved, report.ReservationsCleared, passErr = r.sweepVaultInbox(ctx, state, scanned)
 		return passErr
 	})
@@ -220,24 +231,49 @@ func (r *Repository) runVaultPass(
 	ctx context.Context,
 	act func(*memoryfiles.Vault, memoryVaultState, scannedVault) error,
 ) error {
-	vault, err := r.memoryVaultOrError()
-	if err != nil {
-		return err
-	}
 	r.memoryVaultMutex.Lock()
 	defer r.memoryVaultMutex.Unlock()
 
-	state, scanned, err := r.readVaultAndState(ctx, vault)
+	// Read inside the lock, together. The vault and the cache filled from it
+	// are one pair, and a pass that picked them up either side of a
+	// SetMemoryVault would be reading one vault through another's cache.
+	vault, cache := r.memoryVault, r.memoryScanCache
+	if vault == nil {
+		return ErrMemoryVaultUnavailable
+	}
+	state, scanned, err := r.readVaultAndState(ctx, vault, cache)
 	if err != nil {
 		return err
 	}
 	return act(vault, state, scanned)
 }
 
+// ScanMemoryVault reads the vault the way a pass does, through the same lock
+// and the same cache, and returns what it saw without writing anything.
+//
+// It exists for the one caller that renders a page immediately after
+// reconciling it. That caller needs the notes themselves, which the reconcile
+// report does not carry, and a second cold walk of the user's whole vault to
+// draw one page is a walk too many. Going through here means the second pass
+// reuses everything the first one just read.
+func (r *Repository) ScanMemoryVault(ctx context.Context) (memoryfiles.ScanResult, error) {
+	r.memoryVaultMutex.Lock()
+	defer r.memoryVaultMutex.Unlock()
+	vault, cache := r.memoryVault, r.memoryScanCache
+	if vault == nil {
+		return memoryfiles.ScanResult{}, ErrMemoryVaultUnavailable
+	}
+	return vault.ScanWithCache(ctx, cache)
+}
+
 // readVaultAndState captures the database's view and then walks the vault. The
 // order matters: the anchor is taken first, so anything created while the walk
 // is in progress is newer than it and out of this pass's scope.
-func (r *Repository) readVaultAndState(ctx context.Context, vault *memoryfiles.Vault) (memoryVaultState, scannedVault, error) {
+func (r *Repository) readVaultAndState(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	cache *memoryfiles.MetadataCache,
+) (memoryVaultState, scannedVault, error) {
 	state := memoryVaultState{anchor: now()}
 	if r.memoryReconcileScanAnchor != "" {
 		state.anchor = r.memoryReconcileScanAnchor
@@ -251,7 +287,7 @@ func (r *Repository) readVaultAndState(ctx context.Context, vault *memoryfiles.V
 	if r.memoryVaultPassBarrier != nil {
 		r.memoryVaultPassBarrier()
 	}
-	result, err := vault.Scan(ctx)
+	result, err := vault.ScanWithCache(ctx, cache)
 	if err != nil {
 		return memoryVaultState{}, scannedVault{}, err
 	}
@@ -342,8 +378,21 @@ func (r *Repository) loadMemoryVaultState(ctx context.Context, state *memoryVaul
 // added; their prose is spliced around, never re-encoded, and an inbox draft is
 // deliberately left alone — adopting one would decide, on the user's behalf,
 // that a file they were still drafting is now memory.
-func assignMissingIdentities(ctx context.Context, vault *memoryfiles.Vault, scanned scannedVault) (int, error) {
+//
+// One note it cannot write is one note. A frontmatter written as a YAML flow
+// mapping, a file the user has open read-only, a permission the sync client
+// changed: each is a fact about that file and about nothing else, and each is
+// reported and stepped over. Aborting the pass on the first of them let a
+// single note the user happened to write on one line stop every other note from
+// being adopted, keep an interrupted deletion from ever finishing, and take the
+// whole app down at startup.
+func assignMissingIdentities(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	scanned scannedVault,
+) (int, []MemoryNoteIssue, error) {
 	assigned := 0
+	var issues []MemoryNoteIssue
 	for index := range scanned.beliefs {
 		note := &scanned.beliefs[index]
 		if !note.Indexable || note.NoteID != "" {
@@ -351,7 +400,10 @@ func assignMissingIdentities(ctx context.Context, vault *memoryfiles.Vault, scan
 		}
 		noteID, err := memoryfiles.NewNoteID()
 		if err != nil {
-			return assigned, err
+			// Not a fact about this note: the identity source itself failed,
+			// so the next note would fail the same way and a pass that carried
+			// on would be reporting a vault it never adopted anything in.
+			return assigned, issues, err
 		}
 		rewritten, err := vault.RewriteFrontmatterRefs(ctx, memoryfiles.RewriteFrontmatterRefsRequest{
 			RelPath:             note.RelPath,
@@ -359,14 +411,38 @@ func assignMissingIdentities(ctx context.Context, vault *memoryfiles.Vault, scan
 			ExpectedContentHash: note.ContentHash,
 		})
 		if err != nil {
-			return assigned, err
+			if fatal := untrustworthyPassError(ctx, err); fatal != nil {
+				return assigned, issues, fatal
+			}
+			issues = append(issues, MemoryNoteIssue{
+				RelPath: note.RelPath,
+				Reason:  "this note could not be given a stable identity: " + err.Error(),
+			})
+			continue
 		}
 		note.NoteID = noteID
 		note.Content = rewritten.Content
 		note.ContentHash = rewritten.ContentHash
 		assigned++
 	}
-	return assigned, nil
+	return assigned, issues, nil
+}
+
+// untrustworthyPassError separates "this file" from "this pass".
+//
+// A failure to write one note says something about that note. A cancelled or
+// expired context says the pass never got to look at the rest of the vault, and
+// a report built on top of it would describe a walk that did not happen — so
+// that one is returned and the pass fails as a whole. Everything else is
+// per-note, visible in the report, and stepped over.
+func untrustworthyPassError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return nil
 }
 
 // rewriteRefsFromSidecar is the one direction evidence travels. The database
@@ -379,12 +455,17 @@ func assignMissingIdentities(ctx context.Context, vault *memoryfiles.Vault, scan
 // before the walk, because the index step in between is what gave a healed
 // note its evidence, and rewriting from the older view would cite links that
 // were already refused.
-func (r *Repository) rewriteRefsFromSidecar(ctx context.Context, vault *memoryfiles.Vault, scanned scannedVault) (int, error) {
+func (r *Repository) rewriteRefsFromSidecar(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	scanned scannedVault,
+) (int, []MemoryNoteIssue, error) {
 	current := memoryVaultState{}
 	if err := r.loadMemoryVaultState(ctx, &current); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	rewritten := make([]memoryfiles.NoteRow, 0)
+	var issues []MemoryNoteIssue
 	for index := range scanned.beliefs {
 		note := &scanned.beliefs[index]
 		if !note.Indexable || note.NoteID == "" || note.Status != memoryfiles.NoteStatusManaged {
@@ -400,7 +481,18 @@ func (r *Repository) rewriteRefsFromSidecar(ctx context.Context, vault *memoryfi
 		}
 		updated, err := vault.RewriteFrontmatterRefs(ctx, request)
 		if err != nil {
-			return len(rewritten), err
+			// Same rule as the adoption step above, and it matters more here:
+			// this is the pass a session deletion waits on, and one note whose
+			// citations cannot be rewritten must not hold the withdrawal of
+			// every other note open forever.
+			if fatal := untrustworthyPassError(ctx, err); fatal != nil {
+				return len(rewritten), issues, fatal
+			}
+			issues = append(issues, MemoryNoteIssue{
+				RelPath: note.RelPath,
+				Reason:  "this note's citations could not be brought back in line with the record: " + err.Error(),
+			})
+			continue
 		}
 		note.Content = updated.Content
 		note.ContentHash = updated.ContentHash
@@ -409,7 +501,7 @@ func (r *Repository) rewriteRefsFromSidecar(ctx context.Context, vault *memoryfi
 		rewritten = append(rewritten, *note)
 	}
 	if len(rewritten) == 0 {
-		return 0, nil
+		return 0, issues, nil
 	}
 	// The projection catches up with what was just written. A failure partway
 	// through the loop above returns before this runs, so files already
@@ -417,25 +509,25 @@ func (r *Repository) rewriteRefsFromSidecar(ctx context.Context, vault *memoryfi
 	// indexes before it rewrites, and so brings them back in line.
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return 0, issues, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, note := range rewritten {
 		if err := updateMemoryNoteContentTx(ctx, tx, note.NoteID, note.Content, note.ContentHash); err != nil {
-			return 0, err
+			return 0, issues, err
 		}
 		status := "refs_updated"
 		if note.EvidenceWithdrawn {
 			status = MemoryNoteStatusWithdrawn
 		}
 		if err := recordMemoryReconcileTx(ctx, tx, memoryNoteRefsRewrittenAction, note.NoteID, status); err != nil {
-			return 0, err
+			return 0, issues, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return 0, issues, err
 	}
-	return len(rewritten), nil
+	return len(rewritten), issues, nil
 }
 
 // refsRewriteFor decides what one note's refs value has to say, given what the
@@ -800,8 +892,15 @@ func indexMemoryNoteTx(ctx context.Context, tx *sql.Tx, note memoryfiles.NoteRow
 			withdrawn = true
 		}
 	}
-	if err := upsertMemoryNoteTx(ctx, tx, memoryNoteFromRow(note, status)); err != nil {
-		return false, false, err
+	// A pass that found nothing different writes nothing. The row is the same
+	// row, but an UPDATE is not free here: memory_notes_fts is an
+	// external-content index maintained by trigger, so every no-op write
+	// deletes and reinserts the note's tokens, and updated_at moves — telling
+	// the user their memory changed every time anything looked at it.
+	if desired := memoryNoteFromRow(note, status); !sameIndexedNote(existing, desired) {
+		if err := upsertMemoryNoteTx(ctx, tx, desired); err != nil {
+			return false, false, err
+		}
 	}
 	// Only the transition is recorded, not every pass over an unchanged note:
 	// a log that fills with "reconcile looked at this and left it alone" is one
@@ -812,6 +911,16 @@ func indexMemoryNoteTx(ctx context.Context, tx *sql.Tx, note memoryfiles.NoteRow
 		}
 	}
 	return false, withdrawn, nil
+}
+
+// sameIndexedNote compares the four columns a pass may rewrite. Identity is the
+// key and is equal by construction; created_at is never rewritten; updated_at is
+// the thing being decided about and so cannot be part of the decision.
+func sameIndexedNote(existing MemoryNote, desired MemoryNote) bool {
+	return existing.Path == desired.Path &&
+		existing.Content == desired.Content &&
+		existing.ContentHash == desired.ContentHash &&
+		existing.Status == desired.Status
 }
 
 func memoryNoteFromRow(note memoryfiles.NoteRow, status string) MemoryNote {

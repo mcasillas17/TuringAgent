@@ -155,7 +155,11 @@ func (s *Server) readVault(ctx context.Context) (vaultView, error) {
 		view.reason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_UNREADABLE
 		view.detail = "the vault could not be reconciled; open it and check the folder is readable"
 	}
-	scan, scanErr := s.vault.Scan(ctx)
+	// The render pass goes through the repository, not straight at the vault,
+	// so it shares the lock and the cache the reconcile above just filled.
+	// Walking the user's whole vault a second time to draw one page is a walk
+	// too many, and two independent walks can disagree about what is in it.
+	scan, scanErr := s.repo.ScanMemoryVault(ctx)
 	if scanErr != nil {
 		if errors.Is(scanErr, context.Canceled) || errors.Is(scanErr, context.DeadlineExceeded) {
 			return view, memoryError(scanErr, "scan memory vault failed")
@@ -460,18 +464,18 @@ func (s *Server) PromoteMemoryCandidate(ctx context.Context, req *turingv1.Promo
 	default:
 		return nil, status.Error(codes.InvalidArgument, "a promoted candidate becomes a belief; no other tier is written this way")
 	}
-	candidate, err := s.candidateForDecision(ctx, req.GetCandidateId(), req.GetExpectedContentHash())
+	candidate, err := s.repo.MemoryCandidateByID(ctx, req.GetCandidateId())
 	if err != nil {
-		return nil, err
-	}
-	if candidate.Kind != repository.MemoryCandidateKindBelief {
-		return nil, status.Error(codes.FailedPrecondition, "this is a profile edit; apply it to the profile instead")
+		return nil, memoryError(err, "read memory candidate failed")
 	}
 	note, err := s.repo.PromoteMemoryCandidate(ctx, repository.MemoryCandidateDecision{
 		CandidateID:           candidate.CandidateID,
-		ExpectedCandidateHash: req.GetExpectedCandidateHash(),
+		ExpectedCandidateHash: candidateCompareAndSet(req.GetExpectedCandidateHash(), deprecatedPromoteHash(req)),
 	})
 	if err != nil {
+		if errors.Is(err, repository.ErrMemoryCandidateKind) {
+			return nil, status.Error(codes.FailedPrecondition, "this is a profile edit; apply it to the profile instead")
+		}
 		return nil, memoryError(err, "promote memory candidate failed")
 	}
 	decided := candidateProto(candidate)
@@ -499,13 +503,13 @@ func (s *Server) RejectMemoryCandidate(ctx context.Context, req *turingv1.Reject
 	if req == nil || req.GetCandidateId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "candidate_id is required")
 	}
-	candidate, err := s.candidateForDecision(ctx, req.GetCandidateId(), req.GetExpectedContentHash())
+	candidate, err := s.repo.MemoryCandidateByID(ctx, req.GetCandidateId())
 	if err != nil {
-		return nil, err
+		return nil, memoryError(err, "read memory candidate failed")
 	}
 	if err := s.repo.RejectMemoryCandidate(ctx, repository.MemoryCandidateDecision{
 		CandidateID:           candidate.CandidateID,
-		ExpectedCandidateHash: req.GetExpectedCandidateHash(),
+		ExpectedCandidateHash: candidateCompareAndSet(req.GetExpectedCandidateHash(), deprecatedRejectHash(req)),
 	}); err != nil {
 		return nil, memoryError(err, "reject memory candidate failed")
 	}
@@ -535,16 +539,18 @@ func (s *Server) ApplyMemoryProfile(ctx context.Context, req *turingv1.ApplyMemo
 	if err != nil {
 		return nil, memoryError(err, "read memory candidate failed")
 	}
-	if candidate.Kind != repository.MemoryCandidateKindProfileEdit {
-		return nil, status.Error(codes.FailedPrecondition, "this is a belief; promote it instead")
-	}
 	document, err := s.repo.ApplyMemoryProfileCandidate(ctx, repository.ApplyMemoryProfileInput{
-		CandidateID:           candidate.CandidateID,
+		CandidateID: candidate.CandidateID,
+		// The profile's own compare-and-set, and the only place
+		// expected_content_hash still means the profile document.
 		ExpectedContentHash:   req.GetExpectedContentHash(),
 		Content:               req.GetContent(),
 		ExpectedCandidateHash: req.GetExpectedCandidateHash(),
 	})
 	if err != nil {
+		if errors.Is(err, repository.ErrMemoryCandidateKind) || errors.Is(err, memoryfiles.ErrKind) {
+			return nil, status.Error(codes.FailedPrecondition, "this is a belief; promote it instead")
+		}
 		return nil, memoryError(err, "apply memory profile failed")
 	}
 	s.record(ctx, "memory.profile.applied", candidate.CandidateID, map[string]any{"kind": candidate.Kind})
@@ -558,19 +564,37 @@ func (s *Server) ApplyMemoryProfile(ctx context.Context, req *turingv1.ApplyMemo
 	}}, nil
 }
 
-// candidateForDecision loads a proposal and checks the compare-and-set before
-// any file is touched. An empty expected hash is accepted as "I have not read
-// it"; a wrong one is refused, because the user decided about other words.
-func (s *Server) candidateForDecision(ctx context.Context, candidateID string, expectedHash string) (repository.MemoryCandidate, error) {
-	candidate, err := s.repo.MemoryCandidateByID(ctx, candidateID)
-	if err != nil {
-		return repository.MemoryCandidate{}, memoryError(err, "read memory candidate failed")
+// deprecatedPromoteHash and deprecatedRejectHash read the field this server
+// asks clients to stop sending.
+//
+// Reading it is the point. A server is the one component that has to go on
+// honouring a name it has deprecated, because the alternative is a client built
+// before the split arriving with no compare-and-set at all and having its user's
+// decision applied to text they never read. The linter is told so here, in one
+// place, rather than at every call site.
+func deprecatedPromoteHash(req *turingv1.PromoteMemoryCandidateRequest) string {
+	return req.GetExpectedContentHash() //nolint:staticcheck // deliberately still honoured; see above
+}
+
+func deprecatedRejectHash(req *turingv1.RejectMemoryCandidateRequest) string {
+	return req.GetExpectedContentHash() //nolint:staticcheck // deliberately still honoured; see above
+}
+
+// candidateCompareAndSet picks the token a decision is checked against.
+//
+// There is one candidate compare-and-set, and it names the candidate *file* as
+// it reads now — the bytes every listing serves and the bytes the user was
+// shown. expected_content_hash on a decision is the older spelling of the same
+// question and is accepted as an alias, so a client built before the field was
+// split is not left with no compare-and-set at all. It used to be checked
+// against the database row instead, which is what made every proposal the user
+// edited in their vault permanently undecidable: the page could only ever send
+// the file's hash, and the row's was the only one that would be accepted.
+func candidateCompareAndSet(candidateHash string, deprecatedRowHash string) string {
+	if candidateHash != "" {
+		return candidateHash
 	}
-	if expectedHash != "" && expectedHash != candidate.ContentHash {
-		return repository.MemoryCandidate{}, status.Error(codes.Aborted,
-			"this proposal changed since it was read; re-read it and decide again")
-	}
-	return candidate, nil
+	return deprecatedRowHash
 }
 
 func (s *Server) profile(ctx context.Context, settings *turingv1.MemorySettings) *turingv1.MemoryProfile {

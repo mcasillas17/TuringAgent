@@ -145,6 +145,12 @@ func memoryError(err error, fallback string) error {
 		return status.Error(codes.NotFound, "memory candidate not found")
 	case errors.Is(err, repository.ErrMemoryNoteNotFound):
 		return status.Error(codes.NotFound, "memory note not found")
+	case errors.Is(err, repository.ErrMemoryNoteWithdrawn):
+		// Named as a refusal rather than as a 404: the note is still in the
+		// user's vault and still theirs. What is gone is the standing to answer
+		// with it, and saying so is what stops a caller retrying the id.
+		return status.Error(codes.FailedPrecondition,
+			"the conversations behind this memory were deleted, so it is no longer answered with")
 	case errors.Is(err, repository.ErrMemoryCandidateInvalidTransition):
 		return status.Error(codes.FailedPrecondition, "this memory candidate has already been decided")
 	case errors.Is(err, repository.ErrMemoryCandidateKind):

@@ -116,7 +116,10 @@ void main() {
       MemoryUnavailableReason.unspecified,
       reason: 'a server that said nothing must not be rendered as saying NONE',
     );
-    expect(state.profile.unavailableReason, MemoryUnavailableReason.unspecified);
+    expect(
+      state.profile.unavailableReason,
+      MemoryUnavailableReason.unspecified,
+    );
     expect(state.settings.enabled, isFalse);
     expect(state.tiers, isEmpty);
     expect(state.candidates, isEmpty);
@@ -146,12 +149,9 @@ void main() {
         noteId: 'note-2',
         provenance: [
           memorypb.MemoryProvenance(
-            kind:
-                memorypb.MemoryProvenanceKind.MEMORY_PROVENANCE_KIND_IMPORTED,
+            kind: memorypb.MemoryProvenanceKind.MEMORY_PROVENANCE_KIND_IMPORTED,
             withdrawn: true,
-            withdrawnAt: timestamppb.Timestamp(
-              seconds: Int64(1766000000),
-            ),
+            withdrawnAt: timestamppb.Timestamp(seconds: Int64(1766000000)),
             evidenceCount: 3,
           ),
         ],
