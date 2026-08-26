@@ -205,8 +205,9 @@ func TestRefusedRejectionNamesAStagingLinkItCouldNotDrop(t *testing.T) {
 // The second flush. The staging name is gone from the directory as this process
 // sees it, and the removal of it has not reached the disk — so after a crash
 // the second link can come back. The restore itself is durable, so this is not
-// a refusal to restore; it is a duplicate the caller is told about instead of
-// being assured of a tidiness nobody checked.
+// a refusal to restore, and it is not a duplicate anybody can go and look at
+// today either: saying "a second link remains at ..." would send the user after
+// a file that is not there. What is true is that the drop was not flushed.
 func TestRefusedRejectionReportsAStagingLinkItCouldNotFlushAway(t *testing.T) {
 	const decided = "the proposal the user read"
 	const rewritten = "the words the user typed after they decided"
@@ -236,9 +237,65 @@ func TestRefusedRejectionReportsAStagingLinkItCouldNotFlushAway(t *testing.T) {
 	if readErr != nil || string(onName) != rewritten {
 		t.Fatalf("the entry is not back under its own name: %q, %v", onName, readErr)
 	}
+	// The drop happened; only its flush did not. A refusal that says the link
+	// is still there is pointing at nothing.
+	requireNoStagingResidue(t, vault)
 	stale := requireBoundedRefusal(t, err, rewritten)
 	if !strings.Contains(stale.Detail, stagingPrefix) {
 		t.Fatalf("the refusal does not name the link whose removal was not flushed: %q", stale.Detail)
+	}
+	if strings.Contains(stale.Detail, "could not be dropped") {
+		t.Fatalf("the refusal claims a link that was dropped is still there: %q", stale.Detail)
+	}
+	if !strings.Contains(stale.Detail, "come back") {
+		t.Fatalf("the refusal does not say the name can come back after a crash: %q", stale.Detail)
+	}
+}
+
+// The same distinction on the rescue side. The bytes were moved under a visible
+// recovery name, the staging link was dropped, and the flush that would keep it
+// dropped failed. The user is told where their file is and that the reserved
+// name can reappear — not that there is a copy under it now.
+func TestRescuedFileReportsAStagingLinkItCouldNotFlushAway(t *testing.T) {
+	const decided = "the proposal the user read"
+	const contender = "a third file, under the same name"
+	recorder := &syncRecorder{}
+	var vault *Vault
+	vault = vaultWithRemovalSeams(t, recorder.hooks(), func(phase detachPhase, _ string) {
+		switch phase {
+		case detachPhaseBeforeDetach:
+			rewriteInPlace(t, vault, "inbox/note.md", "the words the user typed after they decided")
+		case detachPhaseBeforeRestore:
+			contestTheName(t, vault, contender)
+			// The rescue links the visible name, flushes, drops the staging
+			// name and flushes again; the last of those is this one.
+			recorder.setFailDirectorySyncNumber(2)
+		}
+	}, nil, nil)
+	full := writeVaultFile(t, vault, "inbox/note.md", decided)
+
+	err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
+		RelPath:             "inbox/note.md",
+		Mode:                RemoveDecidedCandidate,
+		ExpectedContentHash: ContentHash(decided),
+	})
+	if !errors.Is(err, ErrStaleContent) {
+		t.Fatalf("rejection = %v, want a stale-content refusal", err)
+	}
+	if held, readErr := os.ReadFile(full); readErr != nil || string(held) != contender {
+		t.Fatalf("the file that took the name was disturbed: %q, %v", held, readErr)
+	}
+	draft, _ := requireOneRecoveryDraft(t, vault)
+	requireNoStagingResidue(t, vault)
+	stale := requireBoundedRefusal(t, err, decided)
+	if !strings.Contains(stale.Detail, draft) {
+		t.Fatalf("the refusal does not say where the bytes were kept: %q", stale.Detail)
+	}
+	if strings.Contains(stale.Detail, "a copy remains") {
+		t.Fatalf("the refusal claims a copy that was dropped is still there: %q", stale.Detail)
+	}
+	if !strings.Contains(stale.Detail, "come back") {
+		t.Fatalf("the refusal does not say the reserved name can come back: %q", stale.Detail)
 	}
 }
 
@@ -436,5 +493,50 @@ func TestInstallRollbackReportsAContestedEntryItCouldNotFlush(t *testing.T) {
 		if !strings.HasPrefix(name, stagingPrefix) && name != "installed.md" {
 			t.Fatalf("the rollback published %q under beliefs/", name)
 		}
+	}
+}
+
+// The deletion that was authorised and then could not finish. The entry is off
+// its name, the unlink of the staging name fails, and the flush that would at
+// least pin the directory as it stands fails too. Nothing is lost — the bytes
+// are under the reserved name — and the caller has to be told both that the
+// removal did not happen and that where the file is now is not something a
+// crash is guaranteed to keep.
+func TestRefusedDiscardReportsBothTheUnlinkAndTheFlushItCouldNotDo(t *testing.T) {
+	const decided = "the proposal the user read"
+	recorder := &syncRecorder{}
+	var vault *Vault
+	vault = vaultWithRemovalSeams(t, recorder.hooks(), func(phase detachPhase, _ string) {
+		if phase == detachPhaseBeforeVerify {
+			// The verify is about to pass, so the next directory flush is the
+			// one the discard makes after its failed unlink.
+			recorder.setFailDirectorySyncNumber(1)
+		}
+	}, nil, failStagingUnlink())
+	full := writeVaultFile(t, vault, "inbox/note.md", decided)
+
+	err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
+		RelPath:             "inbox/note.md",
+		Mode:                RemoveDecidedCandidate,
+		ExpectedContentHash: ContentHash(decided),
+	})
+	if err == nil {
+		t.Fatal("a rejection whose unlink failed reported itself as a removal")
+	}
+	if !errors.Is(err, errStagingUnlink) {
+		t.Fatalf("the failure does not carry the unlink underneath it: %v", err)
+	}
+	if !strings.Contains(err.Error(), "flushed") {
+		t.Fatalf("the failure does not say the directory could not be flushed either: %v", err)
+	}
+	staged, held := stagingResidueContent(t, vault, InboxDirName)
+	if held != decided {
+		t.Fatalf("the staging entry holds %q, want the proposal", held)
+	}
+	if !strings.Contains(err.Error(), staged) {
+		t.Fatalf("the failure does not say where the bytes are: %v", err)
+	}
+	if _, statErr := os.Lstat(full); !os.IsNotExist(statErr) {
+		t.Fatalf("the entry is under its own name after a detach that never went back: %v", statErr)
 	}
 }
