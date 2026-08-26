@@ -23,7 +23,7 @@ import (
 // names and before anything decides whether to keep it, and the file goes back
 // under its own name before the cancellation is reported.
 func TestHashlessRejectionCancelledMidDetachRestoresTheFileAndSaysSo(t *testing.T) {
-	const unreadable = "a proposal nothing can parse"
+	const unreadable = unparseableCandidate
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	vault := vaultWithDetachBarrier(t, func(phase detachPhase, _ string) {
@@ -32,10 +32,12 @@ func TestHashlessRejectionCancelledMidDetachRestoresTheFileAndSaysSo(t *testing.
 		}
 	})
 	full := writeVaultFile(t, vault, "inbox/note.md", unreadable)
+	identity := unreadableIdentity(t, vault, "inbox/note.md")
 
 	err := vault.RemoveInboxNote(ctx, RemoveInboxNoteRequest{
-		RelPath: "inbox/note.md",
-		Mode:    RemoveUnreadableCandidate,
+		RelPath:    "inbox/note.md",
+		Mode:       RemoveUnreadableCandidate,
+		Unreadable: identity,
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected the cancellation to be reported as one, got %v", err)
@@ -58,7 +60,7 @@ func TestHashlessRejectionCancelledMidDetachRestoresTheFileAndSaysSo(t *testing.
 // writer taking the name; the answer is the same either way, because what makes
 // the deletion unsafe is that nothing is left to receive its outcome.
 func TestHashlessRejectionPastItsDeadlineMidDetachRestoresTheFile(t *testing.T) {
-	const unreadable = "a proposal nothing can parse"
+	const unreadable = unparseableCandidate
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	vault := vaultWithDetachBarrier(t, func(phase detachPhase, _ string) {
@@ -70,10 +72,12 @@ func TestHashlessRejectionPastItsDeadlineMidDetachRestoresTheFile(t *testing.T) 
 		}
 	})
 	full := writeVaultFile(t, vault, "inbox/note.md", unreadable)
+	identity := unreadableIdentity(t, vault, "inbox/note.md")
 
 	err := vault.RemoveInboxNote(ctx, RemoveInboxNoteRequest{
-		RelPath: "inbox/note.md",
-		Mode:    RemoveUnreadableCandidate,
+		RelPath:    "inbox/note.md",
+		Mode:       RemoveUnreadableCandidate,
+		Unreadable: identity,
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected the expired deadline to be reported as one, got %v", err)

@@ -340,42 +340,151 @@ type InboxNoteContent struct {
 	Body        string
 }
 
-// ReadInboxNote reads one candidate under inbox/ and nowhere else.
+// UnreadableCandidateEntry names the exact inbox entry a decision's pre-check
+// failed to read, and it is the only thing a hashless rejection may act on.
+//
+// The hashless door exists because a proposal nobody can parse has no bytes to
+// name, and refusing to delete it would leave the user with a claim about
+// themselves they can neither accept nor be rid of. What it must not become is
+// a licence to delete whatever happens to be under the name later: the
+// pre-check releases the vault's path lock before the primitive takes it, and
+// an editor, a sync client or Turing's own writer can put a different file
+// there in between. So the pre-check says which entry it failed on, and the
+// primitive deletes that entry or nothing.
+//
+// Every field is unexported and there is no constructor: the only way to obtain
+// one is ReadInboxCandidate actually failing to read a real file, so no caller
+// can forge one. It is also never anything a client sees. It carries an inode
+// number and a hash of bytes nobody has read, and a hash handed out is a token
+// a caller could send back — which is exactly the binding this type exists to
+// keep on the server.
+type UnreadableCandidateEntry struct {
+	// bound distinguishes "a pre-check answered about this entry" from the
+	// zero value, which authorises nothing.
+	bound bool
+	// present records whether there was an entry at all. A pre-check that
+	// found nothing may not delete a file that arrived afterwards.
+	present bool
+	device  uint64
+	inode   uint64
+	// rawHash is the hash of the raw bytes, set only when they could be read
+	// at all. A file nobody can open and a file past the size bound reach this
+	// door with no bytes to hash, and are held to their identity alone.
+	rawHash string
+	hashed  bool
+}
+
+// Bound reports whether this identity came from a pre-check that really failed
+// to read a candidate. It says nothing about the file itself.
+func (e UnreadableCandidateEntry) Bound() bool { return e.bound }
+
+// InboxCandidateReading is what a decision's pre-check comes away with.
+//
+// Exactly one half is meaningful. Note holds the proposal when the file read
+// and parsed; Unreadable names the entry when it did not, and ReadErr says why.
+// A candidate that reads is decided about by its bytes; one that does not is
+// decided about by its identity, and nothing else is a decision at all.
+type InboxCandidateReading struct {
+	Note       InboxNoteContent
+	Readable   bool
+	Unreadable UnreadableCandidateEntry
+	ReadErr    error
+}
+
+// ReadInboxCandidate reads one candidate under inbox/ and nowhere else, and
+// answers for it either way.
 //
 // It takes and releases the path lock for the read alone, so a caller may take
 // it again for the write that follows without deadlocking against itself. The
 // serialisation a decision needs is per-candidate and belongs to its caller;
 // this is only the read.
-func (v *Vault) ReadInboxNote(ctx context.Context, relPath string) (InboxNoteContent, error) {
+//
+// A file that cannot be read is not an error here — it is an answer, and the
+// answer names the entry it is about. What stays an error is everything that is
+// not a candidate at all: a path outside the inbox, a symlink, an entry that is
+// not a regular file. None of those is a proposal, and none of them acquires a
+// way out of the vault by being unreadable.
+func (v *Vault) ReadInboxCandidate(ctx context.Context, relPath string) (InboxCandidateReading, error) {
 	if err := ctx.Err(); err != nil {
-		return InboxNoteContent{}, err
+		return InboxCandidateReading{}, err
 	}
 	clean, err := requireInboxRelPath(relPath)
 	if err != nil {
-		return InboxNoteContent{}, err
+		return InboxCandidateReading{}, err
 	}
 	unlock, err := v.locks.lockContext(ctx, v.pathLockKey(clean))
 	if err != nil {
-		return InboxNoteContent{}, err
+		return InboxCandidateReading{}, err
 	}
 	defer unlock()
 
-	content, _, err := v.readConfinedFile(ctx, clean, MaxNoteBytes)
+	content, stat, readErr := v.readConfinedFile(ctx, clean, MaxNoteBytes)
+	if readErr == nil {
+		parsed, parseErr := ParseNote(clean, content)
+		if parseErr == nil {
+			return InboxCandidateReading{
+				Readable: true,
+				Note: InboxNoteContent{
+					RelPath:     clean,
+					Kind:        parsed.Kind,
+					Title:       parsed.Title,
+					Content:     content,
+					ContentHash: ContentHash(content),
+					Body:        parsed.Body,
+				},
+			}, nil
+		}
+		// The bytes are there and they are not a note. This is the case the
+		// hashless door exists for, and it is the one case where it can be
+		// named exactly: identity *and* a hash of what would not parse.
+		return InboxCandidateReading{
+			Unreadable: UnreadableCandidateEntry{
+				bound:   true,
+				present: true,
+				device:  uint64(stat.Dev),
+				inode:   uint64(stat.Ino),
+				rawHash: ContentHash(content),
+				hashed:  true,
+			},
+			ReadErr: parseErr,
+		}, nil
+	}
+	switch {
+	case errors.Is(readErr, unix.ENOENT), errors.Is(readErr, os.ErrNotExist):
+		return InboxCandidateReading{
+			Unreadable: UnreadableCandidateEntry{bound: true},
+			ReadErr:    readErr,
+		}, nil
+	case ctx.Err() != nil, errors.Is(readErr, ErrConfinement), stat.Ino == 0:
+		// Not a candidate, or nothing was inspected at all. There is no entry
+		// to bind a removal to, so this stays the caller's failure.
+		return InboxCandidateReading{}, readErr
+	default:
+		// Unopenable, or past the size bound: the bytes cannot be hashed, and
+		// the entry that was inspected is the whole identity there is.
+		return InboxCandidateReading{
+			Unreadable: UnreadableCandidateEntry{
+				bound:   true,
+				present: true,
+				device:  uint64(stat.Dev),
+				inode:   uint64(stat.Ino),
+			},
+			ReadErr: readErr,
+		}, nil
+	}
+}
+
+// ReadInboxNote is the same read for callers that only want a proposal they can
+// show: a candidate that will not read comes back as the failure to read it.
+func (v *Vault) ReadInboxNote(ctx context.Context, relPath string) (InboxNoteContent, error) {
+	reading, err := v.ReadInboxCandidate(ctx, relPath)
 	if err != nil {
 		return InboxNoteContent{}, err
 	}
-	parsed, err := ParseNote(clean, content)
-	if err != nil {
-		return InboxNoteContent{}, err
+	if !reading.Readable {
+		return InboxNoteContent{}, reading.ReadErr
 	}
-	return InboxNoteContent{
-		RelPath:     clean,
-		Kind:        parsed.Kind,
-		Title:       parsed.Title,
-		Content:     content,
-		ContentHash: ContentHash(content),
-		Body:        parsed.Body,
-	}, nil
+	return reading.Note, nil
 }
 
 // InboxRemovalMode names why a candidate file is being deleted, and with it
@@ -397,7 +506,9 @@ const (
 	// RemoveUnreadableCandidate is the user throwing away a proposal whose
 	// frontmatter nobody could read. There is no hash to name, because nothing
 	// could parse the file to produce one, and refusing the deletion would
-	// leave them with a file they can neither accept nor be rid of.
+	// leave them with a file they can neither accept nor be rid of. What it is
+	// bound to instead is the identity of the exact entry the pre-check failed
+	// on, which Unreadable carries and which nothing else can produce.
 	RemoveUnreadableCandidate InboxRemovalMode = "unreadable_candidate"
 
 	// RemoveRetiredCandidate is Turing's own tidying: bytes whose outcome is
@@ -416,6 +527,12 @@ type RemoveInboxNoteRequest struct {
 	RelPath             string
 	Mode                InboxRemovalMode
 	ExpectedContentHash string
+	// Unreadable is the entry a RemoveUnreadableCandidate removal is bound to,
+	// and that mode requires it. It comes from ReadInboxCandidate and nowhere
+	// else, so a hashless deletion is still a deletion of something somebody
+	// actually looked at — and it never crosses a wire, because the only thing
+	// inside it is the identity and the bytes of a proposal nobody has read.
+	Unreadable UnreadableCandidateEntry
 }
 
 // RemoveInboxNote is the only deletion primitive in this package. It removes a
@@ -453,7 +570,14 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 				clean, RemoveUnreadableCandidate, ErrUnboundDecision,
 			)
 		}
-	case RemoveUnreadableCandidate, RemoveRetiredCandidate:
+	case RemoveUnreadableCandidate:
+		if !request.Unreadable.bound {
+			return fmt.Errorf(
+				"a hashless rejection of %q must name the entry it deletes, and only a pre-check that failed to read one can: %w",
+				clean, ErrUnboundDecision,
+			)
+		}
+	case RemoveRetiredCandidate:
 	default:
 		return fmt.Errorf("inbox removal mode %q is not recognised: %w", request.Mode, ErrUnboundDecision)
 	}
@@ -500,7 +624,7 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 		}
 		return ctx.Err()
 	}
-	return v.removeRejectedInboxEntry(ctx, parent, leaf, clean, stat, request.ExpectedContentHash)
+	return v.removeRejectedInboxEntry(ctx, parent, leaf, clean, stat, request)
 }
 
 // removeRejectedInboxEntry is the user's own rejection, and it deletes the file
@@ -534,14 +658,21 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 // nobody to delete a claim about the user on behalf of, so the entry is put back
 // — or kept under a name the user can see — before the context error is what
 // this returns.
+//
+// A hashless rejection has no decision bytes, so what it is held to instead is
+// the identity its pre-check named: same entry, and still unreadable. Both are
+// checked before anything is detached, because a proposal the user repaired in
+// their editor is one they can now read and decide about properly, and a file
+// that merely took the name is somebody else's entirely.
 func (v *Vault) removeRejectedInboxEntry(
 	ctx context.Context,
 	parent *os.File,
 	leaf string,
 	clean string,
 	named unix.Stat_t,
-	expectedHash string,
+	request RemoveInboxNoteRequest,
 ) error {
+	expectedHash := request.ExpectedContentHash
 	opened, openedStat, err := openConfinedEntry(parent, leaf, clean)
 	switch {
 	case err == nil:
@@ -563,6 +694,11 @@ func (v *Vault) removeRejectedInboxEntry(
 		return err
 	}
 
+	// boundHash is the bytes this removal is entitled to delete, whichever door
+	// it came through: the decision's own hash, or the hash of what the
+	// pre-check could not parse. It is empty only when nobody could read the
+	// file at all, and then identity is all there is.
+	boundHash := expectedHash
 	if expectedHash != "" {
 		content, readErr := readEntryContent(ctx, opened, clean)
 		if readErr != nil {
@@ -570,6 +706,13 @@ func (v *Vault) removeRejectedInboxEntry(
 		}
 		if err := requireDecidedBytes(clean, true, expectedHash, content); err != nil {
 			return err
+		}
+	} else {
+		if err := requireBoundUnreadableEntry(ctx, clean, request.Unreadable, opened, openedStat); err != nil {
+			return err
+		}
+		if request.Unreadable.hashed {
+			boundHash = request.Unreadable.rawHash
 		}
 	}
 	v.detachBarrier(detachPhaseBeforeDetach, clean)
@@ -610,14 +753,16 @@ func (v *Vault) removeRejectedInboxEntry(
 		detached = fmt.Sprintf("the detached entry could not be inspected (%v)", err)
 	} else if detachedStat.Dev != openedStat.Dev || detachedStat.Ino != openedStat.Ino {
 		detached = "another file had taken its name"
-	} else if expectedHash != "" && opened != nil {
+	} else if boundHash != "" && opened != nil {
 		// Same inode, and that is not the same thing as the same bytes: an
 		// editor saving in place keeps the inode, and those are the user's own
-		// newer words. They are held to the decision like everything else.
+		// newer words. They are held to the decision — or, for a hashless
+		// rejection, to the bytes the pre-check could not parse — like
+		// everything else.
 		content, readErr := rereadEntryContent(ctx, opened, clean)
 		if readErr != nil {
 			detached = fmt.Sprintf("it could not be read again before removal (%v)", readErr)
-		} else if ContentHash(content) != expectedHash {
+		} else if ContentHash(content) != boundHash {
 			detached = "it was rewritten in place"
 		}
 	}
@@ -640,6 +785,61 @@ func (v *Vault) removeRejectedInboxEntry(
 		return fmt.Errorf("sync vault directory after removing %q: %w", clean, err)
 	}
 	return ctx.Err()
+}
+
+// requireBoundUnreadableEntry holds a hashless rejection to the entry its
+// pre-check actually failed to read, and refuses it otherwise.
+//
+// Three things can have happened in the window the pre-check opened by giving
+// the path lock back, and none of them is the rejection the user asked for.
+// Another file can have taken the name — a replacement is a new inode, so
+// identity catches it, whether the replacement parses or is broken in some new
+// way of its own. The bytes can have been rewritten under the same inode, which
+// is what an editor saving in place does, and the hash of what would not parse
+// catches that. And the user can simply have repaired the frontmatter, in which
+// case the file is no longer the thing this door exists for at all: it reads as
+// a proposal now, and a proposal is decided about by reading it.
+//
+// Only two cases arrive here with no bytes to compare — a file nothing can open
+// and a file past the size bound — and both are answered the same way they were
+// answered before: the read fails again, which is itself the proof that the
+// file is still what the pre-check found.
+func requireBoundUnreadableEntry(
+	ctx context.Context,
+	clean string,
+	identity UnreadableCandidateEntry,
+	opened *os.File,
+	openedStat unix.Stat_t,
+) error {
+	if !identity.present {
+		return &StaleContentError{RelPath: clean, Detail: boundRefusalDetail(
+			"there was no proposal under that name when it was read, and something has taken it since, so it was left alone")}
+	}
+	if uint64(openedStat.Dev) != identity.device || uint64(openedStat.Ino) != identity.inode {
+		return &StaleContentError{RelPath: clean, Detail: boundRefusalDetail(
+			"another file has taken its name since it was read, so it was left alone")}
+	}
+	if opened == nil {
+		return nil
+	}
+	content, readErr := readEntryContent(ctx, opened, clean)
+	if readErr != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Still unreadable, for the same kind of reason it was unreadable
+		// before, and it is still the same entry.
+		return nil
+	}
+	if identity.hashed && ContentHash(content) != identity.rawHash {
+		return &StaleContentError{RelPath: clean, Detail: boundRefusalDetail(
+			"it was rewritten in place since it was read, so it was left alone")}
+	}
+	if _, err := ParseNote(clean, content); err == nil {
+		return &StaleContentError{RelPath: clean, Detail: boundRefusalDetail(
+			"it reads as a proposal now, so it was left alone; read it again and decide about what it says")}
+	}
+	return nil
 }
 
 // restoreDetachedEntry puts back a file this deletion detached and then found

@@ -107,7 +107,7 @@ func TestRejectionDoesNotUnlinkAReplacementOfTheDecidedProposal(t *testing.T) {
 // identity of the file that was opened is the only thing standing between the
 // user's rejection and somebody else's file.
 func TestHashlessRejectionDoesNotUnlinkAReplacementOfTheOpenedFile(t *testing.T) {
-	const malformed = "not frontmatter, not a note, not parseable"
+	const malformed = unparseableCandidate
 	const replacement = "a newer claim nobody has read yet"
 	var vault *Vault
 	vault = vaultWithDetachBarrier(t, func(phase detachPhase, _ string) {
@@ -117,10 +117,12 @@ func TestHashlessRejectionDoesNotUnlinkAReplacementOfTheOpenedFile(t *testing.T)
 		replaceInboxEntry(t, vault, "inbox/note.md", replacement)
 	})
 	full := writeVaultFile(t, vault, "inbox/note.md", malformed)
+	identity := unreadableIdentity(t, vault, "inbox/note.md")
 
 	err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
-		RelPath: "inbox/note.md",
-		Mode:    RemoveUnreadableCandidate,
+		RelPath:    "inbox/note.md",
+		Mode:       RemoveUnreadableCandidate,
+		Unreadable: identity,
 	})
 	if err == nil {
 		t.Fatal("expected the hashless rejection to refuse rather than delete a file it never opened")
@@ -209,11 +211,13 @@ func TestRejectionRemovesTheDecidedProposalAndCleansUpItsStaging(t *testing.T) {
 
 func TestHashlessRejectionRemovesTheOpenedFileAndCleansUpItsStaging(t *testing.T) {
 	vault := newTestVault(t)
-	full := writeVaultFile(t, vault, "inbox/note.md", "not a note anybody can parse")
+	full := writeVaultFile(t, vault, "inbox/note.md", unparseableCandidate)
+	identity := unreadableIdentity(t, vault, "inbox/note.md")
 
 	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
-		RelPath: "inbox/note.md",
-		Mode:    RemoveUnreadableCandidate,
+		RelPath:    "inbox/note.md",
+		Mode:       RemoveUnreadableCandidate,
+		Unreadable: identity,
 	}); err != nil {
 		t.Fatalf("remove the unreadable proposal: %v", err)
 	}
@@ -230,10 +234,12 @@ func TestHashlessRejectionRemovesTheOpenedFileAndCleansUpItsStaging(t *testing.T
 func TestHashlessRejectionRemovesAFileTooLargeToRead(t *testing.T) {
 	vault := newTestVault(t)
 	full := writeVaultFile(t, vault, "inbox/note.md", strings.Repeat("x", MaxNoteBytes+1))
+	identity := unreadableIdentity(t, vault, "inbox/note.md")
 
 	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
-		RelPath: "inbox/note.md",
-		Mode:    RemoveUnreadableCandidate,
+		RelPath:    "inbox/note.md",
+		Mode:       RemoveUnreadableCandidate,
+		Unreadable: identity,
 	}); err != nil {
 		t.Fatalf("remove the over-sized proposal: %v", err)
 	}
@@ -248,15 +254,20 @@ func TestHashlessRejectionRemovesAFileTooLargeToRead(t *testing.T) {
 // delete it would leave them with no way out at all. It is still deleted on the
 // identity of the entry that was inspected, so the barrier holds.
 func TestHashlessRejectionRemovesAFileNobodyCanOpen(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, where no file is unreadable")
+	}
 	vault := newTestVault(t)
 	full := writeVaultFile(t, vault, "inbox/note.md", "unreadable, unparseable, unwanted")
 	if err := os.Chmod(full, 0o000); err != nil {
 		t.Fatalf("close the file to every reader: %v", err)
 	}
+	identity := unreadableIdentity(t, vault, "inbox/note.md")
 
 	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
-		RelPath: "inbox/note.md",
-		Mode:    RemoveUnreadableCandidate,
+		RelPath:    "inbox/note.md",
+		Mode:       RemoveUnreadableCandidate,
+		Unreadable: identity,
 	}); err != nil {
 		t.Fatalf("remove the unopenable proposal: %v", err)
 	}

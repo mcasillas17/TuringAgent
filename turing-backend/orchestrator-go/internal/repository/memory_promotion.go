@@ -123,6 +123,20 @@ func (r *Repository) lockMemoryCandidateDecision(ctx context.Context, candidateI
 	return memoryCandidateLocks.lockContext(ctx, candidateID)
 }
 
+// decidedCandidateFile is what a decision's pre-check comes away with, and it
+// is what the primitive below it is bound to.
+//
+// ContentHash names the bytes that were read, and is what a rejection or a
+// promotion compares against under the primitive's own lock. Unreadable is the
+// other half, and only one of the two is ever set: a proposal nobody could
+// parse has no bytes to name, so what stands in for them is the identity of the
+// exact entry the read failed on. Neither is ever handed to a client — the hash
+// a client sends is its own claim, and this is the server's.
+type decidedCandidateFile struct {
+	ContentHash string
+	Unreadable  memoryfiles.UnreadableCandidateEntry
+}
+
 // decideAboutCandidateFile reads the proposal as it stands *now* and answers
 // the two questions every decision rests on: is this still the text the user
 // read, and is this still the kind of thing this decision is for.
@@ -145,33 +159,39 @@ func (r *Repository) lockMemoryCandidateDecision(ctx context.Context, candidateI
 // would leave them with a file they can neither accept nor be rid of. It still
 // honours a compare-and-set they did supply.
 //
-// What it returns is the hash of the bytes it actually read, and that is what
-// the primitive below it is bound to — not the caller's token, which may be
-// empty, and not the row's, which is history. The two are the same value
-// whenever the caller supplied one; what matters is that the primitive is given
-// a name for the bytes even when the caller gave none. An empty answer means
-// one thing only: the file could not be read at all, at a door that allows it.
+// What it returns is a name for the bytes it actually read — not the caller's
+// token, which may be empty, and not the row's, which is history. The two are
+// the same value whenever the caller supplied one; what matters is that the
+// primitive is given something to be bound to even when the caller gave
+// nothing. A file that could not be read at all, at a door that allows it,
+// comes back carrying the identity of that entry instead, which is the only
+// thing such a proposal can be bound to and is why the hashless removal is no
+// longer a licence to delete whatever turns up under the name.
 func decideAboutCandidateFile(
 	ctx context.Context,
 	vault *memoryfiles.Vault,
 	candidate MemoryCandidate,
 	expectedHash string,
 	requiredKind string,
-) (string, error) {
-	current, err := vault.ReadInboxNote(ctx, candidate.InboxPath)
+) (decidedCandidateFile, error) {
+	reading, err := vault.ReadInboxCandidate(ctx, candidate.InboxPath)
 	if err != nil {
-		if requiredKind == "" && expectedHash == "" {
-			return "", nil
-		}
-		return "", err
+		return decidedCandidateFile{}, err
 	}
+	if !reading.Readable {
+		if requiredKind == "" && expectedHash == "" {
+			return decidedCandidateFile{Unreadable: reading.Unreadable}, nil
+		}
+		return decidedCandidateFile{}, reading.ReadErr
+	}
+	current := reading.Note
 	if expectedHash != "" && current.ContentHash != expectedHash {
-		return "", fmt.Errorf("%w: %s", ErrMemoryCandidateChanged, candidate.InboxPath)
+		return decidedCandidateFile{}, fmt.Errorf("%w: %s", ErrMemoryCandidateChanged, candidate.InboxPath)
 	}
 	if requiredKind != "" && string(current.Kind) != requiredKind {
-		return "", fmt.Errorf("%w: the file declares %q", ErrMemoryCandidateKind, string(current.Kind))
+		return decidedCandidateFile{}, fmt.Errorf("%w: the file declares %q", ErrMemoryCandidateKind, string(current.Kind))
 	}
-	return current.ContentHash, nil
+	return decidedCandidateFile{ContentHash: current.ContentHash}, nil
 }
 
 // decisionFileBarrier is the seam between a decision's pre-check and the
@@ -226,7 +246,7 @@ func (r *Repository) PromoteMemoryCandidate(ctx context.Context, decision Memory
 		SourceRelPath:       candidate.InboxPath,
 		Mode:                memoryfiles.PromoteManagedCandidate,
 		Kind:                memoryfiles.KindBelief,
-		ExpectedContentHash: decided,
+		ExpectedContentHash: decided.ContentHash,
 	})
 	if err != nil {
 		return MemoryNote{}, err
@@ -380,7 +400,7 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 		CandidateRelPath:      candidate.InboxPath,
 		TargetRelPath:         memoryfiles.ProfileFileName,
 		ExpectedContentHash:   input.ExpectedContentHash,
-		ExpectedCandidateHash: decided,
+		ExpectedCandidateHash: decided.ContentHash,
 		Content:               input.Content,
 	})
 	if err != nil {
@@ -601,19 +621,23 @@ func (r *Repository) RejectMemoryCandidate(ctx context.Context, decision MemoryC
 // hash of exactly those bytes and refuses if the file has moved since, which is
 // the user being told to look again rather than having something they did not
 // read thrown away for them. A proposal that could not be read at all has no
-// such name — nothing could parse it to produce one — and the deletion says so
-// by name instead, which is the only way out that file has.
-func rejectionRemoval(inboxPath string, decidedHash string) memoryfiles.RemoveInboxNoteRequest {
-	if decidedHash == "" {
+// such name — nothing could parse it to produce one — so what goes down instead
+// is the identity of the entry the read failed on. The primitive deletes that
+// entry, still unreadable, or it deletes nothing; a file that took the name in
+// between, even another broken one, is somebody's words nobody has decided
+// about.
+func rejectionRemoval(inboxPath string, decided decidedCandidateFile) memoryfiles.RemoveInboxNoteRequest {
+	if decided.ContentHash == "" {
 		return memoryfiles.RemoveInboxNoteRequest{
-			RelPath: inboxPath,
-			Mode:    memoryfiles.RemoveUnreadableCandidate,
+			RelPath:    inboxPath,
+			Mode:       memoryfiles.RemoveUnreadableCandidate,
+			Unreadable: decided.Unreadable,
 		}
 	}
 	return memoryfiles.RemoveInboxNoteRequest{
 		RelPath:             inboxPath,
 		Mode:                memoryfiles.RemoveDecidedCandidate,
-		ExpectedContentHash: decidedHash,
+		ExpectedContentHash: decided.ContentHash,
 	}
 }
 

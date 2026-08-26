@@ -196,14 +196,17 @@ func TestRemoveInboxNoteRefusesAnUnrecognisedMode(t *testing.T) {
 
 // A proposal nobody could read has no hash to name, and refusing to let the
 // user throw it away would leave them with a file they can neither accept nor
-// be rid of. The escape hatch stays, and it has to be asked for by name.
+// be rid of. The escape hatch stays, it has to be asked for by name, and what
+// it is bound to instead is the entry the pre-check failed on.
 func TestRemoveInboxNoteRemovesAnUnreadableCandidateWithoutAHash(t *testing.T) {
 	vault := newTestVault(t)
 	full := writeVaultFile(t, vault, "inbox/broken.md", "---\nnot: [valid\n")
+	identity := unreadableIdentity(t, vault, "inbox/broken.md")
 
 	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
-		RelPath: "inbox/broken.md",
-		Mode:    RemoveUnreadableCandidate,
+		RelPath:    "inbox/broken.md",
+		Mode:       RemoveUnreadableCandidate,
+		Unreadable: identity,
 	}); err != nil {
 		t.Fatalf("remove an unreadable candidate: %v", err)
 	}
