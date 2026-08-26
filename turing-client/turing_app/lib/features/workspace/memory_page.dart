@@ -44,6 +44,23 @@ String composeProfileResult(String profile, String proposal) {
   return '$existing\n\n$addition\n';
 }
 
+/// One profile proposal's resulting document as this build resolved it: the
+/// editor holding the words, and the compare-and-set token its apply will name.
+///
+/// They are handed out as one value so a caller cannot read the token from a
+/// build where the editor had not been re-seeded yet. Displayed and sent are
+/// the same number by construction, not by call order.
+@immutable
+class _ProfileResultBinding {
+  const _ProfileResultBinding({
+    required this.controller,
+    required this.profileHash,
+  });
+
+  final TextEditingController controller;
+  final String profileHash;
+}
+
 class _MemoryPageState extends State<MemoryPage> {
   late Future<MemoryState> _state;
   final TextEditingController _persona = TextEditingController();
@@ -113,10 +130,16 @@ class _MemoryPageState extends State<MemoryPage> {
     super.dispose();
   }
 
-  /// The editor for one profile proposal's resulting document, created and
-  /// seeded on first sight and re-seeded only while the user has not typed
-  /// into it.
-  TextEditingController _profileResultFor(
+  /// The editor for one profile proposal's resulting document and the token
+  /// that travels with it, resolved together in one call.
+  ///
+  /// Together is the point. The words and the token are one fact: the editor is
+  /// re-seeded here when the profile moves underneath an untouched result, and
+  /// the token is re-aimed in the same step. Reading the token separately —
+  /// before this ran, as the card used to — names the version the *previous*
+  /// build composed against while the apply carries this one, which is the one
+  /// thing a compare-and-set line on screen exists to rule out.
+  _ProfileResultBinding _profileResultFor(
     MemoryCandidate candidate,
     String profile,
     String profileHash,
@@ -127,21 +150,22 @@ class _MemoryPageState extends State<MemoryPage> {
       _profileResultProfileHashes[candidate.candidateId] = profileHash;
       return TextEditingController(text: seed);
     });
-    final previousSeed = _profileResultSeeds[candidate.candidateId];
-    if (previousSeed != seed && controller.text == previousSeed) {
-      controller.text = seed;
+    if (controller.text == _profileResultSeeds[candidate.candidateId]) {
+      // Untouched, so it follows the vault. Re-seeded means re-composed: these
+      // words describe the profile as it reads now, so they are an edit of it
+      // and carry its token.
+      if (controller.text != seed) controller.text = seed;
       _profileResultSeeds[candidate.candidateId] = seed;
-      // Re-seeded means re-composed: these words describe the profile as it
-      // reads now, so they are an edit of it and carry its token.
       _profileResultProfileHashes[candidate.candidateId] = profileHash;
     }
-    return controller;
-  }
-
-  /// The profile token an apply of one proposal has to name: the one its result
-  /// was composed against, never whichever read happened most recently.
-  String _profileResultHashFor(MemoryCandidate candidate, String fallback) {
-    return _profileResultProfileHashes[candidate.candidateId] ?? fallback;
+    return _ProfileResultBinding(
+      controller: controller,
+      // Never whichever read happened most recently: an edited result keeps the
+      // profile it was composed against, so the apply is refused honestly
+      // rather than silently rewriting a document nobody read.
+      profileHash:
+          _profileResultProfileHashes[candidate.candidateId] ?? profileHash,
+    );
   }
 
   /// Forgets the editors for proposals that are no longer on the page. A
@@ -381,7 +405,7 @@ class _MemoryPageState extends State<MemoryPage> {
               ),
               (message) => _inboxError = message,
             ),
-            onApply: (candidate, result) => _mutate(() async {
+            onApply: (candidate, result, profileHash) => _mutate(() async {
               final applied = await widget.apiClient.applyMemoryProfile(
                 candidateId: candidate.candidateId,
                 // The whole resulting document the user reviewed, never the
@@ -390,13 +414,10 @@ class _MemoryPageState extends State<MemoryPage> {
                 content: result,
                 // Compare-and-set against the profile document, not the
                 // proposal: the question an apply asks is whether profile.md
-                // still says what the user was shown beside it. The token is
-                // the one this result was composed against, which is not the
-                // same as the newest one read whenever the user has edited it.
-                expectedContentHash: _profileResultHashFor(
-                  candidate,
-                  state.profile.contentHash,
-                ),
+                // still says what the user was shown beside it. The token
+                // travels from the card that displayed it, so the request and
+                // the sentence under the button cannot name different numbers.
+                expectedContentHash: profileHash,
                 // And the second one, against the proposal this result was
                 // composed from.
                 expectedCandidateHash: candidate.contentHash,
@@ -410,8 +431,6 @@ class _MemoryPageState extends State<MemoryPage> {
               state.profile.content,
               state.profile.contentHash,
             ),
-            profileResultHashFor: (candidate) =>
-                _profileResultHashFor(candidate, state.profile.contentHash),
             onCandidatesBuilt: _retainProfileResults,
           );
         },
@@ -443,7 +462,6 @@ class _MemoryBody extends StatelessWidget {
     required this.onReject,
     required this.onApply,
     required this.profileResultFor,
-    required this.profileResultHashFor,
     required this.onCandidatesBuilt,
   });
 
@@ -474,20 +492,21 @@ class _MemoryBody extends StatelessWidget {
   final ValueChanged<MemoryCandidate> onReject;
 
   /// The apply carries the reviewed resulting document, which is the whole of
-  /// what profile.md will say — not the proposal, which is a fragment of it.
-  final void Function(MemoryCandidate candidate, String result) onApply;
+  /// what profile.md will say — not the proposal, which is a fragment of it —
+  /// and the token the card displayed beside it.
+  final void Function(
+    MemoryCandidate candidate,
+    String result,
+    String profileHash,
+  )
+  onApply;
 
-  /// The editor holding that document, owned by the page so it survives the
-  /// re-read every write triggers.
-  final TextEditingController Function(MemoryCandidate candidate)
+  /// The editor holding that document and the token its apply will name,
+  /// resolved together. The editor is owned by the page so it survives the
+  /// re-read every write triggers, and the token comes back from the same call
+  /// so the card cannot display one the request will not send.
+  final _ProfileResultBinding Function(MemoryCandidate candidate)
   profileResultFor;
-
-  /// The profile compare-and-set token one proposal's apply will carry.
-  ///
-  /// The card displays it and the request sends it, and they are the same
-  /// number or the sentence under the button explains a refusal with a token
-  /// nobody sent.
-  final String Function(MemoryCandidate candidate) profileResultHashFor;
 
   /// Told which proposals are on screen, so the page can forget the editors of
   /// the ones that are not.
@@ -591,7 +610,6 @@ class _MemoryBody extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 12),
               child: _CandidateCard(
                 candidate: candidate,
-                profileHash: profileResultHashFor(candidate),
                 profileResult: _needsProfileResult(candidate)
                     ? profileResultFor(candidate)
                     : null,
@@ -923,7 +941,6 @@ class _DocumentCard extends StatelessWidget {
 class _CandidateCard extends StatelessWidget {
   const _CandidateCard({
     required this.candidate,
-    required this.profileHash,
     required this.profileResult,
     required this.l10n,
     required this.palette,
@@ -934,18 +951,24 @@ class _CandidateCard extends StatelessWidget {
   });
 
   final MemoryCandidate candidate;
-  final String profileHash;
 
-  /// The resulting-profile editor, for a profile edit this page may apply, and
-  /// null for every other proposal. It is owned by the page: a re-read rebuilds
-  /// this card, and an editor rebuilt with it would lose what the user typed.
-  final TextEditingController? profileResult;
+  /// The resulting-profile editor and the token its apply will name, for a
+  /// profile edit this page may apply, and null for every other proposal. The
+  /// editor is owned by the page: a re-read rebuilds this card, and an editor
+  /// rebuilt with it would lose what the user typed. The token arrives with it
+  /// so the line under the button and the request name one number.
+  final _ProfileResultBinding? profileResult;
   final AppLocalizations l10n;
   final AppPalette palette;
   final bool busy;
   final VoidCallback onPromote;
   final VoidCallback onReject;
-  final void Function(MemoryCandidate candidate, String result) onApply;
+  final void Function(
+    MemoryCandidate candidate,
+    String result,
+    String profileHash,
+  )
+  onApply;
 
   @override
   Widget build(BuildContext context) {
@@ -1091,7 +1114,7 @@ class _CandidateCard extends StatelessWidget {
             // own document.
             TextField(
               key: Key('memory-profile-result-${candidate.candidateId}'),
-              controller: result,
+              controller: result.controller,
               maxLines: 8,
               minLines: 4,
               keyboardType: TextInputType.multiline,
@@ -1107,7 +1130,7 @@ class _CandidateCard extends StatelessWidget {
             // profile underneath it moves, and a setState in that window is a
             // build-time crash.
             ValueListenableBuilder<TextEditingValue>(
-              valueListenable: result,
+              valueListenable: result.controller,
               builder: (context, value, _) {
                 if (value.text.trim().isNotEmpty) {
                   return const SizedBox.shrink();
@@ -1121,7 +1144,9 @@ class _CandidateCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               l10n.memoryExpectedProfileHash(
-                profileHash.isEmpty ? l10n.memoryNoProfileYet : profileHash,
+                result.profileHash.isEmpty
+                    ? l10n.memoryNoProfileYet
+                    : result.profileHash,
               ),
               style: TextStyle(fontSize: 12, color: palette.textMuted),
             ),
@@ -1155,14 +1180,21 @@ class _CandidateCard extends StatelessWidget {
                     )
                   else
                     ValueListenableBuilder<TextEditingValue>(
-                      valueListenable: result,
+                      valueListenable: result.controller,
                       builder: (context, value, _) => FilledButton(
                         // Nothing to apply is not an apply. An empty document
                         // would replace everything the user has written about
                         // themselves with nothing.
                         onPressed: busy || value.text.trim().isEmpty
                             ? null
-                            : () => onApply(candidate, result.text),
+                            : () => onApply(
+                                candidate,
+                                result.controller.text,
+                                // The token this card displayed, handed
+                                // straight to the request: one build resolved
+                                // both, so they cannot be two numbers.
+                                result.profileHash,
+                              ),
                         child: Text(l10n.memoryApplyAction),
                       ),
                     )

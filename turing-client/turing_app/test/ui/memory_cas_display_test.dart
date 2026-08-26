@@ -80,6 +80,39 @@ void main() {
       );
     });
 
+    testWidgets('moves with an untouched result when the profile moves', (
+      tester,
+    ) async {
+      final api = _Api()..state = _stateWithProfileEdit();
+      await _pump(tester, api);
+
+      // Nobody typed into the composed result, so the re-read re-composes it
+      // out of the newer profile. The token has to arrive with the words: a
+      // card that names the version the *previous* build was composed against
+      // is describing a document its own apply will not mention.
+      api.state = _stateWithProfileEdit(
+        profileContent: '# Profile\n\nMoved on.\n',
+        profileHash: 'sha256:profile-moved',
+      );
+      await _tap(tester, find.text('Reject'));
+
+      expect(
+        find.textContaining('profile.md still matches sha256:profile-moved'),
+        findsOneWidget,
+        reason:
+            'the result was re-seeded from the newer profile in this same '
+            'build, and the card has to name what the apply will carry',
+      );
+
+      await _tap(tester, find.text('Apply'));
+      expect(api.profileApplies, hasLength(1));
+      expect(
+        api.profileApplies.single.$3,
+        'sha256:profile-moved',
+        reason: 'displayed and sent are one number, on the same build',
+      );
+    });
+
     testWidgets('is the version the persona editor is holding, not the newest', (
       tester,
     ) async {
