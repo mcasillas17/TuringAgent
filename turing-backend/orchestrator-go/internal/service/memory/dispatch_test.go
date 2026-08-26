@@ -179,8 +179,8 @@ func TestMemoryArgumentRefusalNeverEchoesWhatTheCallerSent(t *testing.T) {
 	runID, _ := newRun(t, repo, ctx)
 	setPolicies(t, repo, ctx, "safe")
 
-	const secretKey = "aws_secret_access_key_AKIAIOSFODNN7EXAMPLE"
-	const secretValue = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	const secretKey = "field-that-looks-sensitive"
+	const secretValue = "fixture-value-not-a-secret"
 	huge := strings.Repeat("k", 64*1024)
 
 	var logs bytes.Buffer
