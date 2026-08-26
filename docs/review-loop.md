@@ -510,3 +510,76 @@ never-retried failure and nothing else; and
 `docs/architecture/remote-egress-policy.md` now says which case a migration
 terminalizes and which is refused at dispatch, beside the TUR-003 paragraph it
 is easy to mistake for.
+
+## Round 9
+
+Reviewers: Grok, GPT-5.6 Terra, Claude Opus 5, Claude Opus 4.8.
+Outcome: two findings, both accepted and fixed. Grok and Opus 5 independently
+found the first; Terra found the second; Opus 4.8 found nothing.
+
+### Grok and Opus 5 — a cancelled rejection could still delete the proposal
+
+Round 8 made a rejection's deletion two steps, and round 8's own follow-up made
+a cancelled one put the file back rather than claim it had changed. But that
+second fix lived inside the re-read: a decided rejection cancelled between the
+detach and the unlink failed its re-read, and *that* is what sent it down the
+restore path.
+
+A hashless rejection has no re-read. It is the one door out for a proposal
+nobody can parse or open, so nothing after the detach asks the file anything —
+and a cancelled or timed-out request therefore walked straight past the point
+where the decided path would have stopped, into the unlink. The bytes it deleted
+were an unreviewed claim about the user, removed on behalf of a caller that had
+already gone, and the inbox that would have shown it to them again never will.
+The same held for a deadline that expired in that window.
+
+Accepted. The check belongs to the primitive rather than to one of its branches:
+the moment the entry is off its name, before anything decides whether it may go,
+a context that has ended sends the file back through the same identity-safe,
+no-clobber restore every refused rejection uses — and only once the bytes are
+under their own name again, or under a visible recovery name if somebody took
+it, is the context error what the call returns. Nothing is unlinked for a
+request that ended. Cancellation is not a verdict about the bytes.
+
+Tests: `memoryfiles/remove_cancelled_test.go` — the hashless twin of round 8's
+cancellation test, its deadline twin, and the decided path past its deadline,
+each asserting the file is back under its own name with its own bytes and that
+the refusal is the context error rather than a claim the file changed; deleting
+the check fails both hashless tests and neither of the ones that existed before.
+`repository/memory_cancelled_rejection_test.go` holds the repository's half:
+a rejection that ends without deciding anything leaves the row pending and the
+file where the row says it is, so the user still has the decision and still has
+something to make it about.
+
+### Terra — the page could serve a proposal out of the scan cache
+
+The vault scan keeps an (inode, mtime, size) cache, and it accepts one named
+residual: two writes to the same file in the same second that leave it exactly
+the same length are indistinguishable to it, so a pass can serve the earlier
+words. That was argued for as a stale *search result* over beliefs — bounded,
+self-correcting on the next change, and nothing irreversible hangs off it.
+
+The inbox went through the same cache. There it is not a search result. The
+listing renders the candidate's bytes and hands out its hash; the decision is a
+compare-and-set against the file, taken under the vault's own lock. So a cached
+candidate showed the user one proposal and made the server refuse every decision
+about it — and re-reading the page produced the same refused token, on every
+press, for as long as the entry lived. A proposal edited that way was
+undecidable, and the only advice the refusal could offer was to look again at
+what they were already looking at.
+
+Accepted. The cache still records every path a pass sees, because that record is
+also how a path that stops being seen is evicted, but it will only answer for
+beliefs. Every `ListMemoryState` and every reconcile pass reads, parses and
+hashes each inbox candidate afresh. The residual is now stated where it is
+true — belief search and index discovery — and stated as not applying to inbox
+decisions or to a belief read by identity, which has always gone to disk.
+
+Tests: `memoryfiles/cache_test.go` — one vault, one belief and one candidate,
+both given the same-second same-length rewrite, asserting the candidate comes
+back with the file's own bytes and hash while the belief keeps the residual it
+was granted; and that a candidate the cache will not serve is still recorded and
+still evicted when the file leaves. `service/memory/list_state_candidate_cache_test.go`
+drives it through the RPCs: the listing returns the rewritten words and a new
+hash, and the rejection carrying that hash is accepted and removes the file.
+Letting the inbox be served again fails both.
