@@ -18,7 +18,11 @@ import 'package:turing_flutter_app/models/run_lifecycle.dart';
 void main() {
   group('canTransitionTo accepts every publicly committed pair', () {
     const accepted = <(RunLifecycle, RunLifecycle, String)>[
-      (RunLifecycle.queued, RunLifecycle.running, 'a worker picked the run up'),
+      (
+        RunLifecycle.queued,
+        RunLifecycle.running,
+        'a worker picked the run up',
+      ),
       (
         RunLifecycle.running,
         RunLifecycle.waitingApproval,
@@ -63,34 +67,32 @@ void main() {
     }
   });
 
-  group(
-    'canTransitionTo accepts every terminal outcome from every live state',
-    () {
-      const live = <RunLifecycle>[
-        RunLifecycle.queued,
-        RunLifecycle.running,
-        RunLifecycle.waitingApproval,
-        RunLifecycle.recovering,
-      ];
-      const terminal = <RunLifecycle>[
-        RunLifecycle.completed,
-        RunLifecycle.failed,
-        RunLifecycle.cancelled,
-      ];
+  group('canTransitionTo accepts every terminal outcome from every live state',
+      () {
+    const live = <RunLifecycle>[
+      RunLifecycle.queued,
+      RunLifecycle.running,
+      RunLifecycle.waitingApproval,
+      RunLifecycle.recovering,
+    ];
+    const terminal = <RunLifecycle>[
+      RunLifecycle.completed,
+      RunLifecycle.failed,
+      RunLifecycle.cancelled,
+    ];
 
-      for (final from in live) {
-        for (final to in terminal) {
-          test('${from.name} -> ${to.name}', () {
-            // Completion is the one terminal a queued run cannot reach: nothing
-            // ran, so there is no successful report to commit.
-            final reachable =
-                !(from == RunLifecycle.queued && to == RunLifecycle.completed);
-            expect(from.canTransitionTo(to), reachable);
-          });
-        }
+    for (final from in live) {
+      for (final to in terminal) {
+        test('${from.name} -> ${to.name}', () {
+          // Completion is the one terminal a queued run cannot reach: nothing
+          // ran, so there is no successful report to commit.
+          final reachable =
+              !(from == RunLifecycle.queued && to == RunLifecycle.completed);
+          expect(from.canTransitionTo(to), reachable);
+        });
       }
-    },
-  );
+    }
+  });
 
   group('terminal states have no outgoing transitions', () {
     const terminal = <RunLifecycle>[

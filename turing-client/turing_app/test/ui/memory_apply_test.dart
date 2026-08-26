@@ -136,9 +136,7 @@ void main() {
       // another proposal, and the result the user has not touched has to catch
       // up — a result composed over a profile that no longer exists would be
       // applied over words it never saw.
-      api.state = _stateWithProfileEdit(
-        profileContent: '# Profile\n\nMoved on.\n',
-      );
+      api.state = _stateWithProfileEdit(profileContent: '# Profile\n\nMoved on.\n');
       await _tap(tester, find.text('Reject'));
 
       expect(
@@ -156,9 +154,7 @@ void main() {
 
       await tester.enterText(_resultEditorFinder(), 'Mine, not composed.\n');
       await tester.pumpAndSettle();
-      api.state = _stateWithProfileEdit(
-        profileContent: '# Profile\n\nMoved on.\n',
-      );
+      api.state = _stateWithProfileEdit(profileContent: '# Profile\n\nMoved on.\n');
       await _tap(tester, find.text('Reject'));
 
       expect(
@@ -265,17 +261,14 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpAndSettle();
 
-      expect(api.personaSaves, [
-        ('# Persona\n\nBe direct.\n', 'sha256:persona'),
-      ]);
+      expect(api.personaSaves, [('# Persona\n\nBe direct.\n', 'sha256:persona')]);
       final editor = tester.widget<TextField>(
         find.byKey(const Key('memory-persona-editor')),
       );
       expect(
         editor.controller!.text,
         '# Persona\n\nBe direct. And brief.\n',
-        reason:
-            'a successful save must not swallow what the user typed after it',
+        reason: 'a successful save must not swallow what the user typed after it',
       );
 
       // The next save carries the hash the accepted save returned, because the

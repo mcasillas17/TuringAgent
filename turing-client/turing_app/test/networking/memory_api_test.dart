@@ -39,34 +39,31 @@ void main() {
     );
   }
 
-  test(
-    'listMemoryState maps settings, documents, tiers and proposals',
-    () async {
-      final api = await connect(_MemoryService());
+  test('listMemoryState maps settings, documents, tiers and proposals', () async {
+    final api = await connect(_MemoryService());
 
-      final state = await api.listMemoryState();
+    final state = await api.listMemoryState();
 
-      expect(state.settings.enabled, isTrue);
-      expect(state.settings.vaultRoot, '/memory');
-      expect(state.settings.vaultWritable, isTrue);
-      expect(state.persona.content, '# Persona\n\nBe direct.\n');
-      expect(state.persona.contentHash, 'sha256:persona');
-      expect(state.persona.status, MemoryNoteStatus.unmanaged);
-      expect(state.profile.contentHash, 'sha256:profile');
-      expect(state.profile.unavailableReason, MemoryUnavailableReason.none);
-      expect(state.tiers.map((tier) => tier.tier), [
-        MemoryTier.persona,
-        MemoryTier.profile,
-        MemoryTier.belief,
-      ]);
-      expect(state.notes.single.title, 'Ada');
-      expect(state.notes.single.provenance.single.withdrawn, isTrue);
-      expect(state.candidates.single.candidateId, 'cand-1');
-      expect(state.candidates.single.managed, isTrue);
-      expect(state.candidates.single.content, 'They bike to work.');
-      expect(state.candidates.single.createdAt, isNotNull);
-    },
-  );
+    expect(state.settings.enabled, isTrue);
+    expect(state.settings.vaultRoot, '/memory');
+    expect(state.settings.vaultWritable, isTrue);
+    expect(state.persona.content, '# Persona\n\nBe direct.\n');
+    expect(state.persona.contentHash, 'sha256:persona');
+    expect(state.persona.status, MemoryNoteStatus.unmanaged);
+    expect(state.profile.contentHash, 'sha256:profile');
+    expect(state.profile.unavailableReason, MemoryUnavailableReason.none);
+    expect(state.tiers.map((tier) => tier.tier), [
+      MemoryTier.persona,
+      MemoryTier.profile,
+      MemoryTier.belief,
+    ]);
+    expect(state.notes.single.title, 'Ada');
+    expect(state.notes.single.provenance.single.withdrawn, isTrue);
+    expect(state.candidates.single.candidateId, 'cand-1');
+    expect(state.candidates.single.managed, isTrue);
+    expect(state.candidates.single.content, 'They bike to work.');
+    expect(state.candidates.single.createdAt, isNotNull);
+  });
 
   test('the pinned documents are saved under compare-and-set', () async {
     final service = _MemoryService();
@@ -83,10 +80,7 @@ void main() {
 
     expect(service.personaSaves.single.content, '# Persona\n\nBe warmer.\n');
     expect(service.personaSaves.single.expectedContentHash, 'sha256:persona');
-    expect(
-      service.profileSaves.single.content,
-      '# Profile\n\nBikes to work.\n',
-    );
+    expect(service.profileSaves.single.content, '# Profile\n\nBikes to work.\n');
     expect(service.profileSaves.single.expectedContentHash, 'sha256:profile');
     expect(persona.content, '# Persona\n\nBe warmer.\n');
     expect(profile.content, '# Profile\n\nBikes to work.\n');
@@ -147,21 +141,22 @@ void main() {
     expect(settings.unavailableReason, MemoryUnavailableReason.disabled);
   });
 
-  test(
-    'a refused save arrives as a typed exception, not a raw gRPC error',
-    () async {
-      final api = await connect(_MemoryService()..refuseSaves = true);
+  test('a refused save arrives as a typed exception, not a raw gRPC error', () async {
+    final api = await connect(_MemoryService()..refuseSaves = true);
 
-      await expectLater(
-        api.saveMemoryPersona(content: 'text', expectedContentHash: 'stale'),
-        throwsA(
-          isA<TuringApiException>()
-              .having((error) => error.code, 'code', 'failed_precondition')
-              .having((error) => error.message, 'message', contains('re-read')),
-        ),
-      );
-    },
-  );
+    await expectLater(
+      api.saveMemoryPersona(content: 'text', expectedContentHash: 'stale'),
+      throwsA(
+        isA<TuringApiException>()
+            .having((error) => error.code, 'code', 'failed_precondition')
+            .having(
+              (error) => error.message,
+              'message',
+              contains('re-read'),
+            ),
+      ),
+    );
+  });
 
   test('prepareRemoteEgress maps every disclosed memory field', () async {
     final api = await connect(_MemoryDisclosureChatService());
@@ -413,16 +408,13 @@ class _MemoryService extends memorygrpc.MemoryServiceBase {
   Future<memorypb.ListMemoryToolsResponse> listMemoryTools(
     grpc.ServiceCall call,
     memorypb.ListMemoryToolsRequest request,
-  ) async => throw grpc.GrpcError.permissionDenied(
-    'memory tool discovery is internal',
-  );
+  ) async => throw grpc.GrpcError.permissionDenied('memory tool discovery is internal');
 
   @override
   Future<memorypb.CallMemoryToolResponse> callMemoryTool(
     grpc.ServiceCall call,
     memorypb.CallMemoryToolRequest request,
-  ) async =>
-      throw grpc.GrpcError.permissionDenied('memory tool dispatch is internal');
+  ) async => throw grpc.GrpcError.permissionDenied('memory tool dispatch is internal');
 }
 
 class _MemoryDisclosureChatService extends chatgrpc.ChatServiceBase {

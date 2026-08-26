@@ -131,84 +131,93 @@ void main() {
     // state_version is the sole reconciliation ordering authority (see the
     // outcome doc comment) — state_updated_at must never override it, no
     // matter how much fresher or staler its wall-clock value claims to be.
-    test('ignores a lower version even when its state_updated_at is strictly '
-        'newer', () {
-      final reconciler = RunStateReconciler();
-      final current = state(
-        stateVersion: 3,
-        lifecycle: RunLifecycle.running,
-        stateUpdatedAt: baseUpdatedAt,
-      );
-      reconciler.reconcile(current);
+    test(
+      'ignores a lower version even when its state_updated_at is strictly '
+      'newer',
+      () {
+        final reconciler = RunStateReconciler();
+        final current = state(
+          stateVersion: 3,
+          lifecycle: RunLifecycle.running,
+          stateUpdatedAt: baseUpdatedAt,
+        );
+        reconciler.reconcile(current);
 
-      // Lower version, but its state_updated_at is strictly AFTER the
-      // existing state's — a version ordered purely by the wall clock
-      // would (wrongly) treat this as newer.
-      final stale = state(
-        stateVersion: 2,
-        lifecycle: RunLifecycle.queued,
-        stateUpdatedAt: baseUpdatedAt.add(const Duration(minutes: 5)),
-      );
-      final result = reconciler.reconcile(stale);
+        // Lower version, but its state_updated_at is strictly AFTER the
+        // existing state's — a version ordered purely by the wall clock
+        // would (wrongly) treat this as newer.
+        final stale = state(
+          stateVersion: 2,
+          lifecycle: RunLifecycle.queued,
+          stateUpdatedAt: baseUpdatedAt.add(const Duration(minutes: 5)),
+        );
+        final result = reconciler.reconcile(stale);
 
-      expect(result.outcome, RunStateReconciliationOutcome.stale);
-      expect(result.current, current);
-      expect(reconciler.stateFor('run_1'), current);
-    });
+        expect(result.outcome, RunStateReconciliationOutcome.stale);
+        expect(result.current, current);
+        expect(reconciler.stateFor('run_1'), current);
+      },
+    );
 
-    test('accepts a higher version even when its state_updated_at is strictly '
-        'older', () {
-      final reconciler = RunStateReconciler();
-      final current = state(
-        stateVersion: 1,
-        lifecycle: RunLifecycle.queued,
-        stateUpdatedAt: baseUpdatedAt,
-      );
-      reconciler.reconcile(current);
+    test(
+      'accepts a higher version even when its state_updated_at is strictly '
+      'older',
+      () {
+        final reconciler = RunStateReconciler();
+        final current = state(
+          stateVersion: 1,
+          lifecycle: RunLifecycle.queued,
+          stateUpdatedAt: baseUpdatedAt,
+        );
+        reconciler.reconcile(current);
 
-      // Higher, structurally valid version (queued -> running), but its
-      // state_updated_at is strictly BEFORE the one already held — e.g. a
-      // delayed delivery of an earlier wall-clock write. Only
-      // state_version orders snapshots, so this must still be accepted.
-      final olderTimestamp = state(
-        stateVersion: 2,
-        lifecycle: RunLifecycle.running,
-        stateUpdatedAt: baseUpdatedAt.subtract(const Duration(minutes: 5)),
-      );
-      final result = reconciler.reconcile(olderTimestamp);
+        // Higher, structurally valid version (queued -> running), but its
+        // state_updated_at is strictly BEFORE the one already held — e.g. a
+        // delayed delivery of an earlier wall-clock write. Only
+        // state_version orders snapshots, so this must still be accepted.
+        final olderTimestamp = state(
+          stateVersion: 2,
+          lifecycle: RunLifecycle.running,
+          stateUpdatedAt: baseUpdatedAt.subtract(const Duration(minutes: 5)),
+        );
+        final result = reconciler.reconcile(olderTimestamp);
 
-      expect(result.outcome, RunStateReconciliationOutcome.accepted);
-      expect(result.current, olderTimestamp);
-      expect(reconciler.stateFor('run_1'), olderTimestamp);
-    });
+        expect(result.outcome, RunStateReconciliationOutcome.accepted);
+        expect(result.current, olderTimestamp);
+        expect(reconciler.stateFor('run_1'), olderTimestamp);
+      },
+    );
 
     // RunState equality (and therefore the duplicate/inconsistent split at
     // an equal version) includes state_updated_at — two reports at the same
     // version that differ ONLY in their timestamp are not a safe replay of
     // the same fact, so this must be inconsistent, not duplicate.
-    test('rejects equal version differing only in state_updated_at as '
-        'inconsistent, not duplicate', () {
-      final reconciler = RunStateReconciler();
-      final first = state(
-        stateVersion: 4,
-        lifecycle: RunLifecycle.failed,
-        outcomeReason: RunOutcomeReason.providerFailure,
-        stateUpdatedAt: baseUpdatedAt,
-      );
-      reconciler.reconcile(first);
+    test(
+      'rejects equal version differing only in state_updated_at as '
+      'inconsistent, not duplicate',
+      () {
+        final reconciler = RunStateReconciler();
+        final first = state(
+          stateVersion: 4,
+          lifecycle: RunLifecycle.failed,
+          outcomeReason: RunOutcomeReason.providerFailure,
+          stateUpdatedAt: baseUpdatedAt,
+        );
+        reconciler.reconcile(first);
 
-      final differentTimestamp = state(
-        stateVersion: 4,
-        lifecycle: RunLifecycle.failed,
-        outcomeReason: RunOutcomeReason.providerFailure,
-        stateUpdatedAt: baseUpdatedAt.add(const Duration(seconds: 1)),
-      );
-      final result = reconciler.reconcile(differentTimestamp);
+        final differentTimestamp = state(
+          stateVersion: 4,
+          lifecycle: RunLifecycle.failed,
+          outcomeReason: RunOutcomeReason.providerFailure,
+          stateUpdatedAt: baseUpdatedAt.add(const Duration(seconds: 1)),
+        );
+        final result = reconciler.reconcile(differentTimestamp);
 
-      expect(result.outcome, RunStateReconciliationOutcome.inconsistent);
-      expect(result.current, first);
-      expect(reconciler.stateFor('run_1'), first);
-    });
+        expect(result.outcome, RunStateReconciliationOutcome.inconsistent);
+        expect(result.current, first);
+        expect(reconciler.stateFor('run_1'), first);
+      },
+    );
 
     test('rejects higher version after terminal', () {
       final reconciler = RunStateReconciler();

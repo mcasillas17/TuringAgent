@@ -30,9 +30,7 @@ void main() {
       bearerToken: 'secret-token',
     );
 
-    final decoded = RegisterMcpServerRequest.fromBuffer(
-      request.writeToBuffer(),
-    );
+    final decoded = RegisterMcpServerRequest.fromBuffer(request.writeToBuffer());
 
     expect(decoded.name, 'vendor');
     expect(decoded.url, 'https://vendor.example.com/mcp');
@@ -40,48 +38,30 @@ void main() {
     expect(decoded.bearerToken, 'secret-token');
   });
 
-  test(
-    'RegisterMcpServer response is an McpServerDescriptor without a token',
-    () {
-      final descriptor = McpServerDescriptor(
-        serverId: 'server-1',
-        name: 'vendor',
-      );
+  test('RegisterMcpServer response is an McpServerDescriptor without a token', () {
+    final descriptor = McpServerDescriptor(serverId: 'server-1', name: 'vendor');
 
-      final decoded = McpServerDescriptor.fromBuffer(
-        descriptor.writeToBuffer(),
-      );
+    final decoded = McpServerDescriptor.fromBuffer(descriptor.writeToBuffer());
 
-      expect(decoded.serverId, 'server-1');
-      expect(decoded.name, 'vendor');
-    },
-  );
+    expect(decoded.serverId, 'server-1');
+    expect(decoded.name, 'vendor');
+  });
 
-  test(
-    'ReimportMcpJsonResponse preserves imported, skipped, and refused lists',
-    () {
-      final response = ReimportMcpJsonResponse(
-        imported: ['vendor-a'],
-        skipped: ['vendor-b'],
-        unsupported: [
-          UnsupportedMcpServer(
-            name: 'vendor-c',
-            reason: 'unsupported transport',
-          ),
-        ],
-      );
+  test('ReimportMcpJsonResponse preserves imported, skipped, and refused lists', () {
+    final response = ReimportMcpJsonResponse(
+      imported: ['vendor-a'],
+      skipped: ['vendor-b'],
+      unsupported: [UnsupportedMcpServer(name: 'vendor-c', reason: 'unsupported transport')],
+    );
 
-      final decoded = ReimportMcpJsonResponse.fromBuffer(
-        response.writeToBuffer(),
-      );
+    final decoded = ReimportMcpJsonResponse.fromBuffer(response.writeToBuffer());
 
-      expect(decoded.imported, ['vendor-a']);
-      expect(decoded.skipped, ['vendor-b']);
-      expect(decoded.unsupported, hasLength(1));
-      expect(decoded.unsupported.single.name, 'vendor-c');
-      expect(decoded.unsupported.single.reason, 'unsupported transport');
-    },
-  );
+    expect(decoded.imported, ['vendor-a']);
+    expect(decoded.skipped, ['vendor-b']);
+    expect(decoded.unsupported, hasLength(1));
+    expect(decoded.unsupported.single.name, 'vendor-c');
+    expect(decoded.unsupported.single.reason, 'unsupported transport');
+  });
 
   test('ReimportMcpJsonRequest is empty', () {
     final request = ReimportMcpJsonRequest();
@@ -97,9 +77,7 @@ void main() {
       bearerToken: 'new-secret-token',
     );
 
-    final decoded = RotateMcpServerTokenRequest.fromBuffer(
-      request.writeToBuffer(),
-    );
+    final decoded = RotateMcpServerTokenRequest.fromBuffer(request.writeToBuffer());
 
     expect(decoded.serverId, 'server-1');
     expect(decoded.bearerToken, 'new-secret-token');

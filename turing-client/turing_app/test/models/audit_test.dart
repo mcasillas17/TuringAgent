@@ -82,49 +82,46 @@ void main() {
   // hold every one of them, including their falsy-but-present values, the
   // same "absence is the answer" rule every other optional in this class
   // already follows.
-  test(
-    'AuditPayload holds typed MCP registry fields, including falsy ones',
-    () {
-      const populated = AuditPayload(
-        state: AuditPayloadState.present,
-        serverName: 'vendor',
-        mcpServerTier: 'remote_url',
-        mcpServerUrl: 'https://vendor.example/mcp',
-        adopted: false,
-        tokenConfigured: false,
-        remoteDiscoveryAttempted: false,
-        discoverySucceeded: false,
-        importedServers: 0,
-        skippedServers: 0,
-        refusedServers: 0,
-        toolName: 'vendor.write',
-        toolPolicy: 'disabled',
-      );
+  test('AuditPayload holds typed MCP registry fields, including falsy ones', () {
+    const populated = AuditPayload(
+      state: AuditPayloadState.present,
+      serverName: 'vendor',
+      mcpServerTier: 'remote_url',
+      mcpServerUrl: 'https://vendor.example/mcp',
+      adopted: false,
+      tokenConfigured: false,
+      remoteDiscoveryAttempted: false,
+      discoverySucceeded: false,
+      importedServers: 0,
+      skippedServers: 0,
+      refusedServers: 0,
+      toolName: 'vendor.write',
+      toolPolicy: 'disabled',
+    );
 
-      expect(populated.mcpServerTier, 'remote_url');
-      expect(populated.mcpServerUrl, 'https://vendor.example/mcp');
-      expect(populated.adopted, isFalse);
-      expect(populated.tokenConfigured, isFalse);
-      expect(populated.remoteDiscoveryAttempted, isFalse);
-      expect(populated.discoverySucceeded, isFalse);
-      expect(populated.importedServers, 0);
-      expect(populated.skippedServers, 0);
-      expect(populated.refusedServers, 0);
-      expect(populated.toolPolicy, 'disabled');
+    expect(populated.mcpServerTier, 'remote_url');
+    expect(populated.mcpServerUrl, 'https://vendor.example/mcp');
+    expect(populated.adopted, isFalse);
+    expect(populated.tokenConfigured, isFalse);
+    expect(populated.remoteDiscoveryAttempted, isFalse);
+    expect(populated.discoverySucceeded, isFalse);
+    expect(populated.importedServers, 0);
+    expect(populated.skippedServers, 0);
+    expect(populated.refusedServers, 0);
+    expect(populated.toolPolicy, 'disabled');
 
-      const none = AuditPayload(state: AuditPayloadState.present);
-      expect(none.mcpServerTier, isNull);
-      expect(none.mcpServerUrl, isNull);
-      expect(none.adopted, isNull);
-      expect(none.tokenConfigured, isNull);
-      expect(none.remoteDiscoveryAttempted, isNull);
-      expect(none.discoverySucceeded, isNull);
-      expect(none.importedServers, isNull);
-      expect(none.skippedServers, isNull);
-      expect(none.refusedServers, isNull);
-      expect(none.toolPolicy, isNull);
-    },
-  );
+    const none = AuditPayload(state: AuditPayloadState.present);
+    expect(none.mcpServerTier, isNull);
+    expect(none.mcpServerUrl, isNull);
+    expect(none.adopted, isNull);
+    expect(none.tokenConfigured, isNull);
+    expect(none.remoteDiscoveryAttempted, isNull);
+    expect(none.discoverySucceeded, isNull);
+    expect(none.importedServers, isNull);
+    expect(none.skippedServers, isNull);
+    expect(none.refusedServers, isNull);
+    expect(none.toolPolicy, isNull);
+  });
 }
 
 AuditEntry _entry(String auditId) {

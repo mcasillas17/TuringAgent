@@ -112,30 +112,31 @@ void main() {
   // layer instead, since it is a defensive branch the backend does not
   // currently emit for a completed run — duplicating it here would add a
   // widget test without adding coverage.
-  testWidgets('completed unknown outcome without content shows generic '
-      'outcome-unavailable copy, not the completed-no-content copy', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      host(
-        RunStateCard(
-          state: state(
-            lifecycle: RunLifecycle.completed,
-            outcomeReason: RunOutcomeReason.unknown,
-            hasDisplayableContent: false,
+  testWidgets(
+    'completed unknown outcome without content shows generic '
+    'outcome-unavailable copy, not the completed-no-content copy',
+    (tester) async {
+      await tester.pumpWidget(
+        host(
+          RunStateCard(
+            state: state(
+              lifecycle: RunLifecycle.completed,
+              outcomeReason: RunOutcomeReason.unknown,
+              hasDisplayableContent: false,
+            ),
           ),
         ),
-      ),
-    );
+      );
 
-    expect(find.text('Outcome unavailable'), findsOneWidget);
-    expect(
-      find.text('This app cannot identify why the run ended.'),
-      findsOneWidget,
-    );
-    expect(find.text('Completed'), findsNothing);
-    expect(find.text('No assistant response was recorded.'), findsNothing);
-  });
+      expect(find.text('Outcome unavailable'), findsOneWidget);
+      expect(
+        find.text('This app cannot identify why the run ended.'),
+        findsOneWidget,
+      );
+      expect(find.text('Completed'), findsNothing);
+      expect(find.text('No assistant response was recorded.'), findsNothing);
+    },
+  );
 
   testWidgets('failed lifecycle delegates to RunFailureCard', (tester) async {
     await tester.pumpWidget(
