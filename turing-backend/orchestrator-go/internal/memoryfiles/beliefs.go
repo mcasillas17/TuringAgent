@@ -478,10 +478,10 @@ func installedCopyKept(clean string, placement detachedPlacement, reason string)
 	if placement.clean() {
 		return fmt.Errorf("%q is no longer the copy this promotion installed: %s, so it was left alone", clean, reason)
 	}
-	return fmt.Errorf(
+	return withResidueMarker(placement, fmt.Errorf(
 		"%q is no longer the copy this promotion installed: %s",
 		clean, boundRefusalDetail(placement.explain(reason)),
-	)
+	))
 }
 
 // unopenableEntryError marks a read that failed because the entry could not be

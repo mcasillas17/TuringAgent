@@ -136,6 +136,21 @@ func (v *Vault) removeResidueEntry(
 	}
 	defer unlock()
 
+	// What the entry is, before anything opens it. A directory, a symlink or a
+	// device under a reserved name cannot hold a note's bytes, and answering
+	// that with "this entry could not be read" would wedge every withdrawal on
+	// the install: the sweep would refuse to conclude, every row it was asked
+	// about would be kept, and the next pass would refuse in the same place.
+	var named unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), name, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return "", nil
+		}
+		return "", fmt.Errorf("inspect a reserved entry in %s/: %w", InboxDirName, err)
+	}
+	if named.Mode&unix.S_IFMT != unix.S_IFREG {
+		return "", nil
+	}
 	opened, stat, err := openConfinedEntry(parent, name, clean)
 	if err != nil {
 		if errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist) {
@@ -147,8 +162,8 @@ func (v *Vault) removeResidueEntry(
 	}
 	defer func() { _ = opened.Close() }()
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
-		// Not a file this package ever made, and not something a note's bytes
-		// can be under.
+		// The name became something else between the two calls, which is the
+		// window the open's own check closes. Nothing here may remove it.
 		return "", nil
 	}
 	content, err := readEntryContent(ctx, opened, clean, MaxNoteBytes)

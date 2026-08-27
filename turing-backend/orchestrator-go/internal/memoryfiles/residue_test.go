@@ -291,3 +291,35 @@ func TestACancellationThatLeftBytesStagedSaysSo(t *testing.T) {
 		t.Fatalf("the cancellation does not say a copy was left behind: %v", removeErr)
 	}
 }
+
+// A reserved name holding something that is not a file cannot hold a note's
+// bytes, so it is stepped over rather than treated as an entry the sweep could
+// not read. Treating it as unreadable would wedge every withdrawal on the
+// install for good: the sweep would abort, every row it was asked about would
+// be kept, and the next pass would abort in exactly the same place.
+func TestResidueSweepStepsOverAReservedNameThatIsNotAFile(t *testing.T) {
+	vault := newTestVault(t)
+	const mine = "the note this session wrote"
+	inbox := filepath.Join(vault.Root(), InboxDirName)
+	if err := os.Mkdir(filepath.Join(inbox, stagingPrefix+"eeeeeeeeeeeeeeeeeeeeeeee"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../beliefs", filepath.Join(inbox, stagingPrefix+"ffffffffffffffffffffffff")); err != nil {
+		t.Fatal(err)
+	}
+	residue := filepath.Join(inbox, stagingPrefix+"111111111111111111111111")
+	if err := os.WriteFile(residue, []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	failures, err := vault.RemoveInboxResidue(context.Background(), []string{ContentHash(mine)})
+	if err != nil {
+		t.Fatalf("RemoveInboxResidue: %v", err)
+	}
+	if len(failures) != 0 {
+		t.Fatalf("residue sweep failures = %v, want none", failures)
+	}
+	if _, err := os.Lstat(residue); !os.IsNotExist(err) {
+		t.Fatalf("the real residue was not removed: %v", err)
+	}
+}

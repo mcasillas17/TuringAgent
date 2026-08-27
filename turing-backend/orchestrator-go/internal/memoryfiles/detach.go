@@ -151,7 +151,7 @@ func (d *detachedEntry) objectionToOwnWrite(ctx context.Context, expected unix.S
 // for a file that can come back.
 func (d *detachedEntry) discard() (bool, error) {
 	if err := d.vault.unlinkStaging(d.parent, d.staging); err != nil && !errors.Is(err, unix.ENOENT) {
-		placement := d.putBackOrStage()
+		placement := d.keepAfterFailedRemoval(err)
 		// The name holds the entry again exactly when the link happened,
 		// whether or not the flush that would survive a crash did.
 		gone := !placement.restored && !placement.linkedBack
@@ -246,6 +246,10 @@ type detachedPlacement struct {
 	// after a file that is not there, which is the same class of untruth as
 	// reporting a refusal as a removal.
 	residueRemains bool
+	// keptReserved records that no restore was attempted at all, because the
+	// entry's own name is one the vault walk indexes and nothing durable points
+	// at it. It is not a restore that failed, and must not be described as one.
+	keptReserved bool
 	// flushErr is a directory fsync that failed after the bytes were placed. It
 	// does not move them anywhere; it means the placement this describes is not
 	// known to have survived a crash, and a caller that says where a file is
@@ -297,6 +301,30 @@ func (p detachedPlacement) failure() error {
 // cannot do it from a placement that guessed.
 func (d *detachedEntry) putBack() detachedPlacement {
 	return d.putBackWith(recoveryFor(d.clean))
+}
+
+// keepAfterFailedRemoval decides where the bytes of an entry this call was
+// entitled to delete are kept when the unlink refuses, and the decision is the
+// area's rather than the caller's.
+//
+// Under inbox/, the entry's own name is what every record of it points at: a
+// manifest row, a proposal the user is still being asked about. Putting it back
+// there is what lets the retry find it, prove it, and finish.
+//
+// Under beliefs/ and at the vault root the same act would publish. The only
+// removals that reach here in those areas are compensating ones — the rollback
+// of a copy a promotion had just installed, the undo of a write that failed —
+// and nothing durable names the file they are undoing. Linking it back would
+// put a belief the user never accepted into the directory the app presents as
+// what Turing holds, and the promotion that was abandoned could never be
+// retried, because its destination name would be taken by the copy it rolled
+// back. So the bytes stay under the reserved name, where the walk steps over
+// them, and the failure says where they are.
+func (d *detachedEntry) keepAfterFailedRemoval(cause error) detachedPlacement {
+	if recoveryFor(d.clean) != recoverAsVisibleDraft {
+		return d.stayStaged(detachedPlacement{cause: cause, keptReserved: true})
+	}
+	return d.putBackOrStage()
 }
 
 // putBackOrStage is the same restore, for an entry a removal had every right to
@@ -437,6 +465,11 @@ func (p detachedPlacement) afterFailedRemoval() string {
 		)
 	case p.restored:
 		return p.note(p.withResidue("it is back under its own name"))
+	case p.keptReserved:
+		return p.note(fmt.Sprintf(
+			"it is not lost — it was kept at %s rather than put back under its own name, which the vault indexes as a note nobody accepted",
+			p.recoveryRelPath,
+		))
 	default:
 		return p.note(fmt.Sprintf(
 			"it could not be put back under its own name (%v); it is not lost — it is at %s, where nothing indexes it as a note",

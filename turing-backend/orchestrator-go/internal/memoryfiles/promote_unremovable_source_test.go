@@ -74,3 +74,53 @@ func readVaultEntry(t *testing.T, vault *Vault, relPath string) string {
 	}
 	return string(content)
 }
+
+// The rollback of a promotion that is being abandoned is not a removal of a
+// file anything names. Nothing durable records `beliefs/<id>.md` — the
+// promotion never committed — so putting that entry back under its own name
+// publishes a belief the user never accepted, in the one directory whose
+// contents the app presents as what Turing holds.
+//
+// So when the unlink refuses there, the bytes stay under the reserved name the
+// detach put them under, where the walk steps over them, and the failure says
+// where they are.
+func TestAbandonedPromotionNeverPublishesTheCopyItCouldNotRemove(t *testing.T) {
+	vault, err := openVaultWithRemovalSeams(
+		newTestVaultRoot(t), realSyncHooks(), nil, nil,
+		func(name string, unlink func() error) error {
+			// Both drops refuse: the source's, which abandons the move, and
+			// the rollback's, which is the one this test is about.
+			if strings.HasPrefix(name, stagingPrefix) {
+				return errStagingUnlink
+			}
+			return unlink()
+		},
+	)
+	if err != nil {
+		t.Fatalf("open vault: %v", err)
+	}
+	candidate := seedBelief(t, vault)
+	before := readVaultEntry(t, vault, candidate.RelPath)
+
+	promoteErr := promoteCandidate(context.Background(), vault, candidate)
+	if promoteErr == nil {
+		t.Fatal("a promotion whose original would not go away reported success")
+	}
+	// The proposal is still the user's to decide on.
+	if got := readVaultEntry(t, vault, candidate.RelPath); got != before {
+		t.Fatalf("the proposal = %q, want the bytes it was promoted from", got)
+	}
+	// And nothing the walk indexes was left under beliefs/.
+	for _, name := range vaultDirEntries(t, vault, BeliefsDirName) {
+		if !strings.HasPrefix(name, stagingPrefix) {
+			t.Fatalf("the abandoned promotion published %q under beliefs/", name)
+		}
+	}
+	staged := stagingResidueIn(t, vault, BeliefsDirName)
+	if len(staged) != 1 {
+		t.Fatalf("beliefs/ reserved entries = %v, want the copy kept where nothing indexes it", staged)
+	}
+	if !strings.Contains(promoteErr.Error(), staged[0]) {
+		t.Fatalf("the failure does not say where the copy is: %v", promoteErr)
+	}
+}
