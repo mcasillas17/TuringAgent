@@ -33,6 +33,19 @@ with a smaller registry, queued remote runs that named a missing tool wait for
 a compatible worker rather than silently running with a different set. Routing
 notices make the wait and later restoration visible.
 
+Every decision carries a version number, and the orchestrator's challenge
+version and the runtime's expected decision version are one shared constant.
+Bumping it is an operational event, not just a code change: deploy and restart
+both services together, and expect anything prepared under the old number to
+need one re-preparation. Challenges signed before the upgrade are refused at
+acknowledgment. A queued remote job keeps its stored decision version, and the
+two restart orders fail closed differently: an upgraded orchestrator routes
+the job only to a worker advertising the new version — like the frozen tool
+set above, the run waits visibly rather than executing under a consent shape
+the runtime no longer recognizes — while a runtime that upgrades ahead of a
+claimed old-version job fails that run with a non-retryable
+`egress_decision_invalid` instead of executing it.
+
 ## Categories
 
 The typed category set covers current message, conversation history,

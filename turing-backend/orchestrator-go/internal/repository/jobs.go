@@ -1074,7 +1074,7 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 			displayCategories[index] = egressCategoryLabel(category)
 		}
 		skillNotice := ""
-		if slices.Contains(storedEgressDecision.DataCategories, "EGRESS_DATA_CATEGORY_SKILL_CONTENT") {
+		if len(skillSnapshots) > 0 && slices.Contains(storedEgressDecision.DataCategories, "EGRESS_DATA_CATEGORY_SKILL_CONTENT") {
 			visibleCount := min(len(skillSnapshots), maxEgressSkillNamesInNotice)
 			names := make([]string, visibleCount)
 			for index := range visibleCount {
