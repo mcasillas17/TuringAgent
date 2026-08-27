@@ -51,6 +51,64 @@ set_var() {
   fi
 }
 
+# compose_literal serialises one value the way Compose's dotenv reader will read
+# it back byte for byte: single-quoted, where nothing is interpolated and the
+# only escape is \' for an apostrophe.
+#
+# It exists for the one setting in this file that is not a hex secret. A
+# filesystem path may legally contain every character that reader treats as
+# syntax — $NAME and ${NAME} are substituted, an unquoted # begins a comment,
+# and surrounding spaces are trimmed — so a path written bare arrives as some
+# other string. A checkout under a directory spelling ${TURING_INTEGRATION_KEY}
+# would arrive with the key itself spliced into it, which is a secret on a card
+# in the UI.
+compose_literal() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/\\\\'/g")"
+}
+
+# is_compose_literal_safe refuses the values that form cannot carry.
+#
+# Compose's reader has no escape for a backslash inside single quotes, so a
+# value whose last character is one, or that holds a backslash immediately
+# before an apostrophe, cannot be written down unambiguously: the backslash
+# would escape the quote that ends the value. And a newline or a control
+# character has no representation in a .env line at all. Each of those is
+# refused loudly rather than written as something that looks almost right.
+is_compose_literal_safe() {
+  local value="$1"
+  case "$value" in
+    *\\) return 1 ;;
+  esac
+  case "$value" in
+    *\\\'*) return 1 ;;
+  esac
+  if LC_ALL=C printf '%s' "$value" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    return 1
+  fi
+  return 0
+}
+
+# set_quoted_var writes a value that is not a secret and is not a bare token:
+# it goes in as a Compose literal so that what the stack reads is what is on
+# disk. Secrets keep set_var, because hex needs no quoting and quoting it would
+# change bytes other tools already read out of this file.
+set_quoted_var() {
+  local name="$1"
+  local value="$2"
+  local literal
+  if ! is_compose_literal_safe "$value"; then
+    printf 'Initialization failed: %s cannot be written to .env; it contains characters Compose cannot read back.\n' \
+      "$name" >&2
+    return 1
+  fi
+  literal="$(compose_literal "$value")"
+  if grep -q "^${name}=" .env; then
+    sed -i.bak "s|^${name}=.*|${name}=$(sed_replacement "$literal")|" .env
+  else
+    printf '%s=%s\n' "$name" "$literal" >> .env
+  fi
+}
+
 is_positive_id() {
   local value="$1"
   [[ "$value" =~ ^[1-9][0-9]{0,9}$ ]] &&
@@ -95,7 +153,7 @@ configure_memory_display_root() {
     printf 'Initialization failed: the memory vault path was never resolved.\n' >&2
     return 1
   fi
-  set_var MEMORY_DISPLAY_ROOT "$MEMORY_DISPLAY_ROOT_VALUE"
+  set_quoted_var MEMORY_DISPLAY_ROOT "$MEMORY_DISPLAY_ROOT_VALUE"
 }
 
 validate_sandbox_entries() {

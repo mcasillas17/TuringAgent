@@ -212,6 +212,27 @@ func (v *Vault) PromoteToBeliefs(ctx context.Context, request PromoteToBeliefsRe
 // being the file that was read.
 var ErrSourceChanged = errors.New("the candidate changed while it was being promoted")
 
+// errSourceNotRemoved marks a promotion abandoned because the vault would not
+// take the original off its name — not because anything about it changed.
+//
+// It is unexported because no caller outside this package has a different
+// answer for it: the vault is back the way it was, the proposal is where it
+// was, and what to do is try again. What it exists to stop is the sentence
+// beside it — a removal that failed being reported as the user's own file
+// moving, which is a claim about their vault that nothing observed.
+var errSourceNotRemoved = errors.New("the promoted original could not be removed")
+
+// sourceNotRemovedError carries that marker without spending a word on it. What
+// it prints is the failure underneath — where the bytes are, and what the
+// filesystem said — and what it matches is both that failure and the marker, so
+// a caller can tell the two abandoned promotions apart without the sentence
+// having to say the same thing twice.
+type sourceNotRemovedError struct{ err error }
+
+func (e *sourceNotRemovedError) Error() string { return e.err.Error() }
+
+func (e *sourceNotRemovedError) Unwrap() []error { return []error{errSourceNotRemoved, e.err} }
+
 // checkPromotable is the kind gate, run against the file's own frontmatter
 // rather than against what the caller claimed.
 //
@@ -282,6 +303,25 @@ func checkPromotableShape(source string, mode PromotionMode, parsed ParsedNote) 
 // has to be able to act on this: their edit is still in the inbox, and the
 // half-promoted copy either went away or is named here so they can delete it.
 func promotionAbandoned(source string, destination string, cause error, rollbackErr error) error {
+	if errors.Is(cause, errSourceNotRemoved) {
+		// Nothing about the proposal changed. The vault would not take it off
+		// its name, it is back under that name, and the copy this promotion
+		// had written is gone — so the vault is as the user left it and the
+		// same promotion is what to try again. Saying "it changed while it was
+		// being promoted" here would send them to re-read a file nobody
+		// edited, and a caller matching on staleness round a race there is
+		// none of.
+		if rollbackErr != nil {
+			return fmt.Errorf(
+				"%q could not be removed after it was copied, so nothing was promoted (%w); the copy at %q could not be removed either (%v) — delete it and promote again",
+				source, cause, destination, rollbackErr,
+			)
+		}
+		return fmt.Errorf(
+			"%q could not be removed after it was copied, so nothing was promoted and the copy that had been written was removed (%w)",
+			source, cause,
+		)
+	}
 	if endedRequest(cause) {
 		// Nobody decided anything. The request ran out while the move was in
 		// flight, the original is back under its own name, and "it changed
@@ -357,6 +397,18 @@ func (v *Vault) unlinkPromotedSource(ctx context.Context, clean string, expected
 		return false, fmt.Errorf("%q is no longer there", clean)
 	case removalRefused:
 		return false, promotedSourceKept(clean, placement, reason, err)
+	case removalKept:
+		// The source was this move's to take and the unlink would not happen,
+		// so it is back under its own name. Reporting the move as done here
+		// would leave the user with the same claim twice — once in the inbox
+		// they can still act on, once as a belief they never accepted — and
+		// would stop the caller undoing the copy it just installed.
+		//
+		// The sentinel travels with it because the caller has two abandoned
+		// promotions to tell apart, and they send the user to different
+		// places: a source that *changed* is re-read and decided again, and a
+		// source that would not be removed is the same file it always was.
+		return false, &sourceNotRemovedError{err: err}
 	default:
 		if err != nil {
 			return true, err

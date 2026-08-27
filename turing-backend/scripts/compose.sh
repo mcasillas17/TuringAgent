@@ -129,6 +129,103 @@ configured_database_name() {
   esac
 }
 
+# env_literal_value reads one setting out of .env the way Compose's own dotenv
+# reader does, for the settings this script has to look at itself.
+#
+# A single-quoted value is literal: no interpolation, and the one escape inside
+# it is \' for an apostrophe. That is how init.sh writes a filesystem path, so
+# that a checkout under a directory containing $HOME, ${SOMETHING}, # or a space
+# reaches Compose as the characters that are actually in the path. A bare value
+# is read as-is, which is what an .env written before this did and what an
+# operator's hand-edit usually looks like.
+env_literal_value() {
+  local name="$1"
+  local raw
+  raw="$(sed -n "s/^${name}=//p" .env | tail -n 1)"
+  case "$raw" in
+    "'"*"'")
+      raw="${raw#\'}"
+      raw="${raw%\'}"
+      raw="$(printf '%s' "$raw" | sed "s/\\\\'/'/g")"
+      ;;
+    '"'*'"')
+      raw="${raw#\"}"
+      raw="${raw%\"}"
+      ;;
+  esac
+  printf '%s\n' "$raw"
+}
+
+# is_clean_absolute_path answers the same question the orchestrator asks of this
+# value when it loads: absolute, and spelled the way the filesystem would spell
+# it. A path with a traversal, a doubled separator or a trailing slash is one
+# that resolves somewhere other than it reads, and this one exists to be read.
+is_clean_absolute_path() {
+  local candidate="$1"
+  local component
+  [[ "$candidate" == /* ]] || return 1
+  [[ "$candidate" == "/" || "$candidate" != */ ]] || return 1
+  [[ "$candidate" != *//* ]] || return 1
+  local rest="${candidate#/}"
+  while [[ -n "$rest" ]]; do
+    component="${rest%%/*}"
+    if [[ "$component" == "." || "$component" == ".." ]]; then
+      return 1
+    fi
+    if [[ "$rest" == */* ]]; then
+      rest="${rest#*/}"
+    else
+      rest=""
+    fi
+  done
+  return 0
+}
+
+# validate_memory_display_root is the launch-time half of a requirement the
+# compose file used to carry.
+#
+# It cannot live in the compose file. A ${MEMORY_DISPLAY_ROOT:?...} there is
+# evaluated on every subcommand, including the ones a person reaches for when
+# an install is broken: `down`, `stop`, `rm`. An .env that predates the setting,
+# or has been emptied, or is missing entirely then fails interpolation, and the
+# containers stay up — with reset.sh going on to delete the data underneath
+# them.
+#
+# So the requirement is enforced here, on the paths that actually start or
+# resolve services, and nowhere else. What it refuses is what the orchestrator
+# would refuse or, worse, quietly replace with the container's own /memory: a
+# value that is missing, empty, relative, or not the path it appears to be.
+#
+# The value is never printed. It names a directory on the user's own machine,
+# and this script's output is what a person pastes into an issue.
+validate_memory_display_root() {
+  local configured
+  configured="$(env_literal_value MEMORY_DISPLAY_ROOT)"
+  if [[ -z "$configured" ]]; then
+    printf 'Compose launch failed: MEMORY_DISPLAY_ROOT is not set in .env; run ./scripts/init.sh to record the host vault path.\n' >&2
+    return 1
+  fi
+  if ! is_clean_absolute_path "$configured"; then
+    printf 'Compose launch failed: MEMORY_DISPLAY_ROOT must be a clean absolute path; run ./scripts/init.sh to record the host vault path.\n' >&2
+    return 1
+  fi
+}
+
+# is_recovery_command names the subcommands that only ever stop things.
+#
+# They are the ones that have to work on an install that is already broken, so
+# nothing this script checks before launching may stand in their way — not the
+# bind sources, which exist to stop a launch mounting something unsafe, and not
+# the vault path, which only decides what the client displays. Refusing to stop
+# a container because of a mount is refusing to fix the thing being complained
+# about.
+is_recovery_command() {
+  case "${1:-}" in
+    down | stop | rm | kill) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 validate_database_file() {
   local database_path="$1"
   local relative="${database_path#"$PWD/data/"}"
@@ -201,7 +298,8 @@ if [[ "${1:-}" == "--validate-host-identity" ]]; then
   exit 0
 fi
 if [[ -f .env ]]; then
-  if [[ "${1:-}" != "down" ]]; then
+  if ! is_recovery_command "${1:-}"; then
+    validate_memory_display_root
     validate_sandbox_bind_source
     validate_skills_bind_source
     validate_memory_bind_source
@@ -211,7 +309,7 @@ if [[ -f .env ]]; then
   exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \
     docker compose --env-file .env -f infra/docker-compose.yml "$@"
 fi
-if [[ "${1:-}" != "down" ]]; then
+if ! is_recovery_command "${1:-}"; then
   printf 'Compose launch failed: .env is missing; run ./scripts/init.sh first.\n' >&2
   exit 1
 fi

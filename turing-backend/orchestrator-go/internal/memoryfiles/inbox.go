@@ -612,7 +612,13 @@ type RemoveInboxNoteRequest struct {
 // A missing target is not an error, whatever the mode: cleanup has to be
 // idempotent because the caller may be retrying after a crash that already did
 // the work, and a decided rejection whose file has already gone has nothing
-// left to protect.
+// left to protect. It is reported as success only once the directory that
+// would hold the name has reached the disk, because every caller answers that
+// success by retiring a durable record — a manifest row, a candidate — and an
+// unlink that is still only in the page cache is an absence a crash can undo.
+// The pass that could not flush its own unlink already keeps its record; the
+// pass after it would otherwise drop that record on the strength of the very
+// absence nobody has established.
 //
 // Every other removal that finds the file still there reads it under this
 // primitive's own lock and compares it to the hash it was given, then unlinks
@@ -668,7 +674,7 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 	parent, leaf, err := v.openParent(ctx, clean, false)
 	if err != nil {
 		if errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist) {
-			return nil
+			return v.confirmMissingParent(clean)
 		}
 		return err
 	}
@@ -677,7 +683,7 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 	var stat unix.Stat_t
 	if err := unix.Fstatat(int(parent.Fd()), leaf, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		if errors.Is(err, unix.ENOENT) {
-			return nil
+			return v.confirmAbsence(parent, clean)
 		}
 		return fmt.Errorf("inspect %q: %w", clean, err)
 	}
@@ -733,6 +739,89 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 // checked before anything is detached, because a proposal the user repaired in
 // their editor is one they can now read and decide about properly, and a file
 // that merely took the name is somebody else's entirely.
+// ConfirmInboxNoteAbsent answers whether a candidate path holds nothing, and
+// answers "nothing" only once the directory that would hold it has reached the
+// disk.
+//
+// It exists because absence is what retires a manifest row, and the two ways a
+// path can be empty are not the same fact. A file the user deleted last week is
+// gone in a way no crash undoes. A file this process unlinked a moment ago,
+// through a directory whose fsync failed, is gone only in the page cache — and
+// a row retired on that is a row that stops naming a file which then comes
+// back. So the flush happens here, and a flush that fails is the answer.
+//
+// Only "there is no entry" counts as absent. A note that will not parse, one
+// past a read ceiling, a symlink somebody dropped in its place: all of them are
+// a file in the user's vault, and a row naming one is not stale.
+func (v *Vault) ConfirmInboxNoteAbsent(ctx context.Context, relPath string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	clean, err := requireInboxRelPath(relPath)
+	if err != nil {
+		return false, err
+	}
+	unlock, err := v.locks.lockContext(ctx, v.pathLockKey(clean))
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+
+	parent, leaf, err := v.openParent(ctx, clean, false)
+	if err != nil {
+		if errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist) {
+			if missingErr := v.confirmMissingParent(clean); missingErr != nil {
+				return false, missingErr
+			}
+			return true, nil
+		}
+		return false, err
+	}
+	defer func() { _ = parent.Close() }()
+
+	var stat unix.Stat_t
+	if err := unix.Fstatat(int(parent.Fd()), leaf, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			if absenceErr := v.confirmAbsence(parent, clean); absenceErr != nil {
+				return false, absenceErr
+			}
+			return true, nil
+		}
+		return false, fmt.Errorf("inspect %q: %w", clean, err)
+	}
+	return false, nil
+}
+
+// confirmAbsence turns "there is nothing under this name" into a fact a crash
+// cannot take back, by flushing the directory the name would have been in.
+func (v *Vault) confirmAbsence(parent *os.File, clean string) error {
+	if err := v.syncDirectory(parent); err != nil {
+		return fmt.Errorf(
+			"confirm %q is no longer there: the vault directory could not be flushed: %w", clean, err)
+	}
+	return nil
+}
+
+// confirmMissingParent is the same proof one level up, for a path whose own
+// directory is not there either. What has to be durable then is the absence of
+// the directory, which lives in the vault root.
+//
+// A vault root that is missing is answered as the absence it is: nothing this
+// package did removed it, there is no directory left to flush, and refusing
+// every cleanup on an install whose vault has been deleted would strand every
+// record naming a file inside it.
+func (v *Vault) confirmMissingParent(clean string) error {
+	root, err := v.openRoot()
+	if err != nil {
+		if errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return v.confirmAbsence(root, clean)
+}
+
 func (v *Vault) removeBoundInboxEntry(
 	ctx context.Context,
 	parent *os.File,
@@ -747,8 +836,9 @@ func (v *Vault) removeBoundInboxEntry(
 	case err == nil:
 		defer func() { _ = opened.Close() }()
 	case errors.Is(err, unix.ENOENT), errors.Is(err, os.ErrNotExist):
-		// The user asked for this file not to be there, and it is not there.
-		return nil
+		// The user asked for this file not to be there, and it is not there —
+		// once the directory that would hold it has reached the disk.
+		return v.confirmAbsence(parent, clean)
 	case expectedHash == "" && (errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM)):
 		// A file the user cannot even open is exactly the file this mode
 		// exists for, and refusing here would leave them with a claim about
@@ -797,8 +887,9 @@ func (v *Vault) removeBoundInboxEntry(
 		return err
 	}
 	if detached == nil {
-		// The user asked for this file not to be there, and it is not there.
-		return nil
+		// The user asked for this file not to be there, and it is not there —
+		// once the directory that would hold it has reached the disk.
+		return v.confirmAbsence(parent, clean)
 	}
 	// The file is off its name and nothing has decided yet whether it may go.
 	// A request that has ended here is not a decision, so there is nothing left
@@ -819,11 +910,13 @@ func (v *Vault) removeBoundInboxEntry(
 		return v.refuseDetachedRejection(ctx, detached, objection)
 	}
 
-	if err := detached.discard(); err != nil {
+	if _, err := detached.discard(); err != nil {
 		// The identity check passed, so these are the bytes the user asked to
 		// be rid of — and the unlink that would have done it failed. The
-		// rejection did not happen, and the sentence says where the file
-		// actually is rather than leaving a detached entry unaccounted for.
+		// removal did not happen, and the sentence says where the file
+		// actually is: back under its own name where the caller's record still
+		// points, or, when something else has taken that name, under the
+		// reserved one, named.
 		return err
 	}
 	return ctx.Err()

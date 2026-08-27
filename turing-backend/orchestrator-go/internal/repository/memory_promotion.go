@@ -756,7 +756,7 @@ func consumeMemoryCandidateTx(
 	tx *sql.Tx,
 	candidate MemoryCandidate,
 	decision string,
-	releaseReservation bool,
+	fileRemoved bool,
 	requireActiveSource bool,
 ) error {
 	statement := `DELETE FROM memory_candidates WHERE id = ? AND state = ?`
@@ -778,12 +778,23 @@ func consumeMemoryCandidateTx(
 	if deleted != 1 {
 		return ErrMemoryCandidateInvalidTransition
 	}
-	if releaseReservation {
+	if fileRemoved {
 		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM vault_artifacts WHERE session_id = ? AND vault_path = ?
 		`, candidate.SourceSessionID, candidate.InboxPath); err != nil {
 			return err
 		}
+	} else if err := markUnremovedVaultArtifactTx(
+		ctx, tx, candidate.SourceSessionID, candidate.InboxPath, vaultArtifactRemoveFailedCode,
+	); err != nil {
+		// The proposal's row is going and the file is not, so the manifest row
+		// is about to be the only record that anything is answerable for those
+		// bytes. It is marked as well as kept: a row that does not say a
+		// removal was attempted is one reconcile releases later, on the
+		// strength of a path that holds nothing — which is exactly what a
+		// removal that detached the file and could not put it back leaves
+		// behind.
+		return err
 	}
 	return recordMemoryCandidateDecisionTx(ctx, tx, candidate, decision)
 }

@@ -43,12 +43,16 @@ services:
       # decides anything with it, and every file operation still goes through
       # MEMORY_ROOT above.
       #
-      # Deliberately required rather than defaulted, in the mould of HOST_UID
-      # above. A fallback here would be a container path silently presented to
-      # the user as the folder to open in Obsidian, which is the exact thing
-      # this setting exists to stop — so a stack brought up without init.sh
-      # having recorded the host path fails to launch and says why.
-      MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:?Run scripts/init.sh to record the host vault path}
+      # Deliberately passed through rather than required here. A ${VAR:?} is
+      # evaluated on every subcommand, including `down`, `stop` and `rm` — the
+      # ones a person reaches for when an install is already broken, and the
+      # ones reset.sh runs before it deletes the local data. An .env that
+      # predates this setting would fail interpolation there and leave the
+      # containers up. The requirement is real and lives in scripts/compose.sh,
+      # which enforces a non-empty clean absolute path on the paths that start
+      # or resolve services and stays out of the way of the ones that stop
+      # them.
+      MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:-}
       MCP_CONFIG_ROOT: /mcp
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}

@@ -35,6 +35,16 @@ const maxVaultArtifactPathBytes = 512
 // the sandbox manifest.
 const vaultArtifactCleanupFailedAction = "session.vault_artifact.cleanup.failed"
 
+// The classes a removal can fail under, as the audit row records them. They are
+// constants because the same three words are now written by two callers — the
+// session cleaner and Turing's own tidying — and a class spelled differently in
+// one of them is a failure an operator cannot find by grepping for the other.
+const (
+	vaultArtifactPathScopeCode         = "vault_path_scope"
+	vaultArtifactRemoveFailedCode      = "vault_remove_failed"
+	vaultArtifactOwnershipUnprovenCode = "vault_ownership_unproven"
+)
+
 // maxVaultPurgeErrors bounds how many underlying failures one purge report
 // carries back to its caller. A pass now visits every row rather than
 // abandoning the manifest at the first refusal, so the number of failures it
@@ -367,37 +377,88 @@ func (r *Repository) markVaultArtifactsDeleteFailed(ctx context.Context, session
 	defer func() { _ = tx.Rollback() }()
 
 	for _, failure := range failures {
-		result, err := tx.ExecContext(ctx, `
-			UPDATE vault_artifacts
-			SET state = ?
-			WHERE id = ? AND session_id = ? AND state <> ?
-		`, VaultArtifactStateDeleteFailed, failure.artifactID, sessionID, VaultArtifactStateDeleteFailed)
-		if err != nil {
-			return err
-		}
-		marked, err := result.RowsAffected()
-		if err != nil {
-			return err
-		}
-		// The audit row lands only for a row this statement actually moved, in
-		// the same transaction as the mark: an id naming nothing in this
-		// manifest is not a vault failure and does not get recorded as one, and
-		// neither is a row a previous pass already reported.
-		if marked != 1 {
-			continue
-		}
-		payloadBytes, err := json.Marshal(map[string]string{
-			"state":     VaultArtifactStateDeleteFailed,
-			"errorCode": failure.errorCode,
-		})
-		if err != nil {
-			return err
-		}
-		if err := recordAuditTx(ctx, tx, "", "system", "", vaultArtifactCleanupFailedAction, failure.artifactID, string(payloadBytes)); err != nil {
+		if err := markVaultArtifactDeleteFailedTx(ctx, tx, sessionID, failure); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// markVaultArtifactDeleteFailedTx is that mark for one row, inside a
+// transaction the caller owns.
+//
+// It is its own function because a second caller needs exactly it: Turing's own
+// tidying after an applied profile edit consumes the proposal's row whether or
+// not the file went, so the manifest row becomes the only record that a file
+// may still be there — and a row that does not say a removal was attempted is a
+// row reconcile will later release for a path that holds nothing.
+func markVaultArtifactDeleteFailedTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+	failure vaultArtifactFailure,
+) error {
+	result, err := tx.ExecContext(ctx, `
+		UPDATE vault_artifacts
+		SET state = ?
+		WHERE id = ? AND session_id = ? AND state <> ?
+	`, VaultArtifactStateDeleteFailed, failure.artifactID, sessionID, VaultArtifactStateDeleteFailed)
+	if err != nil {
+		return err
+	}
+	marked, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	// The audit row lands only for a row this statement actually moved, in
+	// the same transaction as the mark: an id naming nothing in this
+	// manifest is not a vault failure and does not get recorded as one, and
+	// neither is a row a previous pass already reported.
+	if marked != 1 {
+		return nil
+	}
+	payloadBytes, err := json.Marshal(map[string]string{
+		"state":     VaultArtifactStateDeleteFailed,
+		"errorCode": failure.errorCode,
+	})
+	if err != nil {
+		return err
+	}
+	return recordAuditTx(ctx, tx, "", "system", "", vaultArtifactCleanupFailedAction, failure.artifactID, string(payloadBytes))
+}
+
+// markUnremovedVaultArtifactTx records that a removal was attempted at one
+// vault path and did not remove the file, on whichever manifest row names that
+// path for this session.
+//
+// A path rather than an id, because the callers that need it are decisions
+// about a proposal and know the path the proposal was written to; the row is
+// looked up here so no caller has to hold two identities for one file.
+//
+// A path with no row is not an error. The write may never have landed, the
+// session may be mid-cascade, and a decision that has just consumed its
+// proposal has nothing left to record against.
+func markUnremovedVaultArtifactTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+	vaultPath string,
+	errorCode string,
+) error {
+	var artifactID string
+	err := tx.QueryRowContext(ctx, `
+		SELECT id FROM vault_artifacts WHERE session_id = ? AND vault_path = ?
+	`, sessionID, vaultPath).Scan(&artifactID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return markVaultArtifactDeleteFailedTx(ctx, tx, sessionID, vaultArtifactFailure{
+		artifactID: artifactID,
+		errorCode:  errorCode,
+	})
 }
 
 // DeleteVaultArtifacts removes manifest rows for exactly the artifacts the
@@ -565,20 +626,23 @@ func vaultPurgeFailure(collected []error, failed int, total int) error {
 // the audit row records, and it is all a caller can act on anyway.
 func removeVaultArtifactFile(ctx context.Context, vault *memoryfiles.Vault, artifact VaultArtifact) (string, error) {
 	if _, err := validateVaultInboxPath(artifact.VaultPath); err != nil {
-		return "vault_path_scope", ErrVaultArtifactPathScope
+		return vaultArtifactPathScopeCode, ErrVaultArtifactPathScope
 	}
 	if artifact.ExpectedContentHash == "" {
-		present, err := inboxEntryStillThere(ctx, vault, artifact.VaultPath)
+		// Absence, and durably: this answer retires the row, and an absence
+		// nobody has flushed is one a crash can undo — leaving the file back
+		// under its path with nothing naming it.
+		absent, err := vault.ConfirmInboxNoteAbsent(ctx, artifact.VaultPath)
 		if err != nil {
-			return "vault_remove_failed", ErrVaultArtifactRemoveFailed
+			return vaultArtifactRemoveFailedCode, ErrVaultArtifactRemoveFailed
 		}
-		if present {
-			return "vault_ownership_unproven", ErrVaultArtifactOwnershipUnproven
+		if !absent {
+			return vaultArtifactOwnershipUnprovenCode, ErrVaultArtifactOwnershipUnproven
 		}
 		return "", nil
 	}
 	if err := vault.RemoveInboxNote(ctx, retiredCandidateRemoval(artifact.VaultPath, artifact.ExpectedContentHash)); err != nil {
-		return "vault_remove_failed", ErrVaultArtifactRemoveFailed
+		return vaultArtifactRemoveFailedCode, ErrVaultArtifactRemoveFailed
 	}
 	return "", nil
 }

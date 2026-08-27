@@ -74,9 +74,18 @@ mounted into the orchestrator alone.
 
 `/memory` is a path inside that container, so the Memory page does not show it.
 `scripts/init.sh` writes the host directory the vault is bound from into `.env`
-as `MEMORY_DISPLAY_ROOT`, Compose passes it to the orchestrator, and that is the
+as `MEMORY_DISPLAY_ROOT` — as a single-quoted literal, so a checkout path
+containing `$`, `#`, a space or an apostrophe reaches the stack as the path that
+is actually on disk — Compose passes it to the orchestrator, and that is the
 folder the app names as the one to open in Obsidian. It is display only: every
 read, write and confinement check still goes through `MEMORY_ROOT`.
+
+`scripts/compose.sh` refuses to start or resolve services when that value is
+missing, empty or not a clean absolute path, and says to run `init.sh`. The
+compose file itself only passes it through: a required interpolation there would
+be evaluated on `down`, `stop` and `rm` too, and teardown has to work on the
+broken install it is being run to fix — including the `down --remove-orphans`
+that `scripts/reset.sh` runs before it deletes local data.
 
 In another terminal, run the Flutter app:
 

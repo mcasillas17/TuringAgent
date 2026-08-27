@@ -130,25 +130,39 @@ func (d *detachedEntry) objectionToOwnWrite(ctx context.Context, expected unix.S
 // and the unlink changed. It is the only unlink on this path, and every caller
 // reaches it only after proving what it is about to remove.
 //
-// A failure says where the bytes actually are, so a detached file is never left
-// unaccounted for in a sentence that reports it gone. The flush after a failed
-// unlink is part of that sentence rather than a formality: if it fails too, the
-// name the bytes are under is not one a crash is guaranteed to keep, and a
-// caller pointing somebody at that name has to know.
-func (d *detachedEntry) discard() error {
+// It answers whether the name the entry was taken off has actually let go of
+// it, because the two outcomes lead callers in opposite directions and only
+// this function knows which one happened.
+//
+// An unlink that fails leaves the bytes off their name, under a reserved
+// private name nothing outside this package can guess — and every record that
+// says somebody is answerable for them names the name they came off. Left
+// there, that is how a file becomes unreachable: the record names a path
+// holding nothing, the retry finds nothing and reports the removal done, and
+// the bytes stay in the user's vault under a name no listing shows. So the
+// entry goes back under its own name first, with a link that refuses to
+// clobber whatever may have taken it, and the failure says where everything
+// ended up. The retry then finds the file exactly where the record says it is
+// and can prove ownership of it all over again.
+//
+// The flush after a successful unlink is not a formality either: an unlink
+// that has not reached the disk is not an absence a crash will honour, and a
+// caller that retires a durable record on the strength of one is retiring it
+// for a file that can come back.
+func (d *detachedEntry) discard() (bool, error) {
 	if err := d.vault.unlinkStaging(d.parent, d.staging); err != nil && !errors.Is(err, unix.ENOENT) {
-		if flushErr := d.vault.syncDirectory(d.parent); flushErr != nil {
-			return fmt.Errorf(
-				"remove the detached %q: %w; it is at %s, and the vault directory could not be flushed either (%v)",
-				d.clean, err, d.stagedRelPath(), flushErr,
-			)
-		}
-		return fmt.Errorf("remove the detached %q: %w; it is at %s", d.clean, err, d.stagedRelPath())
+		placement := d.putBackOrStage()
+		// The name holds the entry again exactly when the link happened,
+		// whether or not the flush that would survive a crash did.
+		gone := !placement.restored && !placement.linkedBack
+		return gone, fmt.Errorf(
+			"remove the detached %q: %w; %s", d.clean, err, placement.afterFailedRemoval(),
+		)
 	}
 	if err := d.vault.syncDirectory(d.parent); err != nil {
-		return fmt.Errorf("sync vault directory after removing %q: %w", d.clean, err)
+		return true, fmt.Errorf("sync vault directory after removing %q: %w", d.clean, err)
 	}
-	return nil
+	return true, nil
 }
 
 // detachRecovery names where the bytes of a detached entry may be kept when
@@ -274,7 +288,24 @@ func (p detachedPlacement) failure() error {
 // than swallowed — a caller that has to tell the user where their file is
 // cannot do it from a placement that guessed.
 func (d *detachedEntry) putBack() detachedPlacement {
-	recovery := recoveryFor(d.clean)
+	return d.putBackWith(recoveryFor(d.clean))
+}
+
+// putBackOrStage is the same restore, for an entry a removal had every right to
+// delete and could not.
+//
+// It differs in one decision and only one: it never publishes. The rescue that
+// puts a *refused* entry under a visible inbox name is for a proposal nobody
+// has answered, and this entry is the opposite — its outcome is already
+// recorded, and a second visible copy of it is a decided claim asked again. So
+// where the name has been taken the bytes stay under the reserved name, both
+// places are named, and the record that tracks the file is kept by the failure
+// this returns.
+func (d *detachedEntry) putBackOrStage() detachedPlacement {
+	return d.putBackWith(recoverUnderReservedName)
+}
+
+func (d *detachedEntry) putBackWith(recovery detachRecovery) detachedPlacement {
 	d.vault.detachBarrier(detachPhaseBeforeRestore, d.clean)
 	if linkErr := d.vault.linkDetached(d.parent, d.staging, d.leaf); linkErr != nil {
 		return d.preserve(recovery, linkErr)
@@ -379,6 +410,31 @@ func (d *detachedEntry) stayStaged(placement detachedPlacement) detachedPlacemen
 	placement.recoveryRelPath = d.stagedRelPath()
 	placement.recoveryHidden = true
 	return placement
+}
+
+// afterFailedRemoval says where the bytes are when the unlink a verified entry
+// had already earned did not happen.
+//
+// It is separate from explain() because the sentence explain() builds is about
+// a refusal — "it was left alone" — and this is not one. The removal was
+// entitled to happen and the filesystem would not do it, so what a caller owes
+// the reader is where the file is now and whether that is a place a crash will
+// keep.
+func (p detachedPlacement) afterFailedRemoval() string {
+	switch {
+	case p.linkedBack:
+		return fmt.Sprintf(
+			"it is back under its own name, but the vault directory could not be flushed (%v), so that is not known to have survived a crash; it is not lost — it is also at %s",
+			p.cause, p.recoveryRelPath,
+		)
+	case p.restored:
+		return p.note(p.withResidue("it is back under its own name"))
+	default:
+		return p.note(fmt.Sprintf(
+			"it could not be put back under its own name (%v); it is not lost — it is at %s, where nothing indexes it as a note",
+			p.cause, p.recoveryRelPath,
+		))
+	}
 }
 
 // explain says where the bytes are, in the caller's own words plus this one's
@@ -564,6 +620,13 @@ const (
 	// removalRefused: what was under the name could not be proved to be the
 	// caller's, so it was put back or kept, and nothing was deleted.
 	removalRefused
+	// removalKept: the entry was proved to be the caller's and the unlink
+	// failed, so it is back under its own name and nothing was deleted. It is
+	// separate from a refusal because nothing is wrong with the file — the
+	// removal is simply still owed — and separate from a removal because a
+	// caller compensating for a move it was making must not act as though the
+	// move had happened.
+	removalKept
 )
 
 // removeVerifiedEntry is the compensating deletion every writer in this package
@@ -618,9 +681,16 @@ func (v *Vault) removeVerifiedEntry(
 		}
 		return removalRefused, placement, objection, nil
 	}
-	if err := detached.discard(); err != nil {
-		// The name is gone either way, so the caller must not treat this as a
-		// removal that never happened.
+	if gone, err := detached.discard(); err != nil {
+		if !gone {
+			// The name holds the entry again, so nothing was removed. A caller
+			// undoing half a move has to hear that as "the move did not
+			// happen", or it keeps a copy of a file that is still where it
+			// started.
+			return removalKept, detachedPlacement{}, "", err
+		}
+		// The name is gone, so the caller must not treat this as a removal
+		// that never happened.
 		return removalDone, detachedPlacement{}, "", err
 	}
 	return removalDone, detachedPlacement{}, "", nil

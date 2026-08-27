@@ -1299,12 +1299,27 @@ func (r *Repository) releaseStaleReservation(
 	vault *memoryfiles.Vault,
 	artifactID string,
 ) (bool, error) {
-	vaultPath, err := vaultArtifactPathByID(ctx, r.db, artifactID)
+	vaultPath, state, err := vaultArtifactByIDForSweep(ctx, r.db, artifactID)
 	if err != nil {
 		return false, err
 	}
 	if vaultPath == "" {
 		// Already gone — a decision retired it while this pass was walking.
+		return false, nil
+	}
+	if state == VaultArtifactStateDeleteFailed {
+		// A cleanup pass reached this file and could not remove it, and a
+		// removal that fails can leave the bytes off their name: detached
+		// under the reserved private name the walk steps over, or under a
+		// recovery name that is not the one the row records. The path holding
+		// nothing is exactly what that looks like from here, so absence is no
+		// evidence at all — and this row is the last record that anything is
+		// answerable for those bytes.
+		//
+		// It belongs to the cleaner, which re-verifies ownership before it
+		// removes anything and drains the row once the file is really gone.
+		// Keeping it costs a row; releasing it costs the user a note nothing
+		// in the system can ever find again.
 		return false, nil
 	}
 	// The lock is the candidate's, because a proposal's row and its reservation
@@ -1326,11 +1341,23 @@ func (r *Repository) releaseStaleReservation(
 		r.memoryReservationSweepBarrier()
 	}
 
-	present, err := inboxEntryStillThere(ctx, vault, vaultPath)
+	// Absence, and durably: this row is about to be deleted, and an unlink that
+	// is still only in the page cache is an absence a crash undoes. The proof
+	// is the primitive's, so the flush that fails keeps the row.
+	//
+	// Anything else this cannot confirm counts as "still there", the way it
+	// always has here: a vault that will not answer is not evidence that a file
+	// is gone, and a sweep that abandoned the whole pass over one unreadable
+	// path would stop the rows beside it draining too. Only the request ending
+	// stops the pass.
+	absent, err := vault.ConfirmInboxNoteAbsent(ctx, vaultPath)
 	if err != nil {
-		return false, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		return false, nil
 	}
-	if present {
+	if !absent {
 		return false, nil
 	}
 	// Asked again, under the lock this time, and about the states that mean a
@@ -1568,22 +1595,27 @@ func turingWrittenNoteHash(ctx context.Context, vault *memoryfiles.Vault, inboxP
 	return reading.Note.ContentHash, true, nil
 }
 
-// vaultArtifactPathByID reads the path one manifest row names, and answers with
-// the empty string for a row that is no longer there. A reservation that has
-// already been retired is not an error: the sweep's worklist was assembled
-// before any of it was acted on.
-func vaultArtifactPathByID(ctx context.Context, q rowQuerier, artifactID string) (string, error) {
+// vaultArtifactByIDForSweep reads the path one manifest row names and the state
+// it is in, and answers with an empty path for a row that is no longer there. A
+// reservation that has already been retired is not an error: the sweep's
+// worklist was assembled before any of it was acted on.
+//
+// The state travels with the path because the sweep's question is not only
+// "does the inbox still hold this?" but "is this row mine to retire?", and a
+// row a cleanup pass already failed on is not.
+func vaultArtifactByIDForSweep(ctx context.Context, q rowQuerier, artifactID string) (string, string, error) {
 	var vaultPath string
+	var state string
 	err := q.QueryRowContext(ctx, `
-		SELECT vault_path FROM vault_artifacts WHERE id = ?
-	`, artifactID).Scan(&vaultPath)
+		SELECT vault_path, state FROM vault_artifacts WHERE id = ?
+	`, artifactID).Scan(&vaultPath, &state)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return "", "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return vaultPath, nil
+	return vaultPath, state, nil
 }
 
 // memoryCandidateNamingInboxPath answers which proposal, if any, still names a

@@ -191,10 +191,41 @@ These are known, bounded, and deliberately not claimed away:
   `/memory` — a directory inside one container and nowhere the person reading
   the Memory page can go. What the page shows is `MEMORY_DISPLAY_ROOT`, the host
   directory the vault is bound from, written into `.env` by `scripts/init.sh`
-  and passed through Compose. It is never consulted for access, confinement or
-  any other decision; a value that is not a clean absolute path is omitted
-  rather than rendered, and the page then names no folder at all instead of
-  naming one that does not exist.
+  as a Compose single-quoted literal and passed through Compose. It is never
+  consulted for access, confinement or any other decision; a value that is not a
+  clean absolute path is omitted rather than rendered, and the page then names
+  no folder at all instead of naming one that does not exist. The requirement
+  that it be present and usable is enforced by `scripts/compose.sh` before it
+  starts or resolves services, and deliberately not by the compose file: a
+  required interpolation there is evaluated on `down`, `stop` and `rm` as well,
+  and a teardown that refuses on a stale `.env` leaves containers running over
+  data `reset.sh` is about to delete.
+- **A link the filesystem refuses to drop is kept and named, not deleted.**
+  Every removal here takes the entry off its name first and unlinks only what it
+  then verified. When that unlink fails, the entry goes back under its own name
+  — with a link that refuses to clobber whatever may have taken it — so the
+  record that names the file still finds it and the retry can prove ownership
+  all over again. The link the failed drop left behind cannot be dropped either;
+  it is reported in the failure, by name, and it survives a later successful
+  retry, so an operator may have to remove one reserved `.turing-memory-*` entry
+  by hand. Where the original name has been taken in the meantime, the bytes
+  stay under the reserved name and both places are named: a decided proposal is
+  never republished into the inbox as a fresh draft, because the user has
+  already answered it.
+- **A manifest row whose cleanup failed is not released by the reconcile
+  pass.** Reconcile releases reservations whose path the inbox no longer holds,
+  and a failed removal is one of the ways a path comes to hold nothing. A row
+  marked `delete_failed` therefore belongs to the session cleaner, which
+  re-verifies ownership before it removes anything and drains the row when the
+  file is really gone; until a session is deleted, such a row stays. Keeping one
+  costs a row in a manifest. Releasing one costs the user a note nothing in the
+  system can ever find again.
+- **An absence is only reported once it has reached the disk.** Removing a file
+  and retiring the record that names it are two durable facts, and an unlink
+  that is still only in the page cache is not the first of them. So the removal
+  primitive flushes the directory before it reports a missing file as gone, and
+  a flush that fails keeps the record — the next pass asks again rather than
+  retiring a row for a file a crash can bring back.
 
 ### What the amendment does not touch
 
