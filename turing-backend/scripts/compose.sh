@@ -189,7 +189,19 @@ env_value_interpolates() {
   local raw
   raw="$(sed -n "s/^${name}=//p" .env | tail -n 1)"
   case "$raw" in
-    "'"*"'") return 1 ;;
+    "'"*"'")
+      # Literal: nothing inside single quotes is substituted.
+      return 1
+      ;;
+    '"'*'"')
+      # Double quotes interpolate, and a `#` between them is part of the value
+      # rather than the start of a comment — so the trim below must not run
+      # first, or a variable written after one would go unnoticed.
+      case "$raw" in
+        *'$'*) return 0 ;;
+      esac
+      return 1
+      ;;
   esac
   # What Compose would substitute into is the value, not the comment beside it.
   case "$(bare_env_value "$raw")" in

@@ -103,6 +103,9 @@ func TestComposeLaunchRefusesAnUnusableHostVaultPath(t *testing.T) {
 		// there.
 		{name: "interpolating", value: "MEMORY_DISPLAY_ROOT=/srv/${TURING_INTEGRATION_KEY}/memory\n"},
 		{name: "double quoted interpolating", value: "MEMORY_DISPLAY_ROOT=\"/srv/$TURING_INTEGRATION_KEY/memory\"\n"},
+		// A `#` inside double quotes is part of the value, not a comment, so
+		// what follows it is still interpolated.
+		{name: "double quoted past a hash", value: "MEMORY_DISPLAY_ROOT=\"/srv/vault # $TURING_INTEGRATION_KEY\"\n"},
 	} {
 		t.Run(unusable.name, func(t *testing.T) {
 			result := executeComposeWithSetup(t, true, "501", "20", "501", "20",
