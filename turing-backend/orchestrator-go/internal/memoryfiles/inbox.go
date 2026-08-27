@@ -388,6 +388,21 @@ type UnreadableCandidateEntry struct {
 	failure unreadableFailure
 }
 
+// BoundHash answers with the bytes a hashless rejection is bound to, when the
+// pre-check managed to read any, and the empty string when nobody could.
+//
+// It is exported for one reason: a decision that removes those bytes may also
+// have to take a copy of them that an earlier attempt left under a name only
+// the vault can spell, and the caller holding the manifest row is the one that
+// asks for that. It is a hash and nothing else — no path, and no word of a
+// proposal nobody has read.
+func (e UnreadableCandidateEntry) BoundHash() string {
+	if !e.bound || !e.hashed {
+		return ""
+	}
+	return e.rawHash
+}
+
 // unreadableFailure names the broad way a candidate refused to be read.
 //
 // A hashless rejection with no bytes behind it is a licence to delete a file
@@ -1278,12 +1293,12 @@ func (v *Vault) refuseDetachedRejection(ctx context.Context, detached *detachedE
 	if reason == unprovableDetachedEntry {
 		cause = errors.Join(cause, ErrUnprovableEntry)
 	}
-	if cause == nil {
+	if cause == nil && !placement.leavesResidue() {
 		return &StaleContentError{RelPath: detached.clean, Detail: detail}
 	}
 	return &StaleContentError{
 		RelPath: detached.clean,
-		Cause:   cause,
+		Cause:   withResidueMarker(placement, cause),
 		Detail:  detail,
 	}
 }

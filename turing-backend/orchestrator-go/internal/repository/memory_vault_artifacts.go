@@ -590,9 +590,17 @@ func (r *Repository) PurgeSessionVaultArtifacts(ctx context.Context, sessionID s
 	removed := make([]string, 0, len(cleared))
 	residue, residueErr := vault.RemoveInboxResidue(ctx, clearedContentHashes(cleared))
 	for _, artifact := range cleared {
-		leftover := residueErr
-		if leftover == nil {
-			leftover = residue[artifact.ExpectedContentHash]
+		// A row that named no bytes contributed no hash, so a sweep that could
+		// not finish says nothing about it. Those rows are the crash artifact
+		// whose write never landed, and they have to be able to drain or every
+		// such crash strands a withdrawal for good — the more so now that
+		// reconcile leaves a marked row alone.
+		var leftover error
+		if artifact.ExpectedContentHash != "" {
+			leftover = residueErr
+			if leftover == nil {
+				leftover = residue[artifact.ExpectedContentHash]
+			}
 		}
 		if leftover == nil {
 			removed = append(removed, artifact.ArtifactID)

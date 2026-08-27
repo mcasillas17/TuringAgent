@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -320,4 +322,96 @@ func TestProfileApplyCleanupFailureBindsTheRowToTheBytesItActedOn(t *testing.T) 
 	if entries := inboxEntries(t, vault); len(entries) != 0 {
 		t.Fatalf("inbox = %v, want the applied proposal gone", entries)
 	}
+}
+
+// A decision whose vault call fails before any row is written still has to
+// leave a record when that failure left the bytes under a name only the vault
+// can spell. Without one the manifest row stays `ready`, the path it names
+// holds nothing, and reconcile releases it — the last thing that could ever
+// find those bytes.
+func TestAVaultFailureThatLeftACopyIsRecordedOnTheRow(t *testing.T) {
+	repo, _, _ := newMemoryTestRepo(t)
+	sessionID, candidate := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
+	artifact := onlyVaultArtifact(t, repo, sessionID)
+
+	left := fmt.Errorf("the removal did not finish: %w", memoryfiles.ErrVaultResidue)
+	repo.recordUnremovedVaultFile(ctx(), candidate, candidate.ContentHash, left)
+
+	if state := vaultArtifactState(t, repo, artifact.ArtifactID); state != VaultArtifactStateDeleteFailed {
+		t.Fatalf("artifact state = %q, want the row kept for the copy that was left", state)
+	}
+
+	// A failure that moved nothing is not that, and must not mark the row:
+	// every mark is an audit row and a row reconcile will stop tidying.
+	other, second := seedVaultDeletableSession(t, repo, "cats", "The user has two cats.")
+	untouched := onlyVaultArtifact(t, repo, other)
+	repo.recordUnremovedVaultFile(ctx(), second, second.ContentHash, errors.New("the request ended"))
+	if state := vaultArtifactState(t, repo, untouched.ArtifactID); state != VaultArtifactStateReady {
+		t.Fatalf("artifact state = %q, want a row nothing happened to left alone", state)
+	}
+}
+
+// A proposal whose frontmatter will not parse is rejected through the door that
+// binds to the bytes the pre-check hashed rather than to a note it could read.
+// Those bytes are still bytes: a copy an earlier attempt left behind is one
+// this rejection can name, and must take with it.
+func TestHashlessRejectionTakesResidueOfTheBytesItRead(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID, candidate := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
+	_ = sessionID
+
+	// The user breaks the proposal's frontmatter in their editor.
+	const broken = "---\nnot: [valid\n---\n\nThe user keeps bees.\n"
+	writeVaultNote(t, vault, candidate.InboxPath, broken)
+	residue := filepath.Join(vault.Root(), memoryfiles.InboxDirName, ".turing-memory-1111111111111111aaaaaaaa")
+	if err := os.WriteFile(residue, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{
+		CandidateID: candidate.CandidateID,
+	}); err != nil {
+		t.Fatalf("RejectMemoryCandidate: %v", err)
+	}
+	if entries := inboxEntries(t, vault); len(entries) != 0 {
+		t.Fatalf("inbox = %v, want the rejected proposal gone under every name", entries)
+	}
+}
+
+// A sweep that cannot finish says nothing about a row that never named any
+// bytes. Those rows are the crash artifact whose write never landed, and they
+// have to be able to drain or every such crash strands a withdrawal forever.
+func TestASweepFailureDoesNotStrandARowThatNamesNoBytes(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every file regardless of mode")
+	}
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+	reservation, err := repo.ReserveVaultArtifact(ctx(), ReserveVaultArtifactInput{
+		SessionID: sessionID, VaultPath: "inbox/01M0000000000000000000000X-never-written.md",
+	})
+	if err != nil {
+		t.Fatalf("ReserveVaultArtifact: %v", err)
+	}
+
+	sealed := filepath.Join(vault.Root(), memoryfiles.InboxDirName, ".turing-memory-2222222222222222bbbbbbbb")
+	if err := os.WriteFile(sealed, []byte("something nobody can read"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sealed, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sealed, 0o600) })
+
+	removed, err := repo.PurgeSessionVaultArtifacts(ctx(), sessionID)
+	if err != nil {
+		t.Fatalf("PurgeSessionVaultArtifacts: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("the cleaner drained %d row(s), want the reservation whose write never landed", removed)
+	}
+	if got := vaultArtifactRows(t, repo, sessionID); got != 0 {
+		t.Fatalf("manifest rows = %d, want the unwritten reservation drained", got)
+	}
+	_ = reservation
 }

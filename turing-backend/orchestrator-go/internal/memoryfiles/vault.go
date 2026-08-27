@@ -106,6 +106,17 @@ var (
 	// caller this is one more refusal that leaves the proposal exactly where it
 	// was, and only the sentence a person reads is different.
 	ErrUnprovableEntry = errors.New("the entry could not be opened to prove what a removal would remove")
+	// ErrVaultResidue marks a failure that left bytes reachable under a name
+	// only this package can spell: the reserved name a detach put them under,
+	// or a recovery name a rescue took.
+	//
+	// It exists for the callers that hold a durable record of a file — a
+	// manifest row, a proposal — because those records name the path the bytes
+	// came off, and that path is exactly the one that now holds nothing. A
+	// caller that reads only "the removal failed" and later finds the path
+	// empty retires the record, and the bytes stay in the user's vault with
+	// nothing able to find them. What this says is: keep the record.
+	ErrVaultResidue = errors.New("bytes were left under a name only the vault can produce")
 
 	// ErrAlreadyExists is real exclusivity: the final name was already taken.
 	ErrAlreadyExists = errors.New("file already exists")

@@ -155,9 +155,9 @@ func (d *detachedEntry) discard() (bool, error) {
 		// The name holds the entry again exactly when the link happened,
 		// whether or not the flush that would survive a crash did.
 		gone := !placement.restored && !placement.linkedBack
-		return gone, fmt.Errorf(
+		return gone, withResidueMarker(placement, fmt.Errorf(
 			"remove the detached %q: %w; %s", d.clean, err, placement.afterFailedRemoval(),
-		)
+		))
 	}
 	if err := d.vault.syncDirectory(d.parent); err != nil {
 		return true, fmt.Errorf("sync vault directory after removing %q: %w", d.clean, err)
@@ -251,6 +251,14 @@ type detachedPlacement struct {
 	// known to have survived a crash, and a caller that says where a file is
 	// owes the reader that.
 	flushErr error
+}
+
+// leavesResidue reports whether these bytes are reachable under a name only
+// this package can spell — the reserved staging one, or a recovery name a
+// rescue took. It is the question a caller with a record to retire has to ask:
+// the path that record names may hold nothing while the file is still there.
+func (p detachedPlacement) leavesResidue() bool {
+	return p.recoveryRelPath != "" || (p.residueRelPath != "" && p.residueRemains)
 }
 
 // clean reports whether the entry is back under its own name with nothing left
@@ -695,6 +703,29 @@ func (v *Vault) removeVerifiedEntry(
 	}
 	return removalDone, detachedPlacement{}, "", nil
 }
+
+// withResidueMarker adds the one fact a caller holding a record has to be able
+// to match on: these bytes are still somewhere, under a name nothing outside
+// this package can produce. Without it, a caller that reads only "the removal
+// failed" retires the record that names the file — and the path that record
+// names is exactly the one that now holds nothing.
+//
+// It adds nothing to the sentence: the placement has already said where the
+// bytes are, in words. This is for errors.Is.
+func withResidueMarker(placement detachedPlacement, err error) error {
+	if err == nil || !placement.leavesResidue() {
+		return err
+	}
+	return &residueError{err: err}
+}
+
+// residueError carries ErrVaultResidue beside a failure without spending a word
+// on it.
+type residueError struct{ err error }
+
+func (e *residueError) Error() string { return e.err.Error() }
+
+func (e *residueError) Unwrap() []error { return []error{ErrVaultResidue, e.err} }
 
 // endedRemoval is the cancellation a compensating removal answers with, carrying
 // where it left the bytes.

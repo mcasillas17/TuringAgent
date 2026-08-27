@@ -1,39 +1,26 @@
-fix(memory): keep every record that can still find a file, and refuse a path Compose would rewrite
+fix(memory): record the copy a vault failure left, and sweep the bytes a hashless door read
 
-Round 20 review, GPT-5.6 Terra. Six findings, all on paths this round
-touched.
+Round 20 review, Opus 5. Three findings, all on paths this round touched.
 
-A decision retires the manifest row for the file it removed, and the same
-bytes can be under a reserved name an earlier attempt could not drop.
-Rejection, promotion and both profile-apply paths now take those copies
-with them, and report the file as not gone when they cannot -- so the row
-is kept and marked instead of retired over a copy nothing can name.
+A decision whose vault call fails returns before it opens a transaction,
+so nothing was written down: the proposal stayed pending and its manifest
+row stayed ready. For a refusal that moved nothing that is right. For the
+one that left the bytes under a reserved or recovery name it is how they
+become unreachable -- the path the row records holds nothing, reconcile
+releases the row for exactly that reason, and the last thing that could
+find the file goes with it. A failure that left a copy now says so, in a
+way a caller can match on rather than only read, and the three decision
+entry points mark the row before returning it.
 
-The bytes a decision acts on are not always the bytes the row was created
-with: a user may edit a proposal in their vault before accepting it. A
-tidying that fails now records what it actually acted on, so the row can
-still prove ownership; bound to the words Turing first proposed it would
-refuse forever and the session would never finish deleting.
+A proposal whose frontmatter will not parse is rejected through the door
+bound to the bytes the pre-check hashed. Those are bytes like any other,
+so the rejection now sweeps copies of them too; before, the sweep was
+handed an empty hash, did nothing, and the row was retired over a copy
+it could have named.
 
-An entry the residue sweep cannot read is not evidence that a file is
-gone, so it refuses instead of reporting a clear vault, and the bound is
-on what it reads rather than on what it happens to match.
-
-A vault whose root cannot be opened is not an absence. Reporting one as
-"the file is gone" retires every record naming every note on a disk
-nobody has attached. Every absence that retires a record now goes through
-the primitive that proves it, including the crash-recovery path for an
-applied profile edit.
-
-And a display root that is not single-quoted is refused before launch:
-Compose interpolates bare and double-quoted values, so a line left by an
-older install can name TURING_INTEGRATION_KEY and reach the Memory page
-as that key.
-
-Two findings are answered rather than changed, and are written down in
-the governance document: a promotion whose original cannot be put back
-keeps the belief it wrote, and the sweep can only be raced by a writer
-staging byte-identical content, which for this package means the same
-note identity and so the same session.
+And a sweep that cannot finish no longer strands the rows it was never
+asked about. A row that named no bytes contributed no hash -- it is the
+crash artifact whose write never landed -- and it has to be able to
+drain, the more so now that reconcile leaves a marked row alone.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

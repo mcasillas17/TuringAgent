@@ -265,6 +265,7 @@ func (r *Repository) PromoteMemoryCandidate(ctx context.Context, decision Memory
 		ExpectedContentHash: decided.ContentHash,
 	})
 	if err != nil {
+		r.recordUnremovedVaultFile(ctx, candidate, decided.ContentHash, err)
 		return MemoryNote{}, err
 	}
 	if r.memoryPromotionBarrier != nil {
@@ -447,6 +448,47 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 	}
 	result.CleanupPending = !r.finishProfileApply(ctx, vault, candidate, decided.ContentHash)
 	return result, nil
+}
+
+// recordUnremovedVaultFile keeps the manifest row for a file a vault call left
+// somewhere only the vault can name.
+//
+// A decision that fails before it opens a transaction writes nothing: the
+// proposal stays pending and its manifest row stays 'ready'. That is right for
+// a refusal that moved nothing, and wrong for the one that left the bytes under
+// a reserved or recovery name — because the path that row records now holds
+// nothing, and reconcile's tidying would release it for exactly that reason,
+// taking the last thing that could ever find those bytes with it.
+//
+// So the row is marked, and only then. The mark is what reconcile honours and
+// what keeps the file in the session cleaner's worklist, where ownership is
+// proved again before anything is removed. A failure that says nothing about
+// residue leaves the row alone: every mark is an audit row and a row the
+// tidying stops touching.
+func (r *Repository) recordUnremovedVaultFile(
+	ctx context.Context,
+	candidate MemoryCandidate,
+	actedHash string,
+	cause error,
+) {
+	if !errors.Is(cause, memoryfiles.ErrVaultResidue) {
+		return
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		log.Printf("record the vault copy left by memory proposal %s: %v", candidate.CandidateID, err)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := markUnremovedVaultArtifactTx(
+		ctx, tx, candidate.SourceSessionID, candidate.InboxPath, actedHash, vaultArtifactRemoveFailedCode,
+	); err != nil {
+		log.Printf("record the vault copy left by memory proposal %s: %v", candidate.CandidateID, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		log.Printf("record the vault copy left by memory proposal %s: %v", candidate.CandidateID, err)
+	}
 }
 
 // sweepDecidedResidue takes the copies an earlier attempt could not remove away
@@ -662,13 +704,14 @@ func (r *Repository) RejectMemoryCandidate(ctx context.Context, decision MemoryC
 	}
 	r.decisionFileBarrier()
 	if err := vault.RemoveInboxNote(ctx, rejectionRemoval(candidate.InboxPath, decided)); err != nil {
+		r.recordUnremovedVaultFile(ctx, candidate, decidedRemovalHash(decided), err)
 		return err
 	}
 	// The proposal is gone from its name. Whether every copy of it is gone is
 	// a second question, and the answer decides whether the manifest row that
 	// tracks the file may be retired with the decision.
 	removed := true
-	if err := sweepDecidedResidue(ctx, vault, decided.ContentHash); err != nil {
+	if err := sweepDecidedResidue(ctx, vault, decidedRemovalHash(decided)); err != nil {
 		log.Printf("clear reserved copies of rejected memory proposal %s: %v", candidate.CandidateID, err)
 		removed = false
 	}
@@ -791,6 +834,18 @@ func (r *Repository) pendingCandidateForDecision(ctx context.Context, candidateI
 // separately can be lost while the change it describes survives. It carries the
 // candidate's identity, its kind and the decision — never the claim it made,
 // the file it lived in, the conversation that produced it, or any hash.
+// decidedRemovalHash names the bytes a rejection was entitled to remove,
+// whichever door it went through. A proposal that read back as a note is bound
+// to its content hash; one whose frontmatter nobody could parse is bound to the
+// hash of whatever the pre-check did read. Both are bytes, and bytes are what
+// authorise taking a copy of them away with the decision.
+func decidedRemovalHash(decided decidedCandidateFile) string {
+	if decided.ContentHash != "" {
+		return decided.ContentHash
+	}
+	return decided.Unreadable.BoundHash()
+}
+
 func consumeMemoryCandidateTx(
 	ctx context.Context,
 	tx *sql.Tx,

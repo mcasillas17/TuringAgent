@@ -2,6 +2,7 @@ package memoryfiles
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -194,5 +195,63 @@ func TestRemovalRefusesWhenTheVaultRootIsNotThere(t *testing.T) {
 	}
 	if absent {
 		t.Fatal("a missing vault root was reported as a proven absence")
+	}
+}
+
+// A failure that leaves the bytes reachable under a name only this package can
+// spell has to say so in a way a caller can match on. The record that names the
+// file is what a later sweep works from, and a caller that cannot tell "the
+// removal did nothing and left a copy" from "the removal was refused and
+// nothing moved" is a caller that retires that record.
+func TestAFailureThatLeavesBytesUnderAReservedNameSaysSo(t *testing.T) {
+	const decided = "the proposal this session wrote"
+	vault, err := openVaultWithRemovalSeams(
+		newTestVaultRoot(t), realSyncHooks(), nil, nil,
+		func(name string, unlink func() error) error {
+			if strings.HasPrefix(name, stagingPrefix) {
+				return errStagingUnlink
+			}
+			return unlink()
+		},
+	)
+	if err != nil {
+		t.Fatalf("open vault: %v", err)
+	}
+	writeVaultFile(t, vault, "inbox/note.md", decided)
+
+	removeErr := vault.RemoveInboxNote(context.Background(), retiredRemoval("inbox/note.md", decided))
+	if removeErr == nil {
+		t.Fatal("a removal whose unlink failed reported success")
+	}
+	if !errors.Is(removeErr, ErrVaultResidue) {
+		t.Fatalf("the failure does not say a copy was left behind: %v", removeErr)
+	}
+
+	// And the refusal beside it: the file is rewritten in place after the check
+	// and something else takes its name while it is detached, so it cannot go
+	// back and is kept under a name of this package's own making.
+	var contested *Vault
+	contested, err = openVaultWithRemovalSeams(
+		newTestVaultRoot(t), realSyncHooks(),
+		func(phase detachPhase, _ string) {
+			switch phase {
+			case detachPhaseBeforeDetach:
+				rewriteInPlace(t, contested, "inbox/note.md", "the words the user typed after they decided")
+			case detachPhaseBeforeRestore:
+				writeVaultFile(t, contested, "inbox/note.md", "a file the user saved under that name")
+			}
+		},
+		nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("open vault: %v", err)
+	}
+	writeVaultFile(t, contested, "inbox/note.md", decided)
+	refusal := contested.RemoveInboxNote(context.Background(), retiredRemoval("inbox/note.md", decided))
+	if refusal == nil {
+		t.Fatal("a removal of bytes it could not prove were its own reported success")
+	}
+	if !errors.Is(refusal, ErrVaultResidue) {
+		t.Fatalf("the refusal does not say where the bytes were kept: %v", refusal)
 	}
 }

@@ -216,6 +216,12 @@ These are known, bounded, and deliberately not claimed away:
   the bytes stay under the reserved name and both places are named: a decided
   proposal is never republished into the inbox as a fresh draft, because the
   user has already answered it.
+- **A vault failure that left a copy is recorded before it is returned.** A
+  decision that fails inside the vault writes nothing else: the proposal stays
+  pending and its manifest row stays as it was. When the failure says bytes were
+  left under a name only the vault can produce, the row is marked first, because
+  the path it records now holds nothing and the tidying below would otherwise
+  release it — taking the last thing that could find those bytes with it.
 - **A manifest row whose cleanup failed is not released by the reconcile
   pass.** Reconcile releases reservations whose path the inbox no longer holds,
   and a failed removal is one of the ways a path comes to hold nothing. A row
