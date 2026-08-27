@@ -152,6 +152,15 @@ env_literal_value() {
       raw="${raw#\"}"
       raw="${raw%\"}"
       ;;
+    *)
+      # A bare value ends at an inline comment and is trimmed of the space
+      # around it, which is how Compose reads one. Keeping the rest of the line
+      # would validate a folder nobody has and then hand it to the stack as the
+      # one to open.
+      raw="${raw%%[[:space:]]\#*}"
+      raw="${raw#"${raw%%[![:space:]]*}"}"
+      raw="${raw%"${raw##*[![:space:]]}"}"
+      ;;
   esac
   printf '%s\n' "$raw"
 }

@@ -307,3 +307,23 @@ func TestComposeRecoveryRetryDropsTheEnvFileAndABadProjectName(t *testing.T) {
 		t.Fatalf("docker was never asked to tear down: %q", result.dockerLog)
 	}
 }
+
+// A .env line an operator wrote by hand is read the way Compose reads it. An
+// unquoted value ends at an inline comment and is trimmed of surrounding
+// space, so the wrapper must hand the stack the same string Compose would have
+// — not the raw remainder of the line, which names a folder nobody has.
+func TestComposeLaunchReadsABareDisplayRootTheWayComposeDoes(t *testing.T) {
+	root := t.TempDir()
+	vault := filepath.Join(root, "memory")
+	result := executeComposeWithSetupIn(t, root, true, "501", "20", "501", "20",
+		func(t *testing.T, root string) {
+			writeComposeEnv(t, root,
+				"TURING_CLIENT_API_KEY=client\nMEMORY_DISPLAY_ROOT=  "+vault+"   # the host vault\n")
+		}, nil, "up")
+	if result.err != nil {
+		t.Fatalf("compose.sh refused a value Compose accepts: %v\n%s", result.err, result.output)
+	}
+	if !strings.Contains(result.dockerLog, "MEMORY_DISPLAY_ROOT="+vault+"\n") {
+		t.Fatalf("docker was handed %q, want the path Compose would have read (%q)", result.dockerLog, vault)
+	}
+}
