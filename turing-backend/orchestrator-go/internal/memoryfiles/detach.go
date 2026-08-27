@@ -160,7 +160,14 @@ func (d *detachedEntry) discard() (bool, error) {
 		))
 	}
 	if err := d.vault.syncDirectory(d.parent); err != nil {
-		return true, fmt.Errorf("sync vault directory after removing %q: %w", d.clean, err)
+		// The name is gone here and not on disk, and neither is the rename
+		// that put the bytes under the reserved one. A crash now can bring
+		// that name back with the original path still empty, which is a copy
+		// under a name no listing shows — so a caller holding a record of this
+		// file is owed the same marker a refused unlink carries, or it retires
+		// the record for the absence the crash undid.
+		return true, &residueError{err: fmt.Errorf(
+			"sync vault directory after removing %q: %w", d.clean, err)}
 	}
 	return true, nil
 }

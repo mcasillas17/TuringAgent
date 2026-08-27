@@ -454,3 +454,37 @@ func TestHashlessRejectionKeepsARowBoundToTheBytesItRead(t *testing.T) {
 		t.Fatalf("artifact state = %q, want the row kept for the copy the sweep could not clear", state)
 	}
 }
+
+// A row whose visible path now holds somebody else's file cannot be drained —
+// that is the trade this manifest already makes — but the copy of Turing's own
+// note that a failed removal left under a reserved name is still Turing's to
+// take. Sweeping only for the rows that drained would leave those bytes in the
+// vault for as long as the user's file sits at that path, which may be forever.
+func TestVaultCleanupSweepsResidueEvenWhenThePathIsContested(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID, candidate := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
+	artifact := onlyVaultArtifact(t, repo, sessionID)
+	content := readVaultNote(t, vault, candidate.InboxPath)
+
+	// What a failed removal into a taken name leaves: Turing's bytes under the
+	// reserved name, somebody else's file under the visible one.
+	residue := filepath.Join(vault.Root(), memoryfiles.InboxDirName, ".turing-memory-4444444444444444dddddddd")
+	if err := os.WriteFile(residue, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const theirs = "---\ntitle: my own note\n---\n\nSomething I wrote myself.\n"
+	writeVaultNote(t, vault, candidate.InboxPath, theirs)
+
+	if _, err := repo.PurgeSessionVaultArtifacts(ctx(), sessionID); err == nil {
+		t.Fatal("cleanup reported success over a file it could not prove it wrote")
+	}
+	if state := vaultArtifactState(t, repo, artifact.ArtifactID); state != VaultArtifactStateDeleteFailed {
+		t.Fatalf("artifact state = %q, want the row kept for the contested path", state)
+	}
+	if got := readVaultNote(t, vault, candidate.InboxPath); got != theirs {
+		t.Fatalf("the user's own file was disturbed: %q", got)
+	}
+	if _, err := os.Lstat(residue); !os.IsNotExist(err) {
+		t.Fatalf("the reserved copy of Turing's own note is still there: %v", err)
+	}
+}

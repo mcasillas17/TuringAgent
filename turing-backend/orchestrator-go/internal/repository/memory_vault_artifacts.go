@@ -588,7 +588,12 @@ func (r *Repository) PurgeSessionVaultArtifacts(ctx context.Context, sessionID s
 	// no listing shows, so the reserved copies of exactly these bytes go too —
 	// and a row whose second copy would not go stays.
 	removed := make([]string, 0, len(cleared))
-	residue, residueErr := vault.RemoveInboxResidue(ctx, clearedContentHashes(cleared))
+	// Every row that names bytes, not only the ones that drained. A row whose
+	// visible path now holds somebody else's file cannot be drained — that is
+	// the trade this manifest makes deliberately — but the copy of Turing's own
+	// note that a failed removal left under a reserved name is still Turing's
+	// to take, and waiting for the path to clear could mean waiting forever.
+	residue, residueErr := vault.RemoveInboxResidue(ctx, artifactContentHashes(artifacts))
 	for _, artifact := range cleared {
 		// A row that named no bytes contributed no hash, so a sweep that could
 		// not finish says nothing about it. Those rows are the crash artifact
@@ -638,13 +643,13 @@ func (r *Repository) PurgeSessionVaultArtifacts(ctx context.Context, sessionID s
 	)
 }
 
-// clearedContentHashes names the bytes a pass has already been entitled to
-// delete, which is exactly what the residue sweep may act on. A row that never
-// named any bytes contributes nothing: it could not authorise a removal at its
-// own path and it cannot authorise one under a reserved name either.
-func clearedContentHashes(cleared []VaultArtifact) []string {
-	hashes := make([]string, 0, len(cleared))
-	for _, artifact := range cleared {
+// artifactContentHashes names the bytes this pass is entitled to delete, which
+// is exactly what the residue sweep may act on. A row that never named any
+// bytes contributes nothing: it could not authorise a removal at its own path
+// and it cannot authorise one under a reserved name either.
+func artifactContentHashes(artifacts []VaultArtifact) []string {
+	hashes := make([]string, 0, len(artifacts))
+	for _, artifact := range artifacts {
 		if artifact.ExpectedContentHash != "" {
 			hashes = append(hashes, artifact.ExpectedContentHash)
 		}

@@ -323,3 +323,24 @@ func TestResidueSweepStepsOverAReservedNameThatIsNotAFile(t *testing.T) {
 		t.Fatalf("the real residue was not removed: %v", err)
 	}
 }
+
+// The unlink happened and the flush that would make it survive a crash did
+// not. The detach that put the bytes under the reserved name was not flushed
+// either, so a crash there can bring that name back with the original path
+// still empty — which is a copy under a name no listing shows, and the record
+// that could find it is about to be retired for exactly that absence.
+func TestAFailedFlushAfterTheUnlinkSaysACopyMayComeBack(t *testing.T) {
+	const decided = "the proposal this session wrote"
+	recorder := &syncRecorder{}
+	vault := openTestVault(t, newTestVaultRoot(t), recorder.hooks())
+	writeVaultFile(t, vault, "inbox/note.md", decided)
+
+	recorder.setFailDirectorySyncNumber(1)
+	err := vault.RemoveInboxNote(context.Background(), retiredRemoval("inbox/note.md", decided))
+	if err == nil {
+		t.Fatal("a removal whose post-unlink flush failed reported success")
+	}
+	if !errors.Is(err, ErrVaultResidue) {
+		t.Fatalf("the failure does not say a copy may come back: %v", err)
+	}
+}
