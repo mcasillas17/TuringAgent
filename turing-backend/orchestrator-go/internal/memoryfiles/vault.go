@@ -839,7 +839,15 @@ func (v *Vault) installNotCommitted(
 	if undoErr := v.undoInstall(parent, leaf, clean, installed, content); undoErr != nil {
 		// Nothing of the file's contents goes into this: the caller logs it and
 		// may hand it on, and what the entry says is the user's business.
-		return fmt.Errorf("%w (undoing the entry this write installed at %q did not finish: %v)", cause, clean, undoErr)
+		reported := fmt.Errorf("%w (undoing the entry this write installed at %q did not finish: %v)", cause, clean, undoErr)
+		if errors.Is(undoErr, ErrVaultResidue) {
+			// The undo left the bytes under a name only this package can spell.
+			// The caller's own record of this path is the only thing that can
+			// reach them, and it is about to be told the write failed — so the
+			// marker and the bytes travel with that.
+			return &residueError{err: reported, hash: ContentHash(content)}
+		}
+		return reported
 	}
 	return cause
 }

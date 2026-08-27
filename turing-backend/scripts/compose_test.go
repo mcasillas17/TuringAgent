@@ -642,7 +642,7 @@ func executeComposeWithSetupIn(
 		"printf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n" +
 		"if [ -n \"$DOCKER_REFUSE_ENV_FILE\" ]; then\n" +
 		"  case \"$*\" in\n" +
-		"    *--env-file*)\n" +
+		"    *--env-file\\ .env*)\n" +
 		"      echo 'required variable NOTHING_SETS_THIS is missing a value' >&2\n" +
 		"      exit 1\n" +
 		"      ;;\n" +

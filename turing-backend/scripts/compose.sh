@@ -411,13 +411,16 @@ if [[ -f .env ]]; then
   # carried across — but only when it is a name Compose will accept. A value
   # that is not is exactly the kind of thing that made the first attempt fail.
   configured_project="$(env_literal_value COMPOSE_PROJECT_NAME)"
+  # An empty env file rather than none at all: Compose looks for a .env of its
+  # own next to the project directory, and a caller who named that directory
+  # would hand it back the very file this retry exists to get away from.
   if [[ "$configured_project" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
     exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \
-      docker compose --project-name "$configured_project" -f infra/docker-compose.yml \
-      "${recovery_arguments[@]}"
+      docker compose --env-file /dev/null --project-name "$configured_project" \
+      -f infra/docker-compose.yml "${recovery_arguments[@]}"
   fi
   exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \
-    docker compose -f infra/docker-compose.yml "${recovery_arguments[@]}"
+    docker compose --env-file /dev/null -f infra/docker-compose.yml "${recovery_arguments[@]}"
 fi
 if ! is_recovery_command "$@"; then
   printf 'Compose launch failed: .env is missing; run ./scripts/init.sh first.\n' >&2

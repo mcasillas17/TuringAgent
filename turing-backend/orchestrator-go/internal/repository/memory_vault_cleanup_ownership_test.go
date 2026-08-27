@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -537,5 +538,22 @@ func TestReconcileKeepsAReadyRowWhoseBytesAreUnderAReservedName(t *testing.T) {
 	}
 	if entries := inboxEntries(t, vault); len(entries) != 0 {
 		t.Fatalf("inbox = %v, want nothing left behind", entries)
+	}
+}
+
+// A request that ends is one of the ways a removal leaves a copy, and the
+// record of it must not be stopped by the same cancellation.
+func TestACancelledDecisionStillRecordsTheCopyItLeft(t *testing.T) {
+	repo, _, _ := newMemoryTestRepo(t)
+	sessionID, candidate := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
+	artifact := onlyVaultArtifact(t, repo, sessionID)
+
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	left := fmt.Errorf("the request ended: %w", errors.Join(context.Canceled, memoryfiles.ErrVaultResidue))
+	repo.recordUnremovedVaultFile(ended, candidate, candidate.ContentHash, left)
+
+	if state := vaultArtifactState(t, repo, artifact.ArtifactID); state != VaultArtifactStateDeleteFailed {
+		t.Fatalf("artifact state = %q, want the row kept for the copy the cancellation left", state)
 	}
 }

@@ -266,8 +266,13 @@ func TestComposeRecoverySurvivesAnEnvFileComposeWillNotRead(t *testing.T) {
 	if result.err != nil {
 		t.Fatalf("compose.sh gave up on teardown over an unreadable .env: %v\n%s", result.err, result.output)
 	}
-	if strings.Contains(result.dockerLog, "--env-file") {
+	if strings.Contains(result.dockerLog, "--env-file .env") {
 		t.Fatalf("the retry still handed compose the .env it refused: %q", result.dockerLog)
+	}
+	// And it names an empty one instead, so Compose cannot discover that file
+	// for itself from a project directory the caller chose.
+	if !strings.Contains(result.dockerLog, "--env-file /dev/null") {
+		t.Fatalf("the retry let compose look for a .env of its own: %q", result.dockerLog)
 	}
 	if !strings.Contains(result.dockerLog, "down --remove-orphans") {
 		t.Fatalf("docker was never asked to tear down: %q", result.dockerLog)
@@ -287,8 +292,13 @@ func TestComposeRecoveryRetryDropsTheEnvFileAndABadProjectName(t *testing.T) {
 	if result.err != nil {
 		t.Fatalf("compose.sh gave up on teardown: %v\n%s", result.err, result.output)
 	}
-	if strings.Contains(result.dockerLog, "--env-file") {
+	if strings.Contains(result.dockerLog, "--env-file .env") {
 		t.Fatalf("the retry still handed compose the .env it refused: %q", result.dockerLog)
+	}
+	// And it names an empty one instead, so Compose cannot discover that file
+	// for itself from a project directory the caller chose.
+	if !strings.Contains(result.dockerLog, "--env-file /dev/null") {
+		t.Fatalf("the retry let compose look for a .env of its own: %q", result.dockerLog)
 	}
 	if strings.Contains(result.dockerLog, "--project-name") {
 		t.Fatalf("the retry carried a project name compose would reject: %q", result.dockerLog)

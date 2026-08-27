@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 )
@@ -465,6 +466,10 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 // proved again before anything is removed. A failure that says nothing about
 // residue leaves the row alone: every mark is an audit row and a row the
 // tidying stops touching.
+// unremovedVaultFileRecordTimeout bounds that record, so a hung database cannot
+// hold a decision open on a failure it is already returning.
+const unremovedVaultFileRecordTimeout = 5 * time.Second
+
 func (r *Repository) recordUnremovedVaultFile(
 	ctx context.Context,
 	candidate MemoryCandidate,
@@ -474,6 +479,13 @@ func (r *Repository) recordUnremovedVaultFile(
 	if !errors.Is(cause, memoryfiles.ErrVaultResidue) {
 		return
 	}
+	// Its own deadline, detached from the caller's. A request that ended is one
+	// of the ways a removal leaves a copy, and the record of it is what keeps
+	// anything able to find those bytes — so it must not be the same
+	// cancellation that stops it being written.
+	record, cancel := context.WithTimeout(context.WithoutCancel(ctx), unremovedVaultFileRecordTimeout)
+	defer cancel()
+	ctx = record
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		log.Printf("record the vault copy left by memory proposal %s: %v", candidate.CandidateID, err)
