@@ -59,8 +59,13 @@ func SanitizeSkillDisplayName(displayName, skillID string) string {
 	return sanitized
 }
 
+// skillDisplayNameEmptyCutset ends with a space on purpose: input arrives from
+// sanitizeSkillDisplayText already whitespace-collapsed, so trimming single
+// spaces alongside path separators is what lets "/ /" count as empty.
+const skillDisplayNameEmptyCutset = `/\ `
+
 func isEmptySkillDisplayName(value string) bool {
-	return value == "" || strings.Trim(value, `/\`) == ""
+	return value == "" || strings.Trim(value, skillDisplayNameEmptyCutset) == ""
 }
 
 func sanitizeSkillDisplayText(value string) string {

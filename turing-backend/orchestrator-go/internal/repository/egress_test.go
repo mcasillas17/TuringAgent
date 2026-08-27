@@ -532,6 +532,13 @@ func TestEnqueueReturnsSpecificWrappedSentinelWhenSkillSnapshotChanged(t *testin
 	}
 }
 
+func withSkillCategory(decision *PendingEgressDecision) {
+	decision.DataCategories = append(
+		append([]string(nil), decision.DataCategories[:2]...),
+		append([]string{"EGRESS_DATA_CATEGORY_SKILL_CONTENT"}, decision.DataCategories[2:]...)...,
+	)
+}
+
 func TestRemoteEgressNoticeNamesOnlyCategoryDisclosedSkills(t *testing.T) {
 	t.Run("remote skill category names skills", func(t *testing.T) {
 		repo, root := newSkillRepository(t)
@@ -543,10 +550,7 @@ func TestRemoteEgressNoticeNamesOnlyCategoryDisclosedSkills(t *testing.T) {
 		}
 		decision := remoteDecision()
 		decision.SkillSnapshotFingerprint = fingerprint
-		decision.DataCategories = append(
-			append([]string(nil), decision.DataCategories[:2]...),
-			append([]string{"EGRESS_DATA_CATEGORY_SKILL_CONTENT"}, decision.DataCategories[2:]...)...,
-		)
+		withSkillCategory(decision)
 		note := enqueueEgressNoticeNote(t, repo, decision, "openai_compatible")
 		if !strings.Contains(note, "Skills that may be sent: Tone Guide") {
 			t.Fatalf("notice = %q, want skill name", note)
@@ -586,6 +590,25 @@ func TestRemoteEgressNoticeNamesOnlyCategoryDisclosedSkills(t *testing.T) {
 		note := enqueueEgressNoticeNote(t, repo, decision, "ollama")
 		if strings.Contains(note, "Skills that may be sent:") || strings.Contains(note, "Tone Guide") {
 			t.Fatalf("notice = %q, want no skill line", note)
+		}
+	})
+
+	t.Run("remote skill category over empty snapshot has no dangling skill line", func(t *testing.T) {
+		repo, _ := newSkillRepository(t)
+		fingerprint, _, err := repo.EgressSkillSnapshotFingerprint(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision := remoteDecision()
+		decision.SkillSnapshotFingerprint = fingerprint
+		withSkillCategory(decision)
+		note := enqueueEgressNoticeNote(t, repo, decision, "openai_compatible")
+		if strings.Contains(note, "Skills that may be sent:") {
+			t.Fatalf("notice = %q, want no dangling skill line", note)
+		}
+		if !strings.Contains(note, "Enabled skill content") ||
+			!strings.Contains(note, "Data leaves your machine") {
+			t.Fatalf("notice = %q, want category line and egress warning intact", note)
 		}
 	})
 }

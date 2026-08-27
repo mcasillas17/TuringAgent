@@ -87,7 +87,7 @@ func addDisclosedSkill(job *turingv1.AgentJob) {
 	slices.Sort(job.EgressDecision.DataCategories)
 }
 
-func TestRemoteRunWithDisclosedSkillExecutes(t *testing.T) {
+func newRoutedRemoteAssistant() (*GeneralAssistant, *scriptedProvider) {
 	remote := &scriptedProvider{
 		endpoint: "https://api.anthropic.com/v1",
 		events:   []llm.StreamEvent{{Type: "completed", FinishReason: "stop"}},
@@ -96,6 +96,11 @@ func TestRemoteRunWithDisclosedSkillExecutes(t *testing.T) {
 	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
 		return remote, nil
 	})
+	return assistant, remote
+}
+
+func TestRemoteRunWithDisclosedSkillExecutes(t *testing.T) {
+	assistant, remote := newRoutedRemoteAssistant()
 	job := routedJob()
 	addDisclosedSkill(job)
 
@@ -109,18 +114,26 @@ func TestRemoteRunWithDisclosedSkillExecutes(t *testing.T) {
 }
 
 func TestRemoteRunRejectsSkillCategoryWithEmptySnapshot(t *testing.T) {
+	assistant, remote := newRoutedRemoteAssistant()
 	job := routedJob()
 	job.EgressDecision.DataCategories = append(
 		job.EgressDecision.DataCategories,
 		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_SKILL_CONTENT,
 	)
 	slices.Sort(job.EgressDecision.DataCategories)
-	if err := validateEgressDecisionShape(job); err == nil {
-		t.Fatal("decision disclosed skill content for an empty snapshot")
+
+	updates := collectUpdates(t, assistant, job)
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "egress_decision_invalid" || failure.GetRetryable() {
+		t.Fatalf("failure = %+v, want non-retryable egress_decision_invalid", failure)
+	}
+	if len(remote.requests) != 0 {
+		t.Fatalf("remote provider requests = %d, want 0", len(remote.requests))
 	}
 }
 
 func TestRemoteRunRejectsUndisclosedNonEmptySkillSnapshot(t *testing.T) {
+	assistant, remote := newRoutedRemoteAssistant()
 	job := routedJob()
 	job.Skills = []*turingv1.SkillSnapshot{{
 		SkillId: "writing/tone", Name: "Tone", Instructions: "Be concise.",
@@ -130,17 +143,19 @@ func TestRemoteRunRejectsUndisclosedNonEmptySkillSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	job.EgressDecision.SkillSnapshotFingerprint = fingerprint
-	if err := validateEgressDecisionShape(job); err == nil {
-		t.Fatal("decision omitted skill content for a non-empty snapshot")
+
+	updates := collectUpdates(t, assistant, job)
+	failure := findRunFailed(updates)
+	if failure == nil || failure.GetCode() != "egress_decision_invalid" || failure.GetRetryable() {
+		t.Fatalf("failure = %+v, want non-retryable egress_decision_invalid", failure)
+	}
+	if len(remote.requests) != 0 {
+		t.Fatalf("remote provider requests = %d, want 0", len(remote.requests))
 	}
 }
 
 func TestRoutedRunRejectsMissingEgressDecisionBeforeProviderIO(t *testing.T) {
-	remote := &scriptedProvider{endpoint: "https://api.anthropic.com/v1", events: []llm.StreamEvent{{Type: "completed", FinishReason: "stop"}}}
-	assistant := NewGeneralAssistant(nil, fakeMessageClient{}, &GeneralAssistantTools{})
-	assistant.SetExternalAgentProvider(func(*turingv1.ExternalAgentTarget) (llm.Provider, error) {
-		return remote, nil
-	})
+	assistant, remote := newRoutedRemoteAssistant()
 	job := routedJob()
 	job.EgressDecision = nil
 

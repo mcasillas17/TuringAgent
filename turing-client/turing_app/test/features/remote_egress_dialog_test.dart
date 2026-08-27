@@ -61,6 +61,24 @@ void main() {
     expect(find.text('Must Not Render'), findsNothing);
   });
 
+  testWidgets('skill header is not rendered when the skill list is empty', (
+    tester,
+  ) async {
+    final disclosure = RemoteEgressDisclosure(
+      challenge: 'challenge',
+      provider: 'openai_compatible',
+      model: 'remote',
+      endpoint: 'https://models.example/v1',
+      endpointHost: 'models.example',
+      dataCategories: const [EgressDataCategory.skillContent],
+      expiresAt: DateTime.utc(2026, 8, 26),
+      skills: const [],
+    );
+    await _open(tester, disclosure);
+
+    expect(find.text('Skills that may be sent:'), findsNothing);
+  });
+
   testWidgets('remote MCP consent names exact endpoint and frozen tool', (
     tester,
   ) async {

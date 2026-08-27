@@ -1426,10 +1426,12 @@ func (x *MemoryEgressDisclosure) GetBodyMayBeSent() bool {
 }
 
 type SkillEgressDisclosure struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SkillId       string                 `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
-	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	BodyMayBeSent bool                   `protobuf:"varint,3,opt,name=body_may_be_sent,json=bodyMayBeSent,proto3" json:"body_may_be_sent,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Raw identity, not sanitized or length-capped. Render display_name, never
+	// this field.
+	SkillId       string `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
+	DisplayName   string `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	BodyMayBeSent bool   `protobuf:"varint,3,opt,name=body_may_be_sent,json=bodyMayBeSent,proto3" json:"body_may_be_sent,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

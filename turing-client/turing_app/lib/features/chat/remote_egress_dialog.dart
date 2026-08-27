@@ -90,8 +90,9 @@ Future<bool> showRemoteEgressDialog(
                         ),
                       ),
                     if (disclosure.dataCategories.contains(
-                      EgressDataCategory.skillContent,
-                    )) ...[
+                          EgressDataCategory.skillContent,
+                        ) &&
+                        disclosure.skills.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       _Heading(l10n.egressDialogSkillsHeading),
                       const SizedBox(height: 6),
