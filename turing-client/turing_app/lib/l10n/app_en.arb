@@ -154,7 +154,7 @@
   "memoryRejectAction": "Reject",
   "memoryApplyAction": "Apply",
   "memoryProposalUnreadable": "This proposal could not be read in full, so there is nothing here to accept.",
-  "memoryProposalUnopenable": "Turing cannot open this file at all, so it can neither show what it says nor throw it away for you: removing it safely means proving which file is being removed, and that needs a file Turing can open. Make it readable in your vault — or delete it there — and Turing will catch up.",
+  "memoryProposalUnopenable": "Turing could not read this file, so there is nothing here to decide. If it cannot open the file at all it cannot throw it away for you either: removing a file safely means proving which file is going, and that needs one Turing can open. Make it readable in your vault — or delete it there — and Turing will catch up.",
   "memoryProposalUndecidable": "This proposal is in a shape this version of Turing does not understand, so there is nothing safe to offer here. Open it in your vault, or update Turing.",
   "memoryProfileResultHeading": "The profile after applying this",
   "memoryProfileResultDescription": "This is what profile.md will say. It starts as your profile with the proposal added; edit it here and Apply writes exactly what you see.",

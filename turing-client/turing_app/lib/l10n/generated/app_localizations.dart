@@ -751,7 +751,7 @@ abstract class AppLocalizations {
   /// No description provided for @memoryProposalUnopenable.
   ///
   /// In en, this message translates to:
-  /// **'Turing cannot open this file at all, so it can neither show what it says nor throw it away for you: removing it safely means proving which file is being removed, and that needs a file Turing can open. Make it readable in your vault — or delete it there — and Turing will catch up.'**
+  /// **'Turing could not read this file, so there is nothing here to decide. If it cannot open the file at all it cannot throw it away for you either: removing a file safely means proving which file is going, and that needs one Turing can open. Make it readable in your vault — or delete it there — and Turing will catch up.'**
   String get memoryProposalUnopenable;
 
   /// No description provided for @memoryProposalUndecidable.

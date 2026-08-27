@@ -1122,13 +1122,18 @@ class _CandidateCard extends StatelessWidget {
               tone: _reasonTone(candidate.unavailableReason),
             ),
           ],
-          // A file the server cannot open is the one card here with no action
-          // on it at all: it cannot be shown, it cannot be accepted, and it
-          // cannot be thrown away either — a removal has to prove which entry
-          // it is removing, and proving that needs a file something can open.
+          // The one card here with no action on it at all: nothing to show,
+          // nothing to accept, and — where the server cannot open the file —
+          // nothing to throw away either, because a removal has to prove which
+          // entry is going and proving that needs a file something can open.
           // Saying only "this could not be read from the vault" beside no
-          // buttons is a dead end; this is the way out of it, and it is one
-          // the user can take without Turing.
+          // buttons is a dead end; this is the way out of it, and one the user
+          // can take without Turing.
+          //
+          // The sentence is conditional because this reason is: it also covers
+          // a walk that could not finish and a read that failed for its own
+          // reasons, and only some of those are a file nothing can open. What
+          // is true of all of them is the instruction.
           if (candidate.managed &&
               candidate.state == MemoryCandidateState.pending &&
               candidate.unavailableReason ==
