@@ -415,3 +415,42 @@ func TestASweepFailureDoesNotStrandARowThatNamesNoBytes(t *testing.T) {
 	}
 	_ = reservation
 }
+
+// When the sweep after a hashless rejection cannot finish, the row it keeps has
+// to name the bytes that decision was actually bound to. Left on the hash the
+// row was created with, the next withdrawal sweeps for words nobody has and
+// retires the row over the copy it was kept for.
+func TestHashlessRejectionKeepsARowBoundToTheBytesItRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every file regardless of mode")
+	}
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID, candidate := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
+	artifact := onlyVaultArtifact(t, repo, sessionID)
+
+	const broken = "---\nnot: [valid\n---\n\nThe user keeps bees.\n"
+	writeVaultNote(t, vault, candidate.InboxPath, broken)
+	// A reserved entry nobody can read stops the sweep, which is what makes the
+	// rejection keep its row.
+	sealed := filepath.Join(vault.Root(), memoryfiles.InboxDirName, ".turing-memory-3333333333333333cccccccc")
+	if err := os.WriteFile(sealed, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sealed, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sealed, 0o600) })
+
+	if err := repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{
+		CandidateID: candidate.CandidateID,
+	}); err != nil {
+		t.Fatalf("RejectMemoryCandidate: %v", err)
+	}
+	bound, ok := vaultArtifactHash(t, repo, artifact.ArtifactID)
+	if !ok || bound != memoryfiles.ContentHash(broken) {
+		t.Fatalf("artifact binding = %q (present=%v), want the bytes the rejection read", bound, ok)
+	}
+	if state := vaultArtifactState(t, repo, artifact.ArtifactID); state != VaultArtifactStateDeleteFailed {
+		t.Fatalf("artifact state = %q, want the row kept for the copy the sweep could not clear", state)
+	}
+}

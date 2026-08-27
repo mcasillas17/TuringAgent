@@ -721,7 +721,9 @@ func (r *Repository) RejectMemoryCandidate(ctx context.Context, decision MemoryC
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStateRejected, removed, decided.ContentHash, true); err != nil {
+	if err := consumeMemoryCandidateTx(
+		ctx, tx, candidate, MemoryCandidateStateRejected, removed, decidedRemovalHash(decided), true,
+	); err != nil {
 		return err
 	}
 	return tx.Commit()

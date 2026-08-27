@@ -1,26 +1,11 @@
-fix(memory): record the copy a vault failure left, and sweep the bytes a hashless door read
+fix(memory): keep a hashless rejection's row bound to the bytes it read
 
-Round 20 review, Opus 5. Three findings, all on paths this round touched.
-
-A decision whose vault call fails returns before it opens a transaction,
-so nothing was written down: the proposal stayed pending and its manifest
-row stayed ready. For a refusal that moved nothing that is right. For the
-one that left the bytes under a reserved or recovery name it is how they
-become unreachable -- the path the row records holds nothing, reconcile
-releases the row for exactly that reason, and the last thing that could
-find the file goes with it. A failure that left a copy now says so, in a
-way a caller can match on rather than only read, and the three decision
-entry points mark the row before returning it.
-
-A proposal whose frontmatter will not parse is rejected through the door
-bound to the bytes the pre-check hashed. Those are bytes like any other,
-so the rejection now sweeps copies of them too; before, the sweep was
-handed an empty hash, did nothing, and the row was retired over a copy
-it could have named.
-
-And a sweep that cannot finish no longer strands the rows it was never
-asked about. A row that named no bytes contributed no hash -- it is the
-crash artifact whose write never landed -- and it has to be able to
-drain, the more so now that reconcile leaves a marked row alone.
+Round 20 review, Grok 4.6: the rejection swept residue with the hash the
+hashless door was bound to and then consumed the candidate with the
+proposal's own -- empty for a proposal nobody could parse. The row it
+kept when the sweep could not finish stayed on the hash it was created
+with, so the next withdrawal swept for words nobody has, found the
+original path empty, and retired the row over the copy it was kept for.
+Both halves of the decision now name the same bytes.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
