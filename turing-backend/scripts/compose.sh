@@ -387,13 +387,37 @@ if [[ -f .env ]]; then
     exit 0
   fi
   printf 'Compose could not read .env; retrying the teardown without it.\n' >&2
+  # The caller's own arguments may name that file too, and the point of the
+  # retry is not to hand it over.
+  recovery_arguments=()
+  drop_next=0
+  for argument in "$@"; do
+    if ((drop_next)); then
+      drop_next=0
+      continue
+    fi
+    case "$argument" in
+      --env-file)
+        drop_next=1
+        continue
+        ;;
+      --env-file=*)
+        continue
+        ;;
+    esac
+    recovery_arguments+=("$argument")
+  done
+  # The project name is the one thing in .env a teardown depends on, so it is
+  # carried across — but only when it is a name Compose will accept. A value
+  # that is not is exactly the kind of thing that made the first attempt fail.
   configured_project="$(env_literal_value COMPOSE_PROJECT_NAME)"
-  if [[ -n "$configured_project" ]]; then
+  if [[ "$configured_project" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
     exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \
-      docker compose --project-name "$configured_project" -f infra/docker-compose.yml "$@"
+      docker compose --project-name "$configured_project" -f infra/docker-compose.yml \
+      "${recovery_arguments[@]}"
   fi
   exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \
-    docker compose -f infra/docker-compose.yml "$@"
+    docker compose -f infra/docker-compose.yml "${recovery_arguments[@]}"
 fi
 if ! is_recovery_command "$@"; then
   printf 'Compose launch failed: .env is missing; run ./scripts/init.sh first.\n' >&2

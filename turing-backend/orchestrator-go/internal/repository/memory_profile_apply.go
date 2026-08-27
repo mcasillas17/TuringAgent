@@ -175,9 +175,23 @@ func (r *Repository) finalizeRecoveredApply(ctx context.Context, vault *memoryfi
 		if presentErr != nil {
 			return presentErr
 		}
-		if present {
+		switch {
+		case present:
 			log.Printf("applied memory proposal %s was left in place: nothing proves the file under its path is Turing's", candidate.CandidateID)
 			removed = false
+		default:
+			// The path holds nothing, which is what a removal that finished
+			// looks like — and also what one that left the bytes under a
+			// reserved name looks like, when the crash this is recovering from
+			// took the record of it. The vault is asked before the row that
+			// names those bytes is consumed.
+			held, heldErr := vault.InboxResidueHolds(ctx, candidate.ContentHash)
+			if heldErr != nil {
+				log.Printf("check reserved copies of applied memory proposal %s: %v", candidate.CandidateID, heldErr)
+				removed = false
+			} else if held {
+				removed = false
+			}
 		}
 	}
 	tx, err := r.db.BeginTx(ctx, nil)

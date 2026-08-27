@@ -18,14 +18,17 @@ import (
 // and a caller matching on staleness retries a race that is not one. The vault
 // is left exactly as it was, and the sentence says what actually stopped.
 func TestPromotionRefusedByAnUnremovableSourceIsNotReportedAsStaleness(t *testing.T) {
+	armed := false
 	failures := 0
 	vault, err := openVaultWithRemovalSeams(
 		newTestVaultRoot(t), realSyncHooks(), nil, nil,
 		func(name string, unlink func() error) error {
-			// Only the first drop fails: that is the promoted original's own
-			// removal. The rollback of the copy that was written has to be
-			// able to finish, or the test would be about two failures.
-			if strings.HasPrefix(name, stagingPrefix) && failures == 0 {
+			// Armed after the proposal is seeded, so what fails is the
+			// promotion and never the setup — and only the first drop, which
+			// is the promoted original's own removal. The rollback of the copy
+			// that was written has to be able to finish, or the test would be
+			// about two failures.
+			if armed && strings.HasPrefix(name, stagingPrefix) && failures == 0 {
 				failures++
 				return errStagingUnlink
 			}
@@ -37,6 +40,7 @@ func TestPromotionRefusedByAnUnremovableSourceIsNotReportedAsStaleness(t *testin
 	}
 	candidate := seedBelief(t, vault)
 	before := readVaultEntry(t, vault, candidate.RelPath)
+	armed = true
 
 	promoteErr := promoteCandidate(context.Background(), vault, candidate)
 	if promoteErr == nil {
@@ -85,12 +89,14 @@ func readVaultEntry(t *testing.T, vault *Vault, relPath string) string {
 // detach put them under, where the walk steps over them, and the failure says
 // where they are.
 func TestAbandonedPromotionNeverPublishesTheCopyItCouldNotRemove(t *testing.T) {
+	armed := false
 	vault, err := openVaultWithRemovalSeams(
 		newTestVaultRoot(t), realSyncHooks(), nil, nil,
 		func(name string, unlink func() error) error {
-			// Both drops refuse: the source's, which abandons the move, and
-			// the rollback's, which is the one this test is about.
-			if strings.HasPrefix(name, stagingPrefix) {
+			// Armed after the proposal is seeded. Then both drops refuse: the
+			// source's, which abandons the move, and the rollback's, which is
+			// the one this test is about.
+			if armed && strings.HasPrefix(name, stagingPrefix) {
 				return errStagingUnlink
 			}
 			return unlink()
@@ -101,6 +107,7 @@ func TestAbandonedPromotionNeverPublishesTheCopyItCouldNotRemove(t *testing.T) {
 	}
 	candidate := seedBelief(t, vault)
 	before := readVaultEntry(t, vault, candidate.RelPath)
+	armed = true
 
 	promoteErr := promoteCandidate(context.Background(), vault, candidate)
 	if promoteErr == nil {
@@ -116,11 +123,21 @@ func TestAbandonedPromotionNeverPublishesTheCopyItCouldNotRemove(t *testing.T) {
 			t.Fatalf("the abandoned promotion published %q under beliefs/", name)
 		}
 	}
+	// The install could not drop its own reserved name either, so beliefs/
+	// holds more than one of them. What matters is that every copy is under a
+	// name the walk steps over, and that the failure names the one the rollback
+	// kept.
 	staged := stagingResidueIn(t, vault, BeliefsDirName)
-	if len(staged) != 1 {
-		t.Fatalf("beliefs/ reserved entries = %v, want the copy kept where nothing indexes it", staged)
+	if len(staged) == 0 {
+		t.Fatal("beliefs/ holds no copy at all, so the rollback deleted bytes it was refused")
 	}
-	if !strings.Contains(promoteErr.Error(), staged[0]) {
-		t.Fatalf("the failure does not say where the copy is: %v", promoteErr)
+	named := false
+	for _, name := range staged {
+		if strings.Contains(promoteErr.Error(), name) {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("the failure does not say where the copy is (%v): %v", staged, promoteErr)
 	}
 }

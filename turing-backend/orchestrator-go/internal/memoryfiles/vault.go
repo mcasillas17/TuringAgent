@@ -793,10 +793,21 @@ func (v *Vault) installStagedFile(ctx context.Context, parent *os.File, leaf str
 		}
 		return fmt.Errorf("install %q: %w", clean, err)
 	}
-	if err := unix.Unlinkat(int(parent.Fd()), stagingName, 0); err != nil {
+	// Through the same seam every other drop of a reserved name goes through:
+	// the branch below is the one where a whole note is left under a name no
+	// listing shows, and a branch no test can reach is one nobody has run.
+	if err := v.unlinkStaging(parent, stagingName); err != nil {
 		removeStaging = false
-		return v.installNotCommitted(parent, leaf, clean, staged, content,
-			fmt.Errorf("remove vault staging file: %w", err))
+		// The bytes are on disk twice: under the name that was just linked, and
+		// under the reserved one this could not drop. Undoing the visible link
+		// below leaves the reserved copy, which is a whole note under a name no
+		// listing shows — so the failure says so, and a caller holding a record
+		// of this path can keep it rather than retire it over an empty path.
+		return &residueError{
+			err: v.installNotCommitted(parent, leaf, clean, staged, content,
+				fmt.Errorf("remove vault staging file: %w", err)),
+			hash: ContentHash(content),
+		}
 	}
 	removeStaging = false
 	if err := v.syncDirectory(parent); err != nil {

@@ -231,6 +231,12 @@ func (r *Repository) CreateMemoryCandidate(ctx context.Context, input CreateMemo
 		// The reservation stays exactly as it is. It is the only durable record
 		// that this session may have left bytes in the vault, and a cleaner
 		// that finds no file simply has nothing to do.
+		//
+		// Unless the write says it left a copy under a name only the vault can
+		// spell. Then there is something to do, and a reservation that names no
+		// bytes cannot ask for it — so it is bound to what was written and
+		// marked, which is what puts those bytes in the cleaner's reach.
+		r.bindAbandonedVaultWrite(ctx, artifact, memoryfiles.ResidueContentHash(err))
 		return MemoryCandidate{}, err
 	}
 	if note.RelPath != artifact.VaultPath {
@@ -347,6 +353,12 @@ func (r *Repository) bindAbandonedVaultWrite(ctx context.Context, artifact Vault
 	if artifact.ArtifactID == "" || contentHash == "" {
 		return
 	}
+	// Its own deadline, because the caller's may be the one that just expired
+	// on the removal above — and this is the step that decides whether anything
+	// can ever find those bytes again.
+	record, cancel := context.WithTimeout(context.WithoutCancel(ctx), abandonedCandidateRemovalTimeout)
+	defer cancel()
+	ctx = record
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		log.Printf("record the vault copy an abandoned write left: %v", err)

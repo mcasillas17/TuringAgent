@@ -273,3 +273,27 @@ func TestComposeRecoverySurvivesAnEnvFileComposeWillNotRead(t *testing.T) {
 		t.Fatalf("docker was never asked to tear down: %q", result.dockerLog)
 	}
 }
+
+// The retry must not be blocked by the same file, whichever way it was named,
+// and must not carry a project name Compose would reject — a .env that failed
+// interpolation is exactly the kind that holds one.
+func TestComposeRecoveryRetryDropsTheEnvFileAndABadProjectName(t *testing.T) {
+	result := executeComposeWithSetupIn(t, t.TempDir(), true, "501", "20", "501", "20",
+		func(t *testing.T, root string) {
+			writeComposeEnv(t, root,
+				"TURING_CLIENT_API_KEY=client\nCOMPOSE_PROJECT_NAME=${NOTHING_SETS_THIS:?run init}\n")
+		}, map[string]string{"DOCKER_REFUSE_ENV_FILE": "1"},
+		"down", "--env-file", ".env", "--remove-orphans")
+	if result.err != nil {
+		t.Fatalf("compose.sh gave up on teardown: %v\n%s", result.err, result.output)
+	}
+	if strings.Contains(result.dockerLog, "--env-file") {
+		t.Fatalf("the retry still handed compose the .env it refused: %q", result.dockerLog)
+	}
+	if strings.Contains(result.dockerLog, "--project-name") {
+		t.Fatalf("the retry carried a project name compose would reject: %q", result.dockerLog)
+	}
+	if !strings.Contains(result.dockerLog, "down --remove-orphans") {
+		t.Fatalf("docker was never asked to tear down: %q", result.dockerLog)
+	}
+}

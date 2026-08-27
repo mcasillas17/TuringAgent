@@ -399,3 +399,57 @@ func TestAbsenceOfANestedPathFlushesTheDirectoryThatHoldsIt(t *testing.T) {
 		t.Fatal("the directory that would hold the missing folder was never flushed")
 	}
 }
+
+// A write that cannot drop its own staging name leaves the whole note under it.
+// The caller's note never came back — the write failed — so the failure is the
+// only thing that can say which bytes are there, and the record that names the
+// path needs exactly that to reach them.
+func TestACreateThatLeftAStagedCopySaysWhichBytes(t *testing.T) {
+	vault, err := openVaultWithRemovalSeams(
+		newTestVaultRoot(t), realSyncHooks(), nil, nil,
+		func(name string, unlink func() error) error {
+			if strings.HasPrefix(name, stagingPrefix) {
+				return errStagingUnlink
+			}
+			return unlink()
+		},
+	)
+	if err != nil {
+		t.Fatalf("open vault: %v", err)
+	}
+	noteID, err := NewNoteID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, createErr := vault.CreateInboxNote(context.Background(), CreateInboxNoteRequest{
+		NoteID: noteID, Kind: KindBelief, Title: "Prefers dark mode",
+		Body: "The user prefers dark mode.",
+	})
+	if createErr == nil {
+		t.Fatal("a write whose staging name would not go away reported success")
+	}
+	if !errors.Is(createErr, ErrVaultResidue) {
+		t.Fatalf("the failure does not say a copy was left behind: %v", createErr)
+	}
+	staged := stagingResidueIn(t, vault, InboxDirName)
+	if len(staged) == 0 {
+		t.Fatal("no copy was left under a reserved name")
+	}
+	named := ResidueContentHash(createErr)
+	if named == "" {
+		t.Fatalf("the failure names no bytes: %v", createErr)
+	}
+	found := false
+	for _, name := range staged {
+		held, err := os.ReadFile(filepath.Join(vault.Root(), InboxDirName, name))
+		if err != nil {
+			t.Fatalf("read the staged copy: %v", err)
+		}
+		if ContentHash(string(held)) == named {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ResidueContentHash = %q, which no reserved entry holds (%v)", named, staged)
+	}
+}

@@ -760,12 +760,31 @@ func withResidueMarker(placement detachedPlacement, err error) error {
 }
 
 // residueError carries ErrVaultResidue beside a failure without spending a word
-// on it.
-type residueError struct{ err error }
+// on it, and the bytes that were left when it knows them.
+//
+// A removal already knows which bytes it was acting on, so it carries none. A
+// *write* that leaves a copy is the one case where the caller does not: its
+// note never came back, so the only thing that can say what is under the
+// reserved name is the write itself.
+type residueError struct {
+	err  error
+	hash string
+}
 
 func (e *residueError) Error() string { return e.err.Error() }
 
 func (e *residueError) Unwrap() []error { return []error{ErrVaultResidue, e.err} }
+
+// ResidueContentHash answers with the bytes a failure left under a name only
+// the vault can spell, or the empty string when the failure does not name any.
+// It is a hash and nothing else: no path, and no word of the file.
+func ResidueContentHash(err error) string {
+	var residue *residueError
+	if errors.As(err, &residue) {
+		return residue.hash
+	}
+	return ""
+}
 
 // endedRemoval is the cancellation a compensating removal answers with, carrying
 // where it left the bytes.
