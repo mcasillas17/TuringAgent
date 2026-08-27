@@ -96,6 +96,13 @@ func TestComposeLaunchRefusesAnUnusableHostVaultPath(t *testing.T) {
 		{name: "relative", value: "MEMORY_DISPLAY_ROOT='turing-backend/memory'\n"},
 		{name: "traversal", value: "MEMORY_DISPLAY_ROOT='/srv/turing/../memory'\n"},
 		{name: "trailing slash", value: "MEMORY_DISPLAY_ROOT='/srv/turing/memory/'\n"},
+		// A bare or double-quoted value is interpolated by Compose, so a
+		// legacy or hand-edited line naming a variable is a value that reaches
+		// the orchestrator — and the Memory page — as whatever that variable
+		// holds. It looks like a clean absolute path here and is a secret
+		// there.
+		{name: "interpolating", value: "MEMORY_DISPLAY_ROOT=/srv/${TURING_INTEGRATION_KEY}/memory\n"},
+		{name: "double quoted interpolating", value: "MEMORY_DISPLAY_ROOT=\"/srv/$TURING_INTEGRATION_KEY/memory\"\n"},
 	} {
 		t.Run(unusable.name, func(t *testing.T) {
 			result := executeComposeWithSetup(t, true, "501", "20", "501", "20",

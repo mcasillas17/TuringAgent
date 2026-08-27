@@ -80,24 +80,27 @@ func (v *Vault) RemoveInboxResidue(ctx context.Context, expectedHashes []string)
 			return failures, nil
 		}
 		for _, name := range names {
-			if !strings.HasPrefix(name, stagingPrefix) {
-				continue
-			}
+			// Every entry counts against the bound, not only the reserved
+			// ones: what is bounded is what this reads, and a directory
+			// somebody has filled with ordinary files is exactly the one a
+			// sweep must not walk to the end of.
 			examined++
 			if examined > maxInboxResidueEntries {
 				return failures, fmt.Errorf(
-					"%s/ holds more than %d reserved entries, past the bound this sweep runs within",
+					"%s/ holds more than %d entries, past the bound this sweep reads within",
 					InboxDirName, maxInboxResidueEntries,
 				)
 			}
-			hash, err := v.removeResidueEntry(ctx, parent, name, wanted)
-			if hash == "" {
-				// Not bytes this caller can name, or gone already. Either way
-				// there is nothing to report against a hash.
-				if err != nil && ctx.Err() != nil {
-					return failures, err
-				}
+			if !strings.HasPrefix(name, stagingPrefix) {
 				continue
+			}
+			hash, err := v.removeResidueEntry(ctx, parent, name, wanted)
+			if err != nil && hash == "" {
+				// The entry could not be inspected at all, so this sweep
+				// cannot say whether it holds bytes somebody is answerable
+				// for. Reporting a clear vault from here is how a record gets
+				// retired over a file nobody could look at.
+				return failures, err
 			}
 			if err != nil {
 				failures[hash] = err
@@ -126,15 +129,27 @@ func (v *Vault) removeResidueEntry(
 
 	opened, stat, err := openConfinedEntry(parent, name, clean)
 	if err != nil {
-		return "", nil
+		if errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist) {
+			// Gone while this was listing, which is the outcome the sweep
+			// wanted anyway.
+			return "", nil
+		}
+		return "", fmt.Errorf("inspect a reserved entry in %s/: %w", InboxDirName, err)
 	}
 	defer func() { _ = opened.Close() }()
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		// Not a file this package ever made, and not something a note's bytes
+		// can be under.
 		return "", nil
 	}
 	content, err := readEntryContent(ctx, opened, clean, MaxNoteBytes)
 	if err != nil {
-		return "", nil
+		if errors.Is(err, ErrTooLarge) {
+			// Bigger than any note this package writes, so it cannot be the
+			// bytes any row here is answerable for.
+			return "", nil
+		}
+		return "", fmt.Errorf("read a reserved entry in %s/: %w", InboxDirName, err)
 	}
 	hash := ContentHash(content)
 	if _, ok := wanted[hash]; !ok {

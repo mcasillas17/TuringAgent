@@ -349,7 +349,7 @@ func TestTheTransitionSQLRefusesADecisionOverADeletingSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	err = consumeMemoryCandidateTx(ctx(), tx, candidate, MemoryCandidateStateRejected, true, true)
+	err = consumeMemoryCandidateTx(ctx(), tx, candidate, MemoryCandidateStateRejected, true, candidate.ContentHash, true)
 	if !errors.Is(err, ErrMemoryCandidateInvalidTransition) {
 		t.Fatalf("consuming a candidate of a deleting session = %v, want ErrMemoryCandidateInvalidTransition", err)
 	}
@@ -367,7 +367,7 @@ func TestTheTransitionSQLRefusesADecisionOverADeletingSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = recoveryTx.Rollback() }()
-	if err := consumeMemoryCandidateTx(ctx(), recoveryTx, candidate, MemoryCandidateStatePromoted, true, false); err != nil {
+	if err := consumeMemoryCandidateTx(ctx(), recoveryTx, candidate, MemoryCandidateStatePromoted, true, candidate.ContentHash, false); err != nil {
 		t.Fatalf("crash recovery could not finish an apply that already landed: %v", err)
 	}
 }

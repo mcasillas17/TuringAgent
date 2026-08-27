@@ -224,12 +224,21 @@ These are known, bounded, and deliberately not claimed away:
   file is really gone; until a session is deleted, such a row stays. Keeping one
   costs a row in a manifest. Releasing one costs the user a note nothing in the
   system can ever find again.
+- **A promotion whose original cannot be put back keeps the belief it wrote.**
+  When the removal of a promoted original fails *and* the name it came off has
+  been taken in the same moment, the bytes stay under the reserved name, the
+  belief that was written stays, and the failure says so. Undoing the belief
+  there would leave the user with a claim they accepted reachable only under a
+  name no listing shows; keeping it leaves a hidden duplicate of content they
+  did accept. Neither is tidy, and the second loses nothing.
 - **An absence is only reported once it has reached the disk.** Removing a file
   and retiring the record that names it are two durable facts, and an unlink
   that is still only in the page cache is not the first of them. So the removal
   primitive flushes the directory before it reports a missing file as gone, and
   a flush that fails keeps the record — the next pass asks again rather than
-  retiring a row for a file a crash can bring back.
+  retiring a row for a file a crash can bring back. A vault whose root cannot be
+  opened at all is not an absence either: the notes are wherever the vault is,
+  and every record naming one is kept.
 
 ### What the amendment does not touch
 

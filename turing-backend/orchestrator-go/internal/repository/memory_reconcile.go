@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path"
 	"sort"
 	"strings"
@@ -1228,24 +1227,28 @@ func (r *Repository) retireOrphanCandidate(
 }
 
 // inboxEntryStillThere answers the one question the sweep needs about a file,
-// through the confined reader every other caller uses rather than by reaching
-// into the vault's directory itself.
+// through the primitive that proves an absence rather than by reaching into the
+// vault's directory itself.
 //
-// Only "the entry is not there" counts as absent. A note that will not parse,
-// one past the read ceiling, a symlink somebody dropped in its place — all of
-// them are a file the user can see in their vault, and a row naming it is not
-// stale.
+// Only "the entry is not there, and the directory that would hold it has
+// reached the disk" counts as absent. Every caller answers absence by retiring
+// a durable record — a candidate row, a manifest row — and an unlink still
+// sitting in the page cache is an absence a crash undoes, so a record retired
+// on one is a record dropped for a file that comes back.
+//
+// A note that will not parse, one past the read ceiling, a symlink somebody
+// dropped in its place, a vault that will not answer at all: all of them are
+// "still there". Anything this cannot confirm leaves the row standing, which
+// costs one more pass; the other way costs the user an untracked note.
 func inboxEntryStillThere(ctx context.Context, vault *memoryfiles.Vault, inboxPath string) (bool, error) {
-	if _, err := vault.ReadInboxNote(ctx, inboxPath); err != nil {
+	absent, err := vault.ConfirmInboxNoteAbsent(ctx, inboxPath)
+	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return false, ctxErr
 		}
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
 		return true, nil
 	}
-	return true, nil
+	return !absent, nil
 }
 
 // releaseStaleReservations clears the manifest rows naming paths the inbox no

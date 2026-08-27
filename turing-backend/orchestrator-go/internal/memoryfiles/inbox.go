@@ -806,17 +806,14 @@ func (v *Vault) confirmAbsence(parent *os.File, clean string) error {
 // directory is not there either. What has to be durable then is the absence of
 // the directory, which lives in the vault root.
 //
-// A vault root that is missing is answered as the absence it is: nothing this
-// package did removed it, there is no directory left to flush, and refusing
-// every cleanup on an install whose vault has been deleted would strand every
-// record naming a file inside it.
+// A vault root that cannot be opened is not an absence and is refused. The
+// notes are wherever the vault is — on a disk nobody has attached, on a share
+// that is down — and answering "the file is gone" from here would retire every
+// record naming every one of them, on the strength of a mount.
 func (v *Vault) confirmMissingParent(clean string) error {
 	root, err := v.openRoot()
 	if err != nil {
-		if errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
+		return fmt.Errorf("confirm %q is no longer there: the vault could not be opened: %w", clean, err)
 	}
 	defer func() { _ = root.Close() }()
 	return v.confirmAbsence(root, clean)

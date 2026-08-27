@@ -1,20 +1,39 @@
-fix(memory): take the copy a failed unlink left under a name nobody can spell
+fix(memory): keep every record that can still find a file, and refuse a path Compose would rewrite
 
-Round 20 review, Grok 4.6: putting the entry back under its own name
-leaves the reserved name pointing at the same inode when the drop cannot
-be retried, and the retry that follows removes the visible name and only
-that one. The manifest row is then retired for a file still in the user
-vault under a name no listing shows -- a withdrawal reporting completion
-over a note that is still there. The same happens when the put-back never
-took the original name at all: the path holds nothing, the absence is
-durable, and the row drains.
+Round 20 review, GPT-5.6 Terra. Six findings, all on paths this round
+touched.
 
-A withdrawal now sweeps the reserved entries in the inbox whose whole
-bytes are exactly the ones it was already entitled to delete, through the
-same detach-and-verify path every other removal here takes, and keeps the
-row for any it could not remove. A reserved entry it cannot name -- a
-half-written note another writer is staging, a file this package never
-made -- is left exactly where it is: the bytes are what authorise a
-removal, and a row that never named any authorises nothing.
+A decision retires the manifest row for the file it removed, and the same
+bytes can be under a reserved name an earlier attempt could not drop.
+Rejection, promotion and both profile-apply paths now take those copies
+with them, and report the file as not gone when they cannot -- so the row
+is kept and marked instead of retired over a copy nothing can name.
+
+The bytes a decision acts on are not always the bytes the row was created
+with: a user may edit a proposal in their vault before accepting it. A
+tidying that fails now records what it actually acted on, so the row can
+still prove ownership; bound to the words Turing first proposed it would
+refuse forever and the session would never finish deleting.
+
+An entry the residue sweep cannot read is not evidence that a file is
+gone, so it refuses instead of reporting a clear vault, and the bound is
+on what it reads rather than on what it happens to match.
+
+A vault whose root cannot be opened is not an absence. Reporting one as
+"the file is gone" retires every record naming every note on a disk
+nobody has attached. Every absence that retires a record now goes through
+the primitive that proves it, including the crash-recovery path for an
+applied profile edit.
+
+And a display root that is not single-quoted is refused before launch:
+Compose interpolates bare and double-quoted values, so a line left by an
+older install can name TURING_INTEGRATION_KEY and reach the Memory page
+as that key.
+
+Two findings are answered rather than changed, and are written down in
+the governance document: a promotion whose original cannot be put back
+keeps the belief it wrote, and the sweep can only be raced by a writer
+staging byte-identical content, which for this package means the same
+note identity and so the same session.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

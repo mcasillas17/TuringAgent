@@ -247,3 +247,77 @@ func TestVaultCleanupLeavesAReservedEntryItCannotName(t *testing.T) {
 		t.Fatalf("the reserved entry the session could not name was disturbed: %q, %v", held, err)
 	}
 }
+
+// A decision retires the manifest row for the file it removed, and a removal
+// that failed once may have left the same bytes under a reserved name. So the
+// decision that finally succeeds takes those with it too — otherwise the row
+// goes, the visible file goes, and the copy nothing can name stays in the
+// user's vault forever.
+func TestRejectionTakesResidueOfTheSameBytesWithIt(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID, candidate := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
+	content := readVaultNote(t, vault, candidate.InboxPath)
+
+	// What an earlier failed attempt leaves behind: a second link to the same
+	// bytes under the reserved private name.
+	residue := filepath.Join(vault.Root(), memoryfiles.InboxDirName, ".turing-memory-89abcdef0123456789abcdef")
+	if err := os.WriteFile(residue, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = sessionID
+
+	if err := repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{
+		CandidateID:           candidate.CandidateID,
+		ExpectedCandidateHash: memoryfiles.ContentHash(content),
+	}); err != nil {
+		t.Fatalf("RejectMemoryCandidate: %v", err)
+	}
+	if entries := inboxEntries(t, vault); len(entries) != 0 {
+		t.Fatalf("inbox = %v, want the rejected proposal gone under every name", entries)
+	}
+}
+
+// The bytes a decision acts on are not always the bytes the row was created
+// with: a user may edit a proposal in their vault before accepting it, which is
+// what a vault is for. When the tidying that follows cannot remove the file,
+// the row it keeps has to name what is actually there — a row still bound to
+// the words Turing first proposed can never prove ownership again, so the
+// withdrawal that comes later refuses forever.
+func TestProfileApplyCleanupFailureBindsTheRowToTheBytesItActedOn(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+	const profile = "# Profile\n\nWritten already.\n"
+	writeVaultNote(t, vault, memoryfiles.ProfileFileName, profile)
+	candidate := profileEditCandidate(t, repo, sessionID)
+	artifact := onlyVaultArtifact(t, repo, sessionID)
+
+	// The user edits the proposal in Obsidian before accepting it.
+	edited := readVaultNote(t, vault, candidate.InboxPath) + "\nAnd keeps chickens.\n"
+	writeVaultNote(t, vault, candidate.InboxPath, edited)
+
+	unseal := sealInboxDirectory(t, vault)
+	if _, err := repo.ApplyMemoryProfileCandidate(ctx(), ApplyMemoryProfileInput{
+		CandidateID:         candidate.CandidateID,
+		ExpectedContentHash: memoryfiles.ContentHash(profile),
+		Content:             "# Profile\n\nThe user keeps bees.\n",
+	}); err != nil {
+		t.Fatalf("ApplyMemoryProfileCandidate: %v", err)
+	}
+	bound, ok := vaultArtifactHash(t, repo, artifact.ArtifactID)
+	if !ok || bound != memoryfiles.ContentHash(edited) {
+		t.Fatalf("artifact binding = %q (present=%v), want the bytes the apply acted on", bound, ok)
+	}
+
+	// And that is what makes the withdrawal able to finish at all.
+	unseal()
+	removed, err := repo.PurgeSessionVaultArtifacts(ctx(), sessionID)
+	if err != nil {
+		t.Fatalf("PurgeSessionVaultArtifacts: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("the cleaner removed %d file(s), want the applied proposal", removed)
+	}
+	if entries := inboxEntries(t, vault); len(entries) != 0 {
+		t.Fatalf("inbox = %v, want the applied proposal gone", entries)
+	}
+}

@@ -272,6 +272,13 @@ func (r *Repository) PromoteMemoryCandidate(ctx context.Context, decision Memory
 			return MemoryNote{}, err
 		}
 	}
+	// The move took the original off its name; a copy an earlier attempt could
+	// not drop would still be under a reserved one.
+	sourceRemoved := true
+	if err := sweepDecidedResidue(ctx, vault, decided.ContentHash); err != nil {
+		log.Printf("clear reserved copies of promoted memory proposal %s: %v", candidate.CandidateID, err)
+		sourceRemoved = false
+	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -297,7 +304,7 @@ func (r *Repository) PromoteMemoryCandidate(ctx context.Context, decision Memory
 	if err := linkMemoryEvidenceTx(ctx, tx, note.NoteID, note.ContentHash, live); err != nil {
 		return MemoryNote{}, err
 	}
-	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted, true, true); err != nil {
+	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted, sourceRemoved, decided.ContentHash, true); err != nil {
 		return MemoryNote{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -442,6 +449,28 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 	return result, nil
 }
 
+// sweepDecidedResidue takes the copies an earlier attempt could not remove away
+// with the decision that finally succeeded.
+//
+// A removal that cannot unlink puts the entry back under its own name and
+// leaves the reserved name it was detached to, so the same bytes have two
+// names. The decision that succeeds afterwards removes the one it knows about
+// and then retires the manifest row — and the copy nobody can name would stay
+// in the user's vault with nothing tracking it. So the reserved copies of
+// exactly the bytes this decision was entitled to remove go too, and a sweep
+// that cannot finish is reported as the file not having gone: the row is kept
+// and marked, and the withdrawal that follows retries it.
+func sweepDecidedResidue(ctx context.Context, vault *memoryfiles.Vault, contentHash string) error {
+	if contentHash == "" {
+		return nil
+	}
+	failures, err := vault.RemoveInboxResidue(ctx, []string{contentHash})
+	if err != nil {
+		return err
+	}
+	return failures[contentHash]
+}
+
 // finishProfileApply retires the proposal an apply has already written, and
 // reports whether it got all the way.
 //
@@ -468,6 +497,9 @@ func (r *Repository) finishProfileApply(
 	if err := vault.RemoveInboxNote(ctx, retiredCandidateRemoval(candidate.InboxPath, appliedHash)); err != nil {
 		log.Printf("remove applied memory proposal %s: %v", candidate.CandidateID, err)
 		removed = false
+	} else if err := sweepDecidedResidue(ctx, vault, appliedHash); err != nil {
+		log.Printf("clear reserved copies of applied memory proposal %s: %v", candidate.CandidateID, err)
+		removed = false
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -475,7 +507,7 @@ func (r *Repository) finishProfileApply(
 		return false
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted, removed, true); err != nil {
+	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted, removed, appliedHash, true); err != nil {
 		log.Printf("finish memory profile apply %s: %v", candidate.CandidateID, err)
 		return false
 	}
@@ -632,13 +664,21 @@ func (r *Repository) RejectMemoryCandidate(ctx context.Context, decision MemoryC
 	if err := vault.RemoveInboxNote(ctx, rejectionRemoval(candidate.InboxPath, decided)); err != nil {
 		return err
 	}
+	// The proposal is gone from its name. Whether every copy of it is gone is
+	// a second question, and the answer decides whether the manifest row that
+	// tracks the file may be retired with the decision.
+	removed := true
+	if err := sweepDecidedResidue(ctx, vault, decided.ContentHash); err != nil {
+		log.Printf("clear reserved copies of rejected memory proposal %s: %v", candidate.CandidateID, err)
+		removed = false
+	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStateRejected, true, true); err != nil {
+	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStateRejected, removed, decided.ContentHash, true); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -757,6 +797,7 @@ func consumeMemoryCandidateTx(
 	candidate MemoryCandidate,
 	decision string,
 	fileRemoved bool,
+	actedHash string,
 	requireActiveSource bool,
 ) error {
 	statement := `DELETE FROM memory_candidates WHERE id = ? AND state = ?`
@@ -785,7 +826,7 @@ func consumeMemoryCandidateTx(
 			return err
 		}
 	} else if err := markUnremovedVaultArtifactTx(
-		ctx, tx, candidate.SourceSessionID, candidate.InboxPath, vaultArtifactRemoveFailedCode,
+		ctx, tx, candidate.SourceSessionID, candidate.InboxPath, actedHash, vaultArtifactRemoveFailedCode,
 	); err != nil {
 		// The proposal's row is going and the file is not, so the manifest row
 		// is about to be the only record that anything is answerable for those

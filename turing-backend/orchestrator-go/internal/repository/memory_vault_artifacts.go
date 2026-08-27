@@ -443,6 +443,7 @@ func markUnremovedVaultArtifactTx(
 	tx *sql.Tx,
 	sessionID string,
 	vaultPath string,
+	actedHash string,
 	errorCode string,
 ) error {
 	var artifactID string
@@ -454,6 +455,21 @@ func markUnremovedVaultArtifactTx(
 	}
 	if err != nil {
 		return err
+	}
+	// The bytes the decision acted on, not the ones the row was created with.
+	// A user may edit a proposal in their vault before accepting it — which is
+	// what a vault is for — and the decision read and verified what was
+	// actually there. A row left bound to the words Turing first proposed can
+	// never prove ownership of the file again, so the withdrawal that comes
+	// later refuses forever and the session never finishes deleting.
+	if actedHash != "" {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE vault_artifacts
+			SET expected_content_hash = ?
+			WHERE id = ? AND session_id = ?
+		`, actedHash, artifactID, sessionID); err != nil {
+			return err
+		}
 	}
 	return markVaultArtifactDeleteFailedTx(ctx, tx, sessionID, vaultArtifactFailure{
 		artifactID: artifactID,

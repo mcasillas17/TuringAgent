@@ -156,6 +156,26 @@ env_literal_value() {
   printf '%s\n' "$raw"
 }
 
+# env_value_interpolates answers whether Compose will substitute something into
+# one recorded value before the stack ever sees it.
+#
+# Only a single-quoted value is literal. A bare or double-quoted one has $NAME
+# and ${NAME} replaced from the environment and from .env itself — so a line
+# left by an older install, or typed by hand, can name a variable and arrive as
+# whatever that variable holds. For the vault path that is a folder nobody has,
+# and when the variable it names is a secret it is that secret on a card in the
+# app.
+env_value_interpolates() {
+  local name="$1"
+  local raw
+  raw="$(sed -n "s/^${name}=//p" .env | tail -n 1)"
+  case "$raw" in
+    "'"*"'") return 1 ;;
+    *'$'*) return 0 ;;
+  esac
+  return 1
+}
+
 # is_clean_absolute_path answers the same question the orchestrator asks of this
 # value when it loads: absolute, and spelled the way the filesystem would spell
 # it. A path with a traversal, a doubled separator or a trailing slash is one
@@ -207,6 +227,10 @@ validate_memory_display_root() {
   fi
   if ! is_clean_absolute_path "$configured"; then
     printf 'Compose launch failed: MEMORY_DISPLAY_ROOT must be a clean absolute path; run ./scripts/init.sh to record the host vault path.\n' >&2
+    return 1
+  fi
+  if env_value_interpolates MEMORY_DISPLAY_ROOT; then
+    printf 'Compose launch failed: MEMORY_DISPLAY_ROOT is not quoted, so Compose would substitute a variable into the folder the app shows; run ./scripts/init.sh to record the host vault path.\n' >&2
     return 1
   fi
 }

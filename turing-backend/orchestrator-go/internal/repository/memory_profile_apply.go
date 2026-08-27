@@ -162,6 +162,9 @@ func (r *Repository) finalizeRecoveredApply(ctx context.Context, vault *memoryfi
 		if err := vault.RemoveInboxNote(ctx, retiredCandidateRemoval(candidate.InboxPath, appliedHash)); err != nil {
 			log.Printf("remove applied memory proposal %s: %v", candidate.CandidateID, err)
 			removed = false
+		} else if err := sweepDecidedResidue(ctx, vault, appliedHash); err != nil {
+			log.Printf("clear reserved copies of applied memory proposal %s: %v", candidate.CandidateID, err)
+			removed = false
 		}
 	default:
 		// Not a file this can prove is Turing's — and one of the ways to be
@@ -186,7 +189,7 @@ func (r *Repository) finalizeRecoveredApply(ctx context.Context, vault *memoryfi
 	// words are already in the user's own profile; the row is the only thing
 	// that records it, and refusing to finish would leave a proposal claimed
 	// and undecidable until the cascade happened to remove it.
-	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted, removed, false); err != nil {
+	if err := consumeMemoryCandidateTx(ctx, tx, candidate, MemoryCandidateStatePromoted, removed, appliedHash, false); err != nil {
 		return err
 	}
 	return tx.Commit()

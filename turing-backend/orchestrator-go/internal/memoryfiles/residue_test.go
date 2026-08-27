@@ -2,6 +2,7 @@ package memoryfiles
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,5 +126,73 @@ func TestResidueSweepReportsWhatItCouldNotRemove(t *testing.T) {
 	}
 	if _, err := os.Lstat(residue); err != nil {
 		t.Fatalf("the bytes the sweep could not remove are gone: %v", err)
+	}
+}
+
+// A reserved entry the sweep cannot read is not evidence that the bytes are
+// gone. Reading it is how this decides whether it may remove it, so a failure
+// to read one means the sweep cannot say the vault holds no second copy — and
+// the record naming those bytes has to be kept rather than retired over a file
+// nobody could look at.
+func TestResidueSweepRefusesToConcludeOverAnEntryItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every file regardless of mode")
+	}
+	vault := newTestVault(t)
+	const mine = "the note this session wrote"
+	sealed := filepath.Join(vault.Root(), InboxDirName, stagingPrefix+"dddddddddddddddddddddddd")
+	if err := os.WriteFile(sealed, []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sealed, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sealed, 0o600) })
+
+	if _, err := vault.RemoveInboxResidue(context.Background(), []string{ContentHash(mine)}); err == nil {
+		t.Fatal("the sweep reported a clear vault over an entry it could not read")
+	}
+	if _, err := os.Lstat(sealed); err != nil {
+		t.Fatalf("the unreadable entry was disturbed: %v", err)
+	}
+}
+
+// The bound is on what the sweep reads, not on what it happens to match. An
+// inbox somebody has filled is read up to the bound and then refused, so a
+// withdrawal keeps its rows instead of walking an unbounded directory.
+func TestResidueSweepRefusesAnInboxPastItsBound(t *testing.T) {
+	vault := newTestVault(t)
+	inbox := filepath.Join(vault.Root(), InboxDirName)
+	for index := 0; index <= maxInboxResidueEntries; index++ {
+		name := filepath.Join(inbox, fmt.Sprintf("note-%05d.md", index))
+		if err := os.WriteFile(name, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := vault.RemoveInboxResidue(context.Background(), []string{ContentHash("anything")}); err == nil {
+		t.Fatal("the sweep read an unbounded directory rather than refusing")
+	}
+}
+
+// A vault whose root is not there is not a vault that is empty. Reporting a
+// missing mount as "the file is gone" would retire every record naming a note
+// that is sitting on a disk nobody has attached.
+func TestRemovalRefusesWhenTheVaultRootIsNotThere(t *testing.T) {
+	vault := newTestVault(t)
+	writeVaultFile(t, vault, "inbox/note.md", "a proposal")
+	if err := os.RemoveAll(vault.Root()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := vault.RemoveInboxNote(context.Background(), retiredRemoval("inbox/note.md", "a proposal")); err == nil {
+		t.Fatal("a vault that is not mounted was reported as a file that is gone")
+	}
+	absent, err := vault.ConfirmInboxNoteAbsent(context.Background(), "inbox/note.md")
+	if err == nil {
+		t.Fatal("a vault that is not mounted answered an absence")
+	}
+	if absent {
+		t.Fatal("a missing vault root was reported as a proven absence")
 	}
 }
