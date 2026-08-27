@@ -16,6 +16,7 @@ import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 
 import '../support/no_audit_api.dart';
 import '../support/no_mcp_registry_api.dart';
+import '../support/no_memory_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
 import '../support/no_remote_egress_api.dart';
@@ -284,6 +285,7 @@ class _FakeApiClient
     with
         NoAuditApi,
         NoMcpRegistryApi,
+        NoMemoryApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,

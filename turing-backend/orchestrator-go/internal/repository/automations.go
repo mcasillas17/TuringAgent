@@ -34,6 +34,13 @@ var (
 	ErrAutomationToolInvalid                = errors.New("an allowed tool needs both a server and a tool name")
 	ErrAutomationTooManyTools               = errors.New("too many allowed tools")
 	ErrAutomationIntegrationToolUnsupported = errors.New("integration tools are not available to automations")
+	// ErrAutomationMemoryToolUnsupported refuses an allowlist entry for a
+	// memory tool. Memory is what Turing believes about the person, and an
+	// unattended run is the one context where nobody is present to see a
+	// belief being read or proposed. This is the save-time half of the rule;
+	// the memory service refuses the dispatch itself as well, because a tool
+	// the user has marked safe never reaches an allowlist at all.
+	ErrAutomationMemoryToolUnsupported = errors.New("memory tools are not available to automations")
 )
 
 // AutomationTool names a tool by the same (server, tool) pair the
@@ -183,6 +190,9 @@ func normalizeAllowedTools(tools []AutomationTool) ([]AutomationTool, error) {
 		}
 		if tool.ServerName == "integrations" {
 			return nil, ErrAutomationIntegrationToolUnsupported
+		}
+		if tool.ServerName == "memory" {
+			return nil, ErrAutomationMemoryToolUnsupported
 		}
 		if _, duplicate := seen[tool]; duplicate {
 			continue

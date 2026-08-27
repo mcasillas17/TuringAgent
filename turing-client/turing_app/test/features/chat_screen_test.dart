@@ -202,6 +202,8 @@ void main() {
     String? deletedSessionId;
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: _FakeApiClient(),
@@ -5375,6 +5377,8 @@ void main() {
 
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -9249,6 +9253,8 @@ void main() {
         );
       await tester.pumpWidget(
         MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
           home: ChatScreen(
             sessionId: 'sess_1',
             apiClient: apiClient,
@@ -9303,6 +9309,8 @@ void main() {
     final eventSource = _FakeEventSource(events.stream);
     Future<void> pump(String provider) => tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,
@@ -9352,6 +9360,8 @@ void main() {
       );
     await tester.pumpWidget(
       MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: ChatScreen(
           sessionId: 'sess_1',
           apiClient: apiClient,

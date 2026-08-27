@@ -102,6 +102,11 @@ func run() error {
 		IntegrationTools: func(context.Context) (agent.ToolLister, error) {
 			return mcp.NewIntegrationClient(client), nil
 		},
+		// Rebuilt with the registry rather than held, so flipping the memory
+		// toggle takes the tools away from this worker without a restart.
+		MemoryTools: func(context.Context) (agent.ToolLister, error) {
+			return mcp.NewMemoryClient(client), nil
+		},
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
 	// The only place a third-party API key exists at runtime. It is read from

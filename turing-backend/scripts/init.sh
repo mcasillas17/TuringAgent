@@ -3,6 +3,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# The vault layout the orchestrator opens at MEMORY_ROOT. Named here so the
+# provisioning below and the compose mount describe the same directory.
+MEMORY_PERSONA_NAME="persona.md"
+MEMORY_PROFILE_NAME="profile.md"
+MEMORY_INBOX_NAME="inbox"
+MEMORY_BELIEFS_NAME="beliefs"
+
 generate_secret() {
   openssl rand -hex 32
 }
@@ -11,12 +18,23 @@ generate_client_key() {
   printf 'tk_%s\n' "$(openssl rand -hex 32)"
 }
 
+# sed_replacement escapes the three characters sed treats as special inside the
+# replacement half of an s|| expression. Secrets here are hex and unaffected,
+# but a filesystem path is not: a checkout under a directory containing & would
+# have the whole matched line spliced back into the value, and one containing |
+# or \ would end the expression or escape the next character. A path with a
+# space needs no escaping and must survive untouched, which quoting already
+# does.
+sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
+}
+
 ensure_var() {
   local name="$1"
   local value="$2"
   if ! grep -q "^${name}=" .env || grep -q "^${name}=$" .env; then
     if grep -q "^${name}=" .env; then
-      sed -i.bak "s|^${name}=.*|${name}=${value}|" .env
+      sed -i.bak "s|^${name}=.*|${name}=$(sed_replacement "$value")|" .env
     else
       printf '%s=%s\n' "$name" "$value" >> .env
     fi
@@ -27,9 +45,67 @@ set_var() {
   local name="$1"
   local value="$2"
   if grep -q "^${name}=" .env; then
-    sed -i.bak "s|^${name}=.*|${name}=${value}|" .env
+    sed -i.bak "s|^${name}=.*|${name}=$(sed_replacement "$value")|" .env
   else
     printf '%s=%s\n' "$name" "$value" >> .env
+  fi
+}
+
+# compose_literal serialises one value the way Compose's dotenv reader will read
+# it back byte for byte: single-quoted, where nothing is interpolated and the
+# only escape is \' for an apostrophe.
+#
+# It exists for the one setting in this file that is not a hex secret. A
+# filesystem path may legally contain every character that reader treats as
+# syntax — $NAME and ${NAME} are substituted, an unquoted # begins a comment,
+# and surrounding spaces are trimmed — so a path written bare arrives as some
+# other string. A checkout under a directory spelling ${TURING_INTEGRATION_KEY}
+# would arrive with the key itself spliced into it, which is a secret on a card
+# in the UI.
+compose_literal() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/\\\\'/g")"
+}
+
+# is_compose_literal_safe refuses the values that form cannot carry.
+#
+# Compose's reader has no escape for a backslash inside single quotes, so a
+# value whose last character is one, or that holds a backslash immediately
+# before an apostrophe, cannot be written down unambiguously: the backslash
+# would escape the quote that ends the value. And a newline or a control
+# character has no representation in a .env line at all. Each of those is
+# refused loudly rather than written as something that looks almost right.
+is_compose_literal_safe() {
+  local value="$1"
+  case "$value" in
+    *\\) return 1 ;;
+  esac
+  case "$value" in
+    *\\\'*) return 1 ;;
+  esac
+  if LC_ALL=C printf '%s' "$value" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    return 1
+  fi
+  return 0
+}
+
+# set_quoted_var writes a value that is not a secret and is not a bare token:
+# it goes in as a Compose literal so that what the stack reads is what is on
+# disk. Secrets keep set_var, because hex needs no quoting and quoting it would
+# change bytes other tools already read out of this file.
+set_quoted_var() {
+  local name="$1"
+  local value="$2"
+  local literal
+  if ! is_compose_literal_safe "$value"; then
+    printf 'Initialization failed: %s cannot be written to .env; it contains characters Compose cannot read back.\n' \
+      "$name" >&2
+    return 1
+  fi
+  literal="$(compose_literal "$value")"
+  if grep -q "^${name}=" .env; then
+    sed -i.bak "s|^${name}=.*|${name}=$(sed_replacement "$literal")|" .env
+  else
+    printf '%s=%s\n' "$name" "$literal" >> .env
   fi
 }
 
@@ -63,6 +139,21 @@ configure_host_identity() {
   set_var HOST_IDENTITY_MODE auto
   set_var HOST_UID "$current_uid"
   set_var HOST_GID "$current_gid"
+}
+
+# configure_memory_display_root records where the vault is on this machine, for
+# the client to show and for nothing else to act on.
+#
+# It is set rather than ensured, because a value left over from a checkout that
+# has since moved names a folder that is not there — which is worse than the
+# container path it replaced, since it looks right. It is never printed: this
+# script's output is what a person pastes into an issue.
+configure_memory_display_root() {
+  if [[ -z "${MEMORY_DISPLAY_ROOT_VALUE:-}" ]]; then
+    printf 'Initialization failed: the memory vault path was never resolved.\n' >&2
+    return 1
+  fi
+  set_quoted_var MEMORY_DISPLAY_ROOT "$MEMORY_DISPLAY_ROOT_VALUE"
 }
 
 validate_sandbox_entries() {
@@ -173,6 +264,155 @@ provision_skills() {
     printf 'Initialization failed: skills must have mode 0700.\n' >&2
     return 1
   fi
+}
+
+provision_memory() {
+  local memory_path="$PWD/memory"
+  local tier
+  local document
+
+  if ! provision_private_directory "$memory_path" memory; then
+    return 1
+  fi
+  # The path the person running this can actually open. It is recorded here,
+  # where the directory has just been proved to exist, and written into .env
+  # further down once that file is there. `pwd -P` rather than the string above
+  # because $PWD is the logical path init.sh was invoked through, and on macOS
+  # /var alone is a symlink — a display path that resolves differently from the
+  # directory it names is a display path somebody will fail to find.
+  if ! MEMORY_DISPLAY_ROOT_VALUE="$(cd "$memory_path" && pwd -P)"; then
+    printf 'Initialization failed: could not resolve the memory vault path.\n' >&2
+    return 1
+  fi
+  for tier in "$MEMORY_INBOX_NAME" "$MEMORY_BELIEFS_NAME"; do
+    if ! provision_private_directory "$memory_path/$tier" "memory/$tier"; then
+      return 1
+    fi
+  done
+  # Both pinned documents are prose about the user, so an existing one is
+  # secured; only the persona is created, because profile.md is the user's to
+  # write and an empty file init.sh invented would replace a visible "not
+  # written yet" with silence.
+  for document in "$MEMORY_PERSONA_NAME" "$MEMORY_PROFILE_NAME"; do
+    if ! secure_pinned_document "$memory_path/$document" "$document"; then
+      return 1
+    fi
+  done
+
+  if [[ -e "$memory_path/$MEMORY_PERSONA_NAME" ]]; then
+    return 0
+  fi
+  if ! write_default_persona "$memory_path/$MEMORY_PERSONA_NAME"; then
+    printf 'Initialization failed: could not write the default memory/%s.\n' \
+      "$MEMORY_PERSONA_NAME" >&2
+    return 1
+  fi
+}
+
+# A pinned document is never rewritten here — it is the user's text, and
+# persona.md is the one file whose contents reach a prompt unframed. A symlink
+# is refused rather than secured: unlike a mode, a link is not something
+# init.sh can fix without deciding what the user meant by it, and writing
+# through one would land the default wherever it points.
+secure_pinned_document() {
+  local path="$1"
+  local name="$2"
+
+  if [[ -L "$path" ]]; then
+    printf 'Initialization failed: memory/%s must be an owned regular file, not a symlink.\n' "$name" >&2
+    return 1
+  fi
+  if [[ ! -e "$path" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$path" || ! -O "$path" ]]; then
+    printf 'Initialization failed: memory/%s must be an owned regular file, not a symlink.\n' "$name" >&2
+    return 1
+  fi
+  if ! chmod 0600 "$path"; then
+    printf 'Initialization failed: could not secure memory/%s.\n' "$name" >&2
+    return 1
+  fi
+}
+
+# The private-directory dance the vault needs at three paths: refuse a symlink,
+# create at 0700 under a tight umask, require host ownership and access, then
+# secure and verify the mode.
+provision_private_directory() {
+  local path="$1"
+  local label="$2"
+
+  if [[ -L "$path" ]]; then
+    printf 'Initialization failed: %s must be a real directory, not a symlink.\n' "$label" >&2
+    return 1
+  fi
+  if [[ -e "$path" && ! -d "$path" ]]; then
+    printf 'Initialization failed: %s must be a real directory.\n' "$label" >&2
+    return 1
+  fi
+  if [[ ! -e "$path" ]] && ! (umask 077 && mkdir -m 0700 -- "$path"); then
+    printf 'Initialization failed: could not create %s directory.\n' "$label" >&2
+    return 1
+  fi
+  if [[ -L "$path" || ! -d "$path" ]]; then
+    printf 'Initialization failed: %s must be a real directory, not a symlink.\n' "$label" >&2
+    return 1
+  fi
+  if [[ ! -O "$path" || ! -r "$path" || ! -w "$path" || ! -x "$path" ]]; then
+    printf 'Initialization failed: %s is not owned, readable, writable, and traversable by the host user.\n' \
+      "$label" >&2
+    return 1
+  fi
+  if ! chmod 0700 "$path"; then
+    printf 'Initialization failed: could not secure %s directory.\n' "$label" >&2
+    return 1
+  fi
+  if [[ "$(path_mode "$path")" != "700" ]]; then
+    printf 'Initialization failed: %s must have mode 0700.\n' "$label" >&2
+    return 1
+  fi
+}
+
+# init.sh installs an active starter persona, not a placeholder. Markdown's
+# "#" makes a heading; it does not comment anything out of the pin, and this
+# file must not claim otherwise. Every line below — heading included — is
+# pinned into every run exactly as written and reaches remote-egress
+# disclosure exactly as written, from the very first run. It is non-empty on
+# purpose: an empty file would disclose nothing, which is not honest about
+# what a fresh install actually pins. The user owns this file outright and
+# can replace any or all of it at any time; init.sh never overwrites an
+# existing one (see secure_pinned_document).
+write_default_persona() {
+  local persona_path="$1"
+  (
+    umask 077
+    cat > "$persona_path" <<'PERSONA'
+# Who Turing is
+
+This is an active starter persona, not a template and not a comment. Every
+line here — this heading included — is pinned into every run exactly as
+written, before anything else, until you edit it. It reaches a prompt
+unframed, it is included when memory is disclosed to a remote model, and the
+agent can never edit it: not through a tool, not through a proposal, not by
+accident.
+
+You are Turing, a careful assistant running on this machine.
+Answer briefly. Say when you are unsure rather than guessing.
+Ask before doing anything that changes files or leaves the machine.
+
+This file is yours. Replace any or all of it with your own words whenever
+you like — delete these paragraphs, keep the three lines above, or start
+over completely. Keep it short: only the first 4096 bytes reach a run, and
+the rest is cut with a notice.
+
+Two neighbours, so you know where the rest goes:
+  profile.md   who you are — also yours to write; the agent may only propose
+               edits to it, which you review before anything is applied.
+  beliefs/     what Turing has been told and you have accepted, one note per
+               subject. inbox/ holds proposals you have not accepted yet.
+PERSONA
+  ) || return 1
+  chmod 0600 "$persona_path"
 }
 
 provision_mcp_config() {
@@ -323,6 +563,7 @@ if ! is_positive_id "$current_uid" || ! is_positive_id "$current_gid"; then
 fi
 provision_sandbox
 provision_skills
+provision_memory
 provision_mcp_config
 
 validate_env_file
@@ -349,6 +590,7 @@ ensure_var TURING_EGRESS_SIGNING_SECRET "$(generate_secret)"
 ensure_var TURING_CURSOR_HMAC_SECRET "$(generate_secret)"
 ensure_var TURING_INTEGRATION_KEY "$(generate_secret)"
 configure_host_identity "$current_uid" "$current_gid"
+configure_memory_display_root
 provision_data
 rm -f .env.bak
 

@@ -46,3 +46,36 @@ func TestEnqueueFingerprintChangesWithIntegrationConnectionSet(t *testing.T) {
 		t.Fatal("integration connection set did not affect idempotency fingerprint")
 	}
 }
+
+// The local fingerprint version guards idempotency replay: a request accepted
+// under the old canonical shape must not silently satisfy a request composed
+// under the new one. Both literals are real fingerprints this exact input
+// produced — one at local version 5, captured before the memory bump, and one
+// after, with the memory snapshot fingerprint carried in the canonical egress
+// shape — so the test fails if the version is reverted, left behind, or moved
+// past the value the rest of this change assumes.
+func TestEnqueueFingerprintVersionMovedForMemorySnapshot(t *testing.T) {
+	const (
+		preMemoryBumpFingerprint  = "afbd1ccaad482e75dbc4bbf7bfecfd7319208b16d48581248220368e17ce009d"
+		postMemoryBumpFingerprint = "e8afcf90ae33103f26616639cff263dae3948cb6eb9aac1655c669449edc0aa5"
+	)
+	input := EnqueueUserMessageInput{
+		SessionID: "session", Content: "hello", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "local", IdempotencyKey: "same-key",
+		EgressDecision: &PendingEgressDecision{
+			Version: 2, Provider: "ollama", Model: "local", RequestDigest: "digest",
+			DataCategories: []string{"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS"},
+			SelectedTools:  []string{"vendor/vendor.lookup"},
+		},
+	}
+	got, err := EnqueueRequestFingerprint(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == preMemoryBumpFingerprint {
+		t.Fatal("enqueue fingerprint still matches the pre-memory-bump canonical shape")
+	}
+	if got != postMemoryBumpFingerprint {
+		t.Fatalf("enqueue fingerprint = %s, want the post-memory-bump %s", got, postMemoryBumpFingerprint)
+	}
+}

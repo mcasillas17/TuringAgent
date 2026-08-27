@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 	agentsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/agents"
@@ -22,11 +24,13 @@ import (
 	eventsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	integrationsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/integrations"
 	mcpregistrysvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/mcpregistry"
+	memorysvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/memory"
 	runtimesvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runtime"
 	sessionsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/sessions"
 	skillsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/skills"
 	telemetrysvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/telemetry"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/skillfiles"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 )
 
@@ -48,6 +52,7 @@ type App struct {
 	ApprovalService    *approvalsvc.Server
 	AuditService       *auditsvc.Server
 	MCPRegistryService *mcpregistrysvc.Server
+	MemoryService      *memorysvc.Server
 	HealthService      *HealthServer
 	// InternalIdentityNames is the exact set of least-privilege identity
 	// names wired into InternalServer's authorization interceptors — names
@@ -142,11 +147,60 @@ func New(cfg config.Config) (*App, error) {
 		},
 	}, approvalService)
 	sessionService := sessionsvc.New(repo, cfg, runtimeService, eventBus)
-	sessionService.SetArtifactCleaner(sessionsvc.NewMCPArtifactCleaner(
-		cfg.MCPFilesBaseURL,
-		cfg.MCPFilesCleanupToken,
-		nil,
-	))
+	// A vault that is not there is not a reason to refuse to start. Memory
+	// reports itself unavailable, offers no tools and refuses every dispatch,
+	// which is a state the surface already has to describe — whereas failing
+	// here would take the whole app down over a folder the user has not made.
+	//
+	// It is opened here, before anything that touches the vault runs, and not
+	// beside the memory service further down. Resuming an interrupted deletion
+	// means removing the notes that session left in the user's vault, and a
+	// cleaner asked to do that with no vault attached reports the withdrawal
+	// as failed and files one audit row per file — telling the user their notes
+	// are still on disk when nothing had gone wrong.
+	var memoryVault *memoryfiles.Vault
+	if cfg.MemoryRoot != "" {
+		memoryVault, err = memoryfiles.Open(cfg.MemoryRoot)
+		if err != nil {
+			log.Printf("memory vault at %s is unavailable: %v", cfg.MemoryRoot, err)
+			memoryVault = nil
+		}
+	}
+	repo.SetMemoryVault(memoryVault)
+	// One writing pass over the vault, before the deletion resume and after the
+	// vault is attached.
+	//
+	// The order is the point. A promotion that moved a file and then died
+	// leaves a belief with no row and a reservation for an inbox entry that is
+	// gone; healing that first means the deletion resume acts on a manifest
+	// that matches the disk. Running it afterwards would have the withdrawal
+	// decide about rows the heal was about to correct.
+	//
+	// A vault that is absent or unreadable owes nothing here: memory is already
+	// reporting itself unavailable, and refusing to start over a folder the
+	// user has not made is exactly what the paragraph above rules out. Any
+	// other failure is a vault that is there and could not be reconciled, which
+	// is not a state to start serving memory on top of.
+	if err := reconcileMemoryVaultAtStartup(repo); err != nil {
+		_ = database.Close()
+		return nil, err
+	}
+	// Two scopes, two cleaners, one list. Each owns its own manifest end to
+	// end, so a sandbox that will not answer cannot leave the user's vault
+	// notes behind and a vault the user has open cannot strand sandbox scratch.
+	sessionService.RegisterArtifactCleaners(
+		sessionsvc.NewMCPArtifactCleaner(
+			repo,
+			cfg.MCPFilesBaseURL,
+			cfg.MCPFilesCleanupToken,
+			nil,
+		),
+		sessionsvc.NewVaultArtifactCleaner(repo),
+	)
+	// A withdrawal is not finished while a belief the user kept still cites the
+	// conversation it just removed. The rewrite happens as part of the
+	// deletion, not on the next restart.
+	sessionService.SetMemoryReconcileCompletion(sessionsvc.NewMemoryReconcileCompletion(repo))
 	if err := sessionService.ResumePendingDeletions(context.Background()); err != nil {
 		_ = database.Close()
 		return nil, fmt.Errorf("resume pending session deletions: %w", err)
@@ -184,6 +238,10 @@ func New(cfg config.Config) (*App, error) {
 	integrationService := integrationsvc.New(repo, integrationSealer, auditService)
 	integrationService.SetApprovalEnforcer(approvalService)
 	integrationService.SetRegistryChangeNotifier(runtimeService)
+	memoryService := memorysvc.New(repo, memoryVault, auditService)
+	memoryService.SetMemoryDisplayRoot(cfg.MemoryDisplayRoot)
+	memoryService.SetApprovalEnforcer(approvalService)
+	memoryService.SetRegistryChangeNotifier(runtimeService)
 	mcpRegistryService := mcpregistrysvc.New(repo, integrationSealer, nil)
 	mcpRegistryService.SetAuditRecorder(auditService)
 	mcpRegistryService.SetMCPConfigRoot(cfg.MCPConfigRoot)
@@ -256,6 +314,8 @@ func New(cfg config.Config) (*App, error) {
 			turingv1.McpRegistryService_CallRegisteredMcpTool_FullMethodName,
 			turingv1.IntegrationService_ListIntegrationTools_FullMethodName,
 			turingv1.IntegrationService_CallIntegrationTool_FullMethodName,
+			turingv1.MemoryService_ListMemoryTools_FullMethodName,
+			turingv1.MemoryService_CallMemoryTool_FullMethodName,
 		),
 		auth.NewServiceIdentity("approval-consumer", cfg.ApprovalConsumerToken,
 			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
@@ -303,6 +363,10 @@ func New(cfg config.Config) (*App, error) {
 	// and dispatch tools. Neither facet ever returns a sealed credential.
 	turingv1.RegisterIntegrationServiceServer(publicServer, integrationsvc.NewPublicServer(integrationService))
 	turingv1.RegisterMcpRegistryServiceServer(publicServer, mcpregistrysvc.NewPublicServer(mcpRegistryService))
+	// Split the same way, and for the same reason: reading the vault and
+	// deciding a proposal are the user's, while discovering and running a
+	// memory tool is the runtime's. Neither facet can do the other's half.
+	turingv1.RegisterMemoryServiceServer(publicServer, memorysvc.NewPublicServer(memoryService))
 	// Public only: nothing outside the orchestrator schedules a run, and the
 	// runtime has no reason to read the automation library.
 	turingv1.RegisterAutomationServiceServer(publicServer, automationService)
@@ -322,6 +386,7 @@ func New(cfg config.Config) (*App, error) {
 	turingv1.RegisterRuntimeServiceServer(internalServer, runtimeService)
 	turingv1.RegisterMcpRegistryServiceServer(internalServer, mcpregistrysvc.NewInternalServer(mcpRegistryService))
 	turingv1.RegisterIntegrationServiceServer(internalServer, integrationsvc.NewInternalServer(integrationService))
+	turingv1.RegisterMemoryServiceServer(internalServer, memorysvc.NewInternalServer(memoryService))
 
 	application := &App{
 		PublicServer:          publicServer,
@@ -336,6 +401,7 @@ func New(cfg config.Config) (*App, error) {
 		ApprovalService:       approvalService,
 		AuditService:          auditService,
 		MCPRegistryService:    mcpRegistryService,
+		MemoryService:         memoryService,
 		HealthService:         healthService,
 		InternalIdentityNames: internalIdentityNames,
 		database:              database,
@@ -449,6 +515,41 @@ func (a *App) Stop() {
 			_ = a.database.Close()
 		}
 	})
+}
+
+// reconcileMemoryVaultAtStartup runs the one writing pass over the vault that
+// startup owes, and decides what a failure of it means.
+//
+// An install with no vault attached, or one whose folder is not there, owes
+// nothing: memory already reports itself unavailable through the whole surface,
+// and refusing to start over a folder the user has not created would take the
+// app down for a feature they are not using.
+//
+// A vault past the scan bound is the same kind of answer and is tolerated for
+// the same reason. The bound exists so a very large vault cannot stall the app;
+// making it stop the app from starting at all would be the exact outcome it was
+// put there to prevent. What it costs is real and confined: indexing and search
+// are degraded until the vault is smaller, the pass says so every time it runs,
+// and the two pinned documents — opened by name, with no walk behind them — are
+// untouched, so persona, profile and every conversation still work.
+//
+// Every other failure is a vault that exists and a database that could not be
+// brought into line with it. Starting on top of that would serve an index the
+// pass had already decided was wrong, so it is fatal and legible.
+func reconcileMemoryVaultAtStartup(repo *repository.Repository) error {
+	_, err := repo.ReconcileMemoryVault(context.Background())
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, repository.ErrMemoryVaultUnavailable),
+		errors.Is(err, memoryfiles.ErrVaultTooLarge),
+		errors.Is(err, os.ErrNotExist),
+		errors.Is(err, unix.ENOENT):
+		log.Printf("memory vault reconcile skipped: %v", err)
+		return nil
+	default:
+		return fmt.Errorf("reconcile memory vault: %w", err)
+	}
 }
 
 func stopGRPCServer(server *grpc.Server) {

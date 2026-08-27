@@ -58,9 +58,27 @@ func runtimeRemoteDecision(model string) *repository.PendingEgressDecision {
 			"EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL",
 			"EGRESS_DATA_CATEGORY_SKILL_CONTENT",
 		},
-		SkillSnapshotFingerprint: skillFingerprint,
-		ConsentGrantedAt:         repository.FormatTimestamp(time.Now().UTC()),
+		SkillSnapshotFingerprint:  skillFingerprint,
+		MemorySnapshotFingerprint: vaultlessMemoryFingerprint(),
+		ConsentGrantedAt:          repository.FormatTimestamp(time.Now().UTC()),
 	}
+}
+
+// vaultlessMemoryFingerprint is the memory binding for a repository with no
+// vault: both pinned tiers withheld and no memory tool selected. Every harness
+// in this package runs without one, so a decision that claims anything else
+// would be refused by the enqueue's own re-check.
+func vaultlessMemoryFingerprint(selectedTools ...string) string {
+	snapshot := repository.MemoryEgressSnapshot{
+		Enabled: true,
+		Persona: repository.MemoryPinnedDocument{RelPath: "persona.md", Reason: "vault_missing"},
+		Profile: repository.MemoryPinnedDocument{RelPath: "profile.md", Reason: "vault_missing"},
+	}
+	fingerprint, err := backendegress.MemorySnapshotFingerprint(snapshot.Preimage(selectedTools))
+	if err != nil {
+		panic(err)
+	}
+	return fingerprint
 }
 
 func newHarness(t *testing.T) *harness {

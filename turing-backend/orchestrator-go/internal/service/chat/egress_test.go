@@ -1182,3 +1182,12 @@ func replayRunNoticeNote(t *testing.T, h *harness, sessionID, runID string) stri
 	t.Fatalf("egress notice for run %q not found in %+v", runID, events)
 	return ""
 }
+
+// The challenge the user signs now covers memory, so its version moves in
+// lockstep with the decision version. Asserted literally: a stale client that
+// echoes the old number has to be rejected by validChallengePayload.
+func TestEgressChallengeVersionCoversMemoryDisclosure(t *testing.T) {
+	if egressChallengeVersion != 3 {
+		t.Fatalf("egressChallengeVersion = %d, want 3 once the disclosure names memory", egressChallengeVersion)
+	}
+}

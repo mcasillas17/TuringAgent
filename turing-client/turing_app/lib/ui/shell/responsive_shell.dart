@@ -11,6 +11,7 @@ import '../../features/workspace/automations_page.dart';
 import '../../features/workspace/session_agent_bar.dart';
 import '../../features/workspace/integrations_page.dart';
 import '../../features/workspace/skills_page.dart';
+import '../../features/workspace/memory_page.dart';
 import '../../features/workspace/telemetry_page.dart';
 import '../../features/workspace/workspace_pages.dart';
 import '../../logic/theme_logic.dart';
@@ -1036,6 +1037,8 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         return AgentsPage(apiClient: widget.apiClient);
       case ShellDestination.skills:
         return SkillsPage(apiClient: widget.apiClient);
+      case ShellDestination.memory:
+        return MemoryPage(apiClient: widget.apiClient);
       case ShellDestination.integrations:
         return IntegrationsPage(apiClient: widget.apiClient);
       case ShellDestination.automations:

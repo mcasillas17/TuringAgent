@@ -20,6 +20,11 @@
 **/data.backup-*
 **/data.worktree-backup-*
 turing-backend/skills
+# The memory vault holds the user's persona, profile and beliefs. It is scoped
+# to this exact path for the same reason skills is, and more sharply: **/memory
+# would also hide agent-runtime-go/internal/memory and
+# orchestrator-go/internal/service/memory, which the images are built from.
+turing-backend/memory
 turing-backend/mcp
 **/sandbox
 

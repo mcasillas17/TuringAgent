@@ -111,9 +111,10 @@ func startDriftGuardRunWithRoutingNotice(t *testing.T, repo *repository.Reposito
 				"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS",
 				"EGRESS_DATA_CATEGORY_TOOL_RESULTS",
 			},
-			SelectedTools:            []string{"vendor/vendor.lookup"},
-			SkillSnapshotFingerprint: skillFingerprint,
-			ConsentGrantedAt:         "2026-08-21T00:00:00Z",
+			SelectedTools:             []string{"vendor/vendor.lookup"},
+			SkillSnapshotFingerprint:  skillFingerprint,
+			MemorySnapshotFingerprint: vaultlessMemoryFingerprint("vendor/vendor.lookup"),
+			ConsentGrantedAt:          "2026-08-21T00:00:00Z",
 			RemoteMCPServers: []repository.RemoteMCPServerEgress{{
 				ServerName: "vendor", Endpoint: "https://vendor.example/mcp", EndpointHost: "vendor.example",
 			}},
@@ -384,4 +385,21 @@ func TestRunStateCarrierSetMatchesActualRepositoryWriters(t *testing.T) {
 			t.Fatalf("no committed row of expected canonical type %q", want)
 		}
 	}
+}
+
+// vaultlessMemoryFingerprint is the memory binding for a repository with no
+// vault: both pinned tiers withheld and no memory tool selected. The enqueue
+// re-derives this inside its own transaction, so a decision claiming anything
+// else is refused.
+func vaultlessMemoryFingerprint(selectedTools ...string) string {
+	snapshot := repository.MemoryEgressSnapshot{
+		Enabled: true,
+		Persona: repository.MemoryPinnedDocument{RelPath: "persona.md", Reason: "vault_missing"},
+		Profile: repository.MemoryPinnedDocument{RelPath: "profile.md", Reason: "vault_missing"},
+	}
+	fingerprint, err := backendegress.MemorySnapshotFingerprint(snapshot.Preimage(selectedTools))
+	if err != nil {
+		panic(err)
+	}
+	return fingerprint
 }

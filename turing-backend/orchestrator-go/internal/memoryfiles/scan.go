@@ -1,0 +1,859 @@
+package memoryfiles
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"sort"
+	"strings"
+	"sync"
+
+	"golang.org/x/sys/unix"
+)
+
+// MaxVaultIndexedFiles bounds how many notes one scan will index. It is a
+// refusal rather than a truncation: a vault silently indexed halfway is a
+// search that quietly lies about what the user has written.
+//
+// The bound applies to scanning, searching and reconciliation only. Reading a
+// belief by its pinned identity never consults it, so a large vault degrades
+// discovery without breaking retrieval of memories already known.
+const MaxVaultIndexedFiles = 4096
+
+// noteFileExtension is the only extension this package indexes. Canvases,
+// attachments and everything else Obsidian keeps in a vault are the user's,
+// not Turing's.
+const noteFileExtension = ".md"
+
+// ErrVaultTooLarge marks a vault past the index bound.
+var ErrVaultTooLarge = errors.New("vault holds more notes than memory indexing will scan")
+
+// VaultArea says which part of the vault a note came from. Callers must keep
+// them apart: beliefs are accepted memory and may be indexed for search, while
+// inbox candidates are unreviewed model output about the user and must never
+// turn up in a search over their memory.
+type VaultArea string
+
+const (
+	AreaBeliefs VaultArea = "beliefs"
+	AreaInbox   VaultArea = "inbox"
+	AreaOther   VaultArea = "other"
+)
+
+// NoteStatus mirrors the managed/unmanaged distinction the client renders, plus
+// the per-note error state a broken or ambiguous file lands in.
+type NoteStatus string
+
+const (
+	NoteStatusManaged   NoteStatus = "managed"
+	NoteStatusUnmanaged NoteStatus = "unmanaged"
+	NoteStatusError     NoteStatus = "error"
+)
+
+// NoteRow is one scanned note. Content, RawFrontmatter and Body are the file's
+// own bytes so a later writer can splice rather than re-encode.
+type NoteRow struct {
+	RelPath        string
+	Area           VaultArea
+	NoteID         string
+	Kind           NoteKind
+	Title          string
+	Content        string
+	ContentHash    string
+	RawFrontmatter string
+	Body           string
+	EvidenceRefs   []string
+	// EvidenceWithdrawn is true when the file itself says its citations were
+	// withdrawn, which is a different statement from carrying none.
+	EvidenceWithdrawn bool
+	Status            NoteStatus
+	ParseError        string
+	// Indexable is false for every note the caller must not project into
+	// search: broken frontmatter, or an identity two files both claim.
+	Indexable   bool
+	ModTimeUnix int64
+	SizeBytes   int64
+	// InodeNumber is which file this is, as opposed to which name it had. A
+	// rename moves bytes to a name another note used to hold, and modification
+	// time and length alone cannot tell the new occupant from the old one.
+	InodeNumber int64
+}
+
+// SkippedEntry records something the walk deliberately did not index, so the
+// user can be told why their file is not showing up instead of guessing.
+type SkippedEntry struct {
+	RelPath string
+	Reason  string
+}
+
+// AreaScan says whether one area of the vault was enumerated in full on this
+// pass, and when it was not, why.
+//
+// The zero value is deliberately "incomplete with no reason given": a caller
+// that never received an answer must not read one into the silence, and a
+// ScanResult returned alongside an error therefore authorises nothing.
+type AreaScan struct {
+	Complete bool
+	Reason   string
+}
+
+// ScanCompleteness is per-area enumeration completeness for one pass.
+//
+// It exists because "the walk returned no notes under beliefs/" and "the walk
+// could not read beliefs/" are the same empty list and opposite facts. A caller
+// that retires rows for notes it did not see must only do so on the first, so
+// the walk states which one it is rather than leaving it to be inferred.
+//
+// Root is not an area notes come from; it is the enumeration everything else
+// depends on. A root the walk could not list says nothing about what is under
+// it, so its failure is carried into both areas as well.
+type ScanCompleteness struct {
+	Root    AreaScan
+	Beliefs AreaScan
+	Inbox   AreaScan
+}
+
+// Area answers for one note-bearing area. AreaOther has no area-wide guarantee
+// to give — it is every folder the user keeps in the vault that memory does not
+// own — so it answers incomplete, which is the answer that authorises nothing.
+func (c ScanCompleteness) Area(area VaultArea) AreaScan {
+	switch area {
+	case AreaBeliefs:
+		return c.Beliefs
+	case AreaInbox:
+		return c.Inbox
+	case AreaOther:
+		return AreaScan{}
+	default:
+		return AreaScan{}
+	}
+}
+
+// ScanResult is one whole-vault pass.
+type ScanResult struct {
+	Notes            []NoteRow
+	Skipped          []SkippedEntry
+	DuplicateNoteIDs []string
+	// Completeness says which areas this pass actually managed to enumerate.
+	// Notes and Skipped describe what the walk saw; this describes what it was
+	// able to look at, which is the only basis on which absence means anything.
+	Completeness ScanCompleteness
+}
+
+// completenessTracker accumulates enumeration failures during one walk. It
+// starts out claiming every area was read whole and is only ever downgraded,
+// so a path that is never exercised cannot leave an area falsely incomplete.
+type completenessTracker struct {
+	completeness ScanCompleteness
+}
+
+func newCompletenessTracker() *completenessTracker {
+	return &completenessTracker{completeness: ScanCompleteness{
+		Root:    AreaScan{Complete: true},
+		Beliefs: AreaScan{Complete: true},
+		Inbox:   AreaScan{Complete: true},
+	}}
+}
+
+// markIncomplete records that the walk could not account for everything at or
+// under relPath. The empty path is the vault root, whose failure reaches every
+// area; anything outside beliefs/ and inbox/ reaches neither, because a folder
+// of the user's own that could not be read says nothing about their memory and
+// must not disable reconciliation for it forever.
+//
+// The first reason recorded for an area is the one kept. A second failure in
+// the same area does not make it any less incomplete, and overwriting would
+// make the message depend on directory listing order.
+func (t *completenessTracker) markIncomplete(relPath string, reason string) {
+	switch {
+	case relPath == "":
+		t.mark(&t.completeness.Root, reason)
+		t.mark(&t.completeness.Beliefs, reason)
+		t.mark(&t.completeness.Inbox, reason)
+	case relPath == BeliefsDirName || strings.HasPrefix(relPath, BeliefsDirName+"/"):
+		t.mark(&t.completeness.Beliefs, reason)
+	case relPath == InboxDirName || strings.HasPrefix(relPath, InboxDirName+"/"):
+		t.mark(&t.completeness.Inbox, reason)
+	}
+}
+
+func (t *completenessTracker) mark(area *AreaScan, reason string) {
+	if !area.Complete {
+		return
+	}
+	area.Complete = false
+	area.Reason = reason
+}
+
+func (t *completenessTracker) snapshot() ScanCompleteness { return t.completeness }
+
+// NoteMetadata is the cheap identity of a file's contents.
+//
+// The inode is part of it, not decoration. A batch rename in Obsidian moves
+// every note onto the name the next one was holding, and modification time and
+// length alone would let the cache answer for a name with the note that used to
+// live there — which is how a rename turns into two notes swapping their words.
+//
+// Accepted residual: two writes to the *same file* in the same second that
+// leave it exactly the same length look identical here, so a cache keyed on it
+// can serve one stale search result. It is confined to belief discovery on
+// purpose. Reads by belief identity always go to disk, and the inbox is never
+// served from the cache at all, so nothing a user decides about is ever answered
+// from a remembered parse.
+type NoteMetadata struct {
+	ModTimeUnix int64
+	SizeBytes   int64
+	InodeNumber int64
+	ContentHash string
+}
+
+// MetadataCache lets a caller keep what one scan read and hand it back to the
+// next one. It is safe for concurrent use: two scans of the same vault share
+// one cache, and the app scans on a timer while the user is editing.
+//
+// Entries hold the note exactly as it parsed, before anything the vault decides
+// across files. Nothing whose answer depends on another note is stored here.
+//
+// What it stores and what it will serve are two different questions. Every path
+// a pass sees is recorded, because the record is also how a path that stops
+// being seen is evicted; only beliefs are ever answered from it. See
+// cacheMayServe.
+type MetadataCache struct {
+	mutex   sync.RWMutex
+	entries map[string]cacheEntry
+}
+
+// cacheEntry keeps the cheap identity beside the parse it belongs to. A caller
+// that supplies metadata by hand gets an entry with no note attached, which is
+// a miss for reuse and a hit for freshness questions.
+type cacheEntry struct {
+	metadata NoteMetadata
+	note     NoteRow
+	hasNote  bool
+}
+
+func NewMetadataCache() *MetadataCache {
+	return &MetadataCache{entries: make(map[string]cacheEntry)}
+}
+
+func (c *MetadataCache) Put(relPath string, metadata NoteMetadata) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.entries[relPath] = cacheEntry{metadata: metadata}
+}
+
+func (c *MetadataCache) Get(relPath string) (NoteMetadata, bool) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	entry, ok := c.entries[relPath]
+	return entry.metadata, ok
+}
+
+// Fresh reports whether a cached entry still matches what the filesystem says.
+func (c *MetadataCache) Fresh(relPath string, current NoteMetadata) bool {
+	metadata, ok := c.Get(relPath)
+	return ok && sameCachedFile(metadata, current)
+}
+
+// sameCachedFile is the one comparison the cache turns on: the same file, at
+// the same length, unmodified since it was read.
+func sameCachedFile(cached NoteMetadata, current NoteMetadata) bool {
+	return cached.InodeNumber == current.InodeNumber &&
+		cached.ModTimeUnix == current.ModTimeUnix &&
+		cached.SizeBytes == current.SizeBytes
+}
+
+func (c *MetadataCache) Len() int {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	return len(c.entries)
+}
+
+// Drop forgets one path, for use when a note is removed.
+func (c *MetadataCache) Drop(relPath string) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	delete(c.entries, relPath)
+}
+
+// The three methods below are what a scan uses. Each tolerates a nil cache, so
+// scanning without one is the same code path with the caching turned off
+// rather than a second implementation that can drift from this one.
+
+func (c *MetadataCache) reusableRow(candidate scanCandidate) (NoteRow, bool) {
+	if c == nil || !cacheMayServe(candidate.area) {
+		return NoteRow{}, false
+	}
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	entry, ok := c.entries[candidate.relPath]
+	if !ok || !entry.hasNote {
+		return NoteRow{}, false
+	}
+	if !cacheMayServe(entry.note.Area) {
+		return NoteRow{}, false
+	}
+	if !sameCachedFile(entry.metadata, candidate.metadata()) {
+		return NoteRow{}, false
+	}
+	return entry.note, true
+}
+
+// cacheMayServe says which areas a remembered parse is allowed to answer for.
+//
+// The inbox is not one of them, and that is a governance rule rather than a
+// performance choice. This cache accepts one named residual: two writes to the
+// same file in the same second, at the same length, are indistinguishable to
+// it, so a pass can serve the earlier words. Over beliefs that is a stale
+// search result, self-correcting on the next change, and it was argued for on
+// those terms.
+//
+// A candidate is not a search result. Its bytes are rendered on the page the
+// user decides from, its hash is the token that decision carries, and the
+// decision itself is a compare-and-set against the file under the vault's own
+// lock. Serving a remembered parse there shows the user one proposal and makes
+// the server refuse every decision about it — and re-reading the page hands
+// back the same refused token, so the proposal is undecidable for as long as
+// the entry lives. Reading the inbox afresh on every pass is what keeps the
+// residual to discovery, where it belongs.
+func cacheMayServe(area VaultArea) bool {
+	return area != AreaInbox
+}
+
+func (c *MetadataCache) putScanned(relPath string, note NoteRow) {
+	if c == nil {
+		return
+	}
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.entries[relPath] = cacheEntry{
+		metadata: NoteMetadata{
+			ModTimeUnix: note.ModTimeUnix,
+			SizeBytes:   note.SizeBytes,
+			InodeNumber: note.InodeNumber,
+			ContentHash: note.ContentHash,
+		},
+		note:    note,
+		hasNote: true,
+	}
+}
+
+// retain drops every path this pass did not see. A note the user deleted in
+// Obsidian has to leave the cache with it, or a later reader is holding the
+// only copy of a memory they asked to be rid of.
+func (c *MetadataCache) retain(seen map[string]struct{}) {
+	if c == nil {
+		return
+	}
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	for relPath := range c.entries {
+		if _, ok := seen[relPath]; !ok {
+			delete(c.entries, relPath)
+		}
+	}
+}
+
+type scanCandidate struct {
+	relPath     string
+	area        VaultArea
+	modTimeUnix int64
+	sizeBytes   int64
+	inodeNumber int64
+}
+
+func (c scanCandidate) metadata() NoteMetadata {
+	return NoteMetadata{
+		ModTimeUnix: c.modTimeUnix,
+		SizeBytes:   c.sizeBytes,
+		InodeNumber: c.inodeNumber,
+	}
+}
+
+// Scan walks the vault with Lstat at every step, never Stat, so a symlink is
+// seen as a symlink and skipped instead of being resolved into whatever it
+// points at. Directories the vault does not own — every dot folder, so
+// .obsidian and .trash included — are skipped whole.
+func (v *Vault) Scan(ctx context.Context) (ScanResult, error) {
+	return v.ScanWithCache(ctx, nil)
+}
+
+// ScanWithCache is the same pass with a cache the caller keeps between runs. A
+// belief whose modification time and length are unchanged is not re-read or
+// re-parsed; it is served from what the last pass already read.
+//
+// An inbox candidate never is. It is read, parsed and hashed on every pass,
+// because it is the text a user is about to decide about and the hash their
+// decision will carry — see cacheMayServe for why that is not the same kind of
+// answer as a search hit.
+//
+// Only a verdict the pass reached about a file's own bytes is cached. A read
+// that failed — a cancelled context, an entry that vanished or could not be
+// opened — decided nothing about the note, so it is never stored: a cancelled
+// pass returns its context error and keeps nothing, and any other failure
+// leaves a visible row this pass only, read again on the next one even though
+// the file has not changed.
+//
+// The cache is deliberately not consulted for anything decided across the whole
+// vault. Duplicate identities are recomputed on every pass, because that answer
+// depends on the other files, and a cached verdict would leave the survivor of
+// a resolved duplicate refused forever.
+//
+// Paths that no longer exist are dropped at the end of the pass, so a deleted
+// note cannot be served out of the cache by a later reader.
+func (v *Vault) ScanWithCache(ctx context.Context, cache *MetadataCache) (ScanResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ScanResult{}, err
+	}
+	result := ScanResult{}
+	candidates, err := v.walkVault(ctx, &result)
+	if err != nil {
+		return ScanResult{}, err
+	}
+	notes := make([]NoteRow, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return ScanResult{}, err
+		}
+		seen[candidate.relPath] = struct{}{}
+		row, reused := cache.reusableRow(candidate)
+		if !reused {
+			cacheable := false
+			row, cacheable, err = v.scanNoteRow(ctx, candidate)
+			if err != nil {
+				return ScanResult{}, err
+			}
+			if cacheable {
+				cache.putScanned(candidate.relPath, row)
+			}
+		}
+		notes = append(notes, row)
+	}
+	cache.retain(seen)
+	sort.Slice(notes, func(first int, second int) bool {
+		return notes[first].RelPath < notes[second].RelPath
+	})
+	result.Notes = notes
+	result.DuplicateNoteIDs = flagDuplicateIdentities(result.Notes)
+	sort.Slice(result.Skipped, func(first int, second int) bool {
+		return result.Skipped[first].RelPath < result.Skipped[second].RelPath
+	})
+	return result, nil
+}
+
+// walkVault lists the vault breadth-first and refuses the moment it has seen
+// one indexable note more than the bound allows. Stopping there rather than
+// after the fact is the difference between a bounded walk and an unbounded one
+// that reports a bound: a vault with a million notes must not be pulled into
+// memory to be told it is too large.
+//
+// Alongside the notes it collects, the walk records which areas it managed to
+// enumerate in full. Every failure that leaves entries unaccounted for — a root
+// that vanished, a directory it could not open, a listing that gave out
+// halfway, an area that is no longer a directory, an entry it could not even
+// inspect — downgrades the area it happened in, because a caller that deletes
+// what this walk did not report must be able to tell "gone" from "unreadable".
+//
+// A folder refused by descentRefusal is deliberately not one of them: that is a
+// standing policy about paths this package could never write, it is reported in
+// Skipped, and it answers the same way on every pass. Treating it as an
+// enumeration failure would let one over-deep folder disable reconciliation for
+// the whole vault permanently.
+//
+// The listing itself arrives in bounded batches. Asking a directory for all of
+// its entries at once would pull a million-entry folder into memory before a
+// single bound was consulted — a walk that reports a bound rather than one that
+// keeps one. Each batch is sorted before it is walked and the collected
+// candidates are sorted again at the end, so the answer does not depend on the
+// order the filesystem happened to hand entries back in.
+func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandidate, error) {
+	var candidates []scanCandidate
+	completeness := newCompletenessTracker()
+	defer func() { result.Completeness = completeness.snapshot() }()
+	queue := []string{""}
+	for len(queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		relDirectory := queue[0]
+		queue = queue[1:]
+
+		components := []string(nil)
+		if relDirectory != "" {
+			components = strings.Split(relDirectory, "/")
+		}
+		directory, err := v.openDirectory(ctx, components, false)
+		if err != nil {
+			// A root that cannot be opened is not an empty vault. It is a
+			// volume that was unmounted, a synced folder mid-rebuild, or a
+			// path the user moved — and every note in it would otherwise look
+			// deleted at once.
+			completeness.markIncomplete(relDirectory, fmt.Sprintf("%s could not be opened: %v", walkTargetName(relDirectory), err))
+			if relDirectory == "" && (errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist)) {
+				return nil, nil
+			}
+			result.Skipped = append(result.Skipped, SkippedEntry{
+				RelPath: relDirectory,
+				Reason:  fmt.Sprintf("directory could not be opened: %v", err),
+			})
+			continue
+		}
+		var readErr error
+		for {
+			var names []string
+			names, readErr = v.listDirectoryBatch(directory)
+			if len(names) == 0 {
+				break
+			}
+			// Sorted per batch, so one pass walks a directory's entries in the
+			// same order regardless of how the filesystem chunked them.
+			sort.Strings(names)
+			for _, name := range names {
+				if err := ctx.Err(); err != nil {
+					_ = directory.Close()
+					return nil, err
+				}
+				relPath := name
+				if relDirectory != "" {
+					relPath = relDirectory + "/" + name
+				}
+				var stat unix.Stat_t
+				if err := unix.Fstatat(int(directory.Fd()), name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+					if errors.Is(err, unix.ENOENT) {
+						continue
+					}
+					// The entry is there and the walk cannot tell what it is, so it
+					// cannot tell whether notes live at or under it either.
+					completeness.markIncomplete(relPath, fmt.Sprintf("entry %q could not be inspected: %v", relPath, err))
+					result.Skipped = append(result.Skipped, SkippedEntry{RelPath: relPath, Reason: fmt.Sprintf("entry could not be inspected: %v", err)})
+					continue
+				}
+				if stat.Mode&unix.S_IFMT != unix.S_IFDIR && isAreaRoot(relPath) {
+					// beliefs/ or inbox/ replaced by a file, a symlink or anything
+					// else the walk will not descend into. The area is not empty;
+					// it is unreadable, and nothing under it was enumerated.
+					completeness.markIncomplete(relPath, fmt.Sprintf(
+						"%q is not a directory on this pass, so nothing under it was enumerated", relPath,
+					))
+				}
+				if reason := skipReason(name, relPath, stat); reason != "" {
+					result.Skipped = append(result.Skipped, SkippedEntry{RelPath: relPath, Reason: reason})
+					continue
+				}
+				if stat.Mode&unix.S_IFMT == unix.S_IFDIR {
+					if reason := descentRefusal(relPath); reason != "" {
+						result.Skipped = append(result.Skipped, SkippedEntry{RelPath: relPath, Reason: reason})
+						continue
+					}
+					queue = append(queue, relPath)
+					continue
+				}
+				candidates = append(candidates, scanCandidate{
+					relPath:     relPath,
+					area:        areaOf(relPath),
+					modTimeUnix: stat.Mtim.Sec,
+					sizeBytes:   stat.Size,
+					inodeNumber: int64(stat.Ino),
+				})
+				// Checked inside the batch loop, not after the listing: this is
+				// what keeps the walk from reading a directory it has already
+				// been told is too large.
+				if len(candidates) > MaxVaultIndexedFiles {
+					_ = directory.Close()
+					return nil, vaultTooLargeError()
+				}
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		_ = directory.Close()
+		if readErr != nil {
+			// Half a listing names half the notes. The entries it did return
+			// are kept — they were really there — but the area cannot be used
+			// to conclude anything about what was not returned.
+			completeness.markIncomplete(relDirectory, fmt.Sprintf("the listing of %s was incomplete: %v", walkTargetName(relDirectory), readErr))
+			result.Skipped = append(result.Skipped, SkippedEntry{
+				RelPath: relDirectory,
+				Reason:  fmt.Sprintf("directory listing was incomplete: %v", readErr),
+			})
+		}
+	}
+	sort.Slice(candidates, func(first int, second int) bool {
+		return candidates[first].relPath < candidates[second].relPath
+	})
+	return candidates, nil
+}
+
+// vaultListingBatchSize is how many directory entries the walk asks for at a
+// time. It is large enough that an ordinary vault is listed in one or two
+// calls and small enough that an enormous folder is refused after reading a
+// bounded slice of it.
+const vaultListingBatchSize = 256
+
+// listDirectoryBatch reads the next bounded batch of entries.
+//
+// A finished directory is not an error: Readdirnames reports io.EOF when there
+// is nothing left, and the walk translates that into "no more names" so an
+// exhausted listing is never recorded as an area it failed to enumerate.
+func (v *Vault) listDirectoryBatch(directory *os.File) ([]string, error) {
+	read := (*os.File).Readdirnames
+	if v.readDirNames != nil {
+		read = v.readDirNames
+	}
+	names, err := read(directory, vaultListingBatchSize)
+	if errors.Is(err, io.EOF) {
+		return names, nil
+	}
+	return names, err
+}
+
+// isAreaRoot reports whether relPath names beliefs/ or inbox/ itself.
+func isAreaRoot(relPath string) bool {
+	return relPath == BeliefsDirName || relPath == InboxDirName
+}
+
+// walkTargetName names what the walk was trying to read, so a reason carried
+// out of the pass says where the gap is without the caller holding the path.
+func walkTargetName(relDirectory string) string {
+	if relDirectory == "" {
+		return "the vault root"
+	}
+	return fmt.Sprintf("%q", relDirectory)
+}
+
+func vaultTooLargeError() error {
+	return fmt.Errorf(
+		"the vault holds more than %d indexable notes, past the %d-note scan bound; memory search and reconciliation are bounded so a large vault cannot stall the app: %w",
+		MaxVaultIndexedFiles, MaxVaultIndexedFiles, ErrVaultTooLarge,
+	)
+}
+
+// descentRefusal says why the walk will not go into a directory. The bound is
+// the one every write gate already applies: a note deeper than
+// MaxVaultPathDepth is a note no primitive in this package could write or
+// rewrite, so indexing it would offer the user a memory nothing can maintain.
+// An ordinary Obsidian tree is nowhere near it.
+func descentRefusal(relPath string) string {
+	if len(relPath) > MaxVaultPathBytes {
+		return fmt.Sprintf("folder path exceeds the %d-byte vault path limit and is not walked", MaxVaultPathBytes)
+	}
+	if strings.Count(relPath, "/")+1 >= MaxVaultPathDepth {
+		return fmt.Sprintf(
+			"folder is %d levels deep, at the %d-level vault path limit; notes below it could not be written or rewritten, so they are not indexed",
+			strings.Count(relPath, "/")+1, MaxVaultPathDepth,
+		)
+	}
+	return ""
+}
+
+// skipReason returns why an entry is not indexed, or "" when it should be.
+func skipReason(name string, relPath string, stat unix.Stat_t) string {
+	if stat.Mode&unix.S_IFMT == unix.S_IFLNK {
+		return "entry is a symlink; the vault walk never follows links"
+	}
+	if strings.HasPrefix(name, ".") {
+		return "dot entries belong to the editor, not to memory"
+	}
+	if stat.Mode&unix.S_IFMT == unix.S_IFDIR {
+		return ""
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		return "entry is not a regular file"
+	}
+	if isSyncConflictArtifact(name) {
+		return "entry is a sync conflict artifact, not a note the user wrote"
+	}
+	if !strings.EqualFold(path.Ext(name), noteFileExtension) {
+		return "only " + noteFileExtension + " files are indexed"
+	}
+	if relPath == PersonaFileName || relPath == ProfileFileName {
+		return "pinned document, loaded separately and never indexed as a note"
+	}
+	return ""
+}
+
+// isSyncConflictArtifact matches the duplicate files Obsidian Sync, Dropbox,
+// iCloud and Syncthing leave behind. Indexing them would double every note the
+// user has ever had a conflict on.
+func isSyncConflictArtifact(name string) bool {
+	folded := strings.ToLower(name)
+	return strings.Contains(folded, "conflicted copy") ||
+		strings.Contains(folded, "sync-conflict") ||
+		strings.Contains(folded, "conflicted version")
+}
+
+func areaOf(relPath string) VaultArea {
+	switch {
+	case strings.HasPrefix(relPath, BeliefsDirName+"/"):
+		return AreaBeliefs
+	case strings.HasPrefix(relPath, InboxDirName+"/"):
+		return AreaInbox
+	default:
+		return AreaOther
+	}
+}
+
+// scanNoteRow produces the row one candidate contributes to this pass and says
+// whether that row may be cached. The distinction is the whole point: a row
+// derived from bytes this pass read is a verdict about the file and keeps until
+// the file changes, while a read that never got its bytes has decided nothing
+// and must be tried again.
+func (v *Vault) scanNoteRow(ctx context.Context, candidate scanCandidate) (NoteRow, bool, error) {
+	row, err := v.readNoteRow(ctx, candidate)
+	if err == nil {
+		return row, true, nil
+	}
+	// A read that failed because the caller hung up decided nothing about this
+	// note, so the pass reports the cancellation rather than inventing a note
+	// error out of it — and keeps nothing. The context is the whole test: a
+	// read that reports cancellation observed this same context, so ctx.Err()
+	// is already set by the time its error arrives here.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return NoteRow{}, false, ctxErr
+	}
+	return unreadableNoteRow(candidate, err), false, nil
+}
+
+// unreadableNoteRow is what a pass shows for a note it could not read at all.
+// The user is told which file and why — silence is the one behaviour the plan
+// forbids — and the row is deliberately never cached, so the next pass reads
+// the file again even though its modification time and length are unchanged. A
+// note that is genuinely unreadable keeps its row on every pass; a note that
+// was briefly unavailable comes back the moment it can be read.
+func unreadableNoteRow(candidate scanCandidate, err error) NoteRow {
+	return NoteRow{
+		RelPath:     candidate.relPath,
+		Area:        candidate.area,
+		Status:      NoteStatusError,
+		ModTimeUnix: candidate.modTimeUnix,
+		SizeBytes:   candidate.sizeBytes,
+		InodeNumber: candidate.inodeNumber,
+		ParseError: fmt.Sprintf(
+			"the note could not be read on this pass and will be read again on the next one: %v", err,
+		),
+	}
+}
+
+// readNoteRow reads one note and parses what it read. The error it returns is
+// reserved for the read itself failing — a cancelled pass, an entry that could
+// not be opened, a descriptor that gave out mid-file — and the caller decides
+// what a failed read means for the pass. Content that was read and could not be
+// parsed is not an error here: it is the per-note error row the plan asks for,
+// and the only kind of refusal this package caches.
+func (v *Vault) readNoteRow(ctx context.Context, candidate scanCandidate) (NoteRow, error) {
+	row := NoteRow{
+		RelPath:     candidate.relPath,
+		Area:        candidate.area,
+		Status:      NoteStatusError,
+		ModTimeUnix: candidate.modTimeUnix,
+		SizeBytes:   candidate.sizeBytes,
+		InodeNumber: candidate.inodeNumber,
+	}
+	content, stat, err := v.readScannedNote(ctx, candidate.relPath)
+	if err != nil {
+		var overLimit *LimitError
+		if !errors.As(err, &overLimit) {
+			return NoteRow{}, err
+		}
+		// The one refusal the read reaches by counting bytes it did read, so it
+		// is a statement about the file rather than about the read. Caching it
+		// is what keeps a half-megabyte note from being pulled off the disk on
+		// every timer tick, and its length is part of the cache key, so the
+		// moment the user trims the note it is read again.
+		row.ModTimeUnix = stat.Mtim.Sec
+		row.SizeBytes = stat.Size
+		row.InodeNumber = int64(stat.Ino)
+		row.ParseError = err.Error()
+		return row, nil
+	}
+	row.Content = content
+	row.ContentHash = ContentHash(content)
+	row.ModTimeUnix = stat.Mtim.Sec
+	row.SizeBytes = stat.Size
+	row.InodeNumber = int64(stat.Ino)
+
+	parsed, err := ParseNote(candidate.relPath, content)
+	if err != nil {
+		row.ParseError = err.Error()
+		return row, nil
+	}
+	row.NoteID = parsed.ID
+	row.Kind = parsed.Kind
+	row.Title = parsed.Title
+	row.RawFrontmatter = parsed.RawFrontmatter
+	row.Body = parsed.Body
+	row.EvidenceRefs = parsed.Refs
+	row.EvidenceWithdrawn = parsed.Withdrawn
+	row.Indexable = true
+	if parsed.Managed {
+		row.Status = NoteStatusManaged
+	} else {
+		row.Status = NoteStatusUnmanaged
+	}
+	// A profile edit under beliefs/ is a file the promotion primitive refuses
+	// to create: it is a proposal to rewrite the user's description of
+	// themselves, and the only way it gets here is that someone moved it by
+	// hand. Reading it as a belief would make a proposal the user never
+	// accepted answerable as a remembered fact, so the walk refuses it in the
+	// same shape it refuses a broken note — visible, not indexed, and still on
+	// disk for the user to move back or reject.
+	if candidate.area == AreaBeliefs && parsed.Kind == KindProfileEdit {
+		row.Indexable = false
+		row.Status = NoteStatusError
+		row.ParseError = fmt.Sprintf(
+			"this file declares kind %q, which is a proposal about %s and never a belief; move it back to %s/ to decide on it, or delete it",
+			KindProfileEdit, ProfileFileName, InboxDirName,
+		)
+	}
+	return row, nil
+}
+
+// readScannedNote is the scan's one read of a note's bytes, routed through the
+// test seam when one is installed and straight to the confined read otherwise.
+func (v *Vault) readScannedNote(ctx context.Context, relPath string) (string, unix.Stat_t, error) {
+	if v.scanRead == nil {
+		return v.readConfinedFile(ctx, relPath, MaxNoteBytes)
+	}
+	return v.scanRead(ctx, relPath, func() (string, unix.Stat_t, error) {
+		return v.readConfinedFile(ctx, relPath, MaxNoteBytes)
+	})
+}
+
+// flagDuplicateIdentities marks every copy of a shared identity as an error and
+// indexes none of them. Picking a winner would silently drop one of the user's
+// files from their own memory; saying so out loud lets them fix it.
+func flagDuplicateIdentities(notes []NoteRow) []string {
+	owners := map[string][]int{}
+	for index, note := range notes {
+		if note.NoteID == "" || !note.Indexable {
+			continue
+		}
+		owners[note.NoteID] = append(owners[note.NoteID], index)
+	}
+	var duplicates []string
+	for noteID, indexes := range owners {
+		if len(indexes) < 2 {
+			continue
+		}
+		duplicates = append(duplicates, noteID)
+		paths := make([]string, 0, len(indexes))
+		for _, index := range indexes {
+			paths = append(paths, notes[index].RelPath)
+		}
+		for _, index := range indexes {
+			notes[index].Status = NoteStatusError
+			notes[index].Indexable = false
+			notes[index].ParseError = fmt.Sprintf(
+				"identity %q is claimed by %s; none of them are indexed until one is renamed or given its own id",
+				noteID, strings.Join(paths, " and "),
+			)
+		}
+	}
+	sort.Strings(duplicates)
+	return duplicates
+}

@@ -13,8 +13,19 @@ func TestComposeLaunchUsesCanonicalCurrentIdentityInsteadOfEnvironment(t *testin
 	if result.err != nil {
 		t.Fatalf("compose.sh failed: %v\n%s", result.err, result.output)
 	}
-	if got := strings.TrimSpace(result.dockerLog); got != "HOST_UID=501 HOST_GID=20\ncompose --env-file .env -f infra/docker-compose.yml up --build" {
-		t.Fatalf("docker invocation = %q", got)
+	// The identity is the one this script resolved, never the one the terminal
+	// exported. The vault path beside it is the value validated out of .env,
+	// which is checked on its own in
+	// TestComposeLaunchSendsTheValidatedHostVaultPath.
+	lines := strings.Split(strings.TrimSpace(result.dockerLog), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("docker invocation = %q", result.dockerLog)
+	}
+	if !strings.HasPrefix(lines[0], "HOST_UID=501 HOST_GID=20 MEMORY_DISPLAY_ROOT=/") {
+		t.Fatalf("docker environment = %q", lines[0])
+	}
+	if lines[1] != "compose --env-file .env -f infra/docker-compose.yml up --build" {
+		t.Fatalf("docker invocation = %q", lines[1])
 	}
 }
 
@@ -28,6 +39,111 @@ func TestComposeMountsFileBackedSkillsIntoTheOrchestrator(t *testing.T) {
 		if !strings.Contains(compose, want) {
 			t.Fatalf("docker-compose.yml is missing %q", want)
 		}
+	}
+}
+
+// The vault is the orchestrator's memory: persona, profile, inbox and beliefs
+// as files the user opens in their own editor. It mounts read/write because
+// promotion moves files and the profile is written in place, and MEMORY_ROOT is
+// set explicitly rather than left to the binary's default so the container path
+// and the bind target are one decision in one file.
+func TestComposeMountsTheMemoryVaultIntoTheOrchestrator(t *testing.T) {
+	content, err := os.ReadFile("../infra/docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(content)
+	for _, want := range []string{"MEMORY_ROOT: /memory", "- ../memory:/memory"} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("docker-compose.yml is missing %q", want)
+		}
+	}
+	if strings.Contains(compose, "../memory:/memory:ro") {
+		t.Fatal("the memory vault is mounted read-only; promotion and profile edits write files")
+	}
+}
+
+// A symlinked host memory/ binds straight through: the vault's own walk refuses
+// links at every component *inside* the mount, but the mount source itself is
+// resolved by Docker before any orchestrator code runs. Validate it here, in the
+// same pass and the same shape as skills, sandbox and mcp.
+func TestComposeLaunchRejectsUnsafeMemoryBindSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(*testing.T, string)
+		wantOutput string
+	}{
+		{
+			name: "missing",
+			setup: func(t *testing.T, root string) {
+				if err := os.Remove(filepath.Join(root, "memory")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory must be a real directory",
+		},
+		{
+			name: "symlink",
+			setup: func(t *testing.T, root string) {
+				memory := filepath.Join(root, "memory")
+				if err := os.Remove(memory); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(root, "outside-memory")
+				if err := os.Mkdir(target, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, memory); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory must be a real directory, not a symlink",
+		},
+		{
+			name: "not a directory",
+			setup: func(t *testing.T, root string) {
+				memory := filepath.Join(root, "memory")
+				if err := os.Remove(memory); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(memory, []byte("not a directory"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory must be a real directory",
+		},
+		{
+			name: "not writable",
+			setup: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "memory"), 0500); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory is not owned, readable, writable, and traversable",
+		},
+		{
+			name: "not mode 0700",
+			setup: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "memory"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory must have mode 0700",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := executeComposeWithSetup(t, true, "501", "20", "501", "20", test.setup, "up")
+			if result.err == nil {
+				t.Fatalf("compose.sh accepted an unsafe memory vault; docker log:\n%s", result.dockerLog)
+			}
+			if !strings.Contains(result.output, test.wantOutput) {
+				t.Fatalf("failure did not explain the unsafe memory vault:\n%s", result.output)
+			}
+			if result.dockerLog != "" {
+				t.Fatalf("docker was called before the memory rejection:\n%s", result.dockerLog)
+			}
+		})
 	}
 }
 
@@ -107,7 +223,7 @@ func TestComposeLaunchAllowsRecoveryDownWithoutEnvFile(t *testing.T) {
 	if result.err != nil {
 		t.Fatalf("compose.sh failed recovery down: %v\n%s", result.err, result.output)
 	}
-	if got := strings.TrimSpace(result.dockerLog); got != "HOST_UID=501 HOST_GID=20\ncompose -f infra/docker-compose.yml down --remove-orphans" {
+	if got := strings.TrimSpace(result.dockerLog); got != "HOST_UID=501 HOST_GID=20 MEMORY_DISPLAY_ROOT=\ncompose -f infra/docker-compose.yml down --remove-orphans" {
 		t.Fatalf("docker invocation = %q", got)
 	}
 }
@@ -448,7 +564,33 @@ func executeComposeWithSetup(
 	args ...string,
 ) composeResult {
 	t.Helper()
-	root := t.TempDir()
+	return executeComposeWithSetupIn(t, t.TempDir(), withEnv, uid, gid, exportedUID, exportedGID, setup, nil, args...)
+}
+
+// executeComposeInRoot runs the wrapper in a checkout the test names, with
+// extra variables exported into its environment. It is how a test asks what
+// happens when the terminal already holds a value the .env also carries.
+func executeComposeInRoot(
+	t *testing.T,
+	root string,
+	uid, gid, exportedUID, exportedGID string,
+	exported map[string]string,
+	args ...string,
+) composeResult {
+	t.Helper()
+	return executeComposeWithSetupIn(t, root, true, uid, gid, exportedUID, exportedGID, nil, exported, args...)
+}
+
+func executeComposeWithSetupIn(
+	t *testing.T,
+	root string,
+	withEnv bool,
+	uid, gid, exportedUID, exportedGID string,
+	setup func(*testing.T, string),
+	exported map[string]string,
+	args ...string,
+) composeResult {
+	t.Helper()
 	scriptsDir := filepath.Join(root, "scripts")
 	if err := os.Mkdir(scriptsDir, 0700); err != nil {
 		t.Fatal(err)
@@ -456,7 +598,11 @@ func executeComposeWithSetup(
 	scriptPath := filepath.Join(scriptsDir, "compose.sh")
 	copyScript(t, "compose.sh", scriptPath)
 	if withEnv {
-		if err := os.WriteFile(filepath.Join(root, ".env"), []byte("TURING_CLIENT_API_KEY=client\n"), 0600); err != nil {
+		// A launchable .env: the vault path compose.sh now requires before it
+		// starts anything, written the way init.sh writes it, plus one secret
+		// so the file looks like the real thing.
+		env := "TURING_CLIENT_API_KEY=client\nMEMORY_DISPLAY_ROOT='" + filepath.Join(root, "memory") + "'\n"
+		if err := os.WriteFile(filepath.Join(root, ".env"), []byte(env), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -472,6 +618,9 @@ func executeComposeWithSetup(
 	if err := os.Mkdir(filepath.Join(root, "mcp"), 0700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(root, "memory"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	if setup != nil {
 		setup(t, root)
 	}
@@ -485,7 +634,20 @@ func executeComposeWithSetup(
 		t.Fatal(err)
 	}
 	dockerLog := filepath.Join(root, "docker.log")
-	fakeDocker := "#!/bin/sh\nprintf 'HOST_UID=%s HOST_GID=%s\\n' \"$HOST_UID\" \"$HOST_GID\" > \"$DOCKER_LOG\"\nprintf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n"
+	// The fake docker records what it was handed. With DOCKER_REFUSE_ENV_FILE
+	// set it also refuses any invocation carrying --env-file, which is how the
+	// real one answers a .env holding a variable it cannot resolve.
+	fakeDocker := "#!/bin/sh\n" +
+		"printf 'HOST_UID=%s HOST_GID=%s MEMORY_DISPLAY_ROOT=%s\\n' \"$HOST_UID\" \"$HOST_GID\" \"$MEMORY_DISPLAY_ROOT\" > \"$DOCKER_LOG\"\n" +
+		"printf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n" +
+		"if [ -n \"$DOCKER_REFUSE_ENV_FILE\" ]; then\n" +
+		"  case \"$*\" in\n" +
+		"    *--env-file\\ .env*)\n" +
+		"      echo 'required variable NOTHING_SETS_THIS is missing a value' >&2\n" +
+		"      exit 1\n" +
+		"      ;;\n" +
+		"  esac\n" +
+		"fi\n"
 	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(fakeDocker), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -497,6 +659,9 @@ func executeComposeWithSetup(
 		"HOST_UID="+exportedUID,
 		"HOST_GID="+exportedGID,
 	)
+	for name, value := range exported {
+		command.Env = append(command.Env, name+"="+value)
+	}
 	output, commandErr := command.CombinedOutput()
 	log, err := os.ReadFile(dockerLog)
 	if err != nil && !os.IsNotExist(err) {

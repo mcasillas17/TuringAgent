@@ -181,6 +181,29 @@ const AgentJob$json = {
       '5': 9,
       '10': 'assignmentAttemptId'
     },
+    {
+      '1': 'pinned_persona',
+      '3': 21,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.PinnedPersonaSnapshot',
+      '10': 'pinnedPersona'
+    },
+    {
+      '1': 'pinned_profile',
+      '3': 22,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.PinnedProfileSnapshot',
+      '10': 'pinnedProfile'
+    },
+    {
+      '1': 'memory_snapshot_fingerprint',
+      '3': 23,
+      '4': 1,
+      '5': 9,
+      '10': 'memorySnapshotFingerprint'
+    },
   ],
 };
 
@@ -202,7 +225,47 @@ final $typed_data.Uint8List agentJobDescriptor = $convert.base64Decode(
     '52MS5SdW5FZ3Jlc3NEZWNpc2lvblIOZWdyZXNzRGVjaXNpb24SJQoOc2VsZWN0ZWRfdG9vbHMY'
     'EiADKAlSDXNlbGVjdGVkVG9vbHMSNAoWZXhwZWN0ZWRfc3RhdGVfdmVyc2lvbhgTIAEoA1IUZX'
     'hwZWN0ZWRTdGF0ZVZlcnNpb24SMgoVYXNzaWdubWVudF9hdHRlbXB0X2lkGBQgASgJUhNhc3Np'
-    'Z25tZW50QXR0ZW1wdElk');
+    'Z25tZW50QXR0ZW1wdElkEkcKDnBpbm5lZF9wZXJzb25hGBUgASgLMiAudHVyaW5nLnYxLlBpbm'
+    '5lZFBlcnNvbmFTbmFwc2hvdFINcGlubmVkUGVyc29uYRJHCg5waW5uZWRfcHJvZmlsZRgWIAEo'
+    'CzIgLnR1cmluZy52MS5QaW5uZWRQcm9maWxlU25hcHNob3RSDXBpbm5lZFByb2ZpbGUSPgobbW'
+    'Vtb3J5X3NuYXBzaG90X2ZpbmdlcnByaW50GBcgASgJUhltZW1vcnlTbmFwc2hvdEZpbmdlcnBy'
+    'aW50');
+
+@$core.Deprecated('Use pinnedPersonaSnapshotDescriptor instead')
+const PinnedPersonaSnapshot$json = {
+  '1': 'PinnedPersonaSnapshot',
+  '2': [
+    {'1': 'persona_id', '3': 1, '4': 1, '5': 9, '10': 'personaId'},
+    {'1': 'display_name', '3': 2, '4': 1, '5': 9, '10': 'displayName'},
+    {'1': 'body', '3': 3, '4': 1, '5': 9, '10': 'body'},
+    {'1': 'content_hash', '3': 4, '4': 1, '5': 9, '10': 'contentHash'},
+    {'1': 'withheld', '3': 5, '4': 1, '5': 8, '10': 'withheld'},
+  ],
+};
+
+/// Descriptor for `PinnedPersonaSnapshot`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List pinnedPersonaSnapshotDescriptor = $convert.base64Decode(
+    'ChVQaW5uZWRQZXJzb25hU25hcHNob3QSHQoKcGVyc29uYV9pZBgBIAEoCVIJcGVyc29uYUlkEi'
+    'EKDGRpc3BsYXlfbmFtZRgCIAEoCVILZGlzcGxheU5hbWUSEgoEYm9keRgDIAEoCVIEYm9keRIh'
+    'Cgxjb250ZW50X2hhc2gYBCABKAlSC2NvbnRlbnRIYXNoEhoKCHdpdGhoZWxkGAUgASgIUgh3aX'
+    'RoaGVsZA==');
+
+@$core.Deprecated('Use pinnedProfileSnapshotDescriptor instead')
+const PinnedProfileSnapshot$json = {
+  '1': 'PinnedProfileSnapshot',
+  '2': [
+    {'1': 'profile_id', '3': 1, '4': 1, '5': 9, '10': 'profileId'},
+    {'1': 'body', '3': 2, '4': 1, '5': 9, '10': 'body'},
+    {'1': 'content_hash', '3': 3, '4': 1, '5': 9, '10': 'contentHash'},
+    {'1': 'withheld', '3': 4, '4': 1, '5': 8, '10': 'withheld'},
+  ],
+};
+
+/// Descriptor for `PinnedProfileSnapshot`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List pinnedProfileSnapshotDescriptor = $convert.base64Decode(
+    'ChVQaW5uZWRQcm9maWxlU25hcHNob3QSHQoKcHJvZmlsZV9pZBgBIAEoCVIJcHJvZmlsZUlkEh'
+    'IKBGJvZHkYAiABKAlSBGJvZHkSIQoMY29udGVudF9oYXNoGAMgASgJUgtjb250ZW50SGFzaBIa'
+    'Cgh3aXRoaGVsZBgEIAEoCFIId2l0aGhlbGQ=');
 
 @$core.Deprecated('Use externalAgentTargetDescriptor instead')
 const ExternalAgentTarget$json = {

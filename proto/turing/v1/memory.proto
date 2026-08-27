@@ -1,0 +1,433 @@
+syntax = "proto3";
+
+package turing.v1;
+
+option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "turing/v1/common.proto";
+
+// Memory is a vault the user can open: notes are Markdown files on their disk,
+// not opaque rows. SQLite holds only the enablement, lifecycle and provenance
+// that a filesystem cannot express, so every message here reports content read
+// from the vault plus the reason it could not be read when that happens.
+
+enum MemoryCandidateKind {
+  MEMORY_CANDIDATE_KIND_UNSPECIFIED = 0;
+  MEMORY_CANDIDATE_KIND_BELIEF = 1;
+  MEMORY_CANDIDATE_KIND_PROFILE_EDIT = 2;
+}
+
+enum MemoryCandidateState {
+  MEMORY_CANDIDATE_STATE_UNSPECIFIED = 0;
+  MEMORY_CANDIDATE_STATE_PENDING = 1;
+  MEMORY_CANDIDATE_STATE_PROMOTED = 2;
+  MEMORY_CANDIDATE_STATE_REJECTED = 3;
+  // The session that produced the candidate was deleted. The candidate is kept
+  // so the record does not silently vanish, but it can no longer be promoted.
+  MEMORY_CANDIDATE_STATE_WITHDRAWN = 4;
+  // The user accepted this profile edit and the server claimed the apply
+  // before touching profile.md. It is not a decision waiting to be taken: the
+  // decision was taken, and what is unfinished is the write or the bookkeeping
+  // after it. No decision RPC accepts a candidate in this state — in
+  // particular a rejection cannot win once the profile may already carry these
+  // words — and a client renders it as an apply being finished rather than as
+  // a proposal with buttons.
+  MEMORY_CANDIDATE_STATE_PROFILE_APPLYING = 5;
+}
+
+// Whether Turing may rewrite the file. An unmanaged note is one the user has
+// taken over by hand; Turing reads it and never writes it back.
+enum MemoryNoteStatus {
+  MEMORY_NOTE_STATUS_UNSPECIFIED = 0;
+  MEMORY_NOTE_STATUS_MANAGED = 1;
+  MEMORY_NOTE_STATUS_UNMANAGED = 2;
+  MEMORY_NOTE_STATUS_WITHDRAWN = 3;
+}
+
+enum MemoryProvenanceKind {
+  MEMORY_PROVENANCE_KIND_UNSPECIFIED = 0;
+  MEMORY_PROVENANCE_KIND_PROMOTED_FROM_CANDIDATE = 1;
+  MEMORY_PROVENANCE_KIND_USER_AUTHORED = 2;
+  MEMORY_PROVENANCE_KIND_IMPORTED = 3;
+}
+
+// Why a read produced nothing. NONE is distinct from UNSPECIFIED so a client
+// can tell "the server answered: nothing is wrong" from "the server did not
+// say", and never renders an empty vault as a healthy one.
+enum MemoryUnavailableReason {
+  MEMORY_UNAVAILABLE_REASON_UNSPECIFIED = 0;
+  MEMORY_UNAVAILABLE_REASON_NONE = 1;
+  MEMORY_UNAVAILABLE_REASON_DISABLED = 2;
+  MEMORY_UNAVAILABLE_REASON_VAULT_MISSING = 3;
+  MEMORY_UNAVAILABLE_REASON_VAULT_UNREADABLE = 4;
+  MEMORY_UNAVAILABLE_REASON_CONTENT_PARSE_FAILED = 5;
+  MEMORY_UNAVAILABLE_REASON_CONTENT_TOO_LARGE = 6;
+}
+
+// Where a claim came from, and whether it still stands.
+message MemoryProvenance {
+  MemoryProvenanceKind kind = 1;
+  string source_session_id = 2;
+  string source_session_title = 3;
+  google.protobuf.Timestamp observed_at = 4;
+  // Set once the originating session is gone. The note survives deletion, so
+  // the client has to be able to say the evidence behind it no longer exists
+  // rather than presenting an unsupported claim as supported.
+  bool withdrawn = 5;
+  google.protobuf.Timestamp withdrawn_at = 6;
+  // Count only. Excerpts are never returned; the vault holds hashes of them.
+  int32 evidence_count = 7;
+}
+
+// A proposed memory awaiting the user's decision.
+message MemoryCandidate {
+  string candidate_id = 1;
+  MemoryCandidateKind kind = 2;
+  // Path of the inbox file, relative to the vault root, so the user can open
+  // the same thing Turing is describing.
+  string inbox_path = 3;
+  // The complete proposed text, never a preview or truncation: the user is
+  // being asked to accept exactly this.
+  string content = 4;
+  string content_hash = 5;
+  MemoryCandidateState state = 6;
+  repeated MemoryProvenance provenance = 7;
+  string promoted_note_id = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  google.protobuf.Timestamp decided_at = 11;
+  // Human-readable detail for unavailable_reason. Empty when content is whole.
+  string parse_error = 12;
+  MemoryUnavailableReason unavailable_reason = 13;
+  // False for a draft the user dropped into the inbox themselves. Turing has
+  // no row for it and will not rewrite or move it, so it is listed for reading
+  // and there is no RPC that promotes it — the user moves the file. A client
+  // that rendered an unmanaged draft with a Promote button would be offering
+  // an action the server refuses.
+  bool managed = 14;
+  // True for an inbox file Turing wrote and then lost the record of: a
+  // creation that crashed between the write and its transaction. It is
+  // unmanaged for exactly the same reason a hand-dropped draft is — there is
+  // no row, so no decision RPC applies — but it is not the user's own draft,
+  // and telling them it is would be a lie about who wrote a claim about them.
+  // It is listed rather than deleted, because a file they may already have
+  // read is not something to remove on a guess.
+  bool untracked = 15;
+}
+
+// An accepted memory: a Markdown file in the user's vault.
+message MemoryNote {
+  string note_id = 1;
+  string path = 2;
+  string title = 3;
+  string content = 4;
+  string content_hash = 5;
+  MemoryNoteStatus status = 6;
+  MemoryTier tier = 7;
+  repeated MemoryProvenance provenance = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  string parse_error = 11;
+  MemoryUnavailableReason unavailable_reason = 12;
+}
+
+// The single profile document.
+message MemoryProfile {
+  // The document as it stands on disk, whole. This is an editor's view, not a
+  // run's: the runtime's pin is bounded and carries a notice saying so, and
+  // handing that here would put words in the editor the user never typed and
+  // save them back into their own file.
+  string content = 1;
+  // A hash of exactly the bytes in `content`. Doubles as the compare-and-set
+  // token for ApplyMemoryProfile and for the user's own SaveMemoryProfile,
+  // which are verified against the file — so this can never be the pin's
+  // post-truncation hash, or a long document could be read and never saved.
+  string content_hash = 2;
+  MemoryNoteStatus status = 3;
+  google.protobuf.Timestamp updated_at = 4;
+  string parse_error = 5;
+  MemoryUnavailableReason unavailable_reason = 6;
+  // True when this document is longer than the runtime's pin budget, so a run
+  // carries a fragment of what is above. Stated rather than left for a client
+  // to infer from a byte count it would have to know the budget to interpret.
+  bool pinned_truncated = 7;
+  // How many bytes of this document reach a prompt: the rune-safe cut at or
+  // below the budget when it is truncated, its whole length when it is not,
+  // and zero when nothing survives trimming. It counts the document's own
+  // bytes, never the truncation notice the runtime appends to the pin.
+  int32 pinned_bytes = 8;
+}
+
+// The single persona document: who Turing is.
+//
+// It is not a second profile. The profile is a description of the user that
+// the agent may propose edits to; the persona is the user's instruction about
+// Turing, pinned unframed into every run, and no agent-facing path in the
+// system writes it. Its own message keeps that asymmetry visible on the wire
+// instead of leaving it to a comment on a shared one.
+message MemoryPersona {
+  // The document as it stands on disk, whole. See MemoryProfile.content.
+  string content = 1;
+  // A hash of exactly the bytes in `content`, and the compare-and-set token
+  // for SaveMemoryPersona.
+  string content_hash = 2;
+  // Always UNMANAGED: Turing reads this document and never rewrites it.
+  MemoryNoteStatus status = 3;
+  google.protobuf.Timestamp updated_at = 4;
+  string parse_error = 5;
+  MemoryUnavailableReason unavailable_reason = 6;
+  // True when a run carries only part of this document.
+  bool pinned_truncated = 7;
+  // How many bytes of this document reach a prompt.
+  int32 pinned_bytes = 8;
+}
+
+message MemoryTierState {
+  MemoryTier tier = 1;
+  bool enabled = 2;
+  int32 note_count = 3;
+  int32 pending_candidate_count = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  MemoryUnavailableReason unavailable_reason = 6;
+  string parse_error = 7;
+}
+
+message MemorySettings {
+  bool enabled = 1;
+  // Absolute path so the user can open the vault in their own editor.
+  string vault_root = 2;
+  bool vault_writable = 3;
+  MemoryUnavailableReason unavailable_reason = 4;
+  string parse_error = 5;
+}
+
+message ListMemoryStateRequest {}
+
+message ListMemoryStateResponse {
+  MemorySettings settings = 1;
+  repeated MemoryTierState tiers = 2;
+  repeated MemoryNote notes = 3;
+  repeated MemoryCandidate candidates = 4;
+  MemoryProfile profile = 5;
+  MemoryPersona persona = 6;
+}
+
+message GetMemorySettingsRequest {}
+
+message SetMemoryEnabledRequest {
+  bool enabled = 1;
+  // Unset (MEMORY_TIER_UNSPECIFIED) toggles memory as a whole.
+  MemoryTier tier = 2;
+}
+
+message ListMemoryCandidatesRequest {
+  MemoryCandidateState state = 1;
+  MemoryCandidateKind kind = 2;
+}
+
+message ListMemoryCandidatesResponse {
+  repeated MemoryCandidate candidates = 1;
+  MemoryUnavailableReason unavailable_reason = 2;
+}
+
+message GetMemoryCandidateRequest {
+  string candidate_id = 1;
+}
+
+message PromoteMemoryCandidateRequest {
+  string candidate_id = 1;
+  // Deprecated: the older spelling of expected_candidate_hash, and checked
+  // against exactly the same thing. It once named the database row's copy of
+  // the proposal, which made every proposal the user edited in their vault
+  // permanently undecidable — the listing can only ever serve the file's hash,
+  // and the row's was the only one that would be accepted. It is still honoured
+  // when expected_candidate_hash is empty, so a client built before the split
+  // is not left with no compare-and-set at all. New clients send
+  // expected_candidate_hash.
+  string expected_content_hash = 2 [deprecated = true];
+  // Optional user edit accepted in place of the proposed content.
+  string edited_content = 3;
+  MemoryTier target_tier = 4;
+  // Compare-and-set against the candidate file's own bytes as they read now,
+  // re-read at decision time inside the same serialisation as the mutation.
+  //
+  // This is the only candidate compare-and-set there is. It names the file
+  // rather than the row because the file is what every listing serves and what
+  // the user was shown — the vault is a vault so they can open a proposal and
+  // rewrite it — so a proposal edited between the listing and the decision is
+  // refused instead of promoted as text they never read. Empty means the caller
+  // is making no claim about the file.
+  //
+  // Which decision applies is read from the same bytes: a proposal the file now
+  // declares a profile_edit is not promoted into beliefs/, whatever the row
+  // remembers Turing having proposed.
+  string expected_candidate_hash = 5;
+}
+
+message PromoteMemoryCandidateResponse {
+  MemoryCandidate candidate = 1;
+  MemoryNote note = 2;
+}
+
+message RejectMemoryCandidateRequest {
+  string candidate_id = 1;
+  // Deprecated: the older spelling of expected_candidate_hash, honoured only
+  // when that field is empty. See
+  // PromoteMemoryCandidateRequest.expected_content_hash.
+  string expected_content_hash = 2 [deprecated = true];
+  string reason = 3;
+  // Compare-and-set against the candidate file's own bytes. See
+  // PromoteMemoryCandidateRequest.expected_candidate_hash: a rejection is a
+  // decision about a claim, and a claim the user did not read is not one they
+  // refused. A rejection asks nothing about the kind — it is the user saying no
+  // to whatever is there — so a proposal whose frontmatter no longer parses can
+  // still be thrown away.
+  //
+  // Optional, and deliberately so. A client that could not read the proposal
+  // has no hash to make a claim with, and sending one it invented — or the
+  // hash of the bytes it failed to parse — would be answering a question it
+  // cannot answer. Empty is that client saying it is making no claim about the
+  // file, which is the one case where a rejection may proceed over a file the
+  // server cannot read either. A non-empty hash against an unreadable file is
+  // still refused: the claim cannot be checked, so it cannot be honoured.
+  string expected_candidate_hash = 4;
+}
+
+message RejectMemoryCandidateResponse {
+  MemoryCandidate candidate = 1;
+}
+
+message GetMemoryProfileRequest {}
+
+message ApplyMemoryProfileRequest {
+  // The whole resulting profile document, as the user reviewed it — never the
+  // proposal on its own. A client that sent the candidate's fragment here
+  // would be asking the server to replace the user's profile with a paragraph.
+  string content = 1;
+  // Compare-and-set against MemoryProfile.content_hash — the profile document
+  // this apply is replacing, and nothing else. This is the one request where
+  // expected_content_hash still names a document rather than a candidate.
+  //
+  // It must be the hash the resulting document was *composed against*, which is
+  // not always the most recent one read: a client holding a result the user has
+  // edited, over a profile that has since moved, has to send the older token and
+  // be refused, rather than pair those words with a document they never saw.
+  // Empty means the caller expects no profile to exist yet.
+  string expected_content_hash = 2;
+  // The pending profile_edit candidate this apply acts on. Turing writes
+  // profile.md only on the authority of a proposal the user is looking at, so
+  // there is no path here and no way to write the profile without one. Whether
+  // it is a profile_edit is read from the candidate file, not from the row.
+  string candidate_id = 3;
+  // Compare-and-set against the candidate file's own bytes. See
+  // PromoteMemoryCandidateRequest.expected_candidate_hash: this binds the
+  // resulting document to the exact proposal it was composed from, so a
+  // proposal edited in the vault after the user read it cannot be applied as
+  // though they had accepted the new words.
+  string expected_candidate_hash = 4;
+}
+
+message ApplyMemoryProfileResponse {
+  MemoryProfile profile = 1;
+  // True when profile.md now holds `content` and the proposal it came from is
+  // still sitting in the inbox because it could not be removed. The write is
+  // the part that matters and it landed, so this is not a failure — but the
+  // user would otherwise be shown a proposal they have already accepted, with
+  // no explanation, and no decision RPC will take it. Turing's own cleanup
+  // finishes it; saying so is what keeps the page honest in the meantime.
+  bool cleanup_pending = 2;
+}
+
+message GetMemoryPersonaRequest {}
+
+// The user saving persona.md by hand. There is no candidate here and no path:
+// this is the one document the user alone authors, and the only file this
+// request can write.
+message SaveMemoryPersonaRequest {
+  string content = 1;
+  // Compare-and-set against MemoryPersona.content_hash. Empty means the caller
+  // expects no persona to exist yet. A save composed against text the vault has
+  // since moved on from is refused rather than applied over the newer words —
+  // the same posture as ApplyMemoryProfile, for the same reason: the file is
+  // open in the user's own editor.
+  string expected_content_hash = 2;
+}
+
+message SaveMemoryPersonaResponse {
+  MemoryPersona persona = 1;
+}
+
+// The user saving profile.md by hand, which is a different authority from
+// ApplyMemoryProfile: that one applies a proposal Turing wrote and the user
+// accepted, this one is the user writing about themselves directly. Keeping
+// them separate is what lets the proposal path keep requiring a candidate.
+message SaveMemoryProfileRequest {
+  string content = 1;
+  // Compare-and-set against MemoryProfile.content_hash. Empty means the caller
+  // expects no profile to exist yet.
+  string expected_content_hash = 2;
+}
+
+message SaveMemoryProfileResponse {
+  MemoryProfile profile = 1;
+}
+
+message MemoryToolDescriptor {
+  string tool_name = 1;
+  ToolPolicy policy = 2;
+  google.protobuf.Struct schema = 3;
+  bool enabled = 4;
+  string description = 5;
+}
+
+message ListMemoryToolsRequest {}
+
+message ListMemoryToolsResponse {
+  repeated MemoryToolDescriptor tools = 1;
+}
+
+// A memory tool call, dispatched by the runtime over the internal channel.
+//
+// There is no session_id and no vault path. The run names itself, and the
+// server resolves the conversation the run belongs to from its own tables: a
+// caller that could name the session could file a memory against a
+// conversation it has nothing to do with.
+message CallMemoryToolRequest {
+  string run_id = 1;
+  string approval_id = 2;
+  string tool_name = 3;
+  google.protobuf.Struct args = 4;
+}
+
+message CallMemoryToolResponse {
+  google.protobuf.Struct result = 1;
+}
+
+// The public facet is everything a client needs to read and decide; the
+// internal facet is ListMemoryTools and CallMemoryTool, which the runtime
+// calls over the internal channel to wire and run memory tools dynamically.
+// The split is enforced by method name at the identity layer, so all of these
+// names must stay stable.
+service MemoryService {
+  rpc ListMemoryState(ListMemoryStateRequest) returns (ListMemoryStateResponse);
+  rpc GetMemorySettings(GetMemorySettingsRequest) returns (MemorySettings);
+  rpc SetMemoryEnabled(SetMemoryEnabledRequest) returns (MemorySettings);
+  rpc ListMemoryCandidates(ListMemoryCandidatesRequest) returns (ListMemoryCandidatesResponse);
+  rpc GetMemoryCandidate(GetMemoryCandidateRequest) returns (MemoryCandidate);
+  rpc PromoteMemoryCandidate(PromoteMemoryCandidateRequest) returns (PromoteMemoryCandidateResponse);
+  rpc RejectMemoryCandidate(RejectMemoryCandidateRequest) returns (RejectMemoryCandidateResponse);
+  rpc GetMemoryProfile(GetMemoryProfileRequest) returns (MemoryProfile);
+  rpc ApplyMemoryProfile(ApplyMemoryProfileRequest) returns (ApplyMemoryProfileResponse);
+  // The user's own hands on the two pinned documents. Public facet only: the
+  // runtime identity is not granted these names, so no agent path — not even a
+  // confused internal caller — can reach persona.md.
+  rpc GetMemoryPersona(GetMemoryPersonaRequest) returns (MemoryPersona);
+  rpc SaveMemoryPersona(SaveMemoryPersonaRequest) returns (SaveMemoryPersonaResponse);
+  rpc SaveMemoryProfile(SaveMemoryProfileRequest) returns (SaveMemoryProfileResponse);
+
+  // Internal facet only.
+  rpc ListMemoryTools(ListMemoryToolsRequest) returns (ListMemoryToolsResponse);
+  rpc CallMemoryTool(CallMemoryToolRequest) returns (CallMemoryToolResponse);
+}

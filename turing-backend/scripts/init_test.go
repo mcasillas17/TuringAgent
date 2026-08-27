@@ -116,6 +116,349 @@ func TestInitRejectsSymlinkedSkillsDirectory(t *testing.T) {
 	}
 }
 
+// The vault has to exist before the orchestrator mounts it, with the same
+// private mode as skills, and with the two folders the brain is organised
+// around already present so the user's first look in Obsidian is the real
+// layout rather than an empty directory.
+func TestInitCreatesPrivateMemoryVaultWithTierDirectories(t *testing.T) {
+	result := runInit(t, "501", "20", "")
+
+	for _, path := range []string{
+		result.memory,
+		filepath.Join(result.memory, "inbox"),
+		filepath.Join(result.memory, "beliefs"),
+	} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			t.Fatalf("%s mode = %v, want a real directory", path, info.Mode())
+		}
+		if info.Mode().Perm() != 0700 {
+			t.Fatalf("fresh %s permissions = %04o, want 0700 independent of umask", path, info.Mode().Perm())
+		}
+	}
+}
+
+// persona.md is the only pinned document the agent can never write, so a
+// fresh install ships an active starter persona rather than an empty file: a
+// fresh install's remote-egress disclosure must be honest, and an empty
+// persona would disclose nothing. Markdown's "#" makes a heading, not a
+// comment, and nothing in this file is inert — every line, headings
+// included, is pinned into every run exactly as written. The file must say
+// so, and must not claim otherwise (no "commented out", no "uncomment").
+func TestInitShipsAnActiveDefaultPersona(t *testing.T) {
+	result := runInit(t, "501", "20", "")
+
+	persona := filepath.Join(result.memory, "persona.md")
+	info, err := os.Lstat(persona)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("persona.md mode = %v, want a regular file", info.Mode())
+	}
+	assertMode(t, persona, 0600)
+	content, err := os.ReadFile(persona)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(content)
+	if strings.TrimSpace(body) == "" {
+		t.Fatal("the default persona is empty; a fresh install would pin nothing and disclose nothing")
+	}
+	lower := strings.ToLower(body)
+	for _, forbidden := range []string{"uncomment", "commented out"} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("the default persona falsely claims its lines are inert comments (found %q):\n%s", forbidden, body)
+		}
+	}
+	if !strings.Contains(lower, "active") && !strings.Contains(lower, "pinned into every run") {
+		t.Fatalf("the default persona does not state that its contents are active/pinned until edited:\n%s", body)
+	}
+	for _, want := range []string{
+		"You are Turing, a careful assistant running on this machine.",
+		"Answer briefly. Say when you are unsure rather than guessing.",
+		"Ask before doing anything that changes files or leaves the machine.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the default persona is missing the intended default persona line %q:\n%s", want, body)
+		}
+	}
+	// Initialization prints one secret on purpose, the client API key. The
+	// user's own persona prose is not the script's to echo.
+	for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+		if line = strings.TrimSpace(line); line != "" && strings.Contains(result.output, line) {
+			t.Fatalf("init.sh printed persona content %q:\n%s", line, result.output)
+		}
+	}
+}
+
+// The default persona is active prose, pinned into every run exactly as
+// written, not a commented-out placeholder the user must uncomment. That is
+// tested against the persona content itself above; this test guards the
+// *documentation* describing it (README.md and CLAUDE.md, which describe
+// init.sh's behavior for humans) so the same false "commented default" /
+// "uncomment" framing cannot silently return there even if the persona
+// content and its own test stay honest.
+func TestDocsDoNotClaimPersonaIsCommented(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+	for _, relPath := range []string{"README.md", "CLAUDE.md"} {
+		path := filepath.Join(repoRoot, relPath)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", relPath, err)
+		}
+		lower := strings.ToLower(string(content))
+		for _, forbidden := range []string{"commented default", "uncomment"} {
+			if strings.Contains(lower, forbidden) {
+				t.Fatalf("%s falsely describes the default persona as a commented-out placeholder (found %q); "+
+					"it must instead say init.sh writes an active starter persona.md, pinned exactly as written, "+
+					"only when the file is absent", relPath, forbidden)
+			}
+		}
+	}
+}
+
+// Re-running init.sh is routine — after a pull, after a reset, after a token
+// rotation. It must never rewrite the persona the user has been editing.
+func TestInitNeverOverwritesAnExistingPersona(t *testing.T) {
+	const authored = "I am the user's own persona, hand written.\n"
+	result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		memory := filepath.Join(root, "memory")
+		if err := os.Mkdir(memory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(memory, "persona.md"), []byte(authored), 0600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if result.err != nil {
+		t.Fatalf("init.sh failed: %v\n%s", result.err, result.output)
+	}
+	persona := filepath.Join(result.memory, "persona.md")
+	content, err := os.ReadFile(persona)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != authored {
+		t.Fatalf("persona.md = %q, want the user's own text preserved", content)
+	}
+
+	// A second run is the real idempotency claim: the first one created
+	// nothing here, so only the second proves the guard is on the file's
+	// existence rather than on the directory's.
+	second := runInit(t, "501", "20", "")
+	created, err := os.ReadFile(filepath.Join(second.memory, "persona.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	third := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		memory := filepath.Join(root, "memory")
+		if err := os.Mkdir(memory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(memory, "persona.md"), created, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(memory, "profile.md"), []byte("the user's prose\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if third.err != nil {
+		t.Fatalf("init.sh failed on an initialized vault: %v\n%s", third.err, third.output)
+	}
+	profile, err := os.ReadFile(filepath.Join(third.memory, "profile.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(profile) != "the user's prose\n" {
+		t.Fatalf("profile.md = %q, want the user's own text preserved", profile)
+	}
+}
+
+func TestInitRejectsSymlinkedMemoryVault(t *testing.T) {
+	result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		target := filepath.Join(t.TempDir(), "memory")
+		if err := os.Mkdir(target, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(root, "memory")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if result.err == nil {
+		t.Fatal("init.sh accepted a symlinked memory vault")
+	}
+	if !strings.Contains(result.output, "memory must be a real directory, not a symlink") {
+		t.Fatalf("failure did not explain the memory symlink rejection:\n%s", result.output)
+	}
+}
+
+// A symlinked persona is the interesting one: writing the default through it
+// would create or truncate a file anywhere the link points, under the host
+// user's own identity.
+func TestInitRejectsUnsafeMemoryVaultEntries(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(*testing.T, string)
+		wantOutput string
+	}{
+		{
+			name: "persona symlink",
+			setup: func(t *testing.T, root string) {
+				memory := filepath.Join(root, "memory")
+				if err := os.Mkdir(memory, 0700); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(t.TempDir(), "outside-persona.md")
+				if err := os.WriteFile(target, []byte("outside\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(memory, "persona.md")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory/persona.md must be an owned regular file, not a symlink",
+		},
+		{
+			name: "vault is a file",
+			setup: func(t *testing.T, root string) {
+				if err := os.WriteFile(filepath.Join(root, "memory"), []byte("not a directory"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory must be a real directory",
+		},
+		{
+			name: "inbox is a file",
+			setup: func(t *testing.T, root string) {
+				memory := filepath.Join(root, "memory")
+				if err := os.Mkdir(memory, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(memory, "inbox"), []byte("not a directory"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory/inbox must be a real directory",
+		},
+		{
+			name: "profile symlink",
+			setup: func(t *testing.T, root string) {
+				memory := filepath.Join(root, "memory")
+				if err := os.Mkdir(memory, 0700); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(t.TempDir(), "outside-profile.md")
+				if err := os.WriteFile(target, []byte("outside\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(memory, "profile.md")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "memory/profile.md must be an owned regular file, not a symlink",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := executeInitWithSetup(t, "501", "20", "", 0, test.setup)
+			if result.err == nil {
+				t.Fatalf("init.sh accepted an unsafe memory vault:\n%s", result.output)
+			}
+			if !strings.Contains(result.output, test.wantOutput) {
+				t.Fatalf("failure did not explain the unsafe memory vault:\n%s", result.output)
+			}
+		})
+	}
+}
+
+// Both pinned documents are prose about the user, and persona.md is the one
+// unframed instruction channel in the system. A copy restored from a backup, or
+// written under a permissive umask, is tightened on the next run rather than
+// left readable by everyone with an account on the machine.
+func TestInitSecuresExistingPinnedDocuments(t *testing.T) {
+	const persona = "my own persona\n"
+	const profile = "my own profile\n"
+	result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		memory := filepath.Join(root, "memory")
+		if err := os.Mkdir(memory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		for name, content := range map[string]string{
+			"persona.md": persona,
+			"profile.md": profile,
+		} {
+			path := filepath.Join(memory, name)
+			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if result.err != nil {
+		t.Fatalf("init.sh failed: %v\n%s", result.err, result.output)
+	}
+	for name, want := range map[string]string{
+		"persona.md": persona,
+		"profile.md": profile,
+	} {
+		path := filepath.Join(result.memory, name)
+		assertMode(t, path, 0600)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != want {
+			t.Fatalf("%s = %q, want the user's own text preserved", name, content)
+		}
+	}
+}
+
+// profile.md is the user's to write, and the client creates it on first save.
+// init.sh must not invent one: an empty file the user never wrote would pin
+// nothing but would replace the visible "not written yet" state with silence.
+func TestInitDoesNotCreateAProfile(t *testing.T) {
+	result := runInit(t, "501", "20", "")
+
+	if _, err := os.Lstat(filepath.Join(result.memory, "profile.md")); !os.IsNotExist(err) {
+		t.Fatalf("init.sh created a profile.md the user did not write: %v", err)
+	}
+}
+
+// A vault carried over from an earlier install, or created by a user with a
+// permissive umask, is secured rather than refused: init.sh owns provisioning,
+// and persona.md is the one unframed instruction channel in the system, so
+// leaving it group-readable is not an option.
+func TestInitSecuresAnExistingPermissiveMemoryVault(t *testing.T) {
+	result := executeInitWithSetup(t, "501", "20", "", 0, func(t *testing.T, root string) {
+		memory := filepath.Join(root, "memory")
+		if err := os.Mkdir(memory, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(memory, 0755); err != nil {
+			t.Fatal(err)
+		}
+		inbox := filepath.Join(memory, "inbox")
+		if err := os.Mkdir(inbox, 0770); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(inbox, 0770); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if result.err != nil {
+		t.Fatalf("init.sh failed: %v\n%s", result.err, result.output)
+	}
+	assertMode(t, result.memory, 0700)
+	assertMode(t, filepath.Join(result.memory, "inbox"), 0700)
+	assertMode(t, filepath.Join(result.memory, "beliefs"), 0700)
+}
+
 func TestInitCreatesPrivateDataDirectoryWithoutChown(t *testing.T) {
 	result := runInit(t, "501", "20", "")
 
@@ -474,8 +817,13 @@ func TestInitRejectsNonRegularEnvBeforeChmod(t *testing.T) {
 }
 
 type initResult struct {
+	// root is the checkout init.sh ran in, so a test can run it again in the
+	// same place. Idempotence is about a second run over the first one's own
+	// files, which a fresh directory cannot express.
+	root     string
 	sandbox  string
 	skills   string
+	memory   string
 	data     string
 	env      string
 	envErr   error
@@ -503,7 +851,45 @@ func executeInit(t *testing.T, uid, gid, identityConfig string, chownExit int) i
 
 func executeInitWithSetup(t *testing.T, uid, gid, identityConfig string, chownExit int, setup func(*testing.T, string)) initResult {
 	t.Helper()
-	root := t.TempDir()
+	return executeInitIn(t, t.TempDir(), uid, gid, identityConfig, chownExit, setup)
+}
+
+// executeInitInDirectory runs init.sh under a checkout directory of the test's
+// choosing. Every other caller does not care where the checkout is; the one
+// that does cares because a path with a space in it is what most of these
+// helpers would quietly get wrong.
+func executeInitInDirectory(t *testing.T, uid, gid, identityConfig string, directory string) initResult {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), directory)
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return executeInitIn(t, root, uid, gid, identityConfig, 0, nil)
+}
+
+// rerunInit runs init.sh again over the checkout a previous run left behind,
+// with that run's own .env in place. It is how idempotence is actually asked
+// about: a second run in a fresh directory answers a different question.
+func rerunInit(t *testing.T, previous initResult) initResult {
+	t.Helper()
+	command := exec.Command("bash", filepath.Join(previous.root, "scripts", "init.sh"))
+	command.Env = append(os.Environ(),
+		"PATH="+filepath.Join(previous.root, "bin")+":"+os.Getenv("PATH"),
+		"CHOWN_LOG="+previous.chownLog,
+		"CHOWN_EXIT=0",
+	)
+	output, commandErr := command.CombinedOutput()
+	updated, err := os.ReadFile(filepath.Join(previous.root, ".env"))
+	rerun := previous
+	rerun.env = string(updated)
+	rerun.envErr = err
+	rerun.output = string(output)
+	rerun.err = commandErr
+	return rerun
+}
+
+func executeInitIn(t *testing.T, root string, uid, gid, identityConfig string, chownExit int, setup func(*testing.T, string)) initResult {
+	t.Helper()
 	scriptsDir := filepath.Join(root, "scripts")
 	if err := os.MkdirAll(scriptsDir, 0700); err != nil {
 		t.Fatal(err)
@@ -551,8 +937,10 @@ func executeInitWithSetup(t *testing.T, uid, gid, identityConfig string, chownEx
 	output, commandErr := command.CombinedOutput()
 	updated, err := os.ReadFile(filepath.Join(root, ".env"))
 	return initResult{
+		root:     root,
 		sandbox:  filepath.Join(root, "sandbox"),
 		skills:   filepath.Join(root, "skills"),
+		memory:   filepath.Join(root, "memory"),
 		data:     filepath.Join(root, "data"),
 		env:      string(updated),
 		envErr:   err,

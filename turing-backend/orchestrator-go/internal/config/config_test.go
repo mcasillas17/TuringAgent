@@ -477,3 +477,60 @@ func TestAutomationTickDefaultsAndAcceptsZeroAsOff(t *testing.T) {
 		t.Fatal("a negative automation tick was accepted")
 	}
 }
+
+// The vault mounts in the SKILLS_ROOT mold: one name, one variable, and a
+// clean absolute path or nothing. The old MEMORY_VAULT_ROOT spelling is gone
+// rather than aliased — an install that still sets it must be told by the
+// default landing on /memory, not silently obeyed at a second name.
+func TestLoadFromMapDefaultsAndOverridesMemoryRoot(t *testing.T) {
+	cfg, err := LoadFromMap(requiredEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MemoryRoot != "/memory" {
+		t.Fatalf("MemoryRoot = %q, want /memory", cfg.MemoryRoot)
+	}
+
+	env := requiredEnv()
+	env["MEMORY_ROOT"] = "/srv/test-memory"
+	cfg, err = LoadFromMap(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MemoryRoot != "/srv/test-memory" {
+		t.Fatalf("MemoryRoot = %q, want the absolute override", cfg.MemoryRoot)
+	}
+
+	for _, bad := range []string{"relative/memory", "memory", "", "/srv/../memory", "/srv/memory/", "/srv//memory", "/srv/./memory"} {
+		env := requiredEnv()
+		env["MEMORY_ROOT"] = bad
+		cfg, err := LoadFromMap(env)
+		if bad == "" {
+			// An explicitly empty value is the unset case: the default stands.
+			if err != nil || cfg.MemoryRoot != "/memory" {
+				t.Fatalf("empty MEMORY_ROOT = %q err=%v, want the /memory default", cfg.MemoryRoot, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Fatalf("LoadFromMap accepted MEMORY_ROOT = %q", bad)
+		}
+		if !strings.Contains(err.Error(), "MEMORY_ROOT") {
+			t.Fatalf("error = %v, want it to name MEMORY_ROOT", err)
+		}
+	}
+}
+
+// MEMORY_VAULT_ROOT is not a second spelling of the same setting; it is not a
+// setting at all.
+func TestLoadFromMapIgnoresTheRetiredMemoryVaultRootVariable(t *testing.T) {
+	env := requiredEnv()
+	env["MEMORY_VAULT_ROOT"] = "/somewhere/else"
+	cfg, err := LoadFromMap(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MemoryRoot != "/memory" {
+		t.Fatalf("MemoryRoot = %q, want the retired variable to have no effect", cfg.MemoryRoot)
+	}
+}

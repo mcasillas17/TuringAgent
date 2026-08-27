@@ -9,6 +9,11 @@ sandbox/*
 !sandbox/.gitkeep
 skills/*
 !skills/.gitkeep
+# The vault is personal prose by design — persona.md and profile.md are about
+# the user, beliefs/ is what Turing has been told, inbox/ holds proposals they
+# never accepted. Only the empty directory is tracked.
+memory/*
+!memory/.gitkeep
 mcp/*
 !mcp/.gitkeep
 !mcp/mcp.json.example

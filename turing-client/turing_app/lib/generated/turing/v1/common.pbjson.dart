@@ -72,6 +72,24 @@ final $typed_data.Uint8List egressDataCategoryDescriptor = $convert.base64Decode
     'RUdPUllfVE9PTF9BUkdVTUVOVFMQBxIlCiFFR1JFU1NfREFUQV9DQVRFR09SWV9UT09MX1JFU1'
     'VMVFMQCBIkCiBFR1JFU1NfREFUQV9DQVRFR09SWV9BVFRBQ0hNRU5UUxAJ');
 
+@$core.Deprecated('Use memoryTierDescriptor instead')
+const MemoryTier$json = {
+  '1': 'MemoryTier',
+  '2': [
+    {'1': 'MEMORY_TIER_UNSPECIFIED', '2': 0},
+    {'1': 'MEMORY_TIER_PERSONA', '2': 1},
+    {'1': 'MEMORY_TIER_PROFILE', '2': 2},
+    {'1': 'MEMORY_TIER_BELIEF', '2': 3},
+    {'1': 'MEMORY_TIER_NOTE', '2': 4},
+  ],
+};
+
+/// Descriptor for `MemoryTier`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List memoryTierDescriptor = $convert.base64Decode(
+    'CgpNZW1vcnlUaWVyEhsKF01FTU9SWV9USUVSX1VOU1BFQ0lGSUVEEAASFwoTTUVNT1JZX1RJRV'
+    'JfUEVSU09OQRABEhcKE01FTU9SWV9USUVSX1BST0ZJTEUQAhIWChJNRU1PUllfVElFUl9CRUxJ'
+    'RUYQAxIUChBNRU1PUllfVElFUl9OT1RFEAQ=');
+
 @$core.Deprecated('Use routingRequirementKindDescriptor instead')
 const RoutingRequirementKind$json = {
   '1': 'RoutingRequirementKind',
@@ -499,6 +517,21 @@ const RemoteEgressDisclosure$json = {
       '6': '.turing.v1.SkillEgressDisclosure',
       '10': 'skills'
     },
+    {
+      '1': 'memory_notes',
+      '3': 13,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.MemoryEgressDisclosure',
+      '10': 'memoryNotes'
+    },
+    {
+      '1': 'memory_profile_may_be_sent',
+      '3': 14,
+      '4': 1,
+      '5': 8,
+      '10': 'memoryProfileMayBeSent'
+    },
   ],
 };
 
@@ -515,7 +548,35 @@ final $typed_data.Uint8List remoteEgressDisclosureDescriptor = $convert.base64De
     'ZU1jcFNlcnZlcnMSJQoOc2VsZWN0ZWRfdG9vbHMYCiADKAlSDXNlbGVjdGVkVG9vbHMSXAoVaW'
     '50ZWdyYXRpb25fZW5kcG9pbnRzGAsgAygLMicudHVyaW5nLnYxLkludGVncmF0aW9uRWdyZXNz'
     'RGVzdGluYXRpb25SFGludGVncmF0aW9uRW5kcG9pbnRzEjgKBnNraWxscxgMIAMoCzIgLnR1cm'
-    'luZy52MS5Ta2lsbEVncmVzc0Rpc2Nsb3N1cmVSBnNraWxscw==');
+    'luZy52MS5Ta2lsbEVncmVzc0Rpc2Nsb3N1cmVSBnNraWxscxJECgxtZW1vcnlfbm90ZXMYDSAD'
+    'KAsyIS50dXJpbmcudjEuTWVtb3J5RWdyZXNzRGlzY2xvc3VyZVILbWVtb3J5Tm90ZXMSOgoabW'
+    'Vtb3J5X3Byb2ZpbGVfbWF5X2JlX3NlbnQYDiABKAhSFm1lbW9yeVByb2ZpbGVNYXlCZVNlbnQ=');
+
+@$core.Deprecated('Use memoryEgressDisclosureDescriptor instead')
+const MemoryEgressDisclosure$json = {
+  '1': 'MemoryEgressDisclosure',
+  '2': [
+    {'1': 'note_id', '3': 1, '4': 1, '5': 9, '10': 'noteId'},
+    {'1': 'title', '3': 2, '4': 1, '5': 9, '10': 'title'},
+    {'1': 'vault_path', '3': 3, '4': 1, '5': 9, '10': 'vaultPath'},
+    {
+      '1': 'tier',
+      '3': 4,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.MemoryTier',
+      '10': 'tier'
+    },
+    {'1': 'body_may_be_sent', '3': 5, '4': 1, '5': 8, '10': 'bodyMayBeSent'},
+  ],
+};
+
+/// Descriptor for `MemoryEgressDisclosure`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List memoryEgressDisclosureDescriptor = $convert.base64Decode(
+    'ChZNZW1vcnlFZ3Jlc3NEaXNjbG9zdXJlEhcKB25vdGVfaWQYASABKAlSBm5vdGVJZBIUCgV0aX'
+    'RsZRgCIAEoCVIFdGl0bGUSHQoKdmF1bHRfcGF0aBgDIAEoCVIJdmF1bHRQYXRoEikKBHRpZXIY'
+    'BCABKA4yFS50dXJpbmcudjEuTWVtb3J5VGllclIEdGllchInChBib2R5X21heV9iZV9zZW50GA'
+    'UgASgIUg1ib2R5TWF5QmVTZW50');
 
 @$core.Deprecated('Use skillEgressDisclosureDescriptor instead')
 const SkillEgressDisclosure$json = {
@@ -680,6 +741,13 @@ const RunEgressDecision$json = {
       '6': '.turing.v1.IntegrationEgressDestination',
       '10': 'integrationEndpoints'
     },
+    {
+      '1': 'memory_snapshot_fingerprint',
+      '3': 19,
+      '4': 1,
+      '5': 9,
+      '10': 'memorySnapshotFingerprint'
+    },
   ],
 };
 
@@ -702,7 +770,8 @@ final $typed_data.Uint8List runEgressDecisionDescriptor = $convert.base64Decode(
     'ZW1vdGVfbWNwX3NlcnZlcnMYESADKAsyJS50dXJpbmcudjEuUmVtb3RlTWNwRWdyZXNzRGVzdG'
     'luYXRpb25SEHJlbW90ZU1jcFNlcnZlcnMSXAoVaW50ZWdyYXRpb25fZW5kcG9pbnRzGBIgAygL'
     'MicudHVyaW5nLnYxLkludGVncmF0aW9uRWdyZXNzRGVzdGluYXRpb25SFGludGVncmF0aW9uRW'
-    '5kcG9pbnRz');
+    '5kcG9pbnRzEj4KG21lbW9yeV9zbmFwc2hvdF9maW5nZXJwcmludBgTIAEoCVIZbWVtb3J5U25h'
+    'cHNob3RGaW5nZXJwcmludA==');
 
 @$core.Deprecated('Use agentDescriptorDescriptor instead')
 const AgentDescriptor$json = {

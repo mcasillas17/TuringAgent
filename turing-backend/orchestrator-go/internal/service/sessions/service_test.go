@@ -839,8 +839,8 @@ func TestDeleteSessionCompletesAfterArtifactCleanerRemovesOwnedNamespace(t *test
 	database := openSessionTestDB(t)
 	repo := repository.New(database)
 	server := New(repo, config.Config{}, &sessionCapabilitySource{})
-	cleaner := &recordingArtifactCleaner{}
-	server.SetArtifactCleaner(cleaner)
+	cleaner := &recordingArtifactCleaner{manifest: repo}
+	server.RegisterArtifactCleaners(cleaner)
 	ctx := context.Background()
 	session, err := repo.CreateSession(ctx, "Delete owned artifact")
 	if err != nil {
@@ -932,8 +932,8 @@ func TestDeleteSessionRetainsFailedExternalReceiptWhenArtifactCleanerFails(t *te
 	database := openSessionTestDB(t)
 	repo := repository.New(database)
 	server := New(repo, config.Config{}, &sessionCapabilitySource{})
-	cleaner := &flakyArtifactCleaner{err: errors.New("cleanup transport unavailable")}
-	server.SetArtifactCleaner(cleaner)
+	cleaner := &flakyArtifactCleaner{manifest: repo, err: errors.New("cleanup transport unavailable")}
+	server.RegisterArtifactCleaners(cleaner)
 	ctx := context.Background()
 	session, err := repo.CreateSession(ctx, "Fail artifact cleanup")
 	if err != nil {
@@ -1002,24 +1002,38 @@ func TestDeleteSessionRetainsFailedExternalReceiptWhenArtifactCleanerFails(t *te
 }
 
 type recordingArtifactCleaner struct {
+	manifest  sandboxArtifactManifest
 	sessionID string
 	calls     int
 }
 
 type flakyArtifactCleaner struct {
-	calls int
-	err   error
+	manifest sandboxArtifactManifest
+	calls    int
+	err      error
 }
+
+func (c *flakyArtifactCleaner) ArtifactScope() string { return ArtifactScopeSandbox }
 
 func (c *flakyArtifactCleaner) CleanupSessionArtifacts(context.Context, string, int64) error {
 	c.calls++
 	return c.err
 }
 
+func (c *flakyArtifactCleaner) ForgetCleanedArtifacts(ctx context.Context, sessionID string) error {
+	return forgetSandboxArtifacts(ctx, c.manifest, sessionID)
+}
+
+func (c *recordingArtifactCleaner) ArtifactScope() string { return ArtifactScopeSandbox }
+
 func (c *recordingArtifactCleaner) CleanupSessionArtifacts(_ context.Context, sessionID string, _ int64) error {
 	c.calls++
 	c.sessionID = sessionID
 	return nil
+}
+
+func (c *recordingArtifactCleaner) ForgetCleanedArtifacts(ctx context.Context, sessionID string) error {
+	return forgetSandboxArtifacts(ctx, c.manifest, sessionID)
 }
 
 func TestSessionServiceSearchMessagesValidatesQuery(t *testing.T) {

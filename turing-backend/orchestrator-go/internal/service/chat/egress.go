@@ -17,6 +17,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -39,6 +40,21 @@ const (
 	maxEgressToolNameBytes     = 512
 	maxEgressSelectedToolBytes = 16 * 1024
 )
+
+// memoryDriftMessage is what a person gets when the vault moved between the
+// disclosure they read and the send they made.
+//
+// It names both pinned files rather than guessing which one moved: the
+// challenge carries one fingerprint over the pair, and inventing a specific
+// tier from that would be a confident sentence this code cannot support.
+//
+// It names Obsidian because that is almost always the cause. The vault is a
+// folder the user has open in an editor, and an autosave landing between
+// consent and send is not a mistake they made — it is the product working as
+// designed. The refusal has to read like an explanation, not an accusation.
+const memoryDriftMessage = "your pinned memory changed since consent was prepared: " +
+	"persona.md or profile.md was edited, which an open Obsidian editor can do by autosaving. " +
+	"Re-read the pinned memory and prepare the send again"
 
 type EgressConfig struct {
 	OpenAIBaseURL string
@@ -67,6 +83,8 @@ type egressContext struct {
 	SkillInfo                 []repository.SkillEgressInfo
 	RecallApplicable          bool
 	MemoryProfileApplicable   bool
+	MemorySnapshotFingerprint string
+	MemorySnapshot            repository.MemoryEgressSnapshot
 	RemoteMCPServers          []repository.RemoteMCPServerEgress
 	IntegrationEndpoints      []repository.IntegrationEndpointEgress
 }
@@ -96,6 +114,7 @@ type egressChallengePayload struct {
 	SkillSnapshotFingerprint  string                                 `json:"skill_snapshot_fingerprint"`
 	RecallApplicable          bool                                   `json:"recall_applicable"`
 	MemoryProfileApplicable   bool                                   `json:"memory_profile_applicable"`
+	MemorySnapshotFingerprint string                                 `json:"memory_snapshot_fingerprint"`
 	RemoteMCPServers          []remoteMCPChallengeDestination        `json:"remote_mcp_servers,omitempty"`
 	IntegrationEndpoints      []repository.IntegrationEndpointEgress `json:"integration_endpoints,omitempty"`
 }
@@ -154,6 +173,7 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 		SkillSnapshotFingerprint:  resolved.SkillSnapshotFingerprint,
 		RecallApplicable:          resolved.RecallApplicable,
 		MemoryProfileApplicable:   resolved.MemoryProfileApplicable,
+		MemorySnapshotFingerprint: resolved.MemorySnapshotFingerprint,
 		RemoteMCPServers:          toChallengeRemoteMCPServers(resolved.RemoteMCPServers),
 		IntegrationEndpoints:      cloneChallengeIntegrationEndpoints(resolved.IntegrationEndpoints),
 	}
@@ -179,8 +199,60 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 			IntegrationEndpoints: toProtoIntegrationEndpoints(resolved.IntegrationEndpoints),
 			SelectedTools:        append([]string(nil), resolved.SelectedTools...),
 			Skills:               disclosedSkills,
+			MemoryNotes:          toProtoMemoryEgressDisclosures(*resolved),
+			// The flag and the rows agree by construction: both are gated on the
+			// category actually being claimed, so a disclosure can never say
+			// "memory may be sent" while naming nothing, or name a tier on a run
+			// that will send none of it.
+			MemoryProfileMayBeSent: resolved.MemoryProfileApplicable,
 		},
 	}, nil
+}
+
+// toProtoMemoryEgressDisclosures names the pinned tiers a person is consenting
+// over. It carries the vault path, so they can go and read exactly what would
+// be sent, and never the pinned bytes themselves: a disclosure is a list of
+// what leaves, not a second copy of it. The fingerprint is absent for the same
+// reason — it is the run's internal binding, not something a client acts on.
+func toProtoMemoryEgressDisclosures(resolved egressContext) []*turingv1.MemoryEgressDisclosure {
+	if !resolved.MemoryProfileApplicable {
+		return nil
+	}
+	rows := make([]*turingv1.MemoryEgressDisclosure, 0, 3)
+	for _, tier := range []struct {
+		tier     turingv1.MemoryTier
+		title    string
+		document repository.MemoryPinnedDocument
+	}{
+		{turingv1.MemoryTier_MEMORY_TIER_PERSONA, "Persona", resolved.MemorySnapshot.Persona},
+		{turingv1.MemoryTier_MEMORY_TIER_PROFILE, "Profile", resolved.MemorySnapshot.Profile},
+	} {
+		if !tier.document.Available || strings.TrimSpace(tier.document.Content) == "" {
+			continue
+		}
+		rows = append(rows, &turingv1.MemoryEgressDisclosure{
+			NoteId:        tier.document.RelPath,
+			Title:         tier.title,
+			VaultPath:     tier.document.RelPath,
+			Tier:          tier.tier,
+			BodyMayBeSent: true,
+		})
+	}
+	// A memory tool is a second, larger door: nothing is pinned through it, but
+	// whatever the model searches for and reads travels as tool arguments and
+	// results. Naming the folder rather than its notes is the honest bound —
+	// which notes get sent depends on what the model asks for, and this
+	// disclosure is written before it asks.
+	if backendegress.SelectedToolsIncludeMemory(resolved.SelectedTools) {
+		rows = append(rows, &turingv1.MemoryEgressDisclosure{
+			NoteId:        memoryfiles.BeliefsDirName,
+			Title:         "Accepted memory reachable by the memory tools",
+			VaultPath:     memoryfiles.BeliefsDirName,
+			Tier:          turingv1.MemoryTier_MEMORY_TIER_BELIEF,
+			BodyMayBeSent: true,
+		})
+	}
+	return rows
 }
 
 func (s *Server) applyRemoteEgress(
@@ -254,6 +326,7 @@ func (s *Server) applyRemoteEgress(
 		SkillSnapshotFingerprint:  payload.SkillSnapshotFingerprint,
 		RecallApplicable:          payload.RecallApplicable,
 		MemoryProfileApplicable:   payload.MemoryProfileApplicable,
+		MemorySnapshotFingerprint: payload.MemorySnapshotFingerprint,
 		RemoteMCPServers:          fromChallengeRemoteMCPServers(payload.RemoteMCPServers),
 		IntegrationEndpoints:      cloneChallengeIntegrationEndpoints(payload.IntegrationEndpoints),
 		ConsentGrantedAt:          repository.FormatTimestamp(s.now().UTC()),
@@ -299,6 +372,10 @@ func (s *Server) applyRemoteEgress(
 		if resolved != nil && payload.SkillSnapshotFingerprint != resolved.SkillSnapshotFingerprint {
 			return repository.EnqueueUserMessageResult{}, false,
 				status.Error(codes.FailedPrecondition, "the skill snapshot changed since consent was prepared; prepare the send again")
+		}
+		if resolved != nil && payload.MemorySnapshotFingerprint != resolved.MemorySnapshotFingerprint {
+			return repository.EnqueueUserMessageResult{}, false,
+				status.Error(codes.FailedPrecondition, memoryDriftMessage)
 		}
 		return repository.EnqueueUserMessageResult{}, false,
 			status.Error(codes.FailedPrecondition, "remote egress context changed; prepare the send again")
@@ -450,6 +527,13 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 		MinimumWorkerMaxConcurrentRuns: input.MinimumWorkerMaxConcurrentRuns,
 		ExternalAgent:                  routed, ExternalAgentCredentialRef: externalCredentialRef,
 	}
+	// A first pass, on what is known before anything has looked at where the
+	// frozen tools go. It is worth making early — an unknown model or a tool no
+	// worker has is a better answer than one arrived at after reading the vault
+	// — but it is provisional by construction: this route says nothing yet
+	// about whether the run will carry an egress decision, and a worker too old
+	// to validate one satisfies it. The authoritative check is below, once that
+	// is known.
 	if s.runtime != nil {
 		if err := s.runtime.ValidateRouting(ctx, route); err != nil {
 			return nil, err
@@ -495,6 +579,32 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 	if !providerEgress && len(resolved.RemoteMCPServers) == 0 && len(resolved.IntegrationEndpoints) == 0 {
 		return nil, nil
 	}
+	// Everything the enqueue will freeze is now known, so the route is rebuilt
+	// on it and validated again — and this is the one that decides whether a
+	// challenge is issued at all.
+	//
+	// Two things are added that the first pass could not know. The decision:
+	// this run will carry one, of whatever shape, and the worker that executes
+	// it has to be able to validate one. A local model calling a remote MCP
+	// server or an integration carries exactly the decision a remote model
+	// does — the user's tool arguments and results leave the machine either
+	// way — so gating on the model's destination let a pre-decision worker look
+	// like a home for this run when the dispatch it is queued for will never
+	// hand it one. And the tools: the snapshot below is the slice that goes
+	// into the signed challenge, so it is the slice validated here rather than
+	// a second reading of the registry that could have moved in between.
+	//
+	// A challenge that goes out is a promise that the run it describes can
+	// happen. Where no connected worker can execute it the caller gets the
+	// routing refusal — which names what is missing — instead of a consent
+	// dialog for a run that would sit in the queue forever.
+	route.SelectedTools = resolved.SelectedTools
+	route.RemoteEgressDecision = true
+	if s.runtime != nil {
+		if err := s.runtime.ValidateRouting(ctx, route); err != nil {
+			return nil, err
+		}
+	}
 	if providerEgress {
 		endpoint, parseErr := backendegress.ParseKeyedEndpoint(rawEndpoint)
 		if parseErr != nil {
@@ -514,6 +624,26 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 	if providerEgress && len(resolved.SkillInfo) > maxEgressSkills {
 		return nil, status.Error(codes.FailedPrecondition, "too many enabled skills for remote egress disclosure; disable skills and try again")
 	}
+	// One read of the vault serves the fingerprint, the applicability decision
+	// and the disclosure. Reading it again for any of the three would let a run
+	// disclose one persona and bind another.
+	resolved.MemorySnapshotFingerprint, resolved.MemorySnapshot, err =
+		s.repo.EgressMemorySnapshotFingerprint(ctx, resolved.SelectedTools)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "resolve remote egress memory context failed")
+	}
+	// Memory is applicable when something of the user's own would actually
+	// travel: pinned words that survive a trim, or a memory tool whose
+	// arguments and results are their notes even when nothing is pinned.
+	//
+	// External agent runs are included, and that is a deliberate divergence
+	// from RecallApplicable. Recall is withheld there because the transcript
+	// belongs to a conversation the user pointed elsewhere; the persona is not,
+	// because it is how they asked to be spoken to, and they asked it of this
+	// conversation.
+	resolved.MemoryProfileApplicable = providerEgress &&
+		(resolved.MemorySnapshot.Preimage(resolved.SelectedTools).HasPinnedContent() ||
+			backendegress.SelectedToolsIncludeMemory(resolved.SelectedTools))
 	if providerEgress {
 		resolved.DataCategories = []turingv1.EgressDataCategory{
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CURRENT_MESSAGE,
@@ -527,6 +657,10 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 	if resolved.RecallApplicable {
 		resolved.DataCategories = append(resolved.DataCategories,
 			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_CROSS_SESSION_RECALL)
+	}
+	if resolved.MemoryProfileApplicable {
+		resolved.DataCategories = append(resolved.DataCategories,
+			turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_MEMORY_PROFILE)
 	}
 	if providerEgress && len(resolved.SelectedTools) > 0 {
 		resolved.DataCategories = append(resolved.DataCategories,
@@ -645,6 +779,7 @@ func validChallengePayload(payload egressChallengePayload) bool {
 		payload.SessionID == "" || len(payload.SessionID) > maxEgressIDBytes ||
 		len(payload.IdempotencyKey) > maxEgressIDBytes ||
 		payload.RequestDigest == "" ||
+		payload.MemorySnapshotFingerprint == "" ||
 		(payload.Provider != "openai_compatible" && payload.Provider != "ollama") ||
 		payload.Model == "" || len(payload.Model) > maxEgressModelBytes ||
 		(payload.ExternalAgentID != "" && payload.ExternalCredentialRefHash == "") ||
@@ -738,6 +873,7 @@ func payloadMatchesEgressContext(payload egressChallengePayload, resolved egress
 		payload.SkillSnapshotFingerprint == resolved.SkillSnapshotFingerprint &&
 		payload.RecallApplicable == resolved.RecallApplicable &&
 		payload.MemoryProfileApplicable == resolved.MemoryProfileApplicable &&
+		payload.MemorySnapshotFingerprint == resolved.MemorySnapshotFingerprint &&
 		slices.Equal(payload.SelectedTools, resolved.SelectedTools) &&
 		slices.Equal(payload.RemoteMCPServers, toChallengeRemoteMCPServers(resolved.RemoteMCPServers)) &&
 		slices.EqualFunc(payload.IntegrationEndpoints, resolved.IntegrationEndpoints, func(left, right repository.IntegrationEndpointEgress) bool {

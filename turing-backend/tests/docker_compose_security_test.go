@@ -88,6 +88,11 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_EGRESS_SIGNING_SECRET:",
 		"DATABASE_PATH:",
 		"SKILLS_ROOT:",
+		"MEMORY_ROOT: /memory",
+		// Display only: the host directory the vault is bound from, so the
+		// client can name a folder the user can actually open. No file
+		// operation and no confinement check ever reads it.
+		"MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:-}",
 		"OLLAMA_BASE_URL:",
 		// The orchestrator never calls OpenAI or mcp-files through its normal
 		// bearer: it only reports
@@ -140,6 +145,15 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_APPROVAL_CONSUMER_TOKEN:",
 		"TURING_EGRESS_SIGNING_SECRET:",
 		"TURING_MCP_FILES_CLEANUP_TOKEN:",
+		// The vault is the orchestrator's alone. The runtime receives the
+		// pinned snapshot on the job and framed tool results over gRPC; a
+		// MEMORY_ROOT here would mean a second process reading the user's
+		// persona, profile and beliefs off disk outside that contract.
+		"MEMORY_ROOT:",
+		// And the display path is no more theirs to know: it names the folder
+		// on the user's own machine, and only the service that answers "where
+		// is my memory?" has any reason to hold it.
+		"MEMORY_DISPLAY_ROOT:",
 	)
 
 	system := composeServiceBlock(t, compose, "turing-mcp-system")
@@ -159,6 +173,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// A tool server has no reason to hold a user's third-party API keys,
 		// and it is the container most exposed to what a model asks for.
 		"TURING_AGENT_API_KEYS:",
+		"MEMORY_ROOT:",
 	)
 
 	files := composeServiceBlock(t, compose, "turing-mcp-files")
@@ -184,6 +199,11 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"TURING_AGENT_API_KEYS:",
 		"ORCHESTRATOR_INTERNAL_BASE_URL:",
 		"${FILES_SANDBOX_ROOT",
+		// The sandbox and the vault are separate confinement domains owned by
+		// separate processes. mcp-files must not learn where the vault is,
+		// under either name.
+		"MEMORY_ROOT:",
+		"MEMORY_DISPLAY_ROOT:",
 		// mcp-files may only consume approvals; it must never hold the
 		// runtime's credential, or a compromised mcp-files could claim jobs
 		// and read conversation history through RuntimeService/SessionService.
@@ -207,6 +227,8 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"ORCHESTRATOR_INTERNAL_PORT",
 			"DATABASE_PATH",
 			"SKILLS_ROOT",
+			"MEMORY_ROOT",
+			"MEMORY_DISPLAY_ROOT",
 			"MCP_CONFIG_ROOT",
 			"OLLAMA_BASE_URL",
 			"OLLAMA_MODEL",
@@ -462,7 +484,7 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 	policies := map[string]composeRuntimePolicy{
 		"turing-orchestrator": {
 			user:     "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
-			volumes:  []string{"../data:/app/data", "../skills:/skills", "../mcp:/mcp:ro"},
+			volumes:  []string{"../data:/app/data", "../skills:/skills", "../mcp:/mcp:ro", "../memory:/memory"},
 			tmpfs:    []string{"/dev/shm:ro,nosuid,nodev,noexec,size=64k"},
 			ports:    []string{"127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:${ORCHESTRATOR_PUBLIC_PORT:-3000}"},
 			expose:   []string{"3001"},
@@ -836,6 +858,7 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 		"**/data.backup-*",
 		"**/data.worktree-backup-*",
 		"turing-backend/skills",
+		"turing-backend/memory",
 		"**/sandbox",
 		"**/node_modules",
 		"**/.dart_tool",
@@ -851,7 +874,7 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 			t.Errorf(".dockerignore missing %q", pattern)
 		}
 	}
-	for _, overbroad := range []string{"**/skills"} {
+	for _, overbroad := range []string{"**/skills", "**/memory", "memory"} {
 		if lines[overbroad] {
 			t.Errorf(".dockerignore uses overbroad runtime-state pattern %q", overbroad)
 		}
@@ -861,6 +884,65 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 			t.Errorf(".dockerignore excludes required Dockerfile input %q", requiredInput)
 		}
 	}
+}
+
+// The user's vault is runtime state and must stay out of every build context;
+// the Go packages that happen to be named "memory" are source the images are
+// built from. An unanchored **/memory pattern cannot tell them apart, so the
+// exclusion is repository-scoped and this test pins both halves: the exact
+// scoped line, and the packages it must not reach. The package assertions are
+// filesystem checks on purpose — an enumeration that named directories which no
+// longer exist would keep passing while protecting nothing.
+func TestDockerignoreKeepsMemoryPackagesInTheBuildContext(t *testing.T) {
+	lines := ignoreFileLines(t, ".dockerignore")
+	const vault = "turing-backend/memory"
+	if !lines[vault] {
+		t.Errorf(".dockerignore missing the repository-scoped vault exclusion %q", vault)
+	}
+	for _, pattern := range []string{"**/memory", "memory", "**/memory/**", "*/memory"} {
+		if lines[pattern] {
+			t.Errorf(".dockerignore pattern %q also hides the Go packages named memory", pattern)
+		}
+	}
+	for _, buildInput := range []string{
+		filepath.Join("..", "agent-runtime-go", "internal", "memory"),
+		filepath.Join("..", "orchestrator-go", "internal", "service", "memory"),
+		filepath.Join("..", "orchestrator-go", "internal", "memoryfiles"),
+	} {
+		info, err := os.Stat(buildInput)
+		if err != nil || !info.IsDir() {
+			t.Errorf("%s is not a directory in this repository: %v", buildInput, err)
+			continue
+		}
+		relative := filepath.ToSlash(filepath.Join("turing-backend", strings.TrimPrefix(filepath.ToSlash(buildInput), "../")))
+		for line := range lines {
+			if dockerignoreLineHides(line, relative) {
+				t.Errorf(".dockerignore line %q excludes required build input %q", line, relative)
+			}
+		}
+	}
+}
+
+// dockerignoreLineHides reports whether an ignore line excludes the given
+// repository-relative directory, either by naming it or by naming one of its
+// parents. Docker matches patterns per path component, so an unanchored
+// "**/memory" hides every directory whose last component is memory.
+func dockerignoreLineHides(line string, target string) bool {
+	line = strings.TrimSuffix(strings.TrimPrefix(line, "./"), "/")
+	if line == "" || strings.HasPrefix(line, "!") {
+		return false
+	}
+	components := strings.Split(target, "/")
+	for index := range components {
+		prefix := strings.Join(components[:index+1], "/")
+		if line == prefix {
+			return true
+		}
+		if strings.HasPrefix(line, "**/") && strings.TrimPrefix(line, "**/") == components[index] {
+			return true
+		}
+	}
+	return false
 }
 
 func composeServiceBlock(t *testing.T, compose string, serviceName string) string {

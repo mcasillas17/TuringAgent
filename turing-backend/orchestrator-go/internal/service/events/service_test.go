@@ -461,7 +461,7 @@ func TestEventServiceDeliversTerminalDeletionAcrossWithdrawnReplayGap(t *testing
 	if _, err := h.repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
 		t.Fatal(err)
 	}
-	receipt, err := h.repo.AdvanceSessionDeletion(ctx, session.SessionID)
+	receipt, err := h.repo.AdvanceSessionDeletion(ctx, session.SessionID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

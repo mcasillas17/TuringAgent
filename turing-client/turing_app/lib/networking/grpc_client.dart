@@ -22,6 +22,8 @@ import '../generated/turing/v1/integrations.pb.dart' as integrationpb;
 import '../generated/turing/v1/integrations.pbgrpc.dart' as integrationgrpc;
 import '../generated/turing/v1/mcp.pb.dart' as mcppb;
 import '../generated/turing/v1/mcp.pbgrpc.dart' as mcpgrpc;
+import '../generated/turing/v1/memory.pb.dart' as memorypb;
+import '../generated/turing/v1/memory.pbgrpc.dart' as memorygrpc;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/sessions.pbgrpc.dart' as sessiongrpc;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
@@ -34,6 +36,7 @@ import '../models/automation.dart';
 import '../models/external_agent.dart';
 import '../models/grpc_mappers.dart';
 import '../models/integration.dart';
+import '../models/memory.dart';
 import '../models/message.dart';
 import '../models/mcp_server.dart';
 import '../models/remote_egress.dart';
@@ -45,6 +48,7 @@ import '../models/skill.dart';
 import '../models/telemetry.dart';
 import '../models/tool_descriptor.dart';
 import '../models/turing_event.dart';
+import '../utils/protobuf_enum.dart';
 import 'api_client.dart';
 
 const _startupUnaryTimeout = Duration(seconds: 10);
@@ -125,6 +129,7 @@ class TuringGrpcApi
     );
     _audit = auditgrpc.AuditServiceClient(_channel, options: options);
     _mcpRegistry = mcpgrpc.McpRegistryServiceClient(_channel, options: options);
+    _memory = memorygrpc.MemoryServiceClient(_channel, options: options);
   }
 
   final String baseUrl;
@@ -142,6 +147,7 @@ class TuringGrpcApi
   late final telemetrygrpc.TelemetryServiceClient _telemetry;
   late final auditgrpc.AuditServiceClient _audit;
   late final mcpgrpc.McpRegistryServiceClient _mcpRegistry;
+  late final memorygrpc.MemoryServiceClient _memory;
 
   GrpcAuthMetadata get _metadata => GrpcAuthMetadata(apiKey: apiKey);
 
@@ -447,8 +453,54 @@ class TuringGrpcApi
           )
           .toList(growable: false),
       selectedTools: List.unmodifiable(disclosure.selectedTools),
+      memoryNotes: disclosure.memoryNotes
+          .map(
+            (note) => MemoryEgressDisclosure(
+              noteId: note.noteId,
+              title: note.title,
+              vaultPath: note.vaultPath,
+              tier: _memoryEgressTierFromProto(note),
+              bodyMayBeSent: note.bodyMayBeSent,
+            ),
+          )
+          .toList(growable: false),
+      memoryProfileMayBeSent: disclosure.memoryProfileMayBeSent,
       expiresAt: disclosure.expiresAt.toDateTime().toUtc(),
     );
+  }
+
+  /// A tier this build does not recognise is reported as unspecified rather
+  /// than guessed at. The dialog says "memory" for it, which is true, instead
+  /// of naming a tier the server never claimed.
+  ///
+  /// Decoded from the whole message, not from the field alone. A closed enum
+  /// keeps the last value the parser *recognised*, so a newer tier arriving
+  /// after a known one leaves the known one sitting in the field while the
+  /// value the server actually meant is filed away as unknown. Reading the
+  /// field would put "Persona — already in this prompt" on a consent dialog
+  /// over a row the server never described that way, which is the one sentence
+  /// this screen must never invent.
+  static MemoryEgressTier _memoryEgressTierFromProto(
+    commonpb.MemoryEgressDisclosure note,
+  ) {
+    final tier = decodeClosedEnum(
+      message: note,
+      fieldNumber: 4,
+      readValue: () => note.tier,
+      unknownValue: commonpb.MemoryTier.MEMORY_TIER_UNSPECIFIED,
+    );
+    switch (GrpcMappers.memoryTierToModel(tier)) {
+      case MemoryTier.persona:
+        return MemoryEgressTier.persona;
+      case MemoryTier.profile:
+        return MemoryEgressTier.profile;
+      case MemoryTier.belief:
+        return MemoryEgressTier.belief;
+      case MemoryTier.note:
+        return MemoryEgressTier.note;
+      case MemoryTier.unspecified:
+        return MemoryEgressTier.unspecified;
+    }
   }
 
   @override
@@ -859,6 +911,161 @@ class TuringGrpcApi
   Future<List<Skill>> listSkills() async {
     final response = await _skills.listSkills(skillpb.ListSkillsRequest());
     return response.skills.map(GrpcMappers.skillToModel).toList();
+  }
+
+  // -------------------------------------------------------------------
+  // Memory
+  //
+  // This client is a reader and a messenger: it holds no vault state, decides
+  // nothing locally, and re-reads the whole state after every write. Failures
+  // arrive as [TuringApiException] so the page can show the server's own
+  // sentence — the compare-and-set refusals in particular are written for the
+  // person holding the file open, and are not this client's to paraphrase.
+  // -------------------------------------------------------------------
+
+  @override
+  Future<MemoryState> listMemoryState() {
+    return _memoryCall(() async {
+      final response = await _memory.listMemoryState(
+        memorypb.ListMemoryStateRequest(),
+      );
+      return GrpcMappers.memoryStateToModel(response);
+    });
+  }
+
+  @override
+  Future<MemorySettings> setMemoryEnabled({required bool enabled}) {
+    return _memoryCall(() async {
+      // No tier is named: this client only ever toggles memory as a whole, and
+      // the server refuses a per-tier toggle it cannot honour.
+      final response = await _memory.setMemoryEnabled(
+        memorypb.SetMemoryEnabledRequest(enabled: enabled),
+      );
+      return GrpcMappers.memorySettingsToModel(response);
+    });
+  }
+
+  @override
+  Future<MemoryCandidate> promoteMemoryCandidate({
+    required String candidateId,
+    required String expectedCandidateHash,
+  }) {
+    return _memoryCall(() async {
+      final response = await _memory.promoteMemoryCandidate(
+        memorypb.PromoteMemoryCandidateRequest(
+          candidateId: candidateId,
+          expectedCandidateHash: expectedCandidateHash,
+        ),
+      );
+      return GrpcMappers.memoryCandidateToModel(response.candidate);
+    });
+  }
+
+  @override
+  Future<MemoryCandidate> rejectMemoryCandidate({
+    required String candidateId,
+    String expectedCandidateHash = '',
+    String reason = '',
+  }) {
+    return _memoryCall(() async {
+      final response = await _memory.rejectMemoryCandidate(
+        memorypb.RejectMemoryCandidateRequest(
+          candidateId: candidateId,
+          reason: reason,
+          expectedCandidateHash: expectedCandidateHash,
+        ),
+      );
+      return GrpcMappers.memoryCandidateToModel(response.candidate);
+    });
+  }
+
+  @override
+  Future<MemoryApplyResult> applyMemoryProfile({
+    required String candidateId,
+    required String content,
+    required String expectedContentHash,
+    String expectedCandidateHash = '',
+  }) {
+    return _memoryCall(() async {
+      final response = await _memory.applyMemoryProfile(
+        memorypb.ApplyMemoryProfileRequest(
+          candidateId: candidateId,
+          content: content,
+          expectedContentHash: expectedContentHash,
+          expectedCandidateHash: expectedCandidateHash,
+        ),
+      );
+      return MemoryApplyResult(
+        profile: GrpcMappers.memoryProfileToModel(response.profile),
+        cleanupPending: response.cleanupPending,
+      );
+    });
+  }
+
+  @override
+  Future<MemoryDocument> saveMemoryPersona({
+    required String content,
+    required String expectedContentHash,
+  }) {
+    return _memoryCall(() async {
+      final response = await _memory.saveMemoryPersona(
+        memorypb.SaveMemoryPersonaRequest(
+          content: content,
+          expectedContentHash: expectedContentHash,
+        ),
+      );
+      return GrpcMappers.memoryPersonaToModel(response.persona);
+    });
+  }
+
+  @override
+  Future<MemoryDocument> saveMemoryProfile({
+    required String content,
+    required String expectedContentHash,
+  }) {
+    return _memoryCall(() async {
+      final response = await _memory.saveMemoryProfile(
+        memorypb.SaveMemoryProfileRequest(
+          content: content,
+          expectedContentHash: expectedContentHash,
+        ),
+      );
+      return GrpcMappers.memoryProfileToModel(response.profile);
+    });
+  }
+
+  /// Turns a transport failure into something the page can render without
+  /// knowing what gRPC is, keeping the server's message verbatim.
+  static Future<T> _memoryCall<T>(Future<T> Function() request) async {
+    try {
+      return await request();
+    } on grpc.GrpcError catch (error) {
+      throw TuringApiException(
+        code: _memoryErrorCode(error.code),
+        message: error.message ?? 'the memory request failed',
+      );
+    }
+  }
+
+  static String _memoryErrorCode(int code) {
+    switch (code) {
+      case grpc.StatusCode.invalidArgument:
+        return 'invalid_argument';
+      case grpc.StatusCode.notFound:
+        return 'not_found';
+      case grpc.StatusCode.permissionDenied:
+        return 'permission_denied';
+      case grpc.StatusCode.failedPrecondition:
+        return 'failed_precondition';
+      case grpc.StatusCode.aborted:
+        return 'aborted';
+      case grpc.StatusCode.unimplemented:
+        return 'unimplemented';
+      case grpc.StatusCode.unavailable:
+        return 'unavailable';
+      default:
+        return 'memory_error';
+    }
   }
 
   @override

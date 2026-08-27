@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
@@ -528,7 +529,7 @@ func integrationCallHarness(t *testing.T, credential string) (*Server, *reposito
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending := &repository.PendingEgressDecision{Version: repository.RunEgressDecisionVersion, ChallengeNonce: "nonce-" + connection.GetConnectionId(), ChallengeFingerprint: "fingerprint", RequestDigest: "digest", Provider: "ollama", Model: "llama", DataCategories: []string{"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS", "EGRESS_DATA_CATEGORY_TOOL_RESULTS"}, SelectedTools: []string{"integrations/github.list_issues"}, SkillSnapshotFingerprint: fingerprint, ConsentGrantedAt: repository.FormatTimestamp(time.Now().UTC()), IntegrationEndpoints: []repository.IntegrationEndpointEgress{{Endpoint: repository.GitHubIntegrationEndpoint, EndpointHost: repository.GitHubIntegrationEndpointHost, ConnectionID: connection.GetConnectionId(), DisplayName: connection.GetDisplayName(), Tools: []string{"github.list_issues"}}}}
+	pending := &repository.PendingEgressDecision{Version: repository.RunEgressDecisionVersion, ChallengeNonce: "nonce-" + connection.GetConnectionId(), ChallengeFingerprint: "fingerprint", RequestDigest: "digest", Provider: "ollama", Model: "llama", DataCategories: []string{"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS", "EGRESS_DATA_CATEGORY_TOOL_RESULTS"}, SelectedTools: []string{"integrations/github.list_issues"}, SkillSnapshotFingerprint: fingerprint, MemorySnapshotFingerprint: vaultlessMemoryFingerprint("integrations/github.list_issues"), ConsentGrantedAt: repository.FormatTimestamp(time.Now().UTC()), IntegrationEndpoints: []repository.IntegrationEndpointEgress{{Endpoint: repository.GitHubIntegrationEndpoint, EndpointHost: repository.GitHubIntegrationEndpointHost, ConnectionID: connection.GetConnectionId(), DisplayName: connection.GetDisplayName(), Tools: []string{"github.list_issues"}}}}
 	enqueued, err := repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{SessionID: session.SessionID, Content: "test", ContentType: "text", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama", SelectedTools: []string{"integrations/github.list_issues"}, EgressDecision: pending})
 	if err != nil {
 		t.Fatal(err)
@@ -683,6 +684,7 @@ func TestProviderReflectedCredentialCannotReachRuntimeEventOrAudit(t *testing.T)
 		Provider: "ollama", Model: "llama3.2", ConsentGrantedAt: repository.FormatTimestamp(time.Now().UTC()),
 		DataCategories: []string{"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS", "EGRESS_DATA_CATEGORY_TOOL_RESULTS"},
 		SelectedTools:  []string{"integrations/github.list_issues"}, SkillSnapshotFingerprint: fingerprint,
+		MemorySnapshotFingerprint: vaultlessMemoryFingerprint("integrations/github.list_issues"),
 		IntegrationEndpoints: []repository.IntegrationEndpointEgress{{
 			Endpoint: repository.GitHubIntegrationEndpoint, EndpointHost: repository.GitHubIntegrationEndpointHost,
 			ConnectionID: connection.GetConnectionId(), DisplayName: connection.GetDisplayName(), Tools: []string{"github.list_issues"},
@@ -962,4 +964,21 @@ func TestIntegrationDispatchWithoutKeyNamesTheMissingKeyNotReconnect(t *testing.
 	if err != nil && strings.Contains(err.Error(), "reconnect") {
 		t.Fatalf("error=%v, told a keyless operator to reconnect", err)
 	}
+}
+
+// vaultlessMemoryFingerprint is the memory binding for a repository with no
+// vault: both pinned tiers withheld and no memory tool selected. The enqueue
+// re-derives this inside its own transaction, so a decision claiming anything
+// else is refused.
+func vaultlessMemoryFingerprint(selectedTools ...string) string {
+	snapshot := repository.MemoryEgressSnapshot{
+		Enabled: true,
+		Persona: repository.MemoryPinnedDocument{RelPath: "persona.md", Reason: "vault_missing"},
+		Profile: repository.MemoryPinnedDocument{RelPath: "profile.md", Reason: "vault_missing"},
+	}
+	fingerprint, err := backendegress.MemorySnapshotFingerprint(snapshot.Preimage(selectedTools))
+	if err != nil {
+		panic(err)
+	}
+	return fingerprint
 }

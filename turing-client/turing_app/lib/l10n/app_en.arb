@@ -53,22 +53,233 @@
   "runDispatchRetryNotice": "Starting attempt {attempt} of {maxAttempts}.",
   "@runDispatchRetryNotice": {
     "placeholders": {
-      "attempt": {"type": "int"},
-      "maxAttempts": {"type": "int"}
+      "attempt": {
+        "type": "int"
+      },
+      "maxAttempts": {
+        "type": "int"
+      }
     }
   },
   "runRecoveryRetryNotice": "Recovering with attempt {attempt} of {maxAttempts}.",
   "@runRecoveryRetryNotice": {
     "placeholders": {
-      "attempt": {"type": "int"},
-      "maxAttempts": {"type": "int"}
+      "attempt": {
+        "type": "int"
+      },
+      "maxAttempts": {
+        "type": "int"
+      }
     }
   },
   "runRecoveryExhaustedNotice": "Recovery stopped after attempt {attempt} of {maxAttempts}.",
   "@runRecoveryExhaustedNotice": {
     "placeholders": {
-      "attempt": {"type": "int"},
-      "maxAttempts": {"type": "int"}
+      "attempt": {
+        "type": "int"
+      },
+      "maxAttempts": {
+        "type": "int"
+      }
     }
-  }
+  },
+  "memoryPageTitle": "Memory",
+  "memoryPageSubtitle": "Memory is a vault of Markdown files you can open and edit yourself. Turing reads it, proposes additions into the inbox, and writes nothing you have not accepted. persona.md is yours alone.",
+  "memoryEnabledTitle": "Memory is on",
+  "memoryDisabledTitle": "Memory is off",
+  "memoryEnabledDetail": "Turing pins persona.md and profile.md into each run and can search accepted beliefs.",
+  "memoryDisabledDetail": "Memory tools are unavailable while memory is off, and nothing is pinned into a run. The vault stays on disk and stays readable here.",
+  "memoryVaultLocation": "The vault is a folder on this computer:",
+  "@memoryVaultLocation": {
+    "description": "Label above the vault's path on the memory page. It names the machine the path is on because the orchestrator may be running in a container, where the path it opens the vault at exists nowhere the user can go."
+  },
+  "memoryReasonUnspecified": "The server did not say whether this could be read.",
+  "memoryReasonNone": "Readable.",
+  "memoryReasonDisabled": "Memory is off, so this is not in use.",
+  "memoryReasonVaultMissing": "This is not in the vault yet.",
+  "memoryReasonVaultUnreadable": "This could not be read from the vault.",
+  "memoryReasonContentParseFailed": "This could not be parsed.",
+  "memoryReasonContentTooLarge": "This is too large to read.",
+  "memoryPinnedTruncated": "Longer than a run carries: only the first {bytes} bytes reach a conversation. The whole document is here, and saving keeps all of it.",
+  "@memoryPinnedTruncated": {
+    "description": "Shown above a persona.md or profile.md editor whose document is longer than the runtime pin budget. The editor holds the whole file; this says how much of it a model actually sees.",
+    "placeholders": {
+      "bytes": {
+        "type": "int"
+      }
+    }
+  },
+  "memoryStatusUnspecified": "The server did not say who may write this.",
+  "memoryStatusManaged": "Turing may rewrite this file.",
+  "memoryStatusUnmanaged": "You have taken this note over; Turing reads it and never writes it.",
+  "memoryStatusWithdrawn": "Withdrawn.",
+  "memoryCandidateStateUnspecified": "The server did not say where this proposal stands.",
+  "memoryCandidateStatePending": "Waiting for you.",
+  "memoryCandidateStatePromoted": "Accepted.",
+  "memoryCandidateStateRejected": "Rejected.",
+  "memoryCandidateStateWithdrawn": "The conversation behind this was deleted, so it can no longer be accepted.",
+  "memoryCandidateStateProfileApplying": "You accepted this and it is being applied to profile.md. Turing is finishing it; there is nothing to decide here.",
+  "memoryCandidateKindUnspecified": "Proposal",
+  "memoryCandidateKindBelief": "Proposed belief",
+  "memoryCandidateKindProfileEdit": "Proposed change to profile.md",
+  "memoryTierUnspecified": "Memory",
+  "memoryTierPersona": "Persona",
+  "memoryTierProfile": "Profile",
+  "memoryTierBelief": "Beliefs",
+  "memoryTierNote": "Notes",
+  "memoryPersonaHeading": "persona.md",
+  "memoryPersonaDescription": "Who Turing is. You are its only author: Turing never writes it, and no proposal can reach it. It is pinned into every run as written.",
+  "memoryProfileHeading": "profile.md",
+  "memoryProfileDescription": "What Turing knows about you. You write it here; Turing can only propose changes into the inbox for you to accept.",
+  "memorySaveAction": "Save",
+  "memoryRereadAction": "Re-read from the vault",
+  "memoryUnmanagedDraftTitle": "Your own draft",
+  "memoryUnmanagedDraftDetail": "Turing did not create this file and will not move it. To accept it, move the file into beliefs/ in your vault.",
+  "memoryUntrackedInboxTitle": "Turing wrote this file and lost track of it",
+  "memoryUntrackedInboxDetail": "Turing wrote this proposal but has no record of it, so it cannot be accepted or rejected here. Read it in your vault and either move it into beliefs/ to keep it, or delete it.",
+  "memoryProposalDiscardOnly": "This proposal could not be read in full, so there is nothing here to accept. You can still throw it away.",
+  "memoryProfileAppliedCleanupPending": "Your profile was updated. The proposal it came from could not be removed from the inbox yet, so it is still listed below; Turing will clear it.",
+  "memoryNoteUnsearchable": "This note is not searchable until the problem above is fixed.",
+  "memoryNoteWithdrawnEvidence": "The evidence behind this was withdrawn with its conversation.",
+  "memoryNoteNoEvidence": "Kept with no evidence behind it.",
+  "memoryEvidenceCount": "{count, plural, =1{1 piece of evidence} other{{count} pieces of evidence}}",
+  "@memoryEvidenceCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "memoryInboxHeading": "Inbox",
+  "memoryInboxEmpty": "Nothing is waiting for you.",
+  "memoryBeliefsHeading": "Beliefs",
+  "memoryBeliefsEmpty": "No accepted beliefs yet.",
+  "memoryPromoteAction": "Promote",
+  "memoryRejectAction": "Reject",
+  "memoryApplyAction": "Apply",
+  "memoryProposalUnreadable": "This proposal could not be read in full, so there is nothing here to accept.",
+  "memoryProposalUnopenable": "Turing could not read this file, so there is nothing here to decide. If it cannot open the file at all it cannot throw it away for you either: removing a file safely means proving which file is going, and that needs one Turing can open. Make it readable in your vault — or delete it there — and Turing will catch up.",
+  "memoryProposalUndecidable": "This proposal is in a shape this version of Turing does not understand, so there is nothing safe to offer here. Open it in your vault, or update Turing.",
+  "memoryProfileResultHeading": "The profile after applying this",
+  "memoryProfileResultDescription": "This is what profile.md will say. It starts as your profile with the proposal added; edit it here and Apply writes exactly what you see.",
+  "memoryProfileResultEmpty": "Add the text you want profile.md to hold before applying.",
+  "memoryExpectedProposalHash": "Applies only while the proposal still matches {hash}.",
+  "@memoryExpectedProposalHash": {
+    "placeholders": {
+      "hash": {
+        "type": "String"
+      }
+    }
+  },
+  "memoryExpectedProfileHash": "Applies only while profile.md still matches {hash}.",
+  "@memoryExpectedProfileHash": {
+    "placeholders": {
+      "hash": {
+        "type": "String"
+      }
+    }
+  },
+  "memoryBackendUnreachable": "Could not reach the backend",
+  "memoryEditingVersion": "Editing version {hash}",
+  "@memoryEditingVersion": {
+    "placeholders": {
+      "hash": {
+        "type": "String"
+      }
+    }
+  },
+  "memoryLastChanged": "Last changed {date} at {time}",
+  "@memoryLastChanged": {
+    "placeholders": {
+      "date": {
+        "type": "DateTime",
+        "format": "yMMMd"
+      },
+      "time": {
+        "type": "DateTime",
+        "format": "Hm"
+      }
+    }
+  },
+  "memoryProvenanceFrom": "From {source}",
+  "@memoryProvenanceFrom": {
+    "placeholders": {
+      "source": {
+        "type": "String"
+      }
+    }
+  },
+  "memoryNoProfileYet": "(no profile yet)",
+  "memorySaveUnavailable": "This document cannot be saved from here until the problem above is fixed.",
+  "memorySaveNeedsVault": "Open or configure a vault before saving here.",
+  "memoryTierItemCount": "{count, plural, =0{Nothing is in this tier.} =1{1 item in this tier.} other{{count} items in this tier.}}",
+  "@memoryTierItemCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "memoryTierPendingCount": "{count, plural, =0{No proposals are waiting for this tier.} =1{1 proposal is waiting for this tier.} other{{count} proposals are waiting for this tier.}}",
+  "@memoryTierPendingCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "egressDialogTitleUnknownHost": "Send data off this machine?",
+  "egressDialogTitle": "Send data to {host}?",
+  "@egressDialogTitle": {
+    "placeholders": {
+      "host": {
+        "type": "String"
+      }
+    }
+  },
+  "egressDialogMaySendHeading": "This run may send:",
+  "egressDialogMcpHeading": "Remote MCP destinations:",
+  "egressDialogIntegrationHeading": "Connected-account destinations:",
+  "egressDialogSkillsHeading": "Skills that may be sent:",
+  "egressSkillBodyMayBeSent": "full content may be sent",
+  "egressSkillNameOnly": "name and description only",
+  "egressDialogSingleRunNotice": "This consent applies only to this exact run.",
+  "egressDialogExpiry": "Confirm before {date} at {time}.",
+  "@egressDialogExpiry": {
+    "placeholders": {
+      "date": {
+        "type": "DateTime",
+        "format": "yMMMd"
+      },
+      "time": {
+        "type": "DateTime",
+        "format": "Hm"
+      }
+    }
+  },
+  "egressDialogCancel": "Cancel",
+  "egressDialogSend": "Send",
+  "egressCategoryCurrentMessage": "Current message",
+  "egressCategoryConversationHistory": "Conversation history",
+  "egressCategoryCrossSessionRecall": "Cross-session recall",
+  "egressCategoryMemoryProfile": "Memory and profile",
+  "egressCategorySkillContent": "Enabled skill content",
+  "egressCategoryToolSchemas": "Tool schemas",
+  "egressCategoryToolArguments": "Tool arguments",
+  "egressCategoryToolResults": "Tool results",
+  "egressCategoryAttachments": "Attachments",
+  "egressMemoryTierUnspecified": "Memory",
+  "egressMemoryTierPersona": "Persona",
+  "egressMemoryTierProfile": "Profile",
+  "egressMemoryTierBelief": "Belief",
+  "egressMemoryTierNote": "Note",
+  "memoryEgressPinnedHeading": "Memory pinned into this run:",
+  "memoryEgressPinnedDetail": "These documents are in the prompt as written.",
+  "memoryEgressReachableHeading": "Memory the memory tools can reach:",
+  "memoryEgressReachableDetail": "Nothing here is in the prompt. A tool call would have to go and read it, and whatever it read would then be part of this run.",
+  "memoryEgressToolsHeading": "The memory tools this run may call:",
+  "memoryEgressToolsDetail": "What those tools return is part of this run and may be sent with it.",
+  "memoryEgressUnnamed": "The server did not name which memory this run may send.",
+  "memoryEgressBodyMayBeSent": "full content may be sent",
+  "memoryEgressNameOnly": "name and location only"
 }

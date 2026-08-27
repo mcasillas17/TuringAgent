@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/persisttime"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runcorrelation"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
@@ -19,6 +21,94 @@ import (
 type Repository struct {
 	db         *db.DB
 	skillStore *skillfiles.Store
+	// memoryVault is the user's note vault. It is nil until SetMemoryVault
+	// attaches one, and every memory method refuses rather than pretending
+	// there is nothing to remember.
+	memoryVault *memoryfiles.Vault
+	// memoryScanCache is what the last whole-vault pass read, kept so the next
+	// one does not open every note again to learn nothing changed. It belongs
+	// to the vault it was filled from and is replaced whenever one is
+	// attached: the same relative path under a different root is a different
+	// file, and serving one for the other would be serving another vault's
+	// memory. It is read and written only under memoryVaultMutex, and has a
+	// mutex of its own for the concurrent readers inside one pass.
+	memoryScanCache *memoryfiles.MetadataCache
+	// memoryVaultMutex serialises whole-vault passes. A file-writing reconcile
+	// and an index refresh both derive their answer from one scan, and two
+	// passes interleaving would let one write the projection of bytes the
+	// other is in the middle of rewriting. It is taken in exactly one place,
+	// runVaultPass, and held across the scan and the index transaction, never
+	// across an unrelated call.
+	memoryVaultMutex sync.Mutex
+	// memoryVaultPassBarrier, when set (test-only; always nil in production),
+	// runs inside a whole-vault pass: after the short state transaction has
+	// closed and before the walk begins. A test can park one pass there and
+	// prove that no other pass — read-only or writing — is inside the vault at
+	// the same time, and that no database transaction is held while it is.
+	memoryVaultPassBarrier func()
+	// memoryReconcileScanAnchor overrides the timestamp a pass treats as "when
+	// this walk started" (test-only; always empty in production). It lets a
+	// test place a row on either side of the anchor without racing a clock.
+	memoryReconcileScanAnchor string
+	// memoryPromotionBarrier, when set (test-only; always nil in production),
+	// runs after a promotion has moved the file and before the transaction
+	// that would record it, so a test can prove what a failure in that window
+	// leaves behind and that reconcile can finish it.
+	memoryPromotionBarrier func() error
+	// memoryDecisionFileBarrier, when set (test-only; always nil in
+	// production), runs after a decision's own pre-check has read the candidate
+	// file and given the vault's path lock back, and before the primitive that
+	// mutates takes that lock again. That gap is the one window the pre-check
+	// cannot speak for — the user has the vault open in their editor — so a
+	// test parked there can rewrite the proposal and prove it is the
+	// primitive's own compare-and-set, not the pre-check above it, that
+	// refuses.
+	memoryDecisionFileBarrier func()
+	// memoryOrphanSweepBarrier, when set (test-only; always nil in production),
+	// runs inside the inbox sweep once a candidate's decision lock is held and
+	// before the row and the file are re-read under it. A test parked there can
+	// put the file back and prove the deletion is decided on what is true under
+	// the lock rather than on what the walk saw.
+	memoryOrphanSweepBarrier func()
+	// memoryReservationSweepBarrier, when set (test-only; always nil in
+	// production), runs inside the inbox sweep once a reservation's coordinating
+	// lock is held and before the file and the rows that may still name it are
+	// re-read under it. A test parked there can move the file or the proposal
+	// and prove the release is decided on what is true under the lock rather
+	// than on what the walk saw.
+	memoryReservationSweepBarrier func()
+	// memoryCandidateWriteBarrier, when set (test-only; always nil in
+	// production), runs after a candidate's path is reserved and before the
+	// vault write, so a test can delete the session in exactly that window and
+	// prove the bytes that land afterwards do not survive as an untracked file
+	// in the user's vault.
+	memoryCandidateWriteBarrier func() error
+	// memoryCandidateRecordBarrier, when set (test-only; always nil in
+	// production), runs after the candidate file is written and before the
+	// transaction that records it, so a test can fail that transaction and
+	// prove the file is removed again rather than left behind with no row.
+	memoryCandidateRecordBarrier func() error
+	// memoryIndexParkBarrier, when set (test-only; always nil in production),
+	// runs inside the index transaction after contested paths have been
+	// vacated and before the real ones are written, so a test can fail the
+	// transaction in exactly that window and prove no note is left holding a
+	// value that is not a vault path.
+	memoryIndexParkBarrier func() error
+	// memoryProfileApplyBarrier, when set (test-only; always nil in
+	// production), runs at the two seams a profile apply can die at: after the
+	// candidate is claimed and before profile.md is written, and after the
+	// write and before the bookkeeping. It is how a test stages a crash at
+	// each and proves what the next pass makes of what was left.
+	memoryProfileApplyBarrier func(stage string) error
+	// memoryDeletionWithdrawalBarrier, when set (test-only; always nil in
+	// production), runs inside the session withdrawal transaction after the
+	// beliefs the deleted conversation was the last support for have been
+	// marked withdrawn and before the cascade removes their evidence. It is
+	// handed the notes that were withdrawn, so a test parked there can prove
+	// the withdrawal happened *and* that failing the transaction takes it back
+	// — a barrier that only said "something ran" would leave the second claim
+	// resting on a rollback that looks the same whether the first ran at all.
+	memoryDeletionWithdrawalBarrier func(withdrawn []string) error
 	// mcpRegistrySnapshotBarrier, when set (test-only; always nil in
 	// production), is invoked by MCPRegistrySnapshot once its single read
 	// transaction is open and its aggregate tool-byte budget guard has
@@ -394,9 +484,9 @@ func validateSession(session Session) error {
 	return nil
 }
 
-func requireActiveSessionTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
+func requireActiveSessionTx(ctx context.Context, q rowQuerier, sessionID string) error {
 	var deletionState string
-	err := tx.QueryRowContext(ctx, `SELECT deletion_state FROM sessions WHERE id = ?`, sessionID).Scan(&deletionState)
+	err := q.QueryRowContext(ctx, `SELECT deletion_state FROM sessions WHERE id = ?`, sessionID).Scan(&deletionState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrSessionNotFound
 	}

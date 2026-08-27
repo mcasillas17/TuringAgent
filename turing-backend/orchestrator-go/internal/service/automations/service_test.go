@@ -285,3 +285,52 @@ func TestDeleteAutomationRemovesItFromTheList(t *testing.T) {
 		t.Fatalf("listed %+v after delete, want none", listed.GetAutomations())
 	}
 }
+
+// An unattended run is the one context where nobody is present to see a memory
+// being read or proposed, so a memory tool cannot even be put on an
+// automation's allowlist. The refusal is its own status, distinct from the
+// integration one, so a client can say which rule it hit.
+func TestAutomationsRefuseMemoryToolsOnTheAllowlist(t *testing.T) {
+	server, _, ctx := newTestServer(t)
+
+	for _, tool := range []string{"memory.search", "memory.read", "memory.remember"} {
+		_, err := server.CreateAutomation(ctx, &turingv1.CreateAutomationRequest{
+			Name:     "Digest " + tool,
+			Prompt:   "Summarise the sandbox.",
+			Schedule: everyFiveMinutes(),
+			AllowedTools: []*turingv1.AutomationTool{
+				{ServerName: "memory", ToolName: tool},
+			},
+		})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("create with %s error = %v, want FailedPrecondition", tool, err)
+		}
+		if got := status.Convert(err).Message(); got != "memory tools are not available to automations" {
+			t.Fatalf("message = %q, want the memory-specific sentence", got)
+		}
+	}
+
+	created, err := server.CreateAutomation(ctx, &turingv1.CreateAutomationRequest{
+		Name:     "Digest",
+		Prompt:   "Summarise the sandbox.",
+		Schedule: everyFiveMinutes(),
+		AllowedTools: []*turingv1.AutomationTool{
+			{ServerName: "files", ToolName: "files.read"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Updating an existing automation is the other door onto the same list.
+	if _, err := server.UpdateAutomation(ctx, &turingv1.UpdateAutomationRequest{
+		AutomationId: created.GetAutomationId(),
+		Name:         "Digest",
+		Prompt:       "Summarise the sandbox.",
+		Schedule:     everyFiveMinutes(),
+		AllowedTools: []*turingv1.AutomationTool{
+			{ServerName: "memory", ToolName: "memory.search"},
+		},
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("update error = %v, want FailedPrecondition", err)
+	}
+}

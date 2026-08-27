@@ -49,6 +49,7 @@ func routedJob() *turingv1.AgentJob {
 		SkillSnapshotFingerprint: skillFingerprint,
 		RecallApplicable:         false,
 	}
+	bindRuntimeMemory(job)
 	return job
 }
 
@@ -70,6 +71,7 @@ func authorizeDirectRemoteJob(job *turingv1.AgentJob, endpoint string) {
 	}
 	parsed, _ := backendegress.ParseKeyedEndpoint(endpoint)
 	job.EgressDecision.EndpointHost = parsed.Host
+	bindRuntimeMemory(job)
 }
 
 func addDisclosedSkill(job *turingv1.AgentJob) {
@@ -214,7 +216,7 @@ func TestRemoteRunRejectsUnsupportedDisclosureCategories(t *testing.T) {
 	job := routedJob()
 	job.EgressDecision.DataCategories = append(
 		job.EgressDecision.DataCategories,
-		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_MEMORY_PROFILE,
+		turingv1.EgressDataCategory_EGRESS_DATA_CATEGORY_ATTACHMENTS,
 	)
 
 	updates := collectUpdates(t, assistant, job)
@@ -796,4 +798,18 @@ func findRunFailed(updates []*turingv1.RuntimeUpdate) *turingv1.RuntimeRunFailed
 		}
 	}
 	return nil
+}
+
+// bindRuntimeMemory gives a fixture the memory binding a real job carries: the
+// fingerprint the runtime re-derives from the pinned snapshot on the job, on
+// both the job and the decision it is checked against.
+func bindRuntimeMemory(job *turingv1.AgentJob) {
+	fingerprint, err := runtimeMemorySnapshotFingerprint(job)
+	if err != nil {
+		panic(err)
+	}
+	job.MemorySnapshotFingerprint = fingerprint
+	if job.GetEgressDecision() != nil {
+		job.EgressDecision.MemorySnapshotFingerprint = fingerprint
+	}
 }

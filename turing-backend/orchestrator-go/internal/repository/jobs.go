@@ -60,6 +60,14 @@ type RoutingRequirements struct {
 	MinimumWorkerMaxConcurrentRuns int
 	ExternalAgent                  bool
 	ExternalAgentCredentialRef     string
+	// RemoteEgressDecision is true when the job carries a frozen egress
+	// decision of any shape — a remote model, an external agent, or a local
+	// model whose tools reach a remote MCP server or an integration. The
+	// worker that executes it has to be able to validate one, and the
+	// destination of the *model* says nothing about whether it does: an
+	// Ollama run calling a remote tool sends the user's tool arguments off
+	// the machine exactly as a remote model sends their message.
+	RemoteEgressDecision bool
 }
 
 type RoutingModelCapability struct {
@@ -134,18 +142,48 @@ type Job struct {
 	ExternalAgent  *ExternalAgentTarget
 	EgressDecision *RunEgressDecision
 	SelectedTools  []string
-	StartedEvent   Event
+	// PinnedPersona and PinnedProfile are the vault's two pinned documents as
+	// they read when the message was accepted, frozen here for the same reason
+	// the skills are: an edit while the job waits must not rewrite the run.
+	PinnedPersona *PinnedPersonaSnapshot
+	PinnedProfile *PinnedProfileSnapshot
+	// MemorySnapshotFingerprint binds this job to the pinned material above. The
+	// runtime re-derives it from the snapshot it was handed and refuses a
+	// mismatch before it speaks to a provider.
+	MemorySnapshotFingerprint string
+	StartedEvent              Event
+}
+
+// PinnedPersonaSnapshot and PinnedProfileSnapshot are the frozen halves of one
+// run's pinned memory. Withheld says the tier was off or unreadable, which is a
+// different fact from an empty body and must never be inferred from one.
+type PinnedPersonaSnapshot struct {
+	PersonaID   string `json:"personaId"`
+	DisplayName string `json:"displayName"`
+	Body        string `json:"body"`
+	ContentHash string `json:"contentHash"`
+	Withheld    bool   `json:"withheld"`
+}
+
+type PinnedProfileSnapshot struct {
+	ProfileID   string `json:"profileId"`
+	Body        string `json:"body"`
+	ContentHash string `json:"contentHash"`
+	Withheld    bool   `json:"withheld"`
 }
 
 type queuedJobPayload struct {
-	UserText                       string               `json:"userText"`
-	RequestedTools                 []string             `json:"requestedTools"`
-	RequiredContextTokens          int                  `json:"requiredContextTokens"`
-	MinimumWorkerMaxConcurrentRuns int                  `json:"minimumWorkerMaxConcurrentRuns"`
-	Skills                         []SkillSnapshot      `json:"skills"`
-	ExternalAgent                  *ExternalAgentTarget `json:"externalAgent"`
-	EgressDecision                 *RunEgressDecision   `json:"egressDecision"`
-	SelectedTools                  []string             `json:"selectedTools"`
+	UserText                       string                 `json:"userText"`
+	RequestedTools                 []string               `json:"requestedTools"`
+	RequiredContextTokens          int                    `json:"requiredContextTokens"`
+	MinimumWorkerMaxConcurrentRuns int                    `json:"minimumWorkerMaxConcurrentRuns"`
+	Skills                         []SkillSnapshot        `json:"skills"`
+	ExternalAgent                  *ExternalAgentTarget   `json:"externalAgent"`
+	EgressDecision                 *RunEgressDecision     `json:"egressDecision"`
+	SelectedTools                  []string               `json:"selectedTools"`
+	PinnedPersona                  *PinnedPersonaSnapshot `json:"pinnedPersona"`
+	PinnedProfile                  *PinnedProfileSnapshot `json:"pinnedProfile"`
+	MemorySnapshotFingerprint      string                 `json:"memorySnapshotFingerprint"`
 }
 
 type Assignment struct {
@@ -191,6 +229,28 @@ func (record sendMessageIdempotencyRecord) result() EnqueueUserMessageResult {
 	}
 }
 
+// pinnedPersonaSnapshot and pinnedProfileSnapshot project the hashed preimage
+// onto the job. They are derived from the same struct the fingerprint covers,
+// so a job can never carry bytes its own fingerprint did not see.
+func pinnedPersonaSnapshot(preimage backendegress.MemorySnapshot) PinnedPersonaSnapshot {
+	return PinnedPersonaSnapshot{
+		PersonaID:   preimage.PersonaID,
+		DisplayName: preimage.PersonaDisplayName,
+		Body:        preimage.PersonaBody,
+		ContentHash: preimage.PersonaContentHash,
+		Withheld:    preimage.PersonaWithheld,
+	}
+}
+
+func pinnedProfileSnapshot(preimage backendegress.MemorySnapshot) PinnedProfileSnapshot {
+	return PinnedProfileSnapshot{
+		ProfileID:   preimage.ProfileID,
+		Body:        preimage.ProfileBody,
+		ContentHash: preimage.ProfileContentHash,
+		Withheld:    preimage.ProfileWithheld,
+	}
+}
+
 func enqueueRequestFingerprint(input EnqueueUserMessageInput) (string, error) {
 	type egressFingerprint struct {
 		Version                   int                         `json:"version"`
@@ -206,6 +266,7 @@ func enqueueRequestFingerprint(input EnqueueUserMessageInput) (string, error) {
 		SkillSnapshotFingerprint  string                      `json:"skill_snapshot_fingerprint"`
 		RecallApplicable          bool                        `json:"recall_applicable"`
 		MemoryProfileApplicable   bool                        `json:"memory_profile_applicable"`
+		MemorySnapshotFingerprint string                      `json:"memory_snapshot_fingerprint"`
 		RemoteMCPServers          []RemoteMCPServerEgress     `json:"remote_mcp_servers"`
 		IntegrationEndpoints      []IntegrationEndpointEgress `json:"integration_endpoints"`
 	}
@@ -225,11 +286,12 @@ func enqueueRequestFingerprint(input EnqueueUserMessageInput) (string, error) {
 			SkillSnapshotFingerprint:  input.EgressDecision.SkillSnapshotFingerprint,
 			RecallApplicable:          input.EgressDecision.RecallApplicable,
 			MemoryProfileApplicable:   input.EgressDecision.MemoryProfileApplicable,
+			MemorySnapshotFingerprint: input.EgressDecision.MemorySnapshotFingerprint,
 			RemoteMCPServers:          append([]RemoteMCPServerEgress(nil), input.EgressDecision.RemoteMCPServers...),
 			IntegrationEndpoints:      cloneIntegrationEndpoints(input.EgressDecision.IntegrationEndpoints),
 		}
 	}
-	version := 5
+	version := 6
 	requestedModel := input.RequestedModel
 	if egressDecision == nil {
 		version = 2
@@ -789,6 +851,11 @@ func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMes
 		SelectedTools:                  append([]string(nil), input.SelectedTools...),
 		RequiredContextTokens:          input.RequiredContextTokens,
 		MinimumWorkerMaxConcurrentRuns: input.MinimumWorkerMaxConcurrentRuns,
+		// Read from the raw input rather than the normalized decision, which
+		// is built later: routing has to be validated against the destination
+		// this message actually has, and a caller that supplied a decision is
+		// asking for a worker that can validate one whatever shape it takes.
+		RemoteEgressDecision: input.EgressDecision != nil,
 	}}
 	routedAgent, routed, err := sessionExternalAgentTx(ctx, tx, input.SessionID)
 	if err != nil {
@@ -999,6 +1066,28 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 			return EnqueueUserMessageResult{}, ErrEgressSkillSnapshotChanged
 		}
 	}
+	// The pinned documents are read here, inside the transaction that accepts
+	// the message, and the same read serves two purposes: it is the snapshot
+	// frozen onto the job, and it is what the frozen decision is re-checked
+	// against. Reading them twice would leave a window where the run carries
+	// one persona and consented to another.
+	//
+	// Exactly two files are opened. Anything wider — a scan, an index refresh —
+	// would hold this write transaction open for as long as the user's vault is
+	// large, on the path a person is waiting on.
+	selectedTools := egressDecisionSelectedTools(egressDecision, input.SelectedTools)
+	memorySnapshot, err := r.egressMemorySnapshotTx(ctx, tx)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	memoryPreimage := memorySnapshot.Preimage(selectedTools)
+	memoryFingerprint, err := backendegress.MemorySnapshotFingerprint(memoryPreimage)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	if egressDecision != nil && memoryFingerprint != egressDecision.MemorySnapshotFingerprint {
+		return EnqueueUserMessageResult{}, ErrEgressMemorySnapshotChanged
+	}
 	jobPayload, err := json.Marshal(map[string]any{
 		"userText":                       input.Content,
 		"sessionId":                      input.SessionID,
@@ -1014,9 +1103,12 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 		// Frozen for the same reason the skills are: re-pointing or deleting
 		// the agent while this job waits must not redirect a message the user
 		// already sent, and must not send it to a company they did not pick.
-		"externalAgent":  resolvedRoute.externalTarget,
-		"egressDecision": storedEgressDecision,
-		"selectedTools":  egressDecisionSelectedTools(egressDecision, input.SelectedTools),
+		"externalAgent":             resolvedRoute.externalTarget,
+		"egressDecision":            storedEgressDecision,
+		"selectedTools":             selectedTools,
+		"pinnedPersona":             pinnedPersonaSnapshot(memoryPreimage),
+		"pinnedProfile":             pinnedProfileSnapshot(memoryPreimage),
+		"memorySnapshotFingerprint": memoryFingerprint,
 	})
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
@@ -1287,6 +1379,12 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 		candidate.ExternalAgent = payload.ExternalAgent
 		candidate.EgressDecision = payload.EgressDecision
 		candidate.SelectedTools = payload.SelectedTools
+		// Absent for every job enqueued before the vault existed. nil is the
+		// honest answer there — that run was never offered a persona — and the
+		// runtime treats it as nothing pinned rather than as an empty one.
+		candidate.PinnedPersona = payload.PinnedPersona
+		candidate.PinnedProfile = payload.PinnedProfile
+		candidate.MemorySnapshotFingerprint = payload.MemorySnapshotFingerprint
 		externalAgentCredentialRef := ""
 		if candidate.ExternalAgent != nil {
 			externalAgentCredentialRef = candidate.ExternalAgent.CredentialRef
@@ -1301,6 +1399,7 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 			MinimumWorkerMaxConcurrentRuns: candidate.MinimumWorkerMaxConcurrentRuns,
 			ExternalAgent:                  candidate.ExternalAgent != nil,
 			ExternalAgentCredentialRef:     externalAgentCredentialRef,
+			RemoteEgressDecision:           candidate.EgressDecision != nil,
 		}) {
 			continue
 		}
@@ -1383,6 +1482,7 @@ func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []a
 		return "", nil
 	}
 	const externalAgentType = `json_type(j.payload_json, '$.externalAgent')`
+	const egressDecisionType = `json_type(j.payload_json, '$.egressDecision')`
 	var destinations []string
 	var args []any
 	egressAware := capabilities.RemoteEgressDecisionVersion >= RunEgressDecisionVersion
@@ -1420,6 +1520,16 @@ func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []a
 			1
 		) <= ?`
 	args = append(args, capabilities.MaxConcurrentRuns)
+	if !egressAware {
+		// Every job carrying a decision, not only the ones whose *model* is
+		// remote. A local model calling a remote MCP server or an integration
+		// carries the same frozen decision, and a worker that cannot validate
+		// one would claim the job and then fail it at execution time — a
+		// terminal failure the user sees, where waiting for a worker that can
+		// run it is invisible and correct.
+		filter += `
+		AND COALESCE(` + egressDecisionType + `, 'null') <> 'object'`
+	}
 	if len(capabilities.Tools) == 0 {
 		filter += `
 		AND NOT EXISTS (
@@ -1511,6 +1621,7 @@ func (r *Repository) ListPendingRoutingWorkPage(
 		if payload.ExternalAgent != nil {
 			item.Requirements.ExternalAgentCredentialRef = payload.ExternalAgent.CredentialRef
 		}
+		item.Requirements.RemoteEgressDecision = payload.EgressDecision != nil
 		work = append(work, item)
 	}
 	if err := rows.Err(); err != nil {

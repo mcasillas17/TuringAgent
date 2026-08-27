@@ -31,16 +31,17 @@ func TestRemoteCallCoveredByTheRunDecisionDispatchesExactlyOnce(t *testing.T) {
 		ModelProvider: "ollama", Model: "test-model",
 		SelectedTools: []string{"vendor/vendor.write"},
 		EgressDecision: &repository.PendingEgressDecision{
-			Version:                  backendegress.DecisionVersion,
-			ChallengeNonce:           "nonce_remote_registry",
-			ChallengeFingerprint:     "fingerprint_remote_registry",
-			RequestDigest:            "digest_remote_registry",
-			Provider:                 "ollama",
-			Model:                    "test-model",
-			DataCategories:           []string{"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS", "EGRESS_DATA_CATEGORY_TOOL_RESULTS"},
-			SelectedTools:            []string{"vendor/vendor.write"},
-			SkillSnapshotFingerprint: skillFingerprint,
-			ConsentGrantedAt:         repository.FormatTimestamp(time.Now().UTC()),
+			Version:                   backendegress.DecisionVersion,
+			ChallengeNonce:            "nonce_remote_registry",
+			ChallengeFingerprint:      "fingerprint_remote_registry",
+			RequestDigest:             "digest_remote_registry",
+			Provider:                  "ollama",
+			Model:                     "test-model",
+			DataCategories:            []string{"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS", "EGRESS_DATA_CATEGORY_TOOL_RESULTS"},
+			SelectedTools:             []string{"vendor/vendor.write"},
+			SkillSnapshotFingerprint:  skillFingerprint,
+			MemorySnapshotFingerprint: vaultlessMemoryFingerprint("vendor/vendor.write"),
+			ConsentGrantedAt:          repository.FormatTimestamp(time.Now().UTC()),
 			RemoteMCPServers: []repository.RemoteMCPServerEgress{{
 				ServerName: "vendor", Endpoint: h.vendor.URL, EndpointHost: h.vendor.Listener.Addr().String(),
 			}},
@@ -84,4 +85,21 @@ func TestRemoteCallCoveredByTheRunDecisionDispatchesExactlyOnce(t *testing.T) {
 	if got := h.reached.Load(); got != 1 {
 		t.Fatalf("vendor requests = %d, want one", got)
 	}
+}
+
+// vaultlessMemoryFingerprint is the memory binding for a repository with no
+// vault: both pinned tiers withheld and no memory tool selected. The enqueue
+// re-derives this inside its own transaction, so a decision claiming anything
+// else is refused.
+func vaultlessMemoryFingerprint(selectedTools ...string) string {
+	snapshot := repository.MemoryEgressSnapshot{
+		Enabled: true,
+		Persona: repository.MemoryPinnedDocument{RelPath: "persona.md", Reason: "vault_missing"},
+		Profile: repository.MemoryPinnedDocument{RelPath: "profile.md", Reason: "vault_missing"},
+	}
+	fingerprint, err := backendegress.MemorySnapshotFingerprint(snapshot.Preimage(selectedTools))
+	if err != nil {
+		panic(err)
+	}
+	return fingerprint
 }

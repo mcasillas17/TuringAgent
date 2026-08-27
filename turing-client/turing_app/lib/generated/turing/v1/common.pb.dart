@@ -779,6 +779,8 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     $core.Iterable<$core.String>? selectedTools,
     $core.Iterable<IntegrationEgressDestination>? integrationEndpoints,
     $core.Iterable<SkillEgressDisclosure>? skills,
+    $core.Iterable<MemoryEgressDisclosure>? memoryNotes,
+    $core.bool? memoryProfileMayBeSent,
   }) {
     final result = create();
     if (challenge != null) result.challenge = challenge;
@@ -795,6 +797,9 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     if (integrationEndpoints != null)
       result.integrationEndpoints.addAll(integrationEndpoints);
     if (skills != null) result.skills.addAll(skills);
+    if (memoryNotes != null) result.memoryNotes.addAll(memoryNotes);
+    if (memoryProfileMayBeSent != null)
+      result.memoryProfileMayBeSent = memoryProfileMayBeSent;
     return result;
   }
 
@@ -837,6 +842,10 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
     ..pc<SkillEgressDisclosure>(
         12, _omitFieldNames ? '' : 'skills', $pb.PbFieldType.PM,
         subBuilder: SkillEgressDisclosure.create)
+    ..pc<MemoryEgressDisclosure>(
+        13, _omitFieldNames ? '' : 'memoryNotes', $pb.PbFieldType.PM,
+        subBuilder: MemoryEgressDisclosure.create)
+    ..aOB(14, _omitFieldNames ? '' : 'memoryProfileMayBeSent')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -942,6 +951,131 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(12)
   $pb.PbList<SkillEgressDisclosure> get skills => $_getList(11);
+
+  /// Memory that would leave the machine, named note by note. The disclosure is
+  /// what the user reads before consenting, so it carries titles and vault
+  /// paths and never the signed snapshot fingerprint the run-owned decision
+  /// uses internally.
+  @$pb.TagNumber(13)
+  $pb.PbList<MemoryEgressDisclosure> get memoryNotes => $_getList(12);
+
+  @$pb.TagNumber(14)
+  $core.bool get memoryProfileMayBeSent => $_getBF(13);
+  @$pb.TagNumber(14)
+  set memoryProfileMayBeSent($core.bool value) => $_setBool(13, value);
+  @$pb.TagNumber(14)
+  $core.bool hasMemoryProfileMayBeSent() => $_has(13);
+  @$pb.TagNumber(14)
+  void clearMemoryProfileMayBeSent() => $_clearField(14);
+}
+
+class MemoryEgressDisclosure extends $pb.GeneratedMessage {
+  factory MemoryEgressDisclosure({
+    $core.String? noteId,
+    $core.String? title,
+    $core.String? vaultPath,
+    MemoryTier? tier,
+    $core.bool? bodyMayBeSent,
+  }) {
+    final result = create();
+    if (noteId != null) result.noteId = noteId;
+    if (title != null) result.title = title;
+    if (vaultPath != null) result.vaultPath = vaultPath;
+    if (tier != null) result.tier = tier;
+    if (bodyMayBeSent != null) result.bodyMayBeSent = bodyMayBeSent;
+    return result;
+  }
+
+  MemoryEgressDisclosure._();
+
+  factory MemoryEgressDisclosure.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory MemoryEgressDisclosure.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'MemoryEgressDisclosure',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'noteId')
+    ..aOS(2, _omitFieldNames ? '' : 'title')
+    ..aOS(3, _omitFieldNames ? '' : 'vaultPath')
+    ..e<MemoryTier>(4, _omitFieldNames ? '' : 'tier', $pb.PbFieldType.OE,
+        defaultOrMaker: MemoryTier.MEMORY_TIER_UNSPECIFIED,
+        valueOf: MemoryTier.valueOf,
+        enumValues: MemoryTier.values)
+    ..aOB(5, _omitFieldNames ? '' : 'bodyMayBeSent')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  MemoryEgressDisclosure clone() =>
+      MemoryEgressDisclosure()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  MemoryEgressDisclosure copyWith(
+          void Function(MemoryEgressDisclosure) updates) =>
+      super.copyWith((message) => updates(message as MemoryEgressDisclosure))
+          as MemoryEgressDisclosure;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static MemoryEgressDisclosure create() => MemoryEgressDisclosure._();
+  @$core.override
+  MemoryEgressDisclosure createEmptyInstance() => create();
+  static $pb.PbList<MemoryEgressDisclosure> createRepeated() =>
+      $pb.PbList<MemoryEgressDisclosure>();
+  @$core.pragma('dart2js:noInline')
+  static MemoryEgressDisclosure getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<MemoryEgressDisclosure>(create);
+  static MemoryEgressDisclosure? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get noteId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set noteId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasNoteId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearNoteId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get title => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set title($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasTitle() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearTitle() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get vaultPath => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set vaultPath($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasVaultPath() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearVaultPath() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  MemoryTier get tier => $_getN(3);
+  @$pb.TagNumber(4)
+  set tier(MemoryTier value) => $_setField(4, value);
+  @$pb.TagNumber(4)
+  $core.bool hasTier() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearTier() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.bool get bodyMayBeSent => $_getBF(4);
+  @$pb.TagNumber(5)
+  set bodyMayBeSent($core.bool value) => $_setBool(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasBodyMayBeSent() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearBodyMayBeSent() => $_clearField(5);
 }
 
 class SkillEgressDisclosure extends $pb.GeneratedMessage {
@@ -1315,6 +1449,7 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     $core.String? requestDigest,
     $core.Iterable<RemoteMcpEgressDestination>? remoteMcpServers,
     $core.Iterable<IntegrationEgressDestination>? integrationEndpoints,
+    $core.String? memorySnapshotFingerprint,
   }) {
     final result = create();
     if (decisionId != null) result.decisionId = decisionId;
@@ -1341,6 +1476,8 @@ class RunEgressDecision extends $pb.GeneratedMessage {
       result.remoteMcpServers.addAll(remoteMcpServers);
     if (integrationEndpoints != null)
       result.integrationEndpoints.addAll(integrationEndpoints);
+    if (memorySnapshotFingerprint != null)
+      result.memorySnapshotFingerprint = memorySnapshotFingerprint;
     return result;
   }
 
@@ -1387,6 +1524,7 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     ..pc<IntegrationEgressDestination>(
         18, _omitFieldNames ? '' : 'integrationEndpoints', $pb.PbFieldType.PM,
         subBuilder: IntegrationEgressDestination.create)
+    ..aOS(19, _omitFieldNames ? '' : 'memorySnapshotFingerprint')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1550,6 +1688,17 @@ class RunEgressDecision extends $pb.GeneratedMessage {
   @$pb.TagNumber(18)
   $pb.PbList<IntegrationEgressDestination> get integrationEndpoints =>
       $_getList(17);
+
+  /// Binds the run to the exact memory snapshot the user consented to. Run-owned
+  /// and internal: it is never surfaced on a public or audit response.
+  @$pb.TagNumber(19)
+  $core.String get memorySnapshotFingerprint => $_getSZ(18);
+  @$pb.TagNumber(19)
+  set memorySnapshotFingerprint($core.String value) => $_setString(18, value);
+  @$pb.TagNumber(19)
+  $core.bool hasMemorySnapshotFingerprint() => $_has(18);
+  @$pb.TagNumber(19)
+  void clearMemorySnapshotFingerprint() => $_clearField(19);
 }
 
 class AgentDescriptor extends $pb.GeneratedMessage {

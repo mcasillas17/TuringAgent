@@ -108,6 +108,36 @@ class EgressDataCategory extends $pb.ProtobufEnum {
   const EgressDataCategory._(super.value, super.name);
 }
 
+/// The vault's shelves. A tier is the unit a user turns on or off, so the
+/// disclosure and the settings surface name the same vocabulary.
+class MemoryTier extends $pb.ProtobufEnum {
+  static const MemoryTier MEMORY_TIER_UNSPECIFIED =
+      MemoryTier._(0, _omitEnumNames ? '' : 'MEMORY_TIER_UNSPECIFIED');
+  static const MemoryTier MEMORY_TIER_PERSONA =
+      MemoryTier._(1, _omitEnumNames ? '' : 'MEMORY_TIER_PERSONA');
+  static const MemoryTier MEMORY_TIER_PROFILE =
+      MemoryTier._(2, _omitEnumNames ? '' : 'MEMORY_TIER_PROFILE');
+  static const MemoryTier MEMORY_TIER_BELIEF =
+      MemoryTier._(3, _omitEnumNames ? '' : 'MEMORY_TIER_BELIEF');
+  static const MemoryTier MEMORY_TIER_NOTE =
+      MemoryTier._(4, _omitEnumNames ? '' : 'MEMORY_TIER_NOTE');
+
+  static const $core.List<MemoryTier> values = <MemoryTier>[
+    MEMORY_TIER_UNSPECIFIED,
+    MEMORY_TIER_PERSONA,
+    MEMORY_TIER_PROFILE,
+    MEMORY_TIER_BELIEF,
+    MEMORY_TIER_NOTE,
+  ];
+
+  static final $core.List<MemoryTier?> _byValue =
+      $pb.ProtobufEnum.$_initByValueList(values, 4);
+  static MemoryTier? valueOf($core.int value) =>
+      value < 0 || value >= _byValue.length ? null : _byValue[value];
+
+  const MemoryTier._(super.value, super.name);
+}
+
 class RoutingRequirementKind extends $pb.ProtobufEnum {
   static const RoutingRequirementKind ROUTING_REQUIREMENT_KIND_UNSPECIFIED =
       RoutingRequirementKind._(

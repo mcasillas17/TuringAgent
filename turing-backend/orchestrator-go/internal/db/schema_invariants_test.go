@@ -40,7 +40,8 @@ var approvedScrubbedExceptionTables = map[string]struct{}{
 }
 
 var ftsProjectionDeleteChecks = map[string]func(context.Context, *DB) error{
-	"messages_fts": validateMessagesFTSDeleteBehavior,
+	"messages_fts":     validateMessagesFTSDeleteBehavior,
+	"memory_notes_fts": validateMemoryNotesFTSDeleteBehavior,
 }
 
 var currentSchemaTablePolicies = []schemaTablePolicy{
@@ -140,6 +141,50 @@ var currentSchemaTablePolicies = []schemaTablePolicy{
 	{table: "send_message_idempotency", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
 	{table: "run_egress_decisions", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{table: "sandbox_artifacts", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
+	// Unreviewed model claims about the user. They are conversation-derived
+	// and nothing has accepted them, so they live and die with the session
+	// that produced them.
+	{table: "memory_candidates", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
+	{
+		table: "memory_notes",
+		kind:  schemaTableIndependent,
+		// AMENDMENT to this manifest's default reading, stated rather than
+		// implied. Every other independent table here holds configuration,
+		// catalogues, or consent records; memory_notes holds content that
+		// began as conversation-derived material, which this manifest
+		// otherwise requires to cascade from its session.
+		//
+		// It is independent because a promoted note is no longer session
+		// state: promotion is an explicit user act that moves a claim out of
+		// one conversation and into a vault the user owns, edits by hand, and
+		// expects to survive housekeeping. Making notes cascade would mean
+		// deleting one old conversation silently erases memory the user
+		// deliberately kept.
+		//
+		// The privacy promise is not weakened, it is relocated. The
+		// conversation link lives in memory_evidence, which cascades from both
+		// the note and the session; deleting a session withdraws the evidence
+		// that justified the note, and a note left without evidence is
+		// withdrawable by the memory lifecycle rather than retained as
+		// unattributed content. What survives a session deletion is only what
+		// the user promoted out of it, never the transcript it came from.
+		rationale: "AMENDMENT: promoted vault notes are user-owned files whose lifecycle the user controls; their session provenance cascades separately through memory_evidence.",
+	},
+	{
+		table:         "memory_notes_fts",
+		kind:          schemaTableFTSProjection,
+		sourceTable:   "memory_notes",
+		deleteTrigger: "memory_notes_fts_ad",
+	},
+	// Provenance, not content: only an excerpt hash. Declared against sessions
+	// because that is the cascade this manifest exists to guarantee — deleting
+	// a conversation withdraws every claim it was evidence for. It cascades
+	// from memory_notes as well.
+	{table: "memory_evidence", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
+	// Files a run wrote into the user's vault. Deliberately its own table
+	// rather than a kind column on sandbox_artifacts: different root,
+	// different retention answer, different owner.
+	{table: "vault_artifacts", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
 }
 
 func TestDerivedStateSchemaPoliciesCoverCurrentSchema(t *testing.T) {
@@ -176,6 +221,53 @@ func TestDerivedStateSchemaPoliciesRequireDeletionReceiptAndSandboxArtifacts(t *
 	}
 	if artifacts.kind != schemaTableCascadeOwned || artifacts.sourceTable != "sessions" {
 		t.Fatalf("sandbox_artifacts policy = %+v, want session-owned cascade", *artifacts)
+	}
+}
+
+// memory_notes is the one independent table in this manifest that holds
+// conversation-derived content. That exception is only defensible if it is
+// written down, so the manifest is required to carry it explicitly.
+func TestDerivedStateSchemaPoliciesRecordVaultMemoryClassification(t *testing.T) {
+	byTable := make(map[string]schemaTablePolicy, len(currentSchemaTablePolicies))
+	for _, policy := range currentSchemaTablePolicies {
+		byTable[policy.table] = policy
+	}
+
+	notes, classified := byTable["memory_notes"]
+	if !classified {
+		t.Fatal("memory_notes must be classified in the derived-state manifest")
+	}
+	if notes.kind != schemaTableIndependent {
+		t.Fatalf("memory_notes policy = %q, want independent", notes.kind)
+	}
+	if !strings.Contains(notes.rationale, "AMENDMENT") {
+		t.Fatalf(
+			"memory_notes rationale = %q, want a written amendment to the default cascade reading",
+			notes.rationale,
+		)
+	}
+
+	for _, table := range []string{"memory_candidates", "memory_evidence", "vault_artifacts"} {
+		policy, ok := byTable[table]
+		if !ok {
+			t.Fatalf("%s must be classified in the derived-state manifest", table)
+		}
+		if policy.kind != schemaTableCascadeOwned || policy.sourceTable != "sessions" {
+			t.Fatalf("%s policy = %+v, want session-owned cascade", table, policy)
+		}
+	}
+
+	projection, ok := byTable["memory_notes_fts"]
+	if !ok {
+		t.Fatal("memory_notes_fts must be classified in the derived-state manifest")
+	}
+	if projection.kind != schemaTableFTSProjection ||
+		projection.sourceTable != "memory_notes" ||
+		projection.deleteTrigger != "memory_notes_fts_ad" {
+		t.Fatalf("memory_notes_fts policy = %+v, want external-content projection over memory_notes", projection)
+	}
+	if _, checked := ftsProjectionDeleteChecks["memory_notes_fts"]; !checked {
+		t.Fatal("memory_notes_fts needs a behavioral delete check, not just a trigger name")
 	}
 }
 
@@ -1323,6 +1415,57 @@ func validateMessagesFTSDeleteBehavior(ctx context.Context, database *DB) error 
 	}
 	if indexed != 0 {
 		return fmt.Errorf("FTS projection %q retained its probe after source deletion", "messages_fts")
+	}
+	return nil
+}
+
+// Hand-written rather than generated from the messages probe: the point of a
+// behavioral check is that it exercises this projection's own triggers against
+// this projection's own source table, transactionally, and is rolled back so
+// the probe never becomes durable memory content.
+func validateMemoryNotesFTSDeleteBehavior(ctx context.Context, database *DB) error {
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin memory_notes_fts delete probe: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const (
+		noteID = "__schema_invariant_memory_fts_note__"
+		token  = "schemainvariantmemoryftsprobe"
+	)
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO memory_notes (id, path, content, content_hash, status, created_at, updated_at)
+		VALUES (?, ?, ?, 'schema-invariant-probe', 'managed', datetime('now'), datetime('now'))`,
+		noteID,
+		"__schema_invariant__/probe.md",
+		token,
+	); err != nil {
+		return fmt.Errorf("insert memory_notes_fts probe note: %w", err)
+	}
+	var indexed int
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM memory_notes_fts WHERE memory_notes_fts MATCH ?`,
+		token,
+	).Scan(&indexed); err != nil {
+		return fmt.Errorf("query inserted memory_notes_fts probe: %w", err)
+	}
+	if indexed != 1 {
+		return fmt.Errorf("FTS projection %q did not index its probe", "memory_notes_fts")
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM memory_notes WHERE id = ?`, noteID); err != nil {
+		return fmt.Errorf("delete memory_notes_fts probe source: %w", err)
+	}
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT COUNT(*) FROM memory_notes_fts WHERE memory_notes_fts MATCH ?`,
+		token,
+	).Scan(&indexed); err != nil {
+		return fmt.Errorf("query deleted memory_notes_fts probe: %w", err)
+	}
+	if indexed != 0 {
+		return fmt.Errorf("FTS projection %q retained its probe after source deletion", "memory_notes_fts")
 	}
 	return nil
 }

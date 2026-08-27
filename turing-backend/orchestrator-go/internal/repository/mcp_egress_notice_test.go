@@ -31,9 +31,10 @@ func TestLocalRemoteMCPConsentNoticeAndAuditNameDestination(t *testing.T) {
 				"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS",
 				"EGRESS_DATA_CATEGORY_TOOL_RESULTS",
 			},
-			SelectedTools:            []string{"vendor/vendor.lookup"},
-			SkillSnapshotFingerprint: skillFingerprint,
-			ConsentGrantedAt:         "2026-08-21T00:00:00Z",
+			SelectedTools:             []string{"vendor/vendor.lookup"},
+			SkillSnapshotFingerprint:  skillFingerprint,
+			MemorySnapshotFingerprint: vaultlessMemoryFingerprint("vendor/vendor.lookup"),
+			ConsentGrantedAt:          "2026-08-21T00:00:00Z",
 			RemoteMCPServers: []RemoteMCPServerEgress{{
 				ServerName: "vendor", Endpoint: "https://vendor.example/mcp", EndpointHost: "vendor.example",
 			}},
@@ -81,7 +82,8 @@ func TestLocalIntegrationConsentNoticeAndAuditNameDestination(t *testing.T) {
 			RequestDigest: "digest_integration_notice", Provider: "ollama", Model: "local",
 			DataCategories: []string{"EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS", "EGRESS_DATA_CATEGORY_TOOL_RESULTS"},
 			SelectedTools:  []string{"integrations/github.list_issues"}, SkillSnapshotFingerprint: skillFingerprint,
-			ConsentGrantedAt: "2026-08-21T00:00:00Z",
+			MemorySnapshotFingerprint: vaultlessMemoryFingerprint("integrations/github.list_issues"),
+			ConsentGrantedAt:          "2026-08-21T00:00:00Z",
 			IntegrationEndpoints: []IntegrationEndpointEgress{{
 				Endpoint: GitHubIntegrationEndpoint, EndpointHost: GitHubIntegrationEndpointHost,
 				ConnectionID: "conn_notice", DisplayName: "GitHub", Tools: []string{"github.list_issues"},

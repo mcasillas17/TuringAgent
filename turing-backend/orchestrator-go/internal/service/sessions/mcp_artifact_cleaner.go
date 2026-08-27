@@ -8,23 +8,61 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
 type mcpArtifactCleaner struct {
+	manifest              sandboxArtifactManifest
 	endpoint              string
 	approvalConsumerToken string
 	client                *http.Client
 }
 
-func NewMCPArtifactCleaner(endpoint string, approvalConsumerToken string, client *http.Client) sessionArtifactCleaner {
+// NewMCPArtifactCleaner withdraws the scratch files a session's runs left in
+// the tool sandbox, and forgets exactly the sandbox manifest rows that describe
+// them.
+func NewMCPArtifactCleaner(
+	manifest sandboxArtifactManifest,
+	endpoint string,
+	approvalConsumerToken string,
+	client *http.Client,
+) SessionArtifactCleaner {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	return &mcpArtifactCleaner{
+		manifest:              manifest,
 		endpoint:              endpoint,
 		approvalConsumerToken: approvalConsumerToken,
 		client:                client,
 	}
+}
+
+func (c *mcpArtifactCleaner) ArtifactScope() string { return ArtifactScopeSandbox }
+
+// ForgetCleanedArtifacts drops the rows for the files the namespace removal
+// just took with it, and only those. A legacy unowned artifact was never
+// deleted, so its row stays: it is the record that a file the sandbox does not
+// own is still on disk.
+func (c *mcpArtifactCleaner) ForgetCleanedArtifacts(ctx context.Context, sessionID string) error {
+	return forgetSandboxArtifacts(ctx, c.manifest, sessionID)
+}
+
+func forgetSandboxArtifacts(ctx context.Context, manifest sandboxArtifactManifest, sessionID string) error {
+	artifacts, err := manifest.SessionSandboxArtifacts(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	for _, artifact := range artifacts {
+		if artifact.Policy != repository.SandboxArtifactPolicyDeleteOnSessionDelete {
+			continue
+		}
+		if err := manifest.DeleteSandboxArtifact(ctx, artifact.ArtifactID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *mcpArtifactCleaner) CleanupSessionArtifacts(ctx context.Context, sessionID string, lifecycleVersion int64) error {

@@ -9,7 +9,19 @@
 
 TuringAgent already has the difficult foundation of a trustworthy local agent: durable SQLite state, replayable events, leased and fenced jobs, bounded model and tool execution, sandboxed file access, and argument-bound single-use approvals. Those parts should be preserved.
 
-Turing is not yet a personal agent that learns about its user. Its current memory is attributed keyword recall over raw messages. It has no curated profile or fact store, no memory lifecycle, no contradiction handling, no user correction workflow, no memory-specific evaluation, and no complete erasure contract for future derived data.
+Turing is not yet a personal agent that learns about its user *on its own*. Its
+episodic memory is attributed keyword recall over raw messages. Since this audit
+was written, MEM-005/006/007 have shipped in reshaped form as the vault-backed
+brain of Phase 1 — a user-owned Markdown vault (`persona.md`, `profile.md`,
+`inbox/`, `beliefs/`) with a SQLite substrate for identity, evidence, search and
+erasure, authenticated memory RPCs, and a client for writing the two pinned
+documents and reviewing proposals. What remains missing is the automatic half
+and the depth: no automatic extraction from conversation (MEM-009), no belief
+revision chains or supersession (MEM-010), no memory-specific evaluation
+harness, no semantic retrieval (MEM-013), no per-session or per-turn memory
+controls (MEM-008), and no sensitivity filtering on what a consented remote run
+may carry. See the substrate note under Phase 3 for exactly what those three
+rungs became.
 
 The recommended path is:
 
@@ -481,7 +493,7 @@ correlation. Terminal unusable links retain only the neutral fallback.
 
 **Status:** Implemented. See [Audit read API](audit-read-api.md) for the full contract; this does not change the status of any dependent task below.
 
-**Outcome:** Users can inspect the actions recorded today — approvals, tool calls, integrations, routing, deletions, and auth failures — through an authenticated, redacted public read API. This is not every mutation in the system, only what the listed writers already record; a future memory or retry writer can use the same recording API but none is implemented here. Retries remain visible only through the existing `tool.call.*` `reason`/`error_code` fields; this task does not cover memory decisions, since curated memory does not exist yet.
+**Outcome:** Users can inspect the actions recorded today — approvals, tool calls, integrations, routing, deletions, and auth failures — through an authenticated, redacted public read API. This is not every mutation in the system, only what the listed writers already record; a future memory or retry writer can use the same recording API but none is implemented here. Retries remain visible only through the existing `tool.call.*` `reason`/`error_code` fields; this task does not cover memory decisions, which curated memory has since started recording on its own audit path (`memory.*` actions for candidate lifecycle, promotion, profile application, and note indexing/withdrawal) without a viewer in this API.
 
 **Scope:** Shipped `AuditService.ListAuditEntries`: correlation/action/time filters (time window start-inclusive, end-exclusive), ascending/descending order (unspecified defaults to descending), keyset-paginated by `(created_at, rowid)` with an opaque HMAC-authenticated cursor (default page size 50, max 100); distinguishes absent/present/scrubbed payload states; the required string metadata fields (`id`, `actor_type`, `action`) are always returned and use `[redacted]` when unsafe, `created_at` is validated separately and an invalid stored timestamp makes the RPC fail with generic `Internal`, and the payload state is an enum; the optional metadata fields (`correlation_id`, `actor_id`, `target`) are returned only when stored and structurally safe, and otherwise omitted entirely — with two action-scoped omissions on top of that, because structural safety cannot answer whether a value is safe to disclose: `target` is never returned for any `approval.*` action (it is the approval id, which is also the approval JWT's `jti`), and `actor_id` is never returned for `auth.failed` (it is the caller's peer address); every action-specific payload field defaults to redacted unless a reviewed, closed, per-action allowlist explicitly names it — including for actions not yet on that allowlist. The allowlist names one deliberately human field: the approval comment on `approval.approved` and the denial reason on `approval.denied` that TUR-002 records, disclosed as their own typed fields (never as the tool-policy `reason`), bounded to 512 bytes by the writer, preserving present-empty against absent, and allowing newline/tab but no other control character. That is the only place this API returns text a person wrote rather than a machine label, so it is documented as free text the service cannot content-inspect.
 
@@ -620,6 +632,42 @@ failures, one-call legacy fallback, and verbatim plain-text snippet rendering.
 **Dependencies:** MEM-003, MEM-004.
 
 ### Phase 3: Add user-controlled long-term memory
+
+**Substrate note (2026-08-23, Phase 1 of the vault-backed brain).** MEM-005,
+MEM-006 and MEM-007 shipped **reshaped**, not as written below. The substrate is
+a user-owned Obsidian-compatible vault of Markdown files at `MEMORY_ROOT`
+(`turing-backend/memory/` on the host, `/memory` in the orchestrator) with
+SQLite underneath for what files cannot hold:
+
+- **MEM-005 became files plus a manifest-classified substrate.** Instead of
+  items/revisions/kinds tables, the vault holds the content and SQLite holds
+  identity, provenance and search: `memory_candidates` and `memory_evidence`
+  (both `cascade_owned` from `sessions`), `vault_artifacts` (`cascade_owned`,
+  reserved before a candidate file is written), `memory_notes` (`independent`,
+  under the promotion-is-authorship rationale) and its external-content
+  `memory_notes_fts` projection. Supersession links and immutable revisions are
+  **not** part of it — see MEM-010.
+- **MEM-006 became a memory service with three tools and a toggle**, plus
+  promotion, rejection and profile-apply RPCs. Server-owned provenance and audit
+  events hold; lifecycle validation applies to candidates, which are the rows
+  the orchestrator owns end to end.
+- **MEM-007 became the vault itself.** `persona.md` and `profile.md` are written
+  by the user in the client or in their own editor and pinned into every run;
+  `memory.remember` proposes into `inbox/` and nowhere else; promotion is a user
+  action by RPC or by moving the file, and both converge in reconcile.
+
+What did **not** ship, and is still owed by the rungs below: automatic
+extraction from conversation (MEM-009 — a candidate exists today only because a
+run explicitly called `memory.remember`), belief revision chains, supersession
+and lifecycle-validated vault edits (MEM-010, deferred by name in
+`memory-governance.md`'s Amendment 1, Relaxation 2), the recall evaluation
+harness (MEM-003) extended to curated memory, semantic retrieval (MEM-013),
+episode summaries, per-session and per-turn memory controls (MEM-008), and
+sensitivity filtering of pinned tiers before remote egress. Two governance
+passages moved with the implementation: promotion is authorship, so promoted
+content survives the deletion of the session that proposed it while every
+machine-owned annotation cascades away; and vault file edits are audited rather
+than versioned.
 
 #### MEM-005 — Add the versioned memory schema
 

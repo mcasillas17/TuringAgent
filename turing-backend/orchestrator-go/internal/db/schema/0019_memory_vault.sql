@@ -1,0 +1,310 @@
+-- TUR: vault-backed memory foundations (Turing's Brain, Phase 1).
+--
+-- Memory is a vault the user can open: notes are files, and the database holds
+-- only the index, the lifecycle, and the provenance needed to withdraw content
+-- when a session is deleted. Nothing here implements repository or service
+-- behavior; this migration only establishes the shape those layers commit to.
+
+-- The tools table's pseudo-server whitelist is a full replacement, not an
+-- append: SQLite cannot amend a trigger's WHEN clause in place, so both
+-- triggers are dropped and recreated verbatim from
+-- 0017_integrations_consumer.sql with 'memory' added. Losing 'skills' or
+-- 'integrations' here would orphan every already-registered pseudo-server tool
+-- on the next write, so both carve-outs are restated explicitly rather than
+-- assumed. 'memory' joins them because memory tools are served by the
+-- orchestrator itself and are never backed by an mcp_servers row.
+DROP TRIGGER tools_require_registered_server_insert;
+DROP TRIGGER tools_require_registered_server_update;
+
+CREATE TRIGGER tools_require_registered_server_insert
+BEFORE INSERT ON tools
+WHEN (NEW.mcp_server_id IS NULL AND NEW.server_name NOT IN ('skills', 'integrations', 'memory')) OR
+  (NEW.mcp_server_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM mcp_servers
+  WHERE id = NEW.mcp_server_id AND name = NEW.server_name
+))
+BEGIN
+  SELECT RAISE(ABORT, 'tool MCP server is not registered');
+END;
+
+CREATE TRIGGER tools_require_registered_server_update
+BEFORE UPDATE OF mcp_server_id, server_name ON tools
+WHEN (NEW.mcp_server_id IS NULL AND NEW.server_name NOT IN ('skills', 'integrations', 'memory')) OR
+  (NEW.mcp_server_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM mcp_servers
+  WHERE id = NEW.mcp_server_id AND name = NEW.server_name
+))
+BEGIN
+  SELECT RAISE(ABORT, 'tool MCP server is not registered');
+END;
+
+-- A vault note. The file on disk is authoritative; this row is the index that
+-- makes it findable and the record of whether Turing is allowed to rewrite it.
+--
+-- Deliberately keeps its implicit rowid (no WITHOUT ROWID): memory_notes_fts
+-- below is an external-content FTS5 index keyed by content_rowid='rowid', and
+-- a WITHOUT ROWID table has no stable rowid for it to key on at all.
+--
+-- status is the managed/unmanaged distinction the client renders: 'managed'
+-- notes were written by Turing and may be rewritten by it, 'unmanaged' notes
+-- were hand-edited in the vault and are read-only to Turing, and 'withdrawn'
+-- marks a note whose supporting evidence is gone.
+CREATE TABLE memory_notes (
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL UNIQUE,
+  content TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('managed', 'unmanaged', 'withdrawn')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE memory_notes_fts USING fts5(
+  content,
+  content='memory_notes',
+  content_rowid='rowid'
+);
+
+CREATE TRIGGER memory_notes_fts_ai AFTER INSERT ON memory_notes BEGIN
+  INSERT INTO memory_notes_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
+CREATE TRIGGER memory_notes_fts_ad AFTER DELETE ON memory_notes BEGIN
+  INSERT INTO memory_notes_fts(memory_notes_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+END;
+
+-- Without this trigger an edited note keeps matching its previous text forever:
+-- external-content FTS5 stores its own copy of the tokens, so an UPDATE that is
+-- not mirrored here leaves search serving text the vault no longer contains.
+CREATE TRIGGER memory_notes_fts_au AFTER UPDATE ON memory_notes BEGIN
+  INSERT INTO memory_notes_fts(memory_notes_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+  INSERT INTO memory_notes_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
+-- A proposal waiting in the vault inbox, owned by the session that produced it.
+--
+-- Candidates are unreviewed model output about the user, so they are session
+-- state and nothing else: deleting the session deletes them, and they are
+-- deliberately NOT projected into any FTS index. A candidate the user never
+-- accepted must never turn up in a search over their memory.
+CREATE TABLE memory_candidates (
+  id TEXT PRIMARY KEY,
+  source_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('belief', 'profile_edit')),
+  inbox_path TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  -- Bounded on purpose: a candidate is a claim, not a transcript. The bound is
+  -- UTF-8 bytes, matching memoryfiles.MaxCandidateBodyBytes exactly, so the row
+  -- refuses precisely what the file layer refuses. length() alone counts
+  -- characters, which would let a body three times the vault's byte limit
+  -- through whenever the user does not write in ASCII.
+  body TEXT NOT NULL CHECK (
+    length(CAST(body AS BLOB)) > 0 AND length(CAST(body AS BLOB)) <= 16384
+  ),
+  evidence_refs_json TEXT NOT NULL
+    CHECK (json_valid(evidence_refs_json) AND json_type(evidence_refs_json) = 'array'),
+  state TEXT NOT NULL CHECK (state IN ('pending', 'profile_applying', 'promoted', 'rejected', 'withdrawn')),
+  -- Set only once the candidate leaves 'pending'; promoted_note_id may be set
+  -- only by a promotion, and is severed rather than dangling if the note it
+  -- produced is later deleted from the vault.
+  promoted_note_id TEXT REFERENCES memory_notes(id) ON DELETE SET NULL,
+  decided_at TEXT,
+  -- The apply claim: the two hashes a 'profile_applying' row is made of.
+  --
+  -- 'profile_applying' is taken *before* profile.md is written, so it is the
+  -- one fact that is true on both sides of a crash mid-apply. apply_base_hash
+  -- is the document the write was replacing and apply_result_hash is the whole
+  -- document it was going to produce, so a pass that finds the claim afterwards
+  -- can read profile.md and say which side of the write the process died on:
+  -- the result means it landed and the bookkeeping can be finished, the base
+  -- means it provably did not and the proposal goes back to the user, and
+  -- anything else means someone has been in the file since and the claim is
+  -- left standing rather than guessed at. Hashes only — the resulting document
+  -- lives in the request and in the user's file, and is never copied here.
+  --
+  -- apply_base_hash may be the empty string: that is the token the vault's own
+  -- writer reads as "no profile exists yet". apply_result_hash may not, because
+  -- an apply always writes something.
+  apply_base_hash TEXT,
+  apply_result_hash TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (source_session_id, inbox_path),
+  CHECK (
+    (state = 'pending' AND decided_at IS NULL) OR
+    (state <> 'pending' AND decided_at IS NOT NULL)
+  ),
+  CHECK (state = 'promoted' OR promoted_note_id IS NULL),
+  -- There is deliberately no CHECK tying 'profile_applying' to kind =
+  -- 'profile_edit'. This column records what Turing *proposed*; which decision
+  -- applies is read from the candidate file, because the vault is a vault
+  -- precisely so the user can open a proposal and rewrite it — and a proposal
+  -- they rewrote into a profile edit is one they may apply, whatever the row
+  -- remembers. A CHECK here would enforce the wrong sentence ("Turing proposed
+  -- a profile edit") in place of the one that matters ("the document the user
+  -- accepted was a profile edit"), and would refuse exactly that legitimate
+  -- apply. The real gate is a file read under the per-candidate lock, and it is
+  -- the only writer of this state.
+  CHECK (
+    (state = 'profile_applying' AND
+      apply_base_hash IS NOT NULL AND
+      apply_result_hash IS NOT NULL AND apply_result_hash <> '') OR
+    (state <> 'profile_applying' AND
+      apply_base_hash IS NULL AND apply_result_hash IS NULL)
+  )
+);
+
+CREATE INDEX idx_memory_candidates_state
+  ON memory_candidates (state, created_at);
+-- No separate index on source_session_id: UNIQUE (source_session_id, inbox_path)
+-- already leaves a covering index with that column as its prefix, which is what
+-- the cascade and the per-session listing use.
+
+-- What a note is grounded in. Both owners cascade: deleting the note drops its
+-- evidence, and deleting the session the evidence came from withdraws it, so a
+-- deleted conversation cannot keep justifying a retained claim. Only a hash of
+-- the supporting excerpt is kept — never the excerpt itself.
+CREATE TABLE memory_evidence (
+  id TEXT PRIMARY KEY,
+  note_id TEXT NOT NULL REFERENCES memory_notes(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  excerpt_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_memory_evidence_note ON memory_evidence (note_id);
+CREATE INDEX idx_memory_evidence_session ON memory_evidence (session_id);
+
+-- Files a run wrote into the vault, tracked per session so they can be removed
+-- with it.
+--
+-- Its own table rather than a kind column on sandbox_artifacts: a sandbox
+-- artifact is scratch output owned by a run inside the tool sandbox, while a
+-- vault artifact is user-visible content inside the vault the user opens, with
+-- a different root, a different retention answer, and no run ownership at all.
+-- Sharing one table would mean one lifecycle for two different promises.
+CREATE TABLE vault_artifacts (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  vault_path TEXT NOT NULL,
+  -- Globally unique, not unique per session. One file in the user's vault is
+  -- one tracked artifact, whichever session wrote it: scoping this to the
+  -- session would let a second session reserve a path the first already owns,
+  -- and deleting the second would then delete a file the first is still
+  -- responsible for — one conversation erasing another's note through a
+  -- manifest that looked consistent to both.
+  physical_path TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL CHECK (state IN ('writing', 'ready', 'delete_failed')),
+  created_at TEXT NOT NULL,
+  finalized_at TEXT,
+  -- The bytes this row is entitled to remove, as a hash of the whole file
+  -- exactly as it was written.
+  --
+  -- A path is not an owner. The user can move a candidate out of the inbox and
+  -- save something of their own under the same name, and a cleaner following a
+  -- row that named only a path would unlink whatever it found there — deleting
+  -- a file Turing never wrote, on the strength of a coincidence of names.
+  --
+  -- Nullable, because the reservation is deliberately taken before the write:
+  -- there is nothing on disk to hash yet, and a hash written then would be a
+  -- guess about bytes that do not exist. The two CHECKs are what keep that
+  -- window from widening into a licence.
+  expected_content_hash TEXT,
+  -- A reservation names no bytes. It exists precisely because the write has not
+  -- happened, so anything it claimed about file contents would be unverifiable
+  -- by construction.
+  CHECK (state <> 'writing' OR expected_content_hash IS NULL),
+  -- A finalized row says the file is on disk, so it has to say which file.
+  -- Finalization is the one moment the bytes are known, and a 'ready' row
+  -- without a hash is a row claiming ownership it can never prove.
+  --
+  -- 'delete_failed' is deliberately outside both rules. A cleanup pass marks
+  -- whatever it could not remove, including a reservation whose write never
+  -- landed and which will never have a hash; refusing that row here would abort
+  -- the whole withdrawal transaction and strand every sibling row with it.
+  CHECK (state <> 'ready' OR expected_content_hash IS NOT NULL)
+);
+
+CREATE INDEX idx_vault_artifacts_session_state
+  ON vault_artifacts (session_id, state);
+
+-- run_egress_decisions gains memory_snapshot_fingerprint. This follows the
+-- same rename-copy-drop rebuild 0014/0016/0017 used for this table, under a
+-- fresh temporary name so a re-run of an older migration can never collide
+-- with it, rather than a bare ALTER TABLE ADD COLUMN: the table's provider
+-- and agent-identity CHECKs and its cascades and indexes must all be
+-- restated explicitly as part of binding in the new column, so the change is
+-- reviewable as one complete, self-consistent table definition instead of a
+-- constraint set implied by diffing an ADD COLUMN against migrations several
+-- steps back. Every column, constraint, cascade and index is restated
+-- verbatim; only the new column is added, and existing rows get '' because a
+-- decision frozen before memory existed disclosed no memory snapshot and
+-- must not be retroactively credited with one.
+ALTER TABLE run_egress_decisions RENAME TO run_egress_decisions_before_memory_vault;
+
+CREATE TABLE run_egress_decisions (
+  decision_id TEXT PRIMARY KEY,
+  decision_version INTEGER NOT NULL CHECK (decision_version > 0),
+  run_id TEXT NOT NULL UNIQUE REFERENCES agent_runs(id) ON DELETE CASCADE,
+  challenge_nonce TEXT NOT NULL UNIQUE,
+  challenge_fingerprint TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('ollama', 'openai_compatible')),
+  model_name TEXT NOT NULL,
+  external_agent_id TEXT,
+  external_credential_ref_hash TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  endpoint_host TEXT NOT NULL,
+  data_categories_json TEXT NOT NULL,
+  selected_tools_json TEXT NOT NULL,
+  skill_snapshot_fingerprint TEXT NOT NULL,
+  -- Defaulted, not nullable: a decision that pins no memory records the empty
+  -- string. NULL would make "no memory" indistinguishable from "not recorded",
+  -- and the fail-closed reader must be able to tell those apart.
+  memory_snapshot_fingerprint TEXT NOT NULL DEFAULT '',
+  recall_applicable INTEGER NOT NULL CHECK (recall_applicable IN (0, 1)),
+  memory_profile_applicable INTEGER NOT NULL CHECK (memory_profile_applicable IN (0, 1)),
+  consent_granted_at TEXT NOT NULL,
+  remote_mcp_servers_json TEXT NOT NULL
+    CHECK (json_valid(remote_mcp_servers_json) AND json_type(remote_mcp_servers_json) = 'array'),
+  integration_endpoints_json TEXT NOT NULL
+    CHECK (json_valid(integration_endpoints_json) AND json_type(integration_endpoints_json) = 'array'),
+  CHECK (
+    (
+      provider = 'openai_compatible' AND
+      endpoint <> '' AND endpoint_host <> ''
+    ) OR (
+      provider = 'ollama' AND
+      endpoint = '' AND endpoint_host = '' AND
+      external_agent_id IS NULL AND external_credential_ref_hash = '' AND
+      (json_array_length(remote_mcp_servers_json) > 0 OR
+       json_array_length(integration_endpoints_json) > 0)
+    )
+  ),
+  CHECK (
+    (external_agent_id IS NULL AND external_credential_ref_hash = '') OR
+    (external_agent_id IS NOT NULL AND external_credential_ref_hash <> '')
+  )
+);
+
+INSERT INTO run_egress_decisions (
+  decision_id, decision_version, run_id, challenge_nonce,
+  challenge_fingerprint, request_digest, provider, model_name,
+  external_agent_id, external_credential_ref_hash, endpoint, endpoint_host,
+  data_categories_json, selected_tools_json, skill_snapshot_fingerprint,
+  memory_snapshot_fingerprint, recall_applicable, memory_profile_applicable,
+  consent_granted_at, remote_mcp_servers_json, integration_endpoints_json
+)
+SELECT
+  decision_id, decision_version, run_id, challenge_nonce,
+  challenge_fingerprint, request_digest, provider, model_name,
+  external_agent_id, external_credential_ref_hash, endpoint, endpoint_host,
+  data_categories_json, selected_tools_json, skill_snapshot_fingerprint,
+  '', recall_applicable, memory_profile_applicable,
+  consent_granted_at, remote_mcp_servers_json, integration_endpoints_json
+FROM run_egress_decisions_before_memory_vault;
+
+DROP TABLE run_egress_decisions_before_memory_vault;
+
+CREATE INDEX idx_run_egress_decisions_provider_created
+  ON run_egress_decisions(provider, consent_granted_at);
