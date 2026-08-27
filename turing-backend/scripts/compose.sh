@@ -153,16 +153,26 @@ env_literal_value() {
       raw="${raw%\"}"
       ;;
     *)
-      # A bare value ends at an inline comment and is trimmed of the space
-      # around it, which is how Compose reads one. Keeping the rest of the line
-      # would validate a folder nobody has and then hand it to the stack as the
-      # one to open.
-      raw="${raw%%[[:space:]]\#*}"
-      raw="${raw#"${raw%%[![:space:]]*}"}"
-      raw="${raw%"${raw##*[![:space:]]}"}"
+      raw="$(bare_env_value "$raw")"
       ;;
   esac
   printf '%s\n' "$raw"
+}
+
+# bare_env_value trims an unquoted value the way Compose does: it ends at an
+# inline comment — a `#` with whitespace in front of it, so a `#` inside a
+# folder name is kept — and loses the space around it.
+#
+# Both readers below go through this. Keeping the rest of the line would
+# validate a folder nobody has and hand it to the stack as the one to open;
+# reading it while looking for interpolation would refuse a launch over a
+# dollar sign somebody wrote in a comment.
+bare_env_value() {
+  local raw="$1"
+  raw="${raw%%[[:space:]]\#*}"
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  raw="${raw%"${raw##*[![:space:]]}"}"
+  printf '%s' "$raw"
 }
 
 # env_value_interpolates answers whether Compose will substitute something into
@@ -180,6 +190,9 @@ env_value_interpolates() {
   raw="$(sed -n "s/^${name}=//p" .env | tail -n 1)"
   case "$raw" in
     "'"*"'") return 1 ;;
+  esac
+  # What Compose would substitute into is the value, not the comment beside it.
+  case "$(bare_env_value "$raw")" in
     *'$'*) return 0 ;;
   esac
   return 1

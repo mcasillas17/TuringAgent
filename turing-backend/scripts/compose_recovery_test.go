@@ -317,8 +317,10 @@ func TestComposeLaunchReadsABareDisplayRootTheWayComposeDoes(t *testing.T) {
 	vault := filepath.Join(root, "memory")
 	result := executeComposeWithSetupIn(t, root, true, "501", "20", "501", "20",
 		func(t *testing.T, root string) {
+			// The comment carries a dollar sign, which is a comment and not an
+			// interpolation: Compose stops reading the value at the `#`.
 			writeComposeEnv(t, root,
-				"TURING_CLIENT_API_KEY=client\nMEMORY_DISPLAY_ROOT=  "+vault+"   # the host vault\n")
+				"TURING_CLIENT_API_KEY=client\nMEMORY_DISPLAY_ROOT=  "+vault+"   # the host vault, not $HOME\n")
 		}, nil, "up")
 	if result.err != nil {
 		t.Fatalf("compose.sh refused a value Compose accepts: %v\n%s", result.err, result.output)
