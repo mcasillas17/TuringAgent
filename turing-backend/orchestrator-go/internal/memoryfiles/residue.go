@@ -41,6 +41,36 @@ const maxInboxResidueEntries = MaxVaultIndexedFiles
 // removals are about, decided under their own locks, with their own rules about
 // what may be deleted and what must be put back.
 func (v *Vault) RemoveInboxResidue(ctx context.Context, expectedHashes []string) (map[string]error, error) {
+	return v.walkInboxResidue(ctx, expectedHashes, true)
+}
+
+// InboxResidueHolds answers whether any reserved entry in the inbox holds
+// exactly these bytes, and removes nothing.
+//
+// It is the same question the sweep answers, asked by something that has no
+// standing to act on it. The reconcile pass releases a manifest row whose path
+// the inbox no longer holds, and the row's own state is not always enough to
+// know better: a process that died between the removal that left a copy and the
+// record of it leaves a row that looks ordinary. Asking the vault is the only
+// thing that is true regardless of what got written down.
+func (v *Vault) InboxResidueHolds(ctx context.Context, contentHash string) (bool, error) {
+	failures, err := v.walkInboxResidue(ctx, []string{contentHash}, false)
+	if err != nil {
+		return false, err
+	}
+	_, held := failures[contentHash]
+	return held, nil
+}
+
+// walkInboxResidue is both of those: it visits the reserved entries once and
+// either removes what it can name or reports it. remove says which, and the map
+// it answers with means "could not be removed" in the first case and "is there"
+// in the second.
+func (v *Vault) walkInboxResidue(
+	ctx context.Context,
+	expectedHashes []string,
+	remove bool,
+) (map[string]error, error) {
 	wanted := make(map[string]struct{}, len(expectedHashes))
 	for _, hash := range expectedHashes {
 		if hash != "" {
@@ -59,7 +89,7 @@ func (v *Vault) RemoveInboxResidue(ctx context.Context, expectedHashes []string)
 			// No inbox, so nothing is under a reserved name in it — once that
 			// absence is one a crash cannot take back. A vault that is simply
 			// not mounted is refused here rather than answered as an empty one.
-			return nil, v.confirmMissingParent(InboxDirName)
+			return nil, v.confirmMissingParent(ctx, InboxDirName)
 		}
 		return nil, err
 	}
@@ -103,7 +133,7 @@ func (v *Vault) RemoveInboxResidue(ctx context.Context, expectedHashes []string)
 			if !strings.HasPrefix(name, stagingPrefix) {
 				continue
 			}
-			hash, err := v.removeResidueEntry(ctx, parent, name, wanted)
+			hash, err := v.visitResidueEntry(ctx, parent, name, wanted, remove)
 			if err != nil && hash == "" {
 				// The entry could not be inspected at all, so this sweep
 				// cannot say whether it holds bytes somebody is answerable
@@ -118,16 +148,18 @@ func (v *Vault) RemoveInboxResidue(ctx context.Context, expectedHashes []string)
 	}
 }
 
-// removeResidueEntry considers one reserved entry and answers with the hash it
-// matched, if any, and what stopped the removal.
+// visitResidueEntry considers one reserved entry and answers with the hash it
+// matched, if any, and what stopped the removal — or, when it is only being
+// asked about, that it is there.
 //
 // An entry that cannot be read, or that is bigger than a note can be, matches
-// nothing: this sweep only ever removes bytes it has read and hashed itself.
-func (v *Vault) removeResidueEntry(
+// nothing: this only ever acts on bytes it has read and hashed itself.
+func (v *Vault) visitResidueEntry(
 	ctx context.Context,
 	parent *os.File,
 	name string,
 	wanted map[string]struct{},
+	remove bool,
 ) (string, error) {
 	clean := vaultRelPath(InboxDirName, name)
 	unlock, err := v.locks.lockContext(ctx, v.pathLockKey(clean))
@@ -178,6 +210,9 @@ func (v *Vault) removeResidueEntry(
 	hash := ContentHash(content)
 	if _, ok := wanted[hash]; !ok {
 		return "", nil
+	}
+	if !remove {
+		return hash, errors.New("a reserved entry holds these bytes")
 	}
 	outcome, placement, reason, err := v.removeVerifiedEntry(ctx, parent, name, clean, stat, content)
 	switch outcome {

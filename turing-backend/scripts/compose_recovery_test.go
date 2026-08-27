@@ -253,3 +253,23 @@ func TestComposeLaunchSendsTheValidatedHostVaultPath(t *testing.T) {
 		t.Fatalf("the inherited value reached compose: %q", result.dockerLog)
 	}
 }
+
+// A .env left by an older install can hold anything, including a line Compose
+// itself refuses to interpolate. Teardown must not depend on that file being
+// readable: it is being run precisely because the install is broken.
+func TestComposeRecoverySurvivesAnEnvFileComposeWillNotRead(t *testing.T) {
+	result := executeComposeWithSetupIn(t, t.TempDir(), true, "501", "20", "501", "20",
+		func(t *testing.T, root string) {
+			writeComposeEnv(t, root,
+				"TURING_CLIENT_API_KEY=client\nMEMORY_DISPLAY_ROOT=${NOTHING_SETS_THIS:?run init}\n")
+		}, map[string]string{"DOCKER_REFUSE_ENV_FILE": "1"}, "down", "--remove-orphans")
+	if result.err != nil {
+		t.Fatalf("compose.sh gave up on teardown over an unreadable .env: %v\n%s", result.err, result.output)
+	}
+	if strings.Contains(result.dockerLog, "--env-file") {
+		t.Fatalf("the retry still handed compose the .env it refused: %q", result.dockerLog)
+	}
+	if !strings.Contains(result.dockerLog, "down --remove-orphans") {
+		t.Fatalf("docker was never asked to tear down: %q", result.dockerLog)
+	}
+}

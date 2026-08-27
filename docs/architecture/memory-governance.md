@@ -226,9 +226,20 @@ These are known, bounded, and deliberately not claimed away:
   keeps the bytes under the reserved name rather than re-linking them —
   re-linking would publish a belief the user never accepted and take the name
   the abandoned promotion would need to be retried under.
+- **A promotion abandoned before its original was removed can leave a belief a
+  crash restores.** The rollback of the copy such a promotion installed unlinks
+  it and flushes; when that flush fails, a crash can bring the copy back under
+  its own name, where the walk indexes it. The proposal is still in the inbox
+  and the user did ask for the promotion, so what this costs is a claim
+  appearing twice rather than one appearing that nobody accepted. The failure
+  names the copy either way.
 - **A vault failure that left a copy is recorded before it is returned.** A
   decision that fails inside the vault writes nothing else: the proposal stays
-  pending and its manifest row stays as it was. When the failure says bytes were
+  pending and its manifest row stays as it was. The same is true of a creation
+  that abandons the bytes it just wrote. Where the record cannot be written at
+  all — a process that dies between the two — the reconcile pass asks the vault
+  itself before releasing a row, because a reserved entry holding exactly the
+  bytes a row names is that row's own file. When the failure says bytes were
   left under a name only the vault can produce, the row is marked first, because
   the path it records now holds nothing and the tidying below would otherwise
   release it — taking the last thing that could find those bytes with it.

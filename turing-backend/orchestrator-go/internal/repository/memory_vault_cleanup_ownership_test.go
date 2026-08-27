@@ -488,3 +488,54 @@ func TestVaultCleanupSweepsResidueEvenWhenThePathIsContested(t *testing.T) {
 		t.Fatalf("the reserved copy of Turing's own note is still there: %v", err)
 	}
 }
+
+// The window a mark cannot close: a process that dies between the removal that
+// left a copy and the row it would have marked leaves an ordinary-looking
+// `ready` row whose path holds nothing. The state says nothing, so the vault is
+// asked instead — a reserved entry holding exactly the bytes this row names is
+// the row's own file, and releasing the row would take the last thing that
+// could find it.
+func TestReconcileKeepsAReadyRowWhoseBytesAreUnderAReservedName(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID, candidate := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
+	artifact := onlyVaultArtifact(t, repo, sessionID)
+
+	// Exactly what a crash after a failed removal leaves: bytes under the
+	// reserved name, nothing under the manifest's path, and a row nobody got
+	// to mark.
+	full := filepath.Join(vault.Root(), filepath.FromSlash(candidate.InboxPath))
+	residue := filepath.Join(vault.Root(), memoryfiles.InboxDirName, ".turing-memory-5555555555555555eeeeeeee")
+	if err := os.Rename(full, residue); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.db.ExecContext(ctx(),
+		`DELETE FROM memory_candidates WHERE id = ?`, candidate.CandidateID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	repo.memoryReconcileScanAnchor = now()
+
+	report, err := repo.ReconcileMemoryVault(ctx())
+	if err != nil {
+		t.Fatalf("ReconcileMemoryVault: %v", err)
+	}
+	if report.ReservationsCleared != 0 {
+		t.Fatalf("reconcile released %d row(s) whose bytes are still in the vault", report.ReservationsCleared)
+	}
+	if state := vaultArtifactState(t, repo, artifact.ArtifactID); state != VaultArtifactStateReady {
+		t.Fatalf("artifact state = %q, want the row kept as it was", state)
+	}
+
+	// And the withdrawal still finishes, because the cleaner can name those
+	// bytes and take them.
+	removed, err := repo.PurgeSessionVaultArtifacts(ctx(), sessionID)
+	if err != nil {
+		t.Fatalf("PurgeSessionVaultArtifacts: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("the cleaner drained %d row(s), want the one naming the reserved copy", removed)
+	}
+	if entries := inboxEntries(t, vault); len(entries) != 0 {
+		t.Fatalf("inbox = %v, want nothing left behind", entries)
+	}
+}

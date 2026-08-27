@@ -344,3 +344,58 @@ func TestAFailedFlushAfterTheUnlinkSaysACopyMayComeBack(t *testing.T) {
 		t.Fatalf("the failure does not say a copy may come back: %v", err)
 	}
 }
+
+// Reconcile has to be able to ask the question the sweep answers, without
+// removing anything: a manifest row whose path holds nothing may still be the
+// only thing that can find bytes under a reserved name — including when the
+// process died between the removal that left them and the record of it.
+func TestInboxResidueHoldsAnswersWithoutRemovingAnything(t *testing.T) {
+	vault := newTestVault(t)
+	const mine = "the note this session wrote"
+	residue := filepath.Join(vault.Root(), InboxDirName, stagingPrefix+"777777777777777777777777")
+	if err := os.WriteFile(residue, []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	held, err := vault.InboxResidueHolds(context.Background(), ContentHash(mine))
+	if err != nil {
+		t.Fatalf("InboxResidueHolds: %v", err)
+	}
+	if !held {
+		t.Fatal("a reserved entry holding exactly those bytes was not found")
+	}
+	if _, err := os.Lstat(residue); err != nil {
+		t.Fatalf("asking the question removed the entry: %v", err)
+	}
+	held, err = vault.InboxResidueHolds(context.Background(), ContentHash("something nobody wrote"))
+	if err != nil {
+		t.Fatalf("InboxResidueHolds: %v", err)
+	}
+	if held {
+		t.Fatal("bytes nothing holds were reported held")
+	}
+}
+
+// An absence one directory down is established by the directory above it, not
+// by the vault root. Flushing the root would report a durable absence for a
+// missing folder whose removal is still in the inbox's page cache.
+func TestAbsenceOfANestedPathFlushesTheDirectoryThatHoldsIt(t *testing.T) {
+	recorder := &syncRecorder{}
+	vault := openTestVault(t, newTestVaultRoot(t), recorder.hooks())
+
+	recorder.setFailDirectorySyncNumber(1)
+	if _, err := vault.ConfirmInboxNoteAbsent(context.Background(), "inbox/gone/note.md"); err == nil {
+		t.Fatal("an absence below a missing folder was reported without flushing the folder above it")
+	}
+	recorder.setFailDirectorySyncNumber(0)
+	absent, err := vault.ConfirmInboxNoteAbsent(context.Background(), "inbox/gone/note.md")
+	if err != nil {
+		t.Fatalf("ConfirmInboxNoteAbsent: %v", err)
+	}
+	if !absent {
+		t.Fatal("a durable absence was not reported as one")
+	}
+	if !recorder.syncedDirectory(directoryInode(t, vault, InboxDirName)) {
+		t.Fatal("the directory that would hold the missing folder was never flushed")
+	}
+}

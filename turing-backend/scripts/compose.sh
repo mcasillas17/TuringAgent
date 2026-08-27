@@ -376,8 +376,24 @@ if [[ -f .env ]]; then
       MEMORY_DISPLAY_ROOT="$MEMORY_DISPLAY_ROOT_VALIDATED" \
       docker compose --env-file .env -f infra/docker-compose.yml "$@"
   fi
+  # A teardown is run because something is already wrong, and .env is one of
+  # the things that can be wrong: a line left by an older install may name a
+  # variable Compose refuses to resolve, and it refuses before it stops
+  # anything. So the recovery path tries with the file and, if Compose will not
+  # read it, again without — carrying the project name across itself, since
+  # that is the one thing in .env teardown actually depends on.
+  if env HOST_UID="$current_uid" HOST_GID="$current_gid" \
+    docker compose --env-file .env -f infra/docker-compose.yml "$@"; then
+    exit 0
+  fi
+  printf 'Compose could not read .env; retrying the teardown without it.\n' >&2
+  configured_project="$(env_literal_value COMPOSE_PROJECT_NAME)"
+  if [[ -n "$configured_project" ]]; then
+    exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \
+      docker compose --project-name "$configured_project" -f infra/docker-compose.yml "$@"
+  fi
   exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \
-    docker compose --env-file .env -f infra/docker-compose.yml "$@"
+    docker compose -f infra/docker-compose.yml "$@"
 fi
 if ! is_recovery_command "$@"; then
   printf 'Compose launch failed: .env is missing; run ./scripts/init.sh first.\n' >&2

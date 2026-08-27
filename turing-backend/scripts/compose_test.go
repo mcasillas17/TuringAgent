@@ -634,7 +634,20 @@ func executeComposeWithSetupIn(
 		t.Fatal(err)
 	}
 	dockerLog := filepath.Join(root, "docker.log")
-	fakeDocker := "#!/bin/sh\nprintf 'HOST_UID=%s HOST_GID=%s MEMORY_DISPLAY_ROOT=%s\\n' \"$HOST_UID\" \"$HOST_GID\" \"$MEMORY_DISPLAY_ROOT\" > \"$DOCKER_LOG\"\nprintf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n"
+	// The fake docker records what it was handed. With DOCKER_REFUSE_ENV_FILE
+	// set it also refuses any invocation carrying --env-file, which is how the
+	// real one answers a .env holding a variable it cannot resolve.
+	fakeDocker := "#!/bin/sh\n" +
+		"printf 'HOST_UID=%s HOST_GID=%s MEMORY_DISPLAY_ROOT=%s\\n' \"$HOST_UID\" \"$HOST_GID\" \"$MEMORY_DISPLAY_ROOT\" > \"$DOCKER_LOG\"\n" +
+		"printf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n" +
+		"if [ -n \"$DOCKER_REFUSE_ENV_FILE\" ]; then\n" +
+		"  case \"$*\" in\n" +
+		"    *--env-file*)\n" +
+		"      echo 'required variable NOTHING_SETS_THIS is missing a value' >&2\n" +
+		"      exit 1\n" +
+		"      ;;\n" +
+		"  esac\n" +
+		"fi\n"
 	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(fakeDocker), 0700); err != nil {
 		t.Fatal(err)
 	}

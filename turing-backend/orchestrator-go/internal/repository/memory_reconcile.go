@@ -1302,15 +1302,16 @@ func (r *Repository) releaseStaleReservation(
 	vault *memoryfiles.Vault,
 	artifactID string,
 ) (bool, error) {
-	vaultPath, state, err := vaultArtifactByIDForSweep(ctx, r.db, artifactID)
+	artifact, err := vaultArtifactByIDForSweep(ctx, r.db, artifactID)
 	if err != nil {
 		return false, err
 	}
+	vaultPath := artifact.VaultPath
 	if vaultPath == "" {
 		// Already gone — a decision retired it while this pass was walking.
 		return false, nil
 	}
-	if state == VaultArtifactStateDeleteFailed {
+	if artifact.State == VaultArtifactStateDeleteFailed {
 		// A cleanup pass reached this file and could not remove it, and a
 		// removal that fails can leave the bytes off their name: detached
 		// under the reserved private name the walk steps over, or under a
@@ -1362,6 +1363,25 @@ func (r *Repository) releaseStaleReservation(
 	}
 	if !absent {
 		return false, nil
+	}
+	// The path holds nothing. Before the row goes, the vault is asked whether
+	// the bytes it names are under a reserved name — the state above cannot
+	// answer that on its own, because a process that died between a removal
+	// that left a copy and the row it would have marked leaves an ordinary
+	// row. A reserved entry holding exactly these bytes is this row's own
+	// file, and the row is the only thing that can still find it.
+	if artifact.ExpectedContentHash != "" {
+		held, residueErr := vault.InboxResidueHolds(ctx, artifact.ExpectedContentHash)
+		if residueErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return false, ctxErr
+			}
+			// Anything this cannot confirm leaves the row standing.
+			return false, nil
+		}
+		if held {
+			return false, nil
+		}
 	}
 	// Asked again, under the lock this time, and about the states that mean a
 	// proposal is still answerable for the file. The answer above picked which
@@ -1606,19 +1626,19 @@ func turingWrittenNoteHash(ctx context.Context, vault *memoryfiles.Vault, inboxP
 // The state travels with the path because the sweep's question is not only
 // "does the inbox still hold this?" but "is this row mine to retire?", and a
 // row a cleanup pass already failed on is not.
-func vaultArtifactByIDForSweep(ctx context.Context, q rowQuerier, artifactID string) (string, string, error) {
-	var vaultPath string
-	var state string
+func vaultArtifactByIDForSweep(ctx context.Context, q rowQuerier, artifactID string) (VaultArtifact, error) {
+	var artifact VaultArtifact
 	err := q.QueryRowContext(ctx, `
-		SELECT vault_path, state FROM vault_artifacts WHERE id = ?
-	`, artifactID).Scan(&vaultPath, &state)
+		SELECT vault_path, state, COALESCE(expected_content_hash, '')
+		FROM vault_artifacts WHERE id = ?
+	`, artifactID).Scan(&artifact.VaultPath, &artifact.State, &artifact.ExpectedContentHash)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", nil
+		return VaultArtifact{}, nil
 	}
 	if err != nil {
-		return "", "", err
+		return VaultArtifact{}, err
 	}
-	return vaultPath, state, nil
+	return artifact, nil
 }
 
 // memoryCandidateNamingInboxPath answers which proposal, if any, still names a

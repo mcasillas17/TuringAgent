@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -233,7 +234,7 @@ func (r *Repository) CreateMemoryCandidate(ctx context.Context, input CreateMemo
 		return MemoryCandidate{}, err
 	}
 	if note.RelPath != artifact.VaultPath {
-		return MemoryCandidate{}, r.abandonWrittenCandidate(ctx, vault, note.RelPath, note.ContentHash, ErrMemoryVaultPathMismatch)
+		return MemoryCandidate{}, r.abandonWrittenCandidate(ctx, vault, artifact, note.RelPath, note.ContentHash, ErrMemoryVaultPathMismatch)
 	}
 
 	createdAt := now()
@@ -250,7 +251,7 @@ func (r *Repository) CreateMemoryCandidate(ctx context.Context, input CreateMemo
 		UpdatedAt:       createdAt,
 	}
 	if err := r.recordMemoryCandidate(ctx, candidate, refsJSON, artifact); err != nil {
-		return MemoryCandidate{}, r.abandonWrittenCandidate(ctx, vault, note.RelPath, note.ContentHash, err)
+		return MemoryCandidate{}, r.abandonWrittenCandidate(ctx, vault, artifact, note.RelPath, note.ContentHash, err)
 	}
 	return candidate, nil
 }
@@ -310,6 +311,7 @@ func (r *Repository) recordMemoryCandidate(ctx context.Context, candidate Memory
 func (r *Repository) abandonWrittenCandidate(
 	ctx context.Context,
 	vault *memoryfiles.Vault,
+	artifact VaultArtifact,
 	relPath string,
 	contentHash string,
 	cause error,
@@ -320,7 +322,46 @@ func (r *Repository) abandonWrittenCandidate(
 	// hold the caller open indefinitely.
 	removal, cancel := context.WithTimeout(context.WithoutCancel(ctx), abandonedCandidateRemovalTimeout)
 	defer cancel()
-	return errors.Join(cause, vault.RemoveInboxNote(removal, retiredCandidateRemoval(relPath, contentHash)))
+	removeErr := vault.RemoveInboxNote(removal, retiredCandidateRemoval(relPath, contentHash))
+	if errors.Is(removeErr, memoryfiles.ErrVaultResidue) {
+		// The bytes are under a name only the vault can spell, and the
+		// reservation that tracks this path names no bytes — it was taken
+		// before the write, so it never could. Left like that the reservation
+		// drains on the empty path and the copy is stranded. Binding it to what
+		// was written, and marking it, is what lets the cleaner find those
+		// bytes and take them.
+		r.bindAbandonedVaultWrite(removal, artifact, contentHash)
+	}
+	return errors.Join(cause, removeErr)
+}
+
+// bindAbandonedVaultWrite records the bytes an abandoned creation left behind
+// on the reservation that already names their path.
+//
+// It is best-effort by construction: the caller is already returning a failure,
+// the session may be cascading away underneath it, and there is nothing useful
+// to say to a user about bookkeeping for a write that was abandoned. What it
+// buys is a row the withdrawal can act on instead of one that drains over a
+// copy nobody can name.
+func (r *Repository) bindAbandonedVaultWrite(ctx context.Context, artifact VaultArtifact, contentHash string) {
+	if artifact.ArtifactID == "" || contentHash == "" {
+		return
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		log.Printf("record the vault copy an abandoned write left: %v", err)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := markUnremovedVaultArtifactTx(
+		ctx, tx, artifact.SessionID, artifact.VaultPath, contentHash, vaultArtifactRemoveFailedCode,
+	); err != nil {
+		log.Printf("record the vault copy an abandoned write left: %v", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		log.Printf("record the vault copy an abandoned write left: %v", err)
+	}
 }
 
 // WithdrawMemoryCandidate retires a proposal without deciding it.

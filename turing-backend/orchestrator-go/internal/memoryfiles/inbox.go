@@ -689,7 +689,7 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 	parent, leaf, err := v.openParent(ctx, clean, false)
 	if err != nil {
 		if errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist) {
-			return v.confirmMissingParent(clean)
+			return v.confirmMissingParent(ctx, clean)
 		}
 		return err
 	}
@@ -785,7 +785,7 @@ func (v *Vault) ConfirmInboxNoteAbsent(ctx context.Context, relPath string) (boo
 	parent, leaf, err := v.openParent(ctx, clean, false)
 	if err != nil {
 		if errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist) {
-			if missingErr := v.confirmMissingParent(clean); missingErr != nil {
+			if missingErr := v.confirmMissingParent(ctx, clean); missingErr != nil {
 				return false, missingErr
 			}
 			return true, nil
@@ -825,7 +825,23 @@ func (v *Vault) confirmAbsence(parent *os.File, clean string) error {
 // notes are wherever the vault is — on a disk nobody has attached, on a share
 // that is down — and answering "the file is gone" from here would retire every
 // record naming every one of them, on the strength of a mount.
-func (v *Vault) confirmMissingParent(clean string) error {
+func (v *Vault) confirmMissingParent(ctx context.Context, clean string) error {
+	// The absence that has to be durable is the missing directory's, and that
+	// lives in the directory above it — which for a nested path is not the
+	// vault root. So the walk goes up until something opens, and flushes that.
+	components := strings.Split(clean, "/")
+	for depth := len(components) - 2; depth >= 1; depth-- {
+		directory, err := v.openDirectory(ctx, components[:depth], false)
+		if err != nil {
+			if errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("confirm %q is no longer there: %w", clean, err)
+		}
+		absenceErr := v.confirmAbsence(directory, clean)
+		_ = directory.Close()
+		return absenceErr
+	}
 	root, err := v.openRoot()
 	if err != nil {
 		return fmt.Errorf("confirm %q is no longer there: the vault could not be opened: %w", clean, err)
