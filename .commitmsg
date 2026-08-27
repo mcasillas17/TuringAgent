@@ -1,11 +1,32 @@
-fix(memory): keep a hashless rejection's row bound to the bytes it read
+fix(memory): carry the copy a cancellation left, and hand Compose the path that was checked
 
-Round 20 review, Grok 4.6: the rejection swept residue with the hash the
-hashless door was bound to and then consumed the candidate with the
-proposal's own -- empty for a proposal nobody could parse. The row it
-kept when the sweep could not finish stayed on the hash it was created
-with, so the next withdrawal swept for words nobody has, found the
-original path empty, and retired the row over the copy it was kept for.
-Both halves of the decision now name the same bytes.
+Round 20 re-review, GPT-5.6 Terra. Four accepted findings.
+
+A request that ends while the bytes are off their name leaves them
+exactly where a failed unlink does, and the cancellation said nothing
+about it -- so the caller holding the record read "the request ended",
+wrote nothing down, and the tidying later released the row for a path
+that holds nothing. The cancellation carries the marker now, on both
+roads, and so does a promoted original kept under a name of the vault's
+own making.
+
+The sweep's clean answer is a durable one: a missing inbox is refused
+when the vault itself is not there, and the directory is flushed before
+"there is no second copy" is reported, because an entry that went away
+between the listing and the look went away in a page cache.
+
+Compose takes its own options before the subcommand, so
+`--project-name x down` was being read as a launch and run through the
+launch checks -- refusing a teardown over the thing it was being run to
+fix. The verb is now found past those options.
+
+And Compose reads the shell environment ahead of --env-file, so a value
+exported in a terminal beat the one this script had just validated. The
+launch hands Compose the checked value explicitly.
+
+Two more are answered rather than changed and are written down in the
+governance document: a copy of a proposal too large to read, and a copy
+of bytes the user rewrote after the decision read them, cannot be
+identified by hash and so are named in the failure rather than swept.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

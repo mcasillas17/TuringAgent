@@ -212,7 +212,11 @@ These are known, bounded, and deliberately not claimed away:
   entitled to delete, and keeps its manifest row when one of them will not go.
   A reserved entry it cannot name is another writer's and is never touched, so
   a vault left holding one after a failure nothing could clear still needs a
-  person to remove it. Where the original name has been taken in the meantime,
+  person to remove it. Two kinds cannot be named at all and are named here
+  instead: a copy of a proposal too large to read, which nothing can hash, and a
+  copy of bytes the user rewrote after the decision read them, which hashes to
+  something no record holds. Both are reported in the failure that left them,
+  by name. Where the original name has been taken in the meantime,
   the bytes stay under the reserved name and both places are named: a decided
   proposal is never republished into the inbox as a fresh draft, because the
   user has already answered it.

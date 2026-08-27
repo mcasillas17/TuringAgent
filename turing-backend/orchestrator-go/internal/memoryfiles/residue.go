@@ -56,8 +56,10 @@ func (v *Vault) RemoveInboxResidue(ctx context.Context, expectedHashes []string)
 	parent, err := v.openDirectory(ctx, []string{InboxDirName}, false)
 	if err != nil {
 		if errors.Is(err, unix.ENOENT) || errors.Is(err, os.ErrNotExist) {
-			// No inbox, so nothing is under a reserved name in it.
-			return nil, nil
+			// No inbox, so nothing is under a reserved name in it — once that
+			// absence is one a crash cannot take back. A vault that is simply
+			// not mounted is refused here rather than answered as an empty one.
+			return nil, v.confirmMissingParent(InboxDirName)
 		}
 		return nil, err
 	}
@@ -77,6 +79,13 @@ func (v *Vault) RemoveInboxResidue(ctx context.Context, expectedHashes []string)
 			return failures, fmt.Errorf("list %s/ for reserved entries: %w", InboxDirName, listErr)
 		}
 		if len(names) == 0 {
+			// One flush at the end, for the entries that were removed and for
+			// any that went away between the listing and the look. What this
+			// answers is "there is no second copy", and an unlink still in the
+			// page cache is not that.
+			if err := v.confirmAbsence(parent, InboxDirName); err != nil {
+				return failures, err
+			}
 			return failures, nil
 		}
 		for _, name := range names {

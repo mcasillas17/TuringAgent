@@ -214,3 +214,42 @@ func cleanComposeEnvironment() []string {
 	}
 	return filtered
 }
+
+// Compose takes its own options before the subcommand, and a person tearing a
+// broken install down may well pass one. Classifying `--project-name x down` as
+// a launch would run the launch checks — and refuse the teardown over the very
+// thing being fixed.
+func TestComposeRecoveryRunsBehindComposeOptions(t *testing.T) {
+	result := executeComposeWithSetup(t, true, "501", "20", "501", "20",
+		func(t *testing.T, root string) {
+			writeComposeEnv(t, root, "TURING_CLIENT_API_KEY=client\n")
+			if err := os.RemoveAll(filepath.Join(root, "memory")); err != nil {
+				t.Fatal(err)
+			}
+		}, "--project-name", "turing", "down", "--remove-orphans")
+	if result.err != nil {
+		t.Fatalf("compose.sh refused a teardown behind a compose option: %v\n%s", result.err, result.output)
+	}
+	if !strings.Contains(result.dockerLog, "down --remove-orphans") {
+		t.Fatalf("docker was never asked to tear down: %q", result.dockerLog)
+	}
+}
+
+// Compose reads the shell environment ahead of --env-file, so a value exported
+// in the terminal wins over the one this script just validated. The stack must
+// get the value that was checked, not whatever happens to be exported.
+func TestComposeLaunchSendsTheValidatedHostVaultPath(t *testing.T) {
+	root := t.TempDir()
+	result := executeComposeInRoot(t, root, "501", "20", "501", "20",
+		map[string]string{"MEMORY_DISPLAY_ROOT": "/somewhere/nobody/validated"}, "up")
+	if result.err != nil {
+		t.Fatalf("compose.sh failed to launch: %v\n%s", result.err, result.output)
+	}
+	want := "MEMORY_DISPLAY_ROOT=" + filepath.Join(root, "memory")
+	if !strings.Contains(result.dockerLog, want) {
+		t.Fatalf("docker was invoked with %q, want the validated path %q", result.dockerLog, want)
+	}
+	if strings.Contains(result.dockerLog, "/somewhere/nobody/validated") {
+		t.Fatalf("the inherited value reached compose: %q", result.dockerLog)
+	}
+}

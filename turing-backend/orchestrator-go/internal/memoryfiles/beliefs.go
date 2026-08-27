@@ -429,9 +429,12 @@ func promotedSourceKept(clean string, placement detachedPlacement, reason string
 	}
 	kept := fmt.Errorf("%q: %s", clean, boundRefusalDetail(placement.explain(reason)))
 	if cause != nil {
-		return fmt.Errorf("%w (%v)", cause, kept)
+		kept = fmt.Errorf("%w (%v)", cause, kept)
 	}
-	return kept
+	// Bytes kept under a name only this package can spell are the caller's
+	// problem as much as the refusal is: the row that tracks this file names
+	// the path it came off.
+	return withResidueMarker(placement, kept)
 }
 
 // removeInstalledCopy undoes the destination half of a promotion that could not

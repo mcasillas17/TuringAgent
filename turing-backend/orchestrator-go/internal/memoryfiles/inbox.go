@@ -1283,7 +1283,11 @@ func (v *Vault) refuseDetachedRejection(ctx context.Context, detached *detachedE
 		detail = boundRefusalDetail(placement.explain(reason))
 	}
 	if ended := ctx.Err(); ended != nil {
-		return &EndedRequestError{RelPath: detached.clean, Detail: detail, Cause: ended}
+		return &EndedRequestError{
+			RelPath: detached.clean,
+			Detail:  detail,
+			Cause:   withResidueMarker(placement, ended),
+		}
 	}
 	// An entry nothing could open is not a claim that the file changed, and it
 	// is answered as itself wherever it is discovered. The sentence is one

@@ -255,3 +255,39 @@ func TestAFailureThatLeavesBytesUnderAReservedNameSaysSo(t *testing.T) {
 		t.Fatalf("the refusal does not say where the bytes were kept: %v", refusal)
 	}
 }
+
+// A request that ends while the bytes are off their name leaves them under a
+// name only this package can spell, exactly as a failed unlink does. The caller
+// holding the record has the same problem and needs the same answer, so the
+// cancellation carries the marker too.
+func TestACancellationThatLeftBytesStagedSaysSo(t *testing.T) {
+	const decided = "the proposal this session wrote"
+	ctx, cancel := context.WithCancel(context.Background())
+	var vault *Vault
+	vault, err := openVaultWithRemovalSeams(
+		newTestVaultRoot(t), realSyncHooks(),
+		func(phase detachPhase, _ string) {
+			switch phase {
+			case detachPhaseBeforeVerify:
+				cancel()
+			case detachPhaseBeforeRestore:
+				// The name is taken while the request is ending, so the bytes
+				// cannot go back and are kept under the reserved one.
+				writeVaultFile(t, vault, "inbox/note.md", "a file the user saved under that name")
+			}
+		},
+		nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("open vault: %v", err)
+	}
+	writeVaultFile(t, vault, "inbox/note.md", decided)
+
+	removeErr := vault.RemoveInboxNote(ctx, retiredRemoval("inbox/note.md", decided))
+	if !errors.Is(removeErr, context.Canceled) {
+		t.Fatalf("removal error = %v, want the cancellation", removeErr)
+	}
+	if !errors.Is(removeErr, ErrVaultResidue) {
+		t.Fatalf("the cancellation does not say a copy was left behind: %v", removeErr)
+	}
+}

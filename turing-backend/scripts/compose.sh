@@ -218,6 +218,12 @@ is_clean_absolute_path() {
 #
 # The value is never printed. It names a directory on the user's own machine,
 # and this script's output is what a person pastes into an issue.
+# MEMORY_DISPLAY_ROOT_VALIDATED is what validate_memory_display_root proved and
+# what is handed to Compose, because Compose reads the shell environment ahead
+# of --env-file: a value exported in somebody's terminal would otherwise win
+# over the one this script just checked.
+MEMORY_DISPLAY_ROOT_VALIDATED=""
+
 validate_memory_display_root() {
   local configured
   configured="$(env_literal_value MEMORY_DISPLAY_ROOT)"
@@ -233,6 +239,43 @@ validate_memory_display_root() {
     printf 'Compose launch failed: MEMORY_DISPLAY_ROOT is not quoted, so Compose would substitute a variable into the folder the app shows; run ./scripts/init.sh to record the host vault path.\n' >&2
     return 1
   fi
+  MEMORY_DISPLAY_ROOT_VALIDATED="$configured"
+}
+
+# compose_subcommand finds the verb in an argument list, past Compose's own
+# options.
+#
+# `docker compose` takes its options before the subcommand — `--project-name x
+# down`, `-f other.yml stop` — and a person tearing down a broken install may
+# well pass one. Reading only the first argument would read those as the
+# subcommand and run the launch checks on a teardown.
+#
+# Options that take a separate value are named so their value is not mistaken
+# for the verb. The `=` spelling needs no such handling, and an unknown option
+# is skipped rather than guessed at: this classification only decides which
+# checks run, and docker itself is what refuses a malformed command line.
+compose_subcommand() {
+  local skip_value=0
+  local argument
+  for argument in "$@"; do
+    if ((skip_value)); then
+      skip_value=0
+      continue
+    fi
+    case "$argument" in
+      --ansi | --env-file | --file | --parallel | --profile | \
+        --progress | --project-directory | --project-name | -f | -p)
+        skip_value=1
+        continue
+        ;;
+      --*=* | -*)
+        continue
+        ;;
+    esac
+    printf '%s\n' "$argument"
+    return 0
+  done
+  printf '\n'
 }
 
 # is_recovery_command names the subcommands that only ever stop things.
@@ -244,7 +287,7 @@ validate_memory_display_root() {
 # a container because of a mount is refusing to fix the thing being complained
 # about.
 is_recovery_command() {
-  case "${1:-}" in
+  case "$(compose_subcommand "$@")" in
     down | stop | rm | kill) return 0 ;;
     *) return 1 ;;
   esac
@@ -322,18 +365,21 @@ if [[ "${1:-}" == "--validate-host-identity" ]]; then
   exit 0
 fi
 if [[ -f .env ]]; then
-  if ! is_recovery_command "${1:-}"; then
+  if ! is_recovery_command "$@"; then
     validate_memory_display_root
     validate_sandbox_bind_source
     validate_skills_bind_source
     validate_memory_bind_source
     validate_mcp_bind_source
     validate_data_bind_source
+    exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \
+      MEMORY_DISPLAY_ROOT="$MEMORY_DISPLAY_ROOT_VALIDATED" \
+      docker compose --env-file .env -f infra/docker-compose.yml "$@"
   fi
   exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \
     docker compose --env-file .env -f infra/docker-compose.yml "$@"
 fi
-if ! is_recovery_command "${1:-}"; then
+if ! is_recovery_command "$@"; then
   printf 'Compose launch failed: .env is missing; run ./scripts/init.sh first.\n' >&2
   exit 1
 fi

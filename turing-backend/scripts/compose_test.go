@@ -13,8 +13,19 @@ func TestComposeLaunchUsesCanonicalCurrentIdentityInsteadOfEnvironment(t *testin
 	if result.err != nil {
 		t.Fatalf("compose.sh failed: %v\n%s", result.err, result.output)
 	}
-	if got := strings.TrimSpace(result.dockerLog); got != "HOST_UID=501 HOST_GID=20\ncompose --env-file .env -f infra/docker-compose.yml up --build" {
-		t.Fatalf("docker invocation = %q", got)
+	// The identity is the one this script resolved, never the one the terminal
+	// exported. The vault path beside it is the value validated out of .env,
+	// which is checked on its own in
+	// TestComposeLaunchSendsTheValidatedHostVaultPath.
+	lines := strings.Split(strings.TrimSpace(result.dockerLog), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("docker invocation = %q", result.dockerLog)
+	}
+	if !strings.HasPrefix(lines[0], "HOST_UID=501 HOST_GID=20 MEMORY_DISPLAY_ROOT=/") {
+		t.Fatalf("docker environment = %q", lines[0])
+	}
+	if lines[1] != "compose --env-file .env -f infra/docker-compose.yml up --build" {
+		t.Fatalf("docker invocation = %q", lines[1])
 	}
 }
 
@@ -212,7 +223,7 @@ func TestComposeLaunchAllowsRecoveryDownWithoutEnvFile(t *testing.T) {
 	if result.err != nil {
 		t.Fatalf("compose.sh failed recovery down: %v\n%s", result.err, result.output)
 	}
-	if got := strings.TrimSpace(result.dockerLog); got != "HOST_UID=501 HOST_GID=20\ncompose -f infra/docker-compose.yml down --remove-orphans" {
+	if got := strings.TrimSpace(result.dockerLog); got != "HOST_UID=501 HOST_GID=20 MEMORY_DISPLAY_ROOT=\ncompose -f infra/docker-compose.yml down --remove-orphans" {
 		t.Fatalf("docker invocation = %q", got)
 	}
 }
@@ -553,7 +564,33 @@ func executeComposeWithSetup(
 	args ...string,
 ) composeResult {
 	t.Helper()
-	root := t.TempDir()
+	return executeComposeWithSetupIn(t, t.TempDir(), withEnv, uid, gid, exportedUID, exportedGID, setup, nil, args...)
+}
+
+// executeComposeInRoot runs the wrapper in a checkout the test names, with
+// extra variables exported into its environment. It is how a test asks what
+// happens when the terminal already holds a value the .env also carries.
+func executeComposeInRoot(
+	t *testing.T,
+	root string,
+	uid, gid, exportedUID, exportedGID string,
+	exported map[string]string,
+	args ...string,
+) composeResult {
+	t.Helper()
+	return executeComposeWithSetupIn(t, root, true, uid, gid, exportedUID, exportedGID, nil, exported, args...)
+}
+
+func executeComposeWithSetupIn(
+	t *testing.T,
+	root string,
+	withEnv bool,
+	uid, gid, exportedUID, exportedGID string,
+	setup func(*testing.T, string),
+	exported map[string]string,
+	args ...string,
+) composeResult {
+	t.Helper()
 	scriptsDir := filepath.Join(root, "scripts")
 	if err := os.Mkdir(scriptsDir, 0700); err != nil {
 		t.Fatal(err)
@@ -597,7 +634,7 @@ func executeComposeWithSetup(
 		t.Fatal(err)
 	}
 	dockerLog := filepath.Join(root, "docker.log")
-	fakeDocker := "#!/bin/sh\nprintf 'HOST_UID=%s HOST_GID=%s\\n' \"$HOST_UID\" \"$HOST_GID\" > \"$DOCKER_LOG\"\nprintf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n"
+	fakeDocker := "#!/bin/sh\nprintf 'HOST_UID=%s HOST_GID=%s MEMORY_DISPLAY_ROOT=%s\\n' \"$HOST_UID\" \"$HOST_GID\" \"$MEMORY_DISPLAY_ROOT\" > \"$DOCKER_LOG\"\nprintf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n"
 	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(fakeDocker), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -609,6 +646,9 @@ func executeComposeWithSetup(
 		"HOST_UID="+exportedUID,
 		"HOST_GID="+exportedGID,
 	)
+	for name, value := range exported {
+		command.Env = append(command.Env, name+"="+value)
+	}
 	output, commandErr := command.CombinedOutput()
 	log, err := os.ReadFile(dockerLog)
 	if err != nil && !os.IsNotExist(err) {

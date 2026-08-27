@@ -740,5 +740,9 @@ func endedRemoval(clean string, placement detachedPlacement, reason string, ende
 	if !placement.clean() {
 		detail = boundRefusalDetail(placement.explain(reason))
 	}
-	return &EndedRequestError{RelPath: clean, Detail: detail, Cause: ended}
+	// A request that ended while the bytes were off their name leaves them
+	// exactly where a failed unlink does, so the caller holding a record of the
+	// file is owed the same marker. It rides beside the cancellation rather
+	// than replacing it: what ended is still the request.
+	return &EndedRequestError{RelPath: clean, Detail: detail, Cause: withResidueMarker(placement, ended)}
 }
