@@ -280,7 +280,7 @@ preview/diff UX, and no approval viewer UI ships here.
 
 #### TUR-001 — Make `SendMessage` idempotent
 
-**Status:** In review — pending merge.
+**Status:** Implemented (PR #64).
 
 **Outcome:** Retrying the same client operation cannot create duplicate messages, runs, or side effects.
 **Scope:** Persist and consume `SendMessageRequest.idempotency_key`; bind it to session and request identity; return the original IDs for an identical replay; reject a conflicting payload.
@@ -324,8 +324,9 @@ preview/diff UX, and no approval viewer UI ships here.
 **Likely files:** session/provider schema and proto, chat validation, runtime provider configuration, Flutter provider selection.
 **Acceptance:** Each remote run records consent and disclosed data categories; local failure never silently falls back remotely; no background feature inherits consent from an interactive request.
 **Dependencies:** None.
-**Pending-merge artifact:** [Remote-provider egress policy](remote-egress-policy.md).
-**Pending-merge coverage:** One-time signed disclosure challenges are bound to
+**Status:** Implemented (PR #69).
+**Artifact:** [Remote-provider egress policy](remote-egress-policy.md).
+**Coverage:** One-time signed disclosure challenges are bound to
 the exact request, effective destination, selected tools/skills, context flags,
 categories, nonce, and expiry; run-owned decisions survive exact idempotent
 replay and assignment retry. Keyed remote endpoints require HTTPS except exact
@@ -340,7 +341,7 @@ interactive consent.
 **Likely files:** session deletion repository/service, events service, MCP file metadata, client session state, architecture docs.
 **Acceptance:** Subscribers are notified; session-owned artifacts are listed and deleted or explicitly retained by policy; no search or memory path returns deleted content.
 **Dependencies:** MEM-001.
-**Implementation pending merge:** `SessionService.DeleteSession` now returns a
+**Status:** Implemented (PR #67). `SessionService.DeleteSession` returns a
 typed durable receipt instead of waiting indefinitely. It immediately hides a
 deleting session from every supported read/mutation path, cancels active work
 through the existing runtime stream, delivers one non-replayed
@@ -361,11 +362,9 @@ tracked here as TUR-022, without adding SQLCipher or an encryption migration.
 **Likely files:** orchestrator/runtime Dockerfiles, Compose, Docker security tests.
 **Acceptance:** Security tests cover all services; normal startup, model calls, and persistence still work.
 **Dependencies:** None.
-**Status:** Pending merge. Branch `mcasillas17-tur-005-container-hardening`
-adds the runtime image identity, applies one fail-closed Compose posture to all
-four backend services, and allowlists only `/app/data`, `/skills`, and `/sandbox`
-as writable storage. The pull request must record fresh Docker-backed startup,
-model-loop, and persistence evidence before merge.
+**Status:** Implemented (PR #63). Adds the runtime image identity, applies one
+fail-closed Compose posture to all four backend services, and allowlists only
+`/app/data`, `/skills`, and `/sandbox` as writable storage.
 
 #### TUR-006 — Introduce service-scoped internal identities
 
@@ -374,9 +373,9 @@ model-loop, and persistence evidence before merge.
 **Likely files:** auth interceptors, app registration, internal clients, Compose/init scripts.
 **Acceptance:** Each service can call only required methods; existing approval consumption remains atomic; no new network listener is introduced.
 **Dependencies:** None.
-**Status:** Pending merge. Branch `mcasillas17-tur-006-service-identities`
-splits the single shared `TURING_INTERNAL_TOKEN` into `TURING_RUNTIME_TOKEN`
-and `TURING_APPROVAL_CONSUMER_TOKEN`, both required and rejected if equal. A
+**Status:** Implemented (PR #66). Splits the single shared
+`TURING_INTERNAL_TOKEN` into `TURING_RUNTIME_TOKEN` and
+`TURING_APPROVAL_CONSUMER_TOKEN`, both required and rejected if equal. A
 new `auth.ServiceIdentity`/`UnaryIdentityInterceptor`/`StreamIdentityInterceptor`
 layer on the existing internal gRPC port resolves the caller's identity from
 which registered token matches — never from a caller-supplied claim — and
@@ -409,9 +408,7 @@ across several rounds — including the CHECK-constraint gap above, a missing
 test for the real identity-to-allowlist wiring, a missing atomicity-under-
 concurrency test, a reproducible race in a new stream test, and the
 tokens-on-a-public-struct-field exposure — before both reported no further
-findings. The pull request must record full verification evidence
-(root/mcp-files/mcp-system tests, race, build, Flutter analyze/test, proto
-check, lint) before merge.
+findings.
 
 ### Phase 1: Make the existing product honest and operable
 
@@ -508,15 +505,15 @@ correlation. Terminal unusable links retain only the neutral fallback.
 **Likely files:** proto files, `tools/proto`, CI workflow and self-guard tests.
 **Acceptance:** Additive changes pass; renumbering/removing a live field fails CI.
 **Dependencies:** None.
-**Implementation pending merge:** `buf.yaml` selects Buf 1.72.0 `FILE`
+**Status:** Implemented (PR #60). `buf.yaml` selects Buf 1.72.0 `FILE`
 compatibility for the `proto` module; `tools/proto/breaking.sh` refreshes and
 resolves the requested remote-tracking base before comparison; real fixtures in
 `tools/proto/breaking_test.go` prove additive changes pass and live-field
 removal or renumbering fails, including removal that reserves the old name and
 number; `.github/workflows/ci.yml` and its self-guard run the pinned check
 without replacing deterministic Go/Dart generation. Mainline history contains
-no removed protobuf fields, enum values, or files, so this pending
-implementation adds no speculative reservations.
+no removed protobuf fields, enum values, or files, so the implementation
+added no speculative reservations.
 
 ### Phase 2: Make recall measurable before changing technology
 
@@ -537,8 +534,7 @@ remains blocked until the commit containing the contract is on `main`.
 
 #### MEM-002 — Return scored, explainable search hits
 
-**Status:** Implemented on the `mcasillas17-mem-002-scored-search-hits` branch
-and in full-diff review; not yet merged to `main`. The canonical public contract
+**Status:** Implemented (PR #74). The canonical public contract
 — score semantics, snippet safety rules, format negotiation, and the visibility
 and limit domain — is specified in [Session recall
 scope](session-recall.md#scored-search-hits); the summary below restates it
@@ -741,10 +737,10 @@ failures, one-call legacy fallback, and verbatim plain-text snippet rendering.
 **Likely files:** DB connection, configuration, migration, and credential-sealing packages; init/runtime scripts and `.env.example` for keystore mode or selector configuration only, never key bytes; backup/restore tooling; platform keystore adapters; orchestrator and runtime container builds; Compose build configuration; CI workflow and self-guard tests; Flutter recovery UX; privacy, security, and operator docs.
 **Acceptance:** Tagged build and search tests prove the selected driver preserves `sqlite_fts5`. Runtime tests prove that, after migration, no supported SQLite path writes plaintext database content to the main database, journals, WAL, `-shm` wal-index, or SQLite temporary files, and that managed backups are encrypted. Database-encryption keys, wrapping keys, and passphrases never appear in the database DSN, environment, process arguments, logs, or error text; `TURING_INTEGRATION_KEY` remains a separate credential-sealing domain. Existing data migrates and restores within the approved numeric transaction, batch, startup, and cancellation budgets; interrupted work resumes without monopolizing SQLite's single connection; wrapper and legacy-plaintext inventories cover every managed artifact named in scope; and missing or wrong keys never open, truncate, replace, or silently recreate the database. Restore reports a missing or rotated credential-sealing key separately, without blocking database recovery or storing credentials in plaintext. Fault-injection tests prove interrupted migration, rotation, restore, and rollback recover safely; unavailable key custody fails closed without allowing scheduled automation to bypass the locked database; documented restart behavior is deterministic; and key loss produces an explicit, non-destructive recovery state in Flutter. Retirement is unavailable when external wrapper state is unknown or any recoverable external wrapper remains. Otherwise, tests fence ingress, schedulers, and automatic restart; confirm zero live key holders; delete every managed wrapper; and prove that neither a previously active client nor a reopened process can read any encrypted-era Turing-managed database or backup. Every readable managed pre-encryption database and backup is migrated before retirement can succeed; residual storage bytes plus separately governed file-backed recovery exports and staging files are reported but never counted as cryptographically retired. Product text distinguishes whole-database retirement from per-session logical withdrawal and disclaims user-created and OS-managed copies outside Turing's custody.
 **Dependencies:** TUR-004, TUR-016. TUR-016 must land before TUR-022 starts so encryption does not precede proven backup and restore integrity.
-**Status:** Entry-criterion design artifact pending approval:
+**Status:** Entry-criterion design artifact approved and merged (PR #85):
 [TUR-022 encrypted database retirement design](tur-022-encrypted-database-retirement-design.md).
-Approval of that artifact passes this task's gate; implementation is a
-separate cycle blocked on TUR-016 landing first.
+The task's approval gate is passed; implementation is a separate cycle
+blocked on TUR-016 landing first.
 
 #### TUR-017 — Add bounded retention
 
@@ -761,8 +757,9 @@ separate cycle blocked on TUR-016 landing first.
 **Likely files:** runtime proto, worker registration, dispatcher, session config APIs.
 **Acceptance:** Unsupported selections fail before enqueue; capability loss updates queue notices; reconnect restores the registry.
 **Dependencies:** None.
-**Pending-merge artifact:** [Worker capability routing](worker-capabilities.md).
-**Pending-merge coverage:** Exact external credential refs are validated before
+**Status:** Implemented (PR #65).
+**Artifact:** [Worker capability routing](worker-capabilities.md).
+**Coverage:** Exact external credential refs are validated before
 enqueue and dispatch; capability fencing preserves execution retry budget; automation
 routing notices remain live and routing-unavailable occurrences are auditable; modern
 empty tool snapshots, populated schema upgrades, and reconnect restoration are covered
@@ -871,7 +868,7 @@ Every edge in this table appears in the corresponding task's `Dependencies` line
 4. **Measure and improve lexical recall:** MEM-002, MEM-003, MEM-004, MEM-016.
 5. **Ship minimum lovable memory:** MEM-005, MEM-006, MEM-007, MEM-008, MEM-011.
 6. **Add safe learning and explainability:** MEM-009, MEM-010, MEM-012, MEM-015.
-7. **Deliver ownership and longevity:** TUR-015, TUR-016, TUR-017, and TUR-022 only when its entry criterion passes.
+7. **Deliver ownership and longevity:** TUR-015, TUR-016, TUR-017, and TUR-022 (entry criterion passed via PR #85; implementation still follows TUR-016).
 8. **Make evidence-gated retrieval upgrades:** MEM-013 and MEM-014 only when their entry criteria pass.
 9. **Add connectivity:** CON-001, CON-002, CON-003, CON-004.
 10. **Add plural agents:** AGT-001 after capability, queue, streaming, observability, and MCP foundations are proven.
