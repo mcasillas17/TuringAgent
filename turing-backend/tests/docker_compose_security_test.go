@@ -92,7 +92,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// Display only: the host directory the vault is bound from, so the
 		// client can name a folder the user can actually open. No file
 		// operation and no confinement check ever reads it.
-		"MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:?",
+		"MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:-}",
 		"OLLAMA_BASE_URL:",
 		// The orchestrator never calls OpenAI or mcp-files through its normal
 		// bearer: it only reports

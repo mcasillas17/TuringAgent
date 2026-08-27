@@ -496,11 +496,15 @@ func TestInstallRollbackReportsAContestedEntryItCouldNotFlush(t *testing.T) {
 	}
 }
 
-// The deletion that was authorised and then could not finish. The entry is off
-// its name, the unlink of the staging name fails, and the flush that would at
-// least pin the directory as it stands fails too. Nothing is lost — the bytes
-// are under the reserved name — and the caller has to be told both that the
-// removal did not happen and that where the file is now is not something a
+// The deletion that was authorised and then could not finish. The unlink of
+// the staging name fails, so the entry goes back under its own name — where
+// every record that says somebody is answerable for it points — and the flush
+// that would make that restore survive a crash fails too.
+//
+// Both names hold the entry then, on purpose: the staging one is where the
+// detach put the bytes and the only name a crash is certain to find, so it
+// stays. The caller has to be told that the removal did not happen, that the
+// file is back under its own name, and that the restore is not something a
 // crash is guaranteed to keep.
 func TestRefusedDiscardReportsBothTheUnlinkAndTheFlushItCouldNotDo(t *testing.T) {
 	const decided = "the proposal the user read"
@@ -535,7 +539,16 @@ func TestRefusedDiscardReportsBothTheUnlinkAndTheFlushItCouldNotDo(t *testing.T)
 	if !strings.Contains(err.Error(), staged) {
 		t.Fatalf("the failure does not say where the bytes are: %v", err)
 	}
-	if _, statErr := os.Lstat(full); !os.IsNotExist(statErr) {
-		t.Fatalf("the entry is under its own name after a detach that never went back: %v", statErr)
+	// Back under its own name, with the bytes intact: a retry can find it,
+	// prove it owns it, and finish the removal that was owed.
+	onName, readErr := os.ReadFile(full)
+	if readErr != nil {
+		t.Fatalf("the entry was not put back under its own name: %v", readErr)
+	}
+	if string(onName) != decided {
+		t.Fatalf("the restored entry holds %q, want the proposal", onName)
+	}
+	if !strings.Contains(err.Error(), "back under its own name") {
+		t.Fatalf("the failure does not say the entry was put back: %v", err)
 	}
 }

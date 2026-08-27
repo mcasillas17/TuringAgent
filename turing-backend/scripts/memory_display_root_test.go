@@ -30,15 +30,19 @@ func TestComposePassesTheHostVaultPathForDisplay(t *testing.T) {
 	if !strings.Contains(compose, "MEMORY_ROOT: /memory") {
 		t.Fatal("MEMORY_ROOT is no longer the container path the vault is opened at")
 	}
-	if !strings.Contains(compose, "MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:?") {
-		t.Fatal("docker-compose.yml does not require the host vault path for display")
+	if !strings.Contains(compose, "MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:-}") {
+		t.Fatal("docker-compose.yml does not pass the host vault path through for display")
 	}
-	// Required, in the mould of the other host-identity values, rather than
-	// defaulted: a fallback would be a container path silently presented as the
-	// user's folder on every install whose .env predates the setting, and
-	// failing to launch is the louder and more honest of the two answers.
-	if strings.Contains(compose, "MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:-") {
-		t.Fatal("MEMORY_DISPLAY_ROOT has a fallback, so a stale .env would show a container path")
+	// Passed through with an empty fallback rather than required here, because
+	// a required variable is evaluated on teardown too and teardown has to work
+	// on the broken install it is being run to fix. The requirement is real and
+	// scripts/compose.sh enforces it before it starts anything — see
+	// TestComposeLaunchRefusesAnUnusableHostVaultPath. What must never happen
+	// is a *literal* default: a container path written in here would be
+	// presented to the user as the folder to open in Obsidian, which is the
+	// exact thing this setting exists to stop.
+	if strings.Contains(compose, "MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:-/") {
+		t.Fatal("MEMORY_DISPLAY_ROOT falls back to a path, so a stale .env would show a folder nobody has")
 	}
 }
 
@@ -67,7 +71,7 @@ func TestInitWritesTheCanonicalHostVaultPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve the provisioned vault: %v", err)
 	}
-	assertEnvValue(t, result.env, "MEMORY_DISPLAY_ROOT", canonical)
+	assertEnvLiteral(t, result.env, "MEMORY_DISPLAY_ROOT", canonical)
 }
 
 // A stale value from a previous checkout is replaced rather than kept: the
@@ -79,7 +83,7 @@ func TestInitReplacesAStaleHostVaultPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve the provisioned vault: %v", err)
 	}
-	assertEnvValue(t, result.env, "MEMORY_DISPLAY_ROOT", canonical)
+	assertEnvLiteral(t, result.env, "MEMORY_DISPLAY_ROOT", canonical)
 }
 
 // Running it twice changes nothing, and touches nothing else. An operator's own
@@ -126,7 +130,7 @@ func TestInitHandlesAHostVaultPathWithSpaces(t *testing.T) {
 	if !strings.Contains(canonical, " ") {
 		t.Fatalf("this test needs a path with a space, got %q", canonical)
 	}
-	assertEnvValue(t, result.env, "MEMORY_DISPLAY_ROOT", canonical)
+	assertEnvLiteral(t, result.env, "MEMORY_DISPLAY_ROOT", canonical)
 }
 
 // The written value is a secret-free operator setting and belongs in the file
@@ -160,6 +164,6 @@ func TestInitHandlesAHostVaultPathWithSedMetacharacters(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolve the provisioned vault: %v", err)
 		}
-		assertEnvValue(t, result.env, "MEMORY_DISPLAY_ROOT", canonical)
+		assertEnvLiteral(t, result.env, "MEMORY_DISPLAY_ROOT", canonical)
 	}
 }

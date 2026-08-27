@@ -561,7 +561,11 @@ func executeComposeWithSetup(
 	scriptPath := filepath.Join(scriptsDir, "compose.sh")
 	copyScript(t, "compose.sh", scriptPath)
 	if withEnv {
-		if err := os.WriteFile(filepath.Join(root, ".env"), []byte("TURING_CLIENT_API_KEY=client\n"), 0600); err != nil {
+		// A launchable .env: the vault path compose.sh now requires before it
+		// starts anything, written the way init.sh writes it, plus one secret
+		// so the file looks like the real thing.
+		env := "TURING_CLIENT_API_KEY=client\nMEMORY_DISPLAY_ROOT='" + filepath.Join(root, "memory") + "'\n"
+		if err := os.WriteFile(filepath.Join(root, ".env"), []byte(env), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
