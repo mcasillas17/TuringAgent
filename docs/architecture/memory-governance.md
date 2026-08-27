@@ -219,7 +219,13 @@ These are known, bounded, and deliberately not claimed away:
   by name. Where the original name has been taken in the meantime,
   the bytes stay under the reserved name and both places are named: a decided
   proposal is never republished into the inbox as a fresh draft, because the
-  user has already answered it.
+  user has already answered it. And the rule about putting an entry back is the
+  area's, not the caller's: only under `inbox/` does a name have a record
+  pointing at it. The compensating removals under `beliefs/` and at the vault
+  root are undoing a write nothing durable names, so a refused unlink there
+  keeps the bytes under the reserved name rather than re-linking them —
+  re-linking would publish a belief the user never accepted and take the name
+  the abandoned promotion would need to be retried under.
 - **A vault failure that left a copy is recorded before it is returned.** A
   decision that fails inside the vault writes nothing else: the proposal stays
   pending and its manifest row stays as it was. When the failure says bytes were
