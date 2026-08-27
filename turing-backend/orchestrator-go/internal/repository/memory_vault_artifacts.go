@@ -547,13 +547,13 @@ func (r *Repository) PurgeSessionVaultArtifacts(ctx context.Context, sessionID s
 	if err != nil {
 		return 0, err
 	}
-	removed := make([]string, 0, len(artifacts))
+	cleared := make([]VaultArtifact, 0, len(artifacts))
 	failures := make([]vaultArtifactFailure, 0, len(artifacts))
 	collected := make([]error, 0, maxVaultPurgeErrors)
 	for _, artifact := range artifacts {
 		errorCode, failure := removeVaultArtifactFile(ctx, vault, artifact)
 		if failure == nil {
-			removed = append(removed, artifact.ArtifactID)
+			cleared = append(cleared, artifact)
 			continue
 		}
 		failures = append(failures, vaultArtifactFailure{
@@ -562,6 +562,32 @@ func (r *Repository) PurgeSessionVaultArtifacts(ctx context.Context, sessionID s
 		})
 		if len(collected) < maxVaultPurgeErrors {
 			collected = append(collected, failure)
+		}
+	}
+	// A file whose visible name is gone can still be reachable: a removal that
+	// could not unlink puts the entry back under its own name and leaves the
+	// reserved one it was detached to, so the same bytes have two names and the
+	// retry above only ever removes one of them. Retiring the row now would end
+	// the withdrawal over a note still sitting in the user's vault under a name
+	// no listing shows, so the reserved copies of exactly these bytes go too —
+	// and a row whose second copy would not go stays.
+	removed := make([]string, 0, len(cleared))
+	residue, residueErr := vault.RemoveInboxResidue(ctx, clearedContentHashes(cleared))
+	for _, artifact := range cleared {
+		leftover := residueErr
+		if leftover == nil {
+			leftover = residue[artifact.ExpectedContentHash]
+		}
+		if leftover == nil {
+			removed = append(removed, artifact.ArtifactID)
+			continue
+		}
+		failures = append(failures, vaultArtifactFailure{
+			artifactID: artifact.ArtifactID,
+			errorCode:  vaultArtifactRemoveFailedCode,
+		})
+		if len(collected) < maxVaultPurgeErrors {
+			collected = append(collected, ErrVaultArtifactRemoveFailed)
 		}
 	}
 	forgetErr := r.DeleteVaultArtifacts(ctx, removed)
@@ -586,6 +612,20 @@ func (r *Repository) PurgeSessionVaultArtifacts(ctx context.Context, sessionID s
 		vaultPurgeFailure(collected, len(failures), len(artifacts)),
 		r.markVaultArtifactsDeleteFailed(ctx, sessionID, failures),
 	)
+}
+
+// clearedContentHashes names the bytes a pass has already been entitled to
+// delete, which is exactly what the residue sweep may act on. A row that never
+// named any bytes contributes nothing: it could not authorise a removal at its
+// own path and it cannot authorise one under a reserved name either.
+func clearedContentHashes(cleared []VaultArtifact) []string {
+	hashes := make([]string, 0, len(cleared))
+	for _, artifact := range cleared {
+		if artifact.ExpectedContentHash != "" {
+			hashes = append(hashes, artifact.ExpectedContentHash)
+		}
+	}
+	return hashes
 }
 
 // vaultPurgeFailure is the bounded, opaque report of a pass that could not

@@ -180,3 +180,70 @@ func TestProfileApplyCleanupFailureKeepsAndMarksTheReservation(t *testing.T) {
 		t.Fatalf("audit payload names the path inside the user's vault: %q", payload)
 	}
 }
+
+// The bytes a failed removal left under a reserved name are still the session's
+// to withdraw, and the record that names them is the only thing that can find
+// them. A retry that removes the entry under the visible name and retires the
+// row would leave the note in the user's vault under a name no listing shows —
+// a withdrawal reporting completion over a file that is still there.
+func TestVaultCleanupTakesBytesLeftUnderAReservedName(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID, candidate := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
+	artifact := onlyVaultArtifact(t, repo, sessionID)
+
+	// What a failed unlink leaves: the same bytes under the reserved private
+	// name, with nothing under the name the manifest records.
+	full := filepath.Join(vault.Root(), filepath.FromSlash(candidate.InboxPath))
+	residue := filepath.Join(vault.Root(), memoryfiles.InboxDirName, ".turing-memory-0123456789abcdef01234567")
+	if err := os.Rename(full, residue); err != nil {
+		t.Fatalf("stage the residue a failed removal leaves: %v", err)
+	}
+	if err := repo.MarkSessionVaultArtifactsDeleteFailed(
+		ctx(), sessionID, []string{artifact.ArtifactID}, "vault_remove_failed",
+	); err != nil {
+		t.Fatalf("mark the failed cleanup: %v", err)
+	}
+
+	removed, err := repo.PurgeSessionVaultArtifacts(ctx(), sessionID)
+	if err != nil {
+		t.Fatalf("PurgeSessionVaultArtifacts: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("the cleaner removed %d file(s), want the note it could reach under either name", removed)
+	}
+	if entries := inboxEntries(t, vault); len(entries) != 0 {
+		t.Fatalf("inbox = %v, want the withdrawn note gone under every name", entries)
+	}
+	if got := vaultArtifactRows(t, repo, sessionID); got != 0 {
+		t.Fatalf("manifest rows = %d, want a drained manifest", got)
+	}
+}
+
+// And a reserved entry the session cannot name is not its business. Somebody
+// else's half-written file stays exactly where it is, and the withdrawal still
+// finishes, because the note this row was about really is gone.
+func TestVaultCleanupLeavesAReservedEntryItCannotName(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID, candidate := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
+
+	const theirs = "half a note another writer is staging"
+	stranger := filepath.Join(vault.Root(), memoryfiles.InboxDirName, ".turing-memory-fedcba9876543210fedcba98")
+	if err := os.WriteFile(stranger, []byte(theirs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := repo.PurgeSessionVaultArtifacts(ctx(), sessionID)
+	if err != nil {
+		t.Fatalf("PurgeSessionVaultArtifacts: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("the cleaner removed %d file(s), want the session's own note", removed)
+	}
+	if candidateFileExists(t, vault, candidate.InboxPath) {
+		t.Fatal("the withdrawn note is still in the inbox")
+	}
+	held, err := os.ReadFile(stranger)
+	if err != nil || string(held) != theirs {
+		t.Fatalf("the reserved entry the session could not name was disturbed: %q, %v", held, err)
+	}
+}

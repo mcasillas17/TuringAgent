@@ -205,13 +205,17 @@ These are known, bounded, and deliberately not claimed away:
   then verified. When that unlink fails, the entry goes back under its own name
   — with a link that refuses to clobber whatever may have taken it — so the
   record that names the file still finds it and the retry can prove ownership
-  all over again. The link the failed drop left behind cannot be dropped either;
-  it is reported in the failure, by name, and it survives a later successful
-  retry, so an operator may have to remove one reserved `.turing-memory-*` entry
-  by hand. Where the original name has been taken in the meantime, the bytes
-  stay under the reserved name and both places are named: a decided proposal is
-  never republished into the inbox as a fresh draft, because the user has
-  already answered it.
+  all over again. The link the failed drop left behind is reported in the
+  failure, by name, and it outlives the retry that removes the visible name —
+  so a session withdrawal, whose whole job is that the bytes go, sweeps the
+  reserved entries in the inbox whose content is exactly what it was already
+  entitled to delete, and keeps its manifest row when one of them will not go.
+  A reserved entry it cannot name is another writer's and is never touched, so
+  a vault left holding one after a failure nothing could clear still needs a
+  person to remove it. Where the original name has been taken in the meantime,
+  the bytes stay under the reserved name and both places are named: a decided
+  proposal is never republished into the inbox as a fresh draft, because the
+  user has already answered it.
 - **A manifest row whose cleanup failed is not released by the reconcile
   pass.** Reconcile releases reservations whose path the inbox no longer holds,
   and a failed removal is one of the ways a path comes to hold nothing. A row

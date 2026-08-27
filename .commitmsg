@@ -1,0 +1,20 @@
+fix(memory): take the copy a failed unlink left under a name nobody can spell
+
+Round 20 review, Grok 4.6: putting the entry back under its own name
+leaves the reserved name pointing at the same inode when the drop cannot
+be retried, and the retry that follows removes the visible name and only
+that one. The manifest row is then retired for a file still in the user
+vault under a name no listing shows -- a withdrawal reporting completion
+over a note that is still there. The same happens when the put-back never
+took the original name at all: the path holds nothing, the absence is
+durable, and the row drains.
+
+A withdrawal now sweeps the reserved entries in the inbox whose whole
+bytes are exactly the ones it was already entitled to delete, through the
+same detach-and-verify path every other removal here takes, and keeps the
+row for any it could not remove. A reserved entry it cannot name -- a
+half-written note another writer is staging, a file this package never
+made -- is left exactly where it is: the bytes are what authorise a
+removal, and a row that never named any authorises nothing.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
