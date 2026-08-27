@@ -37,6 +37,18 @@ services:
       # left to the binary's default so the bind target and the path the
       # orchestrator opens are one decision in one file.
       MEMORY_ROOT: /memory
+      # The same vault named the way the person using it would name it: the
+      # host directory /memory is bound from, written into .env by
+      # scripts/init.sh. Display only — nothing opens it, joins onto it or
+      # decides anything with it, and every file operation still goes through
+      # MEMORY_ROOT above.
+      #
+      # Deliberately required rather than defaulted, in the mould of HOST_UID
+      # above. A fallback here would be a container path silently presented to
+      # the user as the folder to open in Obsidian, which is the exact thing
+      # this setting exists to stop — so a stack brought up without init.sh
+      # having recorded the host path fails to launch and says why.
+      MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:?Run scripts/init.sh to record the host vault path}
       MCP_CONFIG_ROOT: /mcp
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}

@@ -448,6 +448,12 @@ abstract class AppLocalizations {
   /// **'Memory tools are unavailable while memory is off, and nothing is pinned into a run. The vault stays on disk and stays readable here.'**
   String get memoryDisabledDetail;
 
+  /// Label above the vault's path on the memory page. It names the machine the path is on because the orchestrator may be running in a container, where the path it opens the vault at exists nowhere the user can go.
+  ///
+  /// In en, this message translates to:
+  /// **'The vault is a folder on this computer:'**
+  String get memoryVaultLocation;
+
   /// No description provided for @memoryReasonUnspecified.
   ///
   /// In en, this message translates to:

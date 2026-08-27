@@ -30,6 +30,7 @@ const (
 	memoryNoteRefsRewrittenAction   = "memory.note.refs_rewritten"
 	memoryCandidateOrphanedAction   = "memory.candidate.orphan_removed"
 	memoryReservationReleasedAction = "memory.reservation.released"
+	memoryReservationBoundAction    = "memory.reservation.bound"
 )
 
 // recordMemoryReconcileTx writes one redacted reconcile row inside the same
@@ -126,6 +127,12 @@ type MemoryReconcileReport struct {
 	// count and is left standing.
 	ProfileAppliesFinalized int
 	ProfileAppliesReset     int
+	// ArtifactsBound counts the reservations this pass could finish: a write
+	// that landed, a crash before the bookkeeping, and a file under the
+	// reserved path that proves it is Turing's. Until a row is bound it names a
+	// path and nothing else, and cleanup refuses to act on it — so this is what
+	// lets a withdrawal interrupted by a crash still drain.
+	ArtifactsBound int
 }
 
 // memoryVaultState is everything the database knows before a pass acts. It is
@@ -226,6 +233,10 @@ func (r *Repository) ReconcileMemoryVault(ctx context.Context) (MemoryReconcileR
 		report.Index.Errors = append(report.Index.Errors, adoptionIssues...)
 		report.Index.Errors = append(report.Index.Errors, rewriteIssues...)
 		report.OrphanCandidatesRemoved, report.ReservationsCleared, passErr = r.sweepVaultInbox(ctx, vault, state, scanned)
+		if passErr != nil {
+			return passErr
+		}
+		report.ArtifactsBound, passErr = r.bindLandedVaultWrites(ctx, vault, state)
 		return passErr
 	})
 	if err != nil {
@@ -1360,6 +1371,201 @@ func (r *Repository) releaseStaleReservation(
 		return false, err
 	}
 	return true, nil
+}
+
+// bindLandedVaultWrites finishes the bookkeeping for writes that landed and
+// were never confirmed, and it is the only thing that can.
+//
+// The order a creation keeps — reserve, write, then record — leaves exactly one
+// state a crash can produce that nothing else resolves: a reservation still
+// 'writing' with the file sitting under its path. Until this round that row was
+// harmless because cleanup deleted by path anyway. Now it is a row that proves
+// nothing, and cleanup refuses it, so without this heal a crash would leave a
+// note in the user's vault that no withdrawal could ever remove.
+//
+// What it will not do is adopt somebody else's file. The reserved path names an
+// identity this server minted, and the heal binds a row only when the file
+// under it is a managed note carrying that same identity — Turing's own write,
+// answering for itself. A note the user wrote, one with no frontmatter, one
+// whose identity is different, one that will not parse: none of them is
+// adopted, the row stays unbound, and the file stays where it is. The read is
+// the confined per-path reader, taken fresh under this pass, so what gets
+// hashed is the bytes that are there now rather than anything a walk cached.
+func (r *Repository) bindLandedVaultWrites(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	state memoryVaultState,
+) (int, error) {
+	unbound, err := r.unboundVaultWrites(ctx, state.anchor)
+	if err != nil {
+		return 0, err
+	}
+	bound := 0
+	for _, artifact := range unbound {
+		healed, err := r.bindLandedVaultWrite(ctx, vault, artifact)
+		if err != nil {
+			return bound, err
+		}
+		if healed {
+			bound++
+		}
+	}
+	return bound, nil
+}
+
+// unboundVaultWrite is one reservation the heal may be able to close: its id,
+// its session, and the path whose file has to answer for itself.
+type unboundVaultWrite struct {
+	artifactID string
+	sessionID  string
+	vaultPath  string
+}
+
+// unboundVaultWrites is the worklist: every row naming no bytes, from before
+// this pass began.
+//
+// It is keyed on the missing binding rather than on a state, because two states
+// mean the same thing here. A row still 'writing' is a reservation nothing
+// confirmed. A row already 'delete_failed' with no binding is that same
+// reservation after a cleanup pass reached it first and refused it — which it
+// must, since nothing yet proved the file was Turing's. Leaving that second one
+// out is how a note Turing wrote ends up stranded in the user's vault behind a
+// row no retry can ever act on: the purge refuses it forever for want of a
+// binding it could never gain.
+//
+// The anchor keeps out rows created after this pass started. It does not keep
+// out a creation in flight — a reservation taken before the anchor whose write
+// has landed and whose record has not committed is in scope, and binding it is
+// harmless, because the binding both parties compute is the same hash of the
+// same file and the creation's own finalize accepts that answer.
+func (r *Repository) unboundVaultWrites(ctx context.Context, anchor string) ([]unboundVaultWrite, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, session_id, vault_path
+		FROM vault_artifacts
+		WHERE expected_content_hash IS NULL AND state IN (?, ?) AND created_at < ?
+		ORDER BY created_at, id
+	`, VaultArtifactStateWriting, VaultArtifactStateDeleteFailed, anchor)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var unbound []unboundVaultWrite
+	for rows.Next() {
+		var write unboundVaultWrite
+		if err := rows.Scan(&write.artifactID, &write.sessionID, &write.vaultPath); err != nil {
+			return nil, err
+		}
+		unbound = append(unbound, write)
+	}
+	return unbound, rows.Err()
+}
+
+// bindLandedVaultWrite closes one of them, and only on what the file itself
+// says.
+//
+// The lock is the candidate's where a proposal names the path, for the same
+// reason the reservation sweep takes it: a decision moves a row and its
+// reservation together, and this must not land in the middle of one. A path no
+// row names has no decision in flight, because a creation mints a fresh path
+// and cannot reserve one this row still holds.
+func (r *Repository) bindLandedVaultWrite(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	write unboundVaultWrite,
+) (bool, error) {
+	if _, err := validateVaultInboxPath(write.vaultPath); err != nil {
+		// A tampered row is not healed into a licence. It stays exactly as
+		// unusable as it was.
+		return false, nil
+	}
+	claimant, err := memoryCandidateNamingInboxPath(ctx, r.db, write.vaultPath, nil)
+	if err != nil {
+		return false, err
+	}
+	if claimant != "" {
+		unlock, lockErr := r.lockMemoryCandidateDecision(ctx, claimant)
+		if lockErr != nil {
+			return false, lockErr
+		}
+		defer unlock()
+	}
+	if r.memoryReservationSweepBarrier != nil {
+		r.memoryReservationSweepBarrier()
+	}
+
+	hash, owned, err := turingWrittenNoteHash(ctx, vault, write.vaultPath)
+	if err != nil {
+		return false, err
+	}
+	if !owned {
+		return false, nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Keyed on the binding still being absent rather than on a state, so this
+	// covers both rows the worklist carries and does exactly nothing to a row
+	// somebody bound while the file was being read. finalized_at is kept if it
+	// is already set: the row's own history is not this pass's to rewrite.
+	result, err := tx.ExecContext(ctx, `
+		UPDATE vault_artifacts
+		SET state = ?, finalized_at = COALESCE(finalized_at, ?), expected_content_hash = ?
+		WHERE id = ? AND session_id = ? AND expected_content_hash IS NULL
+	`, VaultArtifactStateReady, now(), hash, write.artifactID, write.sessionID)
+	if err != nil {
+		return false, err
+	}
+	bound, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if bound != 1 {
+		// The row moved while this pass was reading the file: a creation
+		// finished it, a decision consumed it, or the session was deleted
+		// underneath. Either way there is nothing left to heal.
+		return false, nil
+	}
+	if err := recordMemoryReconcileTx(ctx, tx, memoryReservationBoundAction, write.artifactID, "write_landed"); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// turingWrittenNoteHash answers whether the file under one inbox path is a note
+// this server wrote, and if so hashes exactly the bytes it read.
+//
+// Ownership is two facts and both are needed. The note has to be managed, which
+// is Turing saying it wrote and may rewrite this file, and its own identity has
+// to be the identity in the name — a name this server minted, which is why the
+// pair means anything at all. A user's own note under that path fails the first,
+// and a note moved there from elsewhere fails the second.
+//
+// Everything that is not a clean answer is "not ours". A file that is not there,
+// one that will not parse, one past the read bound, a symlink somebody dropped
+// in its place: none of them says Turing wrote it, and this is the one call
+// whose "yes" turns a row into a licence to delete.
+func turingWrittenNoteHash(ctx context.Context, vault *memoryfiles.Vault, inboxPath string) (string, bool, error) {
+	reading, err := vault.ReadInboxCandidate(ctx, inboxPath)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", false, ctxErr
+		}
+		return "", false, nil
+	}
+	if !reading.Readable {
+		return "", false, nil
+	}
+	minted := memoryfiles.NoteIDFromInboxRelPath(inboxPath)
+	if minted == "" || !reading.Note.Managed || reading.Note.NoteID != minted {
+		return "", false, nil
+	}
+	return reading.Note.ContentHash, true, nil
 }
 
 // vaultArtifactPathByID reads the path one manifest row names, and answers with

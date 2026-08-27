@@ -396,28 +396,30 @@ func TestReservedStagingNamesStaySkippedAndUnnameable(t *testing.T) {
 	}
 }
 
-// Turing's own tidying is not a decision about text and never grew a two-step
-// detach. It must stay the plain unlink: no staging, no recovery draft, and
-// none of the barrier the rejection path runs through.
-func TestRetiredCleanupKeepsItsPlainUnlinkAndLeavesNothingBehind(t *testing.T) {
+// Turing's own tidying goes through the same two-step detach every other
+// deletion here does, and for the same reason: it is a deletion in the user's
+// vault, and an unlink names a name. What it must not do is leave anything
+// behind on the ordinary path — a tidying that deletes exactly the bytes it was
+// recorded against ends with an inbox holding only the user's own files.
+func TestRetiredCleanupDetachesAndLeavesNothingBehind(t *testing.T) {
 	detached := false
-	linked := false
 	vault := vaultWithDetachSeams(t, func(detachPhase, string) {
 		detached = true
 	}, func(_ string, link func() error) error {
-		linked = true
 		return link()
 	})
 
-	full := writeVaultFile(t, vault, "inbox/note.md", "already accounted for")
+	const accounted = "already accounted for"
+	full := writeVaultFile(t, vault, "inbox/note.md", accounted)
 	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
-		RelPath: "inbox/note.md",
-		Mode:    RemoveRetiredCandidate,
+		RelPath:             "inbox/note.md",
+		Mode:                RemoveRetiredCandidate,
+		ExpectedContentHash: ContentHash(accounted),
 	}); err != nil {
 		t.Fatalf("retired cleanup: %v", err)
 	}
-	if detached || linked {
-		t.Fatalf("the cleaner went through the rejection's detach (detached=%v linked=%v)", detached, linked)
+	if !detached {
+		t.Fatal("the cleaner unlinked a name instead of verifying a detached entry")
 	}
 	if _, err := os.Lstat(full); !os.IsNotExist(err) {
 		t.Fatalf("expected the retired file to be gone, got %v", err)

@@ -817,6 +817,10 @@ func TestInitRejectsNonRegularEnvBeforeChmod(t *testing.T) {
 }
 
 type initResult struct {
+	// root is the checkout init.sh ran in, so a test can run it again in the
+	// same place. Idempotence is about a second run over the first one's own
+	// files, which a fresh directory cannot express.
+	root     string
 	sandbox  string
 	skills   string
 	memory   string
@@ -847,7 +851,45 @@ func executeInit(t *testing.T, uid, gid, identityConfig string, chownExit int) i
 
 func executeInitWithSetup(t *testing.T, uid, gid, identityConfig string, chownExit int, setup func(*testing.T, string)) initResult {
 	t.Helper()
-	root := t.TempDir()
+	return executeInitIn(t, t.TempDir(), uid, gid, identityConfig, chownExit, setup)
+}
+
+// executeInitInDirectory runs init.sh under a checkout directory of the test's
+// choosing. Every other caller does not care where the checkout is; the one
+// that does cares because a path with a space in it is what most of these
+// helpers would quietly get wrong.
+func executeInitInDirectory(t *testing.T, uid, gid, identityConfig string, directory string) initResult {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), directory)
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return executeInitIn(t, root, uid, gid, identityConfig, 0, nil)
+}
+
+// rerunInit runs init.sh again over the checkout a previous run left behind,
+// with that run's own .env in place. It is how idempotence is actually asked
+// about: a second run in a fresh directory answers a different question.
+func rerunInit(t *testing.T, previous initResult) initResult {
+	t.Helper()
+	command := exec.Command("bash", filepath.Join(previous.root, "scripts", "init.sh"))
+	command.Env = append(os.Environ(),
+		"PATH="+filepath.Join(previous.root, "bin")+":"+os.Getenv("PATH"),
+		"CHOWN_LOG="+previous.chownLog,
+		"CHOWN_EXIT=0",
+	)
+	output, commandErr := command.CombinedOutput()
+	updated, err := os.ReadFile(filepath.Join(previous.root, ".env"))
+	rerun := previous
+	rerun.env = string(updated)
+	rerun.envErr = err
+	rerun.output = string(output)
+	rerun.err = commandErr
+	return rerun
+}
+
+func executeInitIn(t *testing.T, root string, uid, gid, identityConfig string, chownExit int, setup func(*testing.T, string)) initResult {
+	t.Helper()
 	scriptsDir := filepath.Join(root, "scripts")
 	if err := os.MkdirAll(scriptsDir, 0700); err != nil {
 		t.Fatal(err)
@@ -895,6 +937,7 @@ func executeInitWithSetup(t *testing.T, uid, gid, identityConfig string, chownEx
 	output, commandErr := command.CombinedOutput()
 	updated, err := os.ReadFile(filepath.Join(root, ".env"))
 	return initResult{
+		root:     root,
 		sandbox:  filepath.Join(root, "sandbox"),
 		skills:   filepath.Join(root, "skills"),
 		memory:   filepath.Join(root, "memory"),

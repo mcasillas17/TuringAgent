@@ -18,12 +18,23 @@ generate_client_key() {
   printf 'tk_%s\n' "$(openssl rand -hex 32)"
 }
 
+# sed_replacement escapes the three characters sed treats as special inside the
+# replacement half of an s|| expression. Secrets here are hex and unaffected,
+# but a filesystem path is not: a checkout under a directory containing & would
+# have the whole matched line spliced back into the value, and one containing |
+# or \ would end the expression or escape the next character. A path with a
+# space needs no escaping and must survive untouched, which quoting already
+# does.
+sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
+}
+
 ensure_var() {
   local name="$1"
   local value="$2"
   if ! grep -q "^${name}=" .env || grep -q "^${name}=$" .env; then
     if grep -q "^${name}=" .env; then
-      sed -i.bak "s|^${name}=.*|${name}=${value}|" .env
+      sed -i.bak "s|^${name}=.*|${name}=$(sed_replacement "$value")|" .env
     else
       printf '%s=%s\n' "$name" "$value" >> .env
     fi
@@ -34,7 +45,7 @@ set_var() {
   local name="$1"
   local value="$2"
   if grep -q "^${name}=" .env; then
-    sed -i.bak "s|^${name}=.*|${name}=${value}|" .env
+    sed -i.bak "s|^${name}=.*|${name}=$(sed_replacement "$value")|" .env
   else
     printf '%s=%s\n' "$name" "$value" >> .env
   fi
@@ -70,6 +81,21 @@ configure_host_identity() {
   set_var HOST_IDENTITY_MODE auto
   set_var HOST_UID "$current_uid"
   set_var HOST_GID "$current_gid"
+}
+
+# configure_memory_display_root records where the vault is on this machine, for
+# the client to show and for nothing else to act on.
+#
+# It is set rather than ensured, because a value left over from a checkout that
+# has since moved names a folder that is not there — which is worse than the
+# container path it replaced, since it looks right. It is never printed: this
+# script's output is what a person pastes into an issue.
+configure_memory_display_root() {
+  if [[ -z "${MEMORY_DISPLAY_ROOT_VALUE:-}" ]]; then
+    printf 'Initialization failed: the memory vault path was never resolved.\n' >&2
+    return 1
+  fi
+  set_var MEMORY_DISPLAY_ROOT "$MEMORY_DISPLAY_ROOT_VALUE"
 }
 
 validate_sandbox_entries() {
@@ -188,6 +214,16 @@ provision_memory() {
   local document
 
   if ! provision_private_directory "$memory_path" memory; then
+    return 1
+  fi
+  # The path the person running this can actually open. It is recorded here,
+  # where the directory has just been proved to exist, and written into .env
+  # further down once that file is there. `pwd -P` rather than the string above
+  # because $PWD is the logical path init.sh was invoked through, and on macOS
+  # /var alone is a symlink — a display path that resolves differently from the
+  # directory it names is a display path somebody will fail to find.
+  if ! MEMORY_DISPLAY_ROOT_VALUE="$(cd "$memory_path" && pwd -P)"; then
+    printf 'Initialization failed: could not resolve the memory vault path.\n' >&2
     return 1
   fi
   for tier in "$MEMORY_INBOX_NAME" "$MEMORY_BELIEFS_NAME"; do
@@ -496,6 +532,7 @@ ensure_var TURING_EGRESS_SIGNING_SECRET "$(generate_secret)"
 ensure_var TURING_CURSOR_HMAC_SECRET "$(generate_secret)"
 ensure_var TURING_INTEGRATION_KEY "$(generate_secret)"
 configure_host_identity "$current_uid" "$current_gid"
+configure_memory_display_root
 provision_data
 rm -f .env.bak
 

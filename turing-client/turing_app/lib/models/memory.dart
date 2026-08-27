@@ -63,7 +63,13 @@ class MemorySettings {
 
   final bool enabled;
 
-  /// Absolute path, so the user can open the vault in their own editor.
+  /// Where the vault is, as a folder on the machine the user is sitting at, so
+  /// they can open it in their own editor.
+  ///
+  /// It is display only, and it is deliberately not the path the orchestrator
+  /// opens: under Docker that is a directory inside one container. Empty means
+  /// the server had nothing usable to name, and the page shows nothing rather
+  /// than guessing.
   final String vaultRoot;
   final bool vaultWritable;
   final MemoryUnavailableReason unavailableReason;

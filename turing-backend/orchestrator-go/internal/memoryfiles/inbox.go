@@ -331,7 +331,16 @@ func sanitizeTitle(title string) string {
 // disagree the file is the one that counts — the user may have opened the
 // proposal in Obsidian and rewritten the claim before deciding on it.
 type InboxNoteContent struct {
-	RelPath     string
+	RelPath string
+	// NoteID and Managed are what the file says about who wrote it: the
+	// identity in its own frontmatter, and whether it claims to be Turing's to
+	// rewrite. They are carried because a caller deciding whether a file is
+	// Turing's own write has to ask the file, and asking it twice — once here
+	// and once by re-parsing the bytes — is two answers where there should be
+	// one. Both are empty or false for a note the user wrote by hand, which is
+	// exactly the answer such a caller needs.
+	NoteID      string
+	Managed     bool
 	Kind        NoteKind
 	Title       string
 	Content     string
@@ -473,6 +482,8 @@ func (v *Vault) ReadInboxCandidate(ctx context.Context, relPath string) (InboxCa
 				Readable: true,
 				Note: InboxNoteContent{
 					RelPath:     clean,
+					NoteID:      parsed.ID,
+					Managed:     parsed.Managed,
 					Kind:        parsed.Kind,
 					Title:       parsed.Title,
 					Content:     content,
@@ -565,9 +576,16 @@ const (
 	// RemoveRetiredCandidate is Turing's own tidying: bytes whose outcome is
 	// already recorded elsewhere — an applied profile edit, a candidate no row
 	// will ever describe, a file the session cleaner's manifest names. It is
-	// idempotent and hashless because it is not a decision about text; the
-	// decision already happened, and leaving the file behind would be the
-	// failure. It is deliberately not reachable as a user's rejection.
+	// idempotent, because a file the user asked not to have and which is not
+	// there is the outcome that was wanted, and it is deliberately not
+	// reachable as a user's rejection.
+	//
+	// It requires ExpectedContentHash for the same reason a rejection does. A
+	// path is not an owner: the user can move a proposal out of the inbox and
+	// save something of their own under the name it had, or open it and rewrite
+	// it in place, and a removal that names only a path would take whichever of
+	// those it found. The decision it follows was about specific bytes, so the
+	// removal is held to those bytes and refuses anything else.
 	RemoveRetiredCandidate InboxRemovalMode = "retired_candidate"
 )
 
@@ -596,11 +614,13 @@ type RemoveInboxNoteRequest struct {
 // the work, and a decided rejection whose file has already gone has nothing
 // left to protect.
 //
-// A decided rejection that finds the file still there reads it under this
-// primitive's own lock and compares it to the hash the decision named, then
-// unlinks the inode whose bytes it just compared. The caller's earlier read
-// released the lock this one holds; without the check here, a proposal the user
-// rewrote between the two would be deleted as though they had read it.
+// Every other removal that finds the file still there reads it under this
+// primitive's own lock and compares it to the hash it was given, then unlinks
+// the inode whose bytes it just compared. The caller's earlier read released
+// the lock this one holds; without the check here, a proposal the user rewrote
+// between the two would be deleted as though they had read it — and Turing's
+// own tidying, which follows an outcome recorded minutes or a crash ago, has
+// the same window and a wider one.
 func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequest) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -629,6 +649,12 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 			)
 		}
 	case RemoveRetiredCandidate:
+		if request.ExpectedContentHash == "" {
+			return fmt.Errorf(
+				"tidying %q away must name the bytes it deletes; a path is not an owner: %w",
+				clean, ErrUnboundDecision,
+			)
+		}
 	default:
 		return fmt.Errorf("inbox removal mode %q is not recognised: %w", request.Mode, ErrUnboundDecision)
 	}
@@ -661,25 +687,17 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
 		return confinementError(clean, "candidate is not a regular file")
 	}
-	if mode == RemoveRetiredCandidate {
-		// Turing's own tidying, and deliberately the plain unlink. The outcome
-		// it follows is already recorded elsewhere, there is no decision to
-		// bind it to, and leaving the file behind is the failure it exists to
-		// prevent. It is unreachable as a user's rejection, and it is still
-		// confined: every path above this refuses anything outside inbox/.
-		if err := unix.Unlinkat(int(parent.Fd()), leaf, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-			return fmt.Errorf("remove %q: %w", clean, err)
-		}
-		if err := v.syncDirectory(parent); err != nil {
-			return fmt.Errorf("sync vault directory after removing %q: %w", clean, err)
-		}
-		return ctx.Err()
-	}
-	return v.removeRejectedInboxEntry(ctx, parent, leaf, clean, stat, request)
+	return v.removeBoundInboxEntry(ctx, parent, leaf, clean, stat, request)
 }
 
-// removeRejectedInboxEntry is the user's own rejection, and it deletes the file
-// they were looking at or it deletes nothing.
+// removeBoundInboxEntry is every deletion this package performs, and it deletes
+// the file it was bound to or it deletes nothing.
+//
+// Three doors reach it and they differ only in what the binding is made of: a
+// rejection names the bytes the user read, a hashless rejection names the entry
+// a pre-check failed on, and Turing's own tidying names the bytes an outcome
+// was already recorded against. What follows is identical, because the unsafe
+// part is identical.
 //
 // An unlink names a name. Between the read that checked the candidate and the
 // unlink that removes it, the entry under that name can become a different
@@ -715,7 +733,7 @@ func (v *Vault) RemoveInboxNote(ctx context.Context, request RemoveInboxNoteRequ
 // checked before anything is detached, because a proposal the user repaired in
 // their editor is one they can now read and decide about properly, and a file
 // that merely took the name is somebody else's entirely.
-func (v *Vault) removeRejectedInboxEntry(
+func (v *Vault) removeBoundInboxEntry(
 	ctx context.Context,
 	parent *os.File,
 	leaf string,

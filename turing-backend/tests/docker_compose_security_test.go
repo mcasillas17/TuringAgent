@@ -89,6 +89,10 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"DATABASE_PATH:",
 		"SKILLS_ROOT:",
 		"MEMORY_ROOT: /memory",
+		// Display only: the host directory the vault is bound from, so the
+		// client can name a folder the user can actually open. No file
+		// operation and no confinement check ever reads it.
+		"MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:?",
 		"OLLAMA_BASE_URL:",
 		// The orchestrator never calls OpenAI or mcp-files through its normal
 		// bearer: it only reports
@@ -146,6 +150,10 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// MEMORY_ROOT here would mean a second process reading the user's
 		// persona, profile and beliefs off disk outside that contract.
 		"MEMORY_ROOT:",
+		// And the display path is no more theirs to know: it names the folder
+		// on the user's own machine, and only the service that answers "where
+		// is my memory?" has any reason to hold it.
+		"MEMORY_DISPLAY_ROOT:",
 	)
 
 	system := composeServiceBlock(t, compose, "turing-mcp-system")
@@ -192,8 +200,10 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"ORCHESTRATOR_INTERNAL_BASE_URL:",
 		"${FILES_SANDBOX_ROOT",
 		// The sandbox and the vault are separate confinement domains owned by
-		// separate processes. mcp-files must not learn where the vault is.
+		// separate processes. mcp-files must not learn where the vault is,
+		// under either name.
 		"MEMORY_ROOT:",
+		"MEMORY_DISPLAY_ROOT:",
 		// mcp-files may only consume approvals; it must never hold the
 		// runtime's credential, or a compromised mcp-files could claim jobs
 		// and read conversation history through RuntimeService/SessionService.
@@ -218,6 +228,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"DATABASE_PATH",
 			"SKILLS_ROOT",
 			"MEMORY_ROOT",
+			"MEMORY_DISPLAY_ROOT",
 			"MCP_CONFIG_ROOT",
 			"OLLAMA_BASE_URL",
 			"OLLAMA_MODEL",

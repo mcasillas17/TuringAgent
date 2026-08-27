@@ -81,11 +81,26 @@ type Server struct {
 	audit     AuditRecorder
 	notifier  RegistryChangeNotifier
 	approvals ApprovalEnforcer
+	// displayRoot is the vault named the way the person using it would name
+	// it, and it is the only thing MemorySettings.vault_root ever carries.
+	//
+	// It is separate from vault.Root() because the two are not the same path
+	// under Compose: the orchestrator opens `/memory`, which exists inside one
+	// container, and the folder the user can actually open is on their own
+	// disk. Nothing here reads it except the settings response — every open,
+	// confinement check and refusal goes through the vault, which knows its own
+	// root and never consults this.
+	displayRoot string
 }
 
 func New(repo *repository.Repository, vault *memoryfiles.Vault, audit AuditRecorder) *Server {
 	return &Server{repo: repo, vault: vault, audit: audit}
 }
+
+// SetMemoryDisplayRoot names the vault for the person using it. It is a
+// configured string, not anything derived from a request, and it is set once at
+// startup for the same reason the vault is.
+func (s *Server) SetMemoryDisplayRoot(root string) { s.displayRoot = root }
 
 func (s *Server) SetRegistryChangeNotifier(notifier RegistryChangeNotifier) { s.notifier = notifier }
 func (s *Server) SetApprovalEnforcer(enforcer ApprovalEnforcer)             { s.approvals = enforcer }

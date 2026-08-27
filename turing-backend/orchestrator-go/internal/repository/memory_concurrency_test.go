@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 )
 
 // The two passes run on different schedules — one on a timer behind reads, one
@@ -214,10 +216,13 @@ func TestPurgeSessionVaultArtifactsRefusesWithoutAVaultOnlyWhenRowsNameFiles(t *
 	}
 
 	if _, err := repo.db.ExecContext(ctx(), `
-		INSERT INTO vault_artifacts (id, session_id, vault_path, physical_path, state, created_at, finalized_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO vault_artifacts (
+			id, session_id, vault_path, physical_path, state, created_at, finalized_at,
+			expected_content_hash
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, "vaultart_detached", session.SessionID, "inbox/note.md", "inbox/note.md",
-		VaultArtifactStateReady, now(), now()); err != nil {
+		VaultArtifactStateReady, now(), now(), memoryfiles.ContentHash("a note this session wrote")); err != nil {
 		t.Fatalf("seed a vault row: %v", err)
 	}
 	if _, err := repo.PurgeSessionVaultArtifacts(ctx(), session.SessionID); !errors.Is(err, ErrMemoryVaultUnavailable) {

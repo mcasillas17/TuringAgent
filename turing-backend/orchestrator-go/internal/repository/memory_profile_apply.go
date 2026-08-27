@@ -141,10 +141,41 @@ func (r *Repository) recoverOneProfileApply(
 // then the row, and the reservation only if the file really went — the same
 // rule the live path follows, for the same reason.
 func (r *Repository) finalizeRecoveredApply(ctx context.Context, vault *memoryfiles.Vault, candidate MemoryCandidate) error {
+	// The apply that wrote the profile is gone, and with it the hash of the
+	// bytes it acted on: the claim records the two sides of the *profile*
+	// write, which is what makes recovery decidable at all, and nothing records
+	// what the proposal read as at that moment. The row's hash is not that —
+	// the user may have edited the proposal before accepting it.
+	//
+	// So the binding is taken the same way every other crash-heal here takes
+	// one: a fresh confined read of the file under the reserved path, adopted
+	// only when it is a managed note carrying the identity in the name this
+	// server minted. Anything else leaves the file alone and the tidying
+	// unfinished, which keeps the reservation that says somebody still has to
+	// deal with it.
 	removed := true
-	if err := vault.RemoveInboxNote(ctx, retiredCandidateRemoval(candidate.InboxPath)); err != nil {
-		log.Printf("remove applied memory proposal %s: %v", candidate.CandidateID, err)
-		removed = false
+	appliedHash, owned, hashErr := turingWrittenNoteHash(ctx, vault, candidate.InboxPath)
+	switch {
+	case hashErr != nil:
+		return hashErr
+	case owned:
+		if err := vault.RemoveInboxNote(ctx, retiredCandidateRemoval(candidate.InboxPath, appliedHash)); err != nil {
+			log.Printf("remove applied memory proposal %s: %v", candidate.CandidateID, err)
+			removed = false
+		}
+	default:
+		// Not a file this can prove is Turing's — and one of the ways to be
+		// that is not to exist. A crash after the removal and before the row
+		// was consumed lands here, and a file the apply already took away is
+		// the outcome it wanted, so the reservation may go.
+		present, presentErr := inboxEntryStillThere(ctx, vault, candidate.InboxPath)
+		if presentErr != nil {
+			return presentErr
+		}
+		if present {
+			log.Printf("applied memory proposal %s was left in place: nothing proves the file under its path is Turing's", candidate.CandidateID)
+			removed = false
+		}
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -132,7 +133,12 @@ func (s *Server) settings(ctx context.Context) (*turingv1.MemorySettings, error)
 		UnavailableReason: turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_NONE,
 	}
 	if s.vault != nil {
-		settings.VaultRoot = s.vault.Root()
+		// The path handed to the client is the display root and never the one
+		// the orchestrator opens: under Compose that is a container mount
+		// point, and telling a desktop user their memory is at `/memory` names
+		// a place they cannot go. Writability, by contrast, is a fact about the
+		// vault itself, so it is answered against the vault.
+		settings.VaultRoot = presentableVaultRoot(s.displayRoot)
 		settings.VaultWritable = unix.Access(s.vault.Root(), unix.W_OK) == nil
 	}
 	switch {
@@ -142,6 +148,23 @@ func (s *Server) settings(ctx context.Context) (*turingv1.MemorySettings, error)
 		settings.UnavailableReason = turingv1.MemoryUnavailableReason_MEMORY_UNAVAILABLE_REASON_VAULT_MISSING
 	}
 	return settings, nil
+}
+
+// presentableVaultRoot is the last check before a path is shown to a person as
+// somewhere to go.
+//
+// Config refuses anything that is not a clean absolute path at load, so this is
+// a second answer to a question that already has one — deliberately, because
+// the failure it guards is silent. A display root that is relative, or that
+// still contains a traversal, renders as a plausible-looking instruction and
+// somebody eventually pastes it into a terminal. Saying nothing is the honest
+// answer to "where is my memory?" when nothing usable is known, and naming the
+// container's own mount point instead would be worse than saying nothing.
+func presentableVaultRoot(root string) string {
+	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return ""
+	}
+	return root
 }
 
 // vaultView is one pass over the vault, in the shapes the public surface needs.

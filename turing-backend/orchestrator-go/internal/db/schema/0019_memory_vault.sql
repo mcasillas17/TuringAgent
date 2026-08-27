@@ -196,7 +196,33 @@ CREATE TABLE vault_artifacts (
   physical_path TEXT NOT NULL UNIQUE,
   state TEXT NOT NULL CHECK (state IN ('writing', 'ready', 'delete_failed')),
   created_at TEXT NOT NULL,
-  finalized_at TEXT
+  finalized_at TEXT,
+  -- The bytes this row is entitled to remove, as a hash of the whole file
+  -- exactly as it was written.
+  --
+  -- A path is not an owner. The user can move a candidate out of the inbox and
+  -- save something of their own under the same name, and a cleaner following a
+  -- row that named only a path would unlink whatever it found there — deleting
+  -- a file Turing never wrote, on the strength of a coincidence of names.
+  --
+  -- Nullable, because the reservation is deliberately taken before the write:
+  -- there is nothing on disk to hash yet, and a hash written then would be a
+  -- guess about bytes that do not exist. The two CHECKs are what keep that
+  -- window from widening into a licence.
+  expected_content_hash TEXT,
+  -- A reservation names no bytes. It exists precisely because the write has not
+  -- happened, so anything it claimed about file contents would be unverifiable
+  -- by construction.
+  CHECK (state <> 'writing' OR expected_content_hash IS NULL),
+  -- A finalized row says the file is on disk, so it has to say which file.
+  -- Finalization is the one moment the bytes are known, and a 'ready' row
+  -- without a hash is a row claiming ownership it can never prove.
+  --
+  -- 'delete_failed' is deliberately outside both rules. A cleanup pass marks
+  -- whatever it could not remove, including a reservation whose write never
+  -- landed and which will never have a hash; refusing that row here would abort
+  -- the whole withdrawal transaction and strand every sibling row with it.
+  CHECK (state <> 'ready' OR expected_content_hash IS NOT NULL)
 );
 
 CREATE INDEX idx_vault_artifacts_session_state

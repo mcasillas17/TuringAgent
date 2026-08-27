@@ -336,23 +336,34 @@ func (d *detachedEntry) preserve(recovery detachRecovery, cause error) detachedP
 	if recovery == recoverUnderReservedName {
 		return d.stayStaged(placement)
 	}
-	name, staged, rescueErr := d.vault.rescueDetachedEntry(d.parent, d.staging)
-	if name == "" {
+	rescue := d.vault.rescueDetachedEntry(d.parent, d.staging)
+	if rescue.name == "" {
 		// No visible name was ever linked, so nothing has moved: the bytes are
 		// exactly where the detach left them, and this is the same placement
 		// the reserved road above makes.
-		placement.residueErr = rescueErr
+		placement.residueErr = rescue.nameErr
 		return d.stayStaged(placement)
 	}
-	placement.recoveryRelPath = vaultRelPath(path.Dir(d.clean), name)
-	if rescueErr != nil {
-		// The visible name exists and holds the bytes; only the tidying after
-		// it failed. The reserved name is reported either way, and staged says
-		// whether it is a link somebody can find today or one a crash can
-		// bring back.
+	placement.recoveryRelPath = vaultRelPath(path.Dir(d.clean), rescue.name)
+	if rescue.flushErr != nil {
+		// The visible name holds the bytes as this process sees it, and the
+		// fsync that would make that true after a crash did not happen. The
+		// rescue stopped there rather than going on to drop the staging name,
+		// so both names are on disk and neither is known to be durable. That
+		// is two facts and neither is a failed drop: nothing was dropped, and
+		// the placement being reported is a placement nobody flushed.
+		placement.flushErr = rescue.flushErr
 		placement.residueRelPath = d.stagedRelPath()
-		placement.residueErr = rescueErr
-		placement.residueRemains = staged
+		placement.residueRemains = true
+		return placement
+	}
+	if rescue.residueErr != nil {
+		// The visible name is durable and holds the bytes; only the tidying
+		// after it failed. residueRemains says whether the reserved name is a
+		// link somebody can find today or one a crash can bring back.
+		placement.residueRelPath = d.stagedRelPath()
+		placement.residueErr = rescue.residueErr
+		placement.residueRemains = rescue.residueRemains
 	}
 	return placement
 }
@@ -408,13 +419,21 @@ func (p detachedPlacement) explain(why string) string {
 }
 
 // withResidue adds the second link this restore did not clear away, in the
-// tense it is actually in. There are two of those and they send a person to
-// different places: one is a file to go and look at, the other is a name that
-// is gone until a crash brings it back.
+// tense it is actually in. There are three of those and they send a person to
+// different places: one is a file to go and look at, one is a name that is gone
+// until a crash brings it back, and one is a link nobody tried to drop at all.
+//
+// That last one is not a failure and must not read like one. It is the rescue
+// stopping the moment its flush failed, keeping the name the bytes were already
+// under rather than trading a link a crash might find for one it might not.
+// Reporting it as a drop that failed blames a step that never ran; the caveat
+// note() adds is what says the placement is not known to be durable.
 func (p detachedPlacement) withResidue(sentence string) string {
 	switch {
 	case p.residueRelPath == "":
 		return sentence
+	case p.residueErr == nil && p.residueRemains:
+		return fmt.Sprintf("%s, and it is also still at %s, which was deliberately left in place rather than dropped", sentence, p.residueRelPath)
 	case p.residueRemains:
 		return fmt.Sprintf("%s, but a second link to it could not be dropped (%v); that link is at %s", sentence, p.residueErr, p.residueRelPath)
 	default:
@@ -448,35 +467,71 @@ func (p detachedPlacement) note(sentence string) string {
 // then flush again. A crash anywhere in it leaves the bytes reachable under at
 // least one name, which is the property the whole path exists for.
 //
-// The second answer is whether the staging name is still a link on disk. It is
-// not a detail: a caller reporting where a file is has to know the difference
-// between a reserved name somebody can go and open and one this call dropped
-// without the drop reaching the disk.
-func (v *Vault) rescueDetachedEntry(parent *os.File, staging string) (string, bool, error) {
+// What it answers with is a rescuePlacement rather than a name and a bool,
+// because the three steps that can fail leave three different states behind and
+// a caller has to be able to tell them apart. Collapsing them is how the first
+// flush ended up reported as a drop that failed — a step that had not run.
+func (v *Vault) rescueDetachedEntry(parent *os.File, staging string) rescuePlacement {
 	for attempt := 0; attempt < 16; attempt++ {
 		name, err := v.mintRecoveryName()
 		if err != nil {
-			return "", true, err
+			return rescuePlacement{nameErr: err}
 		}
 		linkErr := v.linkDetached(parent, staging, name)
 		if errors.Is(linkErr, unix.EEXIST) {
 			continue
 		}
 		if linkErr != nil {
-			return "", true, linkErr
+			return rescuePlacement{nameErr: linkErr}
 		}
 		if err := v.syncDirectory(parent); err != nil {
-			return name, true, err
+			// The staging name is deliberately left alone. Dropping it now
+			// would trade the name the detach already put the bytes under —
+			// which a crash might still find — for one no fsync has
+			// established.
+			return rescuePlacement{name: name, flushErr: err}
 		}
 		if err := v.unlinkStaging(parent, staging); err != nil && !errors.Is(err, unix.ENOENT) {
-			return name, true, err
+			return rescuePlacement{name: name, residueErr: err, residueRemains: true}
 		}
 		if err := v.syncDirectory(parent); err != nil {
-			return name, false, err
+			return rescuePlacement{name: name, residueErr: err}
 		}
-		return name, false, nil
+		return rescuePlacement{name: name}
 	}
-	return "", true, errors.New("could not allocate a recovery name")
+	return rescuePlacement{nameErr: errors.New("could not allocate a recovery name")}
+}
+
+// rescuePlacement is how far a rescue got, in the four states it can stop in.
+//
+// Each field answers a question a caller has to be able to answer about
+// somebody's file, and no two of them mean the same thing. The name is where
+// the bytes were published. nameErr is why they were not. flushErr says the
+// publishing happened but is not known to have survived a crash, and that the
+// reserved name is still there because of it. residueErr says the publishing is
+// durable and the tidying afterwards is what failed — and residueRemains says
+// whether that leftover link is one somebody can go and open today.
+//
+// The reason this is a struct and not (string, bool, error) is the first flush.
+// As one error it was indistinguishable from a failed drop, so the refusal that
+// came out of it blamed a step that never ran and promised a location nobody
+// had flushed.
+type rescuePlacement struct {
+	// name is the visible recovery name the bytes are linked under, empty
+	// exactly when no visible name was ever taken.
+	name string
+	// nameErr is why no visible name was taken. Set only when name is empty.
+	nameErr error
+	// flushErr is the failure of the fsync that would have established the
+	// visible link. When it is set the staging name is still on disk, on
+	// purpose, and no drop was attempted.
+	flushErr error
+	// residueErr is what stopped the staging name being dropped cleanly once
+	// the visible link was durable.
+	residueErr error
+	// residueRemains distinguishes a link that would not go away from one that
+	// went away without the removal reaching the disk.
+	residueRemains bool
 }
 
 // reserveStagingName takes a random private name inside the entry's own

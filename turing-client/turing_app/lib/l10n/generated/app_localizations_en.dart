@@ -209,6 +209,9 @@ class AppLocalizationsEn extends AppLocalizations {
       'Memory tools are unavailable while memory is off, and nothing is pinned into a run. The vault stays on disk and stays readable here.';
 
   @override
+  String get memoryVaultLocation => 'The vault is a folder on this computer:';
+
+  @override
   String get memoryReasonUnspecified =>
       'The server did not say whether this could be read.';
 

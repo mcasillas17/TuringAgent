@@ -216,14 +216,23 @@ func TestRemoveInboxNoteRemovesAnUnreadableCandidateWithoutAHash(t *testing.T) {
 }
 
 // The session cleaner and the tidying after a decision that already landed are
-// idempotent housekeeping over a manifest, not a user deciding about text.
-func TestRemoveInboxNoteRemovesRetiredBytesWithoutAHash(t *testing.T) {
+// idempotent housekeeping over a manifest — but housekeeping over somebody's
+// vault is still a deletion, and it names the bytes it is entitled to remove.
+//
+// The outcome each of these follows was recorded against specific bytes: the
+// proposal that was applied, the note that was written, the file the manifest
+// row was finalized over. What the binding buys is the window afterwards, in
+// which the user can move that file away and save something of their own under
+// the name it had.
+func TestRemoveInboxNoteRemovesRetiredBytesItCanName(t *testing.T) {
 	vault := newTestVault(t)
-	full := writeVaultFile(t, vault, "inbox/retired.md", "candidate")
+	const retired = "candidate"
+	full := writeVaultFile(t, vault, "inbox/retired.md", retired)
 
 	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
-		RelPath: "inbox/retired.md",
-		Mode:    RemoveRetiredCandidate,
+		RelPath:             "inbox/retired.md",
+		Mode:                RemoveRetiredCandidate,
+		ExpectedContentHash: ContentHash(retired),
 	}); err != nil {
 		t.Fatalf("remove retired bytes: %v", err)
 	}
@@ -231,10 +240,53 @@ func TestRemoveInboxNoteRemovesRetiredBytesWithoutAHash(t *testing.T) {
 		t.Fatalf("the retired candidate survived: %v", err)
 	}
 	if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
-		RelPath: "inbox/retired.md",
-		Mode:    RemoveRetiredCandidate,
+		RelPath:             "inbox/retired.md",
+		Mode:                RemoveRetiredCandidate,
+		ExpectedContentHash: ContentHash(retired),
 	}); err != nil {
 		t.Fatalf("retired cleanup is not idempotent: %v", err)
+	}
+}
+
+// And the door that used to exist is closed. A tidying that names only a path
+// cannot be answered truthfully: the entry under a name is not something the
+// caller can hold still, so the request is refused before the file is touched.
+func TestRemoveInboxNoteRefusesRetiredBytesItCannotName(t *testing.T) {
+	vault := newTestVault(t)
+	full := writeVaultFile(t, vault, "inbox/retired.md", "candidate")
+
+	err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
+		RelPath: "inbox/retired.md",
+		Mode:    RemoveRetiredCandidate,
+	})
+	if !errors.Is(err, ErrUnboundDecision) {
+		t.Fatalf("hashless retired cleanup = %v, want it refused as unbound", err)
+	}
+	if _, statErr := os.Lstat(full); statErr != nil {
+		t.Fatalf("the refused cleanup removed the file anyway: %v", statErr)
+	}
+}
+
+// A tidying whose file is no longer the bytes it was recorded against is the
+// case the binding exists for. The user moved the proposal out of the inbox and
+// saved something of their own under the name it had, and what is under that
+// name now is theirs.
+func TestRemoveInboxNoteRefusesRetiredBytesThatChangedUnderIt(t *testing.T) {
+	vault := newTestVault(t)
+	const theirs = "a note the user wrote themselves"
+	full := writeVaultFile(t, vault, "inbox/retired.md", theirs)
+
+	err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
+		RelPath:             "inbox/retired.md",
+		Mode:                RemoveRetiredCandidate,
+		ExpectedContentHash: ContentHash("the proposal Turing wrote"),
+	})
+	if !errors.Is(err, ErrStaleContent) {
+		t.Fatalf("retired cleanup over another file = %v, want a stale-content refusal", err)
+	}
+	held, readErr := os.ReadFile(full)
+	if readErr != nil || string(held) != theirs {
+		t.Fatalf("the user's own file was disturbed: %q, %v", held, readErr)
 	}
 }
 

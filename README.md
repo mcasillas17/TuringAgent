@@ -72,6 +72,12 @@ with read-only roots, no Linux capabilities, and `no-new-privileges`; only
 `/app/data`, `/skills`, `/memory`, and `/sandbox` are writable, and `/memory` is
 mounted into the orchestrator alone.
 
+`/memory` is a path inside that container, so the Memory page does not show it.
+`scripts/init.sh` writes the host directory the vault is bound from into `.env`
+as `MEMORY_DISPLAY_ROOT`, Compose passes it to the orchestrator, and that is the
+folder the app names as the one to open in Obsidian. It is display only: every
+read, write and confinement check still goes through `MEMORY_ROOT`.
+
 In another terminal, run the Flutter app:
 
 ```bash

@@ -112,14 +112,14 @@ func TestVaultArtifactStateTransitionsAreScopedToTheSession(t *testing.T) {
 		t.Fatalf("ReserveVaultArtifact: %v", err)
 	}
 
-	if _, err := repo.FinalizeVaultArtifact(ctx, artifact.ArtifactID, stranger.SessionID); !errors.Is(err, ErrVaultArtifactNotFound) {
+	if _, err := repo.FinalizeVaultArtifact(ctx, artifact.ArtifactID, stranger.SessionID, "sha256:written"); !errors.Is(err, ErrVaultArtifactNotFound) {
 		t.Fatalf("stranger finalize error = %v, want ErrVaultArtifactNotFound", err)
 	}
 	if released, err := repo.ReleaseVaultArtifactReservation(ctx, artifact.ArtifactID, stranger.SessionID); err != nil || released {
 		t.Fatalf("stranger release = (%v, %v), want (false, nil)", released, err)
 	}
 
-	finalized, err := repo.FinalizeVaultArtifact(ctx, artifact.ArtifactID, owner.SessionID)
+	finalized, err := repo.FinalizeVaultArtifact(ctx, artifact.ArtifactID, owner.SessionID, "sha256:written")
 	if err != nil {
 		t.Fatalf("FinalizeVaultArtifact: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestVaultArtifactStateTransitionsAreScopedToTheSession(t *testing.T) {
 	if released, err := repo.ReleaseVaultArtifactReservation(ctx, artifact.ArtifactID, owner.SessionID); err != nil || released {
 		t.Fatalf("release after finalize = (%v, %v), want (false, nil)", released, err)
 	}
-	if _, err := repo.FinalizeVaultArtifact(ctx, artifact.ArtifactID, owner.SessionID); !errors.Is(err, ErrVaultArtifactInvalidTransition) {
+	if _, err := repo.FinalizeVaultArtifact(ctx, artifact.ArtifactID, owner.SessionID, "sha256:written"); !errors.Is(err, ErrVaultArtifactInvalidTransition) {
 		t.Fatalf("second finalize error = %v, want ErrVaultArtifactInvalidTransition", err)
 	}
 }

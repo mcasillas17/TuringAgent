@@ -47,11 +47,27 @@ type Config struct {
 	InternalPort   int
 	DatabasePath   string
 	SkillsRoot     string
-	// MemoryRoot is the folder the user can open in their own editor.
+	// MemoryRoot is the folder the orchestrator opens, and the only path any
+	// file operation, confinement check or refusal is ever about.
 	// A root that does not exist is not fatal: memory reports itself
 	// unavailable and offers no tools, which is a state the app already has to
 	// render, rather than refusing to start.
-	MemoryRoot                string
+	MemoryRoot string
+	// MemoryDisplayRoot is the same vault named the way the person using it
+	// would name it, and it is display-only.
+	//
+	// It exists because MemoryRoot is not always a path anybody can open. Under
+	// Compose the orchestrator opens `/memory`, which exists inside one
+	// container and nowhere else; telling a desktop user their memory is at
+	// `/memory` is telling them a place that is not there. Compose passes the
+	// host directory here instead, and a native run leaves it alone and gets
+	// MemoryRoot.
+	//
+	// Nothing opens it, walks it, joins onto it or decides anything with it. It
+	// is validated as a clean absolute path all the same — a string rendered as
+	// "your memory is here" is a string somebody will eventually paste into a
+	// terminal, and a relative fragment or a traversal is not that.
+	MemoryDisplayRoot         string
 	MCPConfigRoot             string
 	OllamaBaseURL             string
 	OllamaModel               string
@@ -339,6 +355,13 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if !filepath.IsAbs(memoryRoot) || filepath.Clean(memoryRoot) != memoryRoot {
 		return Config{}, fmt.Errorf("MEMORY_ROOT must be a clean absolute path")
 	}
+	// Defaulted from the vault it describes rather than from a literal, so a
+	// native run that never heard of this setting still names the folder it
+	// actually opened.
+	memoryDisplayRoot := stringValue("MEMORY_DISPLAY_ROOT", memoryRoot)
+	if !filepath.IsAbs(memoryDisplayRoot) || filepath.Clean(memoryDisplayRoot) != memoryDisplayRoot {
+		return Config{}, fmt.Errorf("MEMORY_DISPLAY_ROOT must be a clean absolute path")
+	}
 	mcpConfigRoot := stringValue("MCP_CONFIG_ROOT", "/mcp")
 	if !filepath.IsAbs(mcpConfigRoot) || filepath.Clean(mcpConfigRoot) != mcpConfigRoot {
 		return Config{}, fmt.Errorf("MCP_CONFIG_ROOT must be a clean absolute path")
@@ -358,6 +381,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		DatabasePath:              stringValue("DATABASE_PATH", "/app/data/turing.db"),
 		SkillsRoot:                skillsRoot,
 		MemoryRoot:                memoryRoot,
+		MemoryDisplayRoot:         memoryDisplayRoot,
 		MCPConfigRoot:             mcpConfigRoot,
 		OllamaBaseURL:             ollamaEndpoint.Canonical,
 		OllamaModel:               stringValue("OLLAMA_MODEL", "qwen2.5:7b"),

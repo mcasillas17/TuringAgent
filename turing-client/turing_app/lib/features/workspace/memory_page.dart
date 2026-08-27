@@ -791,8 +791,19 @@ class _SettingsCard extends StatelessWidget {
               color: palette.textMuted,
             ),
           ),
+          // Shown only when the server names a folder, and labelled with the
+          // machine it is on. The server sends the host directory here — the
+          // one the vault is bound from — because the path it opens the vault
+          // at may exist only inside a container. An unlabelled string invites
+          // somebody to paste a container path into their own terminal, and a
+          // label with nothing under it invites them to look for a folder
+          // nobody named.
           if (settings.vaultRoot.isNotEmpty) ...[
             const SizedBox(height: 8),
+            Text(
+              l10n.memoryVaultLocation,
+              style: TextStyle(fontSize: 12, color: palette.textMuted),
+            ),
             SelectableText(
               settings.vaultRoot,
               style: TextStyle(fontSize: 12, color: palette.textMuted),

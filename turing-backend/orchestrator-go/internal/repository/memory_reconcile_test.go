@@ -672,7 +672,7 @@ func TestReconcileKeepsAReservationFinalizedAfterTheScanStarted(t *testing.T) {
 	}
 	// The walk starts after the reservation and before the write is confirmed.
 	repo.memoryReconcileScanAnchor = now()
-	if _, err := repo.FinalizeVaultArtifact(ctx(), artifact.ArtifactID, sessionID); err != nil {
+	if _, err := repo.FinalizeVaultArtifact(ctx(), artifact.ArtifactID, sessionID, "sha256:written"); err != nil {
 		t.Fatalf("FinalizeVaultArtifact: %v", err)
 	}
 

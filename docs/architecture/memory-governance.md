@@ -41,7 +41,8 @@ does not change its obligations.
 
 Phase 1 gives Turing a memory the user can open in a text editor: an
 Obsidian-compatible vault of plain Markdown at `MEMORY_ROOT` (`/memory` in the
-container, `turing-backend/memory/` on the host), holding `persona.md`,
+container, `turing-backend/memory/` on the host — the latter is what the app
+shows, as the display-only `MEMORY_DISPLAY_ROOT`), holding `persona.md`,
 `profile.md`, `inbox/` and `beliefs/`. This section is the whole amendment. It
 names two relaxations and rewrites five passages of the contract above —
 §Ownership and scope's final paragraph, §Retention's first bullet, the **Active
@@ -170,6 +171,30 @@ These are known, bounded, and deliberately not claimed away:
   permission on the file itself. This is scoped to the one case that cannot be
   opened at all; a proposal past the size bound opens, proves itself, and is
   still removable.
+- **A file Turing cannot prove it wrote is never withdrawn, and its manifest
+  row stays.** Every vault artifact the session manifest tracks carries the hash
+  of the whole file exactly as it was written, recorded when the write is
+  confirmed, and the withdrawal that removes it deletes those bytes or nothing.
+  A path is not an owner: the user may move a proposal out of the inbox and save
+  something of their own under the name it had, or open it and rewrite it in
+  place. Either way the removal refuses, the file is untouched, the row is kept
+  and marked, and the withdrawal reports itself unfinished and retryable rather
+  than complete. A reservation whose write never landed still drains, because
+  there is no file to remove; a write that landed but whose bookkeeping was lost
+  to a crash is bound by the reconcile pass, which reads the file under the
+  reserved path afresh and adopts it only when it is a managed note carrying the
+  identity in the name this server minted. So a user who leaves their own file
+  at a withdrawn proposal's path keeps that file and keeps a manifest row until
+  they move it, which is the trade this makes deliberately.
+- **The vault path shown in the app is display-only and may be absent.** The
+  orchestrator opens the vault at `MEMORY_ROOT`, which under Compose is
+  `/memory` — a directory inside one container and nowhere the person reading
+  the Memory page can go. What the page shows is `MEMORY_DISPLAY_ROOT`, the host
+  directory the vault is bound from, written into `.env` by `scripts/init.sh`
+  and passed through Compose. It is never consulted for access, confinement or
+  any other decision; a value that is not a clean absolute path is omitted
+  rather than rendered, and the page then names no folder at all instead of
+  naming one that does not exist.
 
 ### What the amendment does not touch
 

@@ -121,7 +121,12 @@ func newMemoryServiceStack(
 	if recorder == nil {
 		recorder = audit.New(repo)
 	}
-	return New(repo, vault, recorder), repo, vault, database, context.Background()
+	server := New(repo, vault, recorder)
+	// The native default, which is what app.New passes when nobody configured a
+	// separate display root: the folder the client names is the folder the
+	// orchestrator opened. Tests about the Docker case override it.
+	server.SetMemoryDisplayRoot(vault.Root())
+	return server, repo, vault, database, context.Background()
 }
 
 func newRun(t *testing.T, repo *repository.Repository, ctx context.Context) (string, string) {

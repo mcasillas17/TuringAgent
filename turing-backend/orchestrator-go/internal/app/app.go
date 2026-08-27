@@ -239,6 +239,7 @@ func New(cfg config.Config) (*App, error) {
 	integrationService.SetApprovalEnforcer(approvalService)
 	integrationService.SetRegistryChangeNotifier(runtimeService)
 	memoryService := memorysvc.New(repo, memoryVault, auditService)
+	memoryService.SetMemoryDisplayRoot(cfg.MemoryDisplayRoot)
 	memoryService.SetApprovalEnforcer(approvalService)
 	memoryService.SetRegistryChangeNotifier(runtimeService)
 	mcpRegistryService := mcpregistrysvc.New(repo, integrationSealer, nil)

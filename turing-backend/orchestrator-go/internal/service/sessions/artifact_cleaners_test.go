@@ -998,7 +998,11 @@ func (p *finalizeOnlyPurger) PurgeSessionVaultArtifacts(ctx context.Context, ses
 		return 0, err
 	}
 	for _, artifact := range pending {
-		if err := p.vault.RemoveInboxNote(ctx, memoryfiles.RemoveInboxNoteRequest{RelPath: artifact.VaultPath, Mode: memoryfiles.RemoveRetiredCandidate}); err != nil {
+		if err := p.vault.RemoveInboxNote(ctx, memoryfiles.RemoveInboxNoteRequest{
+			RelPath:             artifact.VaultPath,
+			Mode:                memoryfiles.RemoveRetiredCandidate,
+			ExpectedContentHash: artifact.ExpectedContentHash,
+		}); err != nil {
 			return 0, err
 		}
 	}

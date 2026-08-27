@@ -351,18 +351,21 @@ func TestRejectionCancelledMidDetachRestoresTheFileAndSaysSo(t *testing.T) {
 	requireNoStagingResidue(t, vault)
 }
 
-// Turing's own tidying keeps the plain, idempotent unlink: it is not a decision
-// about text, the outcome it follows is already recorded elsewhere, and leaving
-// the file behind is the failure. It stays confined to the inbox, which is the
-// property that keeps it from being a way out of the vault.
+// Turing's own tidying stays idempotent — a file the outcome says should not be
+// there and which is not there is the outcome — and stays confined to the
+// inbox, which is the property that keeps it from being a way out of the vault.
+// The confinement refusal comes before the binding is even considered, so a
+// path outside the inbox is refused as confinement whatever it names.
 func TestRetiredCleanupStaysIdempotentAndConfined(t *testing.T) {
 	vault := newTestVault(t)
-	full := writeVaultFile(t, vault, "inbox/note.md", "already accounted for")
+	const accounted = "already accounted for"
+	full := writeVaultFile(t, vault, "inbox/note.md", accounted)
 
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
-			RelPath: "inbox/note.md",
-			Mode:    RemoveRetiredCandidate,
+			RelPath:             "inbox/note.md",
+			Mode:                RemoveRetiredCandidate,
+			ExpectedContentHash: ContentHash(accounted),
 		}); err != nil {
 			t.Fatalf("retired cleanup attempt %d: %v", attempt, err)
 		}
@@ -374,8 +377,9 @@ func TestRetiredCleanupStaysIdempotentAndConfined(t *testing.T) {
 
 	for _, relPath := range append([]string{"beliefs/kept.md"}, escapingRelPathValues()...) {
 		err := vault.RemoveInboxNote(context.Background(), RemoveInboxNoteRequest{
-			RelPath: relPath,
-			Mode:    RemoveRetiredCandidate,
+			RelPath:             relPath,
+			Mode:                RemoveRetiredCandidate,
+			ExpectedContentHash: ContentHash(accounted),
 		})
 		if !errors.Is(err, ErrConfinement) {
 			t.Fatalf("expected the cleaner to be refused %q, got %v", relPath, err)

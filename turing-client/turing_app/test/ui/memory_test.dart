@@ -1028,6 +1028,55 @@ void main() {
     });
   });
 
+  group('where the vault is', () {
+    // The path on this card is the one thing on the page a person is meant to
+    // act on with their own hands: it is what they type into Obsidian, or
+    // paste into a terminal. Inside Docker the orchestrator opens `/memory`,
+    // which is a directory in one container and nowhere they can go — so the
+    // server sends the host directory instead, and the card has to say which
+    // machine that path is on rather than presenting a bare string.
+    testWidgets('names the folder on this computer', (tester) async {
+      const host = '/Users/someone/turing/turing-backend/memory';
+      final api = _MemoryApi()
+        ..state = _state(
+          settings: const MemorySettings(
+            enabled: true,
+            vaultRoot: host,
+            vaultWritable: true,
+            unavailableReason: MemoryUnavailableReason.none,
+          ),
+        );
+      await _pumpMemory(tester, api);
+
+      expect(find.text(host), findsOneWidget);
+      expect(
+        find.textContaining('on this computer'),
+        findsWidgets,
+        reason: 'a bare path does not say which machine it is on',
+      );
+    });
+
+    // And when the server has nothing usable to say, the card says nothing.
+    // An empty vault_root is the server declining to name a folder; inventing
+    // a label with no path under it, or falling back to a container mount
+    // point, both send somebody looking for a directory that is not there.
+    testWidgets('says nothing when there is no folder to name', (tester) async {
+      final api = _MemoryApi()
+        ..state = _state(
+          settings: const MemorySettings(
+            enabled: true,
+            vaultRoot: '',
+            vaultWritable: true,
+            unavailableReason: MemoryUnavailableReason.none,
+          ),
+        );
+      await _pumpMemory(tester, api);
+
+      expect(find.textContaining('on this computer'), findsNothing);
+      expect(find.text('/memory'), findsNothing);
+    });
+  });
+
   group('no vault open at all', () {
     // The server reports VAULT_MISSING on a document both when the vault is
     // open and simply has not been written yet, and when there is no vault

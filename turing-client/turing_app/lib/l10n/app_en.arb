@@ -89,6 +89,10 @@
   "memoryDisabledTitle": "Memory is off",
   "memoryEnabledDetail": "Turing pins persona.md and profile.md into each run and can search accepted beliefs.",
   "memoryDisabledDetail": "Memory tools are unavailable while memory is off, and nothing is pinned into a run. The vault stays on disk and stays readable here.",
+  "memoryVaultLocation": "The vault is a folder on this computer:",
+  "@memoryVaultLocation": {
+    "description": "Label above the vault's path on the memory page. It names the machine the path is on because the orchestrator may be running in a container, where the path it opens the vault at exists nowhere the user can go."
+  },
   "memoryReasonUnspecified": "The server did not say whether this could be read.",
   "memoryReasonNone": "Readable.",
   "memoryReasonDisabled": "Memory is off, so this is not in use.",

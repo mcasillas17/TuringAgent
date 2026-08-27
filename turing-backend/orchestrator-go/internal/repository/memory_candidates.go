@@ -233,7 +233,7 @@ func (r *Repository) CreateMemoryCandidate(ctx context.Context, input CreateMemo
 		return MemoryCandidate{}, err
 	}
 	if note.RelPath != artifact.VaultPath {
-		return MemoryCandidate{}, r.abandonWrittenCandidate(ctx, vault, note.RelPath, ErrMemoryVaultPathMismatch)
+		return MemoryCandidate{}, r.abandonWrittenCandidate(ctx, vault, note.RelPath, note.ContentHash, ErrMemoryVaultPathMismatch)
 	}
 
 	createdAt := now()
@@ -250,7 +250,7 @@ func (r *Repository) CreateMemoryCandidate(ctx context.Context, input CreateMemo
 		UpdatedAt:       createdAt,
 	}
 	if err := r.recordMemoryCandidate(ctx, candidate, refsJSON, artifact); err != nil {
-		return MemoryCandidate{}, r.abandonWrittenCandidate(ctx, vault, note.RelPath, err)
+		return MemoryCandidate{}, r.abandonWrittenCandidate(ctx, vault, note.RelPath, note.ContentHash, err)
 	}
 	return candidate, nil
 }
@@ -288,7 +288,7 @@ func (r *Repository) recordMemoryCandidate(ctx context.Context, candidate Memory
 	); err != nil {
 		return err
 	}
-	if err := finalizeVaultArtifactTx(ctx, tx, artifact.ArtifactID, artifact.SessionID); err != nil {
+	if err := finalizeVaultArtifactTx(ctx, tx, artifact.ArtifactID, artifact.SessionID, candidate.ContentHash); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -307,14 +307,20 @@ func (r *Repository) recordMemoryCandidate(ctx context.Context, candidate Memory
 // record that this path may hold a file, and a cleaner that finds none has
 // nothing to do; if the session was deleted underneath this write, the cascade
 // already took it and there is nothing left to leave behind.
-func (r *Repository) abandonWrittenCandidate(ctx context.Context, vault *memoryfiles.Vault, relPath string, cause error) error {
+func (r *Repository) abandonWrittenCandidate(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	relPath string,
+	contentHash string,
+	cause error,
+) error {
 	// The removal runs even when the caller's context is already done: the
 	// bytes are in the user's vault either way, and a cancelled context is not
 	// a reason to leave them there. It is bounded so a hung filesystem cannot
 	// hold the caller open indefinitely.
 	removal, cancel := context.WithTimeout(context.WithoutCancel(ctx), abandonedCandidateRemovalTimeout)
 	defer cancel()
-	return errors.Join(cause, vault.RemoveInboxNote(removal, retiredCandidateRemoval(relPath)))
+	return errors.Join(cause, vault.RemoveInboxNote(removal, retiredCandidateRemoval(relPath, contentHash)))
 }
 
 // WithdrawMemoryCandidate retires a proposal without deciding it.
@@ -630,12 +636,26 @@ func memoryCandidateByIDTx(ctx context.Context, q rowQuerier, candidateID string
 // finalizeVaultArtifactTx closes a reservation inside a caller's transaction,
 // so the manifest row and the candidate row that describes the same file land
 // together or not at all.
-func finalizeVaultArtifactTx(ctx context.Context, tx *sql.Tx, artifactID string, sessionID string) error {
+//
+// It binds the row to the bytes that landed in the same statement. The two facts
+// are inseparable: "the file is on disk" and "this is which file" are what a
+// later cleanup needs together, and a row that reached 'ready' with only the
+// first would be a licence to delete whatever is under a path.
+func finalizeVaultArtifactTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	artifactID string,
+	sessionID string,
+	contentHash string,
+) error {
+	if strings.TrimSpace(contentHash) == "" {
+		return ErrVaultArtifactOwnershipUnproven
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE vault_artifacts
-		SET state = ?, finalized_at = ?
+		SET state = ?, finalized_at = ?, expected_content_hash = ?
 		WHERE id = ? AND session_id = ? AND state = ?
-	`, VaultArtifactStateReady, now(), artifactID, sessionID, VaultArtifactStateWriting)
+	`, VaultArtifactStateReady, now(), contentHash, artifactID, sessionID, VaultArtifactStateWriting)
 	if err != nil {
 		return err
 	}
@@ -643,7 +663,25 @@ func finalizeVaultArtifactTx(ctx context.Context, tx *sql.Tx, artifactID string,
 	if err != nil {
 		return err
 	}
-	if changed != 1 {
+	if changed == 1 {
+		return nil
+	}
+	// Nothing moved, which has two very different causes. The row may be gone,
+	// and that is the failure this reports. Or somebody else already bound it
+	// to exactly these bytes — which is what reconcile's crash-heal does when
+	// its pass falls inside the window between this creation's write and this
+	// statement, since the reservation is older than the pass's anchor and no
+	// candidate row exists yet to coordinate against.
+	//
+	// The second is agreement, not conflict: two readers of the same file
+	// naming the same hash. Failing it would have this creation delete the note
+	// it just wrote and report an error over work that actually happened, so
+	// whoever arrives second accepts the answer it was going to give.
+	bound, err := vaultArtifactByID(ctx, tx, artifactID, sessionID)
+	if err != nil {
+		return err
+	}
+	if bound.State != VaultArtifactStateReady || bound.ExpectedContentHash != contentHash {
 		return ErrVaultArtifactNotFound
 	}
 	return nil

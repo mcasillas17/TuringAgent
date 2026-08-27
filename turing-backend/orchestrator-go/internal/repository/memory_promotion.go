@@ -438,7 +438,7 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 		result.CleanupPending = true
 		return result, nil
 	}
-	result.CleanupPending = !r.finishProfileApply(ctx, vault, candidate)
+	result.CleanupPending = !r.finishProfileApply(ctx, vault, candidate, decided.ContentHash)
 	return result, nil
 }
 
@@ -451,9 +451,21 @@ func (r *Repository) ApplyMemoryProfileCandidate(ctx context.Context, input Appl
 // user's vault holding a claim about them that nothing in the system knows
 // about. The row goes either way, because an applied proposal is not one
 // anybody may decide again.
-func (r *Repository) finishProfileApply(ctx context.Context, vault *memoryfiles.Vault, candidate MemoryCandidate) bool {
+//
+// appliedHash is the hash of the bytes this apply actually acted on, which is
+// the file as it was read a moment ago and not the row's record of what Turing
+// originally proposed. The two differ whenever the user edited the proposal
+// before accepting it — which a vault exists to let them do — and binding the
+// tidying to the row would refuse every one of those, leaving an applied
+// proposal sitting in the inbox looking decidable.
+func (r *Repository) finishProfileApply(
+	ctx context.Context,
+	vault *memoryfiles.Vault,
+	candidate MemoryCandidate,
+	appliedHash string,
+) bool {
 	removed := true
-	if err := vault.RemoveInboxNote(ctx, retiredCandidateRemoval(candidate.InboxPath)); err != nil {
+	if err := vault.RemoveInboxNote(ctx, retiredCandidateRemoval(candidate.InboxPath, appliedHash)); err != nil {
 		log.Printf("remove applied memory proposal %s: %v", candidate.CandidateID, err)
 		removed = false
 	}
@@ -662,14 +674,24 @@ func rejectionRemoval(inboxPath string, decided decidedCandidateFile) memoryfile
 // retiredCandidateRemoval names Turing's own tidying: bytes whose outcome is
 // already recorded somewhere else — an applied profile edit whose write landed,
 // a candidate no row will ever describe, a file the session cleaner's manifest
-// still names. None of them is a user deciding about text, so none of them has
-// a hash to name, and leaving the file behind would be the failure rather than
-// the safe side. It is separate from a rejection by name, so nothing can reach
-// a hashless deletion by way of a decision.
-func retiredCandidateRemoval(inboxPath string) memoryfiles.RemoveInboxNoteRequest {
+// still names. None of them is a user deciding about text, and leaving the file
+// behind would be the failure rather than the safe side. It is separate from a
+// rejection by name, so nothing can reach it by way of a decision.
+//
+// It still names the bytes it may remove, and the hash is not optional. Every
+// caller has one, because every one of them is following an outcome that was
+// recorded against specific bytes — the proposal that was applied, the note
+// that was written, the file the manifest row was finalized over. What the hash
+// buys is the case where the path no longer holds those bytes: the user moved
+// the proposal somewhere else and saved something of their own under the name,
+// or opened it and rewrote it in place. Then the tidying refuses, the file
+// stays, and the caller reports itself unfinished instead of deleting words
+// nobody proposed.
+func retiredCandidateRemoval(inboxPath string, contentHash string) memoryfiles.RemoveInboxNoteRequest {
 	return memoryfiles.RemoveInboxNoteRequest{
-		RelPath: inboxPath,
-		Mode:    memoryfiles.RemoveRetiredCandidate,
+		RelPath:             inboxPath,
+		Mode:                memoryfiles.RemoveRetiredCandidate,
+		ExpectedContentHash: contentHash,
 	}
 }
 

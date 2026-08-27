@@ -74,6 +74,13 @@ var (
 	// can name a path inside the user's vault, and this value is joined into
 	// what a withdrawal reports back to its caller.
 	ErrVaultArtifactRemoveFailed = errors.New("vault artifact could not be removed")
+	// ErrVaultArtifactOwnershipUnproven refuses a removal whose manifest row
+	// names no bytes. A row like that proves a path, and a path is not an
+	// owner: the file under it may be the write this row was taken for, or it
+	// may be something the user has since put there themselves. It is a
+	// refusal rather than a failure of the file — nothing was touched — and the
+	// row is kept, so a pass that can prove ownership still drains it.
+	ErrVaultArtifactOwnershipUnproven = errors.New("vault artifact ownership is not proven")
 	// ErrVaultArtifactManifestFinalize reports the opposite situation: every
 	// note was removed and the rows that named them could not be dropped. It is
 	// separated from a removal failure because the two demand contradictory
@@ -96,8 +103,17 @@ type VaultArtifact struct {
 	// move indistinguishable from a rename the user did themselves.
 	PhysicalPath string
 	State        string
-	CreatedAt    string
-	FinalizedAt  string
+	// ExpectedContentHash is the ownership binding: a hash of the whole file
+	// exactly as Turing wrote it, and the only thing that entitles a cleanup
+	// pass to unlink anything at PhysicalPath.
+	//
+	// It is empty for a reservation, which is taken before the write and so has
+	// no bytes to name, and for a row a pass could not remove. A cleanup that
+	// finds it empty refuses: without it the row proves a path and a path is
+	// not an owner.
+	ExpectedContentHash string
+	CreatedAt           string
+	FinalizedAt         string
 }
 
 // ReserveVaultArtifactInput is the server-verified description of a vault write
@@ -199,10 +215,24 @@ func (r *Repository) ReserveVaultArtifact(ctx context.Context, input ReserveVaul
 	return artifact, nil
 }
 
-// FinalizeVaultArtifact closes a reservation once the file is on disk. It only
-// advances a reservation that is still writing, so a second finalization is a
-// refused transition rather than a silently rewritten timestamp.
-func (r *Repository) FinalizeVaultArtifact(ctx context.Context, artifactID string, sessionID string) (VaultArtifact, error) {
+// FinalizeVaultArtifact closes a reservation once the file is on disk, and
+// binds the row to the bytes that landed. It only advances a reservation that
+// is still writing, so a second finalization is a refused transition rather
+// than a silently rewritten timestamp.
+//
+// The hash is required, and it is required here rather than at the reservation
+// because this is the first moment it can be true. A row that reaches 'ready'
+// without one would claim a file it cannot identify, and the cleanup that reads
+// it would be back to trusting a path.
+func (r *Repository) FinalizeVaultArtifact(
+	ctx context.Context,
+	artifactID string,
+	sessionID string,
+	contentHash string,
+) (VaultArtifact, error) {
+	if strings.TrimSpace(contentHash) == "" {
+		return VaultArtifact{}, ErrVaultArtifactOwnershipUnproven
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return VaultArtifact{}, err
@@ -219,13 +249,14 @@ func (r *Repository) FinalizeVaultArtifact(ctx context.Context, artifactID strin
 	finalizedAt := now()
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE vault_artifacts
-		SET state = ?, finalized_at = ?
+		SET state = ?, finalized_at = ?, expected_content_hash = ?
 		WHERE id = ? AND session_id = ? AND state = ?
-	`, VaultArtifactStateReady, finalizedAt, artifactID, sessionID, VaultArtifactStateWriting); err != nil {
+	`, VaultArtifactStateReady, finalizedAt, contentHash, artifactID, sessionID, VaultArtifactStateWriting); err != nil {
 		return VaultArtifact{}, err
 	}
 	artifact.State = VaultArtifactStateReady
 	artifact.FinalizedAt = finalizedAt
+	artifact.ExpectedContentHash = contentHash
 	if err := tx.Commit(); err != nil {
 		return VaultArtifact{}, err
 	}
@@ -253,7 +284,8 @@ func (r *Repository) ReleaseVaultArtifactReservation(ctx context.Context, artifa
 // SessionVaultArtifacts lists every vault file one session is responsible for.
 func (r *Repository) SessionVaultArtifacts(ctx context.Context, sessionID string) ([]VaultArtifact, error) {
 	return queryVaultArtifacts(ctx, r.db, `
-		SELECT id, session_id, vault_path, physical_path, state, created_at, COALESCE(finalized_at, '')
+		SELECT id, session_id, vault_path, physical_path, state,
+			COALESCE(expected_content_hash, ''), created_at, COALESCE(finalized_at, '')
 		FROM vault_artifacts
 		WHERE session_id = ?
 		ORDER BY created_at, id
@@ -516,6 +548,17 @@ func vaultPurgeFailure(collected []error, failed int, total int) error {
 // typed error rather than reaching the primitive's confinement check, and a
 // tampered row can never be turned into a way to delete a belief either way.
 //
+// A row that names no bytes is where this splits in two, because "delete the
+// file" and "there is no file" are different questions and only the first needs
+// an owner. A reservation is taken before the write, so a crash between the two
+// leaves a row whose file never existed — and that row has to be able to drain,
+// or every such crash strands a withdrawal forever. So the empty case asks the
+// confined reader whether anything is under the path at all: nothing there is
+// the outcome the user asked for and the row goes. Something there is a file
+// this row cannot prove it owns — the write that landed, or whatever the user
+// has put there since — and it is refused untouched. Reconcile can still bind
+// the first of those, and the next pass removes it.
+//
 // Both failures are returned as their class and nothing more. The underlying
 // removal error can name a path inside the user's vault, and this value is
 // joined into what a withdrawal reports back to its caller; the class is what
@@ -524,7 +567,17 @@ func removeVaultArtifactFile(ctx context.Context, vault *memoryfiles.Vault, arti
 	if _, err := validateVaultInboxPath(artifact.VaultPath); err != nil {
 		return "vault_path_scope", ErrVaultArtifactPathScope
 	}
-	if err := vault.RemoveInboxNote(ctx, retiredCandidateRemoval(artifact.VaultPath)); err != nil {
+	if artifact.ExpectedContentHash == "" {
+		present, err := inboxEntryStillThere(ctx, vault, artifact.VaultPath)
+		if err != nil {
+			return "vault_remove_failed", ErrVaultArtifactRemoveFailed
+		}
+		if present {
+			return "vault_ownership_unproven", ErrVaultArtifactOwnershipUnproven
+		}
+		return "", nil
+	}
+	if err := vault.RemoveInboxNote(ctx, retiredCandidateRemoval(artifact.VaultPath, artifact.ExpectedContentHash)); err != nil {
 		return "vault_remove_failed", ErrVaultArtifactRemoveFailed
 	}
 	return "", nil
@@ -533,7 +586,8 @@ func removeVaultArtifactFile(ctx context.Context, vault *memoryfiles.Vault, arti
 func vaultArtifactByID(ctx context.Context, q rowQuerier, artifactID string, sessionID string) (VaultArtifact, error) {
 	var artifact VaultArtifact
 	err := q.QueryRowContext(ctx, `
-		SELECT id, session_id, vault_path, physical_path, state, created_at, COALESCE(finalized_at, '')
+		SELECT id, session_id, vault_path, physical_path, state,
+			COALESCE(expected_content_hash, ''), created_at, COALESCE(finalized_at, '')
 		FROM vault_artifacts
 		WHERE id = ? AND session_id = ?
 	`, artifactID, sessionID).Scan(
@@ -542,6 +596,7 @@ func vaultArtifactByID(ctx context.Context, q rowQuerier, artifactID string, ses
 		&artifact.VaultPath,
 		&artifact.PhysicalPath,
 		&artifact.State,
+		&artifact.ExpectedContentHash,
 		&artifact.CreatedAt,
 		&artifact.FinalizedAt,
 	)
@@ -573,6 +628,7 @@ func queryVaultArtifacts(ctx context.Context, q contextQuerier, query string, ar
 			&artifact.VaultPath,
 			&artifact.PhysicalPath,
 			&artifact.State,
+			&artifact.ExpectedContentHash,
 			&artifact.CreatedAt,
 			&artifact.FinalizedAt,
 		); err != nil {
