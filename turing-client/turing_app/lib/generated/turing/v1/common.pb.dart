@@ -998,6 +998,8 @@ class SkillEgressDisclosure extends $pb.GeneratedMessage {
       $pb.GeneratedMessage.$_defaultFor<SkillEgressDisclosure>(create);
   static SkillEgressDisclosure? _defaultInstance;
 
+  /// Raw identity, not sanitized or length-capped. Render display_name, never
+  /// this field.
   @$pb.TagNumber(1)
   $core.String get skillId => $_getSZ(0);
   @$pb.TagNumber(1)

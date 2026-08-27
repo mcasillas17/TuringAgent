@@ -116,6 +116,12 @@ func TestSanitizeSkillDisplayName(t *testing.T) {
 			want:        "writing/tone",
 		},
 		{
+			name:        "treats separators mixed with spaces as empty before id fallback",
+			displayName: "/ /",
+			skillID:     "writing/tone",
+			want:        "writing/tone",
+		},
+		{
 			name:        "uses unnamed when both inputs become separators only",
 			displayName: "\u200b\u202e",
 			skillID:     "\u200b/\u2066",

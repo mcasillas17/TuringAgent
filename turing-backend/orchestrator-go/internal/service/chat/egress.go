@@ -24,7 +24,10 @@ import (
 )
 
 const (
-	egressChallengeVersion     = 2
+	// Challenges and run-owned decisions share one version number: the enqueue
+	// path copies the acknowledged challenge's version into the decision, and
+	// normalization refuses any value other than DecisionVersion.
+	egressChallengeVersion     = backendegress.DecisionVersion
 	egressChallengeDomain      = "turing.remote-egress.challenge.v1"
 	defaultEgressChallengeTTL  = 5 * time.Minute
 	maxEgressChallengeBytes    = 32 * 1024
