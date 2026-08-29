@@ -606,3 +606,47 @@ func TestParseNoteReadsAHandWrittenWithdrawalMarker(t *testing.T) {
 		}
 	}
 }
+
+// A hard link is not a symlink: to Lstat, Fstatat with AT_SYMLINK_NOFOLLOW,
+// and O_NOFOLLOW it is a regular file, so none of this package's link
+// refusals see one, and an in-place write through it lands in the linked
+// bytes wherever else they are named. That is the documented residual of the
+// confinement model, not a defended boundary — link(2) only reaches a target
+// on the same filesystem as the vault directory, and planting the link
+// already requires write access to the vault, i.e. being the user, so no
+// privilege boundary is crossed. Refusing files with a second name was
+// considered and rejected:
+// hard-link snapshots are how several backup tools work, and a vault being
+// backed up must not lose withdrawal rewrites over it. This pins the
+// residual as what it is, so hardening or widening it is done knowingly
+// rather than by drift.
+func TestRewriteWritesThroughAHardLinkTheDocumentedResidual(t *testing.T) {
+	vault := newTestVault(t)
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outside, []byte(handWrittenNote), 0o600); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	if err := os.Link(outside, filepath.Join(vault.Root(), "beliefs", "linked.md")); err != nil {
+		// Two temp dirs on different filesystems cannot hard-link at all; on
+		// such a machine this scenario is simply not constructible.
+		t.Skipf("hard link between temp dirs unavailable: %v", err)
+	}
+
+	if _, err := vault.RewriteFrontmatterRefs(context.Background(), RewriteFrontmatterRefsRequest{
+		RelPath: "beliefs/linked.md",
+		Refs:    []string{"sess_kept"},
+	}); err != nil {
+		t.Fatalf("rewrite through a hard link: %v", err)
+	}
+
+	outsideNow, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatalf("read outside file: %v", err)
+	}
+	if strings.Contains(string(outsideNow), "sess_withdrawn") || !strings.Contains(string(outsideNow), "sess_kept") {
+		t.Fatalf(
+			"the write no longer reaches the link's other name — the residual this test documents has changed; update the package doc alongside this test: %q",
+			outsideNow,
+		)
+	}
+}

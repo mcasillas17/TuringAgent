@@ -167,6 +167,11 @@ These are known, bounded, and deliberately not claimed away:
   refused every decision about it.
 - **The 4096-file scan bound degrades search and reconcile only.** A vault past
   it refuses legibly; pinned tiers and enqueue are never blocked by vault size.
+  A second bound sits under it: the walk refuses after examining 16,384
+  directory entries in total — folders, attachments and skipped files
+  included, none of which the note bound counts — through the same legible
+  refusal, so a vault of things that are not notes cannot stall the scan
+  either.
 - **A proposal nothing can open cannot be rejected from the app.** Every
   removal here is authorised by a descriptor whose own identity is checked,
   because an unlink names a name and the entry under a name can be replaced

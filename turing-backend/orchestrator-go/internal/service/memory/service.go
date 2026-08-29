@@ -214,6 +214,15 @@ func memoryError(err error, fallback string) error {
 		// named refusal is the Internal fallback, which tells the user Turing
 		// broke when what happened is that their conversation is gone.
 		return status.Error(codes.NotFound, "the conversation this proposal came from no longer exists")
+	case errors.Is(err, repository.ErrVaultArtifactSessionUnavailable):
+		// The reservation's own transactional read found the session deleting
+		// or gone. Dispatch re-checks liveness just before any tool runs, so
+		// this arm only fires in the window between that check and the
+		// reservation — but the answer is the same precondition either way,
+		// and remember is not read-only, so falling through to Internal would
+		// also mis-report the refusal as a side-effect-unknown failure.
+		return status.Error(codes.FailedPrecondition,
+			"the conversation this memory belongs to is being deleted, so nothing new can be filed for it")
 	case errors.Is(err, repository.ErrMemoryCandidateKind):
 		return status.Error(codes.FailedPrecondition, "this memory candidate is not of the kind this decision applies to")
 	case errors.Is(err, repository.ErrMemoryCandidateBody):

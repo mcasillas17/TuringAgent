@@ -1,9 +1,18 @@
 // Package memoryfiles is the structural confinement layer for the memory
 // vault: an Obsidian-readable folder of Markdown the user owns and can open in
 // their own editor. Every mutation here is descriptor-relative and refuses to
-// follow a symlink at the root, at any component, or at the final entry, so a
-// link planted inside the vault cannot turn a memory write into a write
-// anywhere else on the user's disk.
+// follow a symbolic link at the root, at any component, or at the final entry,
+// so a symlink planted inside the vault cannot turn a memory write into a
+// write anywhere else on the user's disk.
+//
+// A hard link is outside that promise: it is a regular file to every check
+// here, and an in-place write through one lands in the linked bytes wherever
+// else they are named. The residual is bounded — link(2) only reaches a
+// target on the same filesystem as the vault directory, and planting the
+// link already requires write access to the vault, i.e. being the user, so
+// no privilege boundary is crossed — and it is deliberate: refusing files
+// with a second name would break vaults under hard-link-snapshot backup
+// tools. It is pinned as a documented residual by the rewrite tests.
 //
 // The security model is deliberately a reimplementation of the sandbox model in
 // turing-backend/mcp-files/internal/tools: that module is a separate Go module

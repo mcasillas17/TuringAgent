@@ -985,3 +985,65 @@ func TestMarkSessionDeletionSandboxFailureMarksOnlyTheRowsItOwns(t *testing.T) {
 		t.Fatalf("a second audit row was filed for an already-failed file: %d", got)
 	}
 }
+
+// A completed receipt is a tombstone, and neither scoped marker may act on
+// the strength of one. The race this defends is a late or duplicated cleaner
+// failure landing after a concurrent retry finished the withdrawal: the
+// receipt's own guard already refuses the reopen, but the caller is told
+// "marked" or "not marked" by markSessionDeletionFailedTx's boolean, and an
+// implementation that answers true for a tombstone flips every surviving
+// manifest row to delete_failed and files one audit row per file against a
+// session the user was already told was deleted. The completed state is
+// written directly here because the interleaving cannot be reached through
+// the API on one goroutine — which is exactly why nothing had caught this.
+func TestScopedFailureMarkersLeaveACompletedTombstoneAlone(t *testing.T) {
+	repo, _, database := newMemoryTestRepo(t)
+	sessionID, _ := seedVaultDeletableSession(t, repo, "bees", "The user keeps bees.")
+	enqueued, err := repo.EnqueueUserMessage(ctx(), EnqueueUserMessageInput{
+		SessionID: sessionID, Content: "write then withdraw", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2",
+	})
+	if err != nil {
+		t.Fatalf("EnqueueUserMessage: %v", err)
+	}
+	seedSandboxArtifact(t, repo, sessionID, enqueued.RunID, "artifact_sandbox_tombstoned")
+	if _, err := repo.BeginSessionDeletion(ctx(), sessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+	if _, err := repo.db.ExecContext(ctx(), `
+		UPDATE session_deletions SET state = 'completed', retryable = 0, error_code = '' WHERE session_id = ?
+	`, sessionID); err != nil {
+		t.Fatalf("complete the receipt: %v", err)
+	}
+
+	if err := repo.MarkSessionDeletionVaultFailure(ctx(), sessionID, "vault_artifact_cleanup_failed"); err != nil {
+		t.Fatalf("MarkSessionDeletionVaultFailure on a tombstone: %v", err)
+	}
+	if err := repo.MarkSessionDeletionSandboxFailure(ctx(), sessionID, "artifact_cleanup_failed"); err != nil {
+		t.Fatalf("MarkSessionDeletionSandboxFailure on a tombstone: %v", err)
+	}
+
+	receipt, err := repo.SessionDeletionReceipt(ctx(), sessionID)
+	if err != nil {
+		t.Fatalf("SessionDeletionReceipt: %v", err)
+	}
+	if receipt.State != "completed" || receipt.Retryable || receipt.ErrorCode != "" {
+		t.Fatalf("receipt = %+v, want the completed tombstone untouched", receipt)
+	}
+	vaultRows, err := repo.SessionVaultArtifacts(ctx(), sessionID)
+	if err != nil {
+		t.Fatalf("SessionVaultArtifacts: %v", err)
+	}
+	if len(vaultRows) != 1 || vaultRows[0].State != VaultArtifactStateReady {
+		t.Fatalf("vault rows = %+v, want them unmarked on a completed receipt", vaultRows)
+	}
+	if got := vaultArtifactAuditCount(t, database, vaultRows[0].ArtifactID); got != 0 {
+		t.Fatalf("vault cleanup audits = %d, want none against a deleted session", got)
+	}
+	if got := sandboxArtifactState(t, repo, "artifact_sandbox_tombstoned"); got != SandboxArtifactStateReady {
+		t.Fatalf("sandbox row state = %q, want it unmarked on a completed receipt", got)
+	}
+	if got := sandboxArtifactAuditCount(t, repo, "artifact_sandbox_tombstoned"); got != 0 {
+		t.Fatalf("sandbox cleanup audits = %d, want none against a deleted session", got)
+	}
+}

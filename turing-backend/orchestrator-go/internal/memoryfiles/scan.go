@@ -31,6 +31,16 @@ const noteFileExtension = ".md"
 // ErrVaultTooLarge marks a vault past the index bound.
 var ErrVaultTooLarge = errors.New("vault holds more notes than memory indexing will scan")
 
+// maxVaultWalkedEntries bounds how many directory entries one walk will
+// examine at all — directories, attachments and skipped files included, none
+// of which the note bound ever counts. Without it a vault of nothing but
+// empty folders was walked in full at a startup pass that treats most
+// failures as fatal. The slack over MaxVaultIndexedFiles is for what Obsidian
+// vaults legitimately hold alongside their notes — attachment folders,
+// canvases, images — so an ordinary vault under the note bound is never
+// refused for its entry count.
+const maxVaultWalkedEntries = 4 * MaxVaultIndexedFiles
+
 // VaultArea says which part of the vault a note came from. Callers must keep
 // them apart: beliefs are accepted memory and may be indexed for search, while
 // inbox candidates are unreviewed model output about the user and must never
@@ -472,6 +482,7 @@ func (v *Vault) ScanWithCache(ctx context.Context, cache *MetadataCache) (ScanRe
 // order the filesystem happened to hand entries back in.
 func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandidate, error) {
 	var candidates []scanCandidate
+	examined := 0
 	completeness := newCompletenessTracker()
 	defer func() { result.Completeness = completeness.snapshot() }()
 	queue := []string{""}
@@ -516,6 +527,18 @@ func (v *Vault) walkVault(ctx context.Context, result *ScanResult) ([]scanCandid
 				if err := ctx.Err(); err != nil {
 					_ = directory.Close()
 					return nil, err
+				}
+				// Every entry costs at least one syscall whether or not it is
+				// a note, so every entry counts — the note bound below never
+				// sees a directory, and a vault of nothing but folders must
+				// still refuse rather than be walked in full. Checked here,
+				// not after the listing, for the same reason the note bound
+				// is: a bound consulted after the enumeration is the
+				// unbounded walk wearing a different shape.
+				examined++
+				if examined > maxVaultWalkedEntries {
+					_ = directory.Close()
+					return nil, vaultWalkTooLargeError()
 				}
 				relPath := name
 				if relDirectory != "" {
@@ -630,6 +653,19 @@ func vaultTooLargeError() error {
 	return fmt.Errorf(
 		"the vault holds more than %d indexable notes, past the %d-note scan bound; memory search and reconciliation are bounded so a large vault cannot stall the app: %w",
 		MaxVaultIndexedFiles, MaxVaultIndexedFiles, ErrVaultTooLarge,
+	)
+}
+
+// vaultWalkTooLargeError wraps the same tolerated sentinel as the note bound —
+// startup treats ErrVaultTooLarge as "memory stays off until the vault
+// shrinks", and a vault refused for its entry count deserves that outcome, not
+// a fatal — but says entries, because telling the user they have too many
+// notes when what they have is too many folders sends them counting the wrong
+// thing.
+func vaultWalkTooLargeError() error {
+	return fmt.Errorf(
+		"the vault holds more than %d entries (folders and non-note files included), past the walk bound; memory scanning is bounded so a huge vault cannot stall the app: %w",
+		maxVaultWalkedEntries, ErrVaultTooLarge,
 	)
 }
 

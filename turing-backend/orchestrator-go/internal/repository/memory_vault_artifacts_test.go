@@ -77,6 +77,16 @@ func TestReserveVaultArtifactRefusesUnknownSession(t *testing.T) {
 		t.Fatalf("error = %v, want ErrVaultArtifactSessionUnavailable", err)
 	}
 
+	// An empty session id is the caller's bug, not a state of anyone's
+	// conversation — it must NOT carry the sentinel the service renders as
+	// "your conversation is being deleted".
+	if _, err := repo.ReserveVaultArtifact(ctx, ReserveVaultArtifactInput{
+		SessionID: "   ",
+		VaultPath: "inbox/note.md",
+	}); !errors.Is(err, ErrVaultArtifactSessionRequired) || errors.Is(err, ErrVaultArtifactSessionUnavailable) {
+		t.Fatalf("empty session id error = %v, want ErrVaultArtifactSessionRequired and not the deletion sentinel", err)
+	}
+
 	session, err := repo.CreateSession(ctx, "memory")
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
