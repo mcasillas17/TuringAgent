@@ -938,6 +938,17 @@ void main() {
         findsOneWidget,
         reason: 'the re-read is in flight and the editor must survive it',
       );
+      // The held frame is legible but not decidable: what it shows, the vault
+      // may already disagree with, so every button waits for the re-read even
+      // though _busy itself has already cleared.
+      final personaSave = tester.widget<FilledButton>(
+        find.byKey(const Key('memory-persona-save')),
+      );
+      expect(
+        personaSave.onPressed,
+        isNull,
+        reason: 'saving over a frame the vault may disagree with',
+      );
       await tester.enterText(
         find.byKey(const Key('memory-persona-editor')),
         'sent to the vault, and a word more',

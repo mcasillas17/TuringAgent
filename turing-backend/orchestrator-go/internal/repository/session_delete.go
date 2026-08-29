@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
@@ -514,6 +515,10 @@ func (r *Repository) AdvanceSessionDeletion(ctx context.Context, sessionID strin
 
 	if completion != nil {
 		if completionErr := completion(ctx); completionErr != nil {
+			// The receipt carries only the opaque class; the cause is logged
+			// here or it is nowhere, and a failed marker below would otherwise
+			// discard it entirely.
+			log.Printf("session deletion completion for %s failed: %v", sessionID, completionErr)
 			if err := r.markSessionDeletionCompletionFailure(ctx, sessionID, SessionDeletionMemoryReconcileFailed); err != nil {
 				return SessionDeletionReceipt{}, err
 			}
@@ -577,6 +582,12 @@ func (r *Repository) markSessionDeletionCompletionFailure(ctx context.Context, s
 			return ErrSessionNotFound
 		}
 		return err
+	}
+	if state != "completed" {
+		// The UPDATE matches every non-completed state, so a surviving row it
+		// did not touch can only mean the state changed between the two
+		// statements — diagnose it the way the missing-row case is.
+		return ErrSessionNotFound
 	}
 	return nil
 }

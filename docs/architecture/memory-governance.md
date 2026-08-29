@@ -91,7 +91,8 @@ explicitly. `memory_candidates` rows, being machine-owned, keep validated
 lifecycle transitions and audit events from day one.
 
 Nothing here ships revision history for vault files, sensitivity filtering,
-in-app editing of a proposal before acceptance, or automatic extraction. Automatic candidate extraction from conversation remains
+in-app editing of a proposal before acceptance, or automatic extraction.
+Automatic candidate extraction from conversation remains
 **MEM-009**: today a candidate exists only because a run called
 `memory.remember`, and assistant, tool, and recalled content are not a
 candidate source.
@@ -334,8 +335,9 @@ source.
 Source ownership is separate from recall scope. A user-scoped fact derived
 from a session message still depends on that message; deleting the source
 withdraws the derived fact even though its recall scope was wider — with one
-exception, defined in Amendment 1: content the user promoted by an explicit act
-with the full text shown, and editable in the vault, is authored by that act, so it survives
+exception, defined in Amendment 1: content the user promoted by an explicit
+act with the full text shown, and editable in the vault, is authored by that
+act, so it survives
 the deletion of the session it was proposed in, while every machine-owned row
 about it is removed and every citation of the deleted source is rewritten to
 `withdrawn`.

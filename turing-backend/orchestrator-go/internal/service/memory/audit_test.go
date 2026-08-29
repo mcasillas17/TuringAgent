@@ -236,11 +236,13 @@ func (a *racingAudit) RecordForExistingRun(ctx context.Context, runID string, ac
 	return a.inner.RecordForExistingRun(ctx, runID, actorType, actorID, action, target, payload)
 }
 
-// If the conversation is gone by the time the row is written, there is nothing
-// honest left to report. The candidate went with the session's cascade, so a
-// success carrying its id would name a proposal that no longer exists — and
-// falling back to an account-level row would leave a permanent, uncorrelated
-// statement about a conversation the user just deleted.
+// If the conversation is being withdrawn by the time the row is written, there
+// is nothing honest left to report. The moment the session leaves 'active',
+// the audit insert refuses to correlate to it — and falling back to an
+// account-level row would leave a permanent, uncorrelated statement about a
+// conversation the user is deleting. The candidate row and its inbox file are
+// still there at that instant; the deletion pipeline withdraws them behind the
+// running run, which is exactly why the refusal cannot wait for the cascade.
 func TestMemoryProposalFailsRatherThanLeaveAnUncorrelatedAuditRow(t *testing.T) {
 	service, repo, _, ctx := newMemoryService(t)
 	runID, sessionID := newRun(t, repo, ctx)

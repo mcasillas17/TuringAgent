@@ -184,7 +184,8 @@ approval decision comment / denial reason: free text a person typed,
 disclosed on purpose so the recorded rationale is actually readable. The
 service cannot content-inspect it, so bearer-token holders can read whatever
 was typed there and users should not put credentials in it. Deleting a session
-(`Repository.DeleteSession`) scrubs the audit rows it correlates with by
+(the durable `BeginSessionDeletion`/`AdvanceSessionDeletion` pipeline in
+`repository/session_delete.go`) scrubs the audit rows it correlates with by
 overwriting their payload with a fixed tombstone in the same transaction as
 the cascade, so the row itself (and the fact that something happened)
 survives, but the withdrawn content does not. See

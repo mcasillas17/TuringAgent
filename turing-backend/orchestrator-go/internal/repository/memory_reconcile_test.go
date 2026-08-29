@@ -302,11 +302,19 @@ func TestUnmanagedNoteRefsAreProseNotEvidence(t *testing.T) {
 	}
 	writeVaultNote(t, vault, "beliefs/live-ref.md", unmanaged(liveID, sessionID, "The user keeps bees."))
 	writeVaultNote(t, vault, "beliefs/dead-ref.md", unmanaged(deadID, "sess_01NEVEREXISTEDATALL", "The user keeps wasps."))
+	// The withdrawal marker is refs metadata like any other: on a hand-written
+	// note it is the user's own text, not a status for the index to adopt.
+	markerID := newTestNoteID(t)
+	writeVaultNote(t, vault, "beliefs/marker.md",
+		"---\nid: \""+markerID+"\"\nkind: \"belief\"\ntitle: \"a note\"\nmanaged: false\n"+
+			"refs: withdrawn\n---\n\nThe user keeps ants.\n")
 
 	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
 		t.Fatalf("ReconcileMemoryVault: %v", err)
 	}
-	for name, noteID := range map[string]string{"live ref": liveID, "dead ref": deadID} {
+	for name, noteID := range map[string]string{
+		"live ref": liveID, "dead ref": deadID, "withdrawal marker": markerID,
+	} {
 		if got := evidenceSessions(t, repo, noteID); len(got) != 0 {
 			t.Fatalf("%s: evidence rows = %v, want none for an unmanaged note", name, got)
 		}

@@ -147,9 +147,17 @@ func newRun(t *testing.T, repo *repository.Repository, ctx context.Context) (str
 	}
 	// Claim the job the way a worker would, so the run is genuinely executing:
 	// dispatch only answers a run that is running, which is the only state a
-	// real memory tool call ever arrives from.
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "memory-test-worker"); err != nil {
+	// real memory tool call ever arrives from. ClaimNextJob answers an empty
+	// job (not an error) when nothing is claimable, and claims the oldest
+	// pending job when several are — either way, silently handing back a run
+	// this helper did not just make running would fail some later gate for a
+	// reason unrelated to what the test is about.
+	job, err := repo.ClaimNextJob(ctx, "general_assistant", "memory-test-worker")
+	if err != nil {
 		t.Fatalf("ClaimNextJob: %v", err)
+	}
+	if job.RunID != enqueued.RunID {
+		t.Fatalf("ClaimNextJob claimed %q, want the run just enqueued (%q)", job.RunID, enqueued.RunID)
 	}
 	return enqueued.RunID, session.SessionID
 }

@@ -69,7 +69,7 @@ func FrameRetrievedContent(framing Framing, raw []byte) (string, error) {
 	prefix := "BEGIN " + marker + "\n" + framing.Instructions + "\n"
 	suffix := "\nEND " + marker
 	// The notice reports the bytes actually kept, which are only known after
-	// the rune-safe cut \u2014 so the budget reserves worst-case room for it using
+	// the rune-safe cut — so the budget reserves worst-case room for it using
 	// the limit, whose digit count the kept figure can never exceed.
 	noticeFor := func(kept int) string {
 		return fmt.Sprintf("\n[Result truncated to %d bytes on a UTF-8 boundary.]", kept)
@@ -94,6 +94,12 @@ func FrameRetrievedContent(framing Framing, raw []byte) (string, error) {
 		cut := available
 		for cut > 0 && !utf8.RuneStart(valid[cut]) {
 			cut--
+		}
+		if cut == 0 {
+			// The budget admits some bytes but not one whole rune of this
+			// content. Shipping an empty frame that claims "truncated to 0
+			// bytes" would be a well-formed lie; refuse like the guards above.
+			return "", fmt.Errorf("%w: %d bytes cannot hold any of the content", ErrFraming, limit)
 		}
 		valid = valid[:cut]
 	}

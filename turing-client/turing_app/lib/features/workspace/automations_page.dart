@@ -902,6 +902,12 @@ class _AutomationSkills extends StatelessWidget {
   }
 }
 
+/// The pseudo-servers whose tools the orchestrator refuses to automations
+/// unconditionally — integration calls are egress nobody attends, and memory
+/// is never touched on an unattended run. Offering either here would be a
+/// tick that can only fail at Save.
+const _serversUnavailableToAutomations = {'integrations', 'memory'};
+
 /// The tools that would otherwise stop and ask, with a tick against each.
 ///
 /// Only approval-gated tools appear: a safe tool needs no permission, and
@@ -951,15 +957,18 @@ class _AllowlistPicker extends StatelessWidget {
                 style: TextStyle(fontSize: 12.5, color: AppColors.danger),
               );
             }
-            // Memory tools are refused to automations unconditionally on the
-            // server, so offering one here would be a tick that can only fail
-            // at Save. A stale entry from an older allowlist still shows below,
-            // because a permission the user cannot see cannot be withdrawn.
+            // Memory and integration tools are refused to automations
+            // unconditionally on the server (the sentence above says so), so
+            // offering one here would be a tick that can only fail at Save. A
+            // stale entry from an older allowlist still shows below, because a
+            // permission the user cannot see cannot be withdrawn.
             final gated = (snapshot.data ?? const <ToolDescriptor>[])
                 .where(
                   (tool) =>
                       tool.policy == ToolPolicy.approvalRequired &&
-                      tool.serverName != 'memory',
+                      !_serversUnavailableToAutomations.contains(
+                        tool.serverName,
+                      ),
                 )
                 .map(
                   (tool) => AutomationTool(
@@ -1003,9 +1012,19 @@ class _AllowlistPicker extends StatelessWidget {
                       ),
                     ),
                     subtitle: Text(
+                      // A stale entry from a server automations may never use
+                      // is not coming back: while it stays ticked, every save
+                      // of this automation is refused, so the copy has to say
+                      // what unticking is for rather than promise a return.
                       stale.contains(tool)
-                          ? 'from ${tool.serverName} — not offered right now, but '
-                                'still allowed if it comes back'
+                          ? (_serversUnavailableToAutomations.contains(
+                                  tool.serverName,
+                                )
+                                ? 'from ${tool.serverName} — not available to '
+                                      'automations; untick it to save this '
+                                      'automation'
+                                : 'from ${tool.serverName} — not offered right '
+                                      'now, but still allowed if it comes back')
                           : 'from ${tool.serverName}',
                       style: TextStyle(
                         fontSize: 11.5,
