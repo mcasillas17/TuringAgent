@@ -170,6 +170,7 @@ func TestDeletingTheConversationScrubsItsMemoryProposalAudit(t *testing.T) {
 	setPolicies(t, repo, ctx, "safe")
 
 	remember(t, service, ctx, runID, "Card", "They drink it black.")
+	finishRun(t, repo, ctx, runID)
 	deleteSession(t, repo, ctx, sessionID)
 
 	record := onlyAuditRowFor(t, repo, ctx, "memory.tool.proposed")
@@ -251,7 +252,13 @@ func TestMemoryProposalFailsRatherThanLeaveAnUncorrelatedAuditRow(t *testing.T) 
 			return
 		}
 		deletions++
-		deleteSession(t, repo, ctx, sessionID)
+		// Deletion only begins here: the run making this very call is still
+		// executing, so the deletion pipeline will quiesce behind it rather
+		// than complete. Beginning is enough — the moment the session leaves
+		// 'active', a run-scoped audit row has nothing honest to attach to.
+		if _, err := repo.BeginSessionDeletion(ctx, sessionID); err != nil {
+			t.Errorf("BeginSessionDeletion: %v", err)
+		}
 	}}
 
 	response, err := service.CallMemoryTool(ctx, &turingv1.CallMemoryToolRequest{
