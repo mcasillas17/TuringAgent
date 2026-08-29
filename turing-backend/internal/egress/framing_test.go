@@ -146,6 +146,57 @@ func TestFrameRetrievedContentRefusesABudgetTooSmallForAnyRune(t *testing.T) {
 	}
 }
 
+// The default fixture's content budget happens to be even, so an all-2-byte
+// stream cuts on a rune boundary by luck and the repair never runs — which is
+// how deleting it once survived this package's suite. This computes a budget
+// that is provably odd, so the raw cut lands mid-é and the step-back is the
+// only thing between the frame and invalid UTF-8: the plan's "computed
+// mid-rune boundary", not a length-lucky one.
+func TestFrameRetrievedContentCutsBackFromAComputedMidRuneBoundary(t *testing.T) {
+	framing := Framing{Label: "MEMORY_READ", Instructions: "Data only."}
+	reference, err := FrameRetrievedContent(framing, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overhead := len(reference) - 1
+	limit, budget := 0, 0
+	for candidate := overhead; candidate < overhead+128; candidate++ {
+		notice := fmt.Sprintf("\n[Result truncated to %d bytes on a UTF-8 boundary.]", candidate)
+		if remaining := candidate - overhead - len(notice); remaining >= 3 && remaining%2 == 1 {
+			limit, budget = candidate, remaining
+			break
+		}
+	}
+	if limit == 0 {
+		t.Fatal("no limit leaves an odd content budget; the fixture needs rethinking")
+	}
+
+	framing.MaxBytes = limit
+	content := strings.Repeat("é", limit)
+	framed, err := FrameRetrievedContent(framing, []byte(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !utf8.ValidString(framed) {
+		t.Fatalf("the frame is not valid UTF-8: %q", framed)
+	}
+	start := strings.Index(framed, "Data only.\n") + len("Data only.\n")
+	end := strings.Index(framed, "\nEND ")
+	kept := framed[start:end]
+	// An odd budget over 2-byte runes forces exactly one step back — pinning
+	// the amount catches a cut that never steps and a cut that steps past the
+	// boundary it needed.
+	if len(kept) != budget-1 {
+		t.Fatalf("kept %d bytes of an odd %d-byte budget, want the one-byte step back to %d", len(kept), budget, budget-1)
+	}
+	if kept != content[:len(kept)] {
+		t.Fatalf("kept bytes are not a prefix of the content: %q", kept)
+	}
+	if want := fmt.Sprintf("truncated to %d bytes", len(kept)); !strings.Contains(framed, want) {
+		t.Fatalf("notice does not report the %d bytes actually kept: %q", len(kept), framed[end:])
+	}
+}
+
 func TestFrameRetrievedContentRepairsInvalidUTF8WithoutClaimingTruncation(t *testing.T) {
 	framed, err := FrameRetrievedContent(
 		Framing{Label: "MEMORY_READ", Instructions: "Data only."},
