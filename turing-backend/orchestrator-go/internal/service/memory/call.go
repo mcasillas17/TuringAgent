@@ -48,8 +48,11 @@ var (
 //	tool the user marked safe would otherwise sail past an allowlist it never
 //	reaches; then whether there is a vault to answer from at all; then the
 //	toggle, so an off switch refuses every tool whatever the registry says;
-//	then the policy; then dispatch liveness, because everything before it can
-//	go stale while an approval waits; then the arguments.
+//	then the run's frozen egress decision, because a decision-bearing run may
+//	only use the tools its consent named; then the policy; then dispatch
+//	liveness, because everything before it can go stale while an approval
+//	waits — the decision among it, so it is re-checked there; then the
+//	arguments.
 //
 // Nothing here reads a session id, a path or a scope from the caller. The run
 // names itself and everything else is resolved from the orchestrator's own
@@ -78,6 +81,10 @@ func (s *Server) CallMemoryTool(ctx context.Context, req *turingv1.CallMemoryToo
 	}
 	if !enabled {
 		return nil, status.Error(codes.FailedPrecondition, "memory is turned off")
+	}
+
+	if err := s.validateMemoryDecision(ctx, req.GetRunId(), tool.name, "not covered by the run egress decision"); err != nil {
+		return nil, err
 	}
 
 	args := req.GetArgs().AsMap()
@@ -125,6 +132,9 @@ func (s *Server) CallMemoryTool(ctx context.Context, req *turingv1.CallMemoryToo
 	if !active {
 		return nil, status.Error(codes.FailedPrecondition, "memory call was revoked before dispatch")
 	}
+	if err := s.validateMemoryDecision(ctx, req.GetRunId(), tool.name, "egress consent changed before dispatch"); err != nil {
+		return nil, err
+	}
 
 	if err := requireExactArguments(tool, args); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -139,6 +149,26 @@ func (s *Server) CallMemoryTool(ctx context.Context, req *turingv1.CallMemoryToo
 	default:
 		return nil, status.Error(codes.NotFound, "memory tool not found")
 	}
+}
+
+// validateMemoryDecision mirrors validateIntegrationDecision: a run that
+// carries a frozen egress decision was consented to with a named tool set,
+// and a memory tool outside that set was never part of what the user agreed
+// could shape the run — whatever the runtime's own filtering claims. It runs
+// twice, like the integrations pair: once before the policy is read, and once
+// after the dispatch-liveness re-read, so a decision replaced during an
+// approval wait is judged as it stands at dispatch. A run with no decision at
+// all passes — that is the ordinary local run, with no frozen consent to
+// violate (RunAllowsMemory owns that asymmetry).
+func (s *Server) validateMemoryDecision(ctx context.Context, runID, toolName, message string) error {
+	allowed, err := s.repo.RunAllowsMemory(ctx, runID, toolName)
+	if err != nil {
+		return status.Error(codes.Internal, "validate memory egress decision failed")
+	}
+	if !allowed {
+		return status.Error(codes.PermissionDenied, "memory call is "+message)
+	}
+	return nil
 }
 
 // authorizeRun answers who is calling, and answers it from the orchestrator's

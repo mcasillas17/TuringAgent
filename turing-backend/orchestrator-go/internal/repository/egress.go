@@ -449,6 +449,26 @@ func (r *Repository) RunAllowsIntegration(ctx context.Context, runID, endpoint, 
 	return false, nil
 }
 
+// RunAllowsMemory answers whether a run's frozen egress decision covers one
+// memory tool. Unlike RunAllowsIntegration, a run with no decision row is
+// allowed: integration tools exist only behind egress consent, while memory
+// also serves runs that never egress anything — for them there is no frozen
+// consent to violate. When a decision does exist, the qualified tool name
+// must be in the set the user consented to; the runtime already filters a
+// decision-bearing run's tool definitions to that set, but dispatch does not
+// take the runtime's word for its own honesty, the same way it does not for
+// integrations.
+func (r *Repository) RunAllowsMemory(ctx context.Context, runID, toolName string) (bool, error) {
+	decision, err := r.GetRunEgressDecision(ctx, runID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(decision.SelectedTools, backendegress.MemoryServerName+"/"+toolName), nil
+}
+
 func (r *Repository) IntegrationEndpointsForTools(ctx context.Context, selectedTools []string) ([]IntegrationEndpointEgress, error) {
 	toolNames := make([]string, 0)
 	for _, selected := range selectedTools {
