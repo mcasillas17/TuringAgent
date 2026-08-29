@@ -127,15 +127,15 @@ void main() {
         memoryProfileMayBeSent: true,
         memoryNotes: const [
           MemoryEgressDisclosure(
-            noteId: '',
-            title: 'persona.md',
+            noteId: 'persona.md',
+            title: 'Persona',
             vaultPath: 'persona.md',
             tier: MemoryEgressTier.persona,
             bodyMayBeSent: true,
           ),
           MemoryEgressDisclosure(
-            noteId: '',
-            title: 'profile.md',
+            noteId: 'profile.md',
+            title: 'Profile',
             vaultPath: 'profile.md',
             tier: MemoryEgressTier.profile,
             bodyMayBeSent: true,
@@ -150,6 +150,52 @@ void main() {
       expect(find.textContaining('persona.md'), findsWidgets);
       expect(find.textContaining('profile.md'), findsWidgets);
       expect(find.textContaining('full content may be sent'), findsWidgets);
+    });
+
+    // The orchestrator names a pinned document by its tier: the wire rows are
+    // note_id and vault_path both carrying the rel path, and a title that is
+    // the tier's own name in English ("Persona" under MEMORY_TIER_PERSONA).
+    // Rendering "tier · title" over that shape said the same word twice —
+    // "Persona · Persona" — which reads as a glitch in the one dialog that
+    // must read as deliberate.
+    testWidgets('a pinned document is not labelled with its tier twice', (
+      tester,
+    ) async {
+      final disclosure = RemoteEgressDisclosure(
+        challenge: 'challenge',
+        provider: 'openai_compatible',
+        model: 'remote',
+        endpoint: 'https://models.example/v1',
+        endpointHost: 'models.example',
+        dataCategories: const [EgressDataCategory.memoryProfile],
+        expiresAt: DateTime.utc(2026, 8, 24),
+        memoryProfileMayBeSent: true,
+        memoryNotes: const [
+          MemoryEgressDisclosure(
+            noteId: 'persona.md',
+            title: 'Persona',
+            vaultPath: 'persona.md',
+            tier: MemoryEgressTier.persona,
+            bodyMayBeSent: true,
+          ),
+          MemoryEgressDisclosure(
+            noteId: 'profile.md',
+            title: 'Profile',
+            vaultPath: 'profile.md',
+            tier: MemoryEgressTier.profile,
+            bodyMayBeSent: true,
+          ),
+        ],
+      );
+
+      await _open(tester, disclosure);
+
+      expect(find.text('Persona · Persona'), findsNothing);
+      expect(find.text('Profile · Profile'), findsNothing);
+      expect(find.text('Persona'), findsOneWidget);
+      expect(find.text('Profile'), findsOneWidget);
+      expect(find.text('persona.md'), findsOneWidget);
+      expect(find.text('profile.md'), findsOneWidget);
     });
 
     testWidgets('memory tools with nothing pinned say exactly that', (
@@ -228,8 +274,8 @@ void main() {
         memoryProfileMayBeSent: true,
         memoryNotes: const [
           MemoryEgressDisclosure(
-            noteId: '',
-            title: 'persona.md',
+            noteId: 'persona.md',
+            title: 'Persona',
             vaultPath: 'persona.md',
             tier: MemoryEgressTier.persona,
             bodyMayBeSent: true,
@@ -256,8 +302,8 @@ void main() {
         expiresAt: DateTime.utc(2026, 8, 24),
         memoryNotes: const [
           MemoryEgressDisclosure(
-            noteId: '',
-            title: 'persona.md',
+            noteId: 'persona.md',
+            title: 'Persona',
             vaultPath: 'persona.md',
             tier: MemoryEgressTier.persona,
             bodyMayBeSent: true,
@@ -327,8 +373,8 @@ void main() {
         selectedTools: const ['memory/memory.remember'],
         memoryNotes: const [
           MemoryEgressDisclosure(
-            noteId: '',
-            title: 'persona.md',
+            noteId: 'persona.md',
+            title: 'Persona',
             vaultPath: 'persona.md',
             tier: MemoryEgressTier.persona,
             bodyMayBeSent: true,
