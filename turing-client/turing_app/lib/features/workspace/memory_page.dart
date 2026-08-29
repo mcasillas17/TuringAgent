@@ -644,7 +644,7 @@ class _MemoryBody extends StatelessWidget {
           description: l10n.memoryPersonaDescription,
           document: state.persona,
           editingHash: personaHash,
-          vaultConfigured: state.settings.vaultRoot.isNotEmpty,
+          vaultWritable: state.settings.vaultWritable,
           controller: persona,
           editorKey: const Key('memory-persona-editor'),
           saveKey: const Key('memory-persona-save'),
@@ -664,7 +664,7 @@ class _MemoryBody extends StatelessWidget {
           description: l10n.memoryProfileDescription,
           document: state.profile,
           editingHash: profileHash,
-          vaultConfigured: state.settings.vaultRoot.isNotEmpty,
+          vaultWritable: state.settings.vaultWritable,
           controller: profile,
           editorKey: const Key('memory-profile-editor'),
           saveKey: const Key('memory-profile-save'),
@@ -846,7 +846,7 @@ class _DocumentCard extends StatelessWidget {
     required this.description,
     required this.document,
     required this.editingHash,
-    required this.vaultConfigured,
+    required this.vaultWritable,
     required this.controller,
     required this.editorKey,
     required this.saveKey,
@@ -883,7 +883,7 @@ class _DocumentCard extends StatelessWidget {
   /// into. Those are not the same refusal, and the document alone cannot
   /// tell them apart — only the settings row can, so it is threaded down here
   /// rather than folded into [MemoryDocument.isWritable]'s per-file meaning.
-  final bool vaultConfigured;
+  final bool vaultWritable;
   final TextEditingController controller;
   final Key editorKey;
   final Key saveKey;
@@ -903,12 +903,14 @@ class _DocumentCard extends StatelessWidget {
   /// vault is open and this file has not been created yet". But the same
   /// reason is what a document reports when there is no vault open at all, and
   /// offering to create a file with nowhere to land would be a save the server
-  /// can only refuse. [vaultConfigured] is the one signal that tells those
-  /// apart, so it gates VAULT_MISSING specifically without touching what
+  /// can only refuse. [vaultWritable] is the one signal that tells those
+  /// apart — the server's own answer about the vault it opened, never the
+  /// display-only path, which is legitimately empty while the vault writes
+  /// fine — so it gates VAULT_MISSING specifically without touching what
   /// [MemoryDocument.isWritable] means for every other reason.
   bool get _canSave =>
       document.isWritable &&
-      (vaultConfigured ||
+      (vaultWritable ||
           document.unavailableReason != MemoryUnavailableReason.vaultMissing);
 
   @override

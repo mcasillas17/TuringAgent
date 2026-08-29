@@ -449,7 +449,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get memorySaveNeedsVault =>
-      'Open or configure a vault before saving here.';
+      'The memory vault is not writable right now, so this cannot be saved.';
 
   @override
   String memoryTierItemCount(int count) {

@@ -835,7 +835,7 @@ abstract class AppLocalizations {
   /// No description provided for @memorySaveNeedsVault.
   ///
   /// In en, this message translates to:
-  /// **'Open or configure a vault before saving here.'**
+  /// **'The memory vault is not writable right now, so this cannot be saved.'**
   String get memorySaveNeedsVault;
 
   /// No description provided for @memoryTierItemCount.

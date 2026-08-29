@@ -211,7 +211,7 @@
   },
   "memoryNoProfileYet": "(no profile yet)",
   "memorySaveUnavailable": "This document cannot be saved from here until the problem above is fixed.",
-  "memorySaveNeedsVault": "Open or configure a vault before saving here.",
+  "memorySaveNeedsVault": "The memory vault is not writable right now, so this cannot be saved.",
   "memoryTierItemCount": "{count, plural, =0{Nothing is in this tier.} =1{1 item in this tier.} other{{count} items in this tier.}}",
   "@memoryTierItemCount": {
     "placeholders": {
