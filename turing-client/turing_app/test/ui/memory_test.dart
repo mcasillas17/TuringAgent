@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/workspace/memory_page.dart';
@@ -911,6 +913,46 @@ void main() {
       );
       expect(find.text('half a profile'), findsOneWidget);
     });
+
+    testWidgets('the editors stay on screen while a save is in flight', (
+      tester,
+    ) async {
+      // A save re-reads the page, and the re-read takes as long as it takes.
+      // The editor must stay mounted for the whole of that window: a page
+      // that swapped to a spinner here would drop the field mid-word, and
+      // every keystroke that landed after Save would go nowhere.
+      final api = _MemoryApi();
+      await _pumpMemory(tester, api);
+
+      final gate = Completer<void>();
+      api.stateReadGate = gate.future;
+      await tester.enterText(
+        find.byKey(const Key('memory-persona-editor')),
+        'sent to the vault',
+      );
+      await tester.tap(find.byKey(const Key('memory-persona-save')));
+      await tester.pump();
+
+      expect(
+        find.byKey(const Key('memory-persona-editor')),
+        findsOneWidget,
+        reason: 'the re-read is in flight and the editor must survive it',
+      );
+      await tester.enterText(
+        find.byKey(const Key('memory-persona-editor')),
+        'sent to the vault, and a word more',
+      );
+
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('sent to the vault, and a word more'),
+        findsOneWidget,
+        reason: 'what was typed during the save belongs to the user',
+      );
+      expect(api.personaSaves, [('sent to the vault', 'sha256:persona')]);
+    });
   });
 
   group('clearing a document on purpose', () {
@@ -1497,9 +1539,14 @@ class _MemoryApi extends TuringApi
   final List<(String, String)> personaSaves = [];
   final List<(String, String)> profileSaves = [];
 
+  /// When set, every state read waits on it before answering, so a test can
+  /// hold the page in the middle of a re-read and look at what is on screen.
+  Future<void>? stateReadGate;
+
   @override
   Future<MemoryState> listMemoryState() async {
     stateReads++;
+    if (stateReadGate case final gate?) await gate;
     if (listError case final error?) throw error;
     return state;
   }

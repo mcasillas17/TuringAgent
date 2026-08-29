@@ -107,6 +107,12 @@ class _ProfileResult {
 
 class _MemoryPageState extends State<MemoryPage> {
   late Future<MemoryState> _state;
+
+  /// The last state this page actually rendered, held so a re-read in flight
+  /// replaces content with content rather than with a spinner that unmounts
+  /// the editors. Never consulted on the first load — there is nothing typed
+  /// yet to protect — and never a substitute for an error notice.
+  MemoryState? _lastRendered;
   final TextEditingController _persona = TextEditingController();
   final TextEditingController _profile = TextEditingController();
 
@@ -365,9 +371,6 @@ class _MemoryPageState extends State<MemoryPage> {
       child: FutureBuilder<MemoryState>(
         future: _state,
         builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const WorkspaceLoading();
-          }
           if (snapshot.hasError) {
             return WorkspaceNotice(
               icon: Icons.error_outline,
@@ -377,7 +380,17 @@ class _MemoryPageState extends State<MemoryPage> {
               tone: AppColors.danger,
             );
           }
-          final state = snapshot.data!;
+          // Every write re-reads the page, and the read is a fresh future —
+          // but tearing the page down to a spinner for it would unmount the
+          // editors, and the user can be mid-word in one. The last rendered
+          // state stays up while a re-read is in flight (the buttons are
+          // already disabled by _busy); the spinner is only for the first
+          // load, which has nothing to hold on screen.
+          final MemoryState? state = snapshot.data ?? _lastRendered;
+          if (state == null) {
+            return const WorkspaceLoading();
+          }
+          _lastRendered = state;
           return _MemoryBody(
             state: state,
             l10n: l10n,
