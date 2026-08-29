@@ -284,6 +284,59 @@ func TestParseErrorsAreVisibleAndUnindexed(t *testing.T) {
 	}
 }
 
+// A hand-written note's citations are the user's own prose, never machine-owned
+// grounding. rewriteRefsFromSidecar deliberately never edits an unmanaged file,
+// so an evidence row for one would be a citation nothing may ever bring back in
+// line with the file: after the cited conversation's deletion, the file would
+// name a dead session forever while the sidecar disagreed. An implementation
+// that links evidence for every indexed note — or that withdraws an unmanaged
+// note because its refs name no live session — fails here.
+func TestUnmanagedNoteRefsAreProseNotEvidence(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+	liveID := newTestNoteID(t)
+	deadID := newTestNoteID(t)
+	unmanaged := func(noteID, ref, body string) string {
+		return "---\nid: \"" + noteID + "\"\nkind: \"belief\"\ntitle: \"a note\"\nmanaged: false\n" +
+			"refs: [\"" + ref + "\"]\n---\n\n" + body + "\n"
+	}
+	writeVaultNote(t, vault, "beliefs/live-ref.md", unmanaged(liveID, sessionID, "The user keeps bees."))
+	writeVaultNote(t, vault, "beliefs/dead-ref.md", unmanaged(deadID, "sess_01NEVEREXISTEDATALL", "The user keeps wasps."))
+
+	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
+		t.Fatalf("ReconcileMemoryVault: %v", err)
+	}
+	for name, noteID := range map[string]string{"live ref": liveID, "dead ref": deadID} {
+		if got := evidenceSessions(t, repo, noteID); len(got) != 0 {
+			t.Fatalf("%s: evidence rows = %v, want none for an unmanaged note", name, got)
+		}
+		note, found := noteRowFor(t, repo, noteID)
+		if !found {
+			t.Fatalf("%s: the unmanaged note was not indexed", name)
+		}
+		if note.Status != MemoryNoteStatusUnmanaged {
+			t.Fatalf("%s: status = %q, want unmanaged whatever its refs name", name, note.Status)
+		}
+	}
+
+	// Deleting the conversation the user's prose happens to name withdraws
+	// nothing of this note's, and the reconcile that follows leaves the file
+	// exactly as written.
+	before := readVaultNote(t, vault, "beliefs/live-ref.md")
+	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
+		t.Fatalf("ReconcileMemoryVault after the deletion: %v", err)
+	}
+	if got := readVaultNote(t, vault, "beliefs/live-ref.md"); got != before {
+		t.Fatalf("the reconcile rewrote a hand-written note:\nbefore %q\nafter  %q", before, got)
+	}
+	if note, found := noteRowFor(t, repo, liveID); !found || note.Status != MemoryNoteStatusUnmanaged {
+		t.Fatalf("after deletion status = %+v found=%v, want the note untouched and not withdrawn", note, found)
+	}
+}
+
 // Evidence has one direction. The sidecar is what the user's deletions act on,
 // so a file still listing a session that has been deleted is rewritten from
 // the sidecar — never the other way round.

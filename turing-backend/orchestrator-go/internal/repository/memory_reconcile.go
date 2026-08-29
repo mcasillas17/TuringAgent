@@ -877,15 +877,28 @@ func indexMemoryNoteTx(ctx context.Context, tx *sql.Tx, note memoryfiles.NoteRow
 	switch {
 	case err == ErrMemoryNoteNotFound:
 		status := string(note.Status)
-		live, err := liveSessionRefsTx(ctx, tx, note.EvidenceRefs)
-		if err != nil {
-			return false, false, err
+		withdrawn := note.EvidenceWithdrawn
+		// Evidence rows are machine-owned grounding, and only a managed note
+		// has any: its citations were written by promotion, so the sidecar
+		// tracks them and rewriteRefsFromSidecar keeps the file in line when a
+		// cited conversation is deleted. An unmanaged note is the user's own
+		// prose — that same pass deliberately never edits it, so a row here
+		// would put a citation on record that nothing may ever bring back in
+		// line with the file. Its refs stay what they are: words the user
+		// wrote.
+		var live []string
+		if note.Status == memoryfiles.NoteStatusManaged {
+			live, err = liveSessionRefsTx(ctx, tx, note.EvidenceRefs)
+			if err != nil {
+				return false, false, err
+			}
+			// A note whose every citation names a conversation that no longer
+			// exists has lost its support, and so has one whose file already
+			// says its evidence was withdrawn. It is kept — the user accepted
+			// it — and marked, so nothing answers with it as if it were still
+			// grounded.
+			withdrawn = withdrawn || (len(note.EvidenceRefs) > 0 && len(live) == 0)
 		}
-		// A note whose every citation names a conversation that no longer
-		// exists has lost its support, and so has one whose file already says
-		// its evidence was withdrawn. It is kept — the user accepted it — and
-		// marked, so nothing answers with it as if it were still grounded.
-		withdrawn := note.EvidenceWithdrawn || (len(note.EvidenceRefs) > 0 && len(live) == 0)
 		if withdrawn {
 			status = MemoryNoteStatusWithdrawn
 		}
