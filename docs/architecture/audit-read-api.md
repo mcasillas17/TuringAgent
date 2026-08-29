@@ -19,14 +19,17 @@ private-by-nature is the rationale a person typed on an approval or denial —
 that is the answer, not a leak (see
 [Approval decision rationale](#approval-decision-rationale)). It is **not** a
 general-purpose log viewer,
-it does not add new audited actions, and it does not touch memory. A future
+it does not add new audited actions, and it never reads the vault. A future
 action can already be retrieved through this API the moment it is recorded —
 see [Action allowlist](#action-allowlist) — but it is redacted to metadata
-only until someone reviews it and writes an explicit typed rule for it. This
-also means TUR-013 does not, by itself, make memory or retry decisions
-inspectable: nothing beyond the `tool.call.*` `reason` field says why a run
-retried, and there is no memory-specific action yet (that is MEM-012's job,
-tracked as its own task, not implied here).
+only until someone reviews it and writes an explicit typed rule for it. That
+is how the `memory.*` actions the vault's reconcile and erasure paths now
+record (candidate lifecycle, promotion, note indexing/withdrawal — id and
+status only, never content) surface here: as metadata, with no typed payload
+rule yet. Retry decisions remain uninspectable — nothing beyond the
+`tool.call.*` `reason` field says why a run retried — and the "why did
+Turing remember or use this?" tracing question is still MEM-012's job,
+tracked as its own task, not implied here.
 
 - Proto: `proto/turing/v1/audit.proto`
 - Service: `turing-backend/orchestrator-go/internal/service/audit/service.go`
