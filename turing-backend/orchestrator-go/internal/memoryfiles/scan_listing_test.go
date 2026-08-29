@@ -195,6 +195,42 @@ func TestWalkVaultStopsAtTheBoundWithoutListingTheWholeVault(t *testing.T) {
 	}
 }
 
+// Empty directories carry no indexable note, so the note bound never fires on
+// them — a vault of nothing but folders was walked in full, however many there
+// were, at a startup pass that treats most failures as fatal. The walk has to
+// count every entry it examines against its own bound, the way the residue
+// sweep counts examined entries, and refuse with the same tolerated
+// ErrVaultTooLarge the note bound raises.
+func TestWalkVaultBoundsTheEntriesItExaminesNotJustTheNotes(t *testing.T) {
+	root := newTestVaultRoot(t)
+	// Well past the bound, so "stopped early" and "walked everything" cannot
+	// be confused by luck.
+	total := maxVaultWalkedEntries + vaultListingBatchSize*3
+	beliefs := filepath.Join(root, BeliefsDirName)
+	for index := 0; index < total; index++ {
+		if err := os.Mkdir(filepath.Join(beliefs, fmt.Sprintf("area-%06d", index)), 0o700); err != nil {
+			t.Fatalf("seed directory %d: %v", index, err)
+		}
+	}
+	recorder := &listRecorder{}
+	vault := openWalkStubVault(t, root, recorder)
+
+	_, err := vault.Scan(context.Background())
+	if !errors.Is(err, ErrVaultTooLarge) {
+		t.Fatalf("scan of a directory-flooded vault = %v, want ErrVaultTooLarge", err)
+	}
+	// The refusal has to arrive while the listing is still in progress, with
+	// the same one-batch slack the note bound is held to (plus the root's own
+	// short listing).
+	ceiling := maxVaultWalkedEntries + vaultListingBatchSize*2
+	if read := recorder.entriesRead(); read > ceiling {
+		t.Fatalf(
+			"the walk read %d entries before refusing, past the %d it needed; the entry bound is checked after the listing, not during it",
+			read, ceiling,
+		)
+	}
+}
+
 // Half a listing names half the notes. The entries that did arrive are kept —
 // they were really there — and the area is marked incomplete, because nothing
 // may be concluded from what was not returned. Batching must not turn that into
