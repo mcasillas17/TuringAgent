@@ -661,6 +661,17 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	assertProtoField(t, disclosure, "skills", 12, protoreflect.MessageKind, true, "turing.v1.SkillEgressDisclosure")
 	assertProtoField(t, disclosure, "memory_notes", 13, protoreflect.MessageKind, true, "turing.v1.MemoryEgressDisclosure")
 	assertProtoField(t, disclosure, "memory_profile_may_be_sent", 14, protoreflect.BoolKind, false, "")
+	// Membership is exact, not merely inclusive: this is the message the user
+	// reads before consenting, so a field appended without being pinned here
+	// is an undisclosed egress channel, the change class that churned field 15
+	// inside the PR that added memory to this message.
+	assertProtoFieldMembers(t, disclosure, map[protoreflect.Name]protoreflect.FieldNumber{
+		"challenge": 1, "provider": 2, "model": 3, "endpoint": 4,
+		"endpoint_host": 5, "external_agent_id": 6, "data_categories": 7,
+		"expires_at": 8, "remote_mcp_servers": 9, "selected_tools": 10,
+		"integration_endpoints": 11, "skills": 12, "memory_notes": 13,
+		"memory_profile_may_be_sent": 14,
+	})
 
 	// The disclosure is what the user reads before consenting, so its memory
 	// fields name content, never the signed snapshot fingerprint the run-owned
@@ -674,6 +685,10 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	if memoryDisclosure.Fields().ByName("memory_snapshot_fingerprint") != nil {
 		t.Fatal("MemoryEgressDisclosure must not carry a snapshot fingerprint")
 	}
+	assertProtoFieldMembers(t, memoryDisclosure, map[protoreflect.Name]protoreflect.FieldNumber{
+		"note_id": 1, "title": 2, "vault_path": 3, "tier": 4,
+		"body_may_be_sent": 5,
+	})
 
 	assertProtoEnumValues(t, common.Enums().ByName("MemoryTier"), map[protoreflect.Name]protoreflect.EnumNumber{
 		"MEMORY_TIER_UNSPECIFIED": 0,
@@ -718,6 +733,19 @@ func TestRemoteEgressProtoContract(t *testing.T) {
 	assertProtoField(t, decision, "remote_mcp_servers", 17, protoreflect.MessageKind, true, "turing.v1.RemoteMcpEgressDestination")
 	assertProtoField(t, decision, "integration_endpoints", 18, protoreflect.MessageKind, true, "turing.v1.IntegrationEgressDestination")
 	assertProtoField(t, decision, "memory_snapshot_fingerprint", 19, protoreflect.StringKind, false, "")
+	// The decision is the frozen record of what the disclosure's consent
+	// covered; the same exactness applies — an unpinned field here is consent
+	// scope nobody reviewed.
+	assertProtoFieldMembers(t, decision, map[protoreflect.Name]protoreflect.FieldNumber{
+		"decision_id": 1, "version": 2, "provider": 3, "model": 4,
+		"endpoint": 5, "endpoint_host": 6, "external_agent_id": 7,
+		"data_categories": 8, "consent_granted_at": 9,
+		"challenge_fingerprint": 10, "selected_tools": 11,
+		"skill_snapshot_fingerprint": 12, "recall_applicable": 13,
+		"memory_profile_applicable": 14, "external_credential_ref_hash": 15,
+		"request_digest": 16, "remote_mcp_servers": 17,
+		"integration_endpoints": 18, "memory_snapshot_fingerprint": 19,
+	})
 
 	provider := common.Messages().ByName("ProviderConfig")
 	assertProtoField(t, provider, "remote_endpoint", 5, protoreflect.StringKind, false, "")
