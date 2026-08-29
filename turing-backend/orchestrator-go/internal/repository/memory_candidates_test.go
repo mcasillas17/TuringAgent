@@ -258,7 +258,7 @@ func TestMemoryCandidatesCascadeWithTheirSession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateMemoryCandidate: %v", err)
 	}
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	var candidates int
@@ -475,7 +475,7 @@ func TestCreateMemoryCandidateRemovesTheFileWhenTheSessionVanishesMidWrite(t *te
 	sessionID := newMemoryTestSession(t, repo)
 
 	repo.memoryCandidateWriteBarrier = func() error {
-		return repo.DeleteSession(ctx(), sessionID)
+		return repo.DeleteSessionForTests(ctx(), sessionID)
 	}
 	_, err := repo.CreateMemoryCandidate(ctx(), CreateMemoryCandidateInput{
 		SessionID: sessionID,

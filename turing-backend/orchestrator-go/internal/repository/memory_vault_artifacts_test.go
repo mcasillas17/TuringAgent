@@ -361,7 +361,7 @@ func TestVaultArtifactsCascadeWithTheSession(t *testing.T) {
 	if _, err := repo.ReserveVaultArtifact(ctx, ReserveVaultArtifactInput{SessionID: session.SessionID, VaultPath: "inbox/a.md"}); err != nil {
 		t.Fatalf("ReserveVaultArtifact: %v", err)
 	}
-	if err := repo.DeleteSession(ctx, session.SessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx, session.SessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	var rows int

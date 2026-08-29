@@ -59,7 +59,7 @@ func TestMemoryNoteEvidenceIsEmptyForAnUncitedNote(t *testing.T) {
 	session := newMemoryTestSession(t, repo)
 	note := mustPromoteTestBelief(t, repo, session, "Bees", "The user keeps bees.")
 
-	if err := repo.DeleteSession(ctx(), session); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), session); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 

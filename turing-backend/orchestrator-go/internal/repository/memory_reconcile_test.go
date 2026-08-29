@@ -323,7 +323,7 @@ func TestUnmanagedNoteRefsAreProseNotEvidence(t *testing.T) {
 	// nothing of this note's, and the reconcile that follows leaves the file
 	// exactly as written.
 	before := readVaultNote(t, vault, "beliefs/live-ref.md")
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
@@ -352,7 +352,7 @@ func TestStaleFrontmatterCannotResurrectDeletedEvidence(t *testing.T) {
 		t.Fatalf("evidence after adoption = %v, want one row", got)
 	}
 
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if got := evidenceSessions(t, repo, noteID); len(got) != 0 {
@@ -471,7 +471,7 @@ func TestReconcileHealsAPromotionThatCrashedAfterTheFileMoved(t *testing.T) {
 
 	// Deleting the conversation afterwards withdraws the citation, not the
 	// belief: the note was accepted into memory and is no longer session state.
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if _, found := noteRowFor(t, repo, promoted.NoteID); !found {
@@ -490,7 +490,7 @@ func TestHealAfterTheSourceSessionIsAlreadyGoneWithdrawsTheNote(t *testing.T) {
 	sessionID := newMemoryTestSession(t, repo)
 	noteID := newTestNoteID(t)
 	writeVaultNote(t, vault, "beliefs/note.md", managedBelief(noteID, []string{sessionID}, "The user keeps bees."))
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 
@@ -778,7 +778,7 @@ func TestWithdrawnEvidenceIsWrittenAsAWithdrawalAndCannotBeReinserted(t *testing
 	if got := evidenceSessions(t, repo, noteID); len(got) != 1 {
 		t.Fatalf("evidence after adoption = %v, want the citation linked", got)
 	}
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 
@@ -859,7 +859,7 @@ func TestFrontmatterRefsAreAnnotationsValidatedAgainstLiveSessions(t *testing.T)
 	repo, vault, _ := newMemoryTestRepo(t)
 	live := newMemoryTestSession(t, repo)
 	gone := newMemoryTestSession(t, repo)
-	if err := repo.DeleteSession(ctx(), gone); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), gone); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	noteID := newTestNoteID(t)
@@ -969,7 +969,7 @@ func TestReconcileRecordsWhatItChangedWithoutRecordingWhatItSays(t *testing.T) {
 		t.Fatalf("reservation release audits = %d, want 1", first[memoryReservationReleasedAction])
 	}
 
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {

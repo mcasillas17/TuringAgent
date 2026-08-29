@@ -52,7 +52,7 @@ func TestMemoryStateReportsAWithdrawnBeliefAsGroundedInNothing(t *testing.T) {
 		t.Fatalf("ListMemoryState: %v", err)
 	}
 
-	if err := repo.DeleteSession(ctx, sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx, sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 

@@ -2319,7 +2319,7 @@ func TestRecordForExistingRunDoesNotRecreatePayloadAfterSessionDeletion(t *testi
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.DeleteSession(ctx, session.SessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx, session.SessionID); err != nil {
 		t.Fatal(err)
 	}
 

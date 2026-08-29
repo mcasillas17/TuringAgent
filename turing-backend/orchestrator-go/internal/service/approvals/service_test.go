@@ -1093,7 +1093,7 @@ func TestDeleteSessionScrubsApprovalRationaleAudit(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.DeleteSession(context.Background(), enqueued.SessionID); err != nil {
+	if err := h.repo.DeleteSessionForTests(context.Background(), enqueued.SessionID); err != nil {
 		t.Fatal(err)
 	}
 	var approvals int
@@ -1145,7 +1145,7 @@ func TestLateApprovalAuditAfterSessionDeletionDoesNotRestoreRationale(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.DeleteSession(context.Background(), enqueued.SessionID); err != nil {
+	if err := h.repo.DeleteSessionForTests(context.Background(), enqueued.SessionID); err != nil {
 		t.Fatal(err)
 	}
 

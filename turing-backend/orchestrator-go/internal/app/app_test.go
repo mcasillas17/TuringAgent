@@ -870,7 +870,7 @@ func TestDeletedSessionAuditIsListableOnlyAsScrubbedEvidence(t *testing.T) {
 	if _, err := app.database.ExecContext(ctx, `UPDATE agent_runs SET status = 'completed', execution_active = 0 WHERE id = ?`, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.Repository.DeleteSession(ctx, session.SessionID); err != nil {
+	if err := app.Repository.DeleteSessionForTests(ctx, session.SessionID); err != nil {
 		t.Fatal(err)
 	}
 

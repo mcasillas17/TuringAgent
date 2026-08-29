@@ -721,7 +721,7 @@ func TestDeletingASessionRemovesItsRouting(t *testing.T) {
 		t.Fatalf("route: %v", err)
 	}
 
-	if err := repo.DeleteSession(ctx, session.SessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx, session.SessionID); err != nil {
 		t.Fatalf("delete session: %v", err)
 	}
 

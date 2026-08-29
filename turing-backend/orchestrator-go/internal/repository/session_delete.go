@@ -871,8 +871,16 @@ func (r *Repository) SessionDeletionReceipt(ctx context.Context, sessionID strin
 	return receipt, nil
 }
 
-// DeleteSession removes a session and everything it produced, and scrubs the
-// content out of the audit rows it leaves behind.
+// DeleteSessionForTests removes a session and everything it produced in one
+// transaction, and scrubs the content out of the audit rows it leaves behind.
+//
+// TESTS ONLY. Production deletion is the durable pipeline —
+// BeginSessionDeletion, PurgeSessionVaultArtifacts, AdvanceSessionDeletion —
+// which is what drains the vault: this shortcut cascades vault_artifacts rows
+// away without running the vault cleaner, so a candidate's inbox file would
+// survive as an orphan the user was told had been withdrawn. It exists so a
+// test can put the store on the far side of a completed deletion in one call;
+// nothing outside a test may grow a call to it.
 //
 // Two things about this are load-bearing and easy to get wrong:
 //
@@ -888,7 +896,7 @@ func (r *Repository) SessionDeletionReceipt(ctx context.Context, sessionID strin
 // use the session as their target. Both links disappear or become unresolvable
 // after deletion, so the update resolves them while the source rows still
 // exist.
-func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error {
+func (r *Repository) DeleteSessionForTests(ctx context.Context, sessionID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

@@ -37,7 +37,7 @@ func TestWithdrawalIsTerminalAcrossLaterReconcilePasses(t *testing.T) {
 	// about the withdrawal and not about a note search never matched at all.
 	assertMemoryNoteSearchable(t, repo, noteID, "grounded, before the conversation was deleted")
 
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
@@ -83,7 +83,7 @@ func TestWithdrawalIsTerminalEvenWhenTheFileNoLongerSaysSo(t *testing.T) {
 	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
 		t.Fatalf("ReconcileMemoryVault to adopt the note: %v", err)
 	}
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {

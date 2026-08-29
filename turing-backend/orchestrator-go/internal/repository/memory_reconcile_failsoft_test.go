@@ -101,7 +101,7 @@ func TestReconcileRewritesEveryOtherNoteWhenOneCannotBeRewritten(t *testing.T) {
 	}
 	// The conversation both notes cite is deleted, so both files now have to
 	// stop citing it — and one of them cannot be written.
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	sealVaultNote(t, vault.Root(), "beliefs/stubborn.md")
