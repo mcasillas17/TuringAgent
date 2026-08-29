@@ -412,6 +412,13 @@ void main() {
       // ...and safe ones are not: listing them would invite the user to grant
       // something that was never withheld.
       expect(find.text('files.read'), findsNothing);
+      // Nor is an approval-gated memory tool: the server refuses memory to
+      // automations unconditionally, so a tick here could only fail at Save.
+      expect(find.text('memory.remember'), findsNothing);
+      expect(
+        find.textContaining('integrations and memory tools are not available'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('states the whole consent before you can save it', (
@@ -919,6 +926,14 @@ class _FakeApi
       ToolDescriptor(
         serverName: 'files',
         toolName: 'files.update',
+        policy: ToolPolicy.approvalRequired,
+      ),
+      // Approval-gated like the two above, but from the memory pseudo-server:
+      // the orchestrator refuses memory tools to automations unconditionally,
+      // so the picker must not offer it.
+      ToolDescriptor(
+        serverName: 'memory',
+        toolName: 'memory.remember',
         policy: ToolPolicy.approvalRequired,
       ),
     ];

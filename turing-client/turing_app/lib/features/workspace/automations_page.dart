@@ -925,7 +925,8 @@ class _AllowlistPicker extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'Connected-account integrations are not available to automations.',
+          'Connected-account integrations and memory tools are not '
+          'available to automations.',
           style: TextStyle(fontSize: 12.5, color: palette.textMuted),
         ),
         const SizedBox(height: 8),
@@ -950,8 +951,16 @@ class _AllowlistPicker extends StatelessWidget {
                 style: TextStyle(fontSize: 12.5, color: AppColors.danger),
               );
             }
+            // Memory tools are refused to automations unconditionally on the
+            // server, so offering one here would be a tick that can only fail
+            // at Save. A stale entry from an older allowlist still shows below,
+            // because a permission the user cannot see cannot be withdrawn.
             final gated = (snapshot.data ?? const <ToolDescriptor>[])
-                .where((tool) => tool.policy == ToolPolicy.approvalRequired)
+                .where(
+                  (tool) =>
+                      tool.policy == ToolPolicy.approvalRequired &&
+                      tool.serverName != 'memory',
+                )
                 .map(
                   (tool) => AutomationTool(
                     serverName: tool.serverName,
