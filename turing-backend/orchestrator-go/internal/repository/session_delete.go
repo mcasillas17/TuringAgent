@@ -545,13 +545,40 @@ func (r *Repository) AdvanceSessionDeletion(ctx context.Context, sessionID strin
 // markSessionDeletionCompletionFailure keeps a withdrawal whose rows are gone
 // visibly unfinished. It touches neither artifact manifest: both drained before
 // the cascade ran, and there is nothing left in either to mark.
+//
+// A zero-row update is diagnosed rather than swallowed, the same way
+// markSessionDeletionFailedTx diagnoses one: a receipt row that is missing
+// outright means the failure this call exists to record would vanish with it,
+// and the caller must not report a retryable receipt nothing durable backs. A
+// row already completed is the one legitimate zero-row case — a concurrent
+// retry finished the withdrawal while this attempt was failing — and stays a
+// quiet success.
 func (r *Repository) markSessionDeletionCompletionFailure(ctx context.Context, sessionID string, errorCode string) error {
-	_, err := r.db.ExecContext(ctx, `
+	result, err := r.db.ExecContext(ctx, `
 		UPDATE session_deletions
 		SET state = 'failed_external', retryable = 1, error_code = ?
 		WHERE session_id = ? AND state <> 'completed'
 	`, errorCode, sessionID)
-	return err
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed > 0 {
+		return nil
+	}
+	var state string
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT state FROM session_deletions WHERE session_id = ?
+	`, sessionID).Scan(&state); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrSessionNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 // SessionExecutionRunIDs returns only executions that must receive a runtime

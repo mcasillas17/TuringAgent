@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
@@ -110,5 +111,59 @@ func TestMemoryRememberStaysSideEffectingWhenThePolicySaysSo(t *testing.T) {
 	}
 	if !outcome.SideEffecting {
 		t.Fatal("a memory proposal was reported as read-only")
+	}
+}
+
+type failingMemoryRPC struct{}
+
+func (r *failingMemoryRPC) ListMemoryTools(context.Context) (*turingv1.ListMemoryToolsResponse, error) {
+	return &turingv1.ListMemoryToolsResponse{}, nil
+}
+
+func (r *failingMemoryRPC) CallMemoryTool(
+	context.Context,
+	*turingv1.CallMemoryToolRequest,
+) (*turingv1.CallMemoryToolResponse, error) {
+	return nil, errors.New("the orchestrator went away mid-call")
+}
+
+// The failure leg of the read-only carry-through, pinned directly: a search
+// that dies under an approval-gated read-only decision failed at a question,
+// not at a write, so the error must come back recoverable — a runner that
+// classified every approval-gated failure as side-effect-unknown would burn
+// the run for a read it can simply retry.
+func TestMemoryFailedSearchUnderApprovalStaysRecoverable(t *testing.T) {
+	runner := &Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			decision := turingv1.ToolPolicyDecision_DECISION_ALLOW
+			approvalID := ""
+			if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_BEFORE {
+				decision = turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED
+				approvalID = "appr_memory"
+			}
+			return &turingv1.ToolPolicyDecision{
+				Decision: decision, ToolCallId: beacon.GetToolCallId(),
+				ApprovalId: approvalID, ReadOnly: true,
+			}, nil
+		},
+		WaitApproval:   func(context.Context, string) (string, error) { return "approval-jwt", nil },
+		ResumeApproved: allowResume,
+	}
+
+	_, err := runner.RunWithOutcome(context.Background(), RunInput{
+		AgentID:    turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		RunID:      "run_memory",
+		ServerName: "memory",
+		ToolName:   "memory.search",
+		Args:       map[string]any{"query": "chickens"},
+		MCPClient:  mcp.NewMemoryClient(&failingMemoryRPC{}),
+	})
+	var recoverable RecoverableToolError
+	if !errors.As(err, &recoverable) {
+		t.Fatalf("failed read-only search error = %T (%v), want RecoverableToolError", err, err)
+	}
+	var unknown SideEffectUnknownError
+	if errors.As(err, &unknown) {
+		t.Fatalf("a failed read was classified as an uncertain side effect: %v", err)
 	}
 }

@@ -284,21 +284,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get memoryCandidateKindProfileEdit => 'Proposed change to profile.md';
 
   @override
-  String get memoryTierUnspecified => 'Memory';
-
-  @override
-  String get memoryTierPersona => 'Persona';
-
-  @override
-  String get memoryTierProfile => 'Profile';
-
-  @override
-  String get memoryTierBelief => 'Beliefs';
-
-  @override
-  String get memoryTierNote => 'Notes';
-
-  @override
   String get memoryPersonaHeading => 'persona.md';
 
   @override

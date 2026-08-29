@@ -84,21 +84,6 @@ String localizedMemoryCandidateKindCopy(
   }
 }
 
-String localizedMemoryTierCopy(AppLocalizations l10n, MemoryTier tier) {
-  switch (tier) {
-    case MemoryTier.unspecified:
-      return l10n.memoryTierUnspecified;
-    case MemoryTier.persona:
-      return l10n.memoryTierPersona;
-    case MemoryTier.profile:
-      return l10n.memoryTierProfile;
-    case MemoryTier.belief:
-      return l10n.memoryTierBelief;
-    case MemoryTier.note:
-      return l10n.memoryTierNote;
-  }
-}
-
 /// The categories the consent dialog lists, in the user's words.
 ///
 /// Exhaustive for the same reason as the rest of this file: a category added

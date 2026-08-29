@@ -173,7 +173,11 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// A tool server has no reason to hold a user's third-party API keys,
 		// and it is the container most exposed to what a model asks for.
 		"TURING_AGENT_API_KEYS:",
+		// The vault under either of its names, same as the runtime and
+		// mcp-files: the mount path is a confinement boundary and the display
+		// path names a folder on the user's own machine.
 		"MEMORY_ROOT:",
+		"MEMORY_DISPLAY_ROOT:",
 	)
 
 	files := composeServiceBlock(t, compose, "turing-mcp-files")

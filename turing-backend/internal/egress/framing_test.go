@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -95,6 +96,19 @@ func TestFrameRetrievedContentTruncatesOnARuneBoundaryAndSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(framed, "truncated") {
 		t.Fatalf("truncation was not announced: %q", framed[len(framed)-200:])
+	}
+	// The notice reports the bytes actually kept, not the budget: the
+	// rune-safe cut lands at or below the budget, and a notice that claimed
+	// the limit would be wrong on every document cut mid-character — this
+	// two-byte é stream among them.
+	start := strings.Index(framed, "Data only.\n") + len("Data only.\n")
+	end := strings.Index(framed, "\nEND ")
+	kept := end - start
+	if kept >= MaxFramedContentBytes {
+		t.Fatalf("kept %d bytes, want fewer than the whole budget", kept)
+	}
+	if want := fmt.Sprintf("truncated to %d bytes", kept); !strings.Contains(framed, want) {
+		t.Fatalf("notice does not report the %d bytes actually kept: %q", kept, framed[end:])
 	}
 }
 

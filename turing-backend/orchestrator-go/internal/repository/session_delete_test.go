@@ -1255,3 +1255,41 @@ func TestAdvanceSessionDeletionPreservesRetainedLegacyCountAcrossACompletionRetr
 		t.Fatalf("persisted retained legacy count = %d, want 2", persisted.RetainedLegacyArtifactCount)
 	}
 }
+
+// A completion failure that lands on no receipt row is a bug being erased at
+// the moment it matters: the caller would report a retryable withdrawal
+// nothing durable backs. The marker diagnoses that the way its transactional
+// sibling does — missing row is ErrSessionNotFound; a row a concurrent retry
+// already completed is the one legitimate quiet no-op. An implementation that
+// fires the UPDATE and ignores RowsAffected fails the first case.
+func TestCompletionFailureMarkerDiagnosesAMissingReceipt(t *testing.T) {
+	repo := New(openTestDB(t))
+	ctx := context.Background()
+
+	err := repo.markSessionDeletionCompletionFailure(ctx, "sess_01NEVERBEGANDELETION", SessionDeletionMemoryReconcileFailed)
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("marking a nonexistent receipt = %v, want ErrSessionNotFound", err)
+	}
+
+	session, err := repo.CreateSession(ctx, "completed already")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BeginSessionDeletion(ctx, session.SessionID); err != nil {
+		t.Fatalf("BeginSessionDeletion: %v", err)
+	}
+	receipt, err := repo.AdvanceSessionDeletion(ctx, session.SessionID, nil)
+	if err != nil || receipt.State != "completed" {
+		t.Fatalf("AdvanceSessionDeletion = %+v err=%v, want completed", receipt, err)
+	}
+	if err := repo.markSessionDeletionCompletionFailure(ctx, session.SessionID, SessionDeletionMemoryReconcileFailed); err != nil {
+		t.Fatalf("marking a completed receipt = %v, want the quiet no-op", err)
+	}
+	persisted, err := repo.SessionDeletionReceipt(ctx, session.SessionID)
+	if err != nil {
+		t.Fatalf("SessionDeletionReceipt: %v", err)
+	}
+	if persisted.State != "completed" || persisted.Retryable {
+		t.Fatalf("receipt after the late marker = %+v, want completed untouched", persisted)
+	}
+}
