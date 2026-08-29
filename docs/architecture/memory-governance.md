@@ -51,9 +51,15 @@ user-controlled memory** taxonomy row, §Correction's withdrawal sentence, and
 
 ### Relaxation 1 — promotion is authorship
 
-When the user promotes a candidate, with its full content displayed and
-editable before acceptance, that act is the item's source. Links to the session
-the proposal came from demote from load-bearing dependencies to annotations.
+When the user promotes a candidate, with its full content displayed and — by
+editing its inbox file in the vault — editable before acceptance, that act is
+the item's source. Links to the session the proposal came from demote from
+load-bearing dependencies to annotations. The decision is bound to the exact
+text by hash: a candidate edited in the vault after the user read it is
+refused rather than accepted unseen, so what promotion authors is always text
+the user was shown. Editing a proposal inside the app before accepting it is
+deferred — the server refuses `edited_content` explicitly rather than
+accepting and ignoring it.
 
 The consequences, stated rather than implied:
 
@@ -84,8 +90,8 @@ revision chain, supersession, and lifecycle-validated vault edits to **MEM-010**
 explicitly. `memory_candidates` rows, being machine-owned, keep validated
 lifecycle transitions and audit events from day one.
 
-Nothing here ships revision history for vault files, sensitivity filtering, or
-automatic extraction. Automatic candidate extraction from conversation remains
+Nothing here ships revision history for vault files, sensitivity filtering,
+in-app editing of a proposal before acceptance, or automatic extraction. Automatic candidate extraction from conversation remains
 **MEM-009**: today a candidate exists only because a run called
 `memory.remember`, and assistant, tool, and recalled content are not a
 candidate source.
@@ -283,7 +289,7 @@ the user authored, not a byte-level exception to anything.
 | User-authored evidence | User messages, explicit profile edits, a deliberate "remember this" action | May become active memory through an explicit user action. It is evidence of what the user said or requested, not proof that the statement is objectively true. |
 | Locally derived candidate | A fact, preference, summary, or consolidation proposed by a local model or deterministic process | Untrusted until reviewed. It may be stored as a source-linked candidate but must not silently become an active belief or instruction. |
 | External or delegated evidence | Assistant replies, remote-model output, tool results, files, web content, connector data, imported records | Untrusted content. It must retain source and egress attribution and cannot directly create an active belief or procedural instruction. Imports are isolated candidates until the user accepts them. |
-| Active user-controlled memory | A user-created item, or a candidate the user promoted with its full content shown and editable before acceptance | Eligible for recall within its scope. Recall must expose provenance and date, and active instructions must remain distinguishable from untrusted recalled content. Promotion is authorship: the promoted content's source is that act, and its links to the originating session are annotations rather than dependencies (Amendment 1, Relaxation 1). Immutable revision history is required of database-owned items and deferred for vault files (Relaxation 2). |
+| Active user-controlled memory | A user-created item, or a candidate the user promoted with its full content shown, and editable in the vault, before acceptance | Eligible for recall within its scope. Recall must expose provenance and date, and active instructions must remain distinguishable from untrusted recalled content. Promotion is authorship: the promoted content's source is that act, and its links to the originating session are annotations rather than dependencies (Amendment 1, Relaxation 1). Immutable revision history is required of database-owned items and deferred for vault files (Relaxation 2). |
 | Operational metadata | IDs, timestamps, lifecycle state, hashes, model/extractor version, token counts | May support policy, audit, and explanation. It must not smuggle a content copy around deletion rules. |
 | Scrubbed audit tombstone | Minimal evidence that an action or deletion occurred | May survive source deletion only under the explicit exception above. It cannot be recalled as memory or reconstructed into deleted content. |
 
@@ -329,7 +335,7 @@ Source ownership is separate from recall scope. A user-scoped fact derived
 from a session message still depends on that message; deleting the source
 withdraws the derived fact even though its recall scope was wider — with one
 exception, defined in Amendment 1: content the user promoted by an explicit act
-with the full text shown and editable is authored by that act, so it survives
+with the full text shown, and editable in the vault, is authored by that act, so it survives
 the deletion of the session it was proposed in, while every machine-owned row
 about it is removed and every citation of the deleted source is rewritten to
 `withdrawn`.
