@@ -284,6 +284,67 @@ func TestParseErrorsAreVisibleAndUnindexed(t *testing.T) {
 	}
 }
 
+// A hand-written note's citations are the user's own prose, never machine-owned
+// grounding. rewriteRefsFromSidecar deliberately never edits an unmanaged file,
+// so an evidence row for one would be a citation nothing may ever bring back in
+// line with the file: after the cited conversation's deletion, the file would
+// name a dead session forever while the sidecar disagreed. An implementation
+// that links evidence for every indexed note — or that withdraws an unmanaged
+// note because its refs name no live session — fails here.
+func TestUnmanagedNoteRefsAreProseNotEvidence(t *testing.T) {
+	repo, vault, _ := newMemoryTestRepo(t)
+	sessionID := newMemoryTestSession(t, repo)
+	liveID := newTestNoteID(t)
+	deadID := newTestNoteID(t)
+	unmanaged := func(noteID, ref, body string) string {
+		return "---\nid: \"" + noteID + "\"\nkind: \"belief\"\ntitle: \"a note\"\nmanaged: false\n" +
+			"refs: [\"" + ref + "\"]\n---\n\n" + body + "\n"
+	}
+	writeVaultNote(t, vault, "beliefs/live-ref.md", unmanaged(liveID, sessionID, "The user keeps bees."))
+	writeVaultNote(t, vault, "beliefs/dead-ref.md", unmanaged(deadID, "sess_01NEVEREXISTEDATALL", "The user keeps wasps."))
+	// The withdrawal marker is refs metadata like any other: on a hand-written
+	// note it is the user's own text, not a status for the index to adopt.
+	markerID := newTestNoteID(t)
+	writeVaultNote(t, vault, "beliefs/marker.md",
+		"---\nid: \""+markerID+"\"\nkind: \"belief\"\ntitle: \"a note\"\nmanaged: false\n"+
+			"refs: withdrawn\n---\n\nThe user keeps ants.\n")
+
+	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
+		t.Fatalf("ReconcileMemoryVault: %v", err)
+	}
+	for name, noteID := range map[string]string{
+		"live ref": liveID, "dead ref": deadID, "withdrawal marker": markerID,
+	} {
+		if got := evidenceSessions(t, repo, noteID); len(got) != 0 {
+			t.Fatalf("%s: evidence rows = %v, want none for an unmanaged note", name, got)
+		}
+		note, found := noteRowFor(t, repo, noteID)
+		if !found {
+			t.Fatalf("%s: the unmanaged note was not indexed", name)
+		}
+		if note.Status != MemoryNoteStatusUnmanaged {
+			t.Fatalf("%s: status = %q, want unmanaged whatever its refs name", name, note.Status)
+		}
+	}
+
+	// Deleting the conversation the user's prose happens to name withdraws
+	// nothing of this note's, and the reconcile that follows leaves the file
+	// exactly as written.
+	before := readVaultNote(t, vault, "beliefs/live-ref.md")
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {
+		t.Fatalf("ReconcileMemoryVault after the deletion: %v", err)
+	}
+	if got := readVaultNote(t, vault, "beliefs/live-ref.md"); got != before {
+		t.Fatalf("the reconcile rewrote a hand-written note:\nbefore %q\nafter  %q", before, got)
+	}
+	if note, found := noteRowFor(t, repo, liveID); !found || note.Status != MemoryNoteStatusUnmanaged {
+		t.Fatalf("after deletion status = %+v found=%v, want the note untouched and not withdrawn", note, found)
+	}
+}
+
 // Evidence has one direction. The sidecar is what the user's deletions act on,
 // so a file still listing a session that has been deleted is rewritten from
 // the sidecar — never the other way round.
@@ -299,7 +360,7 @@ func TestStaleFrontmatterCannotResurrectDeletedEvidence(t *testing.T) {
 		t.Fatalf("evidence after adoption = %v, want one row", got)
 	}
 
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if got := evidenceSessions(t, repo, noteID); len(got) != 0 {
@@ -418,7 +479,7 @@ func TestReconcileHealsAPromotionThatCrashedAfterTheFileMoved(t *testing.T) {
 
 	// Deleting the conversation afterwards withdraws the citation, not the
 	// belief: the note was accepted into memory and is no longer session state.
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if _, found := noteRowFor(t, repo, promoted.NoteID); !found {
@@ -437,7 +498,7 @@ func TestHealAfterTheSourceSessionIsAlreadyGoneWithdrawsTheNote(t *testing.T) {
 	sessionID := newMemoryTestSession(t, repo)
 	noteID := newTestNoteID(t)
 	writeVaultNote(t, vault, "beliefs/note.md", managedBelief(noteID, []string{sessionID}, "The user keeps bees."))
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 
@@ -725,7 +786,7 @@ func TestWithdrawnEvidenceIsWrittenAsAWithdrawalAndCannotBeReinserted(t *testing
 	if got := evidenceSessions(t, repo, noteID); len(got) != 1 {
 		t.Fatalf("evidence after adoption = %v, want the citation linked", got)
 	}
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 
@@ -806,7 +867,7 @@ func TestFrontmatterRefsAreAnnotationsValidatedAgainstLiveSessions(t *testing.T)
 	repo, vault, _ := newMemoryTestRepo(t)
 	live := newMemoryTestSession(t, repo)
 	gone := newMemoryTestSession(t, repo)
-	if err := repo.DeleteSession(ctx(), gone); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), gone); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	noteID := newTestNoteID(t)
@@ -916,7 +977,7 @@ func TestReconcileRecordsWhatItChangedWithoutRecordingWhatItSays(t *testing.T) {
 		t.Fatalf("reservation release audits = %d, want 1", first[memoryReservationReleasedAction])
 	}
 
-	if err := repo.DeleteSession(ctx(), sessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if _, err := repo.ReconcileMemoryVault(ctx()); err != nil {

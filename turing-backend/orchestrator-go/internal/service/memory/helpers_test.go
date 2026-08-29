@@ -145,7 +145,37 @@ func newRun(t *testing.T, repo *repository.Repository, ctx context.Context) (str
 	if err != nil {
 		t.Fatalf("EnqueueUserMessage: %v", err)
 	}
+	// Claim the job the way a worker would, so the run is genuinely executing:
+	// dispatch only answers a run that is running, which is the only state a
+	// real memory tool call ever arrives from. ClaimNextJob answers an empty
+	// job (not an error) when nothing is claimable, and claims the oldest
+	// pending job when several are — either way, silently handing back a run
+	// this helper did not just make running would fail some later gate for a
+	// reason unrelated to what the test is about.
+	job, err := repo.ClaimNextJob(ctx, "general_assistant", "memory-test-worker")
+	if err != nil {
+		t.Fatalf("ClaimNextJob: %v", err)
+	}
+	if job.RunID != enqueued.RunID {
+		t.Fatalf("ClaimNextJob claimed %q, want the run just enqueued (%q)", job.RunID, enqueued.RunID)
+	}
 	return enqueued.RunID, session.SessionID
+}
+
+// finishRun terminates a claimed run the way a worker reporting success does,
+// for tests whose next step — deleting the conversation — holds at the
+// live-execution gate until the run is over.
+func finishRun(t *testing.T, repo *repository.Repository, ctx context.Context, runID string) {
+	t.Helper()
+	state, err := repo.GetRunState(ctx, runID)
+	if err != nil {
+		t.Fatalf("GetRunState: %v", err)
+	}
+	if _, err := repo.CompleteRunCanonical(ctx, repository.CompleteRunInput{
+		RunID: runID, ExpectedStateVersion: state.StateVersion,
+	}); err != nil {
+		t.Fatalf("CompleteRunCanonical: %v", err)
+	}
 }
 
 func newAutomationRun(t *testing.T, repo *repository.Repository, ctx context.Context) string {

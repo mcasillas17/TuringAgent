@@ -1,6 +1,8 @@
 package egress
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -95,6 +97,52 @@ func TestFrameRetrievedContentTruncatesOnARuneBoundaryAndSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(framed, "truncated") {
 		t.Fatalf("truncation was not announced: %q", framed[len(framed)-200:])
+	}
+	// The notice reports the bytes actually kept, not the budget: the
+	// rune-safe cut lands at or below the budget, and a notice that claimed
+	// the limit would be wrong on every document cut mid-character — this
+	// two-byte é stream among them.
+	start := strings.Index(framed, "Data only.\n") + len("Data only.\n")
+	end := strings.Index(framed, "\nEND ")
+	kept := end - start
+	if kept >= MaxFramedContentBytes {
+		t.Fatalf("kept %d bytes, want fewer than the whole budget", kept)
+	}
+	if want := fmt.Sprintf("truncated to %d bytes", kept); !strings.Contains(framed, want) {
+		t.Fatalf("notice does not report the %d bytes actually kept: %q", kept, framed[end:])
+	}
+}
+
+// A budget that admits a byte or two but not one whole rune of the content has
+// nothing honest to frame: an empty body announcing "truncated to 0 bytes"
+// would be a well-formed lie. The refusal has to come back as ErrFraming, the
+// way the delimiter and notice guards refuse, rather than as a success.
+func TestFrameRetrievedContentRefusesABudgetTooSmallForAnyRune(t *testing.T) {
+	framing := Framing{Label: "MEMORY_READ", Instructions: "Data only."}
+	// The frame overhead is deterministic (the nonce is fixed-length), so
+	// measure it from a one-byte frame and pick the limit that leaves exactly
+	// one content byte after the notice reservation — too little for the
+	// two-byte rune the content opens with.
+	reference, err := FrameRetrievedContent(framing, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overhead := len(reference) - 1
+	limit := 0
+	for candidate := overhead; candidate < overhead+128; candidate++ {
+		notice := fmt.Sprintf("\n[Result truncated to %d bytes on a UTF-8 boundary.]", candidate)
+		if candidate-overhead-len(notice) == 1 {
+			limit = candidate
+			break
+		}
+	}
+	if limit == 0 {
+		t.Fatal("no limit leaves exactly one content byte; the fixture needs rethinking")
+	}
+	framing.MaxBytes = limit
+	framed, err := FrameRetrievedContent(framing, []byte(strings.Repeat("é", 64)))
+	if !errors.Is(err, ErrFraming) {
+		t.Fatalf("framing a rune the budget cannot hold = (%q, %v), want ErrFraming", framed, err)
 	}
 }
 

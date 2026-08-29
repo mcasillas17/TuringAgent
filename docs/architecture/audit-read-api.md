@@ -522,9 +522,11 @@ reaches the wire only if a reviewed rule names it, never by default.
 
 ## Deletion semantics
 
-`Repository.DeleteSession` (`repository/session_delete.go`) scrubs audit
-content **before** the cascading delete, in the same transaction. One
-statement covers two disjoint sets of rows:
+The session-deletion pipeline (`BeginSessionDeletion` /
+`AdvanceSessionDeletion` in `repository/session_delete.go`, both sharing
+`scrubSessionAuditPayloadsSQL`) scrubs audit content **before** the cascading
+delete, in the same transaction. One statement covers two disjoint sets of
+rows:
 
 - every `audit_logs` row whose `correlation_id` matches one of the session's
   runs — the ordinary case, since `correlation_id` is the run id at almost

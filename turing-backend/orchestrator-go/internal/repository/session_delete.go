@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
@@ -514,6 +515,10 @@ func (r *Repository) AdvanceSessionDeletion(ctx context.Context, sessionID strin
 
 	if completion != nil {
 		if completionErr := completion(ctx); completionErr != nil {
+			// The receipt carries only the opaque class; the cause is logged
+			// here or it is nowhere, and a failed marker below would otherwise
+			// discard it entirely.
+			log.Printf("session deletion completion for %s failed: %v", sessionID, completionErr)
 			if err := r.markSessionDeletionCompletionFailure(ctx, sessionID, SessionDeletionMemoryReconcileFailed); err != nil {
 				return SessionDeletionReceipt{}, err
 			}
@@ -545,13 +550,46 @@ func (r *Repository) AdvanceSessionDeletion(ctx context.Context, sessionID strin
 // markSessionDeletionCompletionFailure keeps a withdrawal whose rows are gone
 // visibly unfinished. It touches neither artifact manifest: both drained before
 // the cascade ran, and there is nothing left in either to mark.
+//
+// A zero-row update is diagnosed rather than swallowed, the same way
+// markSessionDeletionFailedTx diagnoses one: a receipt row that is missing
+// outright means the failure this call exists to record would vanish with it,
+// and the caller must not report a retryable receipt nothing durable backs. A
+// row already completed is the one legitimate zero-row case — a concurrent
+// retry finished the withdrawal while this attempt was failing — and stays a
+// quiet success.
 func (r *Repository) markSessionDeletionCompletionFailure(ctx context.Context, sessionID string, errorCode string) error {
-	_, err := r.db.ExecContext(ctx, `
+	result, err := r.db.ExecContext(ctx, `
 		UPDATE session_deletions
 		SET state = 'failed_external', retryable = 1, error_code = ?
 		WHERE session_id = ? AND state <> 'completed'
 	`, errorCode, sessionID)
-	return err
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed > 0 {
+		return nil
+	}
+	var state string
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT state FROM session_deletions WHERE session_id = ?
+	`, sessionID).Scan(&state); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrSessionNotFound
+		}
+		return err
+	}
+	if state != "completed" {
+		// The UPDATE matches every non-completed state, so a surviving row it
+		// did not touch can only mean the state changed between the two
+		// statements — diagnose it the way the missing-row case is.
+		return ErrSessionNotFound
+	}
+	return nil
 }
 
 // SessionExecutionRunIDs returns only executions that must receive a runtime
@@ -871,8 +909,16 @@ func (r *Repository) SessionDeletionReceipt(ctx context.Context, sessionID strin
 	return receipt, nil
 }
 
-// DeleteSession removes a session and everything it produced, and scrubs the
-// content out of the audit rows it leaves behind.
+// DeleteSessionForTests removes a session and everything it produced in one
+// transaction, and scrubs the content out of the audit rows it leaves behind.
+//
+// TESTS ONLY. Production deletion is the durable pipeline —
+// BeginSessionDeletion, PurgeSessionVaultArtifacts, AdvanceSessionDeletion —
+// which is what drains the vault: this shortcut cascades vault_artifacts rows
+// away without running the vault cleaner, so a candidate's inbox file would
+// survive as an orphan the user was told had been withdrawn. It exists so a
+// test can put the store on the far side of a completed deletion in one call;
+// nothing outside a test may grow a call to it.
 //
 // Two things about this are load-bearing and easy to get wrong:
 //
@@ -888,7 +934,7 @@ func (r *Repository) SessionDeletionReceipt(ctx context.Context, sessionID strin
 // use the session as their target. Both links disappear or become unresolvable
 // after deletion, so the update resolves them while the source rows still
 // exist.
-func (r *Repository) DeleteSession(ctx context.Context, sessionID string) error {
+func (r *Repository) DeleteSessionForTests(ctx context.Context, sessionID string) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

@@ -122,11 +122,6 @@
   "memoryCandidateKindUnspecified": "Proposal",
   "memoryCandidateKindBelief": "Proposed belief",
   "memoryCandidateKindProfileEdit": "Proposed change to profile.md",
-  "memoryTierUnspecified": "Memory",
-  "memoryTierPersona": "Persona",
-  "memoryTierProfile": "Profile",
-  "memoryTierBelief": "Beliefs",
-  "memoryTierNote": "Notes",
   "memoryPersonaHeading": "persona.md",
   "memoryPersonaDescription": "Who Turing is. You are its only author: Turing never writes it, and no proposal can reach it. It is pinned into every run as written.",
   "memoryProfileHeading": "profile.md",
@@ -211,7 +206,7 @@
   },
   "memoryNoProfileYet": "(no profile yet)",
   "memorySaveUnavailable": "This document cannot be saved from here until the problem above is fixed.",
-  "memorySaveNeedsVault": "Open or configure a vault before saving here.",
+  "memorySaveNeedsVault": "The memory vault is not writable right now, so this cannot be saved.",
   "memoryTierItemCount": "{count, plural, =0{Nothing is in this tier.} =1{1 item in this tier.} other{{count} items in this tier.}}",
   "@memoryTierItemCount": {
     "placeholders": {

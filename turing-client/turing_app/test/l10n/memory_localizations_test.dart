@@ -49,9 +49,6 @@ void main() {
     for (final kind in MemoryCandidateKind.values) {
       expect(localizedMemoryCandidateKindCopy(l10n, kind), isNotEmpty);
     }
-    for (final tier in MemoryTier.values) {
-      expect(localizedMemoryTierCopy(l10n, tier), isNotEmpty);
-    }
   });
 
   testWidgets('an unreadable vault never reads as a healthy or off one', (

@@ -107,6 +107,12 @@ class _ProfileResult {
 
 class _MemoryPageState extends State<MemoryPage> {
   late Future<MemoryState> _state;
+
+  /// The last state this page actually rendered, held so a re-read in flight
+  /// replaces content with content rather than with a spinner that unmounts
+  /// the editors. Never consulted on the first load — there is nothing typed
+  /// yet to protect — and never a substitute for an error notice.
+  MemoryState? _lastRendered;
   final TextEditingController _persona = TextEditingController();
   final TextEditingController _profile = TextEditingController();
 
@@ -365,9 +371,6 @@ class _MemoryPageState extends State<MemoryPage> {
       child: FutureBuilder<MemoryState>(
         future: _state,
         builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const WorkspaceLoading();
-          }
           if (snapshot.hasError) {
             return WorkspaceNotice(
               icon: Icons.error_outline,
@@ -377,7 +380,24 @@ class _MemoryPageState extends State<MemoryPage> {
               tone: AppColors.danger,
             );
           }
-          final state = snapshot.data!;
+          // Every write re-reads the page, and the read is a fresh future —
+          // but tearing the page down to a spinner for it would unmount the
+          // editors, and the user can be mid-word in one. The last rendered
+          // state stays up while a re-read is in flight; the spinner is only
+          // for the first load, which has nothing to hold on screen.
+          //
+          // The held frame shows content the vault may already disagree with,
+          // so it is legible but not decidable: _busy clears in the same
+          // setState that starts the re-read, and it is the in-flight read
+          // computed here that keeps every button disabled until the page is
+          // current again. The editors stay live throughout — typing is the
+          // one thing this window exists to protect.
+          final MemoryState? state = snapshot.data ?? _lastRendered;
+          if (state == null) {
+            return const WorkspaceLoading();
+          }
+          _lastRendered = state;
+          final reloading = snapshot.connectionState != ConnectionState.done;
           return _MemoryBody(
             state: state,
             l10n: l10n,
@@ -385,7 +405,7 @@ class _MemoryPageState extends State<MemoryPage> {
             profile: _profile,
             personaHash: _personaHash,
             profileHash: _profileHash,
-            busy: _busy,
+            busy: _busy || reloading,
             settingsError: _settingsError,
             personaError: _personaError,
             profileError: _profileError,
@@ -644,7 +664,7 @@ class _MemoryBody extends StatelessWidget {
           description: l10n.memoryPersonaDescription,
           document: state.persona,
           editingHash: personaHash,
-          vaultConfigured: state.settings.vaultRoot.isNotEmpty,
+          vaultWritable: state.settings.vaultWritable,
           controller: persona,
           editorKey: const Key('memory-persona-editor'),
           saveKey: const Key('memory-persona-save'),
@@ -664,7 +684,7 @@ class _MemoryBody extends StatelessWidget {
           description: l10n.memoryProfileDescription,
           document: state.profile,
           editingHash: profileHash,
-          vaultConfigured: state.settings.vaultRoot.isNotEmpty,
+          vaultWritable: state.settings.vaultWritable,
           controller: profile,
           editorKey: const Key('memory-profile-editor'),
           saveKey: const Key('memory-profile-save'),
@@ -846,7 +866,7 @@ class _DocumentCard extends StatelessWidget {
     required this.description,
     required this.document,
     required this.editingHash,
-    required this.vaultConfigured,
+    required this.vaultWritable,
     required this.controller,
     required this.editorKey,
     required this.saveKey,
@@ -883,7 +903,7 @@ class _DocumentCard extends StatelessWidget {
   /// into. Those are not the same refusal, and the document alone cannot
   /// tell them apart — only the settings row can, so it is threaded down here
   /// rather than folded into [MemoryDocument.isWritable]'s per-file meaning.
-  final bool vaultConfigured;
+  final bool vaultWritable;
   final TextEditingController controller;
   final Key editorKey;
   final Key saveKey;
@@ -903,12 +923,14 @@ class _DocumentCard extends StatelessWidget {
   /// vault is open and this file has not been created yet". But the same
   /// reason is what a document reports when there is no vault open at all, and
   /// offering to create a file with nowhere to land would be a save the server
-  /// can only refuse. [vaultConfigured] is the one signal that tells those
-  /// apart, so it gates VAULT_MISSING specifically without touching what
+  /// can only refuse. [vaultWritable] is the one signal that tells those
+  /// apart — the server's own answer about the vault it opened, never the
+  /// display-only path, which is legitimately empty while the vault writes
+  /// fine — so it gates VAULT_MISSING specifically without touching what
   /// [MemoryDocument.isWritable] means for every other reason.
   bool get _canSave =>
       document.isWritable &&
-      (vaultConfigured ||
+      (vaultWritable ||
           document.unavailableReason != MemoryUnavailableReason.vaultMissing);
 
   @override

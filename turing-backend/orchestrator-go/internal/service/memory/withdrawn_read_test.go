@@ -35,7 +35,7 @@ func TestMemoryReadRefusesABeliefWhoseEvidenceWasWithdrawn(t *testing.T) {
 		t.Fatal("the belief was not readable before its evidence was withdrawn")
 	}
 
-	if err := repo.DeleteSession(ctx, grounding); err != nil {
+	if err := repo.DeleteSessionForTests(ctx, grounding); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if _, err := service.ListMemoryState(ctx, &turingv1.ListMemoryStateRequest{}); err != nil {

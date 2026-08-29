@@ -498,19 +498,7 @@ func (r *Repository) IntegrationEndpointsForTools(ctx context.Context, selectedT
 }
 
 func (r *Repository) IntegrationDispatchActive(ctx context.Context, runID, toolName, expectedPolicy string) (bool, error) {
-	var active bool
-	err := r.db.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM tools tool
-			JOIN agent_runs run ON run.id = ?
-			JOIN sessions session ON session.id = run.session_id
-			WHERE tool.server_name = 'integrations' AND tool.tool_name = ?
-				AND tool.policy = ? AND tool.mcp_server_id IS NULL
-				AND run.execution_active = 1 AND run.status = 'running'
-				AND session.deletion_state = 'active'
-		)
-	`, runID, toolName, expectedPolicy).Scan(&active)
-	return active, err
+	return r.pseudoServerDispatchActive(ctx, "integrations", runID, toolName, expectedPolicy)
 }
 
 func cloneIntegrationEndpoints(input []IntegrationEndpointEgress) []IntegrationEndpointEgress {

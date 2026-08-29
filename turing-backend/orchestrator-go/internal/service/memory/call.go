@@ -48,7 +48,8 @@ var (
 //	tool the user marked safe would otherwise sail past an allowlist it never
 //	reaches; then whether there is a vault to answer from at all; then the
 //	toggle, so an off switch refuses every tool whatever the registry says;
-//	then the policy; then the arguments.
+//	then the policy; then dispatch liveness, because everything before it can
+//	go stale while an approval waits; then the arguments.
 //
 // Nothing here reads a session id, a path or a scope from the caller. The run
 // names itself and everything else is resolved from the orchestrator's own
@@ -109,6 +110,20 @@ func (s *Server) CallMemoryTool(ctx context.Context, req *turingv1.CallMemoryToo
 		}
 	default:
 		return nil, status.Error(codes.FailedPrecondition, "memory tool policy is unsupported")
+	}
+
+	// Re-read liveness immediately before dispatch, the way integrations does:
+	// the identity gate ran before the policy was consulted, and for an
+	// approval-gated tool the wait between the two is as long as the user
+	// takes to answer. A run cancelled in that window — or a policy changed
+	// under it, or its conversation entering deletion — must not reach the
+	// vault.
+	active, err := s.repo.MemoryDispatchActive(ctx, req.GetRunId(), tool.name, policy)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "validate memory dispatch state failed")
+	}
+	if !active {
+		return nil, status.Error(codes.FailedPrecondition, "memory call was revoked before dispatch")
 	}
 
 	if err := requireExactArguments(tool, args); err != nil {

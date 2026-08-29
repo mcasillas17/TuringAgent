@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/workspace/memory_page.dart';
@@ -911,6 +913,57 @@ void main() {
       );
       expect(find.text('half a profile'), findsOneWidget);
     });
+
+    testWidgets('the editors stay on screen while a save is in flight', (
+      tester,
+    ) async {
+      // A save re-reads the page, and the re-read takes as long as it takes.
+      // The editor must stay mounted for the whole of that window: a page
+      // that swapped to a spinner here would drop the field mid-word, and
+      // every keystroke that landed after Save would go nowhere.
+      final api = _MemoryApi();
+      await _pumpMemory(tester, api);
+
+      final gate = Completer<void>();
+      api.stateReadGate = gate.future;
+      await tester.enterText(
+        find.byKey(const Key('memory-persona-editor')),
+        'sent to the vault',
+      );
+      await tester.tap(find.byKey(const Key('memory-persona-save')));
+      await tester.pump();
+
+      expect(
+        find.byKey(const Key('memory-persona-editor')),
+        findsOneWidget,
+        reason: 'the re-read is in flight and the editor must survive it',
+      );
+      // The held frame is legible but not decidable: what it shows, the vault
+      // may already disagree with, so every button waits for the re-read even
+      // though _busy itself has already cleared.
+      final personaSave = tester.widget<FilledButton>(
+        find.byKey(const Key('memory-persona-save')),
+      );
+      expect(
+        personaSave.onPressed,
+        isNull,
+        reason: 'saving over a frame the vault may disagree with',
+      );
+      await tester.enterText(
+        find.byKey(const Key('memory-persona-editor')),
+        'sent to the vault, and a word more',
+      );
+
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('sent to the vault, and a word more'),
+        findsOneWidget,
+        reason: 'what was typed during the save belongs to the user',
+      );
+      expect(api.personaSaves, [('sent to the vault', 'sha256:persona')]);
+    });
   });
 
   group('clearing a document on purpose', () {
@@ -1081,8 +1134,8 @@ void main() {
     // The server reports VAULT_MISSING on a document both when the vault is
     // open and simply has not been written yet, and when there is no vault
     // open to write into — the document's own reason cannot tell those apart.
-    // Only settings.vaultRoot says which one this is, so the page must look
-    // there before offering to create a file with nowhere to land.
+    // Only settings.vaultWritable says which one this is, so the page must
+    // look there before offering to create a file with nowhere to land.
     testWidgets(
       'disables save and explains why instead of offering to create a file',
       (tester) async {
@@ -1118,10 +1171,54 @@ void main() {
         expect(personaSave.onPressed, isNull);
         expect(profileSave.onPressed, isNull);
         expect(
-          find.textContaining('Open or configure a vault'),
+          find.textContaining('vault is not writable'),
           findsNWidgets(2),
           reason: 'both documents share the same missing vault',
         );
+      },
+    );
+
+    // The other half of the ambiguity: the vault is open and writable, and the
+    // display root is simply not configured — a real state the server has its
+    // own test for (an empty MEMORY_DISPLAY_ROOT with a healthy /memory
+    // mount). The display path is for naming the folder, never for gating a
+    // write: a page that read vaultRoot here would refuse a save the server
+    // would have accepted.
+    testWidgets(
+      'still offers to create the first file when only the display path is missing',
+      (tester) async {
+        final api = _MemoryApi()
+          ..state = _state(
+            settings: const MemorySettings(
+              enabled: true,
+              vaultRoot: '',
+              vaultWritable: true,
+              unavailableReason: MemoryUnavailableReason.none,
+            ),
+            persona: _document(
+              content: '',
+              contentHash: '',
+              status: MemoryNoteStatus.unmanaged,
+              unavailableReason: MemoryUnavailableReason.vaultMissing,
+            ),
+            profile: _document(
+              content: '',
+              contentHash: '',
+              unavailableReason: MemoryUnavailableReason.vaultMissing,
+            ),
+            tiers: const [],
+          );
+        await _pumpMemory(tester, api);
+
+        final personaSave = tester.widget<FilledButton>(
+          find.byKey(const Key('memory-persona-save')),
+        );
+        final profileSave = tester.widget<FilledButton>(
+          find.byKey(const Key('memory-profile-save')),
+        );
+        expect(personaSave.onPressed, isNotNull);
+        expect(profileSave.onPressed, isNotNull);
+        expect(find.textContaining('vault is not writable'), findsNothing);
       },
     );
 
@@ -1163,7 +1260,7 @@ void main() {
       );
       expect(personaSave.onPressed, isNull);
       expect(profileSave.onPressed, isNull);
-      expect(find.textContaining('Open or configure a vault'), findsNWidgets(2));
+      expect(find.textContaining('vault is not writable'), findsNWidgets(2));
     });
   });
 
@@ -1194,7 +1291,10 @@ void main() {
         editor.controller?.text,
         '# Persona\n\nEvery byte of it, all the way down.\n',
       );
-      expect(find.textContaining('Open the vault to read the rest'), findsNothing);
+      expect(
+        find.textContaining('Open the vault to read the rest'),
+        findsNothing,
+      );
       expect(find.textContaining('4096'), findsWidgets);
       expect(find.textContaining('reach'), findsWidgets);
     });
@@ -1450,9 +1550,14 @@ class _MemoryApi extends TuringApi
   final List<(String, String)> personaSaves = [];
   final List<(String, String)> profileSaves = [];
 
+  /// When set, every state read waits on it before answering, so a test can
+  /// hold the page in the middle of a re-read and look at what is on screen.
+  Future<void>? stateReadGate;
+
   @override
   Future<MemoryState> listMemoryState() async {
     stateReads++;
+    if (stateReadGate case final gate?) await gate;
     if (listError case final error?) throw error;
     return state;
   }

@@ -294,7 +294,7 @@ func TestSessionDeletionScrubsEgressAuditMetadata(t *testing.T) {
 		FormatTimestamp(time.Now().UTC()), enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.DeleteSession(ctx, session.SessionID); err != nil {
+	if err := repo.DeleteSessionForTests(ctx, session.SessionID); err != nil {
 		t.Fatal(err)
 	}
 	var payload string

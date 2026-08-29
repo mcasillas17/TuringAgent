@@ -186,6 +186,31 @@ func (r *Repository) PseudoServerToolPolicy(ctx context.Context, serverName, too
 	return policy, err == nil, err
 }
 
+// MemoryDispatchActive answers whether one memory tool call may still go
+// ahead, immediately before it does: the tool still carries the policy the
+// caller was admitted under, the run is still executing, and its conversation
+// is not being deleted. A run cancelled after the BEFORE beacon — or during an
+// approval wait — fails this, so a stopped run never touches the vault.
+func (r *Repository) MemoryDispatchActive(ctx context.Context, runID, toolName, expectedPolicy string) (bool, error) {
+	return r.pseudoServerDispatchActive(ctx, "memory", runID, toolName, expectedPolicy)
+}
+
+func (r *Repository) pseudoServerDispatchActive(ctx context.Context, serverName, runID, toolName, expectedPolicy string) (bool, error) {
+	var active bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM tools tool
+			JOIN agent_runs run ON run.id = ?
+			JOIN sessions session ON session.id = run.session_id
+			WHERE tool.server_name = ? AND tool.tool_name = ?
+				AND tool.policy = ? AND tool.mcp_server_id IS NULL
+				AND run.execution_active = 1 AND run.status = 'running'
+				AND session.deletion_state = 'active'
+		)
+	`, runID, serverName, toolName, expectedPolicy).Scan(&active)
+	return active, err
+}
+
 func (r *Repository) SetToolPolicyByName(ctx context.Context, serverName, toolName, policy string) error {
 	// The server-backed branches mirror SetMCPToolPolicy exactly. Dropping the
 	// present clauses would let this public RPC resurrect a tool the server no

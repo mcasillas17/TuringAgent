@@ -412,6 +412,15 @@ void main() {
       // ...and safe ones are not: listing them would invite the user to grant
       // something that was never withheld.
       expect(find.text('files.read'), findsNothing);
+      // Nor is an approval-gated memory or integration tool: the server
+      // refuses both to automations unconditionally, so a tick here could
+      // only fail at Save.
+      expect(find.text('memory.remember'), findsNothing);
+      expect(find.text('github.list_issues'), findsNothing);
+      expect(
+        find.textContaining('integrations and memory tools are not available'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('states the whole consent before you can save it', (
@@ -626,6 +635,42 @@ void main() {
       await tester.ensureVisible(find.text('files.vanished'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('files.vanished'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(api.automations.single.allowedTools, isEmpty);
+    });
+
+    testWidgets('a stale memory tick says untick, never that it comes back', (
+      tester,
+    ) async {
+      // A legacy allowlist can still carry memory.remember, and while it does
+      // every save of the automation is refused wholesale. The row must stay
+      // visible — a permission the user cannot see cannot be withdrawn — but
+      // its copy has to say what unticking is for, not promise a return the
+      // server rules out.
+      final api = _FakeApi()
+        ..automations.add(
+          _automation(
+            allowedTools: const [
+              AutomationTool(serverName: 'memory', toolName: 'memory.remember'),
+            ],
+          ),
+        );
+      await _pumpAutomations(tester, api);
+      await tester.tap(find.byTooltip('Edit automation'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('memory.remember'), findsOneWidget);
+      expect(
+        find.textContaining('untick it to save this automation'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('if it comes back'), findsNothing);
+
+      await tester.ensureVisible(find.text('memory.remember'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('memory.remember'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
@@ -919,6 +964,19 @@ class _FakeApi
       ToolDescriptor(
         serverName: 'files',
         toolName: 'files.update',
+        policy: ToolPolicy.approvalRequired,
+      ),
+      // Approval-gated like the two above, but from the pseudo-servers the
+      // orchestrator refuses to automations unconditionally — the picker must
+      // not offer either.
+      ToolDescriptor(
+        serverName: 'memory',
+        toolName: 'memory.remember',
+        policy: ToolPolicy.approvalRequired,
+      ),
+      ToolDescriptor(
+        serverName: 'integrations',
+        toolName: 'github.list_issues',
         policy: ToolPolicy.approvalRequired,
       ),
     ];

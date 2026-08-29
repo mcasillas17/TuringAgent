@@ -68,7 +68,12 @@ func FrameRetrievedContent(framing Framing, raw []byte) (string, error) {
 	marker := "TURING_RETRIEVED_" + framing.Label + "_" + hex.EncodeToString(nonce)
 	prefix := "BEGIN " + marker + "\n" + framing.Instructions + "\n"
 	suffix := "\nEND " + marker
-	notice := fmt.Sprintf("\n[Result truncated to %d bytes on a UTF-8 boundary.]", limit)
+	// The notice reports the bytes actually kept, which are only known after
+	// the rune-safe cut — so the budget reserves worst-case room for it using
+	// the limit, whose digit count the kept figure can never exceed.
+	noticeFor := func(kept int) string {
+		return fmt.Sprintf("\n[Result truncated to %d bytes on a UTF-8 boundary.]", kept)
+	}
 
 	// Replacement is byte-for-byte length-preserving in the worst case only for
 	// valid input, so the budget is measured after the repair, never before.
@@ -79,18 +84,28 @@ func FrameRetrievedContent(framing Framing, raw []byte) (string, error) {
 	}
 	truncated := len(valid) > available
 	if truncated {
-		available -= len(notice)
+		available -= len(noticeFor(limit))
 		if available <= 0 {
 			return "", fmt.Errorf("%w: %d bytes cannot hold a truncation notice", ErrFraming, limit)
 		}
-		valid = valid[:available]
-		for len(valid) > 0 && !utf8.Valid(valid) {
-			valid = valid[:len(valid)-1]
+		// Cut at a rune boundary at or below the budget, the way
+		// memoryfiles.truncateRunes does: step back to the nearest rune start
+		// instead of re-validating the whole slice once per surplus byte.
+		cut := available
+		for cut > 0 && !utf8.RuneStart(valid[cut]) {
+			cut--
 		}
+		if cut == 0 {
+			// The budget admits some bytes but not one whole rune of this
+			// content. Shipping an empty frame that claims "truncated to 0
+			// bytes" would be a well-formed lie; refuse like the guards above.
+			return "", fmt.Errorf("%w: %d bytes cannot hold any of the content", ErrFraming, limit)
+		}
+		valid = valid[:cut]
 	}
 	framed := prefix + string(valid) + suffix
 	if truncated {
-		framed += notice
+		framed += noticeFor(len(valid))
 	}
 	return framed, nil
 }

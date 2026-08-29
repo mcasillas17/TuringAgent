@@ -580,36 +580,6 @@ abstract class AppLocalizations {
   /// **'Proposed change to profile.md'**
   String get memoryCandidateKindProfileEdit;
 
-  /// No description provided for @memoryTierUnspecified.
-  ///
-  /// In en, this message translates to:
-  /// **'Memory'**
-  String get memoryTierUnspecified;
-
-  /// No description provided for @memoryTierPersona.
-  ///
-  /// In en, this message translates to:
-  /// **'Persona'**
-  String get memoryTierPersona;
-
-  /// No description provided for @memoryTierProfile.
-  ///
-  /// In en, this message translates to:
-  /// **'Profile'**
-  String get memoryTierProfile;
-
-  /// No description provided for @memoryTierBelief.
-  ///
-  /// In en, this message translates to:
-  /// **'Beliefs'**
-  String get memoryTierBelief;
-
-  /// No description provided for @memoryTierNote.
-  ///
-  /// In en, this message translates to:
-  /// **'Notes'**
-  String get memoryTierNote;
-
   /// No description provided for @memoryPersonaHeading.
   ///
   /// In en, this message translates to:
@@ -835,7 +805,7 @@ abstract class AppLocalizations {
   /// No description provided for @memorySaveNeedsVault.
   ///
   /// In en, this message translates to:
-  /// **'Open or configure a vault before saving here.'**
+  /// **'The memory vault is not writable right now, so this cannot be saved.'**
   String get memorySaveNeedsVault;
 
   /// No description provided for @memoryTierItemCount.

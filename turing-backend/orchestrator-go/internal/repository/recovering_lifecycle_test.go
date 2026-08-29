@@ -427,7 +427,7 @@ func TestRecoveringRunBlocksSessionDeletionAsActive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repo.DeleteSession(ctx, enqueued.SessionID); !errors.Is(err, ErrSessionHasActiveRun) {
+	if err := repo.DeleteSessionForTests(ctx, enqueued.SessionID); !errors.Is(err, ErrSessionHasActiveRun) {
 		t.Fatalf("DeleteSession with a recovering run = %v, want ErrSessionHasActiveRun", err)
 	}
 	var sessions int
