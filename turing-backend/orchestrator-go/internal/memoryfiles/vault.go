@@ -7,12 +7,12 @@
 //
 // A hard link is outside that promise: it is a regular file to every check
 // here, and an in-place write through one lands in the linked bytes wherever
-// else they are named. The residual is narrow — link(2) fails with EXDEV
-// across the /memory bind mount, so only a target on the vault's own
-// filesystem is reachable, and planting the link already requires write
-// access to the vault — and it is deliberate: refusing files with a second
-// name would break vaults under hard-link-snapshot backup tools. It is pinned
-// as a documented residual by the rewrite tests.
+// else they are named. The residual is bounded — link(2) only reaches a
+// target on the same filesystem as the vault directory, and planting the
+// link already requires write access to the vault, i.e. being the user, so
+// no privilege boundary is crossed — and it is deliberate: refusing files
+// with a second name would break vaults under hard-link-snapshot backup
+// tools. It is pinned as a documented residual by the rewrite tests.
 //
 // The security model is deliberately a reimplementation of the sandbox model in
 // turing-backend/mcp-files/internal/tools: that module is a separate Go module

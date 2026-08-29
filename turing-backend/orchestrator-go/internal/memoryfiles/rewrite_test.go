@@ -611,10 +611,11 @@ func TestParseNoteReadsAHandWrittenWithdrawalMarker(t *testing.T) {
 // and O_NOFOLLOW it is a regular file, so none of this package's link
 // refusals see one, and an in-place write through it lands in the linked
 // bytes wherever else they are named. That is the documented residual of the
-// confinement model, not a defended boundary — link(2) fails with EXDEV
-// across the /memory bind mount, so only a same-filesystem target is ever
-// reachable, and planting the link already requires write access to the
-// vault. Refusing files with a second name was considered and rejected:
+// confinement model, not a defended boundary — link(2) only reaches a target
+// on the same filesystem as the vault directory, and planting the link
+// already requires write access to the vault, i.e. being the user, so no
+// privilege boundary is crossed. Refusing files with a second name was
+// considered and rejected:
 // hard-link snapshots are how several backup tools work, and a vault being
 // backed up must not lose withdrawal rewrites over it. This pins the
 // residual as what it is, so hardening or widening it is done knowingly
@@ -626,8 +627,8 @@ func TestRewriteWritesThroughAHardLinkTheDocumentedResidual(t *testing.T) {
 		t.Fatalf("write outside file: %v", err)
 	}
 	if err := os.Link(outside, filepath.Join(vault.Root(), "beliefs", "linked.md")); err != nil {
-		// Two temp dirs on different filesystems cannot hard-link at all —
-		// which is the bind-mount bound doing its work, not a failure.
+		// Two temp dirs on different filesystems cannot hard-link at all; on
+		// such a machine this scenario is simply not constructible.
 		t.Skipf("hard link between temp dirs unavailable: %v", err)
 	}
 

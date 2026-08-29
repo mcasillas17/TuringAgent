@@ -229,17 +229,24 @@ class _MemoryRow extends StatelessWidget {
     final small = Theme.of(context).textTheme.bodySmall;
     final tierCopy = localizedEgressMemoryTierCopy(l10n, note.tier);
     final title = note.title.isEmpty ? note.vaultPath : note.title;
+    // A pinned document's server title is its tier said again — "Persona"
+    // under MEMORY_TIER_PERSONA — and "Persona · Persona" reads as a glitch
+    // in the one dialog that must read as deliberate. Keyed on the tier, not
+    // on string equality: the title is server-side English while the tier
+    // copy is localized, so an equality check holds only while there is one
+    // locale — and a belief titled "Belief" must not have its title
+    // swallowed.
+    final repeatsTier =
+        note.tier == MemoryEgressTier.persona ||
+        note.tier == MemoryEgressTier.profile;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // A pinned document's server title is its tier said again —
-          // "Persona" under MEMORY_TIER_PERSONA — and "Persona · Persona"
-          // reads as a glitch in the one dialog that must read as
-          // deliberate. When the title repeats the tier, say it once; the
-          // vault path below still names the file.
-          Text(title == tierCopy ? tierCopy : '$tierCopy · $title'),
+          // When the title repeats the tier, say it once; the vault path
+          // below still names the file.
+          Text(repeatsTier ? tierCopy : '$tierCopy · $title'),
           Text(note.vaultPath, style: small),
           Text(
             note.bodyMayBeSent

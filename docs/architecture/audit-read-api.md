@@ -23,10 +23,11 @@ it does not add new audited actions, and it never reads the vault. A future
 action can already be retrieved through this API the moment it is recorded —
 see [Action allowlist](#action-allowlist) — but it is redacted to metadata
 only until someone reviews it and writes an explicit typed rule for it. That
-is how the `memory.*` actions the vault's reconcile and erasure paths now
-record (candidate lifecycle, promotion, note indexing/withdrawal — id and
-status only, never content) surface here: as metadata, with no typed payload
-rule yet. Retry decisions remain uninspectable — nothing beyond the
+is how the `memory.*` actions memory now records — candidate lifecycle,
+promotion, and profile application on the curated-memory paths; note
+indexing/withdrawal and orphan cleanup on the vault reconcile and erasure
+paths; id and status only, never content — surface here: as metadata, with
+no typed payload rule yet. Retry decisions remain uninspectable — nothing beyond the
 `tool.call.*` `reason` field says why a run retried — and the "why did
 Turing remember or use this?" tracing question is still MEM-012's job,
 tracked as its own task, not implied here.

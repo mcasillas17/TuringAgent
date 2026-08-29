@@ -155,11 +155,14 @@ func (s *Server) CallMemoryTool(ctx context.Context, req *turingv1.CallMemoryToo
 // carries a frozen egress decision was consented to with a named tool set,
 // and a memory tool outside that set was never part of what the user agreed
 // could shape the run — whatever the runtime's own filtering claims. It runs
-// twice, like the integrations pair: once before the policy is read, and once
-// after the dispatch-liveness re-read, so a decision replaced during an
-// approval wait is judged as it stands at dispatch. A run with no decision at
-// all passes — that is the ordinary local run, with no frozen consent to
-// violate (RunAllowsMemory owns that asymmetry).
+// twice, mirroring the integrations gate's pre-policy and pre-dispatch
+// positions (integrations adds a third check inside its guarded network
+// dispatch; memory has no network leg between its second check and the
+// handler, so two suffice): once before the policy is read, and once after
+// the dispatch-liveness re-read, so a decision replaced during an approval
+// wait is judged as it stands at dispatch. A run with no decision at all
+// passes — that is the ordinary local run, with no frozen consent to violate
+// (RunAllowsMemory owns that asymmetry).
 func (s *Server) validateMemoryDecision(ctx context.Context, runID, toolName, message string) error {
 	allowed, err := s.repo.RunAllowsMemory(ctx, runID, toolName)
 	if err != nil {

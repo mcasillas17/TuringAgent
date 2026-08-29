@@ -613,6 +613,22 @@ func TestMemoryReconcileCompletionTreatsAnAbsentVaultAsNothingOwed(t *testing.T)
 	if err := NewMemoryReconcileCompletion(broken)(context.Background()); err == nil {
 		t.Fatal("completion swallowed a real reconcile failure")
 	}
+
+	// The walk's entry bound refuses through the same tolerated sentinel as
+	// the note bound, and that choice is deliberate: a vault with a modest
+	// number of notes and an attachment folder past the entry bound reconciled
+	// fine before the bound existed, and retrying cannot shrink it — so the
+	// receipt must complete rather than wedge, with the bounded pass reported
+	// through the memory surface instead. This pins the tolerance through the
+	// wrapped shape the walk actually returns; the walk test pins that its
+	// refusal is that sentinel.
+	flooded := &stubVaultReconciler{err: fmt.Errorf(
+		"the vault holds more than 16384 entries (folders and non-note files included), past the walk bound: %w",
+		memoryfiles.ErrVaultTooLarge,
+	)}
+	if err := NewMemoryReconcileCompletion(flooded)(context.Background()); err != nil {
+		t.Fatalf("completion over an entry-bounded vault = %v, want the deletion to finish anyway", err)
+	}
 }
 
 // The same, end to end: a sandbox-only withdrawal on an install with no vault

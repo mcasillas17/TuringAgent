@@ -453,11 +453,18 @@ func (r *Repository) RunAllowsIntegration(ctx context.Context, runID, endpoint, 
 // memory tool. Unlike RunAllowsIntegration, a run with no decision row is
 // allowed: integration tools exist only behind egress consent, while memory
 // also serves runs that never egress anything — for them there is no frozen
-// consent to violate. When a decision does exist, the qualified tool name
-// must be in the set the user consented to; the runtime already filters a
+// consent to violate. (That also makes a vanished row fail-open, which is
+// unreachable for a live run: decisions only cascade with their agent_runs
+// row, and both authorizeRun and MemoryDispatchActive refuse a run whose row
+// is gone.) When a decision does exist, the qualified tool name must be in
+// the set the user consented to; the runtime already filters a
 // decision-bearing run's tool definitions to that set, but dispatch does not
 // take the runtime's word for its own honesty, the same way it does not for
-// integrations.
+// integrations. Data categories are deliberately not required here, unlike
+// RunAllowsIntegration's TOOL_ARGUMENTS/TOOL_RESULTS demand: a remote
+// provider's enqueue already forces both categories whenever any tool is
+// selected, and on a local-provider decision the memory tool results never
+// leave the machine.
 func (r *Repository) RunAllowsMemory(ctx context.Context, runID, toolName string) (bool, error) {
 	decision, err := r.GetRunEgressDecision(ctx, runID)
 	if errors.Is(err, sql.ErrNoRows) {

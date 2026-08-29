@@ -66,8 +66,16 @@ var (
 	// refused before a row exists.
 	ErrVaultArtifactPathScope = errors.New("vault artifact path is outside the vault inbox")
 	// ErrVaultArtifactSessionUnavailable reports a reservation for a session
-	// that does not exist or has stopped accepting work.
+	// that does not exist or has stopped accepting work. The service maps it
+	// to a user-facing "your conversation is being deleted" precondition, so
+	// it must only ever mean that — a malformed input is
+	// ErrVaultArtifactSessionRequired instead.
 	ErrVaultArtifactSessionUnavailable = errors.New("vault artifact session is unavailable")
+	// ErrVaultArtifactSessionRequired reports a reservation that named no
+	// session at all. That is a programming error in the caller, not a state
+	// of anyone's conversation, and it deliberately stays on the Internal
+	// fallback rather than borrowing the deletion precondition's sentence.
+	ErrVaultArtifactSessionRequired = errors.New("vault artifact session id is required")
 	// ErrVaultArtifactNotFound reports an artifact id with no manifest row in
 	// this session.
 	ErrVaultArtifactNotFound = errors.New("vault artifact not found")
@@ -182,7 +190,7 @@ func (r *Repository) ReserveVaultArtifact(ctx context.Context, input ReserveVaul
 		return VaultArtifact{}, err
 	}
 	if strings.TrimSpace(input.SessionID) == "" {
-		return VaultArtifact{}, ErrVaultArtifactSessionUnavailable
+		return VaultArtifact{}, ErrVaultArtifactSessionRequired
 	}
 	artifact := VaultArtifact{
 		ArtifactID:   ids.New("vaultart"),

@@ -146,54 +146,74 @@ func TestFrameRetrievedContentRefusesABudgetTooSmallForAnyRune(t *testing.T) {
 	}
 }
 
-// The default fixture's content budget happens to be even, so an all-2-byte
-// stream cuts on a rune boundary by luck and the repair never runs — which is
-// how deleting it once survived this package's suite. This computes a budget
-// that is provably odd, so the raw cut lands mid-é and the step-back is the
-// only thing between the frame and invalid UTF-8: the plan's "computed
-// mid-rune boundary", not a length-lucky one.
+// The default fixture's content budget divides evenly into 2-byte runes, so a
+// stream of them cuts on a rune boundary by luck and the repair never runs.
+// This computes, per rune width, a budget the width provably does not divide,
+// so the raw cut lands mid-rune and the step-back is the only thing between
+// the frame and invalid UTF-8: the plan's "computed mid-rune boundary", not a
+// length-lucky one. The 3- and 4-byte runes are what separates the step-back
+// LOOP from a single one-byte step — a repair rewritten as `if` survives the
+// é case and dies here.
 func TestFrameRetrievedContentCutsBackFromAComputedMidRuneBoundary(t *testing.T) {
-	framing := Framing{Label: "MEMORY_READ", Instructions: "Data only."}
-	reference, err := FrameRetrievedContent(framing, []byte("x"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	overhead := len(reference) - 1
-	limit, budget := 0, 0
-	for candidate := overhead; candidate < overhead+128; candidate++ {
-		notice := fmt.Sprintf("\n[Result truncated to %d bytes on a UTF-8 boundary.]", candidate)
-		if remaining := candidate - overhead - len(notice); remaining >= 3 && remaining%2 == 1 {
-			limit, budget = candidate, remaining
-			break
-		}
-	}
-	if limit == 0 {
-		t.Fatal("no limit leaves an odd content budget; the fixture needs rethinking")
-	}
+	for _, test := range []struct {
+		name     string
+		runeText string
+	}{
+		{name: "two-byte rune", runeText: "é"},
+		{name: "three-byte rune", runeText: "…"},
+		{name: "four-byte rune", runeText: "𝄞"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runeLen := len(test.runeText)
+			framing := Framing{Label: "MEMORY_READ", Instructions: "Data only."}
+			reference, err := FrameRetrievedContent(framing, []byte("x"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			overhead := len(reference) - 1
+			limit, budget := 0, 0
+			for candidate := overhead; candidate < overhead+128; candidate++ {
+				notice := fmt.Sprintf("\n[Result truncated to %d bytes on a UTF-8 boundary.]", candidate)
+				remaining := candidate - overhead - len(notice)
+				// The maximal surplus (runeLen-1 bytes past a boundary) is the
+				// case that needs runeLen-1 backward steps — one step is enough
+				// for every smaller surplus, so anything less would let a repair
+				// rewritten as a single `if` pass.
+				if remaining > runeLen && remaining%runeLen == runeLen-1 {
+					limit, budget = candidate, remaining
+					break
+				}
+			}
+			if limit == 0 {
+				t.Fatal("no limit leaves a budget the rune width does not divide; the fixture needs rethinking")
+			}
 
-	framing.MaxBytes = limit
-	content := strings.Repeat("é", limit)
-	framed, err := FrameRetrievedContent(framing, []byte(content))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !utf8.ValidString(framed) {
-		t.Fatalf("the frame is not valid UTF-8: %q", framed)
-	}
-	start := strings.Index(framed, "Data only.\n") + len("Data only.\n")
-	end := strings.Index(framed, "\nEND ")
-	kept := framed[start:end]
-	// An odd budget over 2-byte runes forces exactly one step back — pinning
-	// the amount catches a cut that never steps and a cut that steps past the
-	// boundary it needed.
-	if len(kept) != budget-1 {
-		t.Fatalf("kept %d bytes of an odd %d-byte budget, want the one-byte step back to %d", len(kept), budget, budget-1)
-	}
-	if kept != content[:len(kept)] {
-		t.Fatalf("kept bytes are not a prefix of the content: %q", kept)
-	}
-	if want := fmt.Sprintf("truncated to %d bytes", len(kept)); !strings.Contains(framed, want) {
-		t.Fatalf("notice does not report the %d bytes actually kept: %q", len(kept), framed[end:])
+			framing.MaxBytes = limit
+			content := strings.Repeat(test.runeText, limit)
+			framed, err := FrameRetrievedContent(framing, []byte(content))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !utf8.ValidString(framed) {
+				t.Fatalf("the frame is not valid UTF-8: %q", framed)
+			}
+			start := strings.Index(framed, "Data only.\n") + len("Data only.\n")
+			end := strings.Index(framed, "\nEND ")
+			kept := framed[start:end]
+			// The cut must land on the last whole rune below the budget —
+			// pinning the exact amount catches a cut that never steps, one
+			// that steps a single byte where the rune needs more, and one
+			// that steps past the boundary it needed.
+			if want := budget - budget%runeLen; len(kept) != want {
+				t.Fatalf("kept %d bytes of a %d-byte budget over %d-byte runes, want the step back to %d", len(kept), budget, runeLen, want)
+			}
+			if kept != content[:len(kept)] {
+				t.Fatalf("kept bytes are not a prefix of the content: %q", kept)
+			}
+			if want := fmt.Sprintf("truncated to %d bytes", len(kept)); !strings.Contains(framed, want) {
+				t.Fatalf("notice does not report the %d bytes actually kept: %q", len(kept), framed[end:])
+			}
+		})
 	}
 }
 
