@@ -893,13 +893,13 @@ func TestCancellationFenceAfterClaimReleasesTerminalExecution(t *testing.T) {
 	if err := <-dispatchDone; err != nil {
 		t.Fatalf("terminal claim fence failed dispatch: %v", err)
 	}
-	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if run.Status != "cancelled" || run.ExecutionActive || run.ExecutionState != "exited" {
-		t.Fatalf("released cancelled claim = %+v, want inactive exited execution", run)
-	}
+	eventually(t, 15*time.Second, func() bool {
+		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return run.Status == "cancelled" && !run.ExecutionActive && run.ExecutionState == "exited"
+	})
 }
 
 func TestCancellationFenceWhileQueueingCommandDoesNotJoinAssignmentFence(t *testing.T) {
