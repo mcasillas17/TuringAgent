@@ -493,12 +493,12 @@ func TestToolCapabilityLossLeavesIncompatibleJobQueued(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerCapabilitiesUpdated{
-		WorkerCapabilitiesUpdated: &turingv1.RuntimeWorkerCapabilitiesUpdated{
+	connected := h.service.registeredWorker("worker-tool-loss")
+	if err := h.service.replaceWorkerCapabilities(context.Background(), "worker-tool-loss", connected,
+		&turingv1.RuntimeWorkerCapabilitiesUpdated{
 			WorkerId: "worker-tool-loss", RegistrationId: "registration-tool-loss",
 			Capabilities: modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1),
-		},
-	}}); err != nil {
+		}); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, 15*time.Second, func() bool {
