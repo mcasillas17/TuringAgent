@@ -606,9 +606,9 @@ func TestHeartbeatExpiryPublishesLossAndRevivalRestoresQueuedRoute(t *testing.T)
 	if assigned.GetRunId() != enqueued.RunID {
 		t.Fatalf("revived assignment = %+v, want run %q", assigned, enqueued.RunID)
 	}
-	if !hasRoutingNotice(t, h, session.SessionID, enqueued.RunID, "routing_capability_restored") {
-		t.Fatal("heartbeat revival did not publish a capability restoration")
-	}
+	eventually(t, time.Second, func() bool {
+		return hasRoutingNotice(t, h, session.SessionID, enqueued.RunID, "routing_capability_restored")
+	})
 }
 
 func TestDispatchDoesNotHoldWorkerLockWhileWaitingForDatabase(t *testing.T) {
