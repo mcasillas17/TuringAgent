@@ -316,6 +316,21 @@ func TestCapabilityLossAndDisconnectAppendQueueNotices(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			first, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+				SessionID: session.SessionID, Content: "occupy worker", AgentID: "general_assistant",
+				ModelProvider: "ollama", Model: "llama3.2",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := h.service.DispatchPending(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if assigned := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+				return command.GetRunAssigned() != nil
+			}).GetRunAssigned(); assigned.GetRunId() != first.RunID {
+				t.Fatalf("first assignment = %+v, want run %q", assigned, first.RunID)
+			}
 			enqueued, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
 				SessionID: session.SessionID, Content: "wait", AgentID: "general_assistant",
 				ModelProvider: "ollama", Model: "llama3.2",
