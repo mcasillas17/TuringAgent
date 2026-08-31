@@ -584,10 +584,9 @@ func TestFirstIncompatibleRegistrationPublishesPreviouslyUnreportedLoss(t *testi
 
 func TestHeartbeatExpiryPublishesLossAndRevivalRestoresQueuedRoute(t *testing.T) {
 	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: 40 * time.Millisecond})
-	stream := connectWorkerCapabilities(t, h, "worker-heartbeat", "registration-heartbeat", modelCapabilities(
+	worker := registerWorkerCapabilities(t, h, "worker-heartbeat", "registration-heartbeat", modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
 	))
-	defer func() { _ = stream.CloseSend() }()
 	session, err := h.repo.CreateSession(context.Background(), "Heartbeat")
 	if err != nil {
 		t.Fatal(err)
@@ -599,23 +598,26 @@ func TestHeartbeatExpiryPublishesLossAndRevivalRestoresQueuedRoute(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(60 * time.Millisecond)
+	worker.mu.Lock()
+	worker.lastHeartbeat = time.Now().Add(-time.Second)
+	worker.mu.Unlock()
 	if err := h.service.RecoverOrphanedAssignments(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !hasRoutingNotice(t, h, session.SessionID, enqueued.RunID, "routing_capability_unavailable") {
 		t.Fatal("heartbeat expiry did not publish a capability loss")
 	}
-	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{
-		Heartbeat: &turingv1.RuntimeHeartbeat{WorkerId: "worker-heartbeat"},
-	}}); err != nil {
+	if err := h.service.renewWorkerLeases(context.Background(), "worker-heartbeat", worker,
+		&turingv1.RuntimeHeartbeat{WorkerId: "worker-heartbeat"}); err != nil {
 		t.Fatal(err)
 	}
-	assigned := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
-		return command.GetRunAssigned() != nil
-	}).GetRunAssigned()
-	if assigned.GetRunId() != enqueued.RunID {
-		t.Fatalf("revived assignment = %+v, want run %q", assigned, enqueued.RunID)
+	select {
+	case command := <-worker.commands:
+		if assigned := command.command.GetRunAssigned(); assigned.GetRunId() != enqueued.RunID {
+			t.Fatalf("revived assignment = %+v, want run %q", assigned, enqueued.RunID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("revived worker did not receive queued assignment")
 	}
 	eventually(t, 15*time.Second, func() bool {
 		return hasRoutingNotice(t, h, session.SessionID, enqueued.RunID, "routing_capability_restored")
@@ -749,10 +751,9 @@ func TestCapabilityChangeDuringClaimRequeuesTheReservedAssignment(t *testing.T) 
 
 func TestCapabilityFenceRestartsDispatchForWorkerAddedDuringClaim(t *testing.T) {
 	h := newHarness(t)
-	stream := connectWorkerCapabilities(t, h, "worker-claim-fenced", "registration-claim-fenced", modelCapabilities(
+	registerWorkerCapabilities(t, h, "worker-claim-fenced", "registration-claim-fenced", modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
 	))
-	defer func() { _ = stream.CloseSend() }()
 	session, err := h.repo.CreateSession(context.Background(), "Claim restart")
 	if err != nil {
 		t.Fatal(err)
