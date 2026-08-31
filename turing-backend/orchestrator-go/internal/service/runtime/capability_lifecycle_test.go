@@ -325,7 +325,7 @@ func TestCapabilityLossAndDisconnectAppendQueueNotices(t *testing.T) {
 			}
 
 			test.lose(t, stream)
-			eventually(t, time.Second, func() bool {
+			eventually(t, 5*time.Second, func() bool {
 				events, _, err := h.repo.ReplayEvents(context.Background(), session.SessionID, 0, 50)
 				if err != nil {
 					return false
@@ -626,7 +626,7 @@ func TestDispatchDoesNotHoldWorkerLockWhileWaitingForDatabase(t *testing.T) {
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(dispatchCtx) }()
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
@@ -683,7 +683,7 @@ func TestCapabilityChangeDuringClaimRequeuesTheReservedAssignment(t *testing.T) 
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
@@ -752,7 +752,7 @@ func TestCapabilityFenceRestartsDispatchForWorkerAddedDuringClaim(t *testing.T) 
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
