@@ -355,7 +355,7 @@ func TestProviderAndAgentAvailabilityReflectLiveWorkerUnion(t *testing.T) {
 	if err := second.CloseSend(); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, time.Second, func() bool {
+	eventually(t, eventuallyTimeout, func() bool {
 		return len(h.service.ProviderCapabilities()) == 0 &&
 			!h.service.AgentAvailable(turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT)
 	})

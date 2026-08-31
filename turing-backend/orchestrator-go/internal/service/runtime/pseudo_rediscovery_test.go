@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
@@ -98,7 +97,7 @@ func TestPolicyUpdateNotifierFiltersStalePseudoToolRereports(t *testing.T) {
 		}}); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, time.Second, func() bool {
+		eventually(t, eventuallyTimeout, func() bool {
 			tools := h.service.EgressToolNames(route)
 			return slices.Contains(tools, marker) && !slices.Contains(tools, target.server+"/"+target.tool)
 		})
@@ -132,7 +131,7 @@ func TestPolicyUpdateNotifierFiltersStalePseudoToolRereports(t *testing.T) {
 		}}); err != nil {
 			t.Fatal(err)
 		}
-		eventually(t, time.Second, func() bool {
+		eventually(t, eventuallyTimeout, func() bool {
 			current := h.service.EgressToolNames(route)
 			return slices.Contains(current, marker) && slices.Contains(current, target.server+"/"+target.tool)
 		})
