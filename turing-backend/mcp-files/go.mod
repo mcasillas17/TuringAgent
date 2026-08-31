@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/mcasillas17/TuringAgent v0.0.0
-	golang.org/x/sys v0.45.0
+	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.37.0
 	google.golang.org/grpc v1.69.2
 )
