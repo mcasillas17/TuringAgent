@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - /
+      - /turing-backend/mcp-files
+      - /turing-backend/mcp-system
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /turing-backend
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pub
+    directory: /turing-client/turing_app
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directories:
+      - /turing-backend/agent-runtime-go
+      - /turing-backend/mcp-files
+      - /turing-backend/mcp-system
+      - /turing-backend/orchestrator-go
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
