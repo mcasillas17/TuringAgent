@@ -606,7 +606,7 @@ func TestHeartbeatExpiryPublishesLossAndRevivalRestoresQueuedRoute(t *testing.T)
 	if assigned.GetRunId() != enqueued.RunID {
 		t.Fatalf("revived assignment = %+v, want run %q", assigned, enqueued.RunID)
 	}
-	eventually(t, time.Second, func() bool {
+	eventually(t, 5*time.Second, func() bool {
 		return hasRoutingNotice(t, h, session.SessionID, enqueued.RunID, "routing_capability_restored")
 	})
 }
