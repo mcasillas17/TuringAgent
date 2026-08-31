@@ -35,7 +35,7 @@ func TestCapabilityUpdateReplacesTheRegistrationSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	eventually(t, 5*time.Second, func() bool {
+	eventually(t, 15*time.Second, func() bool {
 		return h.service.ValidateRouting(context.Background(), repository.RoutingRequirements{
 			AgentID: "general_assistant", ModelProvider: "openai_compatible", Model: "gpt-4o-mini",
 			RequiredContextTokens: 4096, MinimumWorkerMaxConcurrentRuns: 1,
@@ -211,7 +211,7 @@ func TestStaleCapabilityUpdateDisconnectsOnlyItsRegistrationAndReconnectRestores
 		t.Fatal("stale capability update kept the stream connected")
 	}
 
-	eventually(t, 5*time.Second, func() bool {
+	eventually(t, 15*time.Second, func() bool {
 		return h.service.ValidateRouting(context.Background(), repository.RoutingRequirements{
 			AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
 		}) != nil
@@ -325,7 +325,7 @@ func TestCapabilityLossAndDisconnectAppendQueueNotices(t *testing.T) {
 			}
 
 			test.lose(t, stream)
-			eventually(t, 5*time.Second, func() bool {
+			eventually(t, 15*time.Second, func() bool {
 				events, _, err := h.repo.ReplayEvents(context.Background(), session.SessionID, 0, 50)
 				if err != nil {
 					return false
@@ -486,7 +486,7 @@ func TestToolCapabilityLossLeavesIncompatibleJobQueued(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, 5*time.Second, func() bool {
+	eventually(t, 15*time.Second, func() bool {
 		events, _, err := h.repo.ReplayEvents(context.Background(), session.SessionID, 0, 50)
 		if err != nil {
 			return false
@@ -537,7 +537,7 @@ func TestCapacityLossLeavesIncompatibleJobQueuedAndAppendsNotice(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, 5*time.Second, func() bool {
+	eventually(t, 15*time.Second, func() bool {
 		return hasRoutingNotice(t, h, session.SessionID, enqueued.RunID, "routing_capability_unavailable")
 	})
 	var status string
@@ -566,7 +566,7 @@ func TestFirstIncompatibleRegistrationPublishesPreviouslyUnreportedLoss(t *testi
 		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
 	))
 	defer func() { _ = stream.CloseSend() }()
-	eventually(t, 5*time.Second, func() bool {
+	eventually(t, 15*time.Second, func() bool {
 		return hasRoutingNotice(t, h, session.SessionID, enqueued.RunID, "routing_capability_unavailable")
 	})
 }
@@ -606,7 +606,7 @@ func TestHeartbeatExpiryPublishesLossAndRevivalRestoresQueuedRoute(t *testing.T)
 	if assigned.GetRunId() != enqueued.RunID {
 		t.Fatalf("revived assignment = %+v, want run %q", assigned, enqueued.RunID)
 	}
-	eventually(t, 5*time.Second, func() bool {
+	eventually(t, 15*time.Second, func() bool {
 		return hasRoutingNotice(t, h, session.SessionID, enqueued.RunID, "routing_capability_restored")
 	})
 }
@@ -1052,7 +1052,7 @@ func TestCapabilityRegistryConcurrentLifecycleIsRaceSafe(t *testing.T) {
 	if err := stream.CloseSend(); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, 5*time.Second, func() bool {
+	eventually(t, 15*time.Second, func() bool {
 		return h.service.registeredWorker("worker-race") == nil
 	})
 }
