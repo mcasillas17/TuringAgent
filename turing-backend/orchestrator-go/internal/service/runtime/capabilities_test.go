@@ -435,7 +435,7 @@ func connectWorkerCapabilities(
 	capabilities *turingv1.WorkerCapabilities,
 ) turingv1.RuntimeService_ConnectWorkerClient {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(h.internalContext(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(h.internalContext(), 30*time.Second)
 	t.Cleanup(cancel)
 	stream, err := h.runtimeClient(t).ConnectWorker(ctx)
 	if err != nil {

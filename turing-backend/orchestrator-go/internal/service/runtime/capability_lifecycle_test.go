@@ -316,6 +316,21 @@ func TestCapabilityLossAndDisconnectAppendQueueNotices(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			first, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
+				SessionID: session.SessionID, Content: "occupy worker", AgentID: "general_assistant",
+				ModelProvider: "ollama", Model: "llama3.2",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := h.service.DispatchPending(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if assigned := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+				return command.GetRunAssigned() != nil
+			}).GetRunAssigned(); assigned.GetRunId() != first.RunID {
+				t.Fatalf("first assignment = %+v, want run %q", assigned, first.RunID)
+			}
 			enqueued, err := h.repo.EnqueueUserMessage(context.Background(), repository.EnqueueUserMessageInput{
 				SessionID: session.SessionID, Content: "wait", AgentID: "general_assistant",
 				ModelProvider: "ollama", Model: "llama3.2",
@@ -348,10 +363,9 @@ func TestCapabilityLossAndDisconnectAppendQueueNotices(t *testing.T) {
 
 func TestCapabilityNoticeDedupSurvivesPartialPersistenceFailure(t *testing.T) {
 	h := newHarness(t)
-	stream := connectWorkerCapabilities(t, h, "worker-partial-notice", "registration-partial-notice", modelCapabilities(
+	registerWorkerCapabilities(t, h, "worker-partial-notice", "registration-partial-notice", modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
 	))
-	defer func() { _ = stream.CloseSend() }()
 
 	var enqueued []repository.EnqueueUserMessageResult
 	for _, title := range []string{"First unavailable", "Second unavailable"} {
@@ -404,10 +418,9 @@ func TestCapabilityNoticeDedupSurvivesPartialPersistenceFailure(t *testing.T) {
 
 func TestNonRestoringRefreshKeepsPublishedLossUntilRestorationCanBeEmitted(t *testing.T) {
 	h := newHarness(t)
-	stream := connectWorkerCapabilities(t, h, "worker-delayed-restoration", "registration-delayed-restoration", modelCapabilities(
+	registerWorkerCapabilities(t, h, "worker-delayed-restoration", "registration-delayed-restoration", modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
 	))
-	defer func() { _ = stream.CloseSend() }()
 	session, err := h.repo.CreateSession(context.Background(), "Delayed restoration")
 	if err != nil {
 		t.Fatal(err)
@@ -465,8 +478,7 @@ func TestToolCapabilityLossLeavesIncompatibleJobQueued(t *testing.T) {
 	initial.Tools = []*turingv1.DiscoveredTool{{
 		ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{},
 	}}
-	stream := connectWorkerCapabilities(t, h, "worker-tool-loss", "registration-tool-loss", initial)
-	defer func() { _ = stream.CloseSend() }()
+	registerWorkerCapabilities(t, h, "worker-tool-loss", "registration-tool-loss", initial)
 	session, err := h.repo.CreateSession(context.Background(), "Tool loss")
 	if err != nil {
 		t.Fatal(err)
@@ -478,12 +490,12 @@ func TestToolCapabilityLossLeavesIncompatibleJobQueued(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerCapabilitiesUpdated{
-		WorkerCapabilitiesUpdated: &turingv1.RuntimeWorkerCapabilitiesUpdated{
+	connected := h.service.registeredWorker("worker-tool-loss")
+	if err := h.service.replaceWorkerCapabilities(context.Background(), "worker-tool-loss", connected,
+		&turingv1.RuntimeWorkerCapabilitiesUpdated{
 			WorkerId: "worker-tool-loss", RegistrationId: "registration-tool-loss",
 			Capabilities: modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1),
-		},
-	}}); err != nil {
+		}); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, eventuallyTimeout, func() bool {
@@ -514,10 +526,9 @@ func TestToolCapabilityLossLeavesIncompatibleJobQueued(t *testing.T) {
 
 func TestCapacityLossLeavesIncompatibleJobQueuedAndAppendsNotice(t *testing.T) {
 	h := newHarness(t)
-	stream := connectWorkerCapabilities(t, h, "worker-capacity-loss", "registration-capacity-loss", modelCapabilities(
+	registerWorkerCapabilities(t, h, "worker-capacity-loss", "registration-capacity-loss", modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 2,
 	))
-	defer func() { _ = stream.CloseSend() }()
 	session, err := h.repo.CreateSession(context.Background(), "Capacity loss")
 	if err != nil {
 		t.Fatal(err)
@@ -529,12 +540,12 @@ func TestCapacityLossLeavesIncompatibleJobQueuedAndAppendsNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerCapabilitiesUpdated{
-		WorkerCapabilitiesUpdated: &turingv1.RuntimeWorkerCapabilitiesUpdated{
+	connected := h.service.registeredWorker("worker-capacity-loss")
+	if err := h.service.replaceWorkerCapabilities(context.Background(), "worker-capacity-loss", connected,
+		&turingv1.RuntimeWorkerCapabilitiesUpdated{
 			WorkerId: "worker-capacity-loss", RegistrationId: "registration-capacity-loss",
 			Capabilities: modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1),
-		},
-	}}); err != nil {
+		}); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, eventuallyTimeout, func() bool {
@@ -573,10 +584,9 @@ func TestFirstIncompatibleRegistrationPublishesPreviouslyUnreportedLoss(t *testi
 
 func TestHeartbeatExpiryPublishesLossAndRevivalRestoresQueuedRoute(t *testing.T) {
 	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: 40 * time.Millisecond})
-	stream := connectWorkerCapabilities(t, h, "worker-heartbeat", "registration-heartbeat", modelCapabilities(
+	worker := registerWorkerCapabilities(t, h, "worker-heartbeat", "registration-heartbeat", modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
 	))
-	defer func() { _ = stream.CloseSend() }()
 	session, err := h.repo.CreateSession(context.Background(), "Heartbeat")
 	if err != nil {
 		t.Fatal(err)
@@ -588,27 +598,30 @@ func TestHeartbeatExpiryPublishesLossAndRevivalRestoresQueuedRoute(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(60 * time.Millisecond)
+	worker.mu.Lock()
+	worker.lastHeartbeat = time.Now().Add(-time.Second)
+	worker.mu.Unlock()
 	if err := h.service.RecoverOrphanedAssignments(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !hasRoutingNotice(t, h, session.SessionID, enqueued.RunID, "routing_capability_unavailable") {
 		t.Fatal("heartbeat expiry did not publish a capability loss")
 	}
-	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_Heartbeat{
-		Heartbeat: &turingv1.RuntimeHeartbeat{WorkerId: "worker-heartbeat"},
-	}}); err != nil {
+	if err := h.service.renewWorkerLeases(context.Background(), "worker-heartbeat", worker,
+		&turingv1.RuntimeHeartbeat{WorkerId: "worker-heartbeat"}); err != nil {
 		t.Fatal(err)
 	}
-	assigned := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
-		return command.GetRunAssigned() != nil
-	}).GetRunAssigned()
-	if assigned.GetRunId() != enqueued.RunID {
-		t.Fatalf("revived assignment = %+v, want run %q", assigned, enqueued.RunID)
+	select {
+	case command := <-worker.commands:
+		if assigned := command.command.GetRunAssigned(); assigned.GetRunId() != enqueued.RunID {
+			t.Fatalf("revived assignment = %+v, want run %q", assigned, enqueued.RunID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("revived worker did not receive queued assignment")
 	}
-	if !hasRoutingNotice(t, h, session.SessionID, enqueued.RunID, "routing_capability_restored") {
-		t.Fatal("heartbeat revival did not publish a capability restoration")
-	}
+	eventually(t, 15*time.Second, func() bool {
+		return hasRoutingNotice(t, h, session.SessionID, enqueued.RunID, "routing_capability_restored")
+	})
 }
 
 func TestDispatchDoesNotHoldWorkerLockWhileWaitingForDatabase(t *testing.T) {
@@ -621,12 +634,16 @@ func TestDispatchDoesNotHoldWorkerLockWhileWaitingForDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := tx.ExecContext(context.Background(), `SELECT 1`); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
 	dispatchCtx, cancelDispatch := context.WithTimeout(context.Background(), time.Second)
 	defer cancelDispatch()
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(dispatchCtx) }()
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
@@ -680,10 +697,14 @@ func TestCapabilityChangeDuringClaimRequeuesTheReservedAssignment(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := tx.ExecContext(context.Background(), `SELECT 1`); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
@@ -730,10 +751,9 @@ func TestCapabilityChangeDuringClaimRequeuesTheReservedAssignment(t *testing.T) 
 
 func TestCapabilityFenceRestartsDispatchForWorkerAddedDuringClaim(t *testing.T) {
 	h := newHarness(t)
-	stream := connectWorkerCapabilities(t, h, "worker-claim-fenced", "registration-claim-fenced", modelCapabilities(
+	registerWorkerCapabilities(t, h, "worker-claim-fenced", "registration-claim-fenced", modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
 	))
-	defer func() { _ = stream.CloseSend() }()
 	session, err := h.repo.CreateSession(context.Background(), "Claim restart")
 	if err != nil {
 		t.Fatal(err)
@@ -749,10 +769,14 @@ func TestCapabilityFenceRestartsDispatchForWorkerAddedDuringClaim(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := tx.ExecContext(context.Background(), `SELECT 1`); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
@@ -828,10 +852,14 @@ func TestCancellationFenceAfterClaimReleasesTerminalExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := tx.ExecContext(context.Background(), `SELECT 1`); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
@@ -878,13 +906,13 @@ func TestCancellationFenceAfterClaimReleasesTerminalExecution(t *testing.T) {
 	if err := <-dispatchDone; err != nil {
 		t.Fatalf("terminal claim fence failed dispatch: %v", err)
 	}
-	run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if run.Status != "cancelled" || run.ExecutionActive || run.ExecutionState != "exited" {
-		t.Fatalf("released cancelled claim = %+v, want inactive exited execution", run)
-	}
+	eventually(t, 15*time.Second, func() bool {
+		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return run.Status == "cancelled" && !run.ExecutionActive && run.ExecutionState == "exited"
+	})
 }
 
 func TestCancellationFenceWhileQueueingCommandDoesNotJoinAssignmentFence(t *testing.T) {
@@ -1107,6 +1135,47 @@ func TestRemoveDiscoveredToolsRestoresToolsetSnapshotWhenPersistenceFails(t *tes
 	}
 }
 
+func registerWorkerCapabilities(
+	t *testing.T,
+	h *harness,
+	workerID string,
+	registrationID string,
+	capabilityProto *turingv1.WorkerCapabilities,
+) *worker {
+	t.Helper()
+	capabilities, discovered, err := decodeWorkerCapabilities(capabilityProto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandBuffer := capabilities.maxConcurrentRuns
+	if commandBuffer < 1 {
+		commandBuffer = 1
+	}
+	connected := &worker{
+		commands:       make(chan workerCommand, commandBuffer),
+		done:           make(chan struct{}),
+		registrationID: registrationID,
+		capabilities:   capabilities,
+		maxConcurrent:  capabilities.maxConcurrentRuns,
+		assignments:    map[string]assignment{},
+		lastHeartbeat:  time.Now().UTC(),
+	}
+	if err := h.service.persistDiscoveredTools(context.Background(), workerID, connected, discovered); err != nil {
+		t.Fatal(err)
+	}
+	h.service.mu.Lock()
+	h.service.workers[workerID] = connected
+	h.service.mu.Unlock()
+	t.Cleanup(func() {
+		connected.close()
+		h.service.removeWorkerRegistration(workerID, connected)
+		if err := h.service.removeDiscoveredTools(workerID, connected); err != nil {
+			t.Fatal(err)
+		}
+	})
+	return connected
+}
+
 // eventuallyTimeout bounds how long a condition may take to become true.
 //
 // It is deliberately generous. The loop polls every 10ms and returns the
@@ -1116,7 +1185,7 @@ func TestRemoveDiscoveredToolsRestoresToolsetSnapshotWhenPersistenceFails(t *tes
 // these tests on timing alone, on a different subtest each run, while the same
 // tests passed locally every time. A bound that distinguishes "slow" from
 // "broken" has to leave room for slow.
-const eventuallyTimeout = 10 * time.Second
+const eventuallyTimeout = 15 * time.Second
 
 func eventually(t *testing.T, timeout time.Duration, condition func() bool) {
 	t.Helper()

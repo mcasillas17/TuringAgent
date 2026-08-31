@@ -7,7 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -413,39 +413,43 @@ func onlyEventOfType(t *testing.T, database interface {
 // that mistake is visible before it reaches a database.
 func TestNoRepositoryWriterAppendsApprovalEventsDirectly(t *testing.T) {
 	fileSet := token.NewFileSet()
-	packages, err := parser.ParseDir(fileSet, ".", func(info fs.FileInfo) bool {
-		return !strings.HasSuffix(info.Name(), "_test.go")
-	}, 0)
+	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, parsed := range packages {
-		for name, file := range parsed.Files {
-			ast.Inspect(file, func(node ast.Node) bool {
-				call, isCall := node.(*ast.CallExpr)
-				if !isCall {
-					return true
-				}
-				function, isIdent := call.Fun.(*ast.Ident)
-				if !isIdent || function.Name != "appendRunEventTx" || len(call.Args) < 6 {
-					return true
-				}
-				literal, isLiteral := call.Args[5].(*ast.BasicLit)
-				if !isLiteral || literal.Kind != token.STRING {
-					return true
-				}
-				eventType, unquoteErr := strconv.Unquote(literal.Value)
-				if unquoteErr != nil {
-					t.Fatalf("%s: %v", name, unquoteErr)
-				}
-				if _, terminal := approvalFailureCategories[eventType]; terminal {
-					t.Fatalf("%s:%d appends %s directly instead of through the approval event helpers, "+
-						"so its payload bypasses the category rule",
-						name, fileSet.Position(literal.Pos()).Line, eventType)
-				}
-				return true
-			})
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
 		}
+		file, err := parser.ParseFile(fileSet, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, isCall := node.(*ast.CallExpr)
+			if !isCall {
+				return true
+			}
+			function, isIdent := call.Fun.(*ast.Ident)
+			if !isIdent || function.Name != "appendRunEventTx" || len(call.Args) < 6 {
+				return true
+			}
+			literal, isLiteral := call.Args[5].(*ast.BasicLit)
+			if !isLiteral || literal.Kind != token.STRING {
+				return true
+			}
+			eventType, unquoteErr := strconv.Unquote(literal.Value)
+			if unquoteErr != nil {
+				t.Fatalf("%s: %v", name, unquoteErr)
+			}
+			if _, terminal := approvalFailureCategories[eventType]; terminal {
+				t.Fatalf("%s:%d appends %s directly instead of through the approval event helpers, "+
+					"so its payload bypasses the category rule",
+					name, fileSet.Position(literal.Pos()).Line, eventType)
+			}
+			return true
+		})
 	}
 }
 
