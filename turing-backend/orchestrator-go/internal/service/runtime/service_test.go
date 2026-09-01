@@ -4199,6 +4199,25 @@ func waitForRunStatus(t *testing.T, h *harness, runID string, want string) {
 	}
 }
 
+func waitForExecutionState(t *testing.T, h *harness, runID string, want string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		run, err := h.repo.GetRun(context.Background(), runID)
+		if err != nil {
+			t.Fatalf("GetRun: %v", err)
+		}
+		if run.ExecutionState == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("run %s execution_state = %q, want %q", runID, run.ExecutionState, want)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
 func countRunEvents(t *testing.T, h *harness, runID string, eventType string) int {
 	t.Helper()
 	var count int
