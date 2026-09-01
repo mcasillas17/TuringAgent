@@ -24,9 +24,9 @@ The project is designed for local development first: secrets stay in your local 
 ## Requirements
 
 - Docker and Docker Compose
-- Go 1.25+ — the root and `mcp-system` modules declare `go 1.23`, but
-  `turing-backend/mcp-files` declares `go 1.25.0`, so 1.25 is the real floor
-  for building every module with one toolchain
+- Go 1.25+ — the root and `turing-backend/mcp-files` modules declare
+  `go 1.25.0` (`mcp-system` still says `go 1.23`), so 1.25 is the floor for
+  building every module with one toolchain
 - Flutter, on a release bundling Dart 3.10.4 or newer (`turing_app`'s
   pubspec declares `sdk: ^3.10.4`; `flutter pub get` fails below it). CI
   tracks the `stable` channel rather than pinning a version.

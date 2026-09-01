@@ -227,6 +227,117 @@ func requireInOrder(t *testing.T, text string, snippets ...string) {
 	}
 }
 
+// TestContainerGoBuildersMatchTheirRuntimeDistroAndModuleFloor pins the two
+// image facts nothing else checks — no CI job builds an image, and Dependabot
+// bumps every FROM line independently of every other:
+//
+//   - the golang builder's distro suffix matches its runtime stage's distro.
+//     The orchestrator build is CGO and links the builder's glibc, so a
+//     newer-distro builder (trixie) over a bookworm-slim runtime produces a
+//     binary that fails at container start, not at image build.
+//   - the builder's Go version covers the module's `go` directive. Below the
+//     floor, GOTOOLCHAIN=auto quietly downloads a conforming toolchain inside
+//     every image build — which is exactly how a 1.23 builder kept serving a
+//     1.25.0 module unnoticed after the Dependabot sweep.
+func TestContainerGoBuildersMatchTheirRuntimeDistroAndModuleFloor(t *testing.T) {
+	cases := []struct {
+		dockerfile string
+		gomod      string
+	}{
+		{"../../turing-backend/orchestrator-go/Dockerfile", "../../go.mod"},
+		{"../../turing-backend/agent-runtime-go/Dockerfile", "../../go.mod"},
+		{"../../turing-backend/mcp-files/Dockerfile", "../../turing-backend/mcp-files/go.mod"},
+		{"../../turing-backend/mcp-system/Dockerfile", "../../turing-backend/mcp-system/go.mod"},
+	}
+	runtimeFor := map[string]string{
+		"bookworm": "FROM debian:bookworm-slim",
+		"alpine":   "FROM alpine:",
+	}
+	for _, test := range cases {
+		data, err := os.ReadFile(test.dockerfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dockerfile := string(data)
+		builderVersion, distro := "", ""
+		for _, line := range strings.Split(dockerfile, "\n") {
+			if !strings.HasPrefix(line, "FROM golang:") {
+				continue
+			}
+			tag := strings.Fields(strings.TrimPrefix(line, "FROM golang:"))[0]
+			version, suffix, found := strings.Cut(tag, "-")
+			if !found {
+				t.Fatalf("%s builder tag %q has no distro suffix; an unsuffixed golang tag floats to whatever distro is current", test.dockerfile, tag)
+			}
+			builderVersion, distro = version, suffix
+			break
+		}
+		if builderVersion == "" {
+			t.Fatalf("%s has no golang builder stage", test.dockerfile)
+		}
+		runtime, known := runtimeFor[distro]
+		if !known {
+			t.Fatalf("%s builder distro %q is not one this repo pairs with a runtime base", test.dockerfile, distro)
+		}
+		if !strings.Contains(dockerfile, runtime) {
+			t.Fatalf("%s builds on golang:*-%s but its runtime stage is not %q", test.dockerfile, distro, runtime)
+		}
+		floor := goDirective(t, test.gomod)
+		if compareGoMinors(t, builderVersion, floor) < 0 {
+			t.Fatalf("%s builder go %s is below the module floor go %s in %s: image builds would download a toolchain via GOTOOLCHAIN=auto instead of using the pinned image", test.dockerfile, builderVersion, floor, test.gomod)
+		}
+	}
+}
+
+func goDirective(t *testing.T, gomod string) string {
+	t.Helper()
+	data, err := os.ReadFile(gomod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if version, found := strings.CutPrefix(line, "go "); found {
+			return strings.TrimSpace(version)
+		}
+	}
+	t.Fatalf("%s has no go directive", gomod)
+	return ""
+}
+
+// compareGoMinors orders two Go versions by major.minor only — the granularity
+// FROM tags carry.
+func compareGoMinors(t *testing.T, left, right string) int {
+	t.Helper()
+	parse := func(version string) [2]int {
+		parts := strings.Split(version, ".")
+		if len(parts) < 2 {
+			t.Fatalf("go version %q does not carry major.minor", version)
+		}
+		var out [2]int
+		for index := range out {
+			value := 0
+			for _, digit := range parts[index] {
+				if digit < '0' || digit > '9' {
+					t.Fatalf("go version %q is not numeric", version)
+				}
+				value = value*10 + int(digit-'0')
+			}
+			out[index] = value
+		}
+		return out
+	}
+	a, b := parse(left), parse(right)
+	for index := range a {
+		if a[index] != b[index] {
+			if a[index] < b[index] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
 func requireIndentedBlock(t *testing.T, text, header string, indent int) string {
 	t.Helper()
 	allLines := strings.Split(text, "\n")

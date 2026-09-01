@@ -1,3 +1,8 @@
+# The -bookworm suffix is kept in step with the runtime stage's
+# debian:bookworm-slim. This build is CGO_ENABLED=0, so nothing links the
+# builder's glibc — but the pairing is asserted anyway (see
+# TestContainerGoBuildersMatchTheirRuntimeDistroAndModuleFloor), so a future
+# CGO dependency cannot reopen the drift the orchestrator's comment explains.
 FROM golang:1.27-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
