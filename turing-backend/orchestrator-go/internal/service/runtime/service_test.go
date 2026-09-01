@@ -3305,12 +3305,12 @@ func TestCancelRunWaitsForCommandBufferSpace(t *testing.T) {
 		close(done)
 	}()
 	time.Sleep(20 * time.Millisecond)
-	<-commands
 	select {
 	case <-done:
-		t.Fatal("CancelRun returned before buffer space was available")
+		t.Fatal("CancelRun returned while the command buffer was full")
 	default:
 	}
+	<-commands
 	select {
 	case cmd := <-commands:
 		cancel := cmd.command.GetRunCancelled()

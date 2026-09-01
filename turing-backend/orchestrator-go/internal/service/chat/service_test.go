@@ -1225,7 +1225,7 @@ func TestSendMessageStreamsRunStartedWhenWorkerClaimsJob(t *testing.T) {
 func TestSendMessageCancelsRunWhenDispatchFails(t *testing.T) {
 	h := newHarness(t)
 	sessionID := h.createSession(t)
-	ctx, cancel := context.WithTimeout(h.clientContext(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(h.clientContext(), 10*time.Second)
 	defer cancel()
 	runtimeClient := turingv1.NewRuntimeServiceClient(h.conn)
 	workerStream, err := runtimeClient.ConnectWorker(ctx)

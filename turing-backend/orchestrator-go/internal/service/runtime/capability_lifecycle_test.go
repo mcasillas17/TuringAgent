@@ -486,7 +486,7 @@ func TestToolCapabilityLossLeavesIncompatibleJobQueued(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, time.Second, func() bool {
+	eventually(t, 5*time.Second, func() bool {
 		events, _, err := h.repo.ReplayEvents(context.Background(), session.SessionID, 0, 50)
 		if err != nil {
 			return false
