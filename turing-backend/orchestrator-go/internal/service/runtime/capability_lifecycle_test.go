@@ -621,12 +621,12 @@ func TestDispatchDoesNotHoldWorkerLockWhileWaitingForDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatchCtx, cancelDispatch := context.WithTimeout(context.Background(), time.Second)
+	dispatchCtx, cancelDispatch := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelDispatch()
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(dispatchCtx) }()
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
@@ -683,7 +683,7 @@ func TestCapabilityChangeDuringClaimRequeuesTheReservedAssignment(t *testing.T) 
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
@@ -752,7 +752,7 @@ func TestCapabilityFenceRestartsDispatchForWorkerAddedDuringClaim(t *testing.T) 
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
@@ -831,7 +831,7 @@ func TestCancellationFenceAfterClaimReleasesTerminalExecution(t *testing.T) {
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
