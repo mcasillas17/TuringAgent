@@ -13,7 +13,7 @@ This is a **multi-module** Go repo. `go build -tags sqlite_fts5 ./...` / `go tes
 - `turing-backend/mcp-files/go.mod` — sandboxed file tools; has a `replace` back to root
 - `turing-backend/mcp-system/go.mod` — standalone system tools; stdlib-only (no `go.sum`). CI has its own `mcp-system` job, but the root `./...` never reaches it, so run it explicitly when you touch it
 
-**The three modules do not declare the same Go version.** Root and `mcp-system` are `go 1.23`; `mcp-files` is `go 1.25.0` (raised by a Dependabot bump). A local toolchain below 1.25 cannot build `mcp-files` directly — with the default `GOTOOLCHAIN=auto` Go selects a conforming toolchain (using one already present, downloading `go1.25.0` otherwise) instead of failing, which is also why CI's `mcp-files` job still passes while pinning `go-version: "1.23.x"`. That job's pin therefore no longer describes the toolchain it runs on, and it would break outright under `GOTOOLCHAIN=local`. Install **Go 1.25 or newer** and the question does not arise locally. Fixing the CI pin is safe when someone wants to: `ci_test.go` asserts a `go-version` for the **lint job only**, so raising the other four jobs to `1.25.x` does not trip the self-guard.
+**The three modules do not declare the same Go version.** Root and `mcp-files` are `go 1.25.0` (raised by Dependabot's grpc bump #92 and x/net bump #91 respectively); `mcp-system` remains `go 1.23`. A local toolchain below 1.25 cannot build the root module or `mcp-files` directly — with the default `GOTOOLCHAIN=auto` Go selects a conforming toolchain (using one already present, downloading `go1.25.0` otherwise) instead of failing. Install **Go 1.25 or newer** and the question does not arise locally. CI pins `go-version: "1.25.x"` on all five jobs (#92 raised the other four; `ci_test.go` asserts the lint job's pin).
 
 ## Toolchain versions (what is pinned, and where)
 
@@ -21,8 +21,8 @@ Nothing here is enforced by one place, so a bump is never a one-line edit. The *
 
 | Tool | Version | Enforcer (fails on mismatch) | Also asserted in |
 |---|---|---|---|
-| Go (local) | **1.25+** | `mcp-files/go.mod` (`go 1.25.0`) | root & `mcp-system` go.mod say `1.23`; CI pins `1.23.x` on four jobs, `1.25.x` on lint |
-| Go (containers) | `1.27-alpine` for both MCP images, `1.23-bookworm` for orchestrator & agent-runtime | the Dockerfiles | Dependabot `docker` entry |
+| Go (local) | **1.25+** | root & `mcp-files` go.mod (`go 1.25.0`) | `mcp-system` go.mod says `1.23`; CI pins `1.25.x` on all five jobs |
+| Go (containers) | `1.27-alpine` for both MCP images, `1.27-bookworm` for orchestrator & agent-runtime | the Dockerfiles | Dependabot `docker` entry |
 | golangci-lint | v2.12.2 | — (no local guard) | `ci.yml`, `ci_test.go` |
 | buf | 1.72.0 | `tools/proto/breaking.sh`, `tools/proto/breaking_test.go` | `ci.yml`, `ci_test.go` |
 | protoc | 34.1 exactly, first on `PATH` | `tools/proto/generate.sh` | `ci.yml`, `generate_test.go` |
@@ -79,7 +79,7 @@ The `/verify` skill runs this matrix.
 cd turing-backend && ./scripts/init.sh   # generates .env, tokens, data/, sandbox/, skills/, mcp/ & memory/ (with a default persona.md); prints the Flutter API key
 ./scripts/dev.sh                          # docker compose up --build (foreground)
 ```
-Requires Docker + Compose, Go 1.25+ (the `mcp-files` module's floor; see "Toolchain versions"), Flutter, and Ollama running on the host (`OLLAMA_BASE_URL=http://host.docker.internal:11434`, default model `qwen2.5:7b` (~4.9 GB resident). The runtime sends Ollama a per-request `keep_alive` (`OLLAMA_KEEP_ALIVE`, default `2m`) instead of relying on Ollama's own server-side env var, so the model is released once you stop talking to it. Keep it above `TURING_APPROVAL_WAIT_TIMEOUT_MS` or it unloads mid-run). Run the client: `cd turing-client/turing_app && flutter pub get && flutter run -d macos`.
+Requires Docker + Compose, Go 1.25+ (the root and `mcp-files` modules' floor; see "Toolchain versions"), Flutter, and Ollama running on the host (`OLLAMA_BASE_URL=http://host.docker.internal:11434`, default model `qwen2.5:7b` (~4.9 GB resident). The runtime sends Ollama a per-request `keep_alive` (`OLLAMA_KEEP_ALIVE`, default `2m`) instead of relying on Ollama's own server-side env var, so the model is released once you stop talking to it. Keep it above `TURING_APPROVAL_WAIT_TIMEOUT_MS` or it unloads mid-run). Run the client: `cd turing-client/turing_app && flutter pub get && flutter run -d macos`.
 
 ## Review before pushing (required)
 

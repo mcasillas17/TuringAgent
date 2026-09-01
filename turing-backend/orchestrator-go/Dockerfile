@@ -1,4 +1,8 @@
-FROM golang:1.23-bookworm AS build
+# The -bookworm suffix must track the runtime stage's debian:bookworm-slim:
+# this build is CGO and links the builder's glibc, so a newer-distro builder
+# (trixie) produces a binary the runtime image cannot load. Enforced by
+# TestContainerGoBuildersMatchTheirRuntimeDistroAndModuleFloor.
+FROM golang:1.27-bookworm AS build
 ARG GOFLAGS=-tags=sqlite_fts5
 WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev sqlite3 libsqlite3-dev && rm -rf /var/lib/apt/lists/*
