@@ -13,7 +13,11 @@ This is a **multi-module** Go repo. `go build -tags sqlite_fts5 ./...` / `go tes
 - `turing-backend/mcp-files/go.mod` — sandboxed file tools; has a `replace` back to root
 - `turing-backend/mcp-system/go.mod` — standalone system tools; stdlib-only (no `go.sum`). CI has its own `mcp-system` job, but the root `./...` never reaches it, so run it explicitly when you touch it
 
-**The three modules do not declare the same Go version.** Root and `mcp-system` are `go 1.23`; `mcp-files` is `go 1.25.0` (raised by a Dependabot bump). A local toolchain below 1.25 cannot build `mcp-files` directly — with the default `GOTOOLCHAIN=auto` Go selects a conforming toolchain (using one already present, downloading `go1.25.0` otherwise) instead of failing, which is also why CI's `mcp-files` job still passes while pinning `go-version: "1.23.x"`. That job's pin therefore no longer describes the toolchain it runs on, and it would break outright under `GOTOOLCHAIN=local`. Install **Go 1.25 or newer** and the question does not arise locally. Fixing the CI pin is safe when someone wants to: `ci_test.go` asserts a `go-version` for the **lint job only**, so raising the other four jobs to `1.25.x` does not trip the self-guard.
+**The three modules still do not declare the same Go version**, though they are closer than they were. Root and `mcp-files` are `go 1.25.0`; `mcp-system` alone remains `go 1.23`. **Install Go 1.25 or newer** — that is the floor for building the repo with one toolchain, set by the two modules that declare it rather than by the one that lags.
+
+`mcp-system` being lower is harmless: a 1.25 toolchain compiles a `go 1.23` module at that module's own language level. What matters is only that nothing is *above* your local toolchain.
+
+An earlier version of this note described CI pinning `1.23.x` while `mcp-files` needed `1.25.0`, passing only because `GOTOOLCHAIN=auto` silently switched toolchains. That was fixed in #92: every `setup-go` job now pins `1.25.x`, so no job depends on auto-switching any more. `ci_test.go` still asserts a `go-version` for the **lint job only**, so the other four pins are held by convention rather than by the self-guard — if one drifts back, nothing will catch it.
 
 ## Toolchain versions (what is pinned, and where)
 
@@ -21,7 +25,7 @@ Nothing here is enforced by one place, so a bump is never a one-line edit. The *
 
 | Tool | Version | Enforcer (fails on mismatch) | Also asserted in |
 |---|---|---|---|
-| Go (local) | **1.25+** | `mcp-files/go.mod` (`go 1.25.0`) | root & `mcp-system` go.mod say `1.23`; CI pins `1.23.x` on four jobs, `1.25.x` on lint |
+| Go (local) | **1.25+** | root and `mcp-files` go.mod (`go 1.25.0`) | `mcp-system` go.mod still says `1.23`; CI pins `1.25.x` on all five jobs, but `ci_test.go` asserts only the lint job's |
 | Go (containers) | `1.27-alpine` for both MCP images, `1.23-bookworm` for orchestrator & agent-runtime | the Dockerfiles | Dependabot `docker` entry |
 | golangci-lint | v2.12.2 | — (no local guard) | `ci.yml`, `ci_test.go` |
 | buf | 1.72.0 | `tools/proto/breaking.sh`, `tools/proto/breaking_test.go` | `ci.yml`, `ci_test.go` |
