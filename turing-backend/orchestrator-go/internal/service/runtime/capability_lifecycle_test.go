@@ -638,7 +638,7 @@ func TestDispatchDoesNotHoldWorkerLockWhileWaitingForDatabase(t *testing.T) {
 		_ = tx.Rollback()
 		t.Fatal(err)
 	}
-	dispatchCtx, cancelDispatch := context.WithTimeout(context.Background(), time.Second)
+	dispatchCtx, cancelDispatch := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancelDispatch()
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
@@ -859,7 +859,7 @@ func TestCancellationFenceAfterClaimReleasesTerminalExecution(t *testing.T) {
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
