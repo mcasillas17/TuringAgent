@@ -833,10 +833,21 @@ func TestCapabilityFenceRestartsDispatchForWorkerAddedDuringClaim(t *testing.T) 
 
 func TestCancellationFenceAfterClaimReleasesTerminalExecution(t *testing.T) {
 	h := newHarness(t)
-	stream := connectWorkerCapabilities(t, h, "worker-cancelled-claim", "registration-cancelled-claim", modelCapabilities(
+	capabilities, _, err := decodeWorkerCapabilities(modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
 	))
-	defer func() { _ = stream.CloseSend() }()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.service.workers["worker-cancelled-claim"] = &worker{
+		commands:       make(chan workerCommand, 1),
+		done:           make(chan struct{}),
+		registrationID: "registration-cancelled-claim",
+		capabilities:   capabilities,
+		maxConcurrent:  1,
+		lastHeartbeat:  time.Now().UTC(),
+		assignments:    map[string]assignment{},
+	}
 	session, err := h.repo.CreateSession(context.Background(), "Cancelled claim fence")
 	if err != nil {
 		t.Fatal(err)
