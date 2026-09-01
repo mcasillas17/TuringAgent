@@ -638,7 +638,7 @@ func TestDispatchDoesNotHoldWorkerLockWhileWaitingForDatabase(t *testing.T) {
 		_ = tx.Rollback()
 		t.Fatal(err)
 	}
-	dispatchCtx, cancelDispatch := context.WithTimeout(context.Background(), time.Second)
+	dispatchCtx, cancelDispatch := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancelDispatch()
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)

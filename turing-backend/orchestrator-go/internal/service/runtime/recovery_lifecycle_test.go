@@ -107,6 +107,12 @@ func TestRecoveryDoesNotRequeueExpiredAttemptOwnedByConnectedWorker(t *testing.T
 	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
 		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == enqueued.RunID
 	})
+	// The stream delivers RunAssigned before the server's own delivery
+	// bookkeeping (finishAssignmentDelivery -> MarkAssignmentDelivered) lands,
+	// so the run can still read back execution_state = "sending" for a moment
+	// after this client observes the command. Wait for "delivered" so the
+	// assertion below exercises live-worker recovery-skipping, not that race.
+	waitForExecutionState(t, h, enqueued.RunID, "delivered")
 	expired := time.Now().Add(-time.Second)
 	if _, err := h.database.ExecContext(context.Background(), `
 		UPDATE agent_runs
