@@ -11,6 +11,7 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -38,6 +39,7 @@ type sessionHarness struct {
 }
 
 type sessionCapabilitySource struct {
+	mu                sync.Mutex
 	providers         map[turingv1.ModelProvider][]*turingv1.ModelCapability
 	agents            map[turingv1.AgentId]bool
 	tools             []string
@@ -73,6 +75,8 @@ func (s *sessionCapabilitySource) LiveToolNames() []string {
 }
 
 func (s *sessionCapabilitySource) CancelSessionRuns(_ context.Context, sessionID string, _ string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.cancelledSessions = append(s.cancelledSessions, sessionID)
 }
 
@@ -794,7 +798,10 @@ func TestDeleteSessionStartsWithdrawalForLiveRun(t *testing.T) {
 	if response.Deletion == nil || response.Deletion.State != turingv1.SessionDeletionState_SESSION_DELETION_STATE_IN_PROGRESS {
 		t.Fatalf("DeleteSession receipt = %+v, want in-progress receipt", response.Deletion)
 	}
-	if got := h.capabilities.cancelledSessions; len(got) != 1 || got[0] != session.SessionID {
+	h.capabilities.mu.Lock()
+	got := append([]string(nil), h.capabilities.cancelledSessions...)
+	h.capabilities.mu.Unlock()
+	if len(got) != 1 || got[0] != session.SessionID {
 		t.Fatalf("runtime cancellation sessions = %v, want [%s]", got, session.SessionID)
 	}
 }

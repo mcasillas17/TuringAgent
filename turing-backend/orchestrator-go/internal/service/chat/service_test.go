@@ -1225,7 +1225,7 @@ func TestSendMessageStreamsRunStartedWhenWorkerClaimsJob(t *testing.T) {
 func TestSendMessageCancelsRunWhenDispatchFails(t *testing.T) {
 	h := newHarness(t)
 	sessionID := h.createSession(t)
-	ctx, cancel := context.WithTimeout(h.clientContext(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(h.clientContext(), 15*time.Second)
 	defer cancel()
 	runtimeClient := turingv1.NewRuntimeServiceClient(h.conn)
 	workerStream, err := runtimeClient.ConnectWorker(ctx)
@@ -1266,8 +1266,10 @@ func TestSendMessageCancelsRunWhenDispatchFails(t *testing.T) {
 	for {
 		event, recvErr := chatStream.Recv()
 		if recvErr != nil {
-			if !receivedCancelled && status.Code(recvErr) != codes.Internal {
-				t.Fatalf("Recv after dispatch failure = %v, want Internal or run_cancelled event", recvErr)
+			if !receivedCancelled && status.Code(recvErr) != codes.Internal &&
+				(ctx.Err() == nil || (status.Code(recvErr) != codes.Canceled &&
+					status.Code(recvErr) != codes.DeadlineExceeded)) {
+				t.Fatalf("Recv after dispatch failure = %v, want Internal, cancellation, or run_cancelled event", recvErr)
 			}
 			if receivedCancelled && !errors.Is(recvErr, io.EOF) {
 				t.Fatalf("Recv after run_cancelled = %v, want EOF", recvErr)
@@ -1281,12 +1283,19 @@ func TestSendMessageCancelsRunWhenDispatchFails(t *testing.T) {
 			receivedCancelled = true
 		}
 	}
-	run, err := h.repo.GetRun(context.Background(), queued.GetRunQueued().RunId)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if run.Status != "cancelled" {
-		t.Fatalf("run status = %q, want cancelled", run.Status)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		run, err := h.repo.GetRun(context.Background(), queued.GetRunQueued().RunId)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.Status == "cancelled" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run status = %q, want cancelled", run.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

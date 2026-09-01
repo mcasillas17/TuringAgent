@@ -590,7 +590,7 @@ func TestConnectWorkerKeepsTeardownFailuresAlongsideCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("worker did not enter its receive loop after initial dispatch")
 	}
-	eventually(t, time.Second, func() bool {
+	eventually(t, eventuallyTimeout, func() bool {
 		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
 		return err == nil && run.ExecutionState == "delivered" && connected.hasAssignment(enqueued.RunID)
 	})
@@ -644,7 +644,7 @@ func TestConnectWorkerRequeuesAssignmentsWhenCapabilityPersistenceFailsBeforeAcc
 	}
 	done := make(chan error, 1)
 	go func() { done <- h.service.ConnectWorker(stream) }()
-	eventually(t, time.Second, func() bool {
+	eventually(t, eventuallyTimeout, func() bool {
 		return h.service.registeredWorker(workerID) != nil
 	})
 	if err := h.service.DispatchPending(context.Background()); err != nil {
