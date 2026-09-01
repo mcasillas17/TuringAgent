@@ -15,12 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
+          go-version: "1.25.x"
           cache: true
 
       - name: Run Go race tests
@@ -37,12 +37,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
+          go-version: "1.25.x"
           cache: true
           cache-dependency-path: |
             go.sum
@@ -68,12 +68,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
+          go-version: "1.25.x"
           cache: true
           # mcp-system is stdlib-only and has no go.sum of its own, so the root
           # go.sum is the only real cache key available here.
@@ -99,17 +99,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # Deliberately ahead of the 1.23.x the other jobs pin: golangci-lint
-          # v2.12.2's own go.mod requires go >= 1.25.0, so a 1.23 toolchain can
-          # only build it by silently auto-switching via GOTOOLCHAIN=auto. Pin
-          # the version that actually builds the linter instead of depending on
-          # that default. The language level of the analyzed code is unaffected —
-          # it stays capped by each module's own `go 1.23` directive.
           go-version: "1.25.x"
           cache: true
           # mcp-system is stdlib-only and has no go.sum, so it contributes no key.
@@ -152,12 +146,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
+          go-version: "1.25.x"
           cache: true
 
       - name: Set up Buf
@@ -176,6 +170,12 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           version: "34.1"
+          # setup-protoc resolves the release through the GitHub API. Without a
+          # token those calls are unauthenticated and shared per runner IP, so
+          # the step fails with "API rate limit exceeded" on a busy runner —
+          # unrelated to anything the PR changed. GITHUB_TOKEN raises the limit
+          # to the authenticated rate.
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Dart
         uses: dart-lang/setup-dart@v1
@@ -210,7 +210,7 @@ jobs:
         working-directory: turing-client/turing_app
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2

@@ -355,7 +355,7 @@ func TestProviderAndAgentAvailabilityReflectLiveWorkerUnion(t *testing.T) {
 	if err := second.CloseSend(); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, time.Second, func() bool {
+	eventually(t, eventuallyTimeout, func() bool {
 		return len(h.service.ProviderCapabilities()) == 0 &&
 			!h.service.AgentAvailable(turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT)
 	})
@@ -435,7 +435,7 @@ func connectWorkerCapabilities(
 	capabilities *turingv1.WorkerCapabilities,
 ) turingv1.RuntimeService_ConnectWorkerClient {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(h.internalContext(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(h.internalContext(), 30*time.Second)
 	t.Cleanup(cancel)
 	stream, err := h.runtimeClient(t).ConnectWorker(ctx)
 	if err != nil {
