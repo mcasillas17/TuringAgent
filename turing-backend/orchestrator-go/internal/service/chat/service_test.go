@@ -1267,8 +1267,8 @@ func TestSendMessageCancelsRunWhenDispatchFails(t *testing.T) {
 		event, recvErr := chatStream.Recv()
 		if recvErr != nil {
 			if !receivedCancelled && status.Code(recvErr) != codes.Internal &&
-				!(ctx.Err() != nil && (status.Code(recvErr) == codes.Canceled ||
-					status.Code(recvErr) == codes.DeadlineExceeded)) {
+				(ctx.Err() == nil || (status.Code(recvErr) != codes.Canceled &&
+					status.Code(recvErr) != codes.DeadlineExceeded)) {
 				t.Fatalf("Recv after dispatch failure = %v, want Internal, cancellation, or run_cancelled event", recvErr)
 			}
 			if receivedCancelled && !errors.Is(recvErr, io.EOF) {
