@@ -79,6 +79,17 @@ func TestCIWorkflowRunsPinnedLintInRootAndNestedModules(t *testing.T) {
 	}
 	lintJob := requireIndentedBlock(t, workflow, "  lint:", 2)
 	requireContains(t, lintJob, `go-version: "1.25.x"`)
+	// Every Go job must pin the same toolchain, and each is asserted inside its
+	// own job block rather than by counting occurrences across the file — a
+	// count is satisfied by any five, including five copies in one job and none
+	// in another. The root module and mcp-files both declare `go 1.25.0`, so a
+	// job that drifted back to 1.23.x would not fail outright: with the default
+	// GOTOOLCHAIN=auto it would silently switch toolchains and pass, which is
+	// exactly how the pins fell out of step before #92 and #115 repaired them.
+	// Only this assertion makes that drift visible.
+	for _, job := range []string{"  go:", "  mcp-files:", "  mcp-system:", "  proto-and-scripts:"} {
+		requireContains(t, requireIndentedBlock(t, workflow, job, 2), `go-version: "1.25.x"`)
+	}
 	requireContains(t, lintJob, "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2")
 	requireContains(t, lintJob, `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" --build-tags sqlite_fts5 ./... ./.github/workflows`)
 	requireRunsIn(t, lintJob, "turing-backend/mcp-files", `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" ./...`)

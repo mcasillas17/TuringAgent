@@ -10,6 +10,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -643,14 +644,7 @@ func TestDispatchDoesNotHoldWorkerLockWhileWaitingForDatabase(t *testing.T) {
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(dispatchCtx) }()
-	deadline := time.Now().Add(2 * time.Second)
-	for h.database.Stats().WaitCount == waitCount {
-		if time.Now().After(deadline) {
-			_ = tx.Rollback()
-			t.Fatal("dispatch never reached the database wait")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	awaitDatabaseWait(t, h.database, waitCount, func() { _ = tx.Rollback() })
 	validationDone := make(chan error, 1)
 	go func() {
 		validationDone <- h.service.ValidateRouting(context.Background(), repository.RoutingRequirements{
@@ -704,14 +698,7 @@ func TestCapabilityChangeDuringClaimRequeuesTheReservedAssignment(t *testing.T) 
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(2 * time.Second)
-	for h.database.Stats().WaitCount == waitCount {
-		if time.Now().After(deadline) {
-			_ = tx.Rollback()
-			t.Fatal("dispatch never reached the database wait")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	awaitDatabaseWait(t, h.database, waitCount, func() { _ = tx.Rollback() })
 	worker := h.service.registeredWorker("worker-claim-race")
 	replacement, _, err := decodeWorkerCapabilities(modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
@@ -776,14 +763,7 @@ func TestCapabilityFenceRestartsDispatchForWorkerAddedDuringClaim(t *testing.T) 
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(2 * time.Second)
-	for h.database.Stats().WaitCount == waitCount {
-		if time.Now().After(deadline) {
-			_ = tx.Rollback()
-			t.Fatal("dispatch never reached the database wait")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	awaitDatabaseWait(t, h.database, waitCount, func() { _ = tx.Rollback() })
 
 	compatible, _, err := decodeWorkerCapabilities(modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
@@ -870,14 +850,7 @@ func TestCancellationFenceAfterClaimReleasesTerminalExecution(t *testing.T) {
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(5 * time.Second)
-	for h.database.Stats().WaitCount == waitCount {
-		if time.Now().After(deadline) {
-			_ = tx.Rollback()
-			t.Fatal("dispatch never reached the database wait")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	awaitDatabaseWait(t, h.database, waitCount, func() { _ = tx.Rollback() })
 	worker := h.service.registeredWorker("worker-cancelled-claim")
 	worker.mu.Lock()
 	workerLocked := true
@@ -889,21 +862,7 @@ func TestCancellationFenceAfterClaimReleasesTerminalExecution(t *testing.T) {
 	if err := tx.Rollback(); err != nil {
 		t.Fatal(err)
 	}
-	for {
-		var status string
-		if err := h.database.QueryRowContext(
-			context.Background(), `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID,
-		).Scan(&status); err != nil {
-			t.Fatal(err)
-		}
-		if status == "in_progress" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("dispatch did not reserve the job")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	awaitJobReserved(t, h, enqueued.JobID)
 	cancelRunFixture(t, h, enqueued.RunID)
 	unsupported, _, err := decodeWorkerCapabilities(modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
@@ -964,22 +923,7 @@ func TestCancellationFenceWhileQueueingCommandDoesNotJoinAssignmentFence(t *test
 		_, _, _, err := h.service.dispatchToWorker(ctx, "worker-cancelled-command", worker)
 		dispatchDone <- dispatchResult{err: err}
 	}()
-	deadline := time.Now().Add(time.Second)
-	for {
-		var status string
-		if err := h.database.QueryRowContext(
-			context.Background(), `SELECT status FROM jobs WHERE id = ?`, enqueued.JobID,
-		).Scan(&status); err != nil {
-			t.Fatal(err)
-		}
-		if status == "in_progress" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("dispatch did not reserve the job")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	awaitJobReserved(t, h, enqueued.JobID)
 	cancelRunFixture(t, h, enqueued.RunID)
 	cancel()
 	result := <-dispatchDone
@@ -1206,6 +1150,69 @@ func eventually(t *testing.T, timeout time.Duration, condition func() bool) {
 			t.Fatal("condition was not satisfied before timeout")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// awaitDatabaseWait blocks until a goroutine has parked on the database pool,
+// observed as WaitCount rising above the caller's baseline.
+//
+// These tests occupy the single connection (SetMaxOpenConns(1)) with an open
+// transaction, launch DispatchPending, and need it *blocked on the pool* before
+// asserting anything about the locks it is or is not holding. Each carried its
+// own deadline — three at two seconds, one at five — and on a loaded CI runner
+// under -race the goroutine was not always scheduled that fast, failing the
+// test on scheduling latency rather than the property it guards.
+//
+// The bound is deliberately generous, for the same reason as eventuallyTimeout:
+// the loop exits the instant the count moves, so a longer bound costs a passing
+// test nothing and only changes how long a genuine failure takes to report.
+//
+// This does not replace the fix in #117. That removed a real worker stream
+// whose background goroutine contended for the same single connection, which is
+// why raising a bound alone had not been enough there. Unifying the bound is
+// orthogonal, and leaving one hardcoded copy beside three extracted ones is the
+// shape that produced this problem twice already.
+//
+// onTimeout runs before the fatal so callers can roll back the transaction
+// holding the connection — without it the failure leaks a busy connection into
+// the rest of the test binary.
+func awaitDatabaseWait(t *testing.T, pool *db.DB, baseline int64, onTimeout func()) {
+	t.Helper()
+	deadline := time.Now().Add(eventuallyTimeout)
+	for pool.Stats().WaitCount == baseline {
+		if time.Now().After(deadline) {
+			if onTimeout != nil {
+				onTimeout()
+			}
+			t.Fatal("dispatch never reached the database wait")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// awaitJobReserved blocks until dispatch has moved a job to in_progress.
+//
+// Two tests poll the jobs row while a dispatch goroutine races them. One
+// borrowed the database-wait deadline above; the other declared its own, at one
+// second — tighter than the two-second bounds that were already failing CI.
+// Both are the same wait, so both get the same bound and the same message.
+func awaitJobReserved(t *testing.T, h *harness, jobID string) {
+	t.Helper()
+	deadline := time.Now().Add(eventuallyTimeout)
+	for {
+		var status string
+		if err := h.database.QueryRowContext(
+			context.Background(), `SELECT status FROM jobs WHERE id = ?`, jobID,
+		).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status == "in_progress" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("dispatch did not reserve the job")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
