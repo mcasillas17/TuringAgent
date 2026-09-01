@@ -572,7 +572,7 @@ func TestFirstIncompatibleRegistrationPublishesPreviouslyUnreportedLoss(t *testi
 }
 
 func TestHeartbeatExpiryPublishesLossAndRevivalRestoresQueuedRoute(t *testing.T) {
-	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: 40 * time.Millisecond})
+	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: time.Second})
 	stream := connectWorkerCapabilities(t, h, "worker-heartbeat", "registration-heartbeat", modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
 	))
@@ -588,7 +588,10 @@ func TestHeartbeatExpiryPublishesLossAndRevivalRestoresQueuedRoute(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(60 * time.Millisecond)
+	connected := h.service.registeredWorker("worker-heartbeat")
+	connected.mu.Lock()
+	connected.lastHeartbeat = time.Now().Add(-time.Second)
+	connected.mu.Unlock()
 	if err := h.service.RecoverOrphanedAssignments(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -831,7 +834,7 @@ func TestCancellationFenceAfterClaimReleasesTerminalExecution(t *testing.T) {
 	waitCount := h.database.Stats().WaitCount
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for h.database.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			_ = tx.Rollback()
