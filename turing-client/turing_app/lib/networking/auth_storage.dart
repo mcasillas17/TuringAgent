@@ -25,7 +25,7 @@ class AuthStorage implements ClientAuthStorage {
   /// "Saving..." forever with no error. The legacy file-based keychain works
   /// without a signing identity, which is what a local-first desktop app needs.
   static const _defaultStorage = FlutterSecureStorage(
-    mOptions: MacOsOptions(useDataProtectionKeyChain: false),
+    mOptions: MacOsOptions(usesDataProtectionKeychain: false),
   );
 
   final FlutterSecureStorage _storage;
