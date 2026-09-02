@@ -672,10 +672,9 @@ func TestDispatchDoesNotHoldWorkerLockWhileWaitingForDatabase(t *testing.T) {
 
 func TestCapabilityChangeDuringClaimRequeuesTheReservedAssignment(t *testing.T) {
 	h := newHarness(t)
-	stream := connectWorkerCapabilities(t, h, "worker-claim-race", "registration-claim-race", modelCapabilities(
+	worker := registerWorkerCapabilities(t, h, "worker-claim-race", "registration-claim-race", modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
 	))
-	defer func() { _ = stream.CloseSend() }()
 	session, err := h.repo.CreateSession(context.Background(), "Claim race")
 	if err != nil {
 		t.Fatal(err)
@@ -699,7 +698,6 @@ func TestCapabilityChangeDuringClaimRequeuesTheReservedAssignment(t *testing.T) 
 	dispatchDone := make(chan error, 1)
 	go func() { dispatchDone <- h.service.DispatchPending(context.Background()) }()
 	awaitDatabaseWait(t, h.database, waitCount, func() { _ = tx.Rollback() })
-	worker := h.service.registeredWorker("worker-claim-race")
 	replacement, _, err := decodeWorkerCapabilities(modelCapabilities(
 		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE, "gpt-4o-mini", 8192, 1,
 	))
