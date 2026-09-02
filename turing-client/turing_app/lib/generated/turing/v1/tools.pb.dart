@@ -52,7 +52,7 @@ class ToolCallError extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ToolCallError clone() => ToolCallError()..mergeFromMessage(this);
+  ToolCallError clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ToolCallError copyWith(void Function(ToolCallError) updates) =>
       super.copyWith((message) => updates(message as ToolCallError))
@@ -137,22 +137,16 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ToolCallBeacon',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<ToolCallPhase>(1, _omitFieldNames ? '' : 'phase', $pb.PbFieldType.OE,
-        defaultOrMaker: ToolCallPhase.TOOL_CALL_PHASE_UNSPECIFIED,
-        valueOf: ToolCallPhase.valueOf,
+    ..aE<ToolCallPhase>(1, _omitFieldNames ? '' : 'phase',
         enumValues: ToolCallPhase.values)
     ..aOS(2, _omitFieldNames ? '' : 'toolCallId')
-    ..e<$1.AgentId>(3, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
-        defaultOrMaker: $1.AgentId.AGENT_ID_UNSPECIFIED,
-        valueOf: $1.AgentId.valueOf,
+    ..aE<$1.AgentId>(3, _omitFieldNames ? '' : 'agentId',
         enumValues: $1.AgentId.values)
     ..aOS(4, _omitFieldNames ? '' : 'serverName')
     ..aOS(5, _omitFieldNames ? '' : 'toolName')
     ..aOM<$0.Struct>(6, _omitFieldNames ? '' : 'args',
         subBuilder: $0.Struct.create)
-    ..e<ToolCallStatus>(7, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
-        defaultOrMaker: ToolCallStatus.TOOL_CALL_STATUS_UNSPECIFIED,
-        valueOf: ToolCallStatus.valueOf,
+    ..aE<ToolCallStatus>(7, _omitFieldNames ? '' : 'status',
         enumValues: ToolCallStatus.values)
     ..aOS(8, _omitFieldNames ? '' : 'resultSummary')
     ..aInt64(9, _omitFieldNames ? '' : 'durationMs')
@@ -164,7 +158,7 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ToolCallBeacon clone() => ToolCallBeacon()..mergeFromMessage(this);
+  ToolCallBeacon clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ToolCallBeacon copyWith(void Function(ToolCallBeacon) updates) =>
       super.copyWith((message) => updates(message as ToolCallBeacon))
@@ -344,18 +338,13 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ToolPolicyDecision',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<ToolPolicyDecision_Decision>(
-        1, _omitFieldNames ? '' : 'decision', $pb.PbFieldType.OE,
-        defaultOrMaker: ToolPolicyDecision_Decision.DECISION_UNSPECIFIED,
-        valueOf: ToolPolicyDecision_Decision.valueOf,
+    ..aE<ToolPolicyDecision_Decision>(1, _omitFieldNames ? '' : 'decision',
         enumValues: ToolPolicyDecision_Decision.values)
     ..aOS(2, _omitFieldNames ? '' : 'toolCallId')
     ..aOS(3, _omitFieldNames ? '' : 'approvalId')
     ..aOS(4, _omitFieldNames ? '' : 'reason')
     ..aOB(5, _omitFieldNames ? '' : 'terminalRun')
-    ..e<ToolCallPhase>(6, _omitFieldNames ? '' : 'phase', $pb.PbFieldType.OE,
-        defaultOrMaker: ToolCallPhase.TOOL_CALL_PHASE_UNSPECIFIED,
-        valueOf: ToolCallPhase.valueOf,
+    ..aE<ToolCallPhase>(6, _omitFieldNames ? '' : 'phase',
         enumValues: ToolCallPhase.values)
     ..aOS(7, _omitFieldNames ? '' : 'provenanceToken')
     ..aOB(8, _omitFieldNames ? '' : 'readOnly')
@@ -363,7 +352,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ToolPolicyDecision clone() => ToolPolicyDecision()..mergeFromMessage(this);
+  ToolPolicyDecision clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ToolPolicyDecision copyWith(void Function(ToolPolicyDecision) updates) =>
       super.copyWith((message) => updates(message as ToolPolicyDecision))

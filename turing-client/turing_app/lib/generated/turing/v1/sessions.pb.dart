@@ -63,7 +63,7 @@ class Session extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  Session clone() => Session()..mergeFromMessage(this);
+  Session clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   Session copyWith(void Function(Session) updates) =>
       super.copyWith((message) => updates(message as Session)) as Session;
@@ -157,8 +157,7 @@ class CreateSessionRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CreateSessionRequest clone() =>
-      CreateSessionRequest()..mergeFromMessage(this);
+  CreateSessionRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   CreateSessionRequest copyWith(void Function(CreateSessionRequest) updates) =>
       super.copyWith((message) => updates(message as CreateSessionRequest))
@@ -218,8 +217,7 @@ class CreateSessionResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CreateSessionResponse clone() =>
-      CreateSessionResponse()..mergeFromMessage(this);
+  CreateSessionResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   CreateSessionResponse copyWith(
           void Function(CreateSessionResponse) updates) =>
@@ -287,15 +285,12 @@ class ListSessionsRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOM<$2.PageRequest>(1, _omitFieldNames ? '' : 'page',
         subBuilder: $2.PageRequest.create)
-    ..e<SessionListFilter>(
-        2, _omitFieldNames ? '' : 'filter', $pb.PbFieldType.OE,
-        defaultOrMaker: SessionListFilter.SESSION_LIST_FILTER_UNSPECIFIED,
-        valueOf: SessionListFilter.valueOf,
+    ..aE<SessionListFilter>(2, _omitFieldNames ? '' : 'filter',
         enumValues: SessionListFilter.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListSessionsRequest clone() => ListSessionsRequest()..mergeFromMessage(this);
+  ListSessionsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListSessionsRequest copyWith(void Function(ListSessionsRequest) updates) =>
       super.copyWith((message) => updates(message as ListSessionsRequest))
@@ -360,15 +355,14 @@ class ListSessionsResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListSessionsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<Session>(1, _omitFieldNames ? '' : 'sessions', $pb.PbFieldType.PM,
+    ..pPM<Session>(1, _omitFieldNames ? '' : 'sessions',
         subBuilder: Session.create)
     ..aOM<$2.PageResponse>(2, _omitFieldNames ? '' : 'page',
         subBuilder: $2.PageResponse.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListSessionsResponse clone() =>
-      ListSessionsResponse()..mergeFromMessage(this);
+  ListSessionsResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListSessionsResponse copyWith(void Function(ListSessionsResponse) updates) =>
       super.copyWith((message) => updates(message as ListSessionsResponse))
@@ -429,7 +423,7 @@ class GetSessionRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetSessionRequest clone() => GetSessionRequest()..mergeFromMessage(this);
+  GetSessionRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetSessionRequest copyWith(void Function(GetSessionRequest) updates) =>
       super.copyWith((message) => updates(message as GetSessionRequest))
@@ -485,8 +479,7 @@ class DeleteSessionRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteSessionRequest clone() =>
-      DeleteSessionRequest()..mergeFromMessage(this);
+  DeleteSessionRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DeleteSessionRequest copyWith(void Function(DeleteSessionRequest) updates) =>
       super.copyWith((message) => updates(message as DeleteSessionRequest))
@@ -556,24 +549,19 @@ class SessionDeletionReceipt extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
-    ..e<SessionDeletionState>(
-        2, _omitFieldNames ? '' : 'state', $pb.PbFieldType.OE,
-        defaultOrMaker: SessionDeletionState.SESSION_DELETION_STATE_UNSPECIFIED,
-        valueOf: SessionDeletionState.valueOf,
+    ..aE<SessionDeletionState>(2, _omitFieldNames ? '' : 'state',
         enumValues: SessionDeletionState.values)
     ..aInt64(3, _omitFieldNames ? '' : 'lifecycleVersion')
     ..aOB(4, _omitFieldNames ? '' : 'retryable')
     ..aOS(5, _omitFieldNames ? '' : 'errorCode')
     ..aInt64(6, _omitFieldNames ? '' : 'terminalSequence')
-    ..a<$core.int>(7, _omitFieldNames ? '' : 'runCount', $pb.PbFieldType.O3)
-    ..a<$core.int>(8, _omitFieldNames ? '' : 'messageCount', $pb.PbFieldType.O3)
-    ..a<$core.int>(9, _omitFieldNames ? '' : 'retainedLegacyArtifactCount',
-        $pb.PbFieldType.O3)
+    ..aI(7, _omitFieldNames ? '' : 'runCount')
+    ..aI(8, _omitFieldNames ? '' : 'messageCount')
+    ..aI(9, _omitFieldNames ? '' : 'retainedLegacyArtifactCount')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SessionDeletionReceipt clone() =>
-      SessionDeletionReceipt()..mergeFromMessage(this);
+  SessionDeletionReceipt clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SessionDeletionReceipt copyWith(
           void Function(SessionDeletionReceipt) updates) =>
@@ -697,8 +685,7 @@ class ListSessionDeletionReceiptsRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListSessionDeletionReceiptsRequest clone() =>
-      ListSessionDeletionReceiptsRequest()..mergeFromMessage(this);
+  ListSessionDeletionReceiptsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListSessionDeletionReceiptsRequest copyWith(
           void Function(ListSessionDeletionReceiptsRequest) updates) =>
@@ -746,14 +733,12 @@ class ListSessionDeletionReceiptsResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListSessionDeletionReceiptsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<SessionDeletionReceipt>(
-        1, _omitFieldNames ? '' : 'deletions', $pb.PbFieldType.PM,
+    ..pPM<SessionDeletionReceipt>(1, _omitFieldNames ? '' : 'deletions',
         subBuilder: SessionDeletionReceipt.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListSessionDeletionReceiptsResponse clone() =>
-      ListSessionDeletionReceiptsResponse()..mergeFromMessage(this);
+  ListSessionDeletionReceiptsResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListSessionDeletionReceiptsResponse copyWith(
           void Function(ListSessionDeletionReceiptsResponse) updates) =>
@@ -811,8 +796,7 @@ class DeleteSessionResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteSessionResponse clone() =>
-      DeleteSessionResponse()..mergeFromMessage(this);
+  DeleteSessionResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DeleteSessionResponse copyWith(
           void Function(DeleteSessionResponse) updates) =>
@@ -883,8 +867,7 @@ class RenameSessionRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RenameSessionRequest clone() =>
-      RenameSessionRequest()..mergeFromMessage(this);
+  RenameSessionRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RenameSessionRequest copyWith(void Function(RenameSessionRequest) updates) =>
       super.copyWith((message) => updates(message as RenameSessionRequest))
@@ -950,8 +933,7 @@ class RenameSessionResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RenameSessionResponse clone() =>
-      RenameSessionResponse()..mergeFromMessage(this);
+  RenameSessionResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RenameSessionResponse copyWith(
           void Function(RenameSessionResponse) updates) =>
@@ -1010,8 +992,7 @@ class ArchiveSessionRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ArchiveSessionRequest clone() =>
-      ArchiveSessionRequest()..mergeFromMessage(this);
+  ArchiveSessionRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ArchiveSessionRequest copyWith(
           void Function(ArchiveSessionRequest) updates) =>
@@ -1069,8 +1050,7 @@ class ArchiveSessionResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ArchiveSessionResponse clone() =>
-      ArchiveSessionResponse()..mergeFromMessage(this);
+  ArchiveSessionResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ArchiveSessionResponse copyWith(
           void Function(ArchiveSessionResponse) updates) =>
@@ -1129,8 +1109,7 @@ class RestoreSessionRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RestoreSessionRequest clone() =>
-      RestoreSessionRequest()..mergeFromMessage(this);
+  RestoreSessionRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RestoreSessionRequest copyWith(
           void Function(RestoreSessionRequest) updates) =>
@@ -1188,8 +1167,7 @@ class RestoreSessionResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RestoreSessionResponse clone() =>
-      RestoreSessionResponse()..mergeFromMessage(this);
+  RestoreSessionResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RestoreSessionResponse copyWith(
           void Function(RestoreSessionResponse) updates) =>
@@ -1249,12 +1227,12 @@ class ListMessagesRequest extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
-    ..a<$core.int>(2, _omitFieldNames ? '' : 'limit', $pb.PbFieldType.O3)
+    ..aI(2, _omitFieldNames ? '' : 'limit')
     ..aOS(3, _omitFieldNames ? '' : 'beforeMessageId')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListMessagesRequest clone() => ListMessagesRequest()..mergeFromMessage(this);
+  ListMessagesRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListMessagesRequest copyWith(void Function(ListMessagesRequest) updates) =>
       super.copyWith((message) => updates(message as ListMessagesRequest))
@@ -1324,13 +1302,12 @@ class ListMessagesResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListMessagesResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<$2.Message>(1, _omitFieldNames ? '' : 'messages', $pb.PbFieldType.PM,
+    ..pPM<$2.Message>(1, _omitFieldNames ? '' : 'messages',
         subBuilder: $2.Message.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListMessagesResponse clone() =>
-      ListMessagesResponse()..mergeFromMessage(this);
+  ListMessagesResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListMessagesResponse copyWith(void Function(ListMessagesResponse) updates) =>
       super.copyWith((message) => updates(message as ListMessagesResponse))
@@ -1382,12 +1359,12 @@ class SearchHit extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOM<$2.Message>(1, _omitFieldNames ? '' : 'message',
         subBuilder: $2.Message.create)
-    ..a<$core.double>(2, _omitFieldNames ? '' : 'score', $pb.PbFieldType.OD)
+    ..aD(2, _omitFieldNames ? '' : 'score')
     ..aOS(3, _omitFieldNames ? '' : 'snippet')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SearchHit clone() => SearchHit()..mergeFromMessage(this);
+  SearchHit clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SearchHit copyWith(void Function(SearchHit) updates) =>
       super.copyWith((message) => updates(message as SearchHit)) as SearchHit;
@@ -1473,19 +1450,15 @@ class SearchMessagesRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'query')
     ..aOS(2, _omitFieldNames ? '' : 'sessionId')
-    ..a<$core.int>(3, _omitFieldNames ? '' : 'limit', $pb.PbFieldType.O3)
+    ..aI(3, _omitFieldNames ? '' : 'limit')
     ..aOS(4, _omitFieldNames ? '' : 'excludeSessionId')
-    ..e<SearchMessagesResponseFormat>(
-        5, _omitFieldNames ? '' : 'responseFormat', $pb.PbFieldType.OE,
-        defaultOrMaker: SearchMessagesResponseFormat
-            .SEARCH_MESSAGES_RESPONSE_FORMAT_UNSPECIFIED,
-        valueOf: SearchMessagesResponseFormat.valueOf,
+    ..aE<SearchMessagesResponseFormat>(
+        5, _omitFieldNames ? '' : 'responseFormat',
         enumValues: SearchMessagesResponseFormat.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SearchMessagesRequest clone() =>
-      SearchMessagesRequest()..mergeFromMessage(this);
+  SearchMessagesRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SearchMessagesRequest copyWith(
           void Function(SearchMessagesRequest) updates) =>
@@ -1578,15 +1551,14 @@ class SearchMessagesResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'SearchMessagesResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<$2.Message>(1, _omitFieldNames ? '' : 'messages', $pb.PbFieldType.PM,
+    ..pPM<$2.Message>(1, _omitFieldNames ? '' : 'messages',
         subBuilder: $2.Message.create)
-    ..pc<SearchHit>(2, _omitFieldNames ? '' : 'hits', $pb.PbFieldType.PM,
+    ..pPM<SearchHit>(2, _omitFieldNames ? '' : 'hits',
         subBuilder: SearchHit.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SearchMessagesResponse clone() =>
-      SearchMessagesResponse()..mergeFromMessage(this);
+  SearchMessagesResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SearchMessagesResponse copyWith(
           void Function(SearchMessagesResponse) updates) =>
@@ -1634,7 +1606,7 @@ class GetConfigRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetConfigRequest clone() => GetConfigRequest()..mergeFromMessage(this);
+  GetConfigRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetConfigRequest copyWith(void Function(GetConfigRequest) updates) =>
       super.copyWith((message) => updates(message as GetConfigRequest))
@@ -1681,15 +1653,14 @@ class GetConfigResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'GetConfigResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<$2.ProviderConfig>(
-        1, _omitFieldNames ? '' : 'providers', $pb.PbFieldType.PM,
+    ..pPM<$2.ProviderConfig>(1, _omitFieldNames ? '' : 'providers',
         subBuilder: $2.ProviderConfig.create)
     ..aOB(2, _omitFieldNames ? '' : 'approvalsEnabled')
     ..aOB(3, _omitFieldNames ? '' : 'filesMcpEnabled')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetConfigResponse clone() => GetConfigResponse()..mergeFromMessage(this);
+  GetConfigResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetConfigResponse copyWith(void Function(GetConfigResponse) updates) =>
       super.copyWith((message) => updates(message as GetConfigResponse))
@@ -1750,7 +1721,7 @@ class ListAgentsRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListAgentsRequest clone() => ListAgentsRequest()..mergeFromMessage(this);
+  ListAgentsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListAgentsRequest copyWith(void Function(ListAgentsRequest) updates) =>
       super.copyWith((message) => updates(message as ListAgentsRequest))
@@ -1793,13 +1764,12 @@ class ListAgentsResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListAgentsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<$2.AgentDescriptor>(
-        1, _omitFieldNames ? '' : 'agents', $pb.PbFieldType.PM,
+    ..pPM<$2.AgentDescriptor>(1, _omitFieldNames ? '' : 'agents',
         subBuilder: $2.AgentDescriptor.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListAgentsResponse clone() => ListAgentsResponse()..mergeFromMessage(this);
+  ListAgentsResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListAgentsResponse copyWith(void Function(ListAgentsResponse) updates) =>
       super.copyWith((message) => updates(message as ListAgentsResponse))
@@ -1851,14 +1821,12 @@ class ToolDescriptor extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'serverName')
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
-    ..e<$2.ToolPolicy>(3, _omitFieldNames ? '' : 'policy', $pb.PbFieldType.OE,
-        defaultOrMaker: $2.ToolPolicy.TOOL_POLICY_UNSPECIFIED,
-        valueOf: $2.ToolPolicy.valueOf,
+    ..aE<$2.ToolPolicy>(3, _omitFieldNames ? '' : 'policy',
         enumValues: $2.ToolPolicy.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ToolDescriptor clone() => ToolDescriptor()..mergeFromMessage(this);
+  ToolDescriptor clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ToolDescriptor copyWith(void Function(ToolDescriptor) updates) =>
       super.copyWith((message) => updates(message as ToolDescriptor))
@@ -1925,7 +1893,7 @@ class ListToolsRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListToolsRequest clone() => ListToolsRequest()..mergeFromMessage(this);
+  ListToolsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListToolsRequest copyWith(void Function(ListToolsRequest) updates) =>
       super.copyWith((message) => updates(message as ListToolsRequest))
@@ -1968,12 +1936,12 @@ class ListToolsResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListToolsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<ToolDescriptor>(1, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
+    ..pPM<ToolDescriptor>(1, _omitFieldNames ? '' : 'tools',
         subBuilder: ToolDescriptor.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListToolsResponse clone() => ListToolsResponse()..mergeFromMessage(this);
+  ListToolsResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListToolsResponse copyWith(void Function(ListToolsResponse) updates) =>
       super.copyWith((message) => updates(message as ListToolsResponse))

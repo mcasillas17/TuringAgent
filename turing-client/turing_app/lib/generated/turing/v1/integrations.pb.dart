@@ -68,10 +68,7 @@ class ProviderDescriptor extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ProviderDescriptor',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<IntegrationProvider>(
-        1, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
-        defaultOrMaker: IntegrationProvider.INTEGRATION_PROVIDER_UNSPECIFIED,
-        valueOf: IntegrationProvider.valueOf,
+    ..aE<IntegrationProvider>(1, _omitFieldNames ? '' : 'provider',
         enumValues: IntegrationProvider.values)
     ..aOS(2, _omitFieldNames ? '' : 'displayName')
     ..aOS(3, _omitFieldNames ? '' : 'category')
@@ -86,7 +83,7 @@ class ProviderDescriptor extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ProviderDescriptor clone() => ProviderDescriptor()..mergeFromMessage(this);
+  ProviderDescriptor clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ProviderDescriptor copyWith(void Function(ProviderDescriptor) updates) =>
       super.copyWith((message) => updates(message as ProviderDescriptor))
@@ -262,19 +259,13 @@ class Connection extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'connectionId')
-    ..e<IntegrationProvider>(
-        2, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
-        defaultOrMaker: IntegrationProvider.INTEGRATION_PROVIDER_UNSPECIFIED,
-        valueOf: IntegrationProvider.valueOf,
+    ..aE<IntegrationProvider>(2, _omitFieldNames ? '' : 'provider',
         enumValues: IntegrationProvider.values)
     ..aOS(3, _omitFieldNames ? '' : 'displayName')
     ..aOS(4, _omitFieldNames ? '' : 'accountLabel')
     ..aOS(5, _omitFieldNames ? '' : 'endpoint')
     ..aOS(6, _omitFieldNames ? '' : 'credentialHint')
-    ..e<ConnectionStatus>(
-        7, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
-        defaultOrMaker: ConnectionStatus.CONNECTION_STATUS_UNSPECIFIED,
-        valueOf: ConnectionStatus.valueOf,
+    ..aE<ConnectionStatus>(7, _omitFieldNames ? '' : 'status',
         enumValues: ConnectionStatus.values)
     ..pPS(8, _omitFieldNames ? '' : 'grantedScopes')
     ..aOM<$1.Timestamp>(9, _omitFieldNames ? '' : 'consentGrantedAt',
@@ -289,7 +280,7 @@ class Connection extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  Connection clone() => Connection()..mergeFromMessage(this);
+  Connection clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   Connection copyWith(void Function(Connection) updates) =>
       super.copyWith((message) => updates(message as Connection)) as Connection;
@@ -458,8 +449,7 @@ class ListProvidersRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListProvidersRequest clone() =>
-      ListProvidersRequest()..mergeFromMessage(this);
+  ListProvidersRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListProvidersRequest copyWith(void Function(ListProvidersRequest) updates) =>
       super.copyWith((message) => updates(message as ListProvidersRequest))
@@ -508,16 +498,14 @@ class ListProvidersResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListProvidersResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<ProviderDescriptor>(
-        1, _omitFieldNames ? '' : 'providers', $pb.PbFieldType.PM,
+    ..pPM<ProviderDescriptor>(1, _omitFieldNames ? '' : 'providers',
         subBuilder: ProviderDescriptor.create)
     ..aOB(2, _omitFieldNames ? '' : 'credentialStorageConfigured')
     ..aOS(3, _omitFieldNames ? '' : 'storageUnconfiguredReason')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListProvidersResponse clone() =>
-      ListProvidersResponse()..mergeFromMessage(this);
+  ListProvidersResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListProvidersResponse copyWith(
           void Function(ListProvidersResponse) updates) =>
@@ -598,10 +586,7 @@ class ConnectAccountRequest extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ConnectAccountRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<IntegrationProvider>(
-        1, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
-        defaultOrMaker: IntegrationProvider.INTEGRATION_PROVIDER_UNSPECIFIED,
-        valueOf: IntegrationProvider.valueOf,
+    ..aE<IntegrationProvider>(1, _omitFieldNames ? '' : 'provider',
         enumValues: IntegrationProvider.values)
     ..aOS(2, _omitFieldNames ? '' : 'displayName')
     ..aOS(3, _omitFieldNames ? '' : 'accountLabel')
@@ -611,8 +596,7 @@ class ConnectAccountRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ConnectAccountRequest clone() =>
-      ConnectAccountRequest()..mergeFromMessage(this);
+  ConnectAccountRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ConnectAccountRequest copyWith(
           void Function(ConnectAccountRequest) updates) =>
@@ -715,8 +699,7 @@ class ListConnectionsRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListConnectionsRequest clone() =>
-      ListConnectionsRequest()..mergeFromMessage(this);
+  ListConnectionsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListConnectionsRequest copyWith(
           void Function(ListConnectionsRequest) updates) =>
@@ -760,14 +743,12 @@ class ListConnectionsResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListConnectionsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<Connection>(
-        1, _omitFieldNames ? '' : 'connections', $pb.PbFieldType.PM,
+    ..pPM<Connection>(1, _omitFieldNames ? '' : 'connections',
         subBuilder: Connection.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListConnectionsResponse clone() =>
-      ListConnectionsResponse()..mergeFromMessage(this);
+  ListConnectionsResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListConnectionsResponse copyWith(
           void Function(ListConnectionsResponse) updates) =>
@@ -818,8 +799,7 @@ class GetConnectionRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetConnectionRequest clone() =>
-      GetConnectionRequest()..mergeFromMessage(this);
+  GetConnectionRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetConnectionRequest copyWith(void Function(GetConnectionRequest) updates) =>
       super.copyWith((message) => updates(message as GetConnectionRequest))
@@ -875,8 +855,7 @@ class RevokeConnectionRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RevokeConnectionRequest clone() =>
-      RevokeConnectionRequest()..mergeFromMessage(this);
+  RevokeConnectionRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RevokeConnectionRequest copyWith(
           void Function(RevokeConnectionRequest) updates) =>
@@ -933,8 +912,7 @@ class DeleteConnectionRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteConnectionRequest clone() =>
-      DeleteConnectionRequest()..mergeFromMessage(this);
+  DeleteConnectionRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DeleteConnectionRequest copyWith(
           void Function(DeleteConnectionRequest) updates) =>
@@ -984,8 +962,7 @@ class DeleteConnectionResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteConnectionResponse clone() =>
-      DeleteConnectionResponse()..mergeFromMessage(this);
+  DeleteConnectionResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DeleteConnectionResponse copyWith(
           void Function(DeleteConnectionResponse) updates) =>
@@ -1042,15 +1019,12 @@ class IntegrationToolDescriptor extends $pb.GeneratedMessage {
     ..aOM<$2.Struct>(3, _omitFieldNames ? '' : 'schema',
         subBuilder: $2.Struct.create)
     ..aOB(4, _omitFieldNames ? '' : 'readOnly')
-    ..e<$3.ToolPolicy>(5, _omitFieldNames ? '' : 'policy', $pb.PbFieldType.OE,
-        defaultOrMaker: $3.ToolPolicy.TOOL_POLICY_UNSPECIFIED,
-        valueOf: $3.ToolPolicy.valueOf,
+    ..aE<$3.ToolPolicy>(5, _omitFieldNames ? '' : 'policy',
         enumValues: $3.ToolPolicy.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  IntegrationToolDescriptor clone() =>
-      IntegrationToolDescriptor()..mergeFromMessage(this);
+  IntegrationToolDescriptor clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   IntegrationToolDescriptor copyWith(
           void Function(IntegrationToolDescriptor) updates) =>
@@ -1138,8 +1112,7 @@ class ListIntegrationToolsRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListIntegrationToolsRequest clone() =>
-      ListIntegrationToolsRequest()..mergeFromMessage(this);
+  ListIntegrationToolsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListIntegrationToolsRequest copyWith(
           void Function(ListIntegrationToolsRequest) updates) =>
@@ -1185,14 +1158,12 @@ class ListIntegrationToolsResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListIntegrationToolsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<IntegrationToolDescriptor>(
-        1, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
+    ..pPM<IntegrationToolDescriptor>(1, _omitFieldNames ? '' : 'tools',
         subBuilder: IntegrationToolDescriptor.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListIntegrationToolsResponse clone() =>
-      ListIntegrationToolsResponse()..mergeFromMessage(this);
+  ListIntegrationToolsResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListIntegrationToolsResponse copyWith(
           void Function(ListIntegrationToolsResponse) updates) =>
@@ -1255,8 +1226,7 @@ class CallIntegrationToolRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CallIntegrationToolRequest clone() =>
-      CallIntegrationToolRequest()..mergeFromMessage(this);
+  CallIntegrationToolRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   CallIntegrationToolRequest copyWith(
           void Function(CallIntegrationToolRequest) updates) =>
@@ -1344,8 +1314,7 @@ class CallIntegrationToolResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CallIntegrationToolResponse clone() =>
-      CallIntegrationToolResponse()..mergeFromMessage(this);
+  CallIntegrationToolResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   CallIntegrationToolResponse copyWith(
           void Function(CallIntegrationToolResponse) updates) =>

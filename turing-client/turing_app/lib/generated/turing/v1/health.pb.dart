@@ -35,7 +35,7 @@ class HealthCheckRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  HealthCheckRequest clone() => HealthCheckRequest()..mergeFromMessage(this);
+  HealthCheckRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   HealthCheckRequest copyWith(void Function(HealthCheckRequest) updates) =>
       super.copyWith((message) => updates(message as HealthCheckRequest))
@@ -82,7 +82,7 @@ class HealthCheckResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  HealthCheckResponse clone() => HealthCheckResponse()..mergeFromMessage(this);
+  HealthCheckResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   HealthCheckResponse copyWith(void Function(HealthCheckResponse) updates) =>
       super.copyWith((message) => updates(message as HealthCheckResponse))
@@ -131,7 +131,7 @@ class VersionRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  VersionRequest clone() => VersionRequest()..mergeFromMessage(this);
+  VersionRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   VersionRequest copyWith(void Function(VersionRequest) updates) =>
       super.copyWith((message) => updates(message as VersionRequest))
@@ -181,7 +181,7 @@ class VersionResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  VersionResponse clone() => VersionResponse()..mergeFromMessage(this);
+  VersionResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   VersionResponse copyWith(void Function(VersionResponse) updates) =>
       super.copyWith((message) => updates(message as VersionResponse))

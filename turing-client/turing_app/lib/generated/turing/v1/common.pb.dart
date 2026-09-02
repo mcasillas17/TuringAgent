@@ -72,14 +72,9 @@ class RunState extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'userMessageId')
     ..aOS(3, _omitFieldNames ? '' : 'assistantMessageId')
-    ..e<RunLifecycle>(4, _omitFieldNames ? '' : 'lifecycle', $pb.PbFieldType.OE,
-        defaultOrMaker: RunLifecycle.RUN_LIFECYCLE_UNSPECIFIED,
-        valueOf: RunLifecycle.valueOf,
+    ..aE<RunLifecycle>(4, _omitFieldNames ? '' : 'lifecycle',
         enumValues: RunLifecycle.values)
-    ..e<RunOutcomeReason>(
-        5, _omitFieldNames ? '' : 'outcomeReason', $pb.PbFieldType.OE,
-        defaultOrMaker: RunOutcomeReason.RUN_OUTCOME_REASON_UNSPECIFIED,
-        valueOf: RunOutcomeReason.valueOf,
+    ..aE<RunOutcomeReason>(5, _omitFieldNames ? '' : 'outcomeReason',
         enumValues: RunOutcomeReason.values)
     ..aInt64(6, _omitFieldNames ? '' : 'stateVersion')
     ..aOM<$0.Timestamp>(7, _omitFieldNames ? '' : 'stateUpdatedAt',
@@ -90,7 +85,7 @@ class RunState extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RunState clone() => RunState()..mergeFromMessage(this);
+  RunState clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RunState copyWith(void Function(RunState) updates) =>
       super.copyWith((message) => updates(message as RunState)) as RunState;
@@ -234,7 +229,7 @@ class RequestMetadata extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RequestMetadata clone() => RequestMetadata()..mergeFromMessage(this);
+  RequestMetadata clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RequestMetadata copyWith(void Function(RequestMetadata) updates) =>
       super.copyWith((message) => updates(message as RequestMetadata))
@@ -288,12 +283,12 @@ class PageRequest extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'PageRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..a<$core.int>(1, _omitFieldNames ? '' : 'limit', $pb.PbFieldType.O3)
+    ..aI(1, _omitFieldNames ? '' : 'limit')
     ..aOS(2, _omitFieldNames ? '' : 'cursor')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  PageRequest clone() => PageRequest()..mergeFromMessage(this);
+  PageRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   PageRequest copyWith(void Function(PageRequest) updates) =>
       super.copyWith((message) => updates(message as PageRequest))
@@ -357,7 +352,7 @@ class PageResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  PageResponse clone() => PageResponse()..mergeFromMessage(this);
+  PageResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   PageResponse copyWith(void Function(PageResponse) updates) =>
       super.copyWith((message) => updates(message as PageResponse))
@@ -423,7 +418,7 @@ class ErrorDetail extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ErrorDetail clone() => ErrorDetail()..mergeFromMessage(this);
+  ErrorDetail clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ErrorDetail copyWith(void Function(ErrorDetail) updates) =>
       super.copyWith((message) => updates(message as ErrorDetail))
@@ -507,19 +502,14 @@ class RoutingUnavailableDetail extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'RoutingUnavailableDetail',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<RoutingRequirementKind>(
-        1, _omitFieldNames ? '' : 'kind', $pb.PbFieldType.OE,
-        defaultOrMaker:
-            RoutingRequirementKind.ROUTING_REQUIREMENT_KIND_UNSPECIFIED,
-        valueOf: RoutingRequirementKind.valueOf,
+    ..aE<RoutingRequirementKind>(1, _omitFieldNames ? '' : 'kind',
         enumValues: RoutingRequirementKind.values)
     ..aOS(2, _omitFieldNames ? '' : 'requested')
     ..pPS(3, _omitFieldNames ? '' : 'available')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RoutingUnavailableDetail clone() =>
-      RoutingUnavailableDetail()..mergeFromMessage(this);
+  RoutingUnavailableDetail clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RoutingUnavailableDetail copyWith(
           void Function(RoutingUnavailableDetail) updates) =>
@@ -588,17 +578,14 @@ class ModelCapability extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ModelCapability',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<ModelProvider>(1, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
-        defaultOrMaker: ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
-        valueOf: ModelProvider.valueOf,
+    ..aE<ModelProvider>(1, _omitFieldNames ? '' : 'provider',
         enumValues: ModelProvider.values)
     ..aOS(2, _omitFieldNames ? '' : 'model')
-    ..a<$core.int>(
-        3, _omitFieldNames ? '' : 'maxContextTokens', $pb.PbFieldType.O3)
+    ..aI(3, _omitFieldNames ? '' : 'maxContextTokens')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ModelCapability clone() => ModelCapability()..mergeFromMessage(this);
+  ModelCapability clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ModelCapability copyWith(void Function(ModelCapability) updates) =>
       super.copyWith((message) => updates(message as ModelCapability))
@@ -681,21 +668,18 @@ class ProviderConfig extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ProviderConfig',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<ModelProvider>(1, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
-        defaultOrMaker: ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
-        valueOf: ModelProvider.valueOf,
+    ..aE<ModelProvider>(1, _omitFieldNames ? '' : 'provider',
         enumValues: ModelProvider.values)
     ..aOB(2, _omitFieldNames ? '' : 'enabled')
     ..aOS(3, _omitFieldNames ? '' : 'defaultModel')
-    ..pc<ModelCapability>(
-        4, _omitFieldNames ? '' : 'models', $pb.PbFieldType.PM,
+    ..pPM<ModelCapability>(4, _omitFieldNames ? '' : 'models',
         subBuilder: ModelCapability.create)
     ..aOS(5, _omitFieldNames ? '' : 'remoteEndpoint')
     ..aOB(6, _omitFieldNames ? '' : 'requiresPerRunConsent')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ProviderConfig clone() => ProviderConfig()..mergeFromMessage(this);
+  ProviderConfig clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ProviderConfig copyWith(void Function(ProviderConfig) updates) =>
       super.copyWith((message) => updates(message as ProviderConfig))
@@ -817,9 +801,7 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'challenge')
-    ..e<ModelProvider>(2, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
-        defaultOrMaker: ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
-        valueOf: ModelProvider.valueOf,
+    ..aE<ModelProvider>(2, _omitFieldNames ? '' : 'provider',
         enumValues: ModelProvider.values)
     ..aOS(3, _omitFieldNames ? '' : 'model')
     ..aOS(4, _omitFieldNames ? '' : 'endpoint')
@@ -832,25 +814,22 @@ class RemoteEgressDisclosure extends $pb.GeneratedMessage {
         defaultEnumValue: EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED)
     ..aOM<$0.Timestamp>(8, _omitFieldNames ? '' : 'expiresAt',
         subBuilder: $0.Timestamp.create)
-    ..pc<RemoteMcpEgressDestination>(
-        9, _omitFieldNames ? '' : 'remoteMcpServers', $pb.PbFieldType.PM,
+    ..pPM<RemoteMcpEgressDestination>(
+        9, _omitFieldNames ? '' : 'remoteMcpServers',
         subBuilder: RemoteMcpEgressDestination.create)
     ..pPS(10, _omitFieldNames ? '' : 'selectedTools')
-    ..pc<IntegrationEgressDestination>(
-        11, _omitFieldNames ? '' : 'integrationEndpoints', $pb.PbFieldType.PM,
+    ..pPM<IntegrationEgressDestination>(
+        11, _omitFieldNames ? '' : 'integrationEndpoints',
         subBuilder: IntegrationEgressDestination.create)
-    ..pc<SkillEgressDisclosure>(
-        12, _omitFieldNames ? '' : 'skills', $pb.PbFieldType.PM,
+    ..pPM<SkillEgressDisclosure>(12, _omitFieldNames ? '' : 'skills',
         subBuilder: SkillEgressDisclosure.create)
-    ..pc<MemoryEgressDisclosure>(
-        13, _omitFieldNames ? '' : 'memoryNotes', $pb.PbFieldType.PM,
+    ..pPM<MemoryEgressDisclosure>(13, _omitFieldNames ? '' : 'memoryNotes',
         subBuilder: MemoryEgressDisclosure.create)
     ..aOB(14, _omitFieldNames ? '' : 'memoryProfileMayBeSent')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RemoteEgressDisclosure clone() =>
-      RemoteEgressDisclosure()..mergeFromMessage(this);
+  RemoteEgressDisclosure clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RemoteEgressDisclosure copyWith(
           void Function(RemoteEgressDisclosure) updates) =>
@@ -1002,16 +981,13 @@ class MemoryEgressDisclosure extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'noteId')
     ..aOS(2, _omitFieldNames ? '' : 'title')
     ..aOS(3, _omitFieldNames ? '' : 'vaultPath')
-    ..e<MemoryTier>(4, _omitFieldNames ? '' : 'tier', $pb.PbFieldType.OE,
-        defaultOrMaker: MemoryTier.MEMORY_TIER_UNSPECIFIED,
-        valueOf: MemoryTier.valueOf,
+    ..aE<MemoryTier>(4, _omitFieldNames ? '' : 'tier',
         enumValues: MemoryTier.values)
     ..aOB(5, _omitFieldNames ? '' : 'bodyMayBeSent')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  MemoryEgressDisclosure clone() =>
-      MemoryEgressDisclosure()..mergeFromMessage(this);
+  MemoryEgressDisclosure clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   MemoryEgressDisclosure copyWith(
           void Function(MemoryEgressDisclosure) updates) =>
@@ -1110,8 +1086,7 @@ class SkillEgressDisclosure extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SkillEgressDisclosure clone() =>
-      SkillEgressDisclosure()..mergeFromMessage(this);
+  SkillEgressDisclosure clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SkillEgressDisclosure copyWith(
           void Function(SkillEgressDisclosure) updates) =>
@@ -1194,8 +1169,7 @@ class RemoteMcpEgressDestination extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RemoteMcpEgressDestination clone() =>
-      RemoteMcpEgressDestination()..mergeFromMessage(this);
+  RemoteMcpEgressDestination clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RemoteMcpEgressDestination copyWith(
           void Function(RemoteMcpEgressDestination) updates) =>
@@ -1283,8 +1257,7 @@ class IntegrationEgressDestination extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  IntegrationEgressDestination clone() =>
-      IntegrationEgressDestination()..mergeFromMessage(this);
+  IntegrationEgressDestination clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   IntegrationEgressDestination copyWith(
           void Function(IntegrationEgressDestination) updates) =>
@@ -1384,7 +1357,7 @@ class RemoteEgressConsent extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RemoteEgressConsent clone() => RemoteEgressConsent()..mergeFromMessage(this);
+  RemoteEgressConsent clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RemoteEgressConsent copyWith(void Function(RemoteEgressConsent) updates) =>
       super.copyWith((message) => updates(message as RemoteEgressConsent))
@@ -1495,10 +1468,8 @@ class RunEgressDecision extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'decisionId')
-    ..a<$core.int>(2, _omitFieldNames ? '' : 'version', $pb.PbFieldType.O3)
-    ..e<ModelProvider>(3, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
-        defaultOrMaker: ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
-        valueOf: ModelProvider.valueOf,
+    ..aI(2, _omitFieldNames ? '' : 'version')
+    ..aE<ModelProvider>(3, _omitFieldNames ? '' : 'provider',
         enumValues: ModelProvider.values)
     ..aOS(4, _omitFieldNames ? '' : 'model')
     ..aOS(5, _omitFieldNames ? '' : 'endpoint')
@@ -1518,17 +1489,17 @@ class RunEgressDecision extends $pb.GeneratedMessage {
     ..aOB(14, _omitFieldNames ? '' : 'memoryProfileApplicable')
     ..aOS(15, _omitFieldNames ? '' : 'externalCredentialRefHash')
     ..aOS(16, _omitFieldNames ? '' : 'requestDigest')
-    ..pc<RemoteMcpEgressDestination>(
-        17, _omitFieldNames ? '' : 'remoteMcpServers', $pb.PbFieldType.PM,
+    ..pPM<RemoteMcpEgressDestination>(
+        17, _omitFieldNames ? '' : 'remoteMcpServers',
         subBuilder: RemoteMcpEgressDestination.create)
-    ..pc<IntegrationEgressDestination>(
-        18, _omitFieldNames ? '' : 'integrationEndpoints', $pb.PbFieldType.PM,
+    ..pPM<IntegrationEgressDestination>(
+        18, _omitFieldNames ? '' : 'integrationEndpoints',
         subBuilder: IntegrationEgressDestination.create)
     ..aOS(19, _omitFieldNames ? '' : 'memorySnapshotFingerprint')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RunEgressDecision clone() => RunEgressDecision()..mergeFromMessage(this);
+  RunEgressDecision clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RunEgressDecision copyWith(void Function(RunEgressDecision) updates) =>
       super.copyWith((message) => updates(message as RunEgressDecision))
@@ -1727,16 +1698,13 @@ class AgentDescriptor extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'AgentDescriptor',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<AgentId>(1, _omitFieldNames ? '' : 'id', $pb.PbFieldType.OE,
-        defaultOrMaker: AgentId.AGENT_ID_UNSPECIFIED,
-        valueOf: AgentId.valueOf,
-        enumValues: AgentId.values)
+    ..aE<AgentId>(1, _omitFieldNames ? '' : 'id', enumValues: AgentId.values)
     ..aOS(2, _omitFieldNames ? '' : 'displayName')
     ..aOB(3, _omitFieldNames ? '' : 'available')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  AgentDescriptor clone() => AgentDescriptor()..mergeFromMessage(this);
+  AgentDescriptor clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   AgentDescriptor copyWith(void Function(AgentDescriptor) updates) =>
       super.copyWith((message) => updates(message as AgentDescriptor))
@@ -1825,9 +1793,7 @@ class Message extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'messageId')
     ..aOS(2, _omitFieldNames ? '' : 'sessionId')
     ..aOS(3, _omitFieldNames ? '' : 'runId')
-    ..e<MessageRole>(4, _omitFieldNames ? '' : 'role', $pb.PbFieldType.OE,
-        defaultOrMaker: MessageRole.MESSAGE_ROLE_UNSPECIFIED,
-        valueOf: MessageRole.valueOf,
+    ..aE<MessageRole>(4, _omitFieldNames ? '' : 'role',
         enumValues: MessageRole.values)
     ..aOS(5, _omitFieldNames ? '' : 'content')
     ..aOS(6, _omitFieldNames ? '' : 'contentType')
@@ -1839,7 +1805,7 @@ class Message extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  Message clone() => Message()..mergeFromMessage(this);
+  Message clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   Message copyWith(void Function(Message) updates) =>
       super.copyWith((message) => updates(message as Message)) as Message;

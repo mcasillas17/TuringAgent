@@ -69,29 +69,22 @@ class SendMessageRequest extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..aOS(2, _omitFieldNames ? '' : 'content')
     ..aOS(3, _omitFieldNames ? '' : 'contentType')
-    ..e<$1.AgentId>(4, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
-        defaultOrMaker: $1.AgentId.AGENT_ID_UNSPECIFIED,
-        valueOf: $1.AgentId.valueOf,
+    ..aE<$1.AgentId>(4, _omitFieldNames ? '' : 'agentId',
         enumValues: $1.AgentId.values)
-    ..e<$1.ModelProvider>(
-        5, _omitFieldNames ? '' : 'modelProvider', $pb.PbFieldType.OE,
-        defaultOrMaker: $1.ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
-        valueOf: $1.ModelProvider.valueOf,
+    ..aE<$1.ModelProvider>(5, _omitFieldNames ? '' : 'modelProvider',
         enumValues: $1.ModelProvider.values)
     ..aOS(6, _omitFieldNames ? '' : 'model')
     ..aOS(7, _omitFieldNames ? '' : 'idempotencyKey')
     ..pPS(8, _omitFieldNames ? '' : 'requestedTools')
-    ..a<$core.int>(
-        9, _omitFieldNames ? '' : 'requiredContextTokens', $pb.PbFieldType.O3)
-    ..a<$core.int>(10, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns',
-        $pb.PbFieldType.O3)
+    ..aI(9, _omitFieldNames ? '' : 'requiredContextTokens')
+    ..aI(10, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns')
     ..aOM<$1.RemoteEgressConsent>(
         11, _omitFieldNames ? '' : 'remoteEgressConsent',
         subBuilder: $1.RemoteEgressConsent.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SendMessageRequest clone() => SendMessageRequest()..mergeFromMessage(this);
+  SendMessageRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SendMessageRequest copyWith(void Function(SendMessageRequest) updates) =>
       super.copyWith((message) => updates(message as SendMessageRequest))
@@ -259,27 +252,19 @@ class PrepareRemoteEgressRequest extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..aOS(2, _omitFieldNames ? '' : 'content')
     ..aOS(3, _omitFieldNames ? '' : 'contentType')
-    ..e<$1.AgentId>(4, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
-        defaultOrMaker: $1.AgentId.AGENT_ID_UNSPECIFIED,
-        valueOf: $1.AgentId.valueOf,
+    ..aE<$1.AgentId>(4, _omitFieldNames ? '' : 'agentId',
         enumValues: $1.AgentId.values)
-    ..e<$1.ModelProvider>(
-        5, _omitFieldNames ? '' : 'modelProvider', $pb.PbFieldType.OE,
-        defaultOrMaker: $1.ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
-        valueOf: $1.ModelProvider.valueOf,
+    ..aE<$1.ModelProvider>(5, _omitFieldNames ? '' : 'modelProvider',
         enumValues: $1.ModelProvider.values)
     ..aOS(6, _omitFieldNames ? '' : 'model')
     ..aOS(7, _omitFieldNames ? '' : 'idempotencyKey')
     ..pPS(8, _omitFieldNames ? '' : 'requestedTools')
-    ..a<$core.int>(
-        9, _omitFieldNames ? '' : 'requiredContextTokens', $pb.PbFieldType.O3)
-    ..a<$core.int>(10, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns',
-        $pb.PbFieldType.O3)
+    ..aI(9, _omitFieldNames ? '' : 'requiredContextTokens')
+    ..aI(10, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  PrepareRemoteEgressRequest clone() =>
-      PrepareRemoteEgressRequest()..mergeFromMessage(this);
+  PrepareRemoteEgressRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   PrepareRemoteEgressRequest copyWith(
           void Function(PrepareRemoteEgressRequest) updates) =>
@@ -414,8 +399,7 @@ class PrepareRemoteEgressResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  PrepareRemoteEgressResponse clone() =>
-      PrepareRemoteEgressResponse()..mergeFromMessage(this);
+  PrepareRemoteEgressResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   PrepareRemoteEgressResponse copyWith(
           void Function(PrepareRemoteEgressResponse) updates) =>
@@ -487,7 +471,7 @@ class RunQueued extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RunQueued clone() => RunQueued()..mergeFromMessage(this);
+  RunQueued clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RunQueued copyWith(void Function(RunQueued) updates) =>
       super.copyWith((message) => updates(message as RunQueued)) as RunQueued;
@@ -574,13 +558,13 @@ class RunStarted extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'jobId')
-    ..a<$core.int>(3, _omitFieldNames ? '' : 'attempt', $pb.PbFieldType.O3)
+    ..aI(3, _omitFieldNames ? '' : 'attempt')
     ..aOM<$1.RunState>(4, _omitFieldNames ? '' : 'runState',
         subBuilder: $1.RunState.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RunStarted clone() => RunStarted()..mergeFromMessage(this);
+  RunStarted clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RunStarted copyWith(void Function(RunStarted) updates) =>
       super.copyWith((message) => updates(message as RunStarted)) as RunStarted;
@@ -662,14 +646,12 @@ class MessageStarted extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'messageId')
-    ..e<$1.MessageRole>(2, _omitFieldNames ? '' : 'role', $pb.PbFieldType.OE,
-        defaultOrMaker: $1.MessageRole.MESSAGE_ROLE_UNSPECIFIED,
-        valueOf: $1.MessageRole.valueOf,
+    ..aE<$1.MessageRole>(2, _omitFieldNames ? '' : 'role',
         enumValues: $1.MessageRole.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  MessageStarted clone() => MessageStarted()..mergeFromMessage(this);
+  MessageStarted clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   MessageStarted copyWith(void Function(MessageStarted) updates) =>
       super.copyWith((message) => updates(message as MessageStarted))
@@ -737,7 +719,7 @@ class TokenDelta extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  TokenDelta clone() => TokenDelta()..mergeFromMessage(this);
+  TokenDelta clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   TokenDelta copyWith(void Function(TokenDelta) updates) =>
       super.copyWith((message) => updates(message as TokenDelta)) as TokenDelta;
@@ -810,7 +792,7 @@ class ToolEvent extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ToolEvent clone() => ToolEvent()..mergeFromMessage(this);
+  ToolEvent clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ToolEvent copyWith(void Function(ToolEvent) updates) =>
       super.copyWith((message) => updates(message as ToolEvent)) as ToolEvent;
@@ -903,7 +885,7 @@ class ApprovalEvent extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ApprovalEvent clone() => ApprovalEvent()..mergeFromMessage(this);
+  ApprovalEvent clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ApprovalEvent copyWith(void Function(ApprovalEvent) updates) =>
       super.copyWith((message) => updates(message as ApprovalEvent))
@@ -994,7 +976,7 @@ class MessageCompleted extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  MessageCompleted clone() => MessageCompleted()..mergeFromMessage(this);
+  MessageCompleted clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   MessageCompleted copyWith(void Function(MessageCompleted) updates) =>
       super.copyWith((message) => updates(message as MessageCompleted))
@@ -1067,7 +1049,7 @@ class RunCompleted extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RunCompleted clone() => RunCompleted()..mergeFromMessage(this);
+  RunCompleted clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RunCompleted copyWith(void Function(RunCompleted) updates) =>
       super.copyWith((message) => updates(message as RunCompleted))
@@ -1156,7 +1138,7 @@ class RunFailed extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RunFailed clone() => RunFailed()..mergeFromMessage(this);
+  RunFailed clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RunFailed copyWith(void Function(RunFailed) updates) =>
       super.copyWith((message) => updates(message as RunFailed)) as RunFailed;
@@ -1262,7 +1244,7 @@ class RunCancelled extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RunCancelled clone() => RunCancelled()..mergeFromMessage(this);
+  RunCancelled clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RunCancelled copyWith(void Function(RunCancelled) updates) =>
       super.copyWith((message) => updates(message as RunCancelled))
@@ -1343,7 +1325,7 @@ class RunStateChanged extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RunStateChanged clone() => RunStateChanged()..mergeFromMessage(this);
+  RunStateChanged clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RunStateChanged copyWith(void Function(RunStateChanged) updates) =>
       super.copyWith((message) => updates(message as RunStateChanged))
@@ -1546,7 +1528,7 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ChatStreamEvent clone() => ChatStreamEvent()..mergeFromMessage(this);
+  ChatStreamEvent clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ChatStreamEvent copyWith(void Function(ChatStreamEvent) updates) =>
       super.copyWith((message) => updates(message as ChatStreamEvent))
@@ -1566,8 +1548,44 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
       $pb.GeneratedMessage.$_defaultFor<ChatStreamEvent>(create);
   static ChatStreamEvent? _defaultInstance;
 
+  @$pb.TagNumber(10)
+  @$pb.TagNumber(11)
+  @$pb.TagNumber(12)
+  @$pb.TagNumber(13)
+  @$pb.TagNumber(14)
+  @$pb.TagNumber(15)
+  @$pb.TagNumber(16)
+  @$pb.TagNumber(17)
+  @$pb.TagNumber(18)
+  @$pb.TagNumber(19)
+  @$pb.TagNumber(20)
+  @$pb.TagNumber(21)
+  @$pb.TagNumber(22)
+  @$pb.TagNumber(23)
+  @$pb.TagNumber(24)
+  @$pb.TagNumber(25)
+  @$pb.TagNumber(26)
+  @$pb.TagNumber(27)
   ChatStreamEvent_Event whichEvent() =>
       _ChatStreamEvent_EventByTag[$_whichOneof(0)]!;
+  @$pb.TagNumber(10)
+  @$pb.TagNumber(11)
+  @$pb.TagNumber(12)
+  @$pb.TagNumber(13)
+  @$pb.TagNumber(14)
+  @$pb.TagNumber(15)
+  @$pb.TagNumber(16)
+  @$pb.TagNumber(17)
+  @$pb.TagNumber(18)
+  @$pb.TagNumber(19)
+  @$pb.TagNumber(20)
+  @$pb.TagNumber(21)
+  @$pb.TagNumber(22)
+  @$pb.TagNumber(23)
+  @$pb.TagNumber(24)
+  @$pb.TagNumber(25)
+  @$pb.TagNumber(26)
+  @$pb.TagNumber(27)
   void clearEvent() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
