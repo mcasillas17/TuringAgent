@@ -79,6 +79,17 @@ func TestCIWorkflowRunsPinnedLintInRootAndNestedModules(t *testing.T) {
 	}
 	lintJob := requireIndentedBlock(t, workflow, "  lint:", 2)
 	requireContains(t, lintJob, `go-version: "1.25.x"`)
+	// Every Go job must pin the same toolchain, and each is asserted inside its
+	// own job block rather than by counting occurrences across the file — a
+	// count is satisfied by any five, including five copies in one job and none
+	// in another. The root module and mcp-files both declare `go 1.25.0`, so a
+	// job that drifted back to 1.23.x would not fail outright: with the default
+	// GOTOOLCHAIN=auto it would silently switch toolchains and pass, which is
+	// exactly how the pins fell out of step before #92 and #115 repaired them.
+	// Only this assertion makes that drift visible.
+	for _, job := range []string{"  go:", "  mcp-files:", "  mcp-system:", "  proto-and-scripts:"} {
+		requireContains(t, requireIndentedBlock(t, workflow, job, 2), `go-version: "1.25.x"`)
+	}
 	requireContains(t, lintJob, "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2")
 	requireContains(t, lintJob, `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" --build-tags sqlite_fts5 ./... ./.github/workflows`)
 	requireRunsIn(t, lintJob, "turing-backend/mcp-files", `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" ./...`)
@@ -225,6 +236,117 @@ func requireInOrder(t *testing.T, text string, snippets ...string) {
 		}
 		offset += index + len(snippet)
 	}
+}
+
+// TestContainerGoBuildersMatchTheirRuntimeDistroAndModuleFloor pins the two
+// image facts nothing else checks — no CI job builds an image, and Dependabot
+// bumps every FROM line independently of every other:
+//
+//   - the golang builder's distro suffix matches its runtime stage's distro.
+//     The orchestrator build is CGO and links the builder's glibc, so a
+//     newer-distro builder (trixie) over a bookworm-slim runtime produces a
+//     binary that fails at container start, not at image build.
+//   - the builder's Go version covers the module's `go` directive. Below the
+//     floor, GOTOOLCHAIN=auto quietly downloads a conforming toolchain inside
+//     every image build — which is exactly how a 1.23 builder kept serving a
+//     1.25.0 module unnoticed after the Dependabot sweep.
+func TestContainerGoBuildersMatchTheirRuntimeDistroAndModuleFloor(t *testing.T) {
+	cases := []struct {
+		dockerfile string
+		gomod      string
+	}{
+		{"../../turing-backend/orchestrator-go/Dockerfile", "../../go.mod"},
+		{"../../turing-backend/agent-runtime-go/Dockerfile", "../../go.mod"},
+		{"../../turing-backend/mcp-files/Dockerfile", "../../turing-backend/mcp-files/go.mod"},
+		{"../../turing-backend/mcp-system/Dockerfile", "../../turing-backend/mcp-system/go.mod"},
+	}
+	runtimeFor := map[string]string{
+		"bookworm": "FROM debian:bookworm-slim",
+		"alpine":   "FROM alpine:",
+	}
+	for _, test := range cases {
+		data, err := os.ReadFile(test.dockerfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dockerfile := string(data)
+		builderVersion, distro := "", ""
+		for _, line := range strings.Split(dockerfile, "\n") {
+			if !strings.HasPrefix(line, "FROM golang:") {
+				continue
+			}
+			tag := strings.Fields(strings.TrimPrefix(line, "FROM golang:"))[0]
+			version, suffix, found := strings.Cut(tag, "-")
+			if !found {
+				t.Fatalf("%s builder tag %q has no distro suffix; an unsuffixed golang tag floats to whatever distro is current", test.dockerfile, tag)
+			}
+			builderVersion, distro = version, suffix
+			break
+		}
+		if builderVersion == "" {
+			t.Fatalf("%s has no golang builder stage", test.dockerfile)
+		}
+		runtime, known := runtimeFor[distro]
+		if !known {
+			t.Fatalf("%s builder distro %q is not one this repo pairs with a runtime base", test.dockerfile, distro)
+		}
+		if !strings.Contains(dockerfile, runtime) {
+			t.Fatalf("%s builds on golang:*-%s but its runtime stage is not %q", test.dockerfile, distro, runtime)
+		}
+		floor := goDirective(t, test.gomod)
+		if compareGoMinors(t, builderVersion, floor) < 0 {
+			t.Fatalf("%s builder go %s is below the module floor go %s in %s: image builds would download a toolchain via GOTOOLCHAIN=auto instead of using the pinned image", test.dockerfile, builderVersion, floor, test.gomod)
+		}
+	}
+}
+
+func goDirective(t *testing.T, gomod string) string {
+	t.Helper()
+	data, err := os.ReadFile(gomod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if version, found := strings.CutPrefix(line, "go "); found {
+			return strings.TrimSpace(version)
+		}
+	}
+	t.Fatalf("%s has no go directive", gomod)
+	return ""
+}
+
+// compareGoMinors orders two Go versions by major.minor only — the granularity
+// FROM tags carry.
+func compareGoMinors(t *testing.T, left, right string) int {
+	t.Helper()
+	parse := func(version string) [2]int {
+		parts := strings.Split(version, ".")
+		if len(parts) < 2 {
+			t.Fatalf("go version %q does not carry major.minor", version)
+		}
+		var out [2]int
+		for index := range out {
+			value := 0
+			for _, digit := range parts[index] {
+				if digit < '0' || digit > '9' {
+					t.Fatalf("go version %q is not numeric", version)
+				}
+				value = value*10 + int(digit-'0')
+			}
+			out[index] = value
+		}
+		return out
+	}
+	a, b := parse(left), parse(right)
+	for index := range a {
+		if a[index] != b[index] {
+			if a[index] < b[index] {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }
 
 func requireIndentedBlock(t *testing.T, text, header string, indent int) string {

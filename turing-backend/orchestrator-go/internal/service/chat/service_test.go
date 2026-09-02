@@ -226,6 +226,7 @@ type dispatchContextRecorder struct {
 	refreshErr           error
 	routableDefaultModel string
 	dispatchCalls        int
+	cancelCalls          int
 	callOrder            []string
 }
 
@@ -261,7 +262,9 @@ func (d *dispatchContextRecorder) DispatchPending(ctx context.Context) error {
 	return d.err
 }
 
-func (d *dispatchContextRecorder) CancelRun(context.Context, string, string) {}
+func (d *dispatchContextRecorder) CancelRun(context.Context, string, string) {
+	d.cancelCalls++
+}
 
 func (d *dispatchContextRecorder) ValidateRouting(context.Context, repository.RoutingRequirements) error {
 	return nil
@@ -1223,65 +1226,32 @@ func TestSendMessageStreamsRunStartedWhenWorkerClaimsJob(t *testing.T) {
 }
 
 func TestSendMessageCancelsRunWhenDispatchFails(t *testing.T) {
-	h := newHarness(t)
-	sessionID := h.createSession(t)
-	ctx, cancel := context.WithTimeout(h.clientContext(), 15*time.Second)
-	defer cancel()
-	runtimeClient := turingv1.NewRuntimeServiceClient(h.conn)
-	workerStream, err := runtimeClient.ConnectWorker(ctx)
+	database := openChatTestDB(t)
+	repo := repository.New(database)
+	bus := events.NewBus(8)
+	dispatcher := &dispatchContextRecorder{err: errors.New("dispatch failed")}
+	service := New(repo, bus, dispatcher, "llama3.2", "gpt-4o-mini")
+	session, err := repo.CreateSession(context.Background(), "Dispatch failure")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = workerStream.CloseSend() }()
-	if err := workerStream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{WorkerId: "worker-dispatch-fails", AgentId: turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT, MaxConcurrentRuns: 1}}}); err != nil {
-		t.Fatal(err)
-	}
-	recvRuntimeCommand(t, workerStream, func(cmd *turingv1.RuntimeCommand) bool {
-		return cmd.GetWorkerAccepted() != nil
-	})
-	if _, err := h.database.ExecContext(ctx, `
-		CREATE TRIGGER fail_job_claim
-		BEFORE UPDATE OF status ON jobs
-		WHEN NEW.status = 'in_progress'
-		BEGIN
-			SELECT RAISE(ABORT, 'claim failed');
-		END;
-	`); err != nil {
-		t.Fatal(err)
-	}
-	chatStream, err := h.chatClient.SendMessage(ctx, &turingv1.SendMessageRequest{
-		SessionId:     sessionID,
+	err = service.SendMessage(&turingv1.SendMessageRequest{
+		SessionId:     session.SessionID,
 		Content:       "dispatch failure",
 		ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
 		Model:         "llama3.2",
-	})
-	if err != nil {
+	}, &queuedChatStream{ctx: context.Background()})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("SendMessage error = %v, want Internal", err)
+	}
+	if dispatcher.dispatchCalls != 1 || dispatcher.cancelCalls != 1 {
+		t.Fatalf("DispatchPending calls = %d and CancelRun calls = %d, want 1 each", dispatcher.dispatchCalls, dispatcher.cancelCalls)
+	}
+	var runID string
+	if err := database.QueryRowContext(context.Background(), `SELECT id FROM agent_runs WHERE session_id = ?`, session.SessionID).Scan(&runID); err != nil {
 		t.Fatal(err)
 	}
-	queued, err := chatStream.Recv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	receivedCancelled := false
-	for {
-		event, recvErr := chatStream.Recv()
-		if recvErr != nil {
-			if !receivedCancelled && status.Code(recvErr) != codes.Internal {
-				t.Fatalf("Recv after dispatch failure = %v, want Internal or run_cancelled event", recvErr)
-			}
-			if receivedCancelled && !errors.Is(recvErr, io.EOF) {
-				t.Fatalf("Recv after run_cancelled = %v, want EOF", recvErr)
-			}
-			break
-		}
-		if event.GetRunStarted() != nil {
-			t.Fatalf("run_started event = %+v, want dispatch failure", event.GetRunStarted())
-		}
-		if event.GetRunCancelled() != nil {
-			receivedCancelled = true
-		}
-	}
-	run, err := h.repo.GetRun(context.Background(), queued.GetRunQueued().RunId)
+	run, err := repo.GetRun(context.Background(), runID)
 	if err != nil {
 		t.Fatal(err)
 	}

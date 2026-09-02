@@ -3305,12 +3305,12 @@ func TestCancelRunWaitsForCommandBufferSpace(t *testing.T) {
 		close(done)
 	}()
 	time.Sleep(20 * time.Millisecond)
-	<-commands
 	select {
 	case <-done:
-		t.Fatal("CancelRun returned before buffer space was available")
+		t.Fatal("CancelRun returned while the command buffer was full")
 	default:
 	}
+	<-commands
 	select {
 	case cmd := <-commands:
 		cancel := cmd.command.GetRunCancelled()
@@ -4194,6 +4194,25 @@ func waitForRunStatus(t *testing.T, h *harness, runID string, want string) {
 		select {
 		case <-deadline:
 			t.Fatalf("run %s is %q, want %q", runID, state.Lifecycle, want)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+func waitForExecutionState(t *testing.T, h *harness, runID string, want string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		run, err := h.repo.GetRun(context.Background(), runID)
+		if err != nil {
+			t.Fatalf("GetRun: %v", err)
+		}
+		if run.ExecutionState == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("run %s execution_state = %q, want %q", runID, run.ExecutionState, want)
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
