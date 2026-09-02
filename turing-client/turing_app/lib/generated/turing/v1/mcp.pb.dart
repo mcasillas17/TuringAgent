@@ -53,9 +53,7 @@ class McpToolDescriptor extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'toolName')
-    ..e<$2.ToolPolicy>(2, _omitFieldNames ? '' : 'policy', $pb.PbFieldType.OE,
-        defaultOrMaker: $2.ToolPolicy.TOOL_POLICY_UNSPECIFIED,
-        valueOf: $2.ToolPolicy.valueOf,
+    ..aE<$2.ToolPolicy>(2, _omitFieldNames ? '' : 'policy',
         enumValues: $2.ToolPolicy.values)
     ..aOM<$1.Struct>(3, _omitFieldNames ? '' : 'schema',
         subBuilder: $1.Struct.create)
@@ -64,7 +62,7 @@ class McpToolDescriptor extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  McpToolDescriptor clone() => McpToolDescriptor()..mergeFromMessage(this);
+  McpToolDescriptor clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   McpToolDescriptor copyWith(void Function(McpToolDescriptor) updates) =>
       super.copyWith((message) => updates(message as McpToolDescriptor))
@@ -176,25 +174,19 @@ class McpServerDescriptor extends $pb.GeneratedMessage {
     ..aOS(2, _omitFieldNames ? '' : 'name')
     ..aOS(3, _omitFieldNames ? '' : 'transport')
     ..aOS(4, _omitFieldNames ? '' : 'url')
-    ..e<McpServerTier>(5, _omitFieldNames ? '' : 'tier', $pb.PbFieldType.OE,
-        defaultOrMaker: McpServerTier.MCP_SERVER_TIER_UNSPECIFIED,
-        valueOf: McpServerTier.valueOf,
+    ..aE<McpServerTier>(5, _omitFieldNames ? '' : 'tier',
         enumValues: McpServerTier.values)
     ..aOB(6, _omitFieldNames ? '' : 'enabled')
-    ..e<McpServerLiveness>(
-        7, _omitFieldNames ? '' : 'liveness', $pb.PbFieldType.OE,
-        defaultOrMaker: McpServerLiveness.MCP_SERVER_LIVENESS_UNSPECIFIED,
-        valueOf: McpServerLiveness.valueOf,
+    ..aE<McpServerLiveness>(7, _omitFieldNames ? '' : 'liveness',
         enumValues: McpServerLiveness.values)
     ..aOS(8, _omitFieldNames ? '' : 'statusMessage')
     ..aOB(9, _omitFieldNames ? '' : 'sandboxConfined')
-    ..pc<McpToolDescriptor>(
-        10, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
+    ..pPM<McpToolDescriptor>(10, _omitFieldNames ? '' : 'tools',
         subBuilder: McpToolDescriptor.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  McpServerDescriptor clone() => McpServerDescriptor()..mergeFromMessage(this);
+  McpServerDescriptor clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   McpServerDescriptor copyWith(void Function(McpServerDescriptor) updates) =>
       super.copyWith((message) => updates(message as McpServerDescriptor))
@@ -328,8 +320,7 @@ class UnsupportedMcpServer extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  UnsupportedMcpServer clone() =>
-      UnsupportedMcpServer()..mergeFromMessage(this);
+  UnsupportedMcpServer clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   UnsupportedMcpServer copyWith(void Function(UnsupportedMcpServer) updates) =>
       super.copyWith((message) => updates(message as UnsupportedMcpServer))
@@ -387,8 +378,7 @@ class ListMcpServersRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListMcpServersRequest clone() =>
-      ListMcpServersRequest()..mergeFromMessage(this);
+  ListMcpServersRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListMcpServersRequest copyWith(
           void Function(ListMcpServersRequest) updates) =>
@@ -439,19 +429,16 @@ class ListMcpServersResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListMcpServersResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<McpServerDescriptor>(
-        1, _omitFieldNames ? '' : 'servers', $pb.PbFieldType.PM,
+    ..pPM<McpServerDescriptor>(1, _omitFieldNames ? '' : 'servers',
         subBuilder: McpServerDescriptor.create)
-    ..pc<UnsupportedMcpServer>(
-        2, _omitFieldNames ? '' : 'unsupported', $pb.PbFieldType.PM,
+    ..pPM<UnsupportedMcpServer>(2, _omitFieldNames ? '' : 'unsupported',
         subBuilder: UnsupportedMcpServer.create)
     ..aOB(3, _omitFieldNames ? '' : 'registryDegraded')
     ..aOS(4, _omitFieldNames ? '' : 'registryDegradationReason')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListMcpServersResponse clone() =>
-      ListMcpServersResponse()..mergeFromMessage(this);
+  ListMcpServersResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListMcpServersResponse copyWith(
           void Function(ListMcpServersResponse) updates) =>
@@ -546,8 +533,7 @@ class SetMcpServerEnabledRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SetMcpServerEnabledRequest clone() =>
-      SetMcpServerEnabledRequest()..mergeFromMessage(this);
+  SetMcpServerEnabledRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SetMcpServerEnabledRequest copyWith(
           void Function(SetMcpServerEnabledRequest) updates) =>
@@ -616,15 +602,12 @@ class UpdateMcpToolPolicyRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'serverId')
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
-    ..e<$2.ToolPolicy>(3, _omitFieldNames ? '' : 'policy', $pb.PbFieldType.OE,
-        defaultOrMaker: $2.ToolPolicy.TOOL_POLICY_UNSPECIFIED,
-        valueOf: $2.ToolPolicy.valueOf,
+    ..aE<$2.ToolPolicy>(3, _omitFieldNames ? '' : 'policy',
         enumValues: $2.ToolPolicy.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  UpdateMcpToolPolicyRequest clone() =>
-      UpdateMcpToolPolicyRequest()..mergeFromMessage(this);
+  UpdateMcpToolPolicyRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   UpdateMcpToolPolicyRequest copyWith(
           void Function(UpdateMcpToolPolicyRequest) updates) =>
@@ -702,15 +685,12 @@ class UpdateToolPolicyByNameRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'serverName')
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
-    ..e<$2.ToolPolicy>(3, _omitFieldNames ? '' : 'policy', $pb.PbFieldType.OE,
-        defaultOrMaker: $2.ToolPolicy.TOOL_POLICY_UNSPECIFIED,
-        valueOf: $2.ToolPolicy.valueOf,
+    ..aE<$2.ToolPolicy>(3, _omitFieldNames ? '' : 'policy',
         enumValues: $2.ToolPolicy.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  UpdateToolPolicyByNameRequest clone() =>
-      UpdateToolPolicyByNameRequest()..mergeFromMessage(this);
+  UpdateToolPolicyByNameRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   UpdateToolPolicyByNameRequest copyWith(
           void Function(UpdateToolPolicyByNameRequest) updates) =>
@@ -787,8 +767,7 @@ class ListPseudoServerToolsRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListPseudoServerToolsRequest clone() =>
-      ListPseudoServerToolsRequest()..mergeFromMessage(this);
+  ListPseudoServerToolsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListPseudoServerToolsRequest copyWith(
           void Function(ListPseudoServerToolsRequest) updates) =>
@@ -843,14 +822,12 @@ class ListPseudoServerToolsResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListPseudoServerToolsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<McpToolDescriptor>(
-        1, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
+    ..pPM<McpToolDescriptor>(1, _omitFieldNames ? '' : 'tools',
         subBuilder: McpToolDescriptor.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListPseudoServerToolsResponse clone() =>
-      ListPseudoServerToolsResponse()..mergeFromMessage(this);
+  ListPseudoServerToolsResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListPseudoServerToolsResponse copyWith(
           void Function(ListPseudoServerToolsResponse) updates) =>
@@ -903,8 +880,7 @@ class DeleteMcpServerRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteMcpServerRequest clone() =>
-      DeleteMcpServerRequest()..mergeFromMessage(this);
+  DeleteMcpServerRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DeleteMcpServerRequest copyWith(
           void Function(DeleteMcpServerRequest) updates) =>
@@ -954,8 +930,7 @@ class DeleteMcpServerResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteMcpServerResponse clone() =>
-      DeleteMcpServerResponse()..mergeFromMessage(this);
+  DeleteMcpServerResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DeleteMcpServerResponse copyWith(
           void Function(DeleteMcpServerResponse) updates) =>
@@ -1008,15 +983,12 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'name')
     ..aOS(2, _omitFieldNames ? '' : 'url')
     ..aOS(3, _omitFieldNames ? '' : 'bearerToken')
-    ..e<McpServerTier>(4, _omitFieldNames ? '' : 'tier', $pb.PbFieldType.OE,
-        defaultOrMaker: McpServerTier.MCP_SERVER_TIER_UNSPECIFIED,
-        valueOf: McpServerTier.valueOf,
+    ..aE<McpServerTier>(4, _omitFieldNames ? '' : 'tier',
         enumValues: McpServerTier.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RegisterMcpServerRequest clone() =>
-      RegisterMcpServerRequest()..mergeFromMessage(this);
+  RegisterMcpServerRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RegisterMcpServerRequest copyWith(
           void Function(RegisterMcpServerRequest) updates) =>
@@ -1101,8 +1073,7 @@ class ReimportMcpJsonRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ReimportMcpJsonRequest clone() =>
-      ReimportMcpJsonRequest()..mergeFromMessage(this);
+  ReimportMcpJsonRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ReimportMcpJsonRequest copyWith(
           void Function(ReimportMcpJsonRequest) updates) =>
@@ -1151,15 +1122,13 @@ class ReimportMcpJsonResponse extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..pPS(1, _omitFieldNames ? '' : 'imported')
-    ..pc<UnsupportedMcpServer>(
-        2, _omitFieldNames ? '' : 'unsupported', $pb.PbFieldType.PM,
+    ..pPM<UnsupportedMcpServer>(2, _omitFieldNames ? '' : 'unsupported',
         subBuilder: UnsupportedMcpServer.create)
     ..pPS(3, _omitFieldNames ? '' : 'skipped')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ReimportMcpJsonResponse clone() =>
-      ReimportMcpJsonResponse()..mergeFromMessage(this);
+  ReimportMcpJsonResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ReimportMcpJsonResponse copyWith(
           void Function(ReimportMcpJsonResponse) updates) =>
@@ -1221,8 +1190,7 @@ class RotateMcpServerTokenRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RotateMcpServerTokenRequest clone() =>
-      RotateMcpServerTokenRequest()..mergeFromMessage(this);
+  RotateMcpServerTokenRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RotateMcpServerTokenRequest copyWith(
           void Function(RotateMcpServerTokenRequest) updates) =>
@@ -1305,8 +1273,7 @@ class CallRegisteredMcpToolRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CallRegisteredMcpToolRequest clone() =>
-      CallRegisteredMcpToolRequest()..mergeFromMessage(this);
+  CallRegisteredMcpToolRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   CallRegisteredMcpToolRequest copyWith(
           void Function(CallRegisteredMcpToolRequest) updates) =>
@@ -1404,8 +1371,7 @@ class CallRegisteredMcpToolResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CallRegisteredMcpToolResponse clone() =>
-      CallRegisteredMcpToolResponse()..mergeFromMessage(this);
+  CallRegisteredMcpToolResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   CallRegisteredMcpToolResponse copyWith(
           void Function(CallRegisteredMcpToolResponse) updates) =>
@@ -1473,7 +1439,7 @@ class McpRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  McpRequest clone() => McpRequest()..mergeFromMessage(this);
+  McpRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   McpRequest copyWith(void Function(McpRequest) updates) =>
       super.copyWith((message) => updates(message as McpRequest)) as McpRequest;
@@ -1548,7 +1514,7 @@ class McpResult extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  McpResult clone() => McpResult()..mergeFromMessage(this);
+  McpResult clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   McpResult copyWith(void Function(McpResult) updates) =>
       super.copyWith((message) => updates(message as McpResult)) as McpResult;

@@ -49,7 +49,7 @@ func TestCIWorkflowCoversCoreChecks(t *testing.T) {
 	requireContains(t, protoJob, "tools/proto/check.sh")
 	requireContains(t, protoJob, "bash -n tools/proto/breaking.sh turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh turing-backend/scripts/verify-tool-loop.sh")
 	requireContains(t, workflow, "uses: dart-lang/setup-dart@v1")
-	requireContains(t, workflow, "dart pub global activate protoc_plugin 22.5.0")
+	requireContains(t, workflow, "dart pub global activate protoc_plugin 23.0.0")
 	requireContains(t, workflow, `echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"`)
 	requireContains(t, workflow, "go test -tags sqlite_fts5 ./.github/workflows")
 	requireContains(t, workflow, "flutter analyze")

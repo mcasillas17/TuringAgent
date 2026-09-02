@@ -9,7 +9,7 @@ Install the required toolchain:
 ```bash
 go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
 go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
-dart pub global activate protoc_plugin 22.5.0
+dart pub global activate protoc_plugin 23.0.0
 export PATH="$(go env GOPATH)/bin:$HOME/.pub-cache/bin:$PATH"
 ```
 
@@ -40,7 +40,7 @@ The script validates the ref and refreshes that branch. It uses a depth-one fetc
 
 Mainline history contains no removed protobuf fields, enum values, or files, so TUR-019 adds no speculative reservations. If a future versioned API policy permits removal, reserve both the old number and name before either can be reused; that policy change must use an explicit new compatibility baseline because the current `FILE` policy intentionally rejects source deletion.
 
-`generate.sh` resolves the global pub cache from `PUB_CACHE`; when unset it uses `$HOME/.pub-cache` on Unix-like systems and `%LOCALAPPDATA%\Pub\Cache` on Windows. It accepts the platform's extensionless, `.bat`, `.cmd`, or `.exe` `protoc-gen-dart` shim and verifies that the selected cache has `protoc_plugin` 22.5.0 globally activated. Unix-like systems pass that absolute executable directly to protoc. On Windows, the selected cache's `bin` directory is prepended to `PATH` for protoc's platform-aware lookup, which is required to launch Dart's `.bat` shim through `cmd.exe`. In both cases a different `protoc-gen-dart` elsewhere on `PATH` cannot win. Missing or mismatched installations fail with the exact `PUB_CACHE=... dart pub global activate protoc_plugin 22.5.0` repair command.
+`generate.sh` resolves the global pub cache from `PUB_CACHE`; when unset it uses `$HOME/.pub-cache` on Unix-like systems and `%LOCALAPPDATA%\Pub\Cache` on Windows. It accepts the platform's extensionless, `.bat`, `.cmd`, or `.exe` `protoc-gen-dart` shim and verifies that the selected cache has `protoc_plugin` 23.0.0 globally activated. Unix-like systems pass that absolute executable directly to protoc. On Windows, the selected cache's `bin` directory is prepended to `PATH` for protoc's platform-aware lookup, which is required to launch Dart's `.bat` shim through `cmd.exe`. In both cases a different `protoc-gen-dart` elsewhere on `PATH` cannot win. Missing or mismatched installations fail with the exact `PUB_CACHE=... dart pub global activate protoc_plugin 23.0.0` repair command.
 
 Canonical generation is deliberately limited to pinned Go and Dart outputs. Unpinned platform generators are not run implicitly, so installing unrelated Swift, C#, or Java tooling cannot change `tools/proto/check.sh` results. The reserved platform directories remain placeholders until their generators and outputs are pinned:
 

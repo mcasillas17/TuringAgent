@@ -102,28 +102,21 @@ class AgentJob extends $pb.GeneratedMessage {
     ..aOS(3, _omitFieldNames ? '' : 'sessionId')
     ..aOS(4, _omitFieldNames ? '' : 'userMessageId')
     ..aOS(5, _omitFieldNames ? '' : 'assistantMessageId')
-    ..e<$1.AgentId>(6, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
-        defaultOrMaker: $1.AgentId.AGENT_ID_UNSPECIFIED,
-        valueOf: $1.AgentId.valueOf,
+    ..aE<$1.AgentId>(6, _omitFieldNames ? '' : 'agentId',
         enumValues: $1.AgentId.values)
     ..aOS(7, _omitFieldNames ? '' : 'traceId')
-    ..e<$1.ModelProvider>(
-        8, _omitFieldNames ? '' : 'modelProvider', $pb.PbFieldType.OE,
-        defaultOrMaker: $1.ModelProvider.MODEL_PROVIDER_UNSPECIFIED,
-        valueOf: $1.ModelProvider.valueOf,
+    ..aE<$1.ModelProvider>(8, _omitFieldNames ? '' : 'modelProvider',
         enumValues: $1.ModelProvider.values)
     ..aOS(9, _omitFieldNames ? '' : 'model')
     ..aOS(10, _omitFieldNames ? '' : 'userText')
     ..pPS(11, _omitFieldNames ? '' : 'requestedTools')
-    ..a<$core.int>(12, _omitFieldNames ? '' : 'attempt', $pb.PbFieldType.O3)
-    ..pc<SkillSnapshot>(13, _omitFieldNames ? '' : 'skills', $pb.PbFieldType.PM,
+    ..aI(12, _omitFieldNames ? '' : 'attempt')
+    ..pPM<SkillSnapshot>(13, _omitFieldNames ? '' : 'skills',
         subBuilder: SkillSnapshot.create)
     ..aOM<ExternalAgentTarget>(14, _omitFieldNames ? '' : 'externalAgent',
         subBuilder: ExternalAgentTarget.create)
-    ..a<$core.int>(
-        15, _omitFieldNames ? '' : 'requiredContextTokens', $pb.PbFieldType.O3)
-    ..a<$core.int>(16, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns',
-        $pb.PbFieldType.O3)
+    ..aI(15, _omitFieldNames ? '' : 'requiredContextTokens')
+    ..aI(16, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns')
     ..aOM<$1.RunEgressDecision>(17, _omitFieldNames ? '' : 'egressDecision',
         subBuilder: $1.RunEgressDecision.create)
     ..pPS(18, _omitFieldNames ? '' : 'selectedTools')
@@ -137,7 +130,7 @@ class AgentJob extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  AgentJob clone() => AgentJob()..mergeFromMessage(this);
+  AgentJob clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   AgentJob copyWith(void Function(AgentJob) updates) =>
       super.copyWith((message) => updates(message as AgentJob)) as AgentJob;
@@ -411,8 +404,7 @@ class PinnedPersonaSnapshot extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  PinnedPersonaSnapshot clone() =>
-      PinnedPersonaSnapshot()..mergeFromMessage(this);
+  PinnedPersonaSnapshot clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   PinnedPersonaSnapshot copyWith(
           void Function(PinnedPersonaSnapshot) updates) =>
@@ -514,8 +506,7 @@ class PinnedProfileSnapshot extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  PinnedProfileSnapshot clone() =>
-      PinnedProfileSnapshot()..mergeFromMessage(this);
+  PinnedProfileSnapshot clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   PinnedProfileSnapshot copyWith(
           void Function(PinnedProfileSnapshot) updates) =>
@@ -620,7 +611,7 @@ class ExternalAgentTarget extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ExternalAgentTarget clone() => ExternalAgentTarget()..mergeFromMessage(this);
+  ExternalAgentTarget clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ExternalAgentTarget copyWith(void Function(ExternalAgentTarget) updates) =>
       super.copyWith((message) => updates(message as ExternalAgentTarget))
@@ -732,7 +723,7 @@ class SkillSnapshot extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SkillSnapshot clone() => SkillSnapshot()..mergeFromMessage(this);
+  SkillSnapshot clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SkillSnapshot copyWith(void Function(SkillSnapshot) updates) =>
       super.copyWith((message) => updates(message as SkillSnapshot))
@@ -849,7 +840,7 @@ class DiscoveredTool extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DiscoveredTool clone() => DiscoveredTool()..mergeFromMessage(this);
+  DiscoveredTool clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DiscoveredTool copyWith(void Function(DiscoveredTool) updates) =>
       super.copyWith((message) => updates(message as DiscoveredTool))
@@ -937,25 +928,22 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'WorkerCapabilities',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<$1.ModelCapability>(
-        1, _omitFieldNames ? '' : 'models', $pb.PbFieldType.PM,
+    ..pPM<$1.ModelCapability>(1, _omitFieldNames ? '' : 'models',
         subBuilder: $1.ModelCapability.create)
     ..pc<$1.AgentId>(2, _omitFieldNames ? '' : 'agentIds', $pb.PbFieldType.KE,
         valueOf: $1.AgentId.valueOf,
         enumValues: $1.AgentId.values,
         defaultEnumValue: $1.AgentId.AGENT_ID_UNSPECIFIED)
-    ..pc<DiscoveredTool>(3, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
+    ..pPM<DiscoveredTool>(3, _omitFieldNames ? '' : 'tools',
         subBuilder: DiscoveredTool.create)
-    ..a<$core.int>(
-        4, _omitFieldNames ? '' : 'maxConcurrentRuns', $pb.PbFieldType.O3)
+    ..aI(4, _omitFieldNames ? '' : 'maxConcurrentRuns')
     ..aOB(5, _omitFieldNames ? '' : 'supportsExternalAgents')
     ..pPS(6, _omitFieldNames ? '' : 'externalAgentCredentialRefs')
-    ..a<$core.int>(7, _omitFieldNames ? '' : 'remoteEgressDecisionVersion',
-        $pb.PbFieldType.O3)
+    ..aI(7, _omitFieldNames ? '' : 'remoteEgressDecisionVersion')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  WorkerCapabilities clone() => WorkerCapabilities()..mergeFromMessage(this);
+  WorkerCapabilities clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   WorkerCapabilities copyWith(void Function(WorkerCapabilities) updates) =>
       super.copyWith((message) => updates(message as WorkerCapabilities))
@@ -1058,18 +1046,12 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'workerId')
-    ..e<$1.AgentId>(2, _omitFieldNames ? '' : 'agentId', $pb.PbFieldType.OE,
-        defaultOrMaker: $1.AgentId.AGENT_ID_UNSPECIFIED,
-        valueOf: $1.AgentId.valueOf,
+    ..aE<$1.AgentId>(2, _omitFieldNames ? '' : 'agentId',
         enumValues: $1.AgentId.values)
-    ..a<$core.int>(
-        3, _omitFieldNames ? '' : 'maxConcurrentRuns', $pb.PbFieldType.O3)
-    ..pc<DiscoveredTool>(4, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
+    ..aI(3, _omitFieldNames ? '' : 'maxConcurrentRuns')
+    ..pPM<DiscoveredTool>(4, _omitFieldNames ? '' : 'tools',
         subBuilder: DiscoveredTool.create)
-    ..e<ToolDiscoveryStatus>(
-        5, _omitFieldNames ? '' : 'toolDiscoveryStatus', $pb.PbFieldType.OE,
-        defaultOrMaker: ToolDiscoveryStatus.TOOL_DISCOVERY_STATUS_UNSPECIFIED,
-        valueOf: ToolDiscoveryStatus.valueOf,
+    ..aE<ToolDiscoveryStatus>(5, _omitFieldNames ? '' : 'toolDiscoveryStatus',
         enumValues: ToolDiscoveryStatus.values)
     ..aOS(6, _omitFieldNames ? '' : 'registrationId')
     ..aOM<WorkerCapabilities>(7, _omitFieldNames ? '' : 'capabilities',
@@ -1077,7 +1059,7 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeWorkerReady clone() => RuntimeWorkerReady()..mergeFromMessage(this);
+  RuntimeWorkerReady clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeWorkerReady copyWith(void Function(RuntimeWorkerReady) updates) =>
       super.copyWith((message) => updates(message as RuntimeWorkerReady))
@@ -1193,8 +1175,7 @@ class RuntimeWorkerCapabilitiesUpdated extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeWorkerCapabilitiesUpdated clone() =>
-      RuntimeWorkerCapabilitiesUpdated()..mergeFromMessage(this);
+  RuntimeWorkerCapabilitiesUpdated clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeWorkerCapabilitiesUpdated copyWith(
           void Function(RuntimeWorkerCapabilitiesUpdated) updates) =>
@@ -1275,7 +1256,7 @@ class RuntimeHeartbeat extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeHeartbeat clone() => RuntimeHeartbeat()..mergeFromMessage(this);
+  RuntimeHeartbeat clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeHeartbeat copyWith(void Function(RuntimeHeartbeat) updates) =>
       super.copyWith((message) => updates(message as RuntimeHeartbeat))
@@ -1342,7 +1323,7 @@ class RunTokenUsage extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RunTokenUsage clone() => RunTokenUsage()..mergeFromMessage(this);
+  RunTokenUsage clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RunTokenUsage copyWith(void Function(RunTokenUsage) updates) =>
       super.copyWith((message) => updates(message as RunTokenUsage))
@@ -1426,7 +1407,7 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeRunCompleted clone() => RuntimeRunCompleted()..mergeFromMessage(this);
+  RuntimeRunCompleted clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeRunCompleted copyWith(void Function(RuntimeRunCompleted) updates) =>
       super.copyWith((message) => updates(message as RuntimeRunCompleted))
@@ -1551,21 +1532,15 @@ class RuntimeRunFailed extends $pb.GeneratedMessage {
     ..aOS(2, _omitFieldNames ? '' : 'code')
     ..aOS(3, _omitFieldNames ? '' : 'message')
     ..aOB(4, _omitFieldNames ? '' : 'retryable')
-    ..e<FailureOrigin>(
-        5, _omitFieldNames ? '' : 'failureOrigin', $pb.PbFieldType.OE,
-        defaultOrMaker: FailureOrigin.FAILURE_ORIGIN_UNSPECIFIED,
-        valueOf: FailureOrigin.valueOf,
+    ..aE<FailureOrigin>(5, _omitFieldNames ? '' : 'failureOrigin',
         enumValues: FailureOrigin.values)
-    ..e<AutomaticRetryClass>(
-        6, _omitFieldNames ? '' : 'automaticRetryClass', $pb.PbFieldType.OE,
-        defaultOrMaker: AutomaticRetryClass.AUTOMATIC_RETRY_CLASS_UNSPECIFIED,
-        valueOf: AutomaticRetryClass.valueOf,
+    ..aE<AutomaticRetryClass>(6, _omitFieldNames ? '' : 'automaticRetryClass',
         enumValues: AutomaticRetryClass.values)
     ..aInt64(7, _omitFieldNames ? '' : 'expectedStateVersion')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeRunFailed clone() => RuntimeRunFailed()..mergeFromMessage(this);
+  RuntimeRunFailed clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeRunFailed copyWith(void Function(RuntimeRunFailed) updates) =>
       super.copyWith((message) => updates(message as RuntimeRunFailed))
@@ -1686,7 +1661,7 @@ class RuntimeCancelledAck extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeCancelledAck clone() => RuntimeCancelledAck()..mergeFromMessage(this);
+  RuntimeCancelledAck clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeCancelledAck copyWith(void Function(RuntimeCancelledAck) updates) =>
       super.copyWith((message) => updates(message as RuntimeCancelledAck))
@@ -1769,8 +1744,7 @@ class RuntimeApprovalResumeReady extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeApprovalResumeReady clone() =>
-      RuntimeApprovalResumeReady()..mergeFromMessage(this);
+  RuntimeApprovalResumeReady clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeApprovalResumeReady copyWith(
           void Function(RuntimeApprovalResumeReady) updates) =>
@@ -1921,7 +1895,7 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeUpdate clone() => RuntimeUpdate()..mergeFromMessage(this);
+  RuntimeUpdate clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeUpdate copyWith(void Function(RuntimeUpdate) updates) =>
       super.copyWith((message) => updates(message as RuntimeUpdate))
@@ -1941,8 +1915,26 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
       $pb.GeneratedMessage.$_defaultFor<RuntimeUpdate>(create);
   static RuntimeUpdate? _defaultInstance;
 
+  @$pb.TagNumber(1)
+  @$pb.TagNumber(2)
+  @$pb.TagNumber(3)
+  @$pb.TagNumber(4)
+  @$pb.TagNumber(5)
+  @$pb.TagNumber(6)
+  @$pb.TagNumber(7)
+  @$pb.TagNumber(8)
+  @$pb.TagNumber(9)
   RuntimeUpdate_Update whichUpdate() =>
       _RuntimeUpdate_UpdateByTag[$_whichOneof(0)]!;
+  @$pb.TagNumber(1)
+  @$pb.TagNumber(2)
+  @$pb.TagNumber(3)
+  @$pb.TagNumber(4)
+  @$pb.TagNumber(5)
+  @$pb.TagNumber(6)
+  @$pb.TagNumber(7)
+  @$pb.TagNumber(8)
+  @$pb.TagNumber(9)
   void clearUpdate() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)
@@ -2077,8 +2069,7 @@ class RuntimeWorkerAccepted extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeWorkerAccepted clone() =>
-      RuntimeWorkerAccepted()..mergeFromMessage(this);
+  RuntimeWorkerAccepted clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeWorkerAccepted copyWith(
           void Function(RuntimeWorkerAccepted) updates) =>
@@ -2150,7 +2141,7 @@ class RuntimeRunCancelled extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeRunCancelled clone() => RuntimeRunCancelled()..mergeFromMessage(this);
+  RuntimeRunCancelled clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeRunCancelled copyWith(void Function(RuntimeRunCancelled) updates) =>
       super.copyWith((message) => updates(message as RuntimeRunCancelled))
@@ -2235,8 +2226,7 @@ class RuntimeApprovalUpdated extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeApprovalUpdated clone() =>
-      RuntimeApprovalUpdated()..mergeFromMessage(this);
+  RuntimeApprovalUpdated clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeApprovalUpdated copyWith(
           void Function(RuntimeApprovalUpdated) updates) =>
@@ -2337,8 +2327,7 @@ class RuntimeApprovalResumeAccepted extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeApprovalResumeAccepted clone() =>
-      RuntimeApprovalResumeAccepted()..mergeFromMessage(this);
+  RuntimeApprovalResumeAccepted clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeApprovalResumeAccepted copyWith(
           void Function(RuntimeApprovalResumeAccepted) updates) =>
@@ -2424,8 +2413,7 @@ class RuntimeShutdownRequested extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeShutdownRequested clone() =>
-      RuntimeShutdownRequested()..mergeFromMessage(this);
+  RuntimeShutdownRequested clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeShutdownRequested copyWith(
           void Function(RuntimeShutdownRequested) updates) =>
@@ -2482,8 +2470,7 @@ class RuntimeMcpRegistryChanged extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeMcpRegistryChanged clone() =>
-      RuntimeMcpRegistryChanged()..mergeFromMessage(this);
+  RuntimeMcpRegistryChanged clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeMcpRegistryChanged copyWith(
           void Function(RuntimeMcpRegistryChanged) updates) =>
@@ -2600,7 +2587,7 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeCommand clone() => RuntimeCommand()..mergeFromMessage(this);
+  RuntimeCommand clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeCommand copyWith(void Function(RuntimeCommand) updates) =>
       super.copyWith((message) => updates(message as RuntimeCommand))
@@ -2620,8 +2607,24 @@ class RuntimeCommand extends $pb.GeneratedMessage {
       $pb.GeneratedMessage.$_defaultFor<RuntimeCommand>(create);
   static RuntimeCommand? _defaultInstance;
 
+  @$pb.TagNumber(1)
+  @$pb.TagNumber(2)
+  @$pb.TagNumber(3)
+  @$pb.TagNumber(4)
+  @$pb.TagNumber(5)
+  @$pb.TagNumber(6)
+  @$pb.TagNumber(7)
+  @$pb.TagNumber(8)
   RuntimeCommand_Command whichCommand() =>
       _RuntimeCommand_CommandByTag[$_whichOneof(0)]!;
+  @$pb.TagNumber(1)
+  @$pb.TagNumber(2)
+  @$pb.TagNumber(3)
+  @$pb.TagNumber(4)
+  @$pb.TagNumber(5)
+  @$pb.TagNumber(6)
+  @$pb.TagNumber(7)
+  @$pb.TagNumber(8)
   void clearCommand() => $_clearField($_whichOneof(0));
 
   @$pb.TagNumber(1)

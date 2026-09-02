@@ -69,11 +69,7 @@ class ExternalAgent extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'agentId')
     ..aOS(2, _omitFieldNames ? '' : 'displayName')
-    ..e<ExternalAgentProvider>(
-        3, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
-        defaultOrMaker:
-            ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_UNSPECIFIED,
-        valueOf: ExternalAgentProvider.valueOf,
+    ..aE<ExternalAgentProvider>(3, _omitFieldNames ? '' : 'provider',
         enumValues: ExternalAgentProvider.values)
     ..aOS(4, _omitFieldNames ? '' : 'baseUrl')
     ..aOS(5, _omitFieldNames ? '' : 'model')
@@ -86,7 +82,7 @@ class ExternalAgent extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ExternalAgent clone() => ExternalAgent()..mergeFromMessage(this);
+  ExternalAgent clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ExternalAgent copyWith(void Function(ExternalAgent) updates) =>
       super.copyWith((message) => updates(message as ExternalAgent))
@@ -230,11 +226,7 @@ class CreateExternalAgentRequest extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'displayName')
-    ..e<ExternalAgentProvider>(
-        2, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
-        defaultOrMaker:
-            ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_UNSPECIFIED,
-        valueOf: ExternalAgentProvider.valueOf,
+    ..aE<ExternalAgentProvider>(2, _omitFieldNames ? '' : 'provider',
         enumValues: ExternalAgentProvider.values)
     ..aOS(3, _omitFieldNames ? '' : 'baseUrl')
     ..aOS(4, _omitFieldNames ? '' : 'model')
@@ -242,8 +234,7 @@ class CreateExternalAgentRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CreateExternalAgentRequest clone() =>
-      CreateExternalAgentRequest()..mergeFromMessage(this);
+  CreateExternalAgentRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   CreateExternalAgentRequest copyWith(
           void Function(CreateExternalAgentRequest) updates) =>
@@ -345,11 +336,7 @@ class UpdateExternalAgentRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'agentId')
     ..aOS(2, _omitFieldNames ? '' : 'displayName')
-    ..e<ExternalAgentProvider>(
-        3, _omitFieldNames ? '' : 'provider', $pb.PbFieldType.OE,
-        defaultOrMaker:
-            ExternalAgentProvider.EXTERNAL_AGENT_PROVIDER_UNSPECIFIED,
-        valueOf: ExternalAgentProvider.valueOf,
+    ..aE<ExternalAgentProvider>(3, _omitFieldNames ? '' : 'provider',
         enumValues: ExternalAgentProvider.values)
     ..aOS(4, _omitFieldNames ? '' : 'baseUrl')
     ..aOS(5, _omitFieldNames ? '' : 'model')
@@ -357,8 +344,7 @@ class UpdateExternalAgentRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  UpdateExternalAgentRequest clone() =>
-      UpdateExternalAgentRequest()..mergeFromMessage(this);
+  UpdateExternalAgentRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   UpdateExternalAgentRequest copyWith(
           void Function(UpdateExternalAgentRequest) updates) =>
@@ -461,8 +447,7 @@ class DeleteExternalAgentRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteExternalAgentRequest clone() =>
-      DeleteExternalAgentRequest()..mergeFromMessage(this);
+  DeleteExternalAgentRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DeleteExternalAgentRequest copyWith(
           void Function(DeleteExternalAgentRequest) updates) =>
@@ -513,8 +498,7 @@ class DeleteExternalAgentResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteExternalAgentResponse clone() =>
-      DeleteExternalAgentResponse()..mergeFromMessage(this);
+  DeleteExternalAgentResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DeleteExternalAgentResponse copyWith(
           void Function(DeleteExternalAgentResponse) updates) =>
@@ -557,8 +541,7 @@ class ListExternalAgentsRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListExternalAgentsRequest clone() =>
-      ListExternalAgentsRequest()..mergeFromMessage(this);
+  ListExternalAgentsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListExternalAgentsRequest copyWith(
           void Function(ListExternalAgentsRequest) updates) =>
@@ -602,13 +585,12 @@ class ListExternalAgentsResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListExternalAgentsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<ExternalAgent>(1, _omitFieldNames ? '' : 'agents', $pb.PbFieldType.PM,
+    ..pPM<ExternalAgent>(1, _omitFieldNames ? '' : 'agents',
         subBuilder: ExternalAgent.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListExternalAgentsResponse clone() =>
-      ListExternalAgentsResponse()..mergeFromMessage(this);
+  ListExternalAgentsResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListExternalAgentsResponse copyWith(
           void Function(ListExternalAgentsResponse) updates) =>
@@ -660,8 +642,7 @@ class GetSessionAgentRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetSessionAgentRequest clone() =>
-      GetSessionAgentRequest()..mergeFromMessage(this);
+  GetSessionAgentRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetSessionAgentRequest copyWith(
           void Function(GetSessionAgentRequest) updates) =>
@@ -721,8 +702,7 @@ class SetSessionAgentRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SetSessionAgentRequest clone() =>
-      SetSessionAgentRequest()..mergeFromMessage(this);
+  SetSessionAgentRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SetSessionAgentRequest copyWith(
           void Function(SetSessionAgentRequest) updates) =>
@@ -788,8 +768,7 @@ class ClearSessionAgentRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ClearSessionAgentRequest clone() =>
-      ClearSessionAgentRequest()..mergeFromMessage(this);
+  ClearSessionAgentRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ClearSessionAgentRequest copyWith(
           void Function(ClearSessionAgentRequest) updates) =>
@@ -850,8 +829,7 @@ class SessionAgentResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SessionAgentResponse clone() =>
-      SessionAgentResponse()..mergeFromMessage(this);
+  SessionAgentResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SessionAgentResponse copyWith(void Function(SessionAgentResponse) updates) =>
       super.copyWith((message) => updates(message as SessionAgentResponse))

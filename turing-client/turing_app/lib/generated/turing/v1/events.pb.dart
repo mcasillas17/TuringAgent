@@ -67,9 +67,7 @@ class TuringEvent extends $pb.GeneratedMessage {
     ..aOS(3, _omitFieldNames ? '' : 'runId')
     ..aOS(4, _omitFieldNames ? '' : 'traceId')
     ..aInt64(5, _omitFieldNames ? '' : 'sequence')
-    ..e<TuringEventType>(6, _omitFieldNames ? '' : 'type', $pb.PbFieldType.OE,
-        defaultOrMaker: TuringEventType.TURING_EVENT_TYPE_UNSPECIFIED,
-        valueOf: TuringEventType.valueOf,
+    ..aE<TuringEventType>(6, _omitFieldNames ? '' : 'type',
         enumValues: TuringEventType.values)
     ..aOM<$1.Timestamp>(7, _omitFieldNames ? '' : 'createdAt',
         subBuilder: $1.Timestamp.create)
@@ -80,7 +78,7 @@ class TuringEvent extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  TuringEvent clone() => TuringEvent()..mergeFromMessage(this);
+  TuringEvent clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   TuringEvent copyWith(void Function(TuringEvent) updates) =>
       super.copyWith((message) => updates(message as TuringEvent))
@@ -224,11 +222,11 @@ class ListEventsRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..aInt64(2, _omitFieldNames ? '' : 'afterSequence')
-    ..a<$core.int>(3, _omitFieldNames ? '' : 'limit', $pb.PbFieldType.O3)
+    ..aI(3, _omitFieldNames ? '' : 'limit')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListEventsRequest clone() => ListEventsRequest()..mergeFromMessage(this);
+  ListEventsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListEventsRequest copyWith(void Function(ListEventsRequest) updates) =>
       super.copyWith((message) => updates(message as ListEventsRequest))
@@ -302,14 +300,14 @@ class ListEventsResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListEventsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<TuringEvent>(1, _omitFieldNames ? '' : 'events', $pb.PbFieldType.PM,
+    ..pPM<TuringEvent>(1, _omitFieldNames ? '' : 'events',
         subBuilder: TuringEvent.create)
     ..aInt64(2, _omitFieldNames ? '' : 'latestSequence')
     ..aOB(3, _omitFieldNames ? '' : 'resyncRequired')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListEventsResponse clone() => ListEventsResponse()..mergeFromMessage(this);
+  ListEventsResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListEventsResponse copyWith(void Function(ListEventsResponse) updates) =>
       super.copyWith((message) => updates(message as ListEventsResponse))
@@ -380,8 +378,7 @@ class SubscribeSessionEventsRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SubscribeSessionEventsRequest clone() =>
-      SubscribeSessionEventsRequest()..mergeFromMessage(this);
+  SubscribeSessionEventsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SubscribeSessionEventsRequest copyWith(
           void Function(SubscribeSessionEventsRequest) updates) =>
@@ -442,8 +439,7 @@ class SubscribeSessionUpdatesRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SubscribeSessionUpdatesRequest clone() =>
-      SubscribeSessionUpdatesRequest()..mergeFromMessage(this);
+  SubscribeSessionUpdatesRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SubscribeSessionUpdatesRequest copyWith(
           void Function(SubscribeSessionUpdatesRequest) updates) =>

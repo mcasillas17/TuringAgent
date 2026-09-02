@@ -87,8 +87,7 @@ class Automation extends $pb.GeneratedMessage {
     ..aOM<AutomationSchedule>(4, _omitFieldNames ? '' : 'schedule',
         subBuilder: AutomationSchedule.create)
     ..aOB(5, _omitFieldNames ? '' : 'enabled')
-    ..pc<AutomationTool>(
-        6, _omitFieldNames ? '' : 'allowedTools', $pb.PbFieldType.PM,
+    ..pPM<AutomationTool>(6, _omitFieldNames ? '' : 'allowedTools',
         subBuilder: AutomationTool.create)
     ..aOM<$1.Timestamp>(7, _omitFieldNames ? '' : 'lastRunAt',
         subBuilder: $1.Timestamp.create)
@@ -108,7 +107,7 @@ class Automation extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  Automation clone() => Automation()..mergeFromMessage(this);
+  Automation clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   Automation copyWith(void Function(Automation) updates) =>
       super.copyWith((message) => updates(message as Automation)) as Automation;
@@ -323,7 +322,7 @@ class AutomationTool extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  AutomationTool clone() => AutomationTool()..mergeFromMessage(this);
+  AutomationTool clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   AutomationTool copyWith(void Function(AutomationTool) updates) =>
       super.copyWith((message) => updates(message as AutomationTool))
@@ -390,20 +389,14 @@ class AutomationSchedule extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'AutomationSchedule',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<AutomationScheduleKind>(
-        1, _omitFieldNames ? '' : 'kind', $pb.PbFieldType.OE,
-        defaultOrMaker:
-            AutomationScheduleKind.AUTOMATION_SCHEDULE_KIND_UNSPECIFIED,
-        valueOf: AutomationScheduleKind.valueOf,
+    ..aE<AutomationScheduleKind>(1, _omitFieldNames ? '' : 'kind',
         enumValues: AutomationScheduleKind.values)
-    ..a<$core.int>(
-        2, _omitFieldNames ? '' : 'intervalMinutes', $pb.PbFieldType.O3)
-    ..a<$core.int>(
-        3, _omitFieldNames ? '' : 'dailyMinuteUtc', $pb.PbFieldType.O3)
+    ..aI(2, _omitFieldNames ? '' : 'intervalMinutes')
+    ..aI(3, _omitFieldNames ? '' : 'dailyMinuteUtc')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  AutomationSchedule clone() => AutomationSchedule()..mergeFromMessage(this);
+  AutomationSchedule clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   AutomationSchedule copyWith(void Function(AutomationSchedule) updates) =>
       super.copyWith((message) => updates(message as AutomationSchedule))
@@ -490,14 +483,12 @@ class CreateAutomationRequest extends $pb.GeneratedMessage {
     ..aOM<AutomationSchedule>(3, _omitFieldNames ? '' : 'schedule',
         subBuilder: AutomationSchedule.create)
     ..aOB(4, _omitFieldNames ? '' : 'enabled')
-    ..pc<AutomationTool>(
-        5, _omitFieldNames ? '' : 'allowedTools', $pb.PbFieldType.PM,
+    ..pPM<AutomationTool>(5, _omitFieldNames ? '' : 'allowedTools',
         subBuilder: AutomationTool.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CreateAutomationRequest clone() =>
-      CreateAutomationRequest()..mergeFromMessage(this);
+  CreateAutomationRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   CreateAutomationRequest copyWith(
           void Function(CreateAutomationRequest) updates) =>
@@ -595,14 +586,12 @@ class UpdateAutomationRequest extends $pb.GeneratedMessage {
     ..aOS(3, _omitFieldNames ? '' : 'prompt')
     ..aOM<AutomationSchedule>(4, _omitFieldNames ? '' : 'schedule',
         subBuilder: AutomationSchedule.create)
-    ..pc<AutomationTool>(
-        5, _omitFieldNames ? '' : 'allowedTools', $pb.PbFieldType.PM,
+    ..pPM<AutomationTool>(5, _omitFieldNames ? '' : 'allowedTools',
         subBuilder: AutomationTool.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  UpdateAutomationRequest clone() =>
-      UpdateAutomationRequest()..mergeFromMessage(this);
+  UpdateAutomationRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   UpdateAutomationRequest copyWith(
           void Function(UpdateAutomationRequest) updates) =>
@@ -694,8 +683,7 @@ class SetAutomationEnabledRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SetAutomationEnabledRequest clone() =>
-      SetAutomationEnabledRequest()..mergeFromMessage(this);
+  SetAutomationEnabledRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SetAutomationEnabledRequest copyWith(
           void Function(SetAutomationEnabledRequest) updates) =>
@@ -763,8 +751,7 @@ class DeleteAutomationRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteAutomationRequest clone() =>
-      DeleteAutomationRequest()..mergeFromMessage(this);
+  DeleteAutomationRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DeleteAutomationRequest copyWith(
           void Function(DeleteAutomationRequest) updates) =>
@@ -814,8 +801,7 @@ class DeleteAutomationResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DeleteAutomationResponse clone() =>
-      DeleteAutomationResponse()..mergeFromMessage(this);
+  DeleteAutomationResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DeleteAutomationResponse copyWith(
           void Function(DeleteAutomationResponse) updates) =>
@@ -856,8 +842,7 @@ class ListAutomationsRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListAutomationsRequest clone() =>
-      ListAutomationsRequest()..mergeFromMessage(this);
+  ListAutomationsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListAutomationsRequest copyWith(
           void Function(ListAutomationsRequest) updates) =>
@@ -901,14 +886,12 @@ class ListAutomationsResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListAutomationsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<Automation>(
-        1, _omitFieldNames ? '' : 'automations', $pb.PbFieldType.PM,
+    ..pPM<Automation>(1, _omitFieldNames ? '' : 'automations',
         subBuilder: Automation.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListAutomationsResponse clone() =>
-      ListAutomationsResponse()..mergeFromMessage(this);
+  ListAutomationsResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListAutomationsResponse copyWith(
           void Function(ListAutomationsResponse) updates) =>

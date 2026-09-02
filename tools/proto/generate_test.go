@@ -80,7 +80,7 @@ func TestGenerateExecutesWindowsPubCacheShimViaPATH(t *testing.T) {
 	writeTool(t, binDir, "protoc", "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo 'libprotoc 34.1'\n  exit 0\nfi\nprintf '%s\\n' \"$*\" >> \"$PROTO_LOG\"\ncase \"$*\" in\n  *--dart_out=*)\n    case \"$*\" in *--plugin=protoc-gen-dart=*) exit 41 ;; esac\n    old_ifs=$IFS\n    IFS=:\n    for directory in $PATH; do\n      candidate=\"$directory/protoc-gen-dart.bat\"\n      if [ -f \"$candidate\" ]; then\n        IFS=$old_ifs\n        /bin/sh \"$candidate\"\n        exit $?\n      fi\n    done\n    IFS=$old_ifs\n    exit 42\n    ;;\nesac\n")
 	writeTool(t, binDir, "protoc-gen-go", "#!/bin/sh\necho 'protoc-gen-go v1.36.11'\n")
 	writeTool(t, binDir, "protoc-gen-go-grpc", "#!/bin/sh\necho 'protoc-gen-go-grpc 1.6.2'\n")
-	writeTool(t, binDir, "dart", "#!/bin/sh\nif [ \"$1 $2 $3\" = 'pub global list' ]; then echo 'protoc_plugin 22.5.0'; fi\n")
+	writeTool(t, binDir, "dart", "#!/bin/sh\nif [ \"$1 $2 $3\" = 'pub global list' ]; then echo 'protoc_plugin 23.0.0'; fi\n")
 
 	localAppData := t.TempDir()
 	pubCache := filepath.Join(localAppData, "Pub", "Cache")

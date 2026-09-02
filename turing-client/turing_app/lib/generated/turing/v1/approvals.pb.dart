@@ -50,8 +50,7 @@ class ApproveApprovalRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ApproveApprovalRequest clone() =>
-      ApproveApprovalRequest()..mergeFromMessage(this);
+  ApproveApprovalRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ApproveApprovalRequest copyWith(
           void Function(ApproveApprovalRequest) updates) =>
@@ -122,7 +121,7 @@ class DenyApprovalRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DenyApprovalRequest clone() => DenyApprovalRequest()..mergeFromMessage(this);
+  DenyApprovalRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DenyApprovalRequest copyWith(void Function(DenyApprovalRequest) updates) =>
       super.copyWith((message) => updates(message as DenyApprovalRequest))
@@ -190,16 +189,14 @@ class ApprovalResponse extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
-    ..e<ApprovalStatus>(2, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
-        defaultOrMaker: ApprovalStatus.APPROVAL_STATUS_UNSPECIFIED,
-        valueOf: ApprovalStatus.valueOf,
+    ..aE<ApprovalStatus>(2, _omitFieldNames ? '' : 'status',
         enumValues: ApprovalStatus.values)
     ..aOM<SandboxArtifactReservation>(3, _omitFieldNames ? '' : 'reservation',
         subBuilder: SandboxArtifactReservation.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ApprovalResponse clone() => ApprovalResponse()..mergeFromMessage(this);
+  ApprovalResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ApprovalResponse copyWith(void Function(ApprovalResponse) updates) =>
       super.copyWith((message) => updates(message as ApprovalResponse))
@@ -289,8 +286,7 @@ class SandboxArtifactReservation extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SandboxArtifactReservation clone() =>
-      SandboxArtifactReservation()..mergeFromMessage(this);
+  SandboxArtifactReservation clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SandboxArtifactReservation copyWith(
           void Function(SandboxArtifactReservation) updates) =>
@@ -377,8 +373,7 @@ class GetApprovalForRuntimeRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetApprovalForRuntimeRequest clone() =>
-      GetApprovalForRuntimeRequest()..mergeFromMessage(this);
+  GetApprovalForRuntimeRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetApprovalForRuntimeRequest copyWith(
           void Function(GetApprovalForRuntimeRequest) updates) =>
@@ -438,16 +433,13 @@ class RuntimeApprovalState extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
-    ..e<ApprovalStatus>(2, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
-        defaultOrMaker: ApprovalStatus.APPROVAL_STATUS_UNSPECIFIED,
-        valueOf: ApprovalStatus.valueOf,
+    ..aE<ApprovalStatus>(2, _omitFieldNames ? '' : 'status',
         enumValues: ApprovalStatus.values)
     ..aOS(3, _omitFieldNames ? '' : 'approvalToken')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RuntimeApprovalState clone() =>
-      RuntimeApprovalState()..mergeFromMessage(this);
+  RuntimeApprovalState clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RuntimeApprovalState copyWith(void Function(RuntimeApprovalState) updates) =>
       super.copyWith((message) => updates(message as RuntimeApprovalState))
@@ -527,8 +519,7 @@ class ConsumeApprovalRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ConsumeApprovalRequest clone() =>
-      ConsumeApprovalRequest()..mergeFromMessage(this);
+  ConsumeApprovalRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ConsumeApprovalRequest copyWith(
           void Function(ConsumeApprovalRequest) updates) =>
@@ -617,8 +608,7 @@ class FinalizeSandboxArtifactRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  FinalizeSandboxArtifactRequest clone() =>
-      FinalizeSandboxArtifactRequest()..mergeFromMessage(this);
+  FinalizeSandboxArtifactRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   FinalizeSandboxArtifactRequest copyWith(
           void Function(FinalizeSandboxArtifactRequest) updates) =>
@@ -701,8 +691,7 @@ class FinalizeSandboxArtifactResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  FinalizeSandboxArtifactResponse clone() =>
-      FinalizeSandboxArtifactResponse()..mergeFromMessage(this);
+  FinalizeSandboxArtifactResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   FinalizeSandboxArtifactResponse copyWith(
           void Function(FinalizeSandboxArtifactResponse) updates) =>
@@ -776,8 +765,7 @@ class CheckSessionCapabilityRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CheckSessionCapabilityRequest clone() =>
-      CheckSessionCapabilityRequest()..mergeFromMessage(this);
+  CheckSessionCapabilityRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   CheckSessionCapabilityRequest copyWith(
           void Function(CheckSessionCapabilityRequest) updates) =>
@@ -840,8 +828,7 @@ class SessionCapabilityState extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SessionCapabilityState clone() =>
-      SessionCapabilityState()..mergeFromMessage(this);
+  SessionCapabilityState clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SessionCapabilityState copyWith(
           void Function(SessionCapabilityState) updates) =>

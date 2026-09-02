@@ -120,10 +120,7 @@ class AuditPayload extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'AuditPayload',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<AuditPayloadState>(
-        1, _omitFieldNames ? '' : 'state', $pb.PbFieldType.OE,
-        defaultOrMaker: AuditPayloadState.AUDIT_PAYLOAD_STATE_UNSPECIFIED,
-        valueOf: AuditPayloadState.valueOf,
+    ..aE<AuditPayloadState>(1, _omitFieldNames ? '' : 'state',
         enumValues: AuditPayloadState.values)
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
     ..aOS(3, _omitFieldNames ? '' : 'serverName')
@@ -152,8 +149,7 @@ class AuditPayload extends $pb.GeneratedMessage {
         enumValues: $2.EgressDataCategory.values,
         defaultEnumValue:
             $2.EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED)
-    ..a<$core.int>(
-        24, _omitFieldNames ? '' : 'egressDecisionVersion', $pb.PbFieldType.O3)
+    ..aI(24, _omitFieldNames ? '' : 'egressDecisionVersion')
     ..aOM<$1.Timestamp>(25, _omitFieldNames ? '' : 'egressConsentGrantedAt',
         subBuilder: $1.Timestamp.create)
     ..aOS(26, _omitFieldNames ? '' : 'mcpServerTier')
@@ -169,7 +165,7 @@ class AuditPayload extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  AuditPayload clone() => AuditPayload()..mergeFromMessage(this);
+  AuditPayload clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   AuditPayload copyWith(void Function(AuditPayload) updates) =>
       super.copyWith((message) => updates(message as AuditPayload))
@@ -569,7 +565,7 @@ class AuditEntry extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  AuditEntry clone() => AuditEntry()..mergeFromMessage(this);
+  AuditEntry clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   AuditEntry copyWith(void Function(AuditEntry) updates) =>
       super.copyWith((message) => updates(message as AuditEntry)) as AuditEntry;
@@ -702,17 +698,14 @@ class ListAuditEntriesRequest extends $pb.GeneratedMessage {
         subBuilder: $1.Timestamp.create)
     ..aOM<$1.Timestamp>(4, _omitFieldNames ? '' : 'createdAtEnd',
         subBuilder: $1.Timestamp.create)
-    ..e<AuditOrder>(5, _omitFieldNames ? '' : 'order', $pb.PbFieldType.OE,
-        defaultOrMaker: AuditOrder.AUDIT_ORDER_UNSPECIFIED,
-        valueOf: AuditOrder.valueOf,
+    ..aE<AuditOrder>(5, _omitFieldNames ? '' : 'order',
         enumValues: AuditOrder.values)
     ..aOM<$2.PageRequest>(6, _omitFieldNames ? '' : 'page',
         subBuilder: $2.PageRequest.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListAuditEntriesRequest clone() =>
-      ListAuditEntriesRequest()..mergeFromMessage(this);
+  ListAuditEntriesRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListAuditEntriesRequest copyWith(
           void Function(ListAuditEntriesRequest) updates) =>
@@ -821,15 +814,14 @@ class ListAuditEntriesResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListAuditEntriesResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<AuditEntry>(1, _omitFieldNames ? '' : 'entries', $pb.PbFieldType.PM,
+    ..pPM<AuditEntry>(1, _omitFieldNames ? '' : 'entries',
         subBuilder: AuditEntry.create)
     ..aOM<$2.PageResponse>(2, _omitFieldNames ? '' : 'page',
         subBuilder: $2.PageResponse.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListAuditEntriesResponse clone() =>
-      ListAuditEntriesResponse()..mergeFromMessage(this);
+  ListAuditEntriesResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListAuditEntriesResponse copyWith(
           void Function(ListAuditEntriesResponse) updates) =>

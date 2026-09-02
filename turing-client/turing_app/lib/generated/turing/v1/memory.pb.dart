@@ -59,10 +59,7 @@ class MemoryProvenance extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'MemoryProvenance',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<MemoryProvenanceKind>(
-        1, _omitFieldNames ? '' : 'kind', $pb.PbFieldType.OE,
-        defaultOrMaker: MemoryProvenanceKind.MEMORY_PROVENANCE_KIND_UNSPECIFIED,
-        valueOf: MemoryProvenanceKind.valueOf,
+    ..aE<MemoryProvenanceKind>(1, _omitFieldNames ? '' : 'kind',
         enumValues: MemoryProvenanceKind.values)
     ..aOS(2, _omitFieldNames ? '' : 'sourceSessionId')
     ..aOS(3, _omitFieldNames ? '' : 'sourceSessionTitle')
@@ -71,12 +68,11 @@ class MemoryProvenance extends $pb.GeneratedMessage {
     ..aOB(5, _omitFieldNames ? '' : 'withdrawn')
     ..aOM<$1.Timestamp>(6, _omitFieldNames ? '' : 'withdrawnAt',
         subBuilder: $1.Timestamp.create)
-    ..a<$core.int>(
-        7, _omitFieldNames ? '' : 'evidenceCount', $pb.PbFieldType.O3)
+    ..aI(7, _omitFieldNames ? '' : 'evidenceCount')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  MemoryProvenance clone() => MemoryProvenance()..mergeFromMessage(this);
+  MemoryProvenance clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   MemoryProvenance copyWith(void Function(MemoryProvenance) updates) =>
       super.copyWith((message) => updates(message as MemoryProvenance))
@@ -220,21 +216,14 @@ class MemoryCandidate extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'candidateId')
-    ..e<MemoryCandidateKind>(
-        2, _omitFieldNames ? '' : 'kind', $pb.PbFieldType.OE,
-        defaultOrMaker: MemoryCandidateKind.MEMORY_CANDIDATE_KIND_UNSPECIFIED,
-        valueOf: MemoryCandidateKind.valueOf,
+    ..aE<MemoryCandidateKind>(2, _omitFieldNames ? '' : 'kind',
         enumValues: MemoryCandidateKind.values)
     ..aOS(3, _omitFieldNames ? '' : 'inboxPath')
     ..aOS(4, _omitFieldNames ? '' : 'content')
     ..aOS(5, _omitFieldNames ? '' : 'contentHash')
-    ..e<MemoryCandidateState>(
-        6, _omitFieldNames ? '' : 'state', $pb.PbFieldType.OE,
-        defaultOrMaker: MemoryCandidateState.MEMORY_CANDIDATE_STATE_UNSPECIFIED,
-        valueOf: MemoryCandidateState.valueOf,
+    ..aE<MemoryCandidateState>(6, _omitFieldNames ? '' : 'state',
         enumValues: MemoryCandidateState.values)
-    ..pc<MemoryProvenance>(
-        7, _omitFieldNames ? '' : 'provenance', $pb.PbFieldType.PM,
+    ..pPM<MemoryProvenance>(7, _omitFieldNames ? '' : 'provenance',
         subBuilder: MemoryProvenance.create)
     ..aOS(8, _omitFieldNames ? '' : 'promotedNoteId')
     ..aOM<$1.Timestamp>(9, _omitFieldNames ? '' : 'createdAt',
@@ -244,18 +233,15 @@ class MemoryCandidate extends $pb.GeneratedMessage {
     ..aOM<$1.Timestamp>(11, _omitFieldNames ? '' : 'decidedAt',
         subBuilder: $1.Timestamp.create)
     ..aOS(12, _omitFieldNames ? '' : 'parseError')
-    ..e<MemoryUnavailableReason>(
-        13, _omitFieldNames ? '' : 'unavailableReason', $pb.PbFieldType.OE,
-        defaultOrMaker:
-            MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
-        valueOf: MemoryUnavailableReason.valueOf,
+    ..aE<MemoryUnavailableReason>(
+        13, _omitFieldNames ? '' : 'unavailableReason',
         enumValues: MemoryUnavailableReason.values)
     ..aOB(14, _omitFieldNames ? '' : 'managed')
     ..aOB(15, _omitFieldNames ? '' : 'untracked')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  MemoryCandidate clone() => MemoryCandidate()..mergeFromMessage(this);
+  MemoryCandidate clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   MemoryCandidate copyWith(void Function(MemoryCandidate) updates) =>
       super.copyWith((message) => updates(message as MemoryCandidate))
@@ -478,33 +464,24 @@ class MemoryNote extends $pb.GeneratedMessage {
     ..aOS(3, _omitFieldNames ? '' : 'title')
     ..aOS(4, _omitFieldNames ? '' : 'content')
     ..aOS(5, _omitFieldNames ? '' : 'contentHash')
-    ..e<MemoryNoteStatus>(
-        6, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
-        defaultOrMaker: MemoryNoteStatus.MEMORY_NOTE_STATUS_UNSPECIFIED,
-        valueOf: MemoryNoteStatus.valueOf,
+    ..aE<MemoryNoteStatus>(6, _omitFieldNames ? '' : 'status',
         enumValues: MemoryNoteStatus.values)
-    ..e<$3.MemoryTier>(7, _omitFieldNames ? '' : 'tier', $pb.PbFieldType.OE,
-        defaultOrMaker: $3.MemoryTier.MEMORY_TIER_UNSPECIFIED,
-        valueOf: $3.MemoryTier.valueOf,
+    ..aE<$3.MemoryTier>(7, _omitFieldNames ? '' : 'tier',
         enumValues: $3.MemoryTier.values)
-    ..pc<MemoryProvenance>(
-        8, _omitFieldNames ? '' : 'provenance', $pb.PbFieldType.PM,
+    ..pPM<MemoryProvenance>(8, _omitFieldNames ? '' : 'provenance',
         subBuilder: MemoryProvenance.create)
     ..aOM<$1.Timestamp>(9, _omitFieldNames ? '' : 'createdAt',
         subBuilder: $1.Timestamp.create)
     ..aOM<$1.Timestamp>(10, _omitFieldNames ? '' : 'updatedAt',
         subBuilder: $1.Timestamp.create)
     ..aOS(11, _omitFieldNames ? '' : 'parseError')
-    ..e<MemoryUnavailableReason>(
-        12, _omitFieldNames ? '' : 'unavailableReason', $pb.PbFieldType.OE,
-        defaultOrMaker:
-            MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
-        valueOf: MemoryUnavailableReason.valueOf,
+    ..aE<MemoryUnavailableReason>(
+        12, _omitFieldNames ? '' : 'unavailableReason',
         enumValues: MemoryUnavailableReason.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  MemoryNote clone() => MemoryNote()..mergeFromMessage(this);
+  MemoryNote clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   MemoryNote copyWith(void Function(MemoryNote) updates) =>
       super.copyWith((message) => updates(message as MemoryNote)) as MemoryNote;
@@ -668,26 +645,19 @@ class MemoryProfile extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'content')
     ..aOS(2, _omitFieldNames ? '' : 'contentHash')
-    ..e<MemoryNoteStatus>(
-        3, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
-        defaultOrMaker: MemoryNoteStatus.MEMORY_NOTE_STATUS_UNSPECIFIED,
-        valueOf: MemoryNoteStatus.valueOf,
+    ..aE<MemoryNoteStatus>(3, _omitFieldNames ? '' : 'status',
         enumValues: MemoryNoteStatus.values)
     ..aOM<$1.Timestamp>(4, _omitFieldNames ? '' : 'updatedAt',
         subBuilder: $1.Timestamp.create)
     ..aOS(5, _omitFieldNames ? '' : 'parseError')
-    ..e<MemoryUnavailableReason>(
-        6, _omitFieldNames ? '' : 'unavailableReason', $pb.PbFieldType.OE,
-        defaultOrMaker:
-            MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
-        valueOf: MemoryUnavailableReason.valueOf,
+    ..aE<MemoryUnavailableReason>(6, _omitFieldNames ? '' : 'unavailableReason',
         enumValues: MemoryUnavailableReason.values)
     ..aOB(7, _omitFieldNames ? '' : 'pinnedTruncated')
-    ..a<$core.int>(8, _omitFieldNames ? '' : 'pinnedBytes', $pb.PbFieldType.O3)
+    ..aI(8, _omitFieldNames ? '' : 'pinnedBytes')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  MemoryProfile clone() => MemoryProfile()..mergeFromMessage(this);
+  MemoryProfile clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   MemoryProfile copyWith(void Function(MemoryProfile) updates) =>
       super.copyWith((message) => updates(message as MemoryProfile))
@@ -842,26 +812,19 @@ class MemoryPersona extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'content')
     ..aOS(2, _omitFieldNames ? '' : 'contentHash')
-    ..e<MemoryNoteStatus>(
-        3, _omitFieldNames ? '' : 'status', $pb.PbFieldType.OE,
-        defaultOrMaker: MemoryNoteStatus.MEMORY_NOTE_STATUS_UNSPECIFIED,
-        valueOf: MemoryNoteStatus.valueOf,
+    ..aE<MemoryNoteStatus>(3, _omitFieldNames ? '' : 'status',
         enumValues: MemoryNoteStatus.values)
     ..aOM<$1.Timestamp>(4, _omitFieldNames ? '' : 'updatedAt',
         subBuilder: $1.Timestamp.create)
     ..aOS(5, _omitFieldNames ? '' : 'parseError')
-    ..e<MemoryUnavailableReason>(
-        6, _omitFieldNames ? '' : 'unavailableReason', $pb.PbFieldType.OE,
-        defaultOrMaker:
-            MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
-        valueOf: MemoryUnavailableReason.valueOf,
+    ..aE<MemoryUnavailableReason>(6, _omitFieldNames ? '' : 'unavailableReason',
         enumValues: MemoryUnavailableReason.values)
     ..aOB(7, _omitFieldNames ? '' : 'pinnedTruncated')
-    ..a<$core.int>(8, _omitFieldNames ? '' : 'pinnedBytes', $pb.PbFieldType.O3)
+    ..aI(8, _omitFieldNames ? '' : 'pinnedBytes')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  MemoryPersona clone() => MemoryPersona()..mergeFromMessage(this);
+  MemoryPersona clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   MemoryPersona copyWith(void Function(MemoryPersona) updates) =>
       super.copyWith((message) => updates(message as MemoryPersona))
@@ -997,27 +960,20 @@ class MemoryTierState extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'MemoryTierState',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<$3.MemoryTier>(1, _omitFieldNames ? '' : 'tier', $pb.PbFieldType.OE,
-        defaultOrMaker: $3.MemoryTier.MEMORY_TIER_UNSPECIFIED,
-        valueOf: $3.MemoryTier.valueOf,
+    ..aE<$3.MemoryTier>(1, _omitFieldNames ? '' : 'tier',
         enumValues: $3.MemoryTier.values)
     ..aOB(2, _omitFieldNames ? '' : 'enabled')
-    ..a<$core.int>(3, _omitFieldNames ? '' : 'noteCount', $pb.PbFieldType.O3)
-    ..a<$core.int>(
-        4, _omitFieldNames ? '' : 'pendingCandidateCount', $pb.PbFieldType.O3)
+    ..aI(3, _omitFieldNames ? '' : 'noteCount')
+    ..aI(4, _omitFieldNames ? '' : 'pendingCandidateCount')
     ..aOM<$1.Timestamp>(5, _omitFieldNames ? '' : 'updatedAt',
         subBuilder: $1.Timestamp.create)
-    ..e<MemoryUnavailableReason>(
-        6, _omitFieldNames ? '' : 'unavailableReason', $pb.PbFieldType.OE,
-        defaultOrMaker:
-            MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
-        valueOf: MemoryUnavailableReason.valueOf,
+    ..aE<MemoryUnavailableReason>(6, _omitFieldNames ? '' : 'unavailableReason',
         enumValues: MemoryUnavailableReason.values)
     ..aOS(7, _omitFieldNames ? '' : 'parseError')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  MemoryTierState clone() => MemoryTierState()..mergeFromMessage(this);
+  MemoryTierState clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   MemoryTierState copyWith(void Function(MemoryTierState) updates) =>
       super.copyWith((message) => updates(message as MemoryTierState))
@@ -1136,17 +1092,13 @@ class MemorySettings extends $pb.GeneratedMessage {
     ..aOB(1, _omitFieldNames ? '' : 'enabled')
     ..aOS(2, _omitFieldNames ? '' : 'vaultRoot')
     ..aOB(3, _omitFieldNames ? '' : 'vaultWritable')
-    ..e<MemoryUnavailableReason>(
-        4, _omitFieldNames ? '' : 'unavailableReason', $pb.PbFieldType.OE,
-        defaultOrMaker:
-            MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
-        valueOf: MemoryUnavailableReason.valueOf,
+    ..aE<MemoryUnavailableReason>(4, _omitFieldNames ? '' : 'unavailableReason',
         enumValues: MemoryUnavailableReason.values)
     ..aOS(5, _omitFieldNames ? '' : 'parseError')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  MemorySettings clone() => MemorySettings()..mergeFromMessage(this);
+  MemorySettings clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   MemorySettings copyWith(void Function(MemorySettings) updates) =>
       super.copyWith((message) => updates(message as MemorySettings))
@@ -1232,8 +1184,7 @@ class ListMemoryStateRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListMemoryStateRequest clone() =>
-      ListMemoryStateRequest()..mergeFromMessage(this);
+  ListMemoryStateRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListMemoryStateRequest copyWith(
           void Function(ListMemoryStateRequest) updates) =>
@@ -1289,12 +1240,11 @@ class ListMemoryStateResponse extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOM<MemorySettings>(1, _omitFieldNames ? '' : 'settings',
         subBuilder: MemorySettings.create)
-    ..pc<MemoryTierState>(2, _omitFieldNames ? '' : 'tiers', $pb.PbFieldType.PM,
+    ..pPM<MemoryTierState>(2, _omitFieldNames ? '' : 'tiers',
         subBuilder: MemoryTierState.create)
-    ..pc<MemoryNote>(3, _omitFieldNames ? '' : 'notes', $pb.PbFieldType.PM,
+    ..pPM<MemoryNote>(3, _omitFieldNames ? '' : 'notes',
         subBuilder: MemoryNote.create)
-    ..pc<MemoryCandidate>(
-        4, _omitFieldNames ? '' : 'candidates', $pb.PbFieldType.PM,
+    ..pPM<MemoryCandidate>(4, _omitFieldNames ? '' : 'candidates',
         subBuilder: MemoryCandidate.create)
     ..aOM<MemoryProfile>(5, _omitFieldNames ? '' : 'profile',
         subBuilder: MemoryProfile.create)
@@ -1303,8 +1253,7 @@ class ListMemoryStateResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListMemoryStateResponse clone() =>
-      ListMemoryStateResponse()..mergeFromMessage(this);
+  ListMemoryStateResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListMemoryStateResponse copyWith(
           void Function(ListMemoryStateResponse) updates) =>
@@ -1387,8 +1336,7 @@ class GetMemorySettingsRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetMemorySettingsRequest clone() =>
-      GetMemorySettingsRequest()..mergeFromMessage(this);
+  GetMemorySettingsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetMemorySettingsRequest copyWith(
           void Function(GetMemorySettingsRequest) updates) =>
@@ -1435,15 +1383,12 @@ class SetMemoryEnabledRequest extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOB(1, _omitFieldNames ? '' : 'enabled')
-    ..e<$3.MemoryTier>(2, _omitFieldNames ? '' : 'tier', $pb.PbFieldType.OE,
-        defaultOrMaker: $3.MemoryTier.MEMORY_TIER_UNSPECIFIED,
-        valueOf: $3.MemoryTier.valueOf,
+    ..aE<$3.MemoryTier>(2, _omitFieldNames ? '' : 'tier',
         enumValues: $3.MemoryTier.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SetMemoryEnabledRequest clone() =>
-      SetMemoryEnabledRequest()..mergeFromMessage(this);
+  SetMemoryEnabledRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SetMemoryEnabledRequest copyWith(
           void Function(SetMemoryEnabledRequest) updates) =>
@@ -1508,21 +1453,14 @@ class ListMemoryCandidatesRequest extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListMemoryCandidatesRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..e<MemoryCandidateState>(
-        1, _omitFieldNames ? '' : 'state', $pb.PbFieldType.OE,
-        defaultOrMaker: MemoryCandidateState.MEMORY_CANDIDATE_STATE_UNSPECIFIED,
-        valueOf: MemoryCandidateState.valueOf,
+    ..aE<MemoryCandidateState>(1, _omitFieldNames ? '' : 'state',
         enumValues: MemoryCandidateState.values)
-    ..e<MemoryCandidateKind>(
-        2, _omitFieldNames ? '' : 'kind', $pb.PbFieldType.OE,
-        defaultOrMaker: MemoryCandidateKind.MEMORY_CANDIDATE_KIND_UNSPECIFIED,
-        valueOf: MemoryCandidateKind.valueOf,
+    ..aE<MemoryCandidateKind>(2, _omitFieldNames ? '' : 'kind',
         enumValues: MemoryCandidateKind.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListMemoryCandidatesRequest clone() =>
-      ListMemoryCandidatesRequest()..mergeFromMessage(this);
+  ListMemoryCandidatesRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListMemoryCandidatesRequest copyWith(
           void Function(ListMemoryCandidatesRequest) updates) =>
@@ -1588,20 +1526,14 @@ class ListMemoryCandidatesResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListMemoryCandidatesResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<MemoryCandidate>(
-        1, _omitFieldNames ? '' : 'candidates', $pb.PbFieldType.PM,
+    ..pPM<MemoryCandidate>(1, _omitFieldNames ? '' : 'candidates',
         subBuilder: MemoryCandidate.create)
-    ..e<MemoryUnavailableReason>(
-        2, _omitFieldNames ? '' : 'unavailableReason', $pb.PbFieldType.OE,
-        defaultOrMaker:
-            MemoryUnavailableReason.MEMORY_UNAVAILABLE_REASON_UNSPECIFIED,
-        valueOf: MemoryUnavailableReason.valueOf,
+    ..aE<MemoryUnavailableReason>(2, _omitFieldNames ? '' : 'unavailableReason',
         enumValues: MemoryUnavailableReason.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListMemoryCandidatesResponse clone() =>
-      ListMemoryCandidatesResponse()..mergeFromMessage(this);
+  ListMemoryCandidatesResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListMemoryCandidatesResponse copyWith(
           void Function(ListMemoryCandidatesResponse) updates) =>
@@ -1663,8 +1595,7 @@ class GetMemoryCandidateRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetMemoryCandidateRequest clone() =>
-      GetMemoryCandidateRequest()..mergeFromMessage(this);
+  GetMemoryCandidateRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetMemoryCandidateRequest copyWith(
           void Function(GetMemoryCandidateRequest) updates) =>
@@ -1731,17 +1662,13 @@ class PromoteMemoryCandidateRequest extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'candidateId')
     ..aOS(2, _omitFieldNames ? '' : 'expectedContentHash')
     ..aOS(3, _omitFieldNames ? '' : 'editedContent')
-    ..e<$3.MemoryTier>(
-        4, _omitFieldNames ? '' : 'targetTier', $pb.PbFieldType.OE,
-        defaultOrMaker: $3.MemoryTier.MEMORY_TIER_UNSPECIFIED,
-        valueOf: $3.MemoryTier.valueOf,
+    ..aE<$3.MemoryTier>(4, _omitFieldNames ? '' : 'targetTier',
         enumValues: $3.MemoryTier.values)
     ..aOS(5, _omitFieldNames ? '' : 'expectedCandidateHash')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  PromoteMemoryCandidateRequest clone() =>
-      PromoteMemoryCandidateRequest()..mergeFromMessage(this);
+  PromoteMemoryCandidateRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   PromoteMemoryCandidateRequest copyWith(
           void Function(PromoteMemoryCandidateRequest) updates) =>
@@ -1867,8 +1794,7 @@ class PromoteMemoryCandidateResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  PromoteMemoryCandidateResponse clone() =>
-      PromoteMemoryCandidateResponse()..mergeFromMessage(this);
+  PromoteMemoryCandidateResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   PromoteMemoryCandidateResponse copyWith(
           void Function(PromoteMemoryCandidateResponse) updates) =>
@@ -1952,8 +1878,7 @@ class RejectMemoryCandidateRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RejectMemoryCandidateRequest clone() =>
-      RejectMemoryCandidateRequest()..mergeFromMessage(this);
+  RejectMemoryCandidateRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RejectMemoryCandidateRequest copyWith(
           void Function(RejectMemoryCandidateRequest) updates) =>
@@ -2061,8 +1986,7 @@ class RejectMemoryCandidateResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RejectMemoryCandidateResponse clone() =>
-      RejectMemoryCandidateResponse()..mergeFromMessage(this);
+  RejectMemoryCandidateResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RejectMemoryCandidateResponse copyWith(
           void Function(RejectMemoryCandidateResponse) updates) =>
@@ -2116,8 +2040,7 @@ class GetMemoryProfileRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetMemoryProfileRequest clone() =>
-      GetMemoryProfileRequest()..mergeFromMessage(this);
+  GetMemoryProfileRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetMemoryProfileRequest copyWith(
           void Function(GetMemoryProfileRequest) updates) =>
@@ -2176,8 +2099,7 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ApplyMemoryProfileRequest clone() =>
-      ApplyMemoryProfileRequest()..mergeFromMessage(this);
+  ApplyMemoryProfileRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ApplyMemoryProfileRequest copyWith(
           void Function(ApplyMemoryProfileRequest) updates) =>
@@ -2286,8 +2208,7 @@ class ApplyMemoryProfileResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ApplyMemoryProfileResponse clone() =>
-      ApplyMemoryProfileResponse()..mergeFromMessage(this);
+  ApplyMemoryProfileResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ApplyMemoryProfileResponse copyWith(
           void Function(ApplyMemoryProfileResponse) updates) =>
@@ -2355,8 +2276,7 @@ class GetMemoryPersonaRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetMemoryPersonaRequest clone() =>
-      GetMemoryPersonaRequest()..mergeFromMessage(this);
+  GetMemoryPersonaRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetMemoryPersonaRequest copyWith(
           void Function(GetMemoryPersonaRequest) updates) =>
@@ -2411,8 +2331,7 @@ class SaveMemoryPersonaRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SaveMemoryPersonaRequest clone() =>
-      SaveMemoryPersonaRequest()..mergeFromMessage(this);
+  SaveMemoryPersonaRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SaveMemoryPersonaRequest copyWith(
           void Function(SaveMemoryPersonaRequest) updates) =>
@@ -2484,8 +2403,7 @@ class SaveMemoryPersonaResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SaveMemoryPersonaResponse clone() =>
-      SaveMemoryPersonaResponse()..mergeFromMessage(this);
+  SaveMemoryPersonaResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SaveMemoryPersonaResponse copyWith(
           void Function(SaveMemoryPersonaResponse) updates) =>
@@ -2552,8 +2470,7 @@ class SaveMemoryProfileRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SaveMemoryProfileRequest clone() =>
-      SaveMemoryProfileRequest()..mergeFromMessage(this);
+  SaveMemoryProfileRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SaveMemoryProfileRequest copyWith(
           void Function(SaveMemoryProfileRequest) updates) =>
@@ -2622,8 +2539,7 @@ class SaveMemoryProfileResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SaveMemoryProfileResponse clone() =>
-      SaveMemoryProfileResponse()..mergeFromMessage(this);
+  SaveMemoryProfileResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SaveMemoryProfileResponse copyWith(
           void Function(SaveMemoryProfileResponse) updates) =>
@@ -2687,9 +2603,7 @@ class MemoryToolDescriptor extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'toolName')
-    ..e<$3.ToolPolicy>(2, _omitFieldNames ? '' : 'policy', $pb.PbFieldType.OE,
-        defaultOrMaker: $3.ToolPolicy.TOOL_POLICY_UNSPECIFIED,
-        valueOf: $3.ToolPolicy.valueOf,
+    ..aE<$3.ToolPolicy>(2, _omitFieldNames ? '' : 'policy',
         enumValues: $3.ToolPolicy.values)
     ..aOM<$2.Struct>(3, _omitFieldNames ? '' : 'schema',
         subBuilder: $2.Struct.create)
@@ -2698,8 +2612,7 @@ class MemoryToolDescriptor extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  MemoryToolDescriptor clone() =>
-      MemoryToolDescriptor()..mergeFromMessage(this);
+  MemoryToolDescriptor clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   MemoryToolDescriptor copyWith(void Function(MemoryToolDescriptor) updates) =>
       super.copyWith((message) => updates(message as MemoryToolDescriptor))
@@ -2786,8 +2699,7 @@ class ListMemoryToolsRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListMemoryToolsRequest clone() =>
-      ListMemoryToolsRequest()..mergeFromMessage(this);
+  ListMemoryToolsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListMemoryToolsRequest copyWith(
           void Function(ListMemoryToolsRequest) updates) =>
@@ -2831,14 +2743,12 @@ class ListMemoryToolsResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListMemoryToolsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<MemoryToolDescriptor>(
-        1, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
+    ..pPM<MemoryToolDescriptor>(1, _omitFieldNames ? '' : 'tools',
         subBuilder: MemoryToolDescriptor.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListMemoryToolsResponse clone() =>
-      ListMemoryToolsResponse()..mergeFromMessage(this);
+  ListMemoryToolsResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListMemoryToolsResponse copyWith(
           void Function(ListMemoryToolsResponse) updates) =>
@@ -2905,8 +2815,7 @@ class CallMemoryToolRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CallMemoryToolRequest clone() =>
-      CallMemoryToolRequest()..mergeFromMessage(this);
+  CallMemoryToolRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   CallMemoryToolRequest copyWith(
           void Function(CallMemoryToolRequest) updates) =>
@@ -2993,8 +2902,7 @@ class CallMemoryToolResponse extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  CallMemoryToolResponse clone() =>
-      CallMemoryToolResponse()..mergeFromMessage(this);
+  CallMemoryToolResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   CallMemoryToolResponse copyWith(
           void Function(CallMemoryToolResponse) updates) =>

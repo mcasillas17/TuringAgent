@@ -48,7 +48,7 @@ class TelemetryWindow extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'TelemetryWindow',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..a<$core.int>(1, _omitFieldNames ? '' : 'days', $pb.PbFieldType.O3)
+    ..aI(1, _omitFieldNames ? '' : 'days')
     ..aOM<$1.Timestamp>(2, _omitFieldNames ? '' : 'start',
         subBuilder: $1.Timestamp.create)
     ..aOM<$1.Timestamp>(3, _omitFieldNames ? '' : 'end',
@@ -56,7 +56,7 @@ class TelemetryWindow extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  TelemetryWindow clone() => TelemetryWindow()..mergeFromMessage(this);
+  TelemetryWindow clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   TelemetryWindow copyWith(void Function(TelemetryWindow) updates) =>
       super.copyWith((message) => updates(message as TelemetryWindow))
@@ -159,7 +159,7 @@ class RunTotals extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  RunTotals clone() => RunTotals()..mergeFromMessage(this);
+  RunTotals clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   RunTotals copyWith(void Function(RunTotals) updates) =>
       super.copyWith((message) => updates(message as RunTotals)) as RunTotals;
@@ -276,7 +276,7 @@ class TokenTotals extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  TokenTotals clone() => TokenTotals()..mergeFromMessage(this);
+  TokenTotals clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   TokenTotals copyWith(void Function(TokenTotals) updates) =>
       super.copyWith((message) => updates(message as TokenTotals))
@@ -381,7 +381,7 @@ class ToolUsage extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ToolUsage clone() => ToolUsage()..mergeFromMessage(this);
+  ToolUsage clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ToolUsage copyWith(void Function(ToolUsage) updates) =>
       super.copyWith((message) => updates(message as ToolUsage)) as ToolUsage;
@@ -501,7 +501,7 @@ class ModelUsage extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ModelUsage clone() => ModelUsage()..mergeFromMessage(this);
+  ModelUsage clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ModelUsage copyWith(void Function(ModelUsage) updates) =>
       super.copyWith((message) => updates(message as ModelUsage)) as ModelUsage;
@@ -624,7 +624,7 @@ class ExternalAgentUsage extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ExternalAgentUsage clone() => ExternalAgentUsage()..mergeFromMessage(this);
+  ExternalAgentUsage clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ExternalAgentUsage copyWith(void Function(ExternalAgentUsage) updates) =>
       super.copyWith((message) => updates(message as ExternalAgentUsage))
@@ -741,7 +741,7 @@ class AutomationTotals extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  AutomationTotals clone() => AutomationTotals()..mergeFromMessage(this);
+  AutomationTotals clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   AutomationTotals copyWith(void Function(AutomationTotals) updates) =>
       super.copyWith((message) => updates(message as AutomationTotals))
@@ -836,7 +836,7 @@ class IntegrationTotals extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  IntegrationTotals clone() => IntegrationTotals()..mergeFromMessage(this);
+  IntegrationTotals clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   IntegrationTotals copyWith(void Function(IntegrationTotals) updates) =>
       super.copyWith((message) => updates(message as IntegrationTotals))
@@ -919,7 +919,7 @@ class DailyActivity extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  DailyActivity clone() => DailyActivity()..mergeFromMessage(this);
+  DailyActivity clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   DailyActivity copyWith(void Function(DailyActivity) updates) =>
       super.copyWith((message) => updates(message as DailyActivity))
@@ -1010,12 +1010,11 @@ class GetTelemetrySummaryRequest extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'GetTelemetrySummaryRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..a<$core.int>(1, _omitFieldNames ? '' : 'windowDays', $pb.PbFieldType.O3)
+    ..aI(1, _omitFieldNames ? '' : 'windowDays')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetTelemetrySummaryRequest clone() =>
-      GetTelemetrySummaryRequest()..mergeFromMessage(this);
+  GetTelemetrySummaryRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetTelemetrySummaryRequest copyWith(
           void Function(GetTelemetrySummaryRequest) updates) =>
@@ -1094,24 +1093,22 @@ class GetTelemetrySummaryResponse extends $pb.GeneratedMessage {
         subBuilder: RunTotals.create)
     ..aOM<TokenTotals>(3, _omitFieldNames ? '' : 'tokens',
         subBuilder: TokenTotals.create)
-    ..pc<ToolUsage>(4, _omitFieldNames ? '' : 'tools', $pb.PbFieldType.PM,
+    ..pPM<ToolUsage>(4, _omitFieldNames ? '' : 'tools',
         subBuilder: ToolUsage.create)
-    ..pc<ModelUsage>(5, _omitFieldNames ? '' : 'models', $pb.PbFieldType.PM,
+    ..pPM<ModelUsage>(5, _omitFieldNames ? '' : 'models',
         subBuilder: ModelUsage.create)
-    ..pc<ExternalAgentUsage>(
-        6, _omitFieldNames ? '' : 'externalAgents', $pb.PbFieldType.PM,
+    ..pPM<ExternalAgentUsage>(6, _omitFieldNames ? '' : 'externalAgents',
         subBuilder: ExternalAgentUsage.create)
     ..aOM<AutomationTotals>(7, _omitFieldNames ? '' : 'automations',
         subBuilder: AutomationTotals.create)
     ..aOM<IntegrationTotals>(8, _omitFieldNames ? '' : 'integrations',
         subBuilder: IntegrationTotals.create)
-    ..pc<DailyActivity>(9, _omitFieldNames ? '' : 'daily', $pb.PbFieldType.PM,
+    ..pPM<DailyActivity>(9, _omitFieldNames ? '' : 'daily',
         subBuilder: DailyActivity.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetTelemetrySummaryResponse clone() =>
-      GetTelemetrySummaryResponse()..mergeFromMessage(this);
+  GetTelemetrySummaryResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetTelemetrySummaryResponse copyWith(
           void Function(GetTelemetrySummaryResponse) updates) =>

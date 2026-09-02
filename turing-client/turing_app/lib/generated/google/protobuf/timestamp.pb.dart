@@ -133,8 +133,7 @@ class Timestamp extends $pb.GeneratedMessage with $mixin.TimestampMixin {
       package:
           const $pb.PackageName(_omitMessageNames ? '' : 'google.protobuf'),
       createEmptyInstance: create,
-      toProto3Json: $mixin.TimestampMixin.toProto3JsonHelper,
-      fromProto3Json: $mixin.TimestampMixin.fromProto3JsonHelper)
+      wellKnownType: $mixin.WellKnownType.timestamp)
     ..aInt64(1, _omitFieldNames ? '' : 'seconds')
     ..a<$core.int>(2, _omitFieldNames ? '' : 'nanos', $pb.PbFieldType.O3)
     ..hasRequiredFields = false;

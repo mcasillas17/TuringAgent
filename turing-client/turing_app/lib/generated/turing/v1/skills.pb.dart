@@ -86,7 +86,7 @@ class Skill extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  Skill clone() => Skill()..mergeFromMessage(this);
+  Skill clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   Skill copyWith(void Function(Skill) updates) =>
       super.copyWith((message) => updates(message as Skill)) as Skill;
@@ -232,7 +232,7 @@ class ListSkillsRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListSkillsRequest clone() => ListSkillsRequest()..mergeFromMessage(this);
+  ListSkillsRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListSkillsRequest copyWith(void Function(ListSkillsRequest) updates) =>
       super.copyWith((message) => updates(message as ListSkillsRequest))
@@ -275,12 +275,11 @@ class ListSkillsResponse extends $pb.GeneratedMessage {
       _omitMessageNames ? '' : 'ListSkillsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: create)
-    ..pc<Skill>(1, _omitFieldNames ? '' : 'skills', $pb.PbFieldType.PM,
-        subBuilder: Skill.create)
+    ..pPM<Skill>(1, _omitFieldNames ? '' : 'skills', subBuilder: Skill.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ListSkillsResponse clone() => ListSkillsResponse()..mergeFromMessage(this);
+  ListSkillsResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ListSkillsResponse copyWith(void Function(ListSkillsResponse) updates) =>
       super.copyWith((message) => updates(message as ListSkillsResponse))
@@ -330,7 +329,7 @@ class GetSkillRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetSkillRequest clone() => GetSkillRequest()..mergeFromMessage(this);
+  GetSkillRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetSkillRequest copyWith(void Function(GetSkillRequest) updates) =>
       super.copyWith((message) => updates(message as GetSkillRequest))
@@ -389,8 +388,7 @@ class SetSkillEnabledRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SetSkillEnabledRequest clone() =>
-      SetSkillEnabledRequest()..mergeFromMessage(this);
+  SetSkillEnabledRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SetSkillEnabledRequest copyWith(
           void Function(SetSkillEnabledRequest) updates) =>
@@ -462,8 +460,7 @@ class SetSkillCapabilityGrantRequest extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  SetSkillCapabilityGrantRequest clone() =>
-      SetSkillCapabilityGrantRequest()..mergeFromMessage(this);
+  SetSkillCapabilityGrantRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   SetSkillCapabilityGrantRequest copyWith(
           void Function(SetSkillCapabilityGrantRequest) updates) =>

@@ -66,13 +66,13 @@ for candidate in \
 done
 
 if [[ -z "$dart_plugin" ]]; then
-  echo "missing required Dart protobuf plugin under $dart_pub_cache/bin; install it with: PUB_CACHE=\"$dart_pub_cache\" dart pub global activate protoc_plugin 22.5.0" >&2
+  echo "missing required Dart protobuf plugin under $dart_pub_cache/bin; install it with: PUB_CACHE=\"$dart_pub_cache\" dart pub global activate protoc_plugin 23.0.0" >&2
   exit 127
 fi
 
 dart_plugin_version="$(PUB_CACHE="$dart_pub_cache" dart pub global list 2>/dev/null | awk '$1 == "protoc_plugin" { print $2; exit }')"
-if [[ "$dart_plugin_version" != "22.5.0" ]]; then
-  echo "protoc-gen-dart requires protoc_plugin 22.5.0 in $dart_pub_cache (found: ${dart_plugin_version:-not globally activated}); run: PUB_CACHE=\"$dart_pub_cache\" dart pub global activate protoc_plugin 22.5.0" >&2
+if [[ "$dart_plugin_version" != "23.0.0" ]]; then
+  echo "protoc-gen-dart requires protoc_plugin 23.0.0 in $dart_pub_cache (found: ${dart_plugin_version:-not globally activated}); run: PUB_CACHE=\"$dart_pub_cache\" dart pub global activate protoc_plugin 23.0.0" >&2
   exit 1
 fi
 
