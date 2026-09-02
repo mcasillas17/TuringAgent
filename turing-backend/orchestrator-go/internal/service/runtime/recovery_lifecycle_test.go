@@ -107,6 +107,20 @@ func TestRecoveryDoesNotRequeueExpiredAttemptOwnedByConnectedWorker(t *testing.T
 	recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
 		return command.GetRunAssigned() != nil && command.GetRunAssigned().GetRunId() == enqueued.RunID
 	})
+	deadline := time.Now().Add(time.Second)
+	for {
+		run, err := h.repo.GetRun(context.Background(), enqueued.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.ExecutionState == "delivered" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("assignment execution state = %q, want delivered", run.ExecutionState)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	expired := time.Now().Add(-time.Second)
 	if _, err := h.database.ExecContext(context.Background(), `
 		UPDATE agent_runs
