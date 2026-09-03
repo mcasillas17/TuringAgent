@@ -1,5 +1,10 @@
 # TuringAgent Personal-Agent Audit — Memory, Trust, and Operability
 
+> **Historical audit:** The canonical product direction and implementation
+> roadmap is now [`docs/NORTH_STAR.md`](../NORTH_STAR.md). This file preserves
+> the 2026-08 audit and task lineage; its status statements are not current
+> unless repeated in the canonical roadmap.
+
 **Audit date:** 2026-08-18
 **Original audit snapshot:** `be2c8c9`
 **Roadmap status last verified against the code:** 2026-08-18, at `f266d9e`

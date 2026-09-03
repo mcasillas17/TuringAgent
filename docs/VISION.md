@@ -1,4 +1,9 @@
-# TuringAgent — North Star
+# TuringAgent - Historical North Star
+
+> **Superseded:** The canonical product direction and implementation roadmap is
+> now [`docs/NORTH_STAR.md`](NORTH_STAR.md). This file is retained as a
+> historical decision record and must not be used to determine current task
+> status.
 
 **Status:** living document. The scope decisions below (multi-agent as a goal, invariants vs. deferrals, destructive-file-op scope) were made by the project owner on 2026-08-14.
 
