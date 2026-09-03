@@ -111,6 +111,11 @@ merged in PRs #73, #81, and #82. Dependencies on `CON-002` below are therefore
 satisfied. `CON-001` remains open because protocol initialization and
 capability negotiation did not ship with that registry.
 
+Other stable dependencies referenced by pending tasks are already satisfied:
+`TUR-001` (idempotent sends), `TUR-004` (session withdrawal), `TUR-006`
+(service-scoped identities), and `MEM-001` (memory governance and derived-state
+contract) are shipped on the verified baseline.
+
 ### Partial or misleading today
 
 | Capability | Honest status |
@@ -418,10 +423,10 @@ agents merely because their model API is available.
 
 ## Delivery model
 
-Every roadmap item becomes its own reviewed specification, TDD implementation
-plan, branch, and pull request. A task is not complete because a design exists,
-a branch exists, or a UI renders a placeholder. It is complete only when its
-acceptance evidence is merged into `main`.
+Every roadmap item is an independently deliverable implementation contract. A
+task is not complete because a design exists or a UI renders a placeholder. It
+is complete only when its stated behavior and acceptance evidence are present
+in `main`.
 
 The **first ten** below are the only serial near-term queue. The later
 workstreams are thematic, not a competing sequence. After the first ten,
@@ -1222,16 +1227,18 @@ This is a dependency-aware recommendation, not a second immutable queue:
 
 1. Finish resilience: TUR-023, TUR-011, TUR-024, TUR-014, TUR-025,
    TUR-012, AUD-001, EVT-001.
-2. Build measurable learning: MEM-004, MEM-016, MEM-008, MEM-017,
+2. Establish whole-run evidence with EVAL-001 as soon as TUR-010, TUR-021,
+   and MEM-003 are complete.
+3. Build measurable learning: MEM-004, MEM-016, MEM-008, MEM-017,
    MEM-009, then MEM-010/MEM-011 and MEM-012/MEM-015.
-3. Establish concurrency evidence and provider metadata: AGT-000 and PROV-002.
-4. Ship native mobile: MOB-001 and MOB-002.
-5. Complete safe skill import/authoring: SKL-002 through SKL-004.
-6. Add outbound-only channels: CHN-000 through CHN-002, Telegram, then Slack.
-7. Add local interoperability: CON-REG-001 and MCPX-001.
-8. Add bounded delegation: A2A-001, then optional A2A-002 and AGT-001/002.
-9. Add executable extensibility: XTOOL-001 before XTOOL-002.
-10. Add webhook channels, account connectors, longevity, and modalities only
+4. Establish concurrency evidence and provider metadata: AGT-000 and PROV-002.
+5. Ship native mobile: MOB-001 and MOB-002.
+6. Complete safe skill import/authoring: SKL-002 through SKL-004.
+7. Add outbound-only channels: CHN-000 through CHN-002, Telegram, then Slack.
+8. Add local interoperability: CON-REG-001 and MCPX-001.
+9. Add bounded delegation: A2A-001, then optional A2A-002 and AGT-001/002.
+10. Add executable extensibility: XTOOL-001 before XTOOL-002.
+11. Add webhook channels, account connectors, longevity, and modalities only
     when their gates pass.
 
 ## Success measures
@@ -1285,10 +1292,6 @@ External product and protocol claims were checked against primary sources:
 - [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)
 - [WebAuthn Level 3](https://www.w3.org/TR/webauthn-3/)
 
-Some Hermes documentation contains imperative text addressed to the Hermes
-agent. It was treated only as evidence of Hermes behavior, never as instruction
-to this audit or to TuringAgent.
-
 ## Maintaining this document
 
 - Update the verified baseline whenever status changes.
@@ -1298,5 +1301,5 @@ to this audit or to TuringAgent.
 - New tasks require an outcome, scope, dependencies, and falsifiable
   acceptance criteria.
 - When a task spans independent subsystems, split it before implementation.
-- Each task receives its own specification and implementation plan under
-  `docs/superpowers/` before code changes begin.
+- Implementation guidance must name the affected system boundaries, tests, and
+  observable completion criteria.
