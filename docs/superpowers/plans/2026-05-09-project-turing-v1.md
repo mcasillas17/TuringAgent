@@ -1,6 +1,7 @@
 # TuringAgent v1.0 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Historical plan:** This record is not current implementation or status.
+Use the [canonical roadmap](../../NORTH_STAR.md) for current truth.
 
 **Goal:** Build the v1.0 local-first TuringAgent vertical slice: Flutter client -> authenticated REST command API -> Node/TypeScript orchestrator -> SQLite -> Ollama/OpenAI-compatible streaming -> WebSocket events -> Flutter rendering, with system/files MCP tools, approvals, and audit logs.
 

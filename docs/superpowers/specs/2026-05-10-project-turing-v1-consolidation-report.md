@@ -1,5 +1,8 @@
 # TuringAgent v1.0 Consolidation Report
 
+**Historical report:** This record is not current implementation or status.
+Use the [canonical roadmap](../../NORTH_STAR.md) for current truth.
+
 ## Sources compared
 
 - Hybrid Copilot spec: `docs/superpowers/specs/2026-05-09-project-turing-v1-design-copilot.md`

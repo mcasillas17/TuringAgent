@@ -1,5 +1,8 @@
 # TuringAgent v1.0 Design
 
+**Historical design:** This record is not current implementation or status.
+Use the [canonical roadmap](../../NORTH_STAR.md) for current truth.
+
 ## Problem
 
 TuringAgent should become a local-first personal AI orchestration platform, not a single chatbot or a client-specific app. The v1.0 release needs a strong foundation that proves the core pipeline while avoiding premature complexity across native apps, distributed agents, semantic memory, external OAuth integrations, vision, voice, and IoT.

@@ -74,10 +74,9 @@ trail without letting it forge or tamper with a cursor.
 give the client a typed way to call the RPC and decode its response. That is
 the entire client-side surface TUR-013 ships: there is no audit screen, no
 navigation entry, and no UI that renders these rows anywhere in
-`turing_app/lib`. Building an inspection UI is out of scope for this task —
-the roadmap (`docs/architecture/2026-08-18-personal-agent-audit.md`) leaves it
-as a decision the Flutter side can make in a follow-up once a real read
-contract exists to build against.
+`turing_app/lib`. The canonical roadmap tracks the missing UI as
+[AUD-001 - Flutter audit viewer](../NORTH_STAR.md#aud-001---flutter-audit-viewer);
+the existing API is not itself a shipped viewer.
 
 ## Request: filters, ordering, and paging
 
@@ -376,9 +375,9 @@ in every consumer.
 **Present-empty versus absent is the answer, not a formatting detail.** The
 approvals request proto has no field presence on these scalars, so an omitted
 comment and an explicitly empty one both arrive as an empty string and are
-both stored as an explicit empty rationale (this limitation is documented in
-[the roadmap's TUR-002 entry](2026-08-18-personal-agent-audit.md)). What is
-preserved end to end is the difference between that and no human field at all:
+both stored as an explicit empty rationale. The write contract cannot distinguish
+those two inputs. What is preserved end to end is the difference between an
+explicit empty rationale and no human field at all:
 
 | Response | Meaning |
 |---|---|

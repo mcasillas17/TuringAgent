@@ -1,5 +1,8 @@
 # Turing Orchestrator Go + gRPC Migration Design
 
+**Historical design:** This record is not current implementation or status.
+Use the [canonical roadmap](../../NORTH_STAR.md) for current truth.
+
 ## Status
 
 Approved design for migrating the current Node.js/TypeScript Turing backend runtime to Go and replacing client WebSocket/REST APIs with gRPC.

@@ -4,6 +4,14 @@ This guide describes the implemented security boundary for bundled and
 registered MCP servers and their integration with the agent runtime and
 orchestrator.
 
+**Protocol scope:** Registration, import, enablement, token rotation and tool
+policies are implemented. The runtime client, registry adapter and bundled
+servers currently use an HTTP JSON-RPC subset for `tools/list` and
+`tools/call`, without MCP initialization or capability negotiation. Do not
+read "MCP server" here as full protocol conformance or guaranteed
+interoperability with a stock MCP host. CON-001 in the
+[canonical roadmap](NORTH_STAR.md#current-status) owns the bounded lifecycle work.
+
 ## Deployment boundary
 
 | Tier | Example | Egress | Sandbox-confined | Approval enforcement |
@@ -33,7 +41,7 @@ bearer-token normalization, then seals the token with the same
 ciphertext. Naming an existing non-bundled, url-empty legacy migration-0016
 placeholder is the one existing name this call does not refuse — it is
 treated as the operator's own consent to adopt that row in place (see below),
-which lets a mobile operator who cannot edit `mcp.json` register a server the
+which lets a client operator who cannot edit `mcp.json` register a server the
 backend already knows about by name. Any other existing name, or a bundled
 name, is still refused. Every genuinely new registration still arrives
 disabled, and registration itself never contacts the server's endpoint. The
@@ -590,7 +598,7 @@ and so whose stale, pre-registry tool snapshot could look available to a
 client — despite never having a real endpoint. The Flutter MCPs page mirrors
 this: a non-bundled server's enable switch is itself disabled while its `url`
 is empty, with a tooltip explaining that an endpoint must be configured
-first; adding or registering a server directly remains the one path a mobile
+first; adding or registering a server directly remains the one path a client
 operator (who cannot edit `mcp.json`) uses to give a placeholder a real
 endpoint. For a remote-URL server this is a real, explicit enable-time
 network request to

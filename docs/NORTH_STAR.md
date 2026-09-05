@@ -2,11 +2,16 @@
 
 **Status:** Canonical product direction and implementation backlog.
 
-**Verified baseline:** `main` at `82eb7e7f` on 2026-09-02.
+**Inspected baseline:** `main` at `331d004c`, inspected 2026-09-04.
+
+At that baseline DOC-001's guard was not implemented. This revision introduces
+the guard and documentation corrections; this baseline record does not assert
+a subsequent merge to `main`.
 
 **Supersedes:** `docs/VISION.md` and
 `docs/architecture/2026-08-18-personal-agent-audit.md` as active roadmap
-documents. Those files remain historical decision records.
+documents. Those paths remain historical pointers; the earlier records are
+available in Git history.
 
 ## North star
 
@@ -85,7 +90,38 @@ adopt Hermes's useful loops while preserving Turing's stronger boundaries.
 
 ## Current status
 
-### Shipped and usable
+### Guarded capability inventory
+
+These explicit status cells are checked against repository wiring, contracts,
+and regression-test witnesses by `go test ./tools/docs -count=1`. `shipped`
+means the bounded capability in **Scope**, not every possible interpretation
+of its name. `pending` means that capability is not delivered, even when a
+related UI or substrate exists. Static wiring checks and an isolated codegen
+probe are not live end-to-end product proof; see
+[coverage, limitations and update procedure](../tools/docs/README.md).
+
+<!-- status-guard:begin -->
+| Claim | Status | Scope |
+| --- | --- | --- |
+| proto-breaking | shipped | TUR-019: CI runs Buf compatibility checks against the PR base, separately from generation. |
+| proto-codegen | shipped | CI checks deterministic, committed Go and Dart protobuf output. |
+| flutter-search | shipped | Shell search calls the backend message-search RPC and opens matching conversations. |
+| flutter-workspace | shipped | Chats, Skills, Memory, Integrations, MCPs, Automations, Agents and Telemetry have backend-connected surfaces; this is not full support for every advertised provider or protocol. |
+| mcp-registry | shipped | Registration, import, enablement, token rotation and tool-policy management; not protocol conformance. |
+| mcp-lifecycle | pending | HTTP JSON-RPC tools/list and tools/call exist; initialization and capability negotiation remain CON-001. |
+| remote-model-routing | shipped | The conversation's destination bar selects a route through ExternalAgentService; the runtime calls its OpenAI-compatible model endpoint under per-run disclosure. |
+| agent-delegation | pending | No A2A delegation or connection to an existing Claude, Copilot, Gemini or ChatGPT product conversation. |
+| github-tools | shipped | Connected GitHub credentials support issue listing/reading, file reading and issue comments under egress and approval policy. |
+| other-integration-tools | pending | IMAP, CalDAV and Notion accept credentials but have no tool consumers; INT-001 owns the credential-acceptance correction. Google, Microsoft and Slack account connections are not implemented. |
+| mobile-client | pending | iOS/Android scaffolding and responsive layouts are not production mobile support; the main Android manifest lacks INTERNET permission, while debug/profile manifests grant it. |
+| mobile-reachability | pending | Compose publishes on 127.0.0.1; changing the client URL to a LAN/tailnet address does not expose it or add device identity/TLS. |
+<!-- status-guard:end -->
+
+### Additional shipped capabilities
+
+The guarded inventory above owns the selected status claims. The following
+tables describe additional capability scope, not a second inventory of those
+claims.
 
 | Capability | Current state |
 |---|---|
@@ -99,11 +135,7 @@ adopt Hermes's useful loops while preserving Turing's stronger boundaries.
 | Memory vault | `persona.md`, `profile.md`, `inbox/`, and `beliefs/` are user-owned Markdown; `memory.search`, `memory.read`, and `memory.remember` exist. |
 | Skills | File-backed `SKILL.md` loading, progressive disclosure, enablement, and Turing capability grants exist. |
 | Automations | Interval and daily unattended runs with per-automation tool allowlists exist. |
-| GitHub integration | Connected credentials can drive issue listing, issue reading, file reading, and issue comments under egress and approval policy. |
-| Tool registry | Bundled, local-container, and remote-URL tool endpoints can be registered, disabled, inspected, and assigned policies. |
-| Remote inference | A conversation can be routed to an OpenAI-compatible endpoint under per-run disclosure. |
 | Audit and telemetry | Redacted audit read APIs and local-only usage aggregation exist. |
-| Contract safety | Protobuf breaking checks and deterministic generated-code checks run in CI. |
 
 The configuration-driven registry scope originally named `CON-002` is treated
 as shipped by the registry, import, enablement, token-rotation, and policy work
@@ -114,18 +146,14 @@ capability negotiation did not ship with that registry.
 Other stable dependencies referenced by pending tasks are already satisfied:
 `TUR-001` (idempotent sends), `TUR-004` (session withdrawal), `TUR-006`
 (service-scoped identities), and `MEM-001` (memory governance and derived-state
-contract) are shipped on the verified baseline.
+contract) are shipped on the inspected baseline.
 
 ### Partial or misleading today
 
 | Capability | Honest status |
 |---|---|
 | Personal learning | The vault and proposal workflow exist, but normal conversation does not automatically extract candidates, revise beliefs, or measure learning quality. |
-| External agents | `ExternalAgentService` routes to remote model endpoints. It is not agent-to-agent delegation. |
-| MCP | Turing implements an HTTP JSON-RPC subset for `tools/list` and `tools/call`, but not the MCP initialization and capability lifecycle. |
 | Skills ecosystem | The parser accepts a Turing-specific subset. It rejects several standard Agent Skills fields and has no import, quarantine, authoring, or marketplace flow. |
-| Integrations | GitHub has functional tools. IMAP, CalDAV, and Notion can currently accept credentials but have no tools. Google, Microsoft, and Slack account connections are not implemented. |
-| Mobile | Flutter has iOS/Android scaffolding and responsive layouts, but the backend is loopback-only, the Android release manifest lacks network permission, and there is no device pairing or non-loopback TLS contract. |
 | Audit UX | The API exists; a user-facing audit viewer does not. |
 | Multi-agent | The runtime is process-separated, but there is one `AgentId`, one general executor, and a default concurrency of one. |
 
@@ -147,6 +175,10 @@ contract) are shipped on the verified baseline.
 - evidence-gated vision, voice, and richer prospective memory.
 
 ## Envisioned scenarios: what works now
+
+These examples illustrate the [guarded capability inventory](#guarded-capability-inventory),
+which owns the corresponding status claims. Update these explanations with that
+inventory; the example wording itself is not machine-checked.
 
 | Scenario | Status | Boundary |
 |---|---|---|
@@ -437,6 +469,13 @@ gates are satisfied.
 
 ### 1. DOC-001 - Canonical truth and status guard
 
+- **Implementation introduced by this revision:** Active setup/status
+  guidance is corrected; `tools/docs` checks the explicit inventories in this
+  file and the Flutter README against named implementation evidence. Isolated
+  fixtures cover false shipped/pending claims and missing or changed evidence.
+  [Guard maintenance](../tools/docs/README.md) defines bounded assurance and
+  probe limits. The inspected mainline baseline above predates this implementation;
+  later roadmap capabilities are not implemented here.
 - **Outcome:** Product documentation cannot silently drift from merged reality.
 - **Scope:** Make this file canonical; mark old roadmap documents historical;
   correct current status, integration labels, remote-model naming, mobile
@@ -1294,7 +1333,9 @@ External product and protocol claims were checked against primary sources:
 
 ## Maintaining this document
 
-- Update the verified baseline whenever status changes.
+- Update the inspected baseline whenever status changes.
+- Reconcile the guarded inventory and its witnesses in
+  `tools/docs/status_claims_test.go`; run `go test ./tools/docs -count=1`.
 - A task becomes **shipped** only with a merged commit and acceptance evidence.
 - Do not duplicate task status in archived plans.
 - Preserve existing stable task IDs and meanings.
