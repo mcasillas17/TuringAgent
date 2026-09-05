@@ -982,3 +982,44 @@ func vaultlessMemoryFingerprint(selectedTools ...string) string {
 	}
 	return fingerprint
 }
+
+func TestIntegrationDiscoveryExcludesUnreadableGitHubConnectionsWithoutDecrypting(t *testing.T) {
+	server, _, ctx := newIntegrationServer(t)
+	old, err := server.ConnectAccount(ctx, githubRequestFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := bytes.Repeat([]byte{0xA5}, secretbox.KeySize)
+	rotated, err := secretbox.New(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spy := &forbiddenCredentialSealer{inner: rotated}
+	server.sealer = spy
+	listed, err := server.ListIntegrationTools(ctx, &turingv1.ListIntegrationToolsRequest{})
+	if err != nil || len(listed.GetTools()) != 0 {
+		t.Errorf("wrong-key-only discovery=%v error=%v, want no tools", listed, err)
+	}
+	// A usable row still supplies all four tools after the rotation. The old
+	// row remains visible for cleanup but never appears as an available id.
+	server.sealer = rotated
+	request := githubRequestFixture()
+	request.DisplayName = "New GitHub key"
+	usable, err := server.ConnectAccount(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.sealer = spy
+	listed, err = server.ListIntegrationTools(ctx, &turingv1.ListIntegrationToolsRequest{})
+	if err != nil || len(listed.GetTools()) != 4 {
+		t.Fatalf("mixed-key discovery=%v error=%v", listed, err)
+	}
+	for _, tool := range listed.GetTools() {
+		if strings.Contains(tool.GetDescription(), old.GetConnectionId()) || !strings.Contains(tool.GetDescription(), usable.GetConnectionId()) {
+			t.Errorf("wrong available connections: %s", tool.GetDescription())
+		}
+	}
+	if spy.opens.Load() != 0 || spy.seals.Load() != 0 {
+		t.Fatal("discovery touched credentials instead of checking headers")
+	}
+}

@@ -14,23 +14,18 @@ import 'dart:core' as $core;
 
 import 'package:protobuf/protobuf.dart' as $pb;
 
-/// A third-party account the user has connected: mail, calendar, notes, code.
-///
-/// The connection model here is deliberately narrow. Turing has no registered
-/// OAuth client with any provider, no redirect URI and no browser round trip,
-/// so an authorization-code flow is not something it can honestly offer. What
-/// it can do is hold a credential the user created themselves — an app
-/// password, an internal integration token, a personal access token — which is
-/// how these services are reached by scripts and self-hosted clients every
-/// day. Providers that only issue credentials through OAuth are listed as
-/// unsupported, with the reason, rather than shown as a button that cannot
-/// work.
+/// Stable identities for saved third-party accounts. Enum presence does not
+/// imply support: consult ProviderDescriptor.supported before offering a form.
+/// GitHub has implemented tools and accepts a personal access token. IMAP,
+/// CalDAV and Notion are descriptor-only; new credentials are refused before
+/// sealing or storage. Earlier-release rows remain available for explicit
+/// local revoke/delete without decrypting or using their credentials.
 class IntegrationProvider extends $pb.ProtobufEnum {
   static const IntegrationProvider INTEGRATION_PROVIDER_UNSPECIFIED =
       IntegrationProvider._(
           0, _omitEnumNames ? '' : 'INTEGRATION_PROVIDER_UNSPECIFIED');
 
-  /// Supported: the user pastes a credential they minted themselves.
+  /// Descriptor-only. Keep these values for earlier-release saved rows.
   static const IntegrationProvider INTEGRATION_PROVIDER_IMAP =
       IntegrationProvider._(
           1, _omitEnumNames ? '' : 'INTEGRATION_PROVIDER_IMAP');
@@ -40,6 +35,8 @@ class IntegrationProvider extends $pb.ProtobufEnum {
   static const IntegrationProvider INTEGRATION_PROVIDER_NOTION =
       IntegrationProvider._(
           3, _omitEnumNames ? '' : 'INTEGRATION_PROVIDER_NOTION');
+
+  /// Functional tools; the user pastes a personal access token.
   static const IntegrationProvider INTEGRATION_PROVIDER_GITHUB =
       IntegrationProvider._(
           4, _omitEnumNames ? '' : 'INTEGRATION_PROVIDER_GITHUB');
@@ -80,6 +77,8 @@ class ConnectionStatus extends $pb.ProtobufEnum {
   static const ConnectionStatus CONNECTION_STATUS_UNSPECIFIED =
       ConnectionStatus._(
           0, _omitEnumNames ? '' : 'CONNECTION_STATUS_UNSPECIFIED');
+
+  /// Stored lifecycle status, independent of provider support/tool availability.
   static const ConnectionStatus CONNECTION_STATUS_CONNECTED =
       ConnectionStatus._(
           1, _omitEnumNames ? '' : 'CONNECTION_STATUS_CONNECTED');

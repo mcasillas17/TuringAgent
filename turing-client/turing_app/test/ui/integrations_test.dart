@@ -37,7 +37,7 @@ void main() {
 
       expect(find.text('No accounts connected'), findsOneWidget);
       expect(
-        find.text('Connected-account tools ask before every call'),
+        find.text('GitHub tools use approval and egress policies'),
         findsOneWidget,
       );
       expect(
@@ -55,7 +55,9 @@ void main() {
       expect(find.text('Not supported'), findsOneWidget);
       expect(find.text('Google (Gmail, Calendar, Drive)'), findsOneWidget);
       expect(
-        find.textContaining('only issue credentials through OAuth'),
+        find.textContaining(
+          'account connections and tools are not implemented',
+        ),
         findsOneWidget,
       );
     });
@@ -76,6 +78,180 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('No accounts connected'), findsOneWidget);
+    });
+  });
+
+  group('powerless credential transition', () {
+    testWidgets('all descriptor-only providers stay visible without forms', (
+      tester,
+    ) async {
+      final api = _IntegrationsApi();
+      await _pumpPage(tester, api);
+      for (final name in ['Mail (IMAP)', 'Calendar (CalDAV)', 'Notion']) {
+        expect(find.text(name), findsOneWidget);
+      }
+      for (final name in ['IMAP', 'CalDAV', 'Notion']) {
+        expect(
+          find.textContaining('$name tools are not implemented'),
+          findsOneWidget,
+        );
+      }
+      await tester.tap(find.text('Connect an account'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ChoiceChip), findsOneWidget);
+      expect(find.widgetWithText(ChoiceChip, 'GitHub'), findsOneWidget);
+      expect(find.text('App password'), findsNothing);
+      expect(find.text('Internal integration token'), findsNothing);
+    });
+
+    for (final provider in [
+      IntegrationProviderKind.imap,
+      IntegrationProviderKind.caldav,
+      IntegrationProviderKind.notion,
+    ]) {
+      testWidgets(
+        '$provider legacy rows explain missing tools and retain cleanup',
+        (tester) async {
+          final api = _IntegrationsApi()
+            ..connections.add(
+              IntegrationConnection(
+                connectionId: 'legacy',
+                provider: provider,
+                displayName: 'Earlier release account',
+                state: IntegrationConnectionState.connected,
+                grantedScopes: const ['Historical grant.'],
+              ),
+            );
+          await _pumpPage(tester, api);
+          expect(find.text('Stored: connected'), findsOneWidget);
+          expect(find.text('Recorded consent'), findsOneWidget);
+          expect(
+            find.textContaining('Saved by an earlier release'),
+            findsOneWidget,
+          );
+          expect(find.text('Revoke access'), findsOneWidget);
+          expect(find.text('Remove'), findsOneWidget);
+          expect(find.text('What this allows'), findsNothing);
+          expect(api.revoked, isEmpty);
+          expect(api.deleted, isEmpty);
+        },
+      );
+    }
+
+    for (final failure in ['catalogue', 'tools', 'key']) {
+      testWidgets('$failure failure keeps legacy cleanup available', (
+        tester,
+      ) async {
+        final api = _IntegrationsApi()..connections.add(_connected());
+        if (failure == 'catalogue') {
+          api.catalogueError = StateError('catalogue unavailable');
+        }
+        if (failure == 'tools') {
+          api.toolsError = StateError('tools unavailable');
+        }
+        if (failure == 'key') api.storageConfigured = false;
+        await _pumpPage(tester, api);
+        expect(find.text('Personal mail'), findsOneWidget);
+        if (failure != 'tools') {
+          expect(_connectAccountButton(tester).onPressed, isNull);
+        }
+        if (failure == 'catalogue') {
+          expect(find.text('Provider catalog unavailable'), findsOneWidget);
+        }
+        if (failure == 'tools') {
+          expect(find.text('Tool policies unavailable'), findsOneWidget);
+        }
+        await tester.ensureVisible(find.text('Revoke access'));
+        await tester.tap(find.text('Revoke access'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(TextButton, 'Revoke'));
+        await tester.pumpAndSettle();
+        expect(api.revoked, ['conn_1']);
+        expect(find.text('Revoked'), findsOneWidget);
+        await tester.ensureVisible(find.text('Remove'));
+        await tester.tap(find.text('Remove'));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.widgetWithText(TextButton, 'Remove'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(api.deleted, ['conn_1']);
+      });
+    }
+
+    testWidgets('other unsupported rows use neutral retention wording', (
+      tester,
+    ) async {
+      final api = _IntegrationsApi()
+        ..connections.add(
+          const IntegrationConnection(
+            connectionId: 'other',
+            provider: IntegrationProviderKind.googleWorkspace,
+            displayName: 'Stored Google row',
+            state: IntegrationConnectionState.connected,
+          ),
+        );
+      await _pumpPage(tester, api);
+      expect(find.textContaining('Saved by an earlier release'), findsNothing);
+      expect(
+        find.textContaining('The saved credential is retained'),
+        findsOneWidget,
+      );
+      expect(find.text('Revoke access'), findsOneWidget);
+      expect(find.text('Remove'), findsOneWidget);
+    });
+
+    testWidgets('unreadable GitHub does not advertise tools on its card', (
+      tester,
+    ) async {
+      final api = _IntegrationsApi()
+        ..connections.add(
+          const IntegrationConnection(
+            connectionId: 'old_github',
+            provider: IntegrationProviderKind.github,
+            displayName: 'Old GitHub key',
+            state: IntegrationConnectionState.connected,
+            credentialUnreadable: true,
+          ),
+        )
+        ..tools.add(
+          const ToolDescriptor(
+            serverName: 'integrations',
+            toolName: 'github.list_issues',
+            policy: ToolPolicy.approvalRequired,
+          ),
+        );
+      await _pumpPage(tester, api);
+      expect(find.text('Agent tools'), findsNothing);
+      expect(find.text('github.list_issues'), findsNothing);
+      expect(find.textContaining('connect the account again'), findsOneWidget);
+      expect(find.text('Revoke access'), findsOneWidget);
+    });
+
+    testWidgets('failed legacy removal preserves row and reports failure', (
+      tester,
+    ) async {
+      final api = _IntegrationsApi()
+        ..connections.add(_connected())
+        ..deleteError = StateError('delete refused');
+      await _pumpPage(tester, api);
+      await tester.ensureVisible(find.text('Remove'));
+      await tester.tap(find.text('Remove'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('does not revoke'), findsOneWidget);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(TextButton, 'Remove'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Could not remove it'), findsOneWidget);
+      expect(find.text('Stored: connected'), findsOneWidget);
+      expect(api.deleted, isEmpty);
     });
   });
 
@@ -107,7 +283,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('What this will allow'), findsOneWidget);
-      expect(find.textContaining('Read every message'), findsOneWidget);
+      expect(find.textContaining('Read repository data'), findsOneWidget);
       // Unticked to begin with. A pre-ticked consent box is consent nobody
       // gave.
       final checkbox = tester.widget<Checkbox>(find.byType(Checkbox));
@@ -146,16 +322,16 @@ void main() {
 
       expect(api.connectCalls, hasLength(1));
       final call = api.connectCalls.single;
-      expect(call.provider, IntegrationProviderKind.imap);
-      expect(call.displayName, 'Personal mail');
-      expect(call.endpoint, 'imap.example.com');
+      expect(call.provider, IntegrationProviderKind.github);
+      expect(call.displayName, 'Personal GitHub');
+      expect(call.endpoint, isEmpty);
       expect(call.credential, _secret);
       expect(
         call.consentAcknowledged,
         isTrue,
         reason: 'the backend refuses without it, so the client must send it',
       );
-      expect(find.text('Personal mail'), findsOneWidget);
+      expect(find.text('Personal GitHub'), findsOneWidget);
     });
 
     testWidgets('the credential never appears on screen afterwards', (
@@ -184,41 +360,42 @@ void main() {
     testWidgets('switching provider drops a consent given for the other one', (
       tester,
     ) async {
-      await _pumpPage(tester, _IntegrationsApi());
+      await _pumpPage(
+        tester,
+        _IntegrationsApi()..additionalProviders.add(_hypotheticalProvider),
+      );
       await tester.tap(find.text('Connect an account'));
       await tester.pumpAndSettle();
       await tester.tap(find.byType(Checkbox));
       await tester.pumpAndSettle();
       expect(_connectButton(tester).onPressed, isNotNull);
 
-      await tester.tap(find.widgetWithText(ChoiceChip, 'Notion'));
+      await tester.tap(find.widgetWithText(ChoiceChip, 'GitHub'));
       await tester.pumpAndSettle();
 
-      // The grants on screen are Notion's now; a tick carried over would
+      // The grants on screen are GitHub's now; a tick carried over would
       // record agreement to something never shown.
       expect(_connectButton(tester).onPressed, isNull);
-      expect(
-        find.textContaining('shared with this integration'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('Read repository data'), findsOneWidget);
     });
 
     testWidgets('switching provider does not carry the old fields over', (
       tester,
     ) async {
-      final api = _IntegrationsApi();
+      final api = _IntegrationsApi()
+        ..additionalProviders.add(_hypotheticalProvider);
       await _pumpPage(tester, api);
       await tester.tap(find.text('Connect an account'));
       await tester.pumpAndSettle();
-      await _fillForm(tester);
+      await _fillHypotheticalForm(tester);
 
-      await tester.tap(find.widgetWithText(ChoiceChip, 'Notion'));
+      await tester.tap(find.widgetWithText(ChoiceChip, 'GitHub'));
       await tester.pumpAndSettle();
       // The name is the user's label for the connection, not the provider's,
       // so it stays. Everything provider-specific goes.
       await tester.enterText(
-        _fieldFor(tester, 'Internal integration token'),
-        'notion-token-abcdef',
+        _fieldFor(tester, 'Personal access token'),
+        'github-token-abcdef',
       );
       await tester.tap(find.byType(Checkbox));
       await tester.pumpAndSettle();
@@ -226,7 +403,7 @@ void main() {
       await tester.pumpAndSettle();
 
       final call = api.connectCalls.single;
-      expect(call.provider, IntegrationProviderKind.notion);
+      expect(call.provider, IntegrationProviderKind.github);
       expect(
         call.endpoint,
         isEmpty,
@@ -234,7 +411,7 @@ void main() {
       );
       expect(
         call.credential,
-        'notion-token-abcdef',
+        'github-token-abcdef',
         reason: 'the token typed for the other provider must not be sent here',
       );
       expect(call.accountLabel, isEmpty);
@@ -243,22 +420,19 @@ void main() {
     testWidgets('a server field appears only where one is needed', (
       tester,
     ) async {
-      await _pumpPage(tester, _IntegrationsApi());
+      await _pumpPage(
+        tester,
+        _IntegrationsApi()..additionalProviders.add(_hypotheticalProvider),
+      );
       await tester.tap(find.text('Connect an account'));
       await tester.pumpAndSettle();
 
-      expect(
-        find.text('IMAP server (for example imap.example.com)'),
-        findsOneWidget,
-      );
+      expect(find.text('Test server'), findsOneWidget);
 
-      await tester.tap(find.widgetWithText(ChoiceChip, 'Notion'));
+      await tester.tap(find.widgetWithText(ChoiceChip, 'GitHub'));
       await tester.pumpAndSettle();
 
-      expect(
-        find.text('IMAP server (for example imap.example.com)'),
-        findsNothing,
-      );
+      expect(find.text('Test server'), findsNothing);
     });
 
     testWidgets('a refused connect keeps the form and shows the reason', (
@@ -284,7 +458,10 @@ void main() {
       await _pumpPage(tester, api);
       await tester.tap(find.text('Connect an account'));
       await tester.pumpAndSettle();
-      await tester.enterText(_fieldFor(tester, 'App password'), _secret);
+      await tester.enterText(
+        _fieldFor(tester, 'Personal access token'),
+        _secret,
+      );
       await tester.tap(find.byType(Checkbox));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(FilledButton, 'Connect'));
@@ -328,10 +505,10 @@ void main() {
       await _pumpPage(tester, api);
 
       expect(find.text('Personal mail'), findsOneWidget);
-      expect(find.text('Connected'), findsOneWidget);
+      expect(find.text('Stored: connected'), findsOneWidget);
       expect(find.text('me@example.com'), findsOneWidget);
       expect(find.text('••••••••c2f1'), findsOneWidget);
-      expect(find.text('What this allows'), findsOneWidget);
+      expect(find.text('Recorded consent'), findsOneWidget);
       expect(find.textContaining('Read every message'), findsOneWidget);
       expect(find.text('2026-05-10'), findsOneWidget);
     });
@@ -342,6 +519,7 @@ void main() {
       final api = _IntegrationsApi()..connections.add(_connected());
       await _pumpPage(tester, api);
 
+      await tester.ensureVisible(find.text('Revoke access'));
       await tester.tap(find.text('Revoke access'));
       await tester.pumpAndSettle();
 
@@ -367,13 +545,14 @@ void main() {
       final api = _IntegrationsApi()..connections.add(_connected());
       await _pumpPage(tester, api);
 
+      await tester.ensureVisible(find.text('Revoke access'));
       await tester.tap(find.text('Revoke access'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
       await tester.pumpAndSettle();
 
       expect(api.revoked, isEmpty);
-      expect(find.text('Connected'), findsOneWidget);
+      expect(find.text('Stored: connected'), findsOneWidget);
     });
 
     testWidgets('a failed revoke says so instead of appearing to work', (
@@ -384,6 +563,7 @@ void main() {
         ..revokeError = StateError('backend down');
       await _pumpPage(tester, api);
 
+      await tester.ensureVisible(find.text('Revoke access'));
       await tester.tap(find.text('Revoke access'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(TextButton, 'Revoke'));
@@ -391,17 +571,18 @@ void main() {
 
       expect(find.textContaining('Could not revoke it'), findsOneWidget);
       // The card still says connected, because it still is.
-      expect(find.text('Connected'), findsOneWidget);
+      expect(find.text('Stored: connected'), findsOneWidget);
     });
 
     testWidgets('removing deletes the record after confirming', (tester) async {
       final api = _IntegrationsApi()..connections.add(_connected());
       await _pumpPage(tester, api);
 
+      await tester.ensureVisible(find.text('Remove'));
       await tester.tap(find.text('Remove'));
       await tester.pumpAndSettle();
       expect(
-        find.textContaining('deletes the connection and its history'),
+        find.textContaining('deletes the saved connection record'),
         findsOneWidget,
       );
       // Scoped to the dialog: the card's own "Remove" is still mounted
@@ -427,10 +608,7 @@ void main() {
 
       expect(find.text('Revoked'), findsOneWidget);
       expect(find.text('Destroyed when you revoked it'), findsOneWidget);
-      expect(
-        find.text('What this allowed, until you revoked it'),
-        findsOneWidget,
-      );
+      expect(find.text('Recorded consent'), findsOneWidget);
       expect(find.text('2026-05-11'), findsOneWidget);
     });
 
@@ -449,7 +627,7 @@ void main() {
       await _pumpPage(tester, api);
 
       expect(find.text('Unknown state'), findsOneWidget);
-      expect(find.text('Connected'), findsNothing);
+      expect(find.text('Stored: connected'), findsNothing);
       // "Destroyed when you revoked it" would be a definite claim about a
       // state we have just admitted we cannot read.
       expect(find.text('Unknown'), findsOneWidget);
@@ -521,8 +699,8 @@ void main() {
       );
       expect(
         find.textContaining('connect the account again'),
-        findsOneWidget,
-        reason: 'the user is told what to do about it',
+        findsNothing,
+        reason: 'reconnecting cannot make unimplemented tools work',
       );
       // Still revocable: the record and the row are still there.
       expect(find.text('Revoke access'), findsOneWidget);
@@ -595,15 +773,33 @@ Future<void> _pumpPage(
 /// Fills the connect form. Fields are addressed by their label so the test
 /// breaks if a field is renamed out from under the user.
 Future<void> _fillForm(WidgetTester tester) async {
-  await tester.enterText(_fieldFor(tester, 'Name'), 'Personal mail');
-  await tester.enterText(_fieldFor(tester, 'Email address'), 'me@example.com');
-  await tester.enterText(
-    _fieldFor(tester, 'IMAP server (for example imap.example.com)'),
-    'imap.example.com',
-  );
-  await tester.enterText(_fieldFor(tester, 'App password'), _secret);
+  await tester.enterText(_fieldFor(tester, 'Name'), 'Personal GitHub');
+  await tester.enterText(_fieldFor(tester, 'GitHub account'), 'octocat');
+  await tester.enterText(_fieldFor(tester, 'Personal access token'), _secret);
   await tester.pumpAndSettle();
 }
+
+Future<void> _fillHypotheticalForm(WidgetTester tester) async {
+  await tester.enterText(_fieldFor(tester, 'Name'), 'Synthetic account');
+  await tester.enterText(_fieldFor(tester, 'Test account'), 'synthetic');
+  await tester.enterText(_fieldFor(tester, 'Test server'), 'example.com');
+  await tester.enterText(_fieldFor(tester, 'Test credential'), _secret);
+  await tester.pumpAndSettle();
+}
+
+// Exercises the existing generic catalog-driven form without claiming that
+// IMAP, CalDAV, or Notion is connectable in the shipping catalog.
+const _hypotheticalProvider = IntegrationProviderInfo(
+  kind: IntegrationProviderKind.unknown,
+  displayName: 'Synthetic future provider',
+  category: 'Test',
+  supported: true,
+  secretLabel: 'Test credential',
+  accountLabel: 'Test account',
+  requiresEndpoint: true,
+  endpointLabel: 'Test server',
+  grants: ['Test grant.'],
+);
 
 Finder _fieldFor(WidgetTester tester, String label) =>
     find.ancestor(of: find.text(label), matching: find.byType(TextField)).first;
@@ -693,7 +889,11 @@ class _IntegrationsApi
   final List<String> revoked = [];
   final List<String> deleted = [];
   final List<String> policyUpdates = [];
+  final List<IntegrationProviderInfo> additionalProviders = [];
   Object? listError;
+  Object? catalogueError;
+  Object? toolsError;
+  Object? deleteError;
   Object? connectError;
   Object? revokeError;
   int nextId = 10;
@@ -704,7 +904,7 @@ class _IntegrationsApi
 
   @override
   Future<IntegrationCatalogue> listIntegrationProviders() async {
-    final error = listError;
+    final error = catalogueError ?? listError;
     if (error != null) throw error;
     return IntegrationCatalogue(
       storageConfigured: storageConfigured,
@@ -712,30 +912,31 @@ class _IntegrationsApi
           ? ''
           : 'integrations are not configured: set TURING_INTEGRATION_KEY in '
                 'turing-backend/.env',
-      providers: const [
-        IntegrationProviderInfo(
+      providers: [
+        ...additionalProviders,
+        const IntegrationProviderInfo(
           kind: IntegrationProviderKind.imap,
           displayName: 'Mail (IMAP)',
           category: 'Mail',
-          supported: true,
-          secretLabel: 'App password',
-          secretHelp: 'Create an app password in your provider settings.',
-          accountLabel: 'Email address',
-          requiresEndpoint: true,
-          endpointLabel: 'IMAP server (for example imap.example.com)',
-          grants: [
-            'Read every message in every mailbox on this account.',
-            'Move, flag and delete messages.',
-          ],
+          supported: false,
+          unsupportedReason:
+              'IMAP tools are not implemented. New connections are unavailable.',
         ),
-        IntegrationProviderInfo(
+        const IntegrationProviderInfo(
+          kind: IntegrationProviderKind.caldav,
+          displayName: 'Calendar (CalDAV)',
+          category: 'Calendar',
+          supported: false,
+          unsupportedReason:
+              'CalDAV tools are not implemented. New connections are unavailable.',
+        ),
+        const IntegrationProviderInfo(
           kind: IntegrationProviderKind.notion,
           displayName: 'Notion',
           category: 'Notes',
-          supported: true,
-          secretLabel: 'Internal integration token',
-          accountLabel: 'Workspace name',
-          grants: ['Read every page shared with this integration.'],
+          supported: false,
+          unsupportedReason:
+              'Notion tools are not implemented. New connections are unavailable.',
         ),
         IntegrationProviderInfo(
           kind: IntegrationProviderKind.github,
@@ -752,8 +953,7 @@ class _IntegrationsApi
           category: 'Mail',
           supported: false,
           unsupportedReason:
-              "Google's APIs only issue credentials through OAuth, which "
-              'needs a registered client and a browser redirect.',
+              'Google account connections and tools are not implemented in TuringAgent.',
         ),
       ],
     );
@@ -804,7 +1004,7 @@ class _IntegrationsApi
       endpoint: endpoint,
       // Redacted by the backend, exactly as the real one does.
       credentialHint: '••••••••wxyz',
-      grantedScopes: const ['Read every message in every mailbox.'],
+      grantedScopes: const ['Read repository data.'],
       connectedAt: DateTime.utc(2026, 5, 12, 9),
     );
     connections.add(connection);
@@ -839,6 +1039,7 @@ class _IntegrationsApi
 
   @override
   Future<void> deleteConnection({required String connectionId}) async {
+    if (deleteError != null) throw deleteError!;
     deleted.add(connectionId);
     connections.removeWhere(
       (connection) => connection.connectionId == connectionId,
@@ -850,6 +1051,7 @@ class _IntegrationsApi
     required String serverName,
   }) async {
     expect(serverName, 'integrations');
+    if (toolsError != null) throw toolsError!;
     return List.unmodifiable(tools);
   }
 

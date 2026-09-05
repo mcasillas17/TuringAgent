@@ -14,8 +14,8 @@ import (
 // here is optional.
 type provider struct {
 	kind turingv1.IntegrationProvider
-	// storageKey is what lands in the database, chosen so the enum can be
-	// renumbered without rewriting rows.
+	// storageKey is the stable database identity. Protobuf enum values are
+	// also stable: changing support must never renumber the wire contract.
 	storageKey        string
 	displayName       string
 	category          string
@@ -33,55 +33,6 @@ type provider struct {
 // first, then what cannot, so the list does not open on a wall of refusals.
 var catalogue = []provider{
 	{
-		kind:             turingv1.IntegrationProvider_INTEGRATION_PROVIDER_IMAP,
-		storageKey:       "imap",
-		displayName:      "Mail (IMAP)",
-		category:         "Mail",
-		supported:        true,
-		secretLabel:      "App password",
-		secretHelp:       "Create an app password in your mail provider's security settings and paste it here. Your normal account password would work too, and is exactly what you should not use: an app password can be deleted on its own.",
-		accountLabel:     "Email address",
-		requiresEndpoint: true,
-		endpointLabel:    "IMAP server (for example imap.fastmail.com)",
-		grants: []string{
-			"Read every message in every mailbox on this account, including ones you have never opened.",
-			"Move, flag and delete messages.",
-			"An app password covers the whole mailbox. There is no read-only version of it, and this app cannot narrow it.",
-		},
-	},
-	{
-		kind:             turingv1.IntegrationProvider_INTEGRATION_PROVIDER_CALDAV,
-		storageKey:       "caldav",
-		displayName:      "Calendar (CalDAV)",
-		category:         "Calendar",
-		supported:        true,
-		secretLabel:      "App password",
-		secretHelp:       "iCloud, Fastmail and Nextcloud all issue app passwords for CalDAV from their account settings.",
-		accountLabel:     "Account username or address",
-		requiresEndpoint: true,
-		endpointLabel:    "CalDAV server (for example caldav.icloud.com)",
-		grants: []string{
-			"Read every calendar on this account, including the events you have marked private.",
-			"Create, change and delete events.",
-			"The credential is per account, not per calendar: you cannot share only one calendar this way.",
-		},
-	},
-	{
-		kind:         turingv1.IntegrationProvider_INTEGRATION_PROVIDER_NOTION,
-		storageKey:   "notion",
-		displayName:  "Notion",
-		category:     "Notes",
-		supported:    true,
-		secretLabel:  "Internal integration token",
-		secretHelp:   "Create an internal integration at notion.so/my-integrations, then share the specific pages you want reachable with it.",
-		accountLabel: "Workspace name",
-		grants: []string{
-			"Read every page and database you have shared with this integration.",
-			"Change content in those pages, if you gave the integration write access when you created it.",
-			"Nothing you have not shared with it. Notion enforces that boundary, which makes this the narrowest connection on the list.",
-		},
-	},
-	{
 		kind:         turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB,
 		storageKey:   "github",
 		displayName:  "GitHub",
@@ -97,12 +48,36 @@ var catalogue = []provider{
 		},
 	},
 	{
+		kind:              turingv1.IntegrationProvider_INTEGRATION_PROVIDER_IMAP,
+		storageKey:        "imap",
+		displayName:       "Mail (IMAP)",
+		category:          "Mail",
+		supported:         false,
+		unsupportedReason: "IMAP tools are not implemented. New connections are unavailable. Accounts saved by earlier releases remain available for explicit revoke or removal.",
+	},
+	{
+		kind:              turingv1.IntegrationProvider_INTEGRATION_PROVIDER_CALDAV,
+		storageKey:        "caldav",
+		displayName:       "Calendar (CalDAV)",
+		category:          "Calendar",
+		supported:         false,
+		unsupportedReason: "CalDAV tools are not implemented. New connections are unavailable. Accounts saved by earlier releases remain available for explicit revoke or removal.",
+	},
+	{
+		kind:              turingv1.IntegrationProvider_INTEGRATION_PROVIDER_NOTION,
+		storageKey:        "notion",
+		displayName:       "Notion",
+		category:          "Notes",
+		supported:         false,
+		unsupportedReason: "Notion tools are not implemented. New connections are unavailable. Accounts saved by earlier releases remain available for explicit revoke or removal.",
+	},
+	{
 		kind:              turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GOOGLE_WORKSPACE,
 		storageKey:        "google_workspace",
 		displayName:       "Google (Gmail, Calendar, Drive)",
 		category:          "Mail",
 		supported:         false,
-		unsupportedReason: "Google's APIs only issue credentials through OAuth, which needs a client ID and secret registered to a published app plus a browser redirect back to it. TuringAgent has none of those, so a Connect button here would open a consent screen that fails at the end. If your Google account issues app passwords, Gmail can still be reached as Mail (IMAP).",
+		unsupportedReason: "Google account connections and tools are not implemented in TuringAgent. IMAP tools are also unavailable.",
 	},
 	{
 		kind:              turingv1.IntegrationProvider_INTEGRATION_PROVIDER_MICROSOFT_365,
@@ -110,7 +85,7 @@ var catalogue = []provider{
 		displayName:       "Microsoft 365 / Outlook",
 		category:          "Mail",
 		supported:         false,
-		unsupportedReason: "Microsoft has retired basic authentication for Exchange Online and Outlook.com, so an app password no longer opens a mailbox there. What is left is OAuth against a registered Azure application, which TuringAgent does not have.",
+		unsupportedReason: "Microsoft 365 / Outlook account connections and tools are not implemented in TuringAgent.",
 	},
 	{
 		kind:              turingv1.IntegrationProvider_INTEGRATION_PROVIDER_SLACK,
@@ -118,7 +93,7 @@ var catalogue = []provider{
 		displayName:       "Slack",
 		category:          "Chat",
 		supported:         false,
-		unsupportedReason: "Slack issues tokens to installed apps through an OAuth install flow with a redirect URI. There is no token a person can create by hand and paste in.",
+		unsupportedReason: "Slack account connections and tools are not implemented in TuringAgent.",
 	},
 }
 

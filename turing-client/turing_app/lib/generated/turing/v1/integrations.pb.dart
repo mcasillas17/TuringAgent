@@ -23,9 +23,9 @@ export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
 
 export 'integrations.pbenum.dart';
 
-/// What a provider is, what credential it takes, and what that credential
-/// grants. Served by the backend rather than hardcoded in a client, so every
-/// client states the same thing about what connecting gives away.
+/// Whether a provider has implemented tools and accepts new connections, plus
+/// credential instructions and grants for connectable providers. Unsupported
+/// providers remain named with an explanation; historical grants live on rows.
 class ProviderDescriptor extends $pb.GeneratedMessage {
   factory ProviderDescriptor({
     IntegrationProvider? provider,
@@ -131,6 +131,7 @@ class ProviderDescriptor extends $pb.GeneratedMessage {
   @$pb.TagNumber(3)
   void clearCategory() => $_clearField(3);
 
+  /// False means no new connections, independently of existing row status.
   @$pb.TagNumber(4)
   $core.bool get supported => $_getBF(3);
   @$pb.TagNumber(4)
@@ -205,7 +206,7 @@ class ProviderDescriptor extends $pb.GeneratedMessage {
   $pb.PbList<$core.String> get grants => $_getList(10);
 }
 
-/// A connected account.
+/// A saved account and its historical consent. This is not a tool-health claim.
 ///
 /// No field here carries the credential, and none ever will. The stored secret
 /// is returned by no RPC in this file; a connection is described by its
@@ -414,12 +415,10 @@ class Connection extends $pb.GeneratedMessage {
   @$pb.TagNumber(12)
   $1.Timestamp ensureUpdatedAt() => $_ensure(11);
 
-  /// True when the stored credential was sealed with a key the backend no
-  /// longer has — TURING_INTEGRATION_KEY was rotated, lost, or restored from a
-  /// different .env. The connection can never be used again and must be
-  /// reconnected. Answered from the sealed value's key fingerprint, without
-  /// decrypting anything; a connection that quietly claimed to work would be
-  /// the app asserting access it does not have.
+  /// True when the stored credential's key fingerprint does not match the
+  /// backend's key, or no key is configured. Answered from the header without
+  /// decryption. Cleanup remains available. Reconnecting is only possible for
+  /// supported providers with configured storage; it cannot enable missing tools.
   @$pb.TagNumber(13)
   $core.bool get credentialUnreadable => $_getBF(12);
   @$pb.TagNumber(13)

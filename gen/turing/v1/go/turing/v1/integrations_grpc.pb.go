@@ -36,8 +36,9 @@ type IntegrationServiceClient interface {
 	// The catalogue: what can be connected, what cannot, and what each kind of
 	// credential grants.
 	ListProviders(ctx context.Context, in *ListProvidersRequest, opts ...grpc.CallOption) (*ListProvidersResponse, error)
-	// Stores a credential the user minted at the provider. Requires explicit
-	// consent to that provider's grants in the same request.
+	// Refuses unsupported providers before credential validation, sealing or
+	// storage. For a supported provider, stores a credential the user minted
+	// after explicit consent to its grants in the same request.
 	ConnectAccount(ctx context.Context, in *ConnectAccountRequest, opts ...grpc.CallOption) (*Connection, error)
 	ListConnections(ctx context.Context, in *ListConnectionsRequest, opts ...grpc.CallOption) (*ListConnectionsResponse, error)
 	GetConnection(ctx context.Context, in *GetConnectionRequest, opts ...grpc.CallOption) (*Connection, error)
@@ -46,8 +47,8 @@ type IntegrationServiceClient interface {
 	// invalidate the credential at the provider — only the provider can do
 	// that — and a client must say so.
 	RevokeConnection(ctx context.Context, in *RevokeConnectionRequest, opts ...grpc.CallOption) (*Connection, error)
-	// Removes the connection entirely, including its history. Revoking first is
-	// not required: deleting a connected account destroys the credential too.
+	// Removes the saved connection row and its credential. Audit records remain.
+	// Revoking first is not required. Neither cleanup RPC revokes vendor copies.
 	DeleteConnection(ctx context.Context, in *DeleteConnectionRequest, opts ...grpc.CallOption) (*DeleteConnectionResponse, error)
 	ListIntegrationTools(ctx context.Context, in *ListIntegrationToolsRequest, opts ...grpc.CallOption) (*ListIntegrationToolsResponse, error)
 	CallIntegrationTool(ctx context.Context, in *CallIntegrationToolRequest, opts ...grpc.CallOption) (*CallIntegrationToolResponse, error)
@@ -148,8 +149,9 @@ type IntegrationServiceServer interface {
 	// The catalogue: what can be connected, what cannot, and what each kind of
 	// credential grants.
 	ListProviders(context.Context, *ListProvidersRequest) (*ListProvidersResponse, error)
-	// Stores a credential the user minted at the provider. Requires explicit
-	// consent to that provider's grants in the same request.
+	// Refuses unsupported providers before credential validation, sealing or
+	// storage. For a supported provider, stores a credential the user minted
+	// after explicit consent to its grants in the same request.
 	ConnectAccount(context.Context, *ConnectAccountRequest) (*Connection, error)
 	ListConnections(context.Context, *ListConnectionsRequest) (*ListConnectionsResponse, error)
 	GetConnection(context.Context, *GetConnectionRequest) (*Connection, error)
@@ -158,8 +160,8 @@ type IntegrationServiceServer interface {
 	// invalidate the credential at the provider — only the provider can do
 	// that — and a client must say so.
 	RevokeConnection(context.Context, *RevokeConnectionRequest) (*Connection, error)
-	// Removes the connection entirely, including its history. Revoking first is
-	// not required: deleting a connected account destroys the credential too.
+	// Removes the saved connection row and its credential. Audit records remain.
+	// Revoking first is not required. Neither cleanup RPC revokes vendor copies.
 	DeleteConnection(context.Context, *DeleteConnectionRequest) (*DeleteConnectionResponse, error)
 	ListIntegrationTools(context.Context, *ListIntegrationToolsRequest) (*ListIntegrationToolsResponse, error)
 	CallIntegrationTool(context.Context, *CallIntegrationToolRequest) (*CallIntegrationToolResponse, error)

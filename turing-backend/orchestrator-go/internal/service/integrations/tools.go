@@ -67,7 +67,7 @@ func (s *Server) ListIntegrationTools(ctx context.Context, _ *turingv1.ListInteg
 	}
 	live := make([]repository.Connection, 0)
 	for _, connection := range connections {
-		if connection.Provider == "github" && connection.Status == repository.ConnectionStatusConnected && len(connection.CredentialHeader) > 0 {
+		if connection.Provider == "github" && connection.Status == repository.ConnectionStatusConnected && s.sealer.SealedWithThisKey(connection.CredentialHeader) {
 			live = append(live, connection)
 		}
 	}

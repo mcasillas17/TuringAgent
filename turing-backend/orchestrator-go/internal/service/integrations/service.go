@@ -141,9 +141,8 @@ func (s *Server) ConnectAccount(ctx context.Context, req *turingv1.ConnectAccoun
 	if len(credential) > maxCredentialBytes {
 		return nil, status.Error(codes.InvalidArgument, "credential is too long")
 	}
-	// A credential is eventually handed to a line-based protocol — IMAP, or
-	// CalDAV over HTTP — where an embedded newline is not a typo but an
-	// injected command. Refused at the boundary while the storage format is
+	// A credential is eventually handed to an HTTP header, where an embedded
+	// newline is not a typo but injected structure. Refused at the boundary while the storage format is
 	// still new, rather than left to the tool that dials the server.
 	if strings.IndexFunc(credential, isForbiddenInCredential) >= 0 {
 		return nil, status.Error(codes.InvalidArgument, "credential contains characters that are not part of a token")
@@ -155,7 +154,7 @@ func (s *Server) ConnectAccount(ctx context.Context, req *turingv1.ConnectAccoun
 	if !entry.requiresEndpoint {
 		// A hosted provider has one address and it is not the user's to set.
 		// Dropped rather than stored, so a form that left a stale value behind
-		// cannot make a Notion connection claim to live on somebody's IMAP
+		// cannot make a GitHub connection claim to live on somebody's IMAP
 		// server.
 		endpoint = ""
 	}

@@ -74,13 +74,14 @@ func TestCreateConnectionStoresWhatItWasGivenAndTrimsIt(t *testing.T) {
 	}
 }
 
-func TestGetSealedConnectionCredentialReturnsTheNamedLiveCredentialAndFailsClosedAfterRevoke(t *testing.T) {
+func TestGetSealedGitHubCredentialReturnsTheNamedLiveCredentialAndFailsClosedAfterRevoke(t *testing.T) {
 	repo, ctx := newConnectionTestRepo(t)
 	input := validConnection()
+	input.Provider = "github"
 	input.CredentialCiphertext = []byte("sealed-for-exact-connection")
 	created := mustCreateConnection(t, ctx, repo, input)
 
-	credential, err := repo.GetSealedConnectionCredential(ctx, created.ConnectionID)
+	credential, err := repo.GetSealedGitHubCredential(ctx, created.ConnectionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,8 +91,23 @@ func TestGetSealedConnectionCredentialReturnsTheNamedLiveCredentialAndFailsClose
 	if _, err := repo.RevokeConnection(ctx, created.ConnectionID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.GetSealedConnectionCredential(ctx, created.ConnectionID); !errors.Is(err, ErrConnectionNotUsable) {
+	if _, err := repo.GetSealedGitHubCredential(ctx, created.ConnectionID); !errors.Is(err, ErrConnectionNotUsable) {
 		t.Fatalf("revoked credential error = %v, want ErrConnectionNotUsable", err)
+	}
+}
+
+func TestSealedCredentialReadExcludesLegacyProviders(t *testing.T) {
+	for _, provider := range []string{"imap", "caldav", "notion"} {
+		t.Run(provider, func(t *testing.T) {
+			repo, ctx := newConnectionTestRepo(t)
+			input := validConnection()
+			input.Provider = provider
+			created := mustCreateConnection(t, ctx, repo, input)
+			credential, err := repo.GetSealedGitHubCredential(ctx, created.ConnectionID)
+			if !errors.Is(err, ErrConnectionNotFound) || credential.Ciphertext != nil {
+				t.Fatalf("legacy credential read returned ciphertext=%t, error=%v", credential.Ciphertext != nil, err)
+			}
+		})
 	}
 }
 
