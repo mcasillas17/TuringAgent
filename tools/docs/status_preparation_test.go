@@ -8,6 +8,36 @@ import (
 	mdast "github.com/yuin/goldmark/ast"
 )
 
+func verificationPreparationProblems(source string) []string {
+	document := parseStatusMarkdown(source)
+	var problems []string
+	found := false
+	_ = mdast.Walk(document.document, func(node mdast.Node, entering bool) (mdast.WalkStatus, error) {
+		block, ok := node.(*mdast.FencedCodeBlock)
+		if !entering || !ok {
+			return mdast.WalkContinue, nil
+		}
+		body := string(block.Lines().Value(document.source))
+		rootTest := strings.Index(body, "go test -tags sqlite_fts5")
+		if rootTest < 0 || !strings.Contains(body, "./...") {
+			return mdast.WalkContinue, nil
+		}
+		found = true
+		for _, module := range []string{"mcp-files", "mcp-system"} {
+			pattern := regexp.MustCompile(`(?m)^\s*\(\s*cd\s+turing-backend/` + module + `\s*&&\s*go\s+mod\s+download\s*\)`)
+			match := pattern.FindStringIndex(body)
+			if match == nil || match[0] > rootTest {
+				problems = append(problems, "prepare "+module+" dependencies before the offline root tests")
+			}
+		}
+		return mdast.WalkContinue, nil
+	})
+	if !found {
+		problems = append(problems, "expected a documented root verification command block")
+	}
+	return problems
+}
+
 func TestVerificationInstructionsPrepareNestedModuleCaches(t *testing.T) {
 	for _, path := range []string{
 		"README.md", "docs/architecture/tech-stack.md",
@@ -15,29 +45,33 @@ func TestVerificationInstructionsPrepareNestedModuleCaches(t *testing.T) {
 		".claude/skills/verify/SKILL.md",
 	} {
 		t.Run(path, func(t *testing.T) {
-			document := parseStatusMarkdown(repoFile(t, path))
-			found := false
-			for node := document.document.FirstChild(); node != nil; node = node.NextSibling() {
-				block, ok := node.(*mdast.FencedCodeBlock)
-				if !ok {
-					continue
-				}
-				body := string(block.Lines().Value(document.source))
-				rootTest := strings.Index(body, "go test -tags sqlite_fts5")
-				if rootTest < 0 || !strings.Contains(body, "./...") {
-					continue
-				}
-				found = true
-				for _, module := range []string{"mcp-files", "mcp-system"} {
-					pattern := regexp.MustCompile(`(?m)^\(\s*cd\s+turing-backend/` + module + `\s*&&\s*go\s+mod\s+download\s*\)`)
-					match := pattern.FindStringIndex(body)
-					if match == nil || match[0] > rootTest {
-						t.Errorf("%s: prepare %s dependencies before the root tests, whose docs guard resolves all module graphs offline", path, module)
-					}
-				}
+			for _, problem := range verificationPreparationProblems(repoFile(t, path)) {
+				t.Errorf("%s: %s", path, problem)
 			}
-			if !found {
-				t.Fatal("expected a documented root verification command block")
+		})
+	}
+}
+
+func TestVerificationPreparationContexts(t *testing.T) {
+	commands := "(cd turing-backend/mcp-files && go mod download)\n(cd turing-backend/mcp-system && go mod download)\ngo test -tags sqlite_fts5 ./... -count=1\n"
+	for _, fixture := range []struct{ name, prefix string }{
+		{"top level", ""}, {"blockquote", "> "}, {"list", "  "},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			wrap := func(commands string) string {
+				block := "```bash\n" + commands + "```\n"
+				block = fixture.prefix + strings.ReplaceAll(block, "\n", "\n"+fixture.prefix)
+				if fixture.name == "list" {
+					block = "- Checks:\n\n" + block
+				}
+				return block
+			}
+			if problems := verificationPreparationProblems(wrap(commands)); len(problems) != 0 {
+				t.Fatalf("prepared block rejected: %v", problems)
+			}
+			missing := wrap("go test -tags sqlite_fts5 ./... -count=1\n")
+			if problems := strings.Join(verificationPreparationProblems(missing), "\n"); !strings.Contains(problems, "prepare mcp-files") || !strings.Contains(problems, "prepare mcp-system") {
+				t.Fatalf("nested missing preparation passed: %s", problems)
 			}
 		})
 	}

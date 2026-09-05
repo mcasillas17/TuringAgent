@@ -11,14 +11,9 @@ func TestCIDocumentationGuardPreparesNestedModuleCaches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	goJob := requireIndentedBlock(t, string(data), "  go:", 2)
-	requireContains(t, goJob, "turing-backend/mcp-files/go.sum")
-	requireContains(t, goJob, "turing-backend/mcp-system/go.mod")
-	requireInOrder(t, goJob,
-		"(cd turing-backend/mcp-files && go mod download)",
-		"(cd turing-backend/mcp-system && go mod download)",
-		"go test -tags sqlite_fts5 -race ./... -count=1",
-	)
+	if problem := documentationPreparationProblem(data); problem != "" {
+		t.Fatal(problem)
+	}
 }
 
 func TestCIWorkflowCoversCoreChecks(t *testing.T) {

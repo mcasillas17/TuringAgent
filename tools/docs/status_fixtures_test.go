@@ -419,6 +419,7 @@ func TestStatusGuardRepositoryFixtures(t *testing.T) {
 	const orchestrator = backend + "orchestrator-go/internal/"
 	for _, test := range []struct{ name, path, old, replacement, claim string }{
 		{"search RPC disconnected", app + "lib/networking/grpc_client.dart", "await _sessions.searchMessages(", "await _sessions.listMessages(", "flutter-search"},
+		{"literal phrase conversion removed", orchestrator + "repository/sessions.go", "fts5Phrase(query)", "query", "flutter-search"},
 		{"workspace page replaced", app + "lib/ui/shell/responsive_shell.dart", "return IntegrationsPage(", "return PlaceholderPage(", "flutter-workspace"},
 		{"breaking check commented", ".github/workflows/ci.yml", "run: tools/proto/breaking.sh", "# run: tools/proto/breaking.sh", "proto-breaking"},
 		{"breaking step disabled", ".github/workflows/ci.yml", "- name: Check protobuf compatibility", "- name: Check protobuf compatibility\n        if: false", "proto-breaking"},
