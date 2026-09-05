@@ -19,7 +19,7 @@ type codegenChange struct {
 
 func TestProtoCheckRejectsGeneratedDrift(t *testing.T) {
 	script := repoFile(t, "tools/proto/check.sh")
-	changes := []codegenChange{{}}
+	changes := []codegenChange{{}, {"fail", ""}}
 	for _, tree := range []string{"proto", "gen", "turing-client/turing_app/lib/generated"} {
 		changes = append(changes,
 			codegenChange{"write", tree + "/output.txt"},
@@ -74,6 +74,13 @@ func TestProtoCheckSuppressionFixtures(t *testing.T) {
 			t.Fatalf("late generation must be detected: %s", problem)
 		}
 	})
+	t.Run("generator failure ignored without errexit", func(t *testing.T) {
+		mutated := strings.Replace(baseline, "set -euo pipefail", "set -uo pipefail", 1)
+		problem := protoCheckBehaviorProblem(t, mutated, codegenChange{"fail", ""})
+		if !strings.Contains(problem, "failed generator was not propagated") {
+			t.Fatalf("ignored generator failure must be detected: %s", problem)
+		}
+	})
 }
 
 // Exercise the real check script with a deterministic fake generator, not
@@ -86,6 +93,7 @@ set -eu
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 case "$DOC_GUARD_OPERATION" in
   "") ;;
+  fail) exit 42 ;;
   write)
     mkdir -p "$(dirname "$ROOT/$DOC_GUARD_CHANGE")"
     printf 'changed\n' > "$ROOT/$DOC_GUARD_CHANGE"
@@ -125,6 +133,13 @@ esac
 	output, err := command.CombinedOutput()
 	if ctx.Err() != nil {
 		return "tools/proto/check.sh: probe timed out; reconcile the generation/diff gate"
+	}
+	if changed.operation == "fail" {
+		var exited *exec.ExitError
+		if errors.As(err, &exited) && exited.ExitCode() == 42 {
+			return ""
+		}
+		return "tools/proto/check.sh: failed generator was not propagated"
 	}
 	if changed.target == "" {
 		if err == nil {

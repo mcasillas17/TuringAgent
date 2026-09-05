@@ -15,6 +15,7 @@ Run these in order and report the outcome of each. Stop and surface failures —
 # 1. Root module
 go test -tags sqlite_fts5 ./... -count=1
 go test -tags sqlite_fts5 -race ./... -count=1
+go test -tags sqlite_fts5 ./.github/workflows -count=1
 go build -tags sqlite_fts5 ./...
 
 # 2. mcp-files (separate module)

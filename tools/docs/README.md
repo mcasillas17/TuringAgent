@@ -1,6 +1,6 @@
 # Documentation guards
 
-`docs/NORTH_STAR.md` is the canonical roadmap. `docs/VISION.md` and the former
+[docs/NORTH_STAR.md](../../docs/NORTH_STAR.md) is the canonical roadmap. `docs/VISION.md` and the former
 personal-agent audit remain short historical pointers, not competing status
 inventories.
 
@@ -173,7 +173,8 @@ and harmless formatting/wording changes. `status_history_test.go` covers
 historical notices, pointers and link contexts. `status_codegen_test.go` uses
 temporary directories (including a fixture-local `TMPDIR`) and a minimal
 environment to expose cleared flags, skipped loops, early success, restored
-output, omitted Dart checks and late generation. `status_dependency_test.go`
+output, omitted Dart checks, late generation and swallowed generator failures.
+`status_dependency_test.go`
 checks the actual runtime dependency graphs with module downloads and workspace
 overrides disabled. No fixture mutates the checkout.
 

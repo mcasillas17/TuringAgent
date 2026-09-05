@@ -162,8 +162,8 @@ than loop failures. This non-deterministic check is intentionally not run in CI.
 ![Live macOS system.time tool card and final answer](docs/assets/live-tool-loop-verification.png)
 
 `CLAUDE.md` documents the contributor verification matrix. The commands below
-also include Go vet; CI additionally runs the explicit `.github/workflows`
-suite (see `.github/workflows/ci.yml`).
+also include Go vet and the explicit `.github/workflows` suite used locally
+and in CI (see `.github/workflows/ci.yml`).
 
 Run developer checks from the repository root:
 
@@ -171,6 +171,7 @@ Run developer checks from the repository root:
 (cd turing-backend/mcp-files && go mod download)
 (cd turing-backend/mcp-system && go mod download)
 go test -tags sqlite_fts5 -race ./... -count=1
+go test -tags sqlite_fts5 ./.github/workflows -count=1
 go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 ./...
 (cd turing-backend/mcp-files && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)

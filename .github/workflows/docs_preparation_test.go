@@ -132,6 +132,9 @@ func TestDocumentationPreparationFixtures(t *testing.T) {
 		{"custom prep shell", "- name: Prepare documentation guard module caches", "- name: Prepare documentation guard module caches\n        shell: 'true {0}'", "execution shell"},
 		{"custom root defaults", "  go:\n", "  go:\n    defaults:\n      run:\n        shell: 'true {0}'\n", "execution shell"},
 		{"wrong prep directory", "- name: Prepare documentation guard module caches", "- name: Prepare documentation guard module caches\n        working-directory: /tmp", "root directory"},
+		{"workflow shell", "jobs:\n", "defaults:\n  run:\n    shell: 'true {0}'\njobs:\n", "execution shell"},
+		{"workflow directory", "jobs:\n", "defaults:\n  run:\n    working-directory: /tmp\njobs:\n", "root directory"},
+		{"job directory", "  go:\n", "  go:\n    defaults:\n      run:\n        working-directory: /tmp\n", "root directory"},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			source := string(baseline)

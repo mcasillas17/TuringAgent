@@ -260,8 +260,8 @@ databases, vault content or sandbox files.
 ## Developer checks
 
 Run from the repository root unless noted. `CLAUDE.md` documents the contributor
-verification matrix. The examples below also include CI-specific vet/workflow
-checks and the focused script suite; smoke/live-model commands are opt-in diagnostics.
+verification matrix. The examples below also include vet, workflow self-checks
+and the focused script suite; smoke/live-model commands are opt-in diagnostics.
 
 ```bash
 (cd turing-backend/mcp-files && go mod download)
