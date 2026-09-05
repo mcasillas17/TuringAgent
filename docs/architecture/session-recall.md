@@ -3,9 +3,11 @@
 This release ships the durable retrieval capability for session messages:
 SQLite FTS5 indexing kept current by database triggers, ranked and
 session-scoped search, and the public `SessionService.SearchMessages` RPC. The
-Flutter Sessions screen exposes that RPC through **Search conversations**.
+Flutter shell exposes that RPC through **Search conversations**.
 Search spans all sessions, treats the query as one exact phrase, groups matches
-by conversation, and opens the selected conversation. Group headings use the
+by conversation, and selects the underlying conversation for display after
+search is dismissed. Selecting a result does not close the search route,
+and the UI has no date filter. Group headings use the
 same orchestrator-owned title that the session list receives through
 `session.updated`, and otherwise retain a session-ID fallback.
 

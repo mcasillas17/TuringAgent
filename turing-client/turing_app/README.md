@@ -1,22 +1,43 @@
 # TuringAgent Flutter Client
 
-This is the v1.0 Flutter client for TuringAgent. It is a thin, protocol-driven UI for the local Go gRPC orchestrator: the backend owns sessions, messages, model routing, approvals, tool execution, persistence, and audit state.
+This is the Flutter client for TuringAgent. It is a thin, protocol-driven UI for the local Go gRPC orchestrator: the backend owns sessions, messages, model routing, approvals, tool execution, persistence, and audit state.
 
 The client preserves the existing polished `ResponsiveShell` experience. Backend-connected chat, sessions, and settings are integrated into that shell instead of replacing it with a plain debug root.
 
 ## Current Status
 
+The [canonical roadmap](../../docs/NORTH_STAR.md) separates current behavior
+from future work. The scoped status cells below are checked by the
+[offline documentation guard](../../tools/docs/README.md); they do not certify
+live providers, MCP conformance, or production mobile support.
+
+<!-- status-guard:begin -->
+| Claim | Status | Scope |
+| --- | --- | --- |
+| flutter-search | shipped | Exact-phrase conversation search is wired from the shell through gRPC to backend search. |
+| flutter-workspace | shipped | The named destinations described below load real backend state, not placeholder pages. |
+| mcp-registry | shipped | The MCPs page manages registrations, imports, enablement, tokens and tool policies. |
+| mcp-lifecycle | pending | Registry management and the HTTP JSON-RPC tools subset do not implement initialization/capability negotiation (CON-001). |
+| remote-model-routing | shipped | Agents manages endpoint records; the conversation's destination bar selects the route through ExternalAgentService, and the runtime calls the model under per-run disclosure. |
+| agent-delegation | pending | ExternalAgentService is model routing, not A2A or access to an existing vendor-product conversation. |
+| github-tools | shipped | Connected GitHub credentials have issue/file read tools and approval-gated issue comments. |
+| other-integration-tools | pending | IMAP, CalDAV and Notion have no functional tools and refuse new credentials. Earlier-release accounts remain available for explicit local revoke/remove. |
+| mobile-client | pending | Responsive layouts and iOS/Android scaffolding are not a production mobile client; the main Android manifest lacks INTERNET permission while debug/profile grant it. |
+| mobile-reachability | pending | The default host API is loopback-only; LAN/tailnet URLs alone cannot make a phone reach it securely. |
+<!-- status-guard:end -->
+
 Implemented in the client:
 
-- Existing TuringAgent app shell with desktop navigation rail and mobile drawer.
+- Existing TuringAgent app shell with desktop sidebar and compact drawer.
 - Backend URL and API key settings stored through secure client storage.
 - gRPC client for config, sessions, message search, event replay, streaming session events, and approval actions.
-- Chat tab wired to backend sessions and streamed message deltas.
+- Chats destination wired to backend sessions and streamed message deltas.
 - Active conversations are cursor-paginated and expose rename, archive, and
   permanent delete actions; an archived-conversations dialog paginates,
   renames, restores, or permanently deletes archived rows.
 - Exact-phrase conversation search across all sessions, grouped by conversation
-  and linked back to the matching chat.
+  with result selection setting the underlying chat. Dismiss search to see it;
+  selecting a result does not itself close the search route. There is no date filter.
 - Inline tool-call status cards for live `tool.call.*` events.
 - Localized lifecycle/outcome cards reconstructed from the same versioned
   `RunState` used by live events and persisted message history.
@@ -28,11 +49,15 @@ Implemented in the client:
   shell removes a conversation only after a completed receipt or its terminal
   event; an in-progress or failed-external receipt remains visible for retry.
 
-Provisional until the full local stack is running:
+Runtime prerequisites and limits:
 
 - End-to-end chat responses require the Go orchestrator, Go agent runtime, model provider, and event stream.
 - Approval cards require the backend/runtime to emit approval events.
-- Devices and Stats remain placeholders. Integration account management is implemented; see below.
+- A functional management page does not imply every connector or protocol it
+  names works. GitHub has tool consumers; IMAP, CalDAV and Notion refuse new
+  connections because their tools are not implemented. Google, Microsoft and
+  Slack account connections are also unavailable. Saved accounts remain
+  manageable as described below; INT-001 shipped these boundaries.
 
 ## Run Locally
 
@@ -44,7 +69,22 @@ flutter pub get
 flutter run -d macos
 ```
 
-Use `flutter devices` to choose another target, such as Chrome or a connected Android device. For physical devices, the backend URL usually needs the host machine's LAN or Tailscale address rather than `localhost`.
+Use `flutter devices` to inspect available development targets, not as a list
+of supported deployments. The current client uses native `ClientChannel`
+gRPC; this guide does not provide a working Chrome/gRPC-Web deployment.
+
+The supported local setup is the desktop client on the backend host. Compose
+publishes the public gRPC API on **127.0.0.1** (default port `3000`). Merely
+setting a phone's backend URL to the host's LAN or Tailscale address does not
+make that loopback listener reachable. Do not expose it on `0.0.0.0` or put
+the shared desktop bearer behind a public tunnel as a mobile workaround.
+
+iOS/Android scaffolding and phone-sized layouts are present, but production
+mobile support is pending: the Android `src/main/AndroidManifest.xml` has no
+`INTERNET` permission (debug/profile manifests do), and device pairing,
+revocation and an authenticated non-loopback TLS transport are not implemented.
+See SEC-001 and MOB-001 in the canonical roadmap. A future private overlay
+transport is a design target, not a setup step that works today.
 
 Run client verification:
 
@@ -60,10 +100,13 @@ On first launch, or when saved credentials are missing, the app opens `SettingsS
 
 Enter:
 
-- **Backend URL**: typically `http://localhost:3000` on the development machine.
+- **Backend URL**: `http://localhost:3000` on the backend host (or the configured
+  loopback port).
 - **API key**: the client API key printed by the backend initialization flow.
 
-After saving, `TuringApp` reloads stored settings and opens the existing `ResponsiveShell`. The Settings tab remains available inside the shell so backend URL or API key can be updated later.
+After saving, `TuringApp` reloads stored settings and opens `ResponsiveShell`.
+Settings remains available from the sidebar, rather than as a workspace
+destination, so the backend URL or API key can be updated later.
 
 The current client sends authenticated gRPC metadata using:
 
@@ -75,15 +118,31 @@ authorization: Bearer <api-key>
 
 `ResponsiveShell` remains the primary app surface:
 
-- **Chat** lists active sessions in `ResponsiveShell`, loads additional cursor
+- **Chats** lists active sessions in `ResponsiveShell`, loads additional cursor
   pages, opens backend-connected `ChatScreen` instances, and exposes search and
   archived-conversation management.
-- **Devices** is a placeholder: `IoT Devices Dashboard`.
-- **Stats** is a placeholder: `Stats & Usage`.
-- **Integrations** manages saved accounts and GitHub tool policies; unsupported providers stay visible with an explanation.
-- **Settings** renders the real backend URL/API key settings screen.
+- **Skills** lists file-backed skills and manages enablement and capability grants.
+- **Memory** displays the file-backed vault, pinned documents and proposal
+  decisions. This does not imply automatic learning from conversation.
+- **Integrations** manages saved accounts and GitHub tool policies;
+  unsupported providers stay visible with an explanation and no credential
+  form. Existing accounts retain explicit revoke/remove actions.
+- **MCPs** manages the tool-server registry and policies. The current transport
+  is an HTTP JSON-RPC subset, not full MCP lifecycle conformance.
+- **Automations** manages interval/daily runs and their explicit tool allowlists;
+  it does not provide mobile/channel delivery.
+- **Agents** manages remote model endpoint records. The conversation's
+  `SessionAgentBar` selects, reads and clears its route through
+  `ExternalAgentService`; model execution stays in the runtime. Vendor labels
+  do not select native Anthropic/Gemini adapters or delegate to a user's
+  existing Claude/Copilot/Gemini/ChatGPT session.
+- **Telemetry** shows backend local usage aggregates, not a user-facing audit log.
 
-This keeps theme logic, app colors, desktop rail behavior, mobile drawer behavior, and placeholder tabs intact while adding backend-connected client surfaces.
+The destination list is defined in `ShellDestination`; `ResponsiveShell`
+wires each page to `TuringApi`, and `TuringGrpcApi` forwards calls to generated
+clients. The older Devices/Stats placeholder descriptions do not describe these
+pages. Responsive sidebar/drawer behavior is a layout capability, not proof of
+mobile networking.
 
 ## Integration accounts
 
@@ -121,7 +180,7 @@ credential at its vendor separately when needed.
 
 ## Chat And Sessions
 
-The Chat tab uses the generated gRPC services for commands, queries, and streamed events:
+The Chats destination uses the generated gRPC services for commands, queries, and streamed events:
 
 - `SessionService.GetConfig` for backend capabilities and model providers.
 - `SessionService.ListSessions`, `SessionService.GetSession`, and
@@ -171,9 +230,11 @@ event replay for a deleted session is `NotFound`, not an empty history.
 ## Important Files
 
 - `lib/app.dart`: loads saved client config and chooses Settings or `ResponsiveShell`.
-- `lib/ui/shell/responsive_shell.dart`: polished TuringAgent shell and tab integration.
+- `lib/ui/shell/responsive_shell.dart`: TuringAgent sidebar, drawer and destination integration.
+- `lib/ui/shell/shell_destination.dart`: current workspace destinations.
+- `lib/features/workspace/`: backend-connected workspace pages, including
+  `workspace_pages.dart` for the MCPs registry surface.
 - `lib/features/settings/settings_screen.dart`: backend URL/API key form.
-- `lib/features/sessions/session_list_screen.dart`: backend session list and new-chat flow.
 - `lib/features/search/search_screen.dart`: debounced, accessible exact-phrase
   conversation search and grouped result navigation.
 - `lib/features/chat/chat_screen.dart`: active backend-connected chat screen for message loading, sending, streaming deltas, inline run/tool activity, and approvals.
@@ -198,7 +259,10 @@ event replay for a deleted session is `NotFound`, not an empty history.
 ## Developer Notes
 
 - Keep the Flutter client thin. Do not move orchestration, memory, routing, tool policy, approval decisions, or persistence into Flutter.
-- Preserve `ResponsiveShell` as the main authenticated app surface. Add new client views as tabs or shell-integrated screens rather than replacing the root.
+- Preserve `ResponsiveShell` as the main authenticated app surface. Add new client views as destinations or shell-integrated screens rather than replacing the root.
 - Prefer the `TuringApi` and `TuringEventSource` interfaces in widgets so tests can use fakes without network access.
-- Keep Devices and Stats visibly present but placeholder-only until their backend contracts are defined. Integrations renders backend provider support separately from saved account status.
-- Avoid claiming full end-to-end chat readiness in UI or docs until the orchestrator/runtime pipeline is available and verified.
+- Keep status descriptions scoped to the real page, RPC and consumer behavior.
+  A provider descriptor or an `implemented` flag is not end-to-end evidence.
+- Run `go test ./tools/docs -count=1` from the repository root after updating
+  guarded statuses. Update evidence and behavioral coverage with a genuine
+  capability change rather than relabeling missing evidence as pending.

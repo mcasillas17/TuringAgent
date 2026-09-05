@@ -10,7 +10,9 @@ The project is designed for local development first: secrets stay in your local 
 - Runs a Go agent runtime that connects to local or OpenAI-compatible models.
 - Requires a fresh destination and data-category confirmation for every remote
   run; the decision is recorded with the run and cannot authorize background work.
-- Exposes MCP tool servers for safe system tools and approval-gated sandboxed file tools.
+- Exposes an HTTP JSON-RPC tool subset for safe system tools and
+  approval-gated sandboxed file tools, with endpoint and policy management.
+  See the [current protocol scope](docs/NORTH_STAR.md#guarded-capability-inventory).
 - Provides a Flutter client with settings, conversation search, automatically
   named and paginated session lists, rename/archive/restore actions, chat,
   streamed responses, localized durable run-outcome cards, and approval cards.
@@ -20,6 +22,13 @@ The project is designed for local development first: secrets stay in your local 
   existing subscribers receive one terminal deletion event, and newly
   session-owned sandbox artifacts are removed by policy.
 - Ships a Docker Compose local stack and an end-to-end gRPC smoke test.
+
+Current capability status and future work are separated in the
+[canonical roadmap](docs/NORTH_STAR.md#current-status). The Flutter shell has
+backend-connected Chats, Skills, Memory, Integrations, MCPs, Automations,
+Agents and Telemetry surfaces. Agents manages model endpoint records;
+[integration and routing limits](docs/NORTH_STAR.md#guarded-capability-inventory)
+distinguish credential storage, functional tools, inference and delegation.
 
 ## Account integrations
 
@@ -86,9 +95,18 @@ Start the backend stack:
 ```
 
 This builds and runs the orchestrator, agent runtime, and MCP servers through
-Docker Compose. The public gRPC API bind address is fixed to `localhost`; its
-host port defaults to `3000` and can be changed with
-`ORCHESTRATOR_PUBLIC_PORT`.
+Docker Compose. Compose publishes the public gRPC API on `127.0.0.1` only;
+its host port defaults to `3000` and can be changed with
+`ORCHESTRATOR_PUBLIC_PORT`. The orchestrator listens on all interfaces inside
+its container; the host restriction comes from Compose's port publication,
+not an in-process loopback check.
+
+The supported client setup runs on that same host. A LAN/Tailscale client URL
+alone does not expose the loopback service. iOS/Android scaffolding and
+responsive layouts are not production mobile support: device pairing and
+non-loopback identity/TLS remain future work, and Android's main manifest
+lacks network permission. See the [Flutter deployment limits](turing-client/turing_app/README.md#run-locally);
+do not widen the host publication or add a public tunnel as a shortcut.
 
 Use the repository scripts rather than invoking this Compose file directly.
 `scripts/compose.sh` validates and injects the current non-root host UID/GID;
@@ -115,7 +133,7 @@ be evaluated on `down`, `stop` and `rm` too, and teardown has to work on the
 broken install it is being run to fix — including the `down --remove-orphans`
 that `scripts/reset.sh` runs before it deletes local data.
 
-In another terminal, run the Flutter app:
+In another terminal, from the repository root, run the Flutter app:
 
 ```bash
 cd turing-client/turing_app
@@ -167,16 +185,29 @@ than loop failures. This non-deterministic check is intentionally not run in CI.
 
 ![Live macOS system.time tool card and final answer](docs/assets/live-tool-loop-verification.png)
 
+`CLAUDE.md` documents the contributor verification matrix. The commands below
+also include Go vet and the explicit `.github/workflows` suite used locally
+and in CI (see `.github/workflows/ci.yml`).
+
 Run developer checks from the repository root:
 
 ```bash
+(cd turing-backend/mcp-files && go mod download)
+(cd turing-backend/mcp-system && go mod download)
 go test -tags sqlite_fts5 -race ./... -count=1
+go test -tags sqlite_fts5 ./.github/workflows -count=1
 go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 ./...
-cd turing-backend/mcp-files && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server
-cd ../mcp-system && go test -race ./... -count=1 && go vet ./... && go build ./...
-cd ../../turing-client/turing_app && flutter analyze && flutter test
+(cd turing-backend/mcp-files && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
+(cd turing-backend/mcp-system && go test -race ./... -count=1 && go vet ./... && go build ./...)
+(cd turing-client/turing_app && flutter analyze && flutter test)
 ```
+
+TUR-019 already enforces protobuf compatibility in CI with
+`tools/proto/breaking.sh`; `tools/proto/check.sh` separately checks deterministic
+Go and Dart generation. See the [pinned toolchain guide](tools/proto/README.md).
+The [documentation guard](tools/docs/README.md) covers explicit status claims
+and tool versions; it does not replace the behavioral suites.
 
 ## Configuration
 
@@ -282,6 +313,8 @@ or migration.
 
 ## Documentation
 
+- [Canonical product direction and roadmap](docs/NORTH_STAR.md)
+- [Documentation status guard](tools/docs/README.md)
 - [Tech stack and architecture](docs/architecture/tech-stack.md)
 - [Durable run outcomes](docs/architecture/run-outcomes.md)
 - [Stable session title lifecycle](docs/architecture/session-titles.md)
@@ -290,4 +323,4 @@ or migration.
 - [Remote-provider egress policy](docs/architecture/remote-egress-policy.md)
 - [MCP security and approval flow](docs/mcp-security-and-integration.md)
 - [Flutter client guide](turing-client/turing_app/README.md)
-- [Go/gRPC migration design](docs/superpowers/specs/2026-05-15-turing-go-grpc-migration-design.md)
+- [Historical Go/gRPC migration design](docs/superpowers/specs/2026-05-15-turing-go-grpc-migration-design.md)

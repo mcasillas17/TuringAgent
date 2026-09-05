@@ -6,6 +6,16 @@ import (
 	"testing"
 )
 
+func TestCIDocumentationGuardPreparesNestedModuleCaches(t *testing.T) {
+	data, err := os.ReadFile("ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if problem := documentationPreparationProblem(data); problem != "" {
+		t.Fatal(problem)
+	}
+}
+
 func TestCIWorkflowCoversCoreChecks(t *testing.T) {
 	data, err := os.ReadFile("ci.yml")
 	if err != nil {

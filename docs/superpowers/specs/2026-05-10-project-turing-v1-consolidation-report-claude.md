@@ -1,5 +1,8 @@
 # TuringAgent v1.0 Consolidation Report (Claude perspective)
 
+**Historical report:** This record is not current implementation or status.
+Use the [canonical roadmap](../../NORTH_STAR.md) for current truth.
+
 **Author:** Claude Code session, 2026-05-10
 **Companion to:** `2026-05-10-project-turing-v1-consolidation-report.md` (Copilot perspective)
 
