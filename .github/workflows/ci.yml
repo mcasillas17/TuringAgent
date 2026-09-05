@@ -22,6 +22,8 @@ jobs:
         with:
           go-version: "1.25.x"
           cache: true
+          # Unlike lint, the root docs suite resolves nested graphs offline;
+          # mcp-system's manifest keys preparation even while it is stdlib-only.
           cache-dependency-path: |
             go.sum
             turing-backend/mcp-files/go.sum

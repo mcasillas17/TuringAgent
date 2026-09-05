@@ -36,7 +36,8 @@ Implemented in the client:
   permanent delete actions; an archived-conversations dialog paginates,
   renames, restores, or permanently deletes archived rows.
 - Exact-phrase conversation search across all sessions, grouped by conversation
-  and linked back to the matching chat.
+  with result selection setting the underlying chat. Dismiss search to see it;
+  selecting a result does not itself close the search route. There is no date filter.
 - Inline tool-call status cards for live `tool.call.*` events.
 - Localized lifecycle/outcome cards reconstructed from the same versioned
   `RunState` used by live events and persisted message history.

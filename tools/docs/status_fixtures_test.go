@@ -170,6 +170,8 @@ func TestStatusEvidenceFixtures(t *testing.T) {
 		{"Python token predicate refused", statusEvidence{path: "source.py", require: "api.search()"}, "# api.search()", "unsupported token predicate"},
 		{"absent literal present", statusEvidence{path: "source.go", require: "package fixture", absent: `"initialize"`}, "package fixture\nvar method = \"initialize\"", "limiting evidence changed"},
 		{"commented Dart call", statusEvidence{path: "source.dart", require: "api.search()"}, "// api.search()\n/* api.search() */", "required evidence contract missing"},
+		{"commented Dart pattern refused", statusEvidence{path: "source.dart", pattern: "api.search"}, "// api.search()", "regex predicates are unsupported"},
+		{"commented proto pattern refused", statusEvidence{path: "source.proto", rejectPattern: "service"}, "// service Example", "regex predicates are unsupported"},
 		{"Dart URL is not a comment", statusEvidence{path: "source.dart", require: "'https://example.invalid'"}, "final url = 'https://example.invalid';", ""},
 		{"identifier boundary", statusEvidence{path: "source.dart", require: "api.search()"}, "otherapi.search();", "required evidence contract missing"},
 		{"unsupported XML", statusEvidence{path: "source.xml", require: "anything"}, "<anything/>", "unsupported XML evidence"},

@@ -246,6 +246,9 @@ func checkStatusEvidence(files fs.FS, evidence statusEvidence) string {
 		return "YAML selection is only supported for YAML evidence"
 	}
 	extension := path.Ext(evidence.path)
+	if (extension == ".dart" || extension == ".proto") && (evidence.pattern != "" || evidence.rejectPattern != "") {
+		return "Dart/proto regex predicates are unsupported; use comment-aware token witnesses"
+	}
 	if (extension == ".sh" || extension == ".yml" || extension == ".yaml") &&
 		evidence.yamlPath == "" && evidence.workflowJob == "" && (evidence.require != "" || evidence.absent != "") {
 		return "shell and YAML token predicates require parsed selection; use anchored patterns for shell evidence"

@@ -105,7 +105,7 @@ probe are not live end-to-end product proof; see
 | --- | --- | --- |
 | proto-breaking | shipped | TUR-019: CI runs Buf compatibility checks against the PR base, separately from generation. |
 | proto-codegen | shipped | CI checks deterministic, committed Go and Dart protobuf output. |
-| flutter-search | shipped | Shell search calls the backend message-search RPC and opens matching conversations. |
+| flutter-search | shipped | Exact-phrase shell search calls the backend RPC. Selecting a hit sets the conversation shown after search is dismissed; no date filter is provided. |
 | flutter-workspace | shipped | Chats, Skills, Memory, Integrations, MCPs, Automations, Agents and Telemetry have backend-connected surfaces; this is not full support for every advertised provider or protocol. |
 | mcp-registry | shipped | Registration, import, enablement, token rotation and tool-policy management; not protocol conformance. |
 | mcp-lifecycle | pending | HTTP JSON-RPC tools/list and tools/call exist; initialization and capability negotiation remain CON-001. |
@@ -182,7 +182,7 @@ inventory; the example wording itself is not machine-checked.
 
 | Scenario | Status | Boundary |
 |---|---|---|
-| "Search what we discussed last month." | Works | FTS5 session search and attributed recall. |
+| "Find the exact phrase 'release checklist'." | Works | FTS5 phrase search; selecting a hit sets the conversation to view after dismissing search. |
 | "Read this project file." | Works | File must be inside the sandbox. |
 | "Update this sandbox file." | Works | Requires an argument-bound approval. |
 | "Remember that I prefer concise answers." | Partial | The model may call `memory.remember`; the proposal is inert until the user promotes it. There is no automatic extraction. |

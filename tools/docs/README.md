@@ -84,6 +84,8 @@ The witnesses are code, configuration and behavioral-test anchors, **not a
 second document containing copied status strings**. Go evidence is parsed
 without comments; named functions are checked within their own declarations.
 Go/Dart/proto code-token comparisons ignore whitespace and C-style comments.
+Dart/proto regex predicates are refused until a context-aware implementation
+exists; those formats use token witnesses rather than raw-text regexes.
 YAML witnesses use parsed mappings/steps; shell witnesses use line-anchored
 patterns and the codegen behavior probe, not a code lexer that misunderstands
 `#`. Token predicates use an allowlist of modeled formats; an unknown format
@@ -172,3 +174,9 @@ environment to expose cleared flags, skipped loops, early success, restored
 output, omitted Dart checks and late generation. `status_dependency_test.go`
 checks the actual runtime dependency graphs with module downloads and workspace
 overrides disabled. No fixture mutates the checkout.
+
+`status_preparation_test.go` checks README.md, tech-stack.md, the integration
+checklist, CLAUDE.md and the existing verify reference. Any fenced block there
+that runs the root Go suite must prepare both nested module caches first.
+An active guide that cites the canonical roadmap must be listed in
+`TestCanonicalRoadmapLinks` so its canonical-file reference remains checked.
