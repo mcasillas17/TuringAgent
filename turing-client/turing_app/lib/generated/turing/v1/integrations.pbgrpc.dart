@@ -41,8 +41,9 @@ class IntegrationServiceClient extends $grpc.Client {
     return $createUnaryCall(_$listProviders, request, options: options);
   }
 
-  /// Stores a credential the user minted at the provider. Requires explicit
-  /// consent to that provider's grants in the same request.
+  /// Refuses unsupported providers before credential validation, sealing or
+  /// storage. For a supported provider, stores a credential the user minted
+  /// after explicit consent to its grants in the same request.
   $grpc.ResponseFuture<$0.Connection> connectAccount(
     $0.ConnectAccountRequest request, {
     $grpc.CallOptions? options,
@@ -75,8 +76,8 @@ class IntegrationServiceClient extends $grpc.Client {
     return $createUnaryCall(_$revokeConnection, request, options: options);
   }
 
-  /// Removes the connection entirely, including its history. Revoking first is
-  /// not required: deleting a connected account destroys the credential too.
+  /// Removes the saved connection row and its credential. Audit records remain.
+  /// Revoking first is not required. Neither cleanup RPC revokes vendor copies.
   $grpc.ResponseFuture<$0.DeleteConnectionResponse> deleteConnection(
     $0.DeleteConnectionRequest request, {
     $grpc.CallOptions? options,

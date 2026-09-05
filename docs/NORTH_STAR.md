@@ -124,7 +124,7 @@ contract) are shipped on the verified baseline.
 | External agents | `ExternalAgentService` routes to remote model endpoints. It is not agent-to-agent delegation. |
 | MCP | Turing implements an HTTP JSON-RPC subset for `tools/list` and `tools/call`, but not the MCP initialization and capability lifecycle. |
 | Skills ecosystem | The parser accepts a Turing-specific subset. It rejects several standard Agent Skills fields and has no import, quarantine, authoring, or marketplace flow. |
-| Integrations | GitHub has functional tools. IMAP, CalDAV, and Notion can currently accept credentials but have no tools. Google, Microsoft, and Slack account connections are not implemented. |
+| Integrations | GitHub has functional tools. The INT-001 candidate makes IMAP, CalDAV, and Notion descriptor-only, rejecting new credentials while retaining earlier-release rows for explicit cleanup; this change is pending merge after DOC-001. Google, Microsoft, and Slack account connections and tools are not implemented. |
 | Mobile | Flutter has iOS/Android scaffolding and responsive layouts, but the backend is loopback-only, the Android release manifest lacks network permission, and there is no device pairing or non-loopback TLS contract. |
 | Audit UX | The API exists; a user-facing audit viewer does not. |
 | Multi-agent | The runtime is process-separated, but there is one `AgentId`, one general executor, and a default concurrency of one. |
@@ -452,8 +452,11 @@ gates are satisfied.
 
 ### 2. INT-001 - Powerless-credential honesty
 
-- **Outcome:** Turing never asks for or retains a credential that provides no
-  product capability.
+- **Implementation status:** Implemented in the INT-001 candidate, pending merge
+  after DOC-001; not yet shipped on `main`.
+- **Outcome:** Turing does not solicit or store new credentials for providers
+  without functional tools. Credentials saved by earlier releases remain until
+  the user explicitly revokes or deletes their connections.
 - **Scope:** Keep enum wire compatibility; mark IMAP, CalDAV, and Notion
   descriptor-only/unsupported until tools ship; reject new connections; retain
   existing rows for explicit revoke/delete without attempting use; make the UI
@@ -463,7 +466,16 @@ gates are satisfied.
 - **Acceptance:** New powerless credentials are rejected before secret sealing;
   existing rows remain visible and revocable; GitHub behavior is unchanged;
   wire compatibility checks pass.
-- **Dependencies:** None.
+- **Usage:** GitHub remains the only functional account integration (issue
+  listing/reading, file reading, issue comments under approval and egress
+  policy). IMAP, CalDAV, and Notion remain visible with no credential form.
+  Their stored status and historical grants are preserved independently of
+  tool availability. In Integrations, **Revoke access** deletes the local
+  credential and retains the record; **Remove** deletes the row and credential.
+  Neither requires decryption or the original sealing key. Audit records
+  remain, and local deletion does not revoke copies at the vendor.
+- **Dependencies:** No technical prerequisite. DOC-001 must land first; preserve
+  its documentation/status guard when integrating this behavior.
 
 ### 3. TUR-010 - No-worker and queue-timeout truth
 

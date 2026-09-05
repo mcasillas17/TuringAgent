@@ -6,14 +6,9 @@ import '../../models/tool_descriptor.dart';
 import '../../networking/api_client.dart';
 import 'workspace_pages.dart';
 
-/// Third-party accounts the user has connected, and the standing access each
-/// one represents.
-///
-/// Two things this page refuses to do. It does not offer a Connect button for
-/// a provider that only issues credentials through OAuth, because TuringAgent
-/// has no registered client with any of them and the flow would fail at the
-/// end; those are listed with the reason instead. GitHub is the first provider
-/// with agent tools, and its connection card exposes their policy explicitly.
+/// Saved third-party accounts and functional integration tools.
+/// Unsupported providers stay visible with an explanation and no connect form.
+/// Saved status and historical consent never imply tool availability.
 class IntegrationsPage extends StatefulWidget {
   const IntegrationsPage({super.key, required this.apiClient});
 
@@ -30,9 +25,9 @@ class _IntegrationsData {
     required this.tools,
   });
 
-  final IntegrationCatalogue catalogue;
+  final IntegrationCatalogue? catalogue;
   final List<IntegrationConnection> connections;
-  final List<ToolDescriptor> tools;
+  final List<ToolDescriptor>? tools;
 }
 
 class _IntegrationsPageState extends State<IntegrationsPage> {
@@ -45,21 +40,29 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
   }
 
   Future<_IntegrationsData> _load() async {
-    // Both, or neither: a connection list without the catalogue could not say
-    // what any of them grants.
+    // Management uses each row's stored metadata. Catalog and policy failures
+    // must not hide accounts the user needs to revoke or remove; null marks
+    // unavailable data and is rendered with an explicit retry notice.
     final policyApi = widget.apiClient is PseudoServerPolicyApi
         ? widget.apiClient as PseudoServerPolicyApi
         : null;
     final results = await Future.wait([
-      widget.apiClient.listIntegrationProviders(),
+      widget.apiClient.listIntegrationProviders().then<IntegrationCatalogue?>(
+        (value) => value,
+        onError: (Object error) => null,
+      ),
       widget.apiClient.listConnections(),
-      policyApi?.listPseudoServerTools(serverName: 'integrations') ??
-          Future.value(const <ToolDescriptor>[]),
+      (policyApi?.listPseudoServerTools(serverName: 'integrations') ??
+              Future.value(const <ToolDescriptor>[]))
+          .then<List<ToolDescriptor>?>(
+            (value) => value,
+            onError: (Object error) => null,
+          ),
     ]);
     return _IntegrationsData(
-      catalogue: results[0] as IntegrationCatalogue,
+      catalogue: results[0] as IntegrationCatalogue?,
       connections: results[1] as List<IntegrationConnection>,
-      tools: results[2] as List<ToolDescriptor>,
+      tools: results[2] as List<ToolDescriptor>?,
     );
   }
 
@@ -84,8 +87,8 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
       builder: (dialogContext) => AlertDialog(
         title: Text('Revoke "${connection.displayName}"?'),
         content: const Text(
-          'This destroys the credential stored here, so nothing on this '
-          'machine can reach the account any more.\n\n'
+          'This destroys the credential stored for this connection. '
+          'The saved record and its consent history remain.\n\n'
           'It does not delete the app password or token at the provider — '
           'only the provider can do that. If the credential could have been '
           'copied, delete it there too.',
@@ -117,9 +120,11 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
       builder: (dialogContext) => AlertDialog(
         title: Text('Remove "${connection.displayName}"?'),
         content: const Text(
-          'This deletes the connection and its history — including the record '
-          'that the account was ever connected, and when. Any credential '
-          'still stored for it goes too.',
+          'This deletes the saved connection record and any credential still '
+          'stored for it. Audit records remain.\n\n'
+          'Local deletion does not revoke the token or app password at the '
+          'provider, or any copies elsewhere. Delete it at the provider too '
+          'if you want to end that access.',
         ),
         actions: [
           TextButton(
@@ -178,10 +183,9 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
     return WorkspacePage(
       title: 'Integrations',
       subtitle:
-          'Accounts you connect with a credential you created yourself — an '
-          'app password, an integration token. Each one is standing access to '
-          'that account until you revoke it, so what it allows is written on '
-          'the card.',
+          'GitHub has functional tools. Other providers remain listed with their '
+          'limitations. A saved connection records a credential and consent; '
+          'its stored status does not mean integration tools are available.',
       child: FutureBuilder<_IntegrationsData>(
         future: _data,
         builder: (context, snapshot) {
@@ -197,25 +201,18 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
               tone: AppColors.danger,
             );
           }
-          final data =
-              snapshot.data ??
-              const _IntegrationsData(
-                catalogue: IntegrationCatalogue(
-                  providers: [],
-                  storageConfigured: false,
-                ),
-                connections: [],
-                tools: [],
-              );
+          final data = snapshot.requireData;
           final catalogue = data.catalogue;
           final canConnect =
-              catalogue.storageConfigured && catalogue.connectable.isNotEmpty;
+              catalogue != null &&
+              catalogue.storageConfigured &&
+              catalogue.connectable.isNotEmpty;
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               WorkspaceNotice(
                 icon: Icons.shield_outlined,
-                title: 'Connected-account tools ask before every call',
+                title: 'GitHub tools use approval and egress policies',
                 body:
                     'GitHub tools can use a connected GitHub account. Reads '
                     'and writes default to “Asks first,” and a local-model '
@@ -226,7 +223,18 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
               // Said before the button, not after the form: asking someone to
               // paste a live app password into something that cannot store it
               // is the worst moment to find out.
-              if (!catalogue.storageConfigured) ...[
+              if (catalogue == null) ...[
+                WorkspaceNotice(
+                  icon: Icons.error_outline,
+                  title: 'Provider catalog unavailable',
+                  body:
+                      'New connections are unavailable until the catalog can be loaded. '
+                      'Saved accounts remain visible for revoke or removal.',
+                  onRetry: _reload,
+                  tone: AppColors.warning,
+                ),
+                const SizedBox(height: 18),
+              ] else if (!catalogue.storageConfigured) ...[
                 WorkspaceNotice(
                   icon: Icons.key_off_outlined,
                   title: 'Nothing can be connected yet',
@@ -236,6 +244,17 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
                             'storing one in the clear.'
                       : catalogue.storageUnconfiguredReason,
                   tone: AppColors.danger,
+                ),
+                const SizedBox(height: 18),
+              ],
+              if (data.tools == null) ...[
+                WorkspaceNotice(
+                  icon: Icons.error_outline,
+                  title: 'Tool policies unavailable',
+                  body:
+                      'Tool policies could not be loaded. Saved accounts can still be managed.',
+                  onRetry: _reload,
+                  tone: AppColors.warning,
                 ),
                 const SizedBox(height: 18),
               ],
@@ -266,17 +285,23 @@ class _IntegrationsPageState extends State<IntegrationsPage> {
                     padding: const EdgeInsets.only(bottom: 10),
                     child: _ConnectionCard(
                       connection: connection,
+                      provider: catalogue?.providers
+                          .where(
+                            (provider) => provider.kind == connection.provider,
+                          )
+                          .firstOrNull,
+                      storageConfigured: catalogue?.storageConfigured ?? false,
                       palette: palette,
                       onRevoke: () => _revoke(connection),
                       onRemove: () => _remove(connection),
                       tools:
                           connection.provider == IntegrationProviderKind.github
-                          ? data.tools
+                          ? data.tools ?? const []
                           : const [],
                       onPolicyChanged: _setPolicy,
                     ),
                   ),
-              if (catalogue.refused.isNotEmpty) ...[
+              if (catalogue != null && catalogue.refused.isNotEmpty) ...[
                 const SizedBox(height: 22),
                 Text(
                   'Not supported',
@@ -334,6 +359,8 @@ String formatDay(DateTime when) {
 class _ConnectionCard extends StatelessWidget {
   const _ConnectionCard({
     required this.connection,
+    required this.provider,
+    required this.storageConfigured,
     required this.palette,
     required this.onRevoke,
     required this.onRemove,
@@ -342,6 +369,8 @@ class _ConnectionCard extends StatelessWidget {
   });
 
   final IntegrationConnection connection;
+  final IntegrationProviderInfo? provider;
+  final bool storageConfigured;
   final AppPalette palette;
   final VoidCallback onRevoke;
   final VoidCallback onRemove;
@@ -382,10 +411,41 @@ class _ConnectionCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              _StateChip(state: connection.state),
+              Flexible(child: _StateChip(state: connection.state)),
             ],
           ),
           const SizedBox(height: 8),
+          if (provider == null || !provider!.supported) ...[
+            Text(
+              provider == null
+                  ? 'Tool availability is unknown. A stored connection does not mean tools are available.'
+                  : 'Tools unavailable: ${provider!.unsupportedReason}',
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.5,
+                color: palette.textMuted,
+              ),
+            ),
+            if (connection.isConnected)
+              Text(
+                provider == null ||
+                        !const [
+                          IntegrationProviderKind.imap,
+                          IntegrationProviderKind.caldav,
+                          IntegrationProviderKind.notion,
+                        ].contains(connection.provider)
+                    ? 'The saved credential is retained until you explicitly revoke or remove it.'
+                    : 'Saved by an earlier release. The credential is retained without being used. '
+                          'Choose Revoke access to delete the local credential, or Remove to delete '
+                          'the saved connection record too.',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.5,
+                  color: palette.textMuted,
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
           if (connection.accountLabel.isNotEmpty)
             _Detail(label: 'Account', value: connection.accountLabel),
           if (connection.endpoint.isNotEmpty)
@@ -407,15 +467,15 @@ class _ConnectionCard extends StatelessWidget {
             },
           ),
           if (connectedAt != null)
-            _Detail(label: 'Connected on', value: formatDay(connectedAt)),
+            _Detail(label: 'Saved on', value: formatDay(connectedAt)),
           if (revokedAt != null)
-            _Detail(label: 'Access ended', value: formatDay(revokedAt)),
+            _Detail(label: 'Revoked on', value: formatDay(revokedAt)),
           if (connection.credentialUnreadable && connection.isConnected) ...[
             const SizedBox(height: 8),
             Text(
-              'This connection cannot be used: the credential was sealed with '
-              'a TURING_INTEGRATION_KEY this backend no longer has. Remove it '
-              'and connect the account again.',
+              'The credential was sealed with a key this backend does not have. '
+              'You can still revoke or remove it without that key.'
+              '${provider?.supported == true && storageConfigured ? ' To use this provider, remove it and connect the account again.' : ''}',
               style: TextStyle(
                 fontSize: 12.5,
                 height: 1.5,
@@ -426,9 +486,7 @@ class _ConnectionCard extends StatelessWidget {
           if (connection.grantedScopes.isNotEmpty) ...[
             const SizedBox(height: 10),
             Text(
-              connection.isConnected
-                  ? 'What this allows'
-                  : 'What this allowed, until you revoked it',
+              'Recorded consent',
               style: TextStyle(
                 fontSize: 12.5,
                 fontWeight: FontWeight.w600,
@@ -463,7 +521,10 @@ class _ConnectionCard extends StatelessWidget {
                 ),
               ),
           ],
-          if (connection.isConnected && tools.isNotEmpty) ...[
+          if (connection.isConnected &&
+              !connection.credentialUnreadable &&
+              provider?.supported == true &&
+              tools.isNotEmpty) ...[
             const SizedBox(height: 10),
             Text(
               'Agent tools',
@@ -580,10 +641,12 @@ class _StateChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = AppColors.of(context);
-    // Live access is the state worth noticing, so it gets the accent; a
-    // revoked connection is history and reads as such.
+    // This is stored lifecycle state, independently of provider support.
     final (label, color) = switch (state) {
-      IntegrationConnectionState.connected => ('Connected', AppColors.brand),
+      IntegrationConnectionState.connected => (
+        'Stored: connected',
+        AppColors.brand,
+      ),
       IntegrationConnectionState.revoked => ('Revoked', palette.textMuted),
       IntegrationConnectionState.unknown => (
         'Unknown state',

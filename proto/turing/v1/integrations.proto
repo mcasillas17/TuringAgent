@@ -8,24 +8,20 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
 import "turing/v1/common.proto";
 
-// A third-party account the user has connected: mail, calendar, notes, code.
-//
-// The connection model here is deliberately narrow. Turing has no registered
-// OAuth client with any provider, no redirect URI and no browser round trip,
-// so an authorization-code flow is not something it can honestly offer. What
-// it can do is hold a credential the user created themselves — an app
-// password, an internal integration token, a personal access token — which is
-// how these services are reached by scripts and self-hosted clients every
-// day. Providers that only issue credentials through OAuth are listed as
-// unsupported, with the reason, rather than shown as a button that cannot
-// work.
+// Stable identities for saved third-party accounts. Enum presence does not
+// imply support: consult ProviderDescriptor.supported before offering a form.
+// GitHub has implemented tools and accepts a personal access token. IMAP,
+// CalDAV and Notion are descriptor-only; new credentials are refused before
+// sealing or storage. Earlier-release rows remain available for explicit
+// local revoke/delete without decrypting or using their credentials.
 enum IntegrationProvider {
   INTEGRATION_PROVIDER_UNSPECIFIED = 0;
 
-  // Supported: the user pastes a credential they minted themselves.
+  // Descriptor-only. Keep these values for earlier-release saved rows.
   INTEGRATION_PROVIDER_IMAP = 1;
   INTEGRATION_PROVIDER_CALDAV = 2;
   INTEGRATION_PROVIDER_NOTION = 3;
+  // Functional tools; the user pastes a personal access token.
   INTEGRATION_PROVIDER_GITHUB = 4;
 
   // Named but not supported. They exist in this enum so the client can list
@@ -38,20 +34,22 @@ enum IntegrationProvider {
 
 enum ConnectionStatus {
   CONNECTION_STATUS_UNSPECIFIED = 0;
+  // Stored lifecycle status, independent of provider support/tool availability.
   CONNECTION_STATUS_CONNECTED = 1;
   // The credential has been destroyed. The row survives so the user can still
   // see that the account was once connected and when access ended.
   CONNECTION_STATUS_REVOKED = 2;
 }
 
-// What a provider is, what credential it takes, and what that credential
-// grants. Served by the backend rather than hardcoded in a client, so every
-// client states the same thing about what connecting gives away.
+// Whether a provider has implemented tools and accepts new connections, plus
+// credential instructions and grants for connectable providers. Unsupported
+// providers remain named with an explanation; historical grants live on rows.
 message ProviderDescriptor {
   IntegrationProvider provider = 1;
   string display_name = 2;
   // "Mail", "Calendar", "Notes", "Code" — how the user thinks about it.
   string category = 3;
+  // False means no new connections, independently of existing row status.
   bool supported = 4;
   // Why it cannot be connected. Set only when supported is false.
   string unsupported_reason = 5;
@@ -69,7 +67,7 @@ message ProviderDescriptor {
   repeated string grants = 11;
 }
 
-// A connected account.
+// A saved account and its historical consent. This is not a tool-health claim.
 //
 // No field here carries the credential, and none ever will. The stored secret
 // is returned by no RPC in this file; a connection is described by its
@@ -94,12 +92,10 @@ message Connection {
   google.protobuf.Timestamp connected_at = 10;
   google.protobuf.Timestamp revoked_at = 11;
   google.protobuf.Timestamp updated_at = 12;
-  // True when the stored credential was sealed with a key the backend no
-  // longer has — TURING_INTEGRATION_KEY was rotated, lost, or restored from a
-  // different .env. The connection can never be used again and must be
-  // reconnected. Answered from the sealed value's key fingerprint, without
-  // decrypting anything; a connection that quietly claimed to work would be
-  // the app asserting access it does not have.
+  // True when the stored credential's key fingerprint does not match the
+  // backend's key, or no key is configured. Answered from the header without
+  // decryption. Cleanup remains available. Reconnecting is only possible for
+  // supported providers with configured storage; it cannot enable missing tools.
   bool credential_unreadable = 13;
 }
 
@@ -183,8 +179,9 @@ service IntegrationService {
   // credential grants.
   rpc ListProviders(ListProvidersRequest) returns (ListProvidersResponse);
 
-  // Stores a credential the user minted at the provider. Requires explicit
-  // consent to that provider's grants in the same request.
+  // Refuses unsupported providers before credential validation, sealing or
+  // storage. For a supported provider, stores a credential the user minted
+  // after explicit consent to its grants in the same request.
   rpc ConnectAccount(ConnectAccountRequest) returns (Connection);
 
   rpc ListConnections(ListConnectionsRequest) returns (ListConnectionsResponse);
@@ -196,8 +193,8 @@ service IntegrationService {
   // that — and a client must say so.
   rpc RevokeConnection(RevokeConnectionRequest) returns (Connection);
 
-  // Removes the connection entirely, including its history. Revoking first is
-  // not required: deleting a connected account destroys the credential too.
+  // Removes the saved connection row and its credential. Audit records remain.
+  // Revoking first is not required. Neither cleanup RPC revokes vendor copies.
   rpc DeleteConnection(DeleteConnectionRequest) returns (DeleteConnectionResponse);
 
   rpc ListIntegrationTools(ListIntegrationToolsRequest) returns (ListIntegrationToolsResponse);

@@ -32,7 +32,7 @@ Provisional until the full local stack is running:
 
 - End-to-end chat responses require the Go orchestrator, Go agent runtime, model provider, and event stream.
 - Approval cards require the backend/runtime to emit approval events.
-- Devices, Stats, and Integrations remain placeholders.
+- Devices and Stats remain placeholders. Integration account management is implemented; see below.
 
 ## Run Locally
 
@@ -80,10 +80,44 @@ authorization: Bearer <api-key>
   archived-conversation management.
 - **Devices** is a placeholder: `IoT Devices Dashboard`.
 - **Stats** is a placeholder: `Stats & Usage`.
-- **Integrations** is a placeholder: `Integrations Status`.
+- **Integrations** manages saved accounts and GitHub tool policies; unsupported providers stay visible with an explanation.
 - **Settings** renders the real backend URL/API key settings screen.
 
 This keeps theme logic, app colors, desktop rail behavior, mobile drawer behavior, and placeholder tabs intact while adding backend-connected client surfaces.
+
+## Integration accounts
+
+GitHub is the only connectable account provider with functional tools. Open
+**Integrations → Connect an account**, create a personal access token at
+GitHub, paste it, review the grants, and explicitly acknowledge consent. Its
+four tools list issues, read an issue, read a repository file, and create an
+issue comment. They default to **Asks first**, including reads; enabled tools
+also require the existing per-run egress consent. Tool policies appear on
+usable GitHub account cards.
+
+**Mail (IMAP)**, **Calendar (CalDAV)**, and **Notion** are descriptor-only:
+their tools are not implemented, so there is no credential-entry form and
+the backend refuses new connections. Adding a key or changing the credential
+cannot enable these providers. Google, Microsoft, and Slack account
+connections and tools are also unimplemented.
+
+Earlier-release accounts stay visible. **Stored: connected** describes the
+saved row, and **Recorded consent** preserves the grants accepted when it was
+created; neither means that tools exist or the credential is usable. Their
+unsupported credentials are retained without automatic use, decryption,
+revocation, or deletion. An unreadable credential is explained separately.
+
+- **Revoke access** deletes the local credential and retains the row, its
+  recorded consent, and revocation date.
+- **Remove** deletes the saved connection record and any remaining local
+  credential. Revoking first is optional. Audit records remain.
+
+Both cleanup actions require explicit confirmation and work without the
+sealing key. A failed catalog or tool-policy request leaves saved accounts
+manageable, with a retry notice; a failed connection-list request shows an
+error instead of claiming that no accounts exist. Local cleanup does not
+revoke vendor-side tokens, app passwords, or other copies. Delete the
+credential at its vendor separately when needed.
 
 ## Chat And Sessions
 
@@ -166,5 +200,5 @@ event replay for a deleted session is `NotFound`, not an empty history.
 - Keep the Flutter client thin. Do not move orchestration, memory, routing, tool policy, approval decisions, or persistence into Flutter.
 - Preserve `ResponsiveShell` as the main authenticated app surface. Add new client views as tabs or shell-integrated screens rather than replacing the root.
 - Prefer the `TuringApi` and `TuringEventSource` interfaces in widgets so tests can use fakes without network access.
-- Keep Devices, Stats, and Integrations visibly present but placeholder-only until their backend contracts are defined.
+- Keep Devices and Stats visibly present but placeholder-only until their backend contracts are defined. Integrations renders backend provider support separately from saved account status.
 - Avoid claiming full end-to-end chat readiness in UI or docs until the orchestrator/runtime pipeline is available and verified.

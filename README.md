@@ -21,6 +21,30 @@ The project is designed for local development first: secrets stay in your local 
   session-owned sandbox artifacts are removed by policy.
 - Ships a Docker Compose local stack and an end-to-end gRPC smoke test.
 
+## Account integrations
+
+GitHub is the only account integration with functional tools: list issues,
+read an issue, read a repository file, and create an issue comment. In
+**Integrations → Connect an account**, paste a personal access token and
+acknowledge its grants. Credentials are sealed at rest with
+`TURING_INTEGRATION_KEY`; tool calls retain the existing approval and per-run
+egress requirements.
+
+IMAP, CalDAV, and Notion remain visible as unsupported because their tools
+are not implemented. New connection requests, including requests from older
+clients, are rejected before credential sealing or storage. Google, Microsoft,
+and Slack account connections and tools are also unavailable.
+
+Accounts saved by earlier releases remain visible with their original stored
+status and recorded consent. Turing does not automatically revoke, delete,
+decrypt, or use the credentials for those unsupported providers. Choose
+**Revoke access** to delete a connection's local credential while retaining its
+record, or **Remove** to delete the saved connection row and credential.
+Cleanup remains available without the sealing key or when the provider catalog
+fails to load. Audit records remain. Local cleanup does not revoke a token or
+app password at its vendor or destroy copies elsewhere; revoke it at the
+vendor separately when needed.
+
 ## Requirements
 
 - Docker and Docker Compose

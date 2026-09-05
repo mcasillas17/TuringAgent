@@ -77,8 +77,13 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 - [ ] Settings, sessions, chat, event streaming, model selection, and approval
   cards use generated gRPC clients.
 - [ ] `ToolCallBeacon.modelToolCallId` survives Dart protobuf serialization.
-- [ ] Devices, Stats, and Integrations remain placeholders until contracts are
-  defined.
+- [ ] Devices and Stats remain placeholders until contracts are defined.
+- [ ] Integrations distinguishes saved connection status and recorded consent
+  from functional tools. GitHub is functional; IMAP, CalDAV, and Notion remain
+  visible without credential-entry forms because their tools are not implemented.
+- [ ] Earlier-release integration accounts remain available for explicit Revoke
+  or Remove, including without the sealing key. Local cleanup does not revoke
+  credentials held by the vendor.
 
 ## 6. Automated Verification
 

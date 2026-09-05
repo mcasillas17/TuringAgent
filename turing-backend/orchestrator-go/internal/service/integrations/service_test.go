@@ -84,7 +84,7 @@ func TestIntegrationFacetsRefuseInBothDirections(t *testing.T) {
 		call func() error
 	}{
 		{"list providers", func() error { _, err := internal.ListProviders(ctx, &turingv1.ListProvidersRequest{}); return err }},
-		{"connect", func() error { _, err := internal.ConnectAccount(ctx, imapRequest()); return err }},
+		{"connect", func() error { _, err := internal.ConnectAccount(ctx, githubRequestFixture()); return err }},
 		{"list", func() error { _, err := internal.ListConnections(ctx, &turingv1.ListConnectionsRequest{}); return err }},
 		{"get", func() error { _, err := internal.GetConnection(ctx, &turingv1.GetConnectionRequest{}); return err }},
 		{"revoke", func() error {
@@ -114,7 +114,7 @@ func TestIntegrationFacetsRefuseInBothDirections(t *testing.T) {
 func TestConnectAccountRoundTripsWithoutTheCredential(t *testing.T) {
 	server, _, ctx := newIntegrationServer(t)
 
-	created, err := server.ConnectAccount(ctx, imapRequest())
+	created, err := server.ConnectAccount(ctx, githubRequestFixture())
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -125,8 +125,8 @@ func TestConnectAccountRoundTripsWithoutTheCredential(t *testing.T) {
 	if created.GetStatus() != turingv1.ConnectionStatus_CONNECTION_STATUS_CONNECTED {
 		t.Fatalf("status = %v, want connected", created.GetStatus())
 	}
-	if created.GetProvider() != turingv1.IntegrationProvider_INTEGRATION_PROVIDER_IMAP {
-		t.Fatalf("provider = %v, want IMAP", created.GetProvider())
+	if created.GetProvider() != turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB {
+		t.Fatalf("provider = %v, want GitHub", created.GetProvider())
 	}
 	if created.GetConsentGrantedAt() == nil || created.GetConnectedAt() == nil {
 		t.Fatalf("consent %v / connected %v, want both recorded", created.GetConsentGrantedAt(), created.GetConnectedAt())
@@ -164,21 +164,21 @@ func TestConnectAccountRoundTripsWithoutTheCredential(t *testing.T) {
 func TestTheStoredCredentialIsNowherePlaintextInTheDatabase(t *testing.T) {
 	server, database, ctx := newIntegrationServer(t)
 
-	if _, err := server.ConnectAccount(ctx, imapRequest()); err != nil {
+	if _, err := server.ConnectAccount(ctx, githubRequestFixture()); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 
 	assertPlaintextAbsentFromDatabase(t, ctx, database, testCredential)
 }
 
-// Handing a third party standing access to a mailbox is the most
+// Holding a credential with standing access to repositories is the most
 // consequential thing this service does, so it leaves a record — the same way
 // deleting a session does. What the record must not contain is the credential
 // or its redaction.
 func TestConnectingRevokingAndDeletingAreAudited(t *testing.T) {
 	server, database, ctx := newIntegrationServer(t)
 
-	created, err := server.ConnectAccount(ctx, imapRequest())
+	created, err := server.ConnectAccount(ctx, githubRequestFixture())
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestConnectingRevokingAndDeletingAreAudited(t *testing.T) {
 		if strings.Contains(payload, testCredential) || strings.Contains(payload, "••••") {
 			t.Fatalf("%s payload carries credential material: %s", action, payload)
 		}
-		if !strings.Contains(payload, "imap") {
+		if !strings.Contains(payload, "github") {
 			t.Fatalf("%s payload = %s, want it to name the provider", action, payload)
 		}
 	}
@@ -245,7 +245,7 @@ func TestConnectingRevokingAndDeletingAreAudited(t *testing.T) {
 func TestAuditRowsAreCoveredByTheWholeDatabaseSweep(t *testing.T) {
 	server, database, ctx := newIntegrationServer(t)
 
-	if _, err := server.ConnectAccount(ctx, imapRequest()); err != nil {
+	if _, err := server.ConnectAccount(ctx, githubRequestFixture()); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 
@@ -263,7 +263,7 @@ func TestAuditRowsAreCoveredByTheWholeDatabaseSweep(t *testing.T) {
 // cannot leave a half-connected account behind.
 func TestConnectAccountRefusesWithoutConsentAndStoresNothing(t *testing.T) {
 	server, database, ctx := newIntegrationServer(t)
-	request := imapRequest()
+	request := githubRequestFixture()
 	request.ConsentAcknowledged = false
 
 	_, err := server.ConnectAccount(ctx, request)
@@ -277,7 +277,7 @@ func TestConnectAccountRefusesWithoutConsentAndStoresNothing(t *testing.T) {
 
 // Naming a provider we cannot connect is the honest half; refusing to pretend
 // otherwise is the other half.
-func TestConnectAccountRefusesOAuthOnlyProvidersWithTheReason(t *testing.T) {
+func TestConnectAccountRefusesOtherUnimplementedProvidersWithTheReason(t *testing.T) {
 	server, database, ctx := newIntegrationServer(t)
 
 	for _, kind := range []turingv1.IntegrationProvider{
@@ -285,7 +285,7 @@ func TestConnectAccountRefusesOAuthOnlyProvidersWithTheReason(t *testing.T) {
 		turingv1.IntegrationProvider_INTEGRATION_PROVIDER_MICROSOFT_365,
 		turingv1.IntegrationProvider_INTEGRATION_PROVIDER_SLACK,
 	} {
-		request := imapRequest()
+		request := githubRequestFixture()
 		request.Provider = kind
 
 		_, err := server.ConnectAccount(ctx, request)
@@ -293,7 +293,7 @@ func TestConnectAccountRefusesOAuthOnlyProvidersWithTheReason(t *testing.T) {
 		if got := status.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("%v: code = %v, want FailedPrecondition", kind, got)
 		}
-		if message := status.Convert(err).Message(); !strings.Contains(message, "OAuth") {
+		if message := status.Convert(err).Message(); !strings.Contains(message, "not implemented") {
 			t.Fatalf("%v: message = %q, want it to say why", kind, message)
 		}
 	}
@@ -302,7 +302,7 @@ func TestConnectAccountRefusesOAuthOnlyProvidersWithTheReason(t *testing.T) {
 
 func TestConnectAccountRejectsAProviderItDoesNotKnow(t *testing.T) {
 	server, _, ctx := newIntegrationServer(t)
-	request := imapRequest()
+	request := githubRequestFixture()
 	request.Provider = turingv1.IntegrationProvider_INTEGRATION_PROVIDER_UNSPECIFIED
 
 	_, err := server.ConnectAccount(ctx, request)
@@ -319,7 +319,7 @@ func TestConnectAccountRefusesWhenNoIntegrationKeyIsConfigured(t *testing.T) {
 	server := New(repository.New(database), nil, audit.New(repository.New(database)))
 	ctx := context.Background()
 
-	_, err := server.ConnectAccount(ctx, imapRequest())
+	_, err := server.ConnectAccount(ctx, githubRequestFixture())
 
 	if got := status.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("code = %v, want FailedPrecondition", got)
@@ -345,15 +345,14 @@ func TestConnectAccountValidatesTheFieldsItWasGiven(t *testing.T) {
 	}{
 		{"no credential", func(r *turingv1.ConnectAccountRequest) { r.Credential = "   " }},
 		{"credential too long", func(r *turingv1.ConnectAccountRequest) { r.Credential = strings.Repeat("a", 4097) }},
-		// IMAP has no single hosted endpoint, so a connection without one
-		// could never be used.
-		{"no endpoint for a provider that needs one", func(r *turingv1.ConnectAccountRequest) { r.Endpoint = "" }},
+		{"name too long", func(r *turingv1.ConnectAccountRequest) { r.DisplayName = strings.Repeat("a", 121) }},
+		{"account too long", func(r *turingv1.ConnectAccountRequest) { r.AccountLabel = strings.Repeat("a", 321) }},
 		{"no name", func(r *turingv1.ConnectAccountRequest) { r.DisplayName = "  " }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, database, ctx := newIntegrationServer(t)
-			request := imapRequest()
+			request := githubRequestFixture()
 			tt.mutate(request)
 
 			_, err := server.ConnectAccount(ctx, request)
@@ -370,24 +369,24 @@ func TestConnectAccountDoesNotDemandAnEndpointFromAHostedProvider(t *testing.T) 
 	server, _, ctx := newIntegrationServer(t)
 
 	_, err := server.ConnectAccount(ctx, &turingv1.ConnectAccountRequest{
-		Provider:            turingv1.IntegrationProvider_INTEGRATION_PROVIDER_NOTION,
-		DisplayName:         "Work notes",
+		Provider:            turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB,
+		DisplayName:         "Work GitHub",
 		AccountLabel:        "Acme",
 		Credential:          testCredential,
 		ConsentAcknowledged: true,
 	})
 
 	if err != nil {
-		t.Fatalf("connect Notion without an endpoint: %v", err)
+		t.Fatalf("connect GitHub without an endpoint: %v", err)
 	}
 }
 
 func TestConnectAccountRejectsASecondConnectionWithTheSameName(t *testing.T) {
 	server, _, ctx := newIntegrationServer(t)
-	if _, err := server.ConnectAccount(ctx, imapRequest()); err != nil {
+	if _, err := server.ConnectAccount(ctx, githubRequestFixture()); err != nil {
 		t.Fatalf("first connect: %v", err)
 	}
-	duplicate := imapRequest()
+	duplicate := githubRequestFixture()
 	duplicate.DisplayName = strings.ToUpper(duplicate.DisplayName)
 
 	_, err := server.ConnectAccount(ctx, duplicate)
@@ -418,7 +417,7 @@ func TestRedactRevealsAtMostFourCharactersAndOnlyFromALongSecret(t *testing.T) {
 func TestConnectAccountReturnsARedactionRatherThanTheCredential(t *testing.T) {
 	server, _, ctx := newIntegrationServer(t)
 
-	created, err := server.ConnectAccount(ctx, imapRequest())
+	created, err := server.ConnectAccount(ctx, githubRequestFixture())
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -437,7 +436,7 @@ func TestConnectAccountReturnsARedactionRatherThanTheCredential(t *testing.T) {
 
 func TestRevokeConnectionDestroysTheCredentialAndSaysSo(t *testing.T) {
 	server, database, ctx := newIntegrationServer(t)
-	created, err := server.ConnectAccount(ctx, imapRequest())
+	created, err := server.ConnectAccount(ctx, githubRequestFixture())
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -476,7 +475,7 @@ func TestRevokeConnectionDestroysTheCredentialAndSaysSo(t *testing.T) {
 
 func TestRevokeAndDeleteReportMissingAndAlreadyRevoked(t *testing.T) {
 	server, _, ctx := newIntegrationServer(t)
-	created, err := server.ConnectAccount(ctx, imapRequest())
+	created, err := server.ConnectAccount(ctx, githubRequestFixture())
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -505,7 +504,7 @@ func TestRevokeAndDeleteReportMissingAndAlreadyRevoked(t *testing.T) {
 
 func TestDeleteConnectionRemovesTheRecordAndTheCredential(t *testing.T) {
 	server, database, ctx := newIntegrationServer(t)
-	created, err := server.ConnectAccount(ctx, imapRequest())
+	created, err := server.ConnectAccount(ctx, githubRequestFixture())
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -563,24 +562,8 @@ func TestListProvidersDescribesEveryEntryHonestly(t *testing.T) {
 		}
 	}
 
-	for _, want := range []turingv1.IntegrationProvider{
-		turingv1.IntegrationProvider_INTEGRATION_PROVIDER_IMAP,
-		turingv1.IntegrationProvider_INTEGRATION_PROVIDER_CALDAV,
-		turingv1.IntegrationProvider_INTEGRATION_PROVIDER_NOTION,
-		turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB,
-	} {
-		if !supported[want] {
-			t.Fatalf("%v is not offered, but it takes a credential a person can create", want)
-		}
-	}
-	for _, refused := range []turingv1.IntegrationProvider{
-		turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GOOGLE_WORKSPACE,
-		turingv1.IntegrationProvider_INTEGRATION_PROVIDER_MICROSOFT_365,
-		turingv1.IntegrationProvider_INTEGRATION_PROVIDER_SLACK,
-	} {
-		if supported[refused] {
-			t.Fatalf("%v is offered, but there is no credential a person can paste", refused)
-		}
+	if len(supported) != 1 || !supported[turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB] {
+		t.Fatalf("connectable providers = %v, want only GitHub", supported)
 	}
 }
 
@@ -648,12 +631,12 @@ func TestParseTimestampReturnsNilForAnUnparseableValue(t *testing.T) {
 // server of their choosing.
 func TestAStoredCredentialCannotBeMovedToAnotherConnection(t *testing.T) {
 	server, database, ctx := newIntegrationServer(t)
-	first, err := server.ConnectAccount(ctx, imapRequest())
+	first, err := server.ConnectAccount(ctx, githubRequestFixture())
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	second := imapRequest()
-	second.DisplayName = "Second mailbox"
+	second := githubRequestFixture()
+	second.DisplayName = "Second GitHub"
 	second.Credential = "another-app-password-0000"
 	other, err := server.ConnectAccount(ctx, second)
 	if err != nil {
@@ -677,12 +660,12 @@ func TestAStoredCredentialCannotBeMovedToAnotherConnection(t *testing.T) {
 }
 
 // A newline in a credential is not a typo, it is an injected command waiting
-// for the tool that eventually dials an IMAP or CalDAV server.
+// for the HTTP request that eventually uses the GitHub token.
 func TestConnectAccountRejectsControlCharactersInACredential(t *testing.T) {
 	for _, name := range []string{"newline", "carriage return", "null", "tab"} {
 		t.Run(name, func(t *testing.T) {
 			server, database, ctx := newIntegrationServer(t)
-			request := imapRequest()
+			request := githubRequestFixture()
 			switch name {
 			case "newline":
 				request.Credential = "token\nA001 LOGOUT"
@@ -705,14 +688,14 @@ func TestConnectAccountRejectsControlCharactersInACredential(t *testing.T) {
 }
 
 // A hosted provider has one address, and it is not the user's to set. A form
-// that left a stale value behind must not make a Notion connection claim to
+// that left a stale value behind must not make a GitHub connection claim to
 // live on somebody's mail server.
 func TestConnectAccountDropsAnEndpointAProviderDoesNotUse(t *testing.T) {
 	server, _, ctx := newIntegrationServer(t)
 
 	created, err := server.ConnectAccount(ctx, &turingv1.ConnectAccountRequest{
-		Provider:            turingv1.IntegrationProvider_INTEGRATION_PROVIDER_NOTION,
-		DisplayName:         "Work notes",
+		Provider:            turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB,
+		DisplayName:         "Work GitHub",
 		AccountLabel:        "Acme",
 		Endpoint:            "imap.example.com",
 		Credential:          testCredential,
@@ -732,7 +715,7 @@ func TestConnectAccountDropsAnEndpointAProviderDoesNotUse(t *testing.T) {
 // asserting access it does not have — VISION's first failure.
 func TestAConnectionSealedWithAKeyWeNoLongerHaveSaysSo(t *testing.T) {
 	server, database, ctx := newIntegrationServer(t)
-	created, err := server.ConnectAccount(ctx, imapRequest())
+	created, err := server.ConnectAccount(ctx, githubRequestFixture())
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -828,7 +811,7 @@ func TestNothingOnTheConnectPathIsLogged(t *testing.T) {
 	log.SetOutput(&logged)
 	t.Cleanup(func() { log.SetOutput(previous) })
 
-	created, err := server.ConnectAccount(ctx, imapRequest())
+	created, err := server.ConnectAccount(ctx, githubRequestFixture())
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -846,12 +829,11 @@ func TestNothingOnTheConnectPathIsLogged(t *testing.T) {
 	}
 }
 
-func imapRequest() *turingv1.ConnectAccountRequest {
+func githubRequestFixture() *turingv1.ConnectAccountRequest {
 	return &turingv1.ConnectAccountRequest{
-		Provider:            turingv1.IntegrationProvider_INTEGRATION_PROVIDER_IMAP,
-		DisplayName:         "Personal mail",
-		AccountLabel:        "me@example.com",
-		Endpoint:            "imap.example.com",
+		Provider:            turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB,
+		DisplayName:         "Personal GitHub",
+		AccountLabel:        "octocat",
 		Credential:          testCredential,
 		ConsentAcknowledged: true,
 	}
