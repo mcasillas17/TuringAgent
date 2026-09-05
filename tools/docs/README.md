@@ -60,9 +60,11 @@ cannot justify `shipped`; otherwise the bounded implementation witnesses
 justify `shipped`. Missing/changed witnesses yield an error, not an automatic
 promotion. Landing a capability requires reconciling the limiting witnesses
 with new implementation and behavioral coverage.
-The meaning of a witness is explicit: absence of initialization is a
+For example, absence of initialization is a
 limitation, whereas absence of placeholder destinations supports the wired
-workspace claim. A task registered through `pendingTask` is explicitly
+workspace claim; absence of navigation calls in SearchScreen supports the
+documented no-dismissal behavior, alongside a real shell-route regression.
+A task registered through `pendingTask` is explicitly
 remaining work, not evidence that a heading alone proves runtime absence.
 A pending claim also requires a concrete, non-document implementation
 limitation; a roadmap heading plus unrelated working code is insufficient.
@@ -72,7 +74,7 @@ absence alone or prose in any file format cannot establish a shipped capability.
 | Claims | Witnesses and assurance |
 | --- | --- |
 | `proto-breaking`, `proto-codegen` | An unfiltered PR trigger, separate gating commands (including required-Buf behavioral tests), parsed Buf FILE policy and removal fixture. A black-box probe executes real check.sh with a deterministic fake generator: unchanged output passes; modification, addition, nested addition and removal in each proto/Go/Dart tree must fail. |
-| `flutter-search` | Shell entry, search page API call, typed interface, gRPC forwarding, RPC declaration/registration, backend search call, backend and Flutter regression-test declarations. |
+| `flutter-search` | Shell entry, query/limit-only interface, gRPC HITS forwarding, both service/repository projections through FTS5 literal-phrase conversion and their regressions. SearchScreen's no-Navigator witness and a shell-route regression cover selection without automatic dismissal. |
 | `flutter-workspace` | Shell page wiring, per-page read API call, gRPC forwarding, public service registration and widget-test witnesses; not just `implemented: true`. |
 | `mcp-registry` | Page and gRPC calls, RPC contracts, service/repository operations and named regressions for registration, import, enablement, token rotation and tool policies. |
 | `mcp-lifecycle` | Positive tools/list and tools/call witnesses in both clients and bundled servers, no initialize/initialized method literals there, and the CON-001 task marker. |
@@ -133,7 +135,7 @@ This is a bounded repository guard, not an automatic feature detector:
   dependencies require reconciliation rather than speculative evaluation.
   Step/job/workflow run defaults are resolved in order; custom execution shells
   or non-root working directories likewise require reconciliation.
-- Absence checks are deliberately limited to named current transport files.
+- Absence checks are deliberately limited to named transport and UI files.
   Future adapters in other files require explicit review and witness updates.
   Task markers track the remaining scope; they alone never prove a feature
   shipped or that all possible implementations are absent.

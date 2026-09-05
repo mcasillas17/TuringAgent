@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:turing_flutter_app/features/chat/chat_screen.dart';
+import 'package:turing_flutter_app/features/search/search_screen.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
@@ -26,6 +28,55 @@ import '../support/no_skills_api.dart';
 import '../support/no_telemetry_api.dart';
 
 void main() {
+  testWidgets('search selection stays open until dismissed', (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final api = _FakeApiClient()
+      ..searchHits = [
+        SearchHit(
+          sessionId: 'sess_existing',
+          message: Message(
+            messageId: 'search-hit',
+            role: 'user',
+            content: 'release checklist',
+            sequence: 1,
+            createdAt: DateTime.utc(2026, 5, 10),
+          ),
+        ),
+      ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ResponsiveShell(
+          apiClient: api,
+          eventSourceFactory: () => _FakeEventSource(),
+          authStorage: _FakeAuthStorage(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Search conversations'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('search-field')),
+      'release checklist',
+    );
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('hit-search-hit')));
+    await tester.pumpAndSettle();
+    expect(find.byType(SearchScreen), findsOneWidget);
+    final chat = tester.widget<ChatScreen>(
+      find.byType(ChatScreen, skipOffstage: false),
+    );
+    expect(chat.sessionId, 'sess_existing');
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.byType(SearchScreen), findsNothing);
+    expect(find.byType(ChatScreen), findsOneWidget);
+  });
+
   testWidgets('the shell is one surface: conversations beside a chat', (
     tester,
   ) async {
@@ -370,8 +421,10 @@ class _FakeApiClient
     required String query,
     int limit = 50,
   }) async {
-    return const [];
+    return searchHits;
   }
+
+  List<SearchHit> searchHits = const [];
 
   /// Mutable so a test can change what the backend reports between calls —
   /// which is exactly what happens when the first message renames a session.

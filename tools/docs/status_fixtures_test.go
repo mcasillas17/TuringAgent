@@ -168,7 +168,8 @@ func TestStatusEvidenceFixtures(t *testing.T) {
 		{"unparsed YAML pattern refused", statusEvidence{path: "source.yml", pattern: "FILE"}, "# use: FILE", "YAML evidence requires"},
 		{"Dockerfile token predicate refused", statusEvidence{path: "Dockerfile", require: "FROM golang"}, "# FROM golang", "unsupported token predicate"},
 		{"Python token predicate refused", statusEvidence{path: "source.py", require: "api.search()"}, "# api.search()", "unsupported token predicate"},
-		{"absent literal present", statusEvidence{path: "source.go", require: "package fixture", absent: `"initialize"`}, "package fixture\nvar method = \"initialize\"", "limiting evidence changed"},
+		{"absent literal present", statusEvidence{path: "source.go", require: "package fixture", absent: `"initialize"`, limitation: "initialization is missing"}, "package fixture\nvar method = \"initialize\"", "limiting evidence changed"},
+		{"supporting absence contradicted", statusEvidence{path: "source.go", require: "package fixture", absent: "Placeholder"}, "package fixture\nvar Placeholder = true", "contradicting evidence appeared"},
 		{"commented Dart call", statusEvidence{path: "source.dart", require: "api.search()"}, "// api.search()\n/* api.search() */", "required evidence contract missing"},
 		{"commented Dart pattern refused", statusEvidence{path: "source.dart", pattern: "api.search"}, "// api.search()", "regex predicates are unsupported"},
 		{"commented proto pattern refused", statusEvidence{path: "source.proto", rejectPattern: "service"}, "// service Example", "regex predicates are unsupported"},
@@ -180,7 +181,7 @@ func TestStatusEvidenceFixtures(t *testing.T) {
 		{"commented permission", statusEvidence{path: "AndroidManifest.xml", require: "android.permission.INTERNET"}, `<manifest><!-- <uses-permission android:name="android.permission.INTERNET"/> --></manifest>`, "required evidence contract missing"},
 		{"wrong permission namespace", statusEvidence{path: "AndroidManifest.xml", require: "android.permission.INTERNET"}, `<manifest><uses-permission name="android.permission.INTERNET"/></manifest>`, "required evidence contract missing"},
 		{"formatted permission", statusEvidence{path: "AndroidManifest.xml", require: "android.permission.INTERNET"}, "<manifest xmlns:a='http://schemas.android.com/apk/res/android'>\n <uses-permission a:name = 'android.permission.INTERNET' />\n</manifest>", ""},
-		{"SDK 23 permission limits absence", statusEvidence{path: "AndroidManifest.xml", absent: "android.permission.INTERNET"}, `<manifest xmlns:android="http://schemas.android.com/apk/res/android"><uses-permission-sdk-23 android:name="android.permission.INTERNET"/></manifest>`, "limiting evidence changed"},
+		{"SDK 23 permission limits absence", statusEvidence{path: "AndroidManifest.xml", absent: "android.permission.INTERNET", limitation: "network permission absent"}, `<manifest xmlns:android="http://schemas.android.com/apk/res/android"><uses-permission-sdk-23 android:name="android.permission.INTERNET"/></manifest>`, "limiting evidence changed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			files := fstest.MapFS{test.evidence.path: {Data: []byte(test.source)}}
@@ -420,6 +421,7 @@ func TestStatusGuardRepositoryFixtures(t *testing.T) {
 	for _, test := range []struct{ name, path, old, replacement, claim string }{
 		{"search RPC disconnected", app + "lib/networking/grpc_client.dart", "await _sessions.searchMessages(", "await _sessions.listMessages(", "flutter-search"},
 		{"literal phrase conversion removed", orchestrator + "repository/sessions.go", "fts5Phrase(query)", "query", "flutter-search"},
+		{"HITS predicate disconnected", orchestrator + "repository/search_hits.go", "searchMessagesPredicate(", "unvalidatedSearchPredicate(", "flutter-search"},
 		{"workspace page replaced", app + "lib/ui/shell/responsive_shell.dart", "return IntegrationsPage(", "return PlaceholderPage(", "flutter-workspace"},
 		{"breaking check commented", ".github/workflows/ci.yml", "run: tools/proto/breaking.sh", "# run: tools/proto/breaking.sh", "proto-breaking"},
 		{"breaking step disabled", ".github/workflows/ci.yml", "- name: Check protobuf compatibility", "- name: Check protobuf compatibility\n        if: false", "proto-breaking"},
@@ -439,6 +441,7 @@ func TestStatusGuardRepositoryFixtures(t *testing.T) {
 		{"unsupported provider marked supported", orchestrator + "service/integrations/providers.go", "supported: false,", "supported: true,", "other-integration-tools"},
 		{"release network permission added", app + "android/app/src/main/AndroidManifest.xml", "<application", `<uses-permission android:name="android.permission.INTERNET"/><application`, "mobile-client"},
 		{"loopback bind widened", backend + "infra/docker-compose.yml", `"127.0.0.1:`, `"0.0.0.0:`, "mobile-reachability"},
+		{"wildcard publication added", backend + "infra/docker-compose.yml", `- "127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:${ORCHESTRATOR_PUBLIC_PORT:-3000}"`, "- \"127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:${ORCHESTRATOR_PUBLIC_PORT:-3000}\"\n      - \"0.0.0.0:4000:3000\"", "mobile-reachability"},
 		{"task marker removed", "docs/NORTH_STAR.md", "A2A-001 - Outbound", "A2A-099 - Outbound", "agent-delegation"},
 		{"A2A service added", orchestrator + "app/app.go", "turingv1.RegisterSessionServiceServer(publicServer, sessionService)", "turingv1.RegisterA2AServiceServer(publicServer, peerService)\nturingv1.RegisterSessionServiceServer(publicServer, sessionService)", "agent-delegation"},
 		{"A2A bridge added", orchestrator + "app/app.go", "turingv1.RegisterSessionServiceServer(publicServer, sessionService)", "NewA2ABridge(cfg)\nturingv1.RegisterSessionServiceServer(publicServer, sessionService)", "agent-delegation"},

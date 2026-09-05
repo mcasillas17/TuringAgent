@@ -351,7 +351,7 @@ func checkStatusEvidence(files fs.FS, evidence statusEvidence) string {
 			return "invalid rejected evidence pattern"
 		}
 		if pattern.MatchString(source) {
-			return "limiting evidence changed"
+			return absenceMismatch(evidence)
 		}
 	}
 	if evidence.pattern != "" {
@@ -368,9 +368,16 @@ func checkStatusEvidence(files fs.FS, evidence statusEvidence) string {
 		return "required evidence contract missing"
 	}
 	if evidence.absent != "" && strings.Contains(source, syntaxTokens(evidence.absent)) {
-		return "limiting evidence changed"
+		return absenceMismatch(evidence)
 	}
 	return ""
+}
+
+func absenceMismatch(evidence statusEvidence) string {
+	if evidence.limitation != "" {
+		return "limiting evidence changed"
+	}
+	return "contradicting evidence appeared"
 }
 
 func checkWorkflowCommand(data []byte, jobName, command string) string {
