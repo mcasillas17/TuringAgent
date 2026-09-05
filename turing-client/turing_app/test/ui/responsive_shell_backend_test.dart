@@ -34,9 +34,21 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final api = _FakeApiClient()
+      ..sessions = [
+        Session(
+          sessionId: 'sess_initial',
+          title: 'Initial chat',
+          updatedAt: DateTime.utc(2026, 5, 11),
+        ),
+        Session(
+          sessionId: 'sess_target',
+          title: 'Target chat',
+          updatedAt: DateTime.utc(2026, 5, 10),
+        ),
+      ]
       ..searchHits = [
         SearchHit(
-          sessionId: 'sess_existing',
+          sessionId: 'sess_target',
           message: Message(
             messageId: 'search-hit',
             role: 'user',
@@ -56,6 +68,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Initial chat'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<ChatScreen>(find.byType(ChatScreen)).sessionId,
+      'sess_initial',
+    );
     await tester.tap(find.byTooltip('Search conversations'));
     await tester.pumpAndSettle();
     await tester.enterText(
@@ -70,11 +88,15 @@ void main() {
     final chat = tester.widget<ChatScreen>(
       find.byType(ChatScreen, skipOffstage: false),
     );
-    expect(chat.sessionId, 'sess_existing');
+    expect(chat.sessionId, 'sess_target');
     await tester.pageBack();
     await tester.pumpAndSettle();
     expect(find.byType(SearchScreen), findsNothing);
     expect(find.byType(ChatScreen), findsOneWidget);
+    expect(
+      tester.widget<ChatScreen>(find.byType(ChatScreen)).sessionId,
+      'sess_target',
+    );
   });
 
   testWidgets('the shell is one surface: conversations beside a chat', (

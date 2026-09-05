@@ -18,8 +18,8 @@ func verificationPreparationProblems(source string) []string {
 			return mdast.WalkContinue, nil
 		}
 		body := string(block.Lines().Value(document.source))
-		rootTest := strings.Index(body, "go test -tags sqlite_fts5")
-		if rootTest < 0 || !strings.Contains(body, "./...") {
+		rootTest := directRootTestOffset(body)
+		if rootTest < 0 {
 			return mdast.WalkContinue, nil
 		}
 		found = true
@@ -38,6 +38,25 @@ func verificationPreparationProblems(source string) []string {
 	return problems
 }
 
+func directRootTestOffset(body string) int {
+	offset := 0
+	for _, line := range strings.SplitAfter(body, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "go" && fields[1] == "test" {
+			root, tags := false, false
+			for i, field := range fields {
+				root = root || field == "./..."
+				tags = tags || (field == "-tags" && i+1 < len(fields) && fields[i+1] == "sqlite_fts5")
+			}
+			if root && tags {
+				return offset
+			}
+		}
+		offset += len(line)
+	}
+	return -1
+}
+
 func TestVerificationInstructionsPrepareNestedModuleCaches(t *testing.T) {
 	for _, path := range []string{
 		"README.md", "docs/architecture/tech-stack.md",
@@ -49,6 +68,19 @@ func TestVerificationInstructionsPrepareNestedModuleCaches(t *testing.T) {
 				t.Errorf("%s: %s", path, problem)
 			}
 		})
+	}
+}
+
+func TestPreparationIgnoresNonCommands(t *testing.T) {
+	for _, body := range []string{
+		"# go test -tags sqlite_fts5 ./...\n",
+		"echo go test -tags sqlite_fts5 ./...\n",
+		"printf 'go test -tags sqlite_fts5 ./...'\n",
+		"go test -tags sqlite_fts5 ./tools/docs\n",
+	} {
+		if offset := directRootTestOffset(body); offset != -1 {
+			t.Fatalf("non-root command detected at %d", offset)
+		}
 	}
 }
 
@@ -64,6 +96,7 @@ func TestVerificationPreparationContexts(t *testing.T) {
 				if fixture.name == "list" {
 					block = "- Checks:\n\n" + block
 				}
+
 				return block
 			}
 			if problems := verificationPreparationProblems(wrap(commands)); len(problems) != 0 {

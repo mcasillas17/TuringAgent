@@ -9,15 +9,26 @@ import (
 )
 
 func documentationPreparationProblem(data []byte) string {
+	type runSettings struct {
+		Shell     yaml.Node `yaml:"shell"`
+		Directory yaml.Node `yaml:"working-directory"`
+	}
+	type defaults struct {
+		Run runSettings `yaml:"run"`
+	}
 	var workflow struct {
-		Jobs map[string]struct {
+		Defaults defaults `yaml:"defaults"`
+		Jobs     map[string]struct {
 			If       yaml.Node `yaml:"if"`
 			Continue yaml.Node `yaml:"continue-on-error"`
+			Needs    yaml.Node `yaml:"needs"`
+			Defaults defaults  `yaml:"defaults"`
 			Steps    []struct {
-				Uses     string    `yaml:"uses"`
-				Run      string    `yaml:"run"`
-				If       yaml.Node `yaml:"if"`
-				Continue yaml.Node `yaml:"continue-on-error"`
+				Uses     string      `yaml:"uses"`
+				Run      string      `yaml:"run"`
+				If       yaml.Node   `yaml:"if"`
+				Continue yaml.Node   `yaml:"continue-on-error"`
+				Settings runSettings `yaml:",inline"`
 				With     struct {
 					Cache      yaml.Node `yaml:"cache"`
 					CachePaths string    `yaml:"cache-dependency-path"`
@@ -35,9 +46,22 @@ func documentationPreparationProblem(data []byte) string {
 	if !unconditionalPreparationSetting(job.If, true) || !unconditionalPreparationSetting(job.Continue, false) {
 		return "root Go job must be unconditional and gating"
 	}
+	if job.Needs.Kind != 0 && (job.Needs.Kind != yaml.SequenceNode || len(job.Needs.Content) != 0) {
+		return "root Go job must not depend on an unmodeled job"
+	}
 	setup, preparation, tests := -1, -1, -1
 	const downloads = "(cd turing-backend/mcp-files && go mod download)\n(cd turing-backend/mcp-system && go mod download)"
 	for index, step := range job.Steps {
+		if strings.TrimSpace(step.Run) == downloads || strings.TrimSpace(step.Run) == "go test -tags sqlite_fts5 -race ./... -count=1" {
+			shell := preparationSetting(step.Settings.Shell, job.Defaults.Run.Shell, workflow.Defaults.Run.Shell)
+			if shell.Kind != 0 && (shell.Tag != "!!str" || (shell.Value != "bash" && shell.Value != "sh")) {
+				return "unmodeled preparation/test execution shell"
+			}
+			directory := preparationSetting(step.Settings.Directory, job.Defaults.Run.Directory, workflow.Defaults.Run.Directory)
+			if directory.Kind != 0 && (directory.Tag != "!!str" || (directory.Value != "." && directory.Value != "./")) {
+				return "preparation/tests must run in the repository root directory"
+			}
+		}
 		if strings.HasPrefix(step.Uses, "actions/setup-go@") {
 			if !unconditionalPreparationSetting(step.If, true) || !unconditionalPreparationSetting(step.Continue, false) || !unconditionalPreparationSetting(step.With.Cache, true) {
 				return "setup-go must run with caching enabled"
@@ -70,6 +94,15 @@ func documentationPreparationProblem(data []byte) string {
 	return ""
 }
 
+func preparationSetting(values ...yaml.Node) yaml.Node {
+	for _, value := range values {
+		if value.Kind != 0 {
+			return value
+		}
+	}
+	return yaml.Node{}
+}
+
 func unconditionalPreparationSetting(node yaml.Node, want bool) bool {
 	if node.Kind == 0 {
 		return true
@@ -95,6 +128,10 @@ func TestDocumentationPreparationFixtures(t *testing.T) {
 		{"disabled cache", "cache: true", "cache: false", "caching enabled"},
 		{"disabled root tests", "- name: Run Go race tests", "- name: Run Go race tests\n        if: false", "root tests"},
 		{"non-gating root tests", "- name: Run Go race tests", "- name: Run Go race tests\n        continue-on-error: true", "root tests"},
+		{"dependent root job", "  go:\n", "  go:\n    needs: optional\n", "unmodeled job"},
+		{"custom prep shell", "- name: Prepare documentation guard module caches", "- name: Prepare documentation guard module caches\n        shell: 'true {0}'", "execution shell"},
+		{"custom root defaults", "  go:\n", "  go:\n    defaults:\n      run:\n        shell: 'true {0}'\n", "execution shell"},
+		{"wrong prep directory", "- name: Prepare documentation guard module caches", "- name: Prepare documentation guard module caches\n        working-directory: /tmp", "root directory"},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			source := string(baseline)
