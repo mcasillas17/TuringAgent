@@ -429,6 +429,7 @@ func TestStatusGuardRepositoryFixtures(t *testing.T) {
 		{"routing provider changed", runtime + "agent/external_agent.go", "llm.NewOpenAICompatibleWithLimits(", "llm.NewNativeProvider(", "remote-model-routing"},
 		{"routing RPC registration removed", orchestrator + "app/app.go", "turingv1.RegisterExternalAgentServiceServer(publicServer, agentService)", "", "remote-model-routing"},
 		{"GitHub consumer removed", orchestrator + "service/integrations/github.go", `case "github.get_file":`, `case "github.no_file":`, "github-tools"},
+		{"GitHub egress validation removed", orchestrator + "service/integrations/call.go", "s.validateIntegrationDecision(", "s.skippedIntegrationDecision(", "github-tools"},
 		{"non-GitHub tool added", orchestrator + "service/integrations/tools.go", "var githubTools = []integrationTool{", "var githubTools = []integrationTool{\n{name: \"imap.read\"},", "other-integration-tools"},
 		{"second integration consumer table", orchestrator + "service/integrations/tools.go", "for _, tool := range githubTools {", "for _, extra := range imapTools { if extra.name == name { return extra, true } }\nfor _, tool := range githubTools {", "other-integration-tools"},
 		{"credential-only acceptance changed", orchestrator + "service/integrations/providers.go", "supported: true,", "supported: false,", "other-integration-tools"},

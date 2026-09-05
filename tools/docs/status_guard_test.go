@@ -523,6 +523,7 @@ func TestCanonicalRoadmapLinks(t *testing.T) {
 		{"README.md", "docs/NORTH_STAR.md"},
 		{"turing-client/turing_app/README.md", "../../docs/NORTH_STAR.md"},
 		{"docs/architecture/tech-stack.md", "../NORTH_STAR.md"},
+		{"docs/architecture/tur-022-encrypted-database-retirement-design.md", "../NORTH_STAR.md"},
 		{"docs/mcp-security-and-integration.md", "NORTH_STAR.md"},
 		{"docs/superpowers/integration-checklist.md", "../NORTH_STAR.md"},
 		{"docs/VISION.md", "NORTH_STAR.md"},

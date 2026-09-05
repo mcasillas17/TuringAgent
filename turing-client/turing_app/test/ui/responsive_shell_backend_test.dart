@@ -47,9 +47,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // The old rail carried Devices/Stats/IoT: destinations for features
-    // docs/VISION.md refuses outright, rendering mock dashboards that implied
-    // the feature existed. Those stay gone.
+    // The old Devices/Stats/IoT destinations rendered mock dashboards that
+    // implied unimplemented features existed. Those stay gone.
     expect(find.text('Devices'), findsNothing);
     expect(find.text('Stats'), findsNothing);
     expect(find.text('IoT Devices Dashboard'), findsNothing);

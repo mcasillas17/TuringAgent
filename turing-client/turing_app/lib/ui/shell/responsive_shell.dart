@@ -28,9 +28,9 @@ import 'shell_destination.dart';
 /// A conversation, with a rail of past ones and the app's other surfaces
 /// beside it.
 ///
-/// An earlier shell here had a nav rail whose destinations — Devices, Stats,
-/// IoT — stood for features `docs/VISION.md` explicitly refuses to build, so
-/// they were removed. The destinations in [ShellDestination] are a different
+/// An earlier shell had Devices, Stats and IoT destinations with mock
+/// dashboards that implied unimplemented features were available, so they
+/// were removed. The destinations in [ShellDestination] are a different
 /// case: they are wanted, and each view either shows real backend state or
 /// says in plain words that it is not built and what is in the way. The rule
 /// is not "no destination without an implementation", it is "no destination
