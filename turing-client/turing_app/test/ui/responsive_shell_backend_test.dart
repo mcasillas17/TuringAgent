@@ -53,9 +53,7 @@ void main() {
     expect(find.text('Stats'), findsNothing);
     expect(find.text('IoT Devices Dashboard'), findsNothing);
 
-    // Destinations that ARE on the roadmap do appear — the rule is not "only
-    // implemented destinations" but "no destination that pretends", and each
-    // unimplemented one says so on arrival (asserted below).
+    // These four workspace labels remain visible in navigation.
     for (final label in ['Skills', 'Integrations', 'MCPs', 'Automations']) {
       expect(find.text(label), findsOneWidget, reason: '$label is navigable');
     }
