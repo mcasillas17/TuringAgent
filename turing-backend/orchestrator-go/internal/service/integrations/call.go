@@ -70,15 +70,12 @@ func (s *Server) CallIntegrationTool(ctx context.Context, req *turingv1.CallInte
 	if !active {
 		return nil, status.Error(codes.FailedPrecondition, "integration call was revoked before dispatch")
 	}
-	sealed, err := s.repo.GetSealedConnectionCredential(ctx, connectionID)
+	sealed, err := s.repo.GetSealedGitHubCredential(ctx, connectionID)
 	if err != nil {
 		if errors.Is(err, repository.ErrConnectionNotFound) || errors.Is(err, repository.ErrConnectionNotUsable) {
-			return nil, status.Error(codes.FailedPrecondition, "integration connection is revoked or deleted")
+			return nil, status.Error(codes.FailedPrecondition, "integration connection is unavailable")
 		}
 		return nil, status.Error(codes.Internal, "read integration connection failed")
-	}
-	if sealed.Provider != "github" {
-		return nil, status.Error(codes.InvalidArgument, "connection is not a GitHub account")
 	}
 	if s.sealer == nil {
 		// No TURING_INTEGRATION_KEY: reconnecting cannot help, so do not tell
@@ -133,14 +130,14 @@ func (s *Server) validateImmediatelyBeforeIntegrationDispatch(
 	if !active {
 		return status.Error(codes.FailedPrecondition, "integration call was revoked before dispatch")
 	}
-	current, err := s.repo.GetSealedConnectionCredential(ctx, connectionID)
+	current, err := s.repo.GetSealedGitHubCredential(ctx, connectionID)
 	if err != nil {
 		if errors.Is(err, repository.ErrConnectionNotFound) || errors.Is(err, repository.ErrConnectionNotUsable) {
-			return status.Error(codes.FailedPrecondition, "integration connection is revoked or deleted")
+			return status.Error(codes.FailedPrecondition, "integration connection is unavailable")
 		}
 		return status.Error(codes.Internal, "read integration connection failed")
 	}
-	if current.Provider != "github" || !bytes.Equal(current.Ciphertext, expectedCiphertext) {
+	if !bytes.Equal(current.Ciphertext, expectedCiphertext) {
 		return status.Error(codes.FailedPrecondition, "integration connection changed before dispatch")
 	}
 	return nil

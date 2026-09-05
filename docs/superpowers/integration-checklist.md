@@ -92,6 +92,12 @@ this checklist does not imply that future mobile or MCP conformance work ships.
   integration consumers; Agents is remote model routing, not A2A delegation.
 - [ ] Responsive layouts are not called production mobile support, and a
   LAN/tailnet URL is not presented as sufficient for loopback reachability.
+- [ ] Integrations distinguishes saved connection status and recorded consent
+  from functional tools. GitHub is functional; IMAP, CalDAV, and Notion remain
+  visible without credential-entry forms because their tools are not implemented.
+- [ ] Earlier-release integration accounts remain available for explicit Revoke
+  or Remove, including without the sealing key. Local cleanup does not revoke
+  credentials held by the vendor.
 
 ## 6. Automated Verification
 

@@ -2,7 +2,7 @@
 
 **Status:** Canonical product direction and implementation backlog.
 
-**Inspected baseline:** `main` at `331d004c`, inspected 2026-09-04.
+**Inspected baseline:** `main` at `c75ffc44`, inspected 2026-09-05.
 
 At that baseline DOC-001's guard was not implemented. This revision introduces
 the guard and documentation corrections; this baseline record does not assert
@@ -112,7 +112,7 @@ probe are not live end-to-end product proof; see
 | remote-model-routing | shipped | The conversation's destination bar selects a route through ExternalAgentService; the runtime calls its OpenAI-compatible model endpoint under per-run disclosure. |
 | agent-delegation | pending | No A2A delegation or connection to an existing Claude, Copilot, Gemini or ChatGPT product conversation. |
 | github-tools | shipped | Connected GitHub credentials support issue listing/reading, file reading and issue comments under egress and approval policy. |
-| other-integration-tools | pending | IMAP, CalDAV and Notion accept credentials but have no tool consumers; INT-001 owns the credential-acceptance correction. Google, Microsoft and Slack account connections are not implemented. |
+| other-integration-tools | pending | IMAP, CalDAV and Notion have no tool consumers and refuse new credentials; earlier-release rows remain for explicit local cleanup. INT-001 shipped this boundary. Google, Microsoft and Slack account connections are not implemented. |
 | mobile-client | pending | iOS/Android scaffolding and responsive layouts are not production mobile support; the main Android manifest lacks INTERNET permission, while debug/profile manifests grant it. |
 | mobile-reachability | pending | Compose publishes on 127.0.0.1; changing the client URL to a LAN/tailnet address does not expose it or add device identity/TLS. |
 <!-- status-guard:end -->
@@ -474,8 +474,8 @@ gates are satisfied.
   file and the Flutter README against named implementation evidence. Isolated
   fixtures cover false shipped/pending claims and missing or changed evidence.
   [Guard maintenance](../tools/docs/README.md) defines bounded assurance and
-  probe limits. The inspected mainline baseline above predates this implementation;
-  later roadmap capabilities are not implemented here.
+  probe limits. The inspected mainline baseline above predates the DOC-001
+  guard; DOC-001 does not change application behavior.
 - **Outcome:** Product documentation cannot silently drift from merged reality.
 - **Scope:** Make this file canonical; mark old roadmap documents historical;
   correct current status, integration labels, remote-model naming, mobile
@@ -491,8 +491,10 @@ gates are satisfied.
 
 ### 2. INT-001 - Powerless-credential honesty
 
-- **Outcome:** Turing never asks for or retains a credential that provides no
-  product capability.
+- **Implementation status:** Shipped on `main` in #122 (`c75ffc44`).
+- **Outcome:** Turing does not solicit or store new credentials for providers
+  without functional tools. Credentials saved by earlier releases remain until
+  the user explicitly revokes or deletes their connections.
 - **Scope:** Keep enum wire compatibility; mark IMAP, CalDAV, and Notion
   descriptor-only/unsupported until tools ship; reject new connections; retain
   existing rows for explicit revoke/delete without attempting use; make the UI
@@ -502,7 +504,16 @@ gates are satisfied.
 - **Acceptance:** New powerless credentials are rejected before secret sealing;
   existing rows remain visible and revocable; GitHub behavior is unchanged;
   wire compatibility checks pass.
-- **Dependencies:** None.
+- **Usage:** GitHub remains the only functional account integration (issue
+  listing/reading, file reading, issue comments under approval and egress
+  policy). IMAP, CalDAV, and Notion remain visible with no credential form.
+  Their stored status and historical grants are preserved independently of
+  tool availability. In Integrations, **Revoke access** deletes the local
+  credential and retains the record; **Remove** deletes the row and credential.
+  Neither requires decryption or the original sealing key. Audit records
+  remain, and local deletion does not revoke copies at the vendor.
+- **Dependencies:** No technical prerequisite. INT-001 landed independently;
+  preserve DOC-001's documentation/status guard when integrating this behavior.
 
 ### 3. TUR-010 - No-worker and queue-timeout truth
 

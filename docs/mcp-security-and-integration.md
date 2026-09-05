@@ -996,8 +996,34 @@ discover and dispatch integration tools through the internal service facet but
 cannot enumerate, create, revoke, or delete connections; the public client can
 manage connections but cannot reach dispatch.
 
-Integration credentials are AES-256-GCM-sealed at rest and opened once per
-call in the orchestrator. Plaintext exists only in the provider-call stack
+GitHub is the only functional account integration. IMAP, CalDAV, and Notion
+are descriptor-only: the public `ConnectAccount` boundary rejects them before
+credential validation, sealing, persistence, audit creation, or registry
+activation, including for an older client that submits directly. Their catalog
+descriptors remain visible with fixed unsupported reasons and no credential
+instructions or grants.
+
+Earlier-release rows retain their stored lifecycle, metadata, and historical
+grants. List/get and explicit revoke/delete do not decrypt credentials or
+contact a provider, even without the original key. Revoke deletes the local
+credential and records revocation; delete removes the connection row too.
+Audit records remain. Neither action revokes the vendor credential or other
+copies. A stored `connected` status is not evidence of functional tools.
+
+```mermaid
+flowchart LR
+    New[New connection request] --> Support{Provider tools implemented?}
+    Support -->|No| Refuse[Reject before sealing or storage]
+    Support -->|GitHub| Consent[Consent, validation, sealed storage]
+    Legacy[Earlier-release unsupported row] --> Metadata[Retain metadata and sealed credential]
+    Metadata --> Choice{Explicit user action}
+    Choice -->|Revoke| Revoke[Delete local credential; keep record]
+    Choice -->|Remove| Delete[Delete row and local credential]
+```
+
+GitHub credentials are AES-256-GCM-sealed at rest and opened once per
+policy-authorized, egress-authorized call in the orchestrator. Discovery checks only the key
+fingerprint and omits unreadable connection IDs. Plaintext exists only in the provider-call stack
 frame, travels only in GitHub's `Authorization` header, and is never placed in
 a URL, event, audit row, log, error, or tool result. Provider HTTP uses the
 shared public-address resolver and no-redirect client, so a private DNS answer

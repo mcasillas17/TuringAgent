@@ -21,7 +21,7 @@ live providers, MCP conformance, or production mobile support.
 | remote-model-routing | shipped | Agents manages endpoint records; the conversation's destination bar selects the route through ExternalAgentService, and the runtime calls the model under per-run disclosure. |
 | agent-delegation | pending | ExternalAgentService is model routing, not A2A or access to an existing vendor-product conversation. |
 | github-tools | shipped | Connected GitHub credentials have issue/file read tools and approval-gated issue comments. |
-| other-integration-tools | pending | IMAP, CalDAV and Notion currently store credentials without functional tools; do not connect them expecting mail, calendar or notes operations. |
+| other-integration-tools | pending | IMAP, CalDAV and Notion have no functional tools and refuse new credentials. Earlier-release accounts remain available for explicit local revoke/remove. |
 | mobile-client | pending | Responsive layouts and iOS/Android scaffolding are not a production mobile client; the main Android manifest lacks INTERNET permission while debug/profile grant it. |
 | mobile-reachability | pending | The default host API is loopback-only; LAN/tailnet URLs alone cannot make a phone reach it securely. |
 <!-- status-guard:end -->
@@ -54,10 +54,10 @@ Runtime prerequisites and limits:
 - End-to-end chat responses require the Go orchestrator, Go agent runtime, model provider, and event stream.
 - Approval cards require the backend/runtime to emit approval events.
 - A functional management page does not imply every connector or protocol it
-  names works. GitHub has tool consumers; IMAP, CalDAV and Notion currently
-  only accept credentials. Google, Microsoft and Slack account connections
-  are not implemented. INT-001 will change powerless-credential acceptance;
-  this documentation change does not.
+  names works. GitHub has tool consumers; IMAP, CalDAV and Notion refuse new
+  connections because their tools are not implemented. Google, Microsoft and
+  Slack account connections are also unavailable. Saved accounts remain
+  manageable as described below; INT-001 shipped these boundaries.
 
 ## Run Locally
 
@@ -124,9 +124,9 @@ authorization: Bearer <api-key>
 - **Skills** lists file-backed skills and manages enablement and capability grants.
 - **Memory** displays the file-backed vault, pinned documents and proposal
   decisions. This does not imply automatic learning from conversation.
-- **Integrations** lists providers and connections with connect/revoke/delete
-  actions and GitHub tool policies; credential storage is not functional
-  IMAP/CalDAV/Notion support.
+- **Integrations** manages saved accounts and GitHub tool policies;
+  unsupported providers stay visible with an explanation and no credential
+  form. Existing accounts retain explicit revoke/remove actions.
 - **MCPs** manages the tool-server registry and policies. The current transport
   is an HTTP JSON-RPC subset, not full MCP lifecycle conformance.
 - **Automations** manages interval/daily runs and their explicit tool allowlists;
@@ -143,6 +143,40 @@ wires each page to `TuringApi`, and `TuringGrpcApi` forwards calls to generated
 clients. The older Devices/Stats placeholder descriptions do not describe these
 pages. Responsive sidebar/drawer behavior is a layout capability, not proof of
 mobile networking.
+
+## Integration accounts
+
+GitHub is the only connectable account provider with functional tools. Open
+**Integrations → Connect an account**, create a personal access token at
+GitHub, paste it, review the grants, and explicitly acknowledge consent. Its
+four tools list issues, read an issue, read a repository file, and create an
+issue comment. They default to **Asks first**, including reads; enabled tools
+also require the existing per-run egress consent. Tool policies appear on
+usable GitHub account cards.
+
+**Mail (IMAP)**, **Calendar (CalDAV)**, and **Notion** are descriptor-only:
+their tools are not implemented, so there is no credential-entry form and
+the backend refuses new connections. Adding a key or changing the credential
+cannot enable these providers. Google, Microsoft, and Slack account
+connections and tools are also unimplemented.
+
+Earlier-release accounts stay visible. **Stored: connected** describes the
+saved row, and **Recorded consent** preserves the grants accepted when it was
+created; neither means that tools exist or the credential is usable. Their
+unsupported credentials are retained without automatic use, decryption,
+revocation, or deletion. An unreadable credential is explained separately.
+
+- **Revoke access** deletes the local credential and retains the row, its
+  recorded consent, and revocation date.
+- **Remove** deletes the saved connection record and any remaining local
+  credential. Revoking first is optional. Audit records remain.
+
+Both cleanup actions require explicit confirmation and work without the
+sealing key. A failed catalog or tool-policy request leaves saved accounts
+manageable, with a retry notice; a failed connection-list request shows an
+error instead of claiming that no accounts exist. Local cleanup does not
+revoke vendor-side tokens, app passwords, or other copies. Delete the
+credential at its vendor separately when needed.
 
 ## Chat And Sessions
 

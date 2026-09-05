@@ -50,7 +50,7 @@ var (
 )
 
 // Connection is the metadata-only read model. The only full-ciphertext read is
-// GetSealedConnectionCredential, whose result is reserved for one dispatch.
+// GetSealedGitHubCredential, whose result is reserved for one dispatch.
 type Connection struct {
 	ConnectionID   string
 	Provider       string
@@ -80,14 +80,16 @@ type SealedConnectionCredential struct {
 	Ciphertext   []byte
 }
 
-// GetSealedConnectionCredential reads the full sealed value and status in one
+// GetSealedGitHubCredential reads the full sealed value and status in one
 // statement so revocation can never be observed separately from the secret.
-func (r *Repository) GetSealedConnectionCredential(ctx context.Context, connectionID string) (SealedConnectionCredential, error) {
+// Filtering by provider before reading ciphertext keeps descriptor-only
+// providers out of dispatch, including when a caller names a legacy row.
+func (r *Repository) GetSealedGitHubCredential(ctx context.Context, connectionID string) (SealedConnectionCredential, error) {
 	var result SealedConnectionCredential
 	var ciphertext []byte
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id, provider, display_name, status, credential_ciphertext
-		FROM integration_connections WHERE id = ?
+		FROM integration_connections WHERE id = ? AND provider = 'github'
 	`, connectionID).Scan(&result.ConnectionID, &result.Provider, &result.DisplayName, &result.Status, &ciphertext)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SealedConnectionCredential{}, ErrConnectionNotFound

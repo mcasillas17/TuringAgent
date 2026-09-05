@@ -23,25 +23,21 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// A third-party account the user has connected: mail, calendar, notes, code.
-//
-// The connection model here is deliberately narrow. Turing has no registered
-// OAuth client with any provider, no redirect URI and no browser round trip,
-// so an authorization-code flow is not something it can honestly offer. What
-// it can do is hold a credential the user created themselves — an app
-// password, an internal integration token, a personal access token — which is
-// how these services are reached by scripts and self-hosted clients every
-// day. Providers that only issue credentials through OAuth are listed as
-// unsupported, with the reason, rather than shown as a button that cannot
-// work.
+// Stable identities for saved third-party accounts. Enum presence does not
+// imply support: consult ProviderDescriptor.supported before offering a form.
+// GitHub has implemented tools and accepts a personal access token. IMAP,
+// CalDAV and Notion are descriptor-only; new credentials are refused before
+// sealing or storage. Earlier-release rows remain available for explicit
+// local revoke/delete without decrypting or using their credentials.
 type IntegrationProvider int32
 
 const (
 	IntegrationProvider_INTEGRATION_PROVIDER_UNSPECIFIED IntegrationProvider = 0
-	// Supported: the user pastes a credential they minted themselves.
+	// Descriptor-only. Keep these values for earlier-release saved rows.
 	IntegrationProvider_INTEGRATION_PROVIDER_IMAP   IntegrationProvider = 1
 	IntegrationProvider_INTEGRATION_PROVIDER_CALDAV IntegrationProvider = 2
 	IntegrationProvider_INTEGRATION_PROVIDER_NOTION IntegrationProvider = 3
+	// Functional tools; the user pastes a personal access token.
 	IntegrationProvider_INTEGRATION_PROVIDER_GITHUB IntegrationProvider = 4
 	// Named but not supported. They exist in this enum so the client can list
 	// them with a reason instead of leaving the user wondering whether Turing
@@ -106,7 +102,8 @@ type ConnectionStatus int32
 
 const (
 	ConnectionStatus_CONNECTION_STATUS_UNSPECIFIED ConnectionStatus = 0
-	ConnectionStatus_CONNECTION_STATUS_CONNECTED   ConnectionStatus = 1
+	// Stored lifecycle status, independent of provider support/tool availability.
+	ConnectionStatus_CONNECTION_STATUS_CONNECTED ConnectionStatus = 1
 	// The credential has been destroyed. The row survives so the user can still
 	// see that the account was once connected and when access ended.
 	ConnectionStatus_CONNECTION_STATUS_REVOKED ConnectionStatus = 2
@@ -153,16 +150,17 @@ func (ConnectionStatus) EnumDescriptor() ([]byte, []int) {
 	return file_turing_v1_integrations_proto_rawDescGZIP(), []int{1}
 }
 
-// What a provider is, what credential it takes, and what that credential
-// grants. Served by the backend rather than hardcoded in a client, so every
-// client states the same thing about what connecting gives away.
+// Whether a provider has implemented tools and accepts new connections, plus
+// credential instructions and grants for connectable providers. Unsupported
+// providers remain named with an explanation; historical grants live on rows.
 type ProviderDescriptor struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	Provider    IntegrationProvider    `protobuf:"varint,1,opt,name=provider,proto3,enum=turing.v1.IntegrationProvider" json:"provider,omitempty"`
 	DisplayName string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	// "Mail", "Calendar", "Notes", "Code" — how the user thinks about it.
-	Category  string `protobuf:"bytes,3,opt,name=category,proto3" json:"category,omitempty"`
-	Supported bool   `protobuf:"varint,4,opt,name=supported,proto3" json:"supported,omitempty"`
+	Category string `protobuf:"bytes,3,opt,name=category,proto3" json:"category,omitempty"`
+	// False means no new connections, independently of existing row status.
+	Supported bool `protobuf:"varint,4,opt,name=supported,proto3" json:"supported,omitempty"`
 	// Why it cannot be connected. Set only when supported is false.
 	UnsupportedReason string `protobuf:"bytes,5,opt,name=unsupported_reason,json=unsupportedReason,proto3" json:"unsupported_reason,omitempty"`
 	// What the user is being asked to paste, and where they get it.
@@ -288,7 +286,7 @@ func (x *ProviderDescriptor) GetGrants() []string {
 	return nil
 }
 
-// A connected account.
+// A saved account and its historical consent. This is not a tool-health claim.
 //
 // No field here carries the credential, and none ever will. The stored secret
 // is returned by no RPC in this file; a connection is described by its
@@ -314,12 +312,10 @@ type Connection struct {
 	ConnectedAt      *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=connected_at,json=connectedAt,proto3" json:"connected_at,omitempty"`
 	RevokedAt        *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=revoked_at,json=revokedAt,proto3" json:"revoked_at,omitempty"`
 	UpdatedAt        *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// True when the stored credential was sealed with a key the backend no
-	// longer has — TURING_INTEGRATION_KEY was rotated, lost, or restored from a
-	// different .env. The connection can never be used again and must be
-	// reconnected. Answered from the sealed value's key fingerprint, without
-	// decrypting anything; a connection that quietly claimed to work would be
-	// the app asserting access it does not have.
+	// True when the stored credential's key fingerprint does not match the
+	// backend's key, or no key is configured. Answered from the header without
+	// decryption. Cleanup remains available. Reconnecting is only possible for
+	// supported providers with configured storage; it cannot enable missing tools.
 	CredentialUnreadable bool `protobuf:"varint,13,opt,name=credential_unreadable,json=credentialUnreadable,proto3" json:"credential_unreadable,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache

@@ -108,6 +108,7 @@ func featureStatusClaims() []statusClaim {
 			pendingTask("A2A-001"),
 		}},
 		{"github-tools", true, []statusEvidence{
+			{path: integrations + "providers.go", pattern: `(?s)kind:\s+turingv1\.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB,\s+storageKey:[^}]+?supported:\s+true,`},
 			function(integrations+"tools.go", "ListIntegrationTools", `connection.Provider == "github"`),
 			function(integrations+"call.go", "CallIntegrationTool", "s.callGitHubGuarded("),
 			has("proto/turing/v1/integrations.proto", "rpc CallIntegrationTool("),
@@ -125,9 +126,12 @@ func featureStatusClaims() []statusClaim {
 		{"other-integration-tools", true, []statusEvidence{
 			{path: integrations + "tools.go", symbol: "lookupIntegrationTool", require: "range githubTools", rejectPattern: `(?s)\brange\b.*\brange\b`, limitation: "the consumer lookup only exposes GitHub tools"},
 			{path: integrations + "tools.go", rejectPattern: `name:\s*"(?:imap|caldav|notion)\.`},
-			function(integrations+"call.go", "CallIntegrationTool", `sealed.Provider != "github"`),
-			function(integrations+"service.go", "ConnectAccount", "s.repo.CreateConnection("),
-			pendingTask("INT-001"),
+			function(integrations+"call.go", "CallIntegrationTool", "s.repo.GetSealedGitHubCredential("),
+			{path: orchestrator + "repository/integrations.go", symbol: "GetSealedGitHubCredential", pattern: `\bprovider\s*=\s*'github'`},
+			function(integrations+"service.go", "ConnectAccount", "if !entry.supported { return nil, status.Errorf(codes.FailedPrecondition,"),
+			function(integrations+"powerless_test.go", "TestPowerlessConnectionsRefusedBeforeSideEffectsIncludingDirectRPC", "client.ConnectAccount("),
+			function(integrations+"powerless_test.go", "TestLegacyPowerlessConnectionsSurviveReopenAndExplicitCleanup", "server.RevokeConnection("),
+			function(integrations+"powerless_test.go", "TestLegacyPowerlessRowsCannotDispatchTools", "server.CallIntegrationTool("),
 		}},
 		{"mobile-client", true, []statusEvidence{
 			{path: app + "android/app/src/main/AndroidManifest.xml", absent: "android.permission.INTERNET", limitation: "the main Android manifest does not grant network access"},
@@ -211,13 +215,7 @@ func featureStatusClaims() []statusClaim {
 			function(integrations+"github.go", "githubRequest", `case "`+tool+`":`),
 		)
 	}
-	for _, provider := range []string{"IMAP", "CALDAV", "NOTION"} {
-		addEvidence("other-integration-tools", statusEvidence{
-			path:    integrations + "providers.go",
-			pattern: `(?s)kind:\s+turingv1\.IntegrationProvider_INTEGRATION_PROVIDER_` + provider + `,\s+storageKey:[^}]+?supported:\s+true,`,
-		})
-	}
-	for _, provider := range []string{"GOOGLE_WORKSPACE", "MICROSOFT_365", "SLACK"} {
+	for _, provider := range []string{"IMAP", "CALDAV", "NOTION", "GOOGLE_WORKSPACE", "MICROSOFT_365", "SLACK"} {
 		addEvidence("other-integration-tools", statusEvidence{
 			path:    integrations + "providers.go",
 			pattern: `(?s)kind:\s+turingv1\.IntegrationProvider_INTEGRATION_PROVIDER_` + provider + `,\s+storageKey:[^}]+?supported:\s+false,`,

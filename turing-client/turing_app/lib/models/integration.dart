@@ -72,9 +72,8 @@ class IntegrationProviderInfo {
   final String displayName;
   final String category;
 
-  /// False for providers that only issue credentials through OAuth. They are
-  /// listed anyway, with [unsupportedReason], so a missing provider reads as
-  /// a stated limitation rather than an oversight.
+  /// Whether the backend accepts new connections for implemented tools.
+  /// Unsupported providers remain visible with [unsupportedReason].
   final bool supported;
   final String unsupportedReason;
 
@@ -89,7 +88,8 @@ class IntegrationProviderInfo {
   final List<String> grants;
 }
 
-/// A connected account. A standing grant of access until it is revoked.
+/// A saved account and its historical consent. Stored lifecycle state is
+/// independent of provider support and functional tool availability.
 class IntegrationConnection {
   const IntegrationConnection({
     required this.connectionId,
@@ -121,9 +121,8 @@ class IntegrationConnection {
   final List<String> grantedScopes;
 
   /// True when the key that sealed this credential is gone — rotated, lost,
-  /// or restored from a different .env. The connection can never be used
-  /// again and has to be reconnected. Shown rather than hidden: a card that
-  /// kept saying "Connected" would be claiming access the app does not have.
+  /// or restored from a different .env. Cleanup remains possible without
+  /// decrypting. Reconnection is only offered for supported providers.
   final bool credentialUnreadable;
 
   final DateTime? connectedAt;
