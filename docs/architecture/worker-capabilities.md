@@ -1,6 +1,9 @@
 # Worker capability routing
 
-**Status:** Pending merge for TUR-018.
+**Status:** Shipped. This file describes behavior present in this checkout; it
+is not a record of what is merged to `main`. The bounded waiting policy for work
+that is accepted and then loses its workers is TUR-010's, and lives in
+[bounded queue waiting](queue-wait.md).
 
 ## Purpose
 
@@ -158,7 +161,11 @@ against the registry before and after the transition.
 - Unsupported to supported appends a restoration notice and immediately retries
   dispatch.
 
-Only pending jobs with queued runs are considered. Notice insertion repeats those
+Only pending jobs with queued runs are considered. The same scan also records
+TUR-010's durable queue truth on each run it inspects and applies the configured
+waiting bounds; the advisory notices below and that durable state are written
+independently, because a notice decides whether to interrupt a user and the
+durable state is what a reopened conversation reads. Notice insertion repeats those
 conditions atomically at the SQLite write boundary, so work claimed after a scan does
 not receive a stale loss or restoration notice. An already delivered run keeps its
 frozen assignment; reducing capacity or removing a model does not cancel work already

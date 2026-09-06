@@ -1,6 +1,7 @@
 package runoutcome
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -64,6 +65,12 @@ func approvedFailureMappings() []failureMappingCase {
 		{name: "tool_result_limit_exceeded", origin: OriginToolGuard, code: "tool_result_limit_exceeded", wantReason: ReasonToolFailure},
 		{name: "runtime_error", origin: OriginWorkerRuntime, code: "runtime_error", wantReason: ReasonInternalFailure},
 		{name: "retries_exhausted", origin: OriginDispatch, code: "retries_exhausted", wantReason: ReasonRetriesExhausted},
+		// TUR-010's two queue bounds. Both report EXPIRED: the run was accepted
+		// and then ran out of the time the operator allowed it to wait. Which
+		// bound ran out is recorded on the run's queue_wait_reason, not by
+		// forking this vocabulary.
+		{name: "queue_wait_expired", origin: OriginDispatch, code: CodeQueueWaitExpired, wantReason: ReasonExpired},
+		{name: "queue_no_compatible_worker", origin: OriginDispatch, code: CodeQueueNoCompatibleWorker, wantReason: ReasonExpired},
 		{name: "job_timeout", origin: OriginRecovery, code: "job_timeout", wantReason: ReasonRecoveryInterrupted},
 		{name: "side_effect_uncertain", origin: OriginRecovery, code: "side_effect_uncertain", wantReason: ReasonSideEffectUncertain},
 		{name: "approval_delivery_failed", origin: OriginApprovalTransport, code: "approval_delivery_failed", wantReason: ReasonApprovalDeliveryFailed},
@@ -294,10 +301,28 @@ func TestAbandonedCancellationNeverClaimsUserIntent(t *testing.T) {
 		}
 	}
 
+	// QueueTimeoutCancellation is the second constructor, and it is listed here
+	// rather than exempted because this pin exists to make every new one a
+	// deliberate edit. It claims no user intent either: the orchestrator gave up
+	// on the run's behalf, so its reason is abandoned. The rule the test above
+	// enforces still stands — a user-cancelled constructor may only appear
+	// alongside an explicit typed cancel-intent RPC.
 	constructors := exportedFunctionsReturning(t, "Cancellation")
-	want := []string{"AbandonedCancellation"}
+	want := []string{"AbandonedCancellation", "QueueTimeoutCancellation"}
 	if !reflect.DeepEqual(constructors, want) {
 		t.Fatalf("exported cancellation constructors = %v, want %v", constructors, want)
+	}
+	for _, code := range []string{CodeQueueWaitExpired, CodeQueueNoCompatibleWorker} {
+		queued, err := QueueTimeoutCancellation(code)
+		if err != nil {
+			t.Fatalf("QueueTimeoutCancellation(%q) = %v", code, err)
+		}
+		if queued.Reason() != ReasonAbandoned {
+			t.Fatalf("QueueTimeoutCancellation(%q) reason = %q, want %q", code, queued.Reason(), ReasonAbandoned)
+		}
+	}
+	if _, err := QueueTimeoutCancellation("client_cancelled"); !errors.Is(err, ErrUnsupportedQueueOutcome) {
+		t.Fatalf("a non-queue code built a queue cancellation: %v", err)
 	}
 }
 

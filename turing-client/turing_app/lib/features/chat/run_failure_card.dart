@@ -25,13 +25,30 @@ import 'terminal_outcome_card.dart';
 /// this card can never render a raw backend `message`, `note`, `reason`,
 /// `code`, or numeric enum value.
 class RunFailureCard extends StatelessWidget {
-  const RunFailureCard({super.key, required this.reason});
+  const RunFailureCard({
+    super.key,
+    required this.reason,
+    this.queueWaitReason = QueueWaitReason.none,
+  });
 
   final RunOutcomeReason reason;
+
+  /// Which queue bound ended this run, when one did. It is a separate
+  /// parameter rather than something derived from [reason] because it cannot
+  /// be: a queue bound and an expired approval both report
+  /// [RunOutcomeReason.expired], and only this value tells them apart.
+  final QueueWaitReason queueWaitReason;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final queued = localizedQueueOutcomeCopy(l10n, reason, queueWaitReason);
+    if (queued != null) {
+      return TerminalOutcomeCard(
+        outcomeLabel: queued.title,
+        message: queued.detail,
+      );
+    }
     // `none` mirrors `localizedRunStateCopy`'s own fallback: a failure with
     // no more specific classified reason still needs truthful "Run failed"
     // copy, not the generic cross-lifecycle "outcome unavailable" wording

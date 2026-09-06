@@ -22,6 +22,27 @@ class AppLocalizationsEn extends AppLocalizations {
   String get runQueuedDetail => 'The run is waiting to start.';
 
   @override
+  String get runQueuedNoWorkerTitle => 'Waiting for an assistant';
+
+  @override
+  String get runQueuedNoWorkerDetail =>
+      'Nothing connected right now can run this. It will start on its own if one becomes available.';
+
+  @override
+  String get runQueueNoWorkerExpiredTitle => 'No assistant became available';
+
+  @override
+  String get runQueueNoWorkerExpiredDetail =>
+      'This never started: nothing able to run it connected in time. Send it again once your assistant is running.';
+
+  @override
+  String get runQueueTimeoutTitle => 'Waited too long to start';
+
+  @override
+  String get runQueueTimeoutDetail =>
+      'This never started: it stayed in the queue past the time allowed. Send it again when things are less busy.';
+
+  @override
   String get runRunningTitle => 'Working';
 
   @override

@@ -19,6 +19,24 @@ const (
 	maxConcurrentRunsLimit = 128
 	maxApprovalTTLMS       = 24 * 60 * 60 * 1000
 	maxContextWindowTokens = 16 * 1024 * 1024
+	// TUR-010 queue bounds. The defaults are chosen for the home hub this
+	// product is: a laptop whose worker is stopped, restarted, or simply not
+	// running while its owner is elsewhere.
+	//
+	// Fifteen minutes with no compatible worker is long enough to survive a
+	// restart, a model swap, or a laptop lid, and short enough that a message
+	// typed into a stopped stack gets an answer the same session rather than
+	// sitting silent. Twelve hours of total queue age is the backstop for the
+	// case the first bound does not cover — a worker that is present but never
+	// gets to this run — and is deliberately far longer, because a slow queue
+	// is not a broken one.
+	defaultQueueNoWorkerTimeoutMS = 15 * 60 * 1000
+	defaultQueueMaxWaitMS         = 12 * 60 * 60 * 1000
+	// maxQueueWaitMS keeps a configured bound inside the range time.Duration
+	// arithmetic stays exact in, so a value nobody can wait for cannot be
+	// turned into a negative deadline. Thirty days is well past any use this
+	// product has and well inside that range.
+	maxQueueWaitMS = 30 * 24 * 60 * 60 * 1000
 )
 
 type Config struct {
@@ -102,7 +120,27 @@ type Config struct {
 	ModelTimeoutMS           int
 	ToolTimeoutMS            int
 	ApprovalTTLMS            int
-	LogLevel                 string
+	// QueueMaxWaitMS bounds the TOTAL time an accepted run may spend queued,
+	// accumulated across every queued interval so a requeue cannot restart it.
+	// It is the outer bound and applies whatever the run is waiting for,
+	// including a compatible worker that is simply busy or working through
+	// earlier turns. Zero disables the bound.
+	//
+	// It is not a model timeout, an approval timeout, a heartbeat lease, or a
+	// retry budget: none of those measure waiting, and all four keep their own
+	// separate settings.
+	QueueMaxWaitMS int
+	// QueueNoWorkerTimeoutMS bounds how long an accepted run may sit queued
+	// while NO live worker satisfies its frozen route — absent, heartbeat
+	// expired, or advertising capabilities the route needs and does not have.
+	// The clock starts when the orchestrator first observes that condition, not
+	// at enqueue, and is cleared when a compatible worker returns. Zero
+	// disables the bound, leaving only QueueMaxWaitMS.
+	QueueNoWorkerTimeoutMS int
+	// QueueTimeoutPolicy is what happens when either bound is reached: "fail"
+	// (the default) or "cancel". Both are terminal; pausing is not offered.
+	QueueTimeoutPolicy string
+	LogLevel           string
 }
 
 func Load() (Config, error) {
@@ -322,6 +360,28 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if approvalTTL <= 0 || approvalTTL > maxApprovalTTLMS {
 		return Config{}, fmt.Errorf("invalid integer env var TURING_APPROVAL_TIMEOUT_MS")
 	}
+	// Zero is a legal, meaningful value here — it turns a bound off — so these
+	// take the nonnegative parser rather than the positive one, and the
+	// millisecond ceiling is applied by hand for the same reason.
+	queueMaxWait, err := intValue("TURING_QUEUE_MAX_WAIT_MS", defaultQueueMaxWaitMS)
+	if err != nil {
+		return Config{}, err
+	}
+	if queueMaxWait > maxQueueWaitMS {
+		return Config{}, fmt.Errorf("TURING_QUEUE_MAX_WAIT_MS must be between 0 and %d", maxQueueWaitMS)
+	}
+	queueNoWorkerTimeout, err := intValue("TURING_QUEUE_NO_WORKER_TIMEOUT_MS", defaultQueueNoWorkerTimeoutMS)
+	if err != nil {
+		return Config{}, err
+	}
+	if queueNoWorkerTimeout > maxQueueWaitMS {
+		return Config{}, fmt.Errorf("TURING_QUEUE_NO_WORKER_TIMEOUT_MS must be between 0 and %d", maxQueueWaitMS)
+	}
+	queueTimeoutPolicy := stringValue("TURING_QUEUE_TIMEOUT_POLICY", string(runoutcome.QueueTimeoutPolicyFail))
+	if !runoutcome.KnownQueueTimeoutPolicy(queueTimeoutPolicy) {
+		return Config{}, fmt.Errorf("TURING_QUEUE_TIMEOUT_POLICY must be %q or %q",
+			runoutcome.QueueTimeoutPolicyFail, runoutcome.QueueTimeoutPolicyCancel)
+	}
 	agentAPIKeys, err := ParseAgentAPIKeys(env[AgentAPIKeysVar])
 	if err != nil {
 		return Config{}, err
@@ -401,6 +461,9 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		ModelTimeoutMS:            modelTimeout,
 		ToolTimeoutMS:             toolTimeout,
 		ApprovalTTLMS:             approvalTTL,
+		QueueMaxWaitMS:            queueMaxWait,
+		QueueNoWorkerTimeoutMS:    queueNoWorkerTimeout,
+		QueueTimeoutPolicy:        queueTimeoutPolicy,
 		LogLevel:                  stringValue("LOG_LEVEL", "info"),
 	}, nil
 }

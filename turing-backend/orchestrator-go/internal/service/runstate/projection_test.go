@@ -205,6 +205,11 @@ func TestRunStateProjectionOmitsContentHashAndInternalExecution(t *testing.T) {
 		"run_id": true, "user_message_id": true, "assistant_message_id": true,
 		"lifecycle": true, "outcome_reason": true, "state_version": true,
 		"state_updated_at": true, "finished_at": true, "has_displayable_content": true,
+		// TUR-010. A closed, localizable vocabulary saying why a queued run is
+		// still waiting, or which queue bound ended one that stopped. It names
+		// no worker, no capability value and no timing detail, so it publishes
+		// nothing about which machine or which model was missing.
+		"queue_wait_reason": true,
 	}
 	fields := projected.ProtoReflect().Descriptor().Fields()
 	for index := 0; index < fields.Len(); index++ {

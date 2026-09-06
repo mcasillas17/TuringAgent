@@ -534,3 +534,61 @@ func TestLoadFromMapIgnoresTheRetiredMemoryVaultRootVariable(t *testing.T) {
 		t.Fatalf("MemoryRoot = %q, want the retired variable to have no effect", cfg.MemoryRoot)
 	}
 }
+
+// TUR-010's bounds. Zero is legal and turns a bound off, which is why they use
+// the nonnegative parser rather than the positive one every other duration
+// uses — and why that has to be pinned rather than assumed.
+func TestLoadFromMapReadsQueueWaitPolicy(t *testing.T) {
+	env := requiredEnv()
+	cfg, err := LoadFromMap(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.QueueMaxWaitMS != defaultQueueMaxWaitMS {
+		t.Fatalf("default TURING_QUEUE_MAX_WAIT_MS = %d, want %d", cfg.QueueMaxWaitMS, defaultQueueMaxWaitMS)
+	}
+	if cfg.QueueNoWorkerTimeoutMS != defaultQueueNoWorkerTimeoutMS {
+		t.Fatalf("default TURING_QUEUE_NO_WORKER_TIMEOUT_MS = %d, want %d",
+			cfg.QueueNoWorkerTimeoutMS, defaultQueueNoWorkerTimeoutMS)
+	}
+	if cfg.QueueTimeoutPolicy != string(runoutcome.QueueTimeoutPolicyFail) {
+		t.Fatalf("default TURING_QUEUE_TIMEOUT_POLICY = %q, want %q",
+			cfg.QueueTimeoutPolicy, runoutcome.QueueTimeoutPolicyFail)
+	}
+
+	env["TURING_QUEUE_MAX_WAIT_MS"] = "0"
+	env["TURING_QUEUE_NO_WORKER_TIMEOUT_MS"] = "0"
+	env["TURING_QUEUE_TIMEOUT_POLICY"] = string(runoutcome.QueueTimeoutPolicyCancel)
+	cfg, err = LoadFromMap(env)
+	if err != nil {
+		t.Fatalf("zero bounds were refused: %v", err)
+	}
+	if cfg.QueueMaxWaitMS != 0 || cfg.QueueNoWorkerTimeoutMS != 0 {
+		t.Fatalf("disabled bounds = %d/%d, want 0/0", cfg.QueueMaxWaitMS, cfg.QueueNoWorkerTimeoutMS)
+	}
+	if cfg.QueueTimeoutPolicy != string(runoutcome.QueueTimeoutPolicyCancel) {
+		t.Fatalf("policy = %q, want %q", cfg.QueueTimeoutPolicy, runoutcome.QueueTimeoutPolicyCancel)
+	}
+}
+
+func TestLoadFromMapRejectsUnusableQueueWaitPolicy(t *testing.T) {
+	for name, value := range map[string]string{
+		"TURING_QUEUE_MAX_WAIT_MS":          strconv.Itoa(maxQueueWaitMS + 1),
+		"TURING_QUEUE_NO_WORKER_TIMEOUT_MS": strconv.Itoa(maxQueueWaitMS + 1),
+		"TURING_QUEUE_TIMEOUT_POLICY":       "pause",
+	} {
+		env := requiredEnv()
+		env[name] = value
+		if _, err := LoadFromMap(env); err == nil {
+			t.Fatalf("LoadFromMap accepted %s = %q", name, value)
+		} else if !strings.Contains(err.Error(), name) {
+			t.Fatalf("error for %s = %v, want it to name the variable", name, err)
+		}
+	}
+	// A negative bound is not "off"; the shared integer parser refuses it.
+	env := requiredEnv()
+	env["TURING_QUEUE_MAX_WAIT_MS"] = "-1"
+	if _, err := LoadFromMap(env); err == nil {
+		t.Fatal("LoadFromMap accepted a negative queue bound")
+	}
+}

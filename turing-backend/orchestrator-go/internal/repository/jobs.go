@@ -15,6 +15,7 @@ import (
 
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/persisttime"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
@@ -87,6 +88,11 @@ type WorkerRoutingCapabilities struct {
 type PendingRoutingWork struct {
 	RunID        string
 	Requirements RoutingRequirements
+	// Clock is the run's durable queue state as of this read. The sweep decides
+	// notices and bounded outcomes from it rather than from anything it holds
+	// in memory, so a reconnect, a capability change, a requeue, or a restart
+	// cannot hand a waiting run a fresh deadline.
+	Clock QueueWaitClock
 }
 
 type PendingRoutingCursor struct {
@@ -981,7 +987,16 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	//
 	// The host rather than the base URL: a URL can carry a path, a query, and
 	// from a careless paste a credential. Only the recipient is worth keeping.
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, external_agent_name, external_agent_host, created_at, state_version, state_updated_at, outcome_reason, assistant_content_sha256) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, 1, ?, 'none', ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, resolvedRoute.externalAgentName, resolvedRoute.externalAgentHost, createdAt, createdAt, emptyAssistantContentSHA256); err != nil {
+	//
+	// queued_since_ns opens the run's first queued interval here, from the same
+	// instant the row is created by. Starting it anywhere later would give a
+	// run that is never dispatched a queue age that begins whenever something
+	// happened to notice it.
+	createdAtNanos, err := persisttime.ParseCanonical(createdAt)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status, model_provider, model_name, external_agent_name, external_agent_host, created_at, state_version, state_updated_at, outcome_reason, assistant_content_sha256, queued_since_ns) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, 1, ?, 'none', ?, ?)`, runID, input.SessionID, userMessageID, assistantMessageID, input.AgentID, traceID, modelProvider, model, resolvedRoute.externalAgentName, resolvedRoute.externalAgentHost, createdAt, createdAt, emptyAssistantContentSHA256, createdAtNanos.UnixNano()); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	// Enqueue is the only writer that creates the circular run/message link, so
@@ -1573,7 +1588,8 @@ func (r *Repository) ListPendingRoutingWorkPage(
 		return nil, after, fmt.Errorf("pending routing page limit must be positive")
 	}
 	query := `
-		SELECT j.id, j.created_at_ns, j.run_id, j.agent_id, r.model_provider, r.model_name, j.payload_json
+		SELECT j.id, j.created_at_ns, j.run_id, j.agent_id, r.model_provider, r.model_name, j.payload_json,
+			r.queue_wait_reason, r.queue_waited_ns, r.queued_since_ns, r.queue_unroutable_since_ns
 		FROM jobs j
 		JOIN agent_runs r ON r.id = j.run_id
 		WHERE j.status = 'pending' AND r.status = 'queued'`
@@ -1606,6 +1622,10 @@ func (r *Repository) ListPendingRoutingWorkPage(
 			&item.Requirements.ModelProvider,
 			&item.Requirements.Model,
 			&payloadJSON,
+			&item.Clock.Reason,
+			&item.Clock.WaitedNanos,
+			&item.Clock.QueuedSinceNanos,
+			&item.Clock.UnroutableSinceNanos,
 		); err != nil {
 			return nil, after, err
 		}

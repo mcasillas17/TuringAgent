@@ -41,9 +41,15 @@ class RunStateCard extends StatelessWidget {
   Widget build(BuildContext context) {
     switch (state.lifecycle) {
       case RunLifecycle.failed:
-        return RunFailureCard(reason: state.outcomeReason);
+        return RunFailureCard(
+          reason: state.outcomeReason,
+          queueWaitReason: state.queueWaitReason,
+        );
       case RunLifecycle.cancelled:
-        return RunCancelledCard(reason: state.outcomeReason);
+        return RunCancelledCard(
+          reason: state.outcomeReason,
+          queueWaitReason: state.queueWaitReason,
+        );
       case RunLifecycle.queued:
       case RunLifecycle.running:
       case RunLifecycle.waitingApproval:

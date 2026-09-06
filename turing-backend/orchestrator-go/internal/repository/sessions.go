@@ -223,6 +223,7 @@ func historyJoinQuery(page string, order string) string {
 			COALESCE(r.id, ''), COALESCE(r.session_id, ''), COALESCE(r.user_message_id, ''),
 			COALESCE(r.assistant_message_id, ''), COALESCE(r.status, ''), COALESCE(r.outcome_reason, ''),
 			COALESCE(r.state_version, 0), COALESCE(r.state_updated_at, ''), r.finished_at,
+			COALESCE(r.queue_wait_reason, ''),
 			(SELECT COUNT(*) FROM messages claimant
 				WHERE claimant.run_id = p.run_id AND claimant.role = ?),
 			(SELECT COUNT(*) FROM agent_runs owner
@@ -290,6 +291,7 @@ func scanHistoryPage(rows *sql.Rows) ([]Message, error) {
 			stateVersion          int64
 			stateUpdatedAt        string
 			finishedAt            sql.NullString
+			queueWaitReason       string
 			runClaimants          int64
 			messageOwners         int64
 		)
@@ -297,7 +299,7 @@ func scanHistoryPage(rows *sql.Rows) ([]Message, error) {
 			&message.MessageID, &messageSessionID, &message.RunID, &message.Role, &message.Content,
 			&message.ContentType, &message.Sequence, &message.CreatedAt,
 			&runID, &runSessionID, &runUserMessageID, &runAssistantMessageID, &lifecycle,
-			&outcomeReason, &stateVersion, &stateUpdatedAt, &finishedAt,
+			&outcomeReason, &stateVersion, &stateUpdatedAt, &finishedAt, &queueWaitReason,
 			&runClaimants, &messageOwners,
 		); err != nil {
 			return nil, err
@@ -336,6 +338,12 @@ func scanHistoryPage(rows *sql.Rows) ([]Message, error) {
 					// message, so its content is the authority on whether the
 					// run produced anything worth rendering.
 					HasDisplayableContent: runoutcome.HasDisplayableContent(message.Content),
+					// Reopened history is the whole reason this column is
+					// public: without it here, a conversation reopened while a
+					// run is stuck waiting — or after one ran out of queue time
+					// — would show the lifecycle and no explanation, which is
+					// the silence TUR-010 exists to remove.
+					QueueWaitReason: queueWaitReason,
 				}
 			}
 		}

@@ -128,6 +128,39 @@ enum RunOutcomeReason {
   RUN_OUTCOME_REASON_LEGACY_UNKNOWN = 16;
 }
 
+// Why a queued run is still waiting, as a closed vocabulary a client can
+// localize. It answers a different question from RunLifecycle: queued already
+// says the run has not started, and this says whether anything is currently
+// able to start it.
+//
+// NONE is the normal queue: at least one live worker satisfies the run's frozen
+// route, so the run is only waiting its turn or waiting for that worker to free
+// a slot. NO_COMPATIBLE_WORKER means the orchestrator observed that no live
+// worker satisfies the route at all — absent, heartbeat-expired, or advertising
+// capabilities the route needs and does not have. Only that second state starts
+// the no-worker deadline; the overall queue-age deadline applies to both.
+//
+// QUEUE_TIMEOUT appears only on a terminal snapshot, and means the overall
+// queue-age bound ran out — whichever condition the run was waiting under.
+// NO_COMPATIBLE_WORKER is reported for a terminal run instead only when the
+// no-worker bound is enabled and was reached first, so a run whose worker
+// vanished shortly before its total queue age expired still reports
+// QUEUE_TIMEOUT. Either value separates a run that ran out of queue time from
+// an approval that ran out of its own, since both report EXPIRED.
+//
+// A terminal snapshot carries a value only when the queue bound that ended the
+// run asserted it, so a reopened conversation can say which bound ran out. A run
+// that left the queue for any other reason — it was picked up, cancelled, or
+// abandoned by its client — reports NONE, because the reason describes waiting
+// and that run stopped waiting.
+enum QueueWaitReason {
+  QUEUE_WAIT_REASON_UNSPECIFIED = 0;
+  QUEUE_WAIT_REASON_UNKNOWN = 1;
+  QUEUE_WAIT_REASON_NONE = 2;
+  QUEUE_WAIT_REASON_NO_COMPATIBLE_WORKER = 3;
+  QUEUE_WAIT_REASON_QUEUE_TIMEOUT = 4;
+}
+
 // The durable, self-contained answer to "what happened to this run", carried on
 // history and on every lifecycle event so a reopened session and a live stream
 // agree without replaying the timeline.
@@ -158,6 +191,10 @@ message RunState {
   // client can distinguish a silent success from a lost one without inspecting
   // message bodies.
   bool has_displayable_content = 9;
+  // Why this run is still in the queue, and — once it is terminal — why it
+  // stopped waiting. NONE for every run that is not being held back by a
+  // missing route, which is every run in normal operation.
+  QueueWaitReason queue_wait_reason = 10;
 }
 
 message RequestMetadata {

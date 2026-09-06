@@ -93,6 +93,18 @@ LocalizedRunCopy localizedCompletedContentUnavailableCopy(
 LocalizedRunCopy localizedRunStateCopy(AppLocalizations l10n, RunState state) {
   switch (state.lifecycle) {
     case RunLifecycle.queued:
+      // A queued run with nothing able to serve it is the one queue state
+      // worth explaining: without this the card says only "Queued", which is
+      // what it also says for a run that is about to start, and the user has
+      // no way to tell the two apart or to know that this one will not wait
+      // forever. Every other queue reason renders as the plain lifecycle.
+      if (state.queueWaitReason == QueueWaitReason.noCompatibleWorker) {
+        return LocalizedRunCopy(
+          title: l10n.runQueuedNoWorkerTitle,
+          detail: l10n.runQueuedNoWorkerDetail,
+        );
+      }
+      return localizedRunLifecycleCopy(l10n, state.lifecycle);
     case RunLifecycle.running:
     case RunLifecycle.waitingApproval:
     case RunLifecycle.recovering:
@@ -119,6 +131,14 @@ LocalizedRunCopy localizedRunStateCopy(AppLocalizations l10n, RunState state) {
       return localizedRunLifecycleCopy(l10n, state.lifecycle);
     case RunLifecycle.failed:
     case RunLifecycle.cancelled:
+      final queued = localizedQueueOutcomeCopy(
+        l10n,
+        state.outcomeReason,
+        state.queueWaitReason,
+      );
+      if (queued != null) {
+        return queued;
+      }
       if (state.outcomeReason == RunOutcomeReason.none) {
         return localizedRunLifecycleCopy(l10n, state.lifecycle);
       }
@@ -126,6 +146,48 @@ LocalizedRunCopy localizedRunStateCopy(AppLocalizations l10n, RunState state) {
     case RunLifecycle.unspecified:
     case RunLifecycle.unknown:
       return localizedRunLifecycleCopy(l10n, RunLifecycle.unknown);
+  }
+}
+
+/// The copy for a run that ended because it ran out of the time it was allowed
+/// to spend in the queue, or null when this run did not.
+///
+/// It exists because a terminal queue bound and an expired approval report the
+/// same [RunOutcomeReason.expired]: the outcome vocabulary says the run expired
+/// and only [RunState.queueWaitReason] says which clock ran out. Rendering
+/// "The run expired before it could finish" for a run that never started would
+/// describe work that never happened.
+///
+/// Both queue reasons are read from a terminal state only. A queued run still
+/// holding [QueueWaitReason.noCompatibleWorker] is still waiting and is
+/// rendered by the nonterminal branch above, not here.
+LocalizedRunCopy? localizedQueueOutcomeCopy(
+  AppLocalizations l10n,
+  RunOutcomeReason outcome,
+  QueueWaitReason queueWaitReason,
+) {
+  // The two outcomes the configured policy can commit: fail reports expired,
+  // cancel reports abandoned. Any other outcome on a run that also carries a
+  // queue reason is some other ending that happened to a run which had been
+  // waiting, and it keeps its own copy.
+  if (outcome != RunOutcomeReason.expired &&
+      outcome != RunOutcomeReason.abandoned) {
+    return null;
+  }
+  switch (queueWaitReason) {
+    case QueueWaitReason.noCompatibleWorker:
+      return LocalizedRunCopy(
+        title: l10n.runQueueNoWorkerExpiredTitle,
+        detail: l10n.runQueueNoWorkerExpiredDetail,
+      );
+    case QueueWaitReason.queueTimeout:
+      return LocalizedRunCopy(
+        title: l10n.runQueueTimeoutTitle,
+        detail: l10n.runQueueTimeoutDetail,
+      );
+    case QueueWaitReason.none:
+    case QueueWaitReason.unknown:
+      return null;
   }
 }
 

@@ -243,6 +243,12 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"TURING_AGENT_API_KEYS",
 			"TURING_JOB_TIMEOUT_MS",
 			"TURING_JOB_REAPER_INTERVAL_MS",
+			// TUR-010's queue bounds. They carry no secret and belong to the
+			// orchestrator alone: nothing else owns queue state, so no worker
+			// or tool server has any reason to be told how long work waits.
+			"TURING_QUEUE_NO_WORKER_TIMEOUT_MS",
+			"TURING_QUEUE_MAX_WAIT_MS",
+			"TURING_QUEUE_TIMEOUT_POLICY",
 			"TURING_AUTOMATION_TICK_MS",
 			"TURING_JOB_MAX_ATTEMPTS",
 			"TURING_MAX_CONCURRENT_RUNS_GENERAL",

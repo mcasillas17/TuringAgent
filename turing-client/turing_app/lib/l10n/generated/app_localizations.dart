@@ -118,6 +118,42 @@ abstract class AppLocalizations {
   /// **'The run is waiting to start.'**
   String get runQueuedDetail;
 
+  /// No description provided for @runQueuedNoWorkerTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for an assistant'**
+  String get runQueuedNoWorkerTitle;
+
+  /// No description provided for @runQueuedNoWorkerDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing connected right now can run this. It will start on its own if one becomes available.'**
+  String get runQueuedNoWorkerDetail;
+
+  /// No description provided for @runQueueNoWorkerExpiredTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No assistant became available'**
+  String get runQueueNoWorkerExpiredTitle;
+
+  /// No description provided for @runQueueNoWorkerExpiredDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'This never started: nothing able to run it connected in time. Send it again once your assistant is running.'**
+  String get runQueueNoWorkerExpiredDetail;
+
+  /// No description provided for @runQueueTimeoutTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Waited too long to start'**
+  String get runQueueTimeoutTitle;
+
+  /// No description provided for @runQueueTimeoutDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'This never started: it stayed in the queue past the time allowed. Send it again when things are less busy.'**
+  String get runQueueTimeoutDetail;
+
   /// No description provided for @runRunningTitle.
   ///
   /// In en, this message translates to:

@@ -361,6 +361,10 @@ func runStateFrom(eventRunID string, payload map[string]any) *turingv1.RunState 
 		StateVersion:          version,
 		StateUpdatedAt:        payloadText(snapshot, "stateUpdatedAt"),
 		HasDisplayableContent: payloadBool(snapshot, "hasDisplayableContent"),
+		// Absent means none — see runStateSnapshot, which writes this key only
+		// when there is something to say, and the projection, which reads the
+		// two as the same fact.
+		QueueWaitReason: payloadText(snapshot, "queueWaitReason"),
 	}
 	if finished := payloadText(snapshot, "finishedAt"); finished != "" {
 		state.FinishedAt = sql.NullString{String: finished, Valid: true}

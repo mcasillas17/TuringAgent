@@ -124,6 +124,12 @@ type RunState struct {
 	FinishedAt            sql.NullString
 	HasDisplayableContent bool
 	ContentSHA256         string
+	// QueueWaitReason is TUR-010's public queue truth: whether this run is
+	// being held back by a route no live worker satisfies. A terminal run
+	// carries one only when the queue bound that ended it asserted it, so a run
+	// that started and was later abandoned reports none rather than being
+	// described as one that never started.
+	QueueWaitReason string
 }
 
 // RunTransitionResult is what a guarded transition committed. Duplicate marks
@@ -260,10 +266,84 @@ type runTransition struct {
 	// different instant on the same transition.
 	extraSet  string
 	extraArgs []any
+	// queueWaitReason is the TUR-010 queue truth this transition asserts. Two
+	// writers set it: the queue observer, and the queue bound that terminalizes
+	// an over-waiting run through failRunTx or cancelRunTx.
+	//
+	// Empty means the transition has no opinion, and a transition with no
+	// opinion that crosses the queue boundary in either direction resets the
+	// reason to none — see nextQueueWaitReason. So a terminal run carries a
+	// queue reason only because the bound that ended it said so, never because
+	// the row happened to be holding one when it was picked up.
+	queueWaitReason string
 	// eventType is the single canonical projection. Empty means the transition
 	// has no lifecycle event of its own and projects agent.run.state_changed.
 	eventType    string
 	eventPayload map[string]any
+}
+
+// nextQueueWaitReason decides the queue_wait_reason a transition commits.
+//
+// Three rules, in this order: a writer that asserts one owns it; entering the
+// queue from anywhere else starts over at none, because a route that could not
+// be served on the previous attempt says nothing about this one; anything else
+// keeps what the row already holds, which is what carries the reason through
+// the terminal transition and onto the snapshot a reopened conversation reads.
+func nextQueueWaitReason(row runRow, transition runTransition) string {
+	if transition.queueWaitReason != "" {
+		return transition.queueWaitReason
+	}
+	// Crossing the queue boundary in either direction clears it. Entering,
+	// because a route that could not be served on a previous attempt says
+	// nothing about this one. Leaving, because the reason describes waiting and
+	// this run has stopped waiting — a claimed run that keeps
+	// "no compatible worker" would carry it through execution and onto whatever
+	// ended it, and a run abandoned by its client after running for a minute
+	// would then be reported as one that never started.
+	//
+	// So the value on a terminal run is only ever one the transition itself
+	// asserted, which is exactly the queue bound that ended it.
+	if row.lifecycle == lifecycleQueued || transition.to == lifecycleQueued {
+		return string(runoutcome.QueueWaitNone)
+	}
+	return row.queueWaitReason
+}
+
+// queueClockUpdate maintains TUR-010's durable queue clock in the one place
+// every public lifecycle transition already passes through, so no writer can
+// forget it and no writer can compute a second, slightly different instant for
+// the same transition.
+//
+// The accumulator is the point. Measuring only from the current queued interval
+// would let a run that flaps between recovering and queued — a worker that
+// keeps disconnecting, a reconnect storm, a restart loop — restart its own
+// deadline forever, which is exactly the silent reset this feature exists to
+// rule out. Banking each interval on the way out means the overall queue-age
+// bound converges no matter how many times the run is requeued.
+//
+// A queued -> queued transition is not the end of a queued interval: it is the
+// queue observer recording what it saw about a run that never left the queue,
+// so the clock is deliberately untouched there.
+func queueClockUpdate(from string, to string, at string) (string, []any, error) {
+	if from == to || (from != lifecycleQueued && to != lifecycleQueued) {
+		return "", nil, nil
+	}
+	instant, err := persisttime.ParseCanonical(at)
+	if err != nil {
+		return "", nil, err
+	}
+	atNanos := instant.UnixNano()
+	if to == lifecycleQueued {
+		return `queued_since_ns = ?, queue_unroutable_since_ns = NULL`, []any{atNanos}, nil
+	}
+	// COALESCE covers a row that was queued without a start — a pre-0020 row
+	// the backfill could not reach, or one hand-edited since — by banking zero
+	// for the interval rather than treating the whole epoch as queue age. MAX
+	// does the same for a clock that went backwards between two writes.
+	return `queue_waited_ns = queue_waited_ns + MAX(0, ? - COALESCE(queued_since_ns, ?)),
+			queued_since_ns = NULL,
+			queue_unroutable_since_ns = NULL`,
+		[]any{atNanos, atNanos}, nil
 }
 
 // transitionTime is the placeholder a writer puts in extraArgs where the
@@ -299,6 +379,7 @@ type runRow struct {
 	stateUpdatedAt     string
 	finishedAt         sql.NullString
 	contentSHA256      string
+	queueWaitReason    string
 	workerID           string
 	attemptID          string
 	messageID          string
@@ -322,7 +403,8 @@ type runStateQuerier interface {
 const runRowQuery = `
 	SELECT r.id, r.session_id, r.trace_id, r.user_message_id, COALESCE(r.assistant_message_id, ''),
 		r.status, r.outcome_reason, r.state_version, r.state_updated_at, r.finished_at,
-		r.assistant_content_sha256, COALESCE(r.worker_id, ''), COALESCE(r.execution_attempt_id, ''),
+		r.assistant_content_sha256, r.queue_wait_reason,
+		COALESCE(r.worker_id, ''), COALESCE(r.execution_attempt_id, ''),
 		COALESCE(m.id, ''), COALESCE(m.session_id, ''), COALESCE(m.run_id, ''),
 		COALESCE(m.role, ''), COALESCE(m.content, '')
 	FROM agent_runs r
@@ -335,7 +417,7 @@ func readRunRow(ctx context.Context, q runStateQuerier, runID string) (runRow, e
 	err := q.QueryRowContext(ctx, runRowQuery, runID).Scan(
 		&row.runID, &row.sessionID, &row.traceID, &row.userMessageID, &row.assistantMessageID,
 		&row.lifecycle, &row.outcomeReason, &row.stateVersion, &row.stateUpdatedAt, &row.finishedAt,
-		&row.contentSHA256, &row.workerID, &row.attemptID,
+		&row.contentSHA256, &row.queueWaitReason, &row.workerID, &row.attemptID,
 		&row.messageID, &row.messageSessionID, &row.messageRunID, &row.messageRole, &row.messageContent,
 	)
 	return row, err
@@ -386,6 +468,7 @@ func (row runRow) state() RunState {
 		FinishedAt:            row.finishedAt,
 		HasDisplayableContent: runoutcome.HasDisplayableContent(row.messageContent),
 		ContentSHA256:         row.contentSHA256,
+		QueueWaitReason:       row.queueWaitReason,
 	}
 }
 
@@ -440,6 +523,14 @@ func runStateSnapshot(state RunState) map[string]any {
 	}
 	if state.FinishedAt.Valid && state.FinishedAt.String != "" {
 		snapshot["finishedAt"] = state.FinishedAt.String
+	}
+	// Written only when there is something to say. Absence and "none" mean the
+	// same thing — nothing is holding this run back that a user could act on —
+	// which is also the honest reading of a payload written before TUR-010
+	// existed, so the reader can treat the two identically instead of having to
+	// tell a pre-migration row from a normally-queued one.
+	if state.QueueWaitReason != "" && state.QueueWaitReason != string(runoutcome.QueueWaitNone) {
+		snapshot["queueWaitReason"] = state.QueueWaitReason
 	}
 	return snapshot
 }
@@ -621,6 +712,19 @@ func applyRunTransitionTx(
 		update += `, ` + transition.extraSet
 		args = append(args, resolveTransitionArgs(transition.extraArgs, transitionAt)...)
 	}
+	queueSet, queueArgs, err := queueClockUpdate(row.lifecycle, transition.to, transitionAt)
+	if err != nil {
+		return RunTransitionResult{}, err
+	}
+	if queueSet != "" {
+		update += `, ` + queueSet
+		args = append(args, queueArgs...)
+	}
+	queueWaitReason := nextQueueWaitReason(row, transition)
+	if queueWaitReason != row.queueWaitReason {
+		update += `, queue_wait_reason = ?`
+		args = append(args, queueWaitReason)
+	}
 	update += ` WHERE id = ? AND status = ? AND state_version = ?`
 	args = append(args, transition.runID, row.lifecycle, row.stateVersion)
 	result, err := tx.ExecContext(ctx, update, args...)
@@ -639,6 +743,7 @@ func applyRunTransitionTx(
 	if isTerminalLifecycle(transition.to) {
 		committed.FinishedAt = sql.NullString{String: transitionAt, Valid: true}
 	}
+	committed.QueueWaitReason = queueWaitReason
 	if content != nil {
 		committed.ContentSHA256 = content.sha256
 		committed.HasDisplayableContent = content.hasDisplayable

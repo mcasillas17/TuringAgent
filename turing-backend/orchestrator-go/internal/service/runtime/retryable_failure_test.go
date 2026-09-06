@@ -398,10 +398,21 @@ func TestRuntimeRetryableFailureUsesCurrentAttemptConfirmedRelease(t *testing.T)
 
 	// The queued projection is the deterministic barrier: it is published only
 	// once the requeue has committed, so nothing below has to wait on a clock.
-	queued := recvBusEvent(t, published, func(event events.Event) bool {
-		return event.Type == "agent.run.state_changed" && runStateLifecycle(t, event.PayloadJSON) == "queued"
-	})
+	//
+	// It is matched on a version above the one this run was dispatched at,
+	// because this harness enqueues before any worker connects and TUR-010's
+	// queue observer publishes that fact: the run is queued with nothing able
+	// to serve it, then queued with a worker available, both before the claim.
+	// Those are earlier queued projections and neither is the release under
+	// test. Production cannot reach them the same way — routing validation
+	// refuses an enqueue with no compatible live worker — but the barrier has
+	// to name the event it means either way.
 	wantVersion := running.StateVersion + 1
+	queued := recvBusEvent(t, published, func(event events.Event) bool {
+		return event.Type == "agent.run.state_changed" &&
+			runStateLifecycle(t, event.PayloadJSON) == "queued" &&
+			runStateVersion(t, event.PayloadJSON) > running.StateVersion
+	})
 	if got := runStateVersion(t, queued.PayloadJSON); got != wantVersion {
 		t.Fatalf("queued projection version = %d, want exactly one increment to %d", got, wantVersion)
 	}
@@ -444,11 +455,32 @@ func TestRuntimeRetryableFailureUsesCurrentAttemptConfirmedRelease(t *testing.T)
 	// than a race.
 	awaitStreamEnd(t, stream)
 
-	if after := h.runState(t, assigned.GetRunId()); after != beforeReplay {
+	// Refusing the report ends the stream, and the teardown that follows is a
+	// writer of its own: with this worker gone there is no live worker left
+	// that satisfies the route, and TUR-010 records that on the queued run. So
+	// the claim being made here is narrowed to the one it was always about —
+	// the report changed nothing — by comparing everything the report could
+	// have touched and allowing exactly the queue observation the disconnect
+	// owns. Ignoring the whole comparison instead would have retired the guard.
+	after := h.runState(t, assigned.GetRunId())
+	unchanged := after
+	unchanged.StateVersion = beforeReplay.StateVersion
+	unchanged.StateUpdatedAt = beforeReplay.StateUpdatedAt
+	unchanged.QueueWaitReason = beforeReplay.QueueWaitReason
+	if unchanged != beforeReplay {
 		t.Fatalf("stale report changed the run: %+v, want %+v", after, beforeReplay)
 	}
-	if got := countRunEvents(t, h, assigned.GetRunId(), "agent.run.state_changed"); got != stateEvents {
-		t.Fatalf("stale report appended %d lifecycle projections", got-stateEvents)
+	if after.QueueWaitReason != string(runoutcome.QueueWaitNoCompatibleWorker) {
+		t.Fatalf("queue wait reason after the worker went away = %q, want %q",
+			after.QueueWaitReason, runoutcome.QueueWaitNoCompatibleWorker)
+	}
+	if after.StateVersion != beforeReplay.StateVersion+1 {
+		t.Fatalf("state version = %d, want exactly the disconnect's one queue observation past %d",
+			after.StateVersion, beforeReplay.StateVersion)
+	}
+	if got := countRunEvents(t, h, assigned.GetRunId(), "agent.run.state_changed"); got != stateEvents+1 {
+		t.Fatalf("stale report appended %d lifecycle projections beyond the disconnect's queue observation",
+			got-stateEvents-1)
 	}
 	assertNoRawDiagnostic(t, h, assigned.GetRunId(), rawDiagnostic)
 }

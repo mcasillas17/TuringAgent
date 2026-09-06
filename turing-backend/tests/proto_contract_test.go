@@ -358,9 +358,22 @@ func TestRunOutcomeProtoContractUsesApprovedAllocations(t *testing.T) {
 	assertProtoField(t, runState, "state_updated_at", 7, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
 	assertProtoField(t, runState, "finished_at", 8, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
 	assertProtoField(t, runState, "has_displayable_content", 9, protoreflect.BoolKind, false, "")
+	assertProtoField(t, runState, "queue_wait_reason", 10, protoreflect.EnumKind, false, "")
 	assertProtoFieldMembers(t, runState, map[protoreflect.Name]protoreflect.FieldNumber{
 		"run_id": 1, "user_message_id": 2, "assistant_message_id": 3, "lifecycle": 4, "outcome_reason": 5,
 		"state_version": 6, "state_updated_at": 7, "finished_at": 8, "has_displayable_content": 9,
+		"queue_wait_reason": 10,
+	})
+	// TUR-010 appends rather than renumbering, and its vocabulary keeps the
+	// same unspecified/unknown discipline the outcome enums use: a field absent
+	// on the wire and a value a newer server invented are both distinguishable
+	// from every real answer.
+	assertProtoEnumValues(t, common.Enums().ByName("QueueWaitReason"), map[protoreflect.Name]protoreflect.EnumNumber{
+		"QUEUE_WAIT_REASON_UNSPECIFIED":          0,
+		"QUEUE_WAIT_REASON_UNKNOWN":              1,
+		"QUEUE_WAIT_REASON_NONE":                 2,
+		"QUEUE_WAIT_REASON_NO_COMPATIBLE_WORKER": 3,
+		"QUEUE_WAIT_REASON_QUEUE_TIMEOUT":        4,
 	})
 	assertProtoField(t, common.Messages().ByName("Message"), "run_state", 9, protoreflect.MessageKind, false, "turing.v1.RunState")
 	assertProtoFieldMembers(t, common.Messages().ByName("Message"), map[protoreflect.Name]protoreflect.FieldNumber{

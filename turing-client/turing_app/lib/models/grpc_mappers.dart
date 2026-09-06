@@ -517,7 +517,40 @@ class GrpcMappers {
       stateUpdatedAt: stateUpdatedAt,
       finishedAt: finishedAt,
       hasDisplayableContent: runState.hasDisplayableContent,
+      queueWaitReason: queueWaitReasonToModel(
+        decodeClosedEnum(
+          message: runState,
+          fieldNumber: 10,
+          readValue: () => runState.queueWaitReason,
+          unknownValue: commonpb.QueueWaitReason.QUEUE_WAIT_REASON_UNKNOWN,
+        ),
+      ),
     );
+  }
+
+  /// Maps the queue-wait vocabulary, treating an absent field as [none].
+  ///
+  /// Absence is what every snapshot written before TUR-010 carries, and it is
+  /// also what a normally-queued run carries, because the backend omits the key
+  /// when there is nothing to say. Reading it as [unknown] would put "status
+  /// unavailable" on the entire history of every conversation. A value this
+  /// build cannot name is different and does become [unknown]: a newer backend
+  /// saying something is not the same as one saying nothing.
+  static model_run_state.QueueWaitReason queueWaitReasonToModel(
+    commonpb.QueueWaitReason reason,
+  ) {
+    switch (reason) {
+      case commonpb.QueueWaitReason.QUEUE_WAIT_REASON_UNSPECIFIED:
+      case commonpb.QueueWaitReason.QUEUE_WAIT_REASON_NONE:
+        return model_run_state.QueueWaitReason.none;
+      case commonpb.QueueWaitReason.QUEUE_WAIT_REASON_NO_COMPATIBLE_WORKER:
+        return model_run_state.QueueWaitReason.noCompatibleWorker;
+      case commonpb.QueueWaitReason.QUEUE_WAIT_REASON_QUEUE_TIMEOUT:
+        return model_run_state.QueueWaitReason.queueTimeout;
+      case commonpb.QueueWaitReason.QUEUE_WAIT_REASON_UNKNOWN:
+      default:
+        return model_run_state.QueueWaitReason.unknown;
+    }
   }
 
   // state_version is the sole reconciliation ordering authority: callers
@@ -1430,9 +1463,8 @@ class GrpcMappers {
           message: candidate,
           fieldNumber: 2,
           readValue: () => candidate.kind,
-          unknownValue: memorypb
-              .MemoryCandidateKind
-              .MEMORY_CANDIDATE_KIND_UNSPECIFIED,
+          unknownValue:
+              memorypb.MemoryCandidateKind.MEMORY_CANDIDATE_KIND_UNSPECIFIED,
         ),
       ),
       inboxPath: candidate.inboxPath,
@@ -1443,9 +1475,8 @@ class GrpcMappers {
           message: candidate,
           fieldNumber: 6,
           readValue: () => candidate.state,
-          unknownValue: memorypb
-              .MemoryCandidateState
-              .MEMORY_CANDIDATE_STATE_UNSPECIFIED,
+          unknownValue:
+              memorypb.MemoryCandidateState.MEMORY_CANDIDATE_STATE_UNSPECIFIED,
         ),
       ),
       managed: candidate.managed,
@@ -1484,9 +1515,8 @@ class GrpcMappers {
           message: provenance,
           fieldNumber: 1,
           readValue: () => provenance.kind,
-          unknownValue: memorypb
-              .MemoryProvenanceKind
-              .MEMORY_PROVENANCE_KIND_UNSPECIFIED,
+          unknownValue:
+              memorypb.MemoryProvenanceKind.MEMORY_PROVENANCE_KIND_UNSPECIFIED,
         ),
       ),
       sourceSessionId: provenance.sourceSessionId,

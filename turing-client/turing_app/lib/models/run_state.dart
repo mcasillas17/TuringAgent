@@ -19,6 +19,21 @@ enum RunOutcomeReason {
   legacyUnknown,
 }
 
+/// Why a queued run is still waiting, or which queue bound ended one that
+/// stopped waiting.
+///
+/// [none] is the normal queue and needs no explanation of its own: something is
+/// able to run this, it just has not yet. [noCompatibleWorker] is the state a
+/// user can act on — nothing connected can serve this run's route.
+/// [queueTimeout] only ever appears on a terminal run whose overall queue-age
+/// bound ran out, and is what separates that from an approval that expired,
+/// since both report [RunOutcomeReason.expired].
+///
+/// [unknown] covers an absent value and one a newer backend introduced, on the
+/// same terms the other reserved values use: it describes no state, so it is
+/// rendered as the plain lifecycle rather than as a guess.
+enum QueueWaitReason { unknown, none, noCompatibleWorker, queueTimeout }
+
 enum RunStepNoticeCategory { dispatchRetry, recoveryRetry, recoveryExhausted }
 
 /// Mirrors the backend's public retry-notice counter bound.
@@ -35,6 +50,7 @@ class RunState {
     required this.stateUpdatedAt,
     required this.finishedAt,
     required this.hasDisplayableContent,
+    this.queueWaitReason = QueueWaitReason.none,
   });
 
   final String runId;
@@ -46,6 +62,7 @@ class RunState {
   final DateTime stateUpdatedAt;
   final DateTime? finishedAt;
   final bool hasDisplayableContent;
+  final QueueWaitReason queueWaitReason;
 
   bool get isTerminal =>
       lifecycle == RunLifecycle.completed ||
@@ -62,6 +79,7 @@ class RunState {
     DateTime? stateUpdatedAt,
     DateTime? finishedAt,
     bool? hasDisplayableContent,
+    QueueWaitReason? queueWaitReason,
   }) {
     return RunState(
       runId: runId ?? this.runId,
@@ -74,6 +92,7 @@ class RunState {
       finishedAt: finishedAt ?? this.finishedAt,
       hasDisplayableContent:
           hasDisplayableContent ?? this.hasDisplayableContent,
+      queueWaitReason: queueWaitReason ?? this.queueWaitReason,
     );
   }
 
@@ -89,7 +108,8 @@ class RunState {
           stateVersion == other.stateVersion &&
           stateUpdatedAt == other.stateUpdatedAt &&
           finishedAt == other.finishedAt &&
-          hasDisplayableContent == other.hasDisplayableContent;
+          hasDisplayableContent == other.hasDisplayableContent &&
+          queueWaitReason == other.queueWaitReason;
 
   @override
   int get hashCode => Object.hash(
@@ -102,5 +122,6 @@ class RunState {
     stateUpdatedAt,
     finishedAt,
     hasDisplayableContent,
+    queueWaitReason,
   );
 }

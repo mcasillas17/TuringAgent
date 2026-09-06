@@ -654,6 +654,86 @@ func (RunOutcomeReason) EnumDescriptor() ([]byte, []int) {
 	return file_turing_v1_common_proto_rawDescGZIP(), []int{9}
 }
 
+// Why a queued run is still waiting, as a closed vocabulary a client can
+// localize. It answers a different question from RunLifecycle: queued already
+// says the run has not started, and this says whether anything is currently
+// able to start it.
+//
+// NONE is the normal queue: at least one live worker satisfies the run's frozen
+// route, so the run is only waiting its turn or waiting for that worker to free
+// a slot. NO_COMPATIBLE_WORKER means the orchestrator observed that no live
+// worker satisfies the route at all — absent, heartbeat-expired, or advertising
+// capabilities the route needs and does not have. Only that second state starts
+// the no-worker deadline; the overall queue-age deadline applies to both.
+//
+// QUEUE_TIMEOUT appears only on a terminal snapshot, and means the overall
+// queue-age bound ran out — whichever condition the run was waiting under.
+// NO_COMPATIBLE_WORKER is reported for a terminal run instead only when the
+// no-worker bound is enabled and was reached first, so a run whose worker
+// vanished shortly before its total queue age expired still reports
+// QUEUE_TIMEOUT. Either value separates a run that ran out of queue time from
+// an approval that ran out of its own, since both report EXPIRED.
+//
+// A terminal snapshot carries a value only when the queue bound that ended the
+// run asserted it, so a reopened conversation can say which bound ran out. A run
+// that left the queue for any other reason — it was picked up, cancelled, or
+// abandoned by its client — reports NONE, because the reason describes waiting
+// and that run stopped waiting.
+type QueueWaitReason int32
+
+const (
+	QueueWaitReason_QUEUE_WAIT_REASON_UNSPECIFIED          QueueWaitReason = 0
+	QueueWaitReason_QUEUE_WAIT_REASON_UNKNOWN              QueueWaitReason = 1
+	QueueWaitReason_QUEUE_WAIT_REASON_NONE                 QueueWaitReason = 2
+	QueueWaitReason_QUEUE_WAIT_REASON_NO_COMPATIBLE_WORKER QueueWaitReason = 3
+	QueueWaitReason_QUEUE_WAIT_REASON_QUEUE_TIMEOUT        QueueWaitReason = 4
+)
+
+// Enum value maps for QueueWaitReason.
+var (
+	QueueWaitReason_name = map[int32]string{
+		0: "QUEUE_WAIT_REASON_UNSPECIFIED",
+		1: "QUEUE_WAIT_REASON_UNKNOWN",
+		2: "QUEUE_WAIT_REASON_NONE",
+		3: "QUEUE_WAIT_REASON_NO_COMPATIBLE_WORKER",
+		4: "QUEUE_WAIT_REASON_QUEUE_TIMEOUT",
+	}
+	QueueWaitReason_value = map[string]int32{
+		"QUEUE_WAIT_REASON_UNSPECIFIED":          0,
+		"QUEUE_WAIT_REASON_UNKNOWN":              1,
+		"QUEUE_WAIT_REASON_NONE":                 2,
+		"QUEUE_WAIT_REASON_NO_COMPATIBLE_WORKER": 3,
+		"QUEUE_WAIT_REASON_QUEUE_TIMEOUT":        4,
+	}
+)
+
+func (x QueueWaitReason) Enum() *QueueWaitReason {
+	p := new(QueueWaitReason)
+	*p = x
+	return p
+}
+
+func (x QueueWaitReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (QueueWaitReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_turing_v1_common_proto_enumTypes[10].Descriptor()
+}
+
+func (QueueWaitReason) Type() protoreflect.EnumType {
+	return &file_turing_v1_common_proto_enumTypes[10]
+}
+
+func (x QueueWaitReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use QueueWaitReason.Descriptor instead.
+func (QueueWaitReason) EnumDescriptor() ([]byte, []int) {
+	return file_turing_v1_common_proto_rawDescGZIP(), []int{10}
+}
+
 // The durable, self-contained answer to "what happened to this run", carried on
 // history and on every lifecycle event so a reopened session and a live stream
 // agree without replaying the timeline.
@@ -685,8 +765,12 @@ type RunState struct {
 	// client can distinguish a silent success from a lost one without inspecting
 	// message bodies.
 	HasDisplayableContent bool `protobuf:"varint,9,opt,name=has_displayable_content,json=hasDisplayableContent,proto3" json:"has_displayable_content,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// Why this run is still in the queue, and — once it is terminal — why it
+	// stopped waiting. NONE for every run that is not being held back by a
+	// missing route, which is every run in normal operation.
+	QueueWaitReason QueueWaitReason `protobuf:"varint,10,opt,name=queue_wait_reason,json=queueWaitReason,proto3,enum=turing.v1.QueueWaitReason" json:"queue_wait_reason,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RunState) Reset() {
@@ -780,6 +864,13 @@ func (x *RunState) GetHasDisplayableContent() bool {
 		return x.HasDisplayableContent
 	}
 	return false
+}
+
+func (x *RunState) GetQueueWaitReason() QueueWaitReason {
+	if x != nil {
+		return x.QueueWaitReason
+	}
+	return QueueWaitReason_QUEUE_WAIT_REASON_UNSPECIFIED
 }
 
 type RequestMetadata struct {
@@ -2051,7 +2142,7 @@ var File_turing_v1_common_proto protoreflect.FileDescriptor
 
 const file_turing_v1_common_proto_rawDesc = "" +
 	"\n" +
-	"\x16turing/v1/common.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd6\x03\n" +
+	"\x16turing/v1/common.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x9e\x04\n" +
 	"\bRunState\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12&\n" +
 	"\x0fuser_message_id\x18\x02 \x01(\tR\ruserMessageId\x120\n" +
@@ -2062,7 +2153,9 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"\x10state_updated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\x0estateUpdatedAt\x12;\n" +
 	"\vfinished_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"finishedAt\x126\n" +
-	"\x17has_displayable_content\x18\t \x01(\bR\x15hasDisplayableContent\"0\n" +
+	"\x17has_displayable_content\x18\t \x01(\bR\x15hasDisplayableContent\x12F\n" +
+	"\x11queue_wait_reason\x18\n" +
+	" \x01(\x0e2\x1a.turing.v1.QueueWaitReasonR\x0fqueueWaitReason\"0\n" +
 	"\x0fRequestMetadata\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\";\n" +
@@ -2257,7 +2350,13 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"(RUN_OUTCOME_REASON_SIDE_EFFECT_UNCERTAIN\x10\r\x12/\n" +
 	"+RUN_OUTCOME_REASON_APPROVAL_DELIVERY_FAILED\x10\x0e\x12'\n" +
 	"#RUN_OUTCOME_REASON_INTERNAL_FAILURE\x10\x0f\x12%\n" +
-	"!RUN_OUTCOME_REASON_LEGACY_UNKNOWN\x10\x10B>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
+	"!RUN_OUTCOME_REASON_LEGACY_UNKNOWN\x10\x10*\xc0\x01\n" +
+	"\x0fQueueWaitReason\x12!\n" +
+	"\x1dQUEUE_WAIT_REASON_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19QUEUE_WAIT_REASON_UNKNOWN\x10\x01\x12\x1a\n" +
+	"\x16QUEUE_WAIT_REASON_NONE\x10\x02\x12*\n" +
+	"&QUEUE_WAIT_REASON_NO_COMPATIBLE_WORKER\x10\x03\x12#\n" +
+	"\x1fQUEUE_WAIT_REASON_QUEUE_TIMEOUT\x10\x04B>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
 var (
 	file_turing_v1_common_proto_rawDescOnce sync.Once
@@ -2271,7 +2370,7 @@ func file_turing_v1_common_proto_rawDescGZIP() []byte {
 	return file_turing_v1_common_proto_rawDescData
 }
 
-var file_turing_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
+var file_turing_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 11)
 var file_turing_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_turing_v1_common_proto_goTypes = []any{
 	(AgentId)(0),                         // 0: turing.v1.AgentId
@@ -2284,59 +2383,61 @@ var file_turing_v1_common_proto_goTypes = []any{
 	(RunStatus)(0),                       // 7: turing.v1.RunStatus
 	(RunLifecycle)(0),                    // 8: turing.v1.RunLifecycle
 	(RunOutcomeReason)(0),                // 9: turing.v1.RunOutcomeReason
-	(*RunState)(nil),                     // 10: turing.v1.RunState
-	(*RequestMetadata)(nil),              // 11: turing.v1.RequestMetadata
-	(*PageRequest)(nil),                  // 12: turing.v1.PageRequest
-	(*PageResponse)(nil),                 // 13: turing.v1.PageResponse
-	(*ErrorDetail)(nil),                  // 14: turing.v1.ErrorDetail
-	(*RoutingUnavailableDetail)(nil),     // 15: turing.v1.RoutingUnavailableDetail
-	(*ModelCapability)(nil),              // 16: turing.v1.ModelCapability
-	(*ProviderConfig)(nil),               // 17: turing.v1.ProviderConfig
-	(*RemoteEgressDisclosure)(nil),       // 18: turing.v1.RemoteEgressDisclosure
-	(*MemoryEgressDisclosure)(nil),       // 19: turing.v1.MemoryEgressDisclosure
-	(*SkillEgressDisclosure)(nil),        // 20: turing.v1.SkillEgressDisclosure
-	(*RemoteMcpEgressDestination)(nil),   // 21: turing.v1.RemoteMcpEgressDestination
-	(*IntegrationEgressDestination)(nil), // 22: turing.v1.IntegrationEgressDestination
-	(*RemoteEgressConsent)(nil),          // 23: turing.v1.RemoteEgressConsent
-	(*RunEgressDecision)(nil),            // 24: turing.v1.RunEgressDecision
-	(*AgentDescriptor)(nil),              // 25: turing.v1.AgentDescriptor
-	(*Message)(nil),                      // 26: turing.v1.Message
-	(*timestamppb.Timestamp)(nil),        // 27: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),              // 28: google.protobuf.Struct
+	(QueueWaitReason)(0),                 // 10: turing.v1.QueueWaitReason
+	(*RunState)(nil),                     // 11: turing.v1.RunState
+	(*RequestMetadata)(nil),              // 12: turing.v1.RequestMetadata
+	(*PageRequest)(nil),                  // 13: turing.v1.PageRequest
+	(*PageResponse)(nil),                 // 14: turing.v1.PageResponse
+	(*ErrorDetail)(nil),                  // 15: turing.v1.ErrorDetail
+	(*RoutingUnavailableDetail)(nil),     // 16: turing.v1.RoutingUnavailableDetail
+	(*ModelCapability)(nil),              // 17: turing.v1.ModelCapability
+	(*ProviderConfig)(nil),               // 18: turing.v1.ProviderConfig
+	(*RemoteEgressDisclosure)(nil),       // 19: turing.v1.RemoteEgressDisclosure
+	(*MemoryEgressDisclosure)(nil),       // 20: turing.v1.MemoryEgressDisclosure
+	(*SkillEgressDisclosure)(nil),        // 21: turing.v1.SkillEgressDisclosure
+	(*RemoteMcpEgressDestination)(nil),   // 22: turing.v1.RemoteMcpEgressDestination
+	(*IntegrationEgressDestination)(nil), // 23: turing.v1.IntegrationEgressDestination
+	(*RemoteEgressConsent)(nil),          // 24: turing.v1.RemoteEgressConsent
+	(*RunEgressDecision)(nil),            // 25: turing.v1.RunEgressDecision
+	(*AgentDescriptor)(nil),              // 26: turing.v1.AgentDescriptor
+	(*Message)(nil),                      // 27: turing.v1.Message
+	(*timestamppb.Timestamp)(nil),        // 28: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),              // 29: google.protobuf.Struct
 }
 var file_turing_v1_common_proto_depIdxs = []int32{
 	8,  // 0: turing.v1.RunState.lifecycle:type_name -> turing.v1.RunLifecycle
 	9,  // 1: turing.v1.RunState.outcome_reason:type_name -> turing.v1.RunOutcomeReason
-	27, // 2: turing.v1.RunState.state_updated_at:type_name -> google.protobuf.Timestamp
-	27, // 3: turing.v1.RunState.finished_at:type_name -> google.protobuf.Timestamp
-	28, // 4: turing.v1.ErrorDetail.details:type_name -> google.protobuf.Struct
-	4,  // 5: turing.v1.RoutingUnavailableDetail.kind:type_name -> turing.v1.RoutingRequirementKind
-	1,  // 6: turing.v1.ModelCapability.provider:type_name -> turing.v1.ModelProvider
-	1,  // 7: turing.v1.ProviderConfig.provider:type_name -> turing.v1.ModelProvider
-	16, // 8: turing.v1.ProviderConfig.models:type_name -> turing.v1.ModelCapability
-	1,  // 9: turing.v1.RemoteEgressDisclosure.provider:type_name -> turing.v1.ModelProvider
-	2,  // 10: turing.v1.RemoteEgressDisclosure.data_categories:type_name -> turing.v1.EgressDataCategory
-	27, // 11: turing.v1.RemoteEgressDisclosure.expires_at:type_name -> google.protobuf.Timestamp
-	21, // 12: turing.v1.RemoteEgressDisclosure.remote_mcp_servers:type_name -> turing.v1.RemoteMcpEgressDestination
-	22, // 13: turing.v1.RemoteEgressDisclosure.integration_endpoints:type_name -> turing.v1.IntegrationEgressDestination
-	20, // 14: turing.v1.RemoteEgressDisclosure.skills:type_name -> turing.v1.SkillEgressDisclosure
-	19, // 15: turing.v1.RemoteEgressDisclosure.memory_notes:type_name -> turing.v1.MemoryEgressDisclosure
-	3,  // 16: turing.v1.MemoryEgressDisclosure.tier:type_name -> turing.v1.MemoryTier
-	2,  // 17: turing.v1.RemoteEgressConsent.acknowledged_data_categories:type_name -> turing.v1.EgressDataCategory
-	1,  // 18: turing.v1.RunEgressDecision.provider:type_name -> turing.v1.ModelProvider
-	2,  // 19: turing.v1.RunEgressDecision.data_categories:type_name -> turing.v1.EgressDataCategory
-	27, // 20: turing.v1.RunEgressDecision.consent_granted_at:type_name -> google.protobuf.Timestamp
-	21, // 21: turing.v1.RunEgressDecision.remote_mcp_servers:type_name -> turing.v1.RemoteMcpEgressDestination
-	22, // 22: turing.v1.RunEgressDecision.integration_endpoints:type_name -> turing.v1.IntegrationEgressDestination
-	0,  // 23: turing.v1.AgentDescriptor.id:type_name -> turing.v1.AgentId
-	5,  // 24: turing.v1.Message.role:type_name -> turing.v1.MessageRole
-	27, // 25: turing.v1.Message.created_at:type_name -> google.protobuf.Timestamp
-	10, // 26: turing.v1.Message.run_state:type_name -> turing.v1.RunState
-	27, // [27:27] is the sub-list for method output_type
-	27, // [27:27] is the sub-list for method input_type
-	27, // [27:27] is the sub-list for extension type_name
-	27, // [27:27] is the sub-list for extension extendee
-	0,  // [0:27] is the sub-list for field type_name
+	28, // 2: turing.v1.RunState.state_updated_at:type_name -> google.protobuf.Timestamp
+	28, // 3: turing.v1.RunState.finished_at:type_name -> google.protobuf.Timestamp
+	10, // 4: turing.v1.RunState.queue_wait_reason:type_name -> turing.v1.QueueWaitReason
+	29, // 5: turing.v1.ErrorDetail.details:type_name -> google.protobuf.Struct
+	4,  // 6: turing.v1.RoutingUnavailableDetail.kind:type_name -> turing.v1.RoutingRequirementKind
+	1,  // 7: turing.v1.ModelCapability.provider:type_name -> turing.v1.ModelProvider
+	1,  // 8: turing.v1.ProviderConfig.provider:type_name -> turing.v1.ModelProvider
+	17, // 9: turing.v1.ProviderConfig.models:type_name -> turing.v1.ModelCapability
+	1,  // 10: turing.v1.RemoteEgressDisclosure.provider:type_name -> turing.v1.ModelProvider
+	2,  // 11: turing.v1.RemoteEgressDisclosure.data_categories:type_name -> turing.v1.EgressDataCategory
+	28, // 12: turing.v1.RemoteEgressDisclosure.expires_at:type_name -> google.protobuf.Timestamp
+	22, // 13: turing.v1.RemoteEgressDisclosure.remote_mcp_servers:type_name -> turing.v1.RemoteMcpEgressDestination
+	23, // 14: turing.v1.RemoteEgressDisclosure.integration_endpoints:type_name -> turing.v1.IntegrationEgressDestination
+	21, // 15: turing.v1.RemoteEgressDisclosure.skills:type_name -> turing.v1.SkillEgressDisclosure
+	20, // 16: turing.v1.RemoteEgressDisclosure.memory_notes:type_name -> turing.v1.MemoryEgressDisclosure
+	3,  // 17: turing.v1.MemoryEgressDisclosure.tier:type_name -> turing.v1.MemoryTier
+	2,  // 18: turing.v1.RemoteEgressConsent.acknowledged_data_categories:type_name -> turing.v1.EgressDataCategory
+	1,  // 19: turing.v1.RunEgressDecision.provider:type_name -> turing.v1.ModelProvider
+	2,  // 20: turing.v1.RunEgressDecision.data_categories:type_name -> turing.v1.EgressDataCategory
+	28, // 21: turing.v1.RunEgressDecision.consent_granted_at:type_name -> google.protobuf.Timestamp
+	22, // 22: turing.v1.RunEgressDecision.remote_mcp_servers:type_name -> turing.v1.RemoteMcpEgressDestination
+	23, // 23: turing.v1.RunEgressDecision.integration_endpoints:type_name -> turing.v1.IntegrationEgressDestination
+	0,  // 24: turing.v1.AgentDescriptor.id:type_name -> turing.v1.AgentId
+	5,  // 25: turing.v1.Message.role:type_name -> turing.v1.MessageRole
+	28, // 26: turing.v1.Message.created_at:type_name -> google.protobuf.Timestamp
+	11, // 27: turing.v1.Message.run_state:type_name -> turing.v1.RunState
+	28, // [28:28] is the sub-list for method output_type
+	28, // [28:28] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_common_proto_init() }
@@ -2349,7 +2450,7 @@ func file_turing_v1_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_common_proto_rawDesc), len(file_turing_v1_common_proto_rawDesc)),
-			NumEnums:      10,
+			NumEnums:      11,
 			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   0,

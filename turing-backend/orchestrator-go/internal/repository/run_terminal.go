@@ -63,6 +63,11 @@ type FailRunInput struct {
 	// same reason raw is: no caller outside this package can skip carrying an
 	// expected version.
 	resolveVersionInTx bool
+	// queueWaitReason is the TUR-010 queue bound this failure asserts, set only
+	// by the queue sweep. Every other terminal failure leaves it empty and the
+	// run's reason resets to none, because a run that stopped waiting long ago
+	// must not be reported as one that never started.
+	queueWaitReason string
 }
 
 // CancelRunInput is a normalized terminal cancellation.
@@ -73,6 +78,9 @@ type CancelRunInput struct {
 	Cancellation         runoutcome.Cancellation
 
 	resolveVersionInTx bool
+	// queueWaitReason carries the same assertion as FailRunInput's, for the
+	// cancel half of the configurable queue policy.
+	queueWaitReason string
 }
 
 // terminalExpectation resolves how a terminal command names the version it
@@ -278,6 +286,7 @@ func failRunTx(ctx context.Context, tx *sql.Tx, input FailRunInput) (RunTransiti
 		to:               lifecycleFailed,
 		reason:           input.Failure.Reason(),
 		terminal:         &content,
+		queueWaitReason:  input.queueWaitReason,
 		rejection:        ErrRunNotFailable,
 		extraSet:         extraSet,
 		extraArgs:        extraArgs,
@@ -354,6 +363,7 @@ func cancelRunTx(ctx context.Context, tx *sql.Tx, input CancelRunInput) (RunTran
 		to:               lifecycleCancelled,
 		reason:           input.Cancellation.Reason(),
 		terminal:         &content,
+		queueWaitReason:  input.queueWaitReason,
 		rejection:        ErrRunNotCancellable,
 		extraSet:         `cancellation_reason = ?`,
 		extraArgs:        []any{storedReason},
