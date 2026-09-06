@@ -14,10 +14,12 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/approvalpreview"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/testsupport/approvalfixture"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -457,14 +459,14 @@ func TestConcurrentConsumeApprovalOverInternalServerConsumesExactlyOnce(t *testi
 	if err := app.Repository.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.Repository.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: "call_concurrent", RunID: enqueued.RunID}, "general_assistant", "custom", "custom.write", `{}`, "sha256:concurrent"); err != nil {
+	if err := app.Repository.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: "call_concurrent", RunID: enqueued.RunID}, "general_assistant", "custom", "custom.write", `{}`, approvalpreview.Hash("{}")); err != nil {
 		t.Fatal(err)
 	}
 	approvalID, err := app.ApprovalService.CreateApprovalForTool(ctx, enqueued.RunID, "call_concurrent", "general_assistant", "custom.write", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.ApprovalService.ApproveApproval(ctx, &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+	if _, err := approvalfixture.Approve(t, app.ApprovalService, ctx, &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -12,6 +12,12 @@ through this API the moment it does, but no such writer is implemented here.
 
 ## Goal and scope
 
+Proposed effects are inspected through the separate authenticated
+[`ApprovalService.GetApprovalDetails`](approval-previews.md) API. Approval
+previews do not add file contents to audit events, replace this read API, or
+add an audit viewer. This API keeps its existing metadata/rationale allowlist;
+preview redaction does not retroactively scrub older event or tool records.
+
 The goal is narrow: let the person who owns this local install answer "what
 did this system actually do?" without exposing anything a tool call, approval,
 or credential needs kept private. The one thing it discloses *because* it is

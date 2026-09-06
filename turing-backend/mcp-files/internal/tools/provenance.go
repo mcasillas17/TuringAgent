@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/approvalpreview"
 	"golang.org/x/sys/unix"
 )
 
@@ -52,6 +53,7 @@ type Reservation struct {
 // says what a capability means, whether a write may happen, and it is told what
 // the write did.
 type ProvenanceGuard interface {
+	VerifyWrite(req WriteAuthorization) (approvalpreview.Binding, error)
 	Verify(token string, tool string, args map[string]any, agentID string) (Provenance, error)
 	AuthorizeWrite(ctx context.Context, req WriteAuthorization) (Reservation, error)
 	FinalizeWrite(ctx context.Context, artifactID string, provenanceToken string, committed bool) error

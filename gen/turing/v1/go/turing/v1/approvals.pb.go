@@ -79,12 +79,84 @@ func (ApprovalStatus) EnumDescriptor() ([]byte, []int) {
 	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{0}
 }
 
+type ApprovalPreviewState int32
+
+const (
+	ApprovalPreviewState_APPROVAL_PREVIEW_STATE_UNSPECIFIED ApprovalPreviewState = 0
+	ApprovalPreviewState_APPROVAL_PREVIEW_STATE_READY       ApprovalPreviewState = 1
+	ApprovalPreviewState_APPROVAL_PREVIEW_STATE_UNAVAILABLE ApprovalPreviewState = 2
+	ApprovalPreviewState_APPROVAL_PREVIEW_STATE_UNSUPPORTED ApprovalPreviewState = 3
+	ApprovalPreviewState_APPROVAL_PREVIEW_STATE_REDACTED    ApprovalPreviewState = 4
+	ApprovalPreviewState_APPROVAL_PREVIEW_STATE_OVERSIZED   ApprovalPreviewState = 5
+	ApprovalPreviewState_APPROVAL_PREVIEW_STATE_BINARY      ApprovalPreviewState = 6
+	ApprovalPreviewState_APPROVAL_PREVIEW_STATE_EXPIRED     ApprovalPreviewState = 7
+	ApprovalPreviewState_APPROVAL_PREVIEW_STATE_STALE       ApprovalPreviewState = 8
+	ApprovalPreviewState_APPROVAL_PREVIEW_STATE_TERMINAL    ApprovalPreviewState = 9
+)
+
+// Enum value maps for ApprovalPreviewState.
+var (
+	ApprovalPreviewState_name = map[int32]string{
+		0: "APPROVAL_PREVIEW_STATE_UNSPECIFIED",
+		1: "APPROVAL_PREVIEW_STATE_READY",
+		2: "APPROVAL_PREVIEW_STATE_UNAVAILABLE",
+		3: "APPROVAL_PREVIEW_STATE_UNSUPPORTED",
+		4: "APPROVAL_PREVIEW_STATE_REDACTED",
+		5: "APPROVAL_PREVIEW_STATE_OVERSIZED",
+		6: "APPROVAL_PREVIEW_STATE_BINARY",
+		7: "APPROVAL_PREVIEW_STATE_EXPIRED",
+		8: "APPROVAL_PREVIEW_STATE_STALE",
+		9: "APPROVAL_PREVIEW_STATE_TERMINAL",
+	}
+	ApprovalPreviewState_value = map[string]int32{
+		"APPROVAL_PREVIEW_STATE_UNSPECIFIED": 0,
+		"APPROVAL_PREVIEW_STATE_READY":       1,
+		"APPROVAL_PREVIEW_STATE_UNAVAILABLE": 2,
+		"APPROVAL_PREVIEW_STATE_UNSUPPORTED": 3,
+		"APPROVAL_PREVIEW_STATE_REDACTED":    4,
+		"APPROVAL_PREVIEW_STATE_OVERSIZED":   5,
+		"APPROVAL_PREVIEW_STATE_BINARY":      6,
+		"APPROVAL_PREVIEW_STATE_EXPIRED":     7,
+		"APPROVAL_PREVIEW_STATE_STALE":       8,
+		"APPROVAL_PREVIEW_STATE_TERMINAL":    9,
+	}
+)
+
+func (x ApprovalPreviewState) Enum() *ApprovalPreviewState {
+	p := new(ApprovalPreviewState)
+	*p = x
+	return p
+}
+
+func (x ApprovalPreviewState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ApprovalPreviewState) Descriptor() protoreflect.EnumDescriptor {
+	return file_turing_v1_approvals_proto_enumTypes[1].Descriptor()
+}
+
+func (ApprovalPreviewState) Type() protoreflect.EnumType {
+	return &file_turing_v1_approvals_proto_enumTypes[1]
+}
+
+func (x ApprovalPreviewState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ApprovalPreviewState.Descriptor instead.
+func (ApprovalPreviewState) EnumDescriptor() ([]byte, []int) {
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{1}
+}
+
 type ApproveApprovalRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	ApprovalId string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
 	// Optional by convention. Proto3 scalar presence is not enabled, so omission
 	// and an explicitly empty value are both persisted as an empty human comment.
 	Comment       string `protobuf:"bytes,2,opt,name=comment,proto3" json:"comment,omitempty"`
+	PreviewHash   string `protobuf:"bytes,3,opt,name=preview_hash,json=previewHash,proto3" json:"preview_hash,omitempty"`
+	ArgsHash      string `protobuf:"bytes,4,opt,name=args_hash,json=argsHash,proto3" json:"args_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -133,6 +205,336 @@ func (x *ApproveApprovalRequest) GetComment() string {
 	return ""
 }
 
+func (x *ApproveApprovalRequest) GetPreviewHash() string {
+	if x != nil {
+		return x.PreviewHash
+	}
+	return ""
+}
+
+func (x *ApproveApprovalRequest) GetArgsHash() string {
+	if x != nil {
+		return x.ArgsHash
+	}
+	return ""
+}
+
+type GetApprovalDetailsRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ApprovalId     string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	RefreshPreview bool                   `protobuf:"varint,2,opt,name=refresh_preview,json=refreshPreview,proto3" json:"refresh_preview,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *GetApprovalDetailsRequest) Reset() {
+	*x = GetApprovalDetailsRequest{}
+	mi := &file_turing_v1_approvals_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetApprovalDetailsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetApprovalDetailsRequest) ProtoMessage() {}
+
+func (x *GetApprovalDetailsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_approvals_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetApprovalDetailsRequest.ProtoReflect.Descriptor instead.
+func (*GetApprovalDetailsRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *GetApprovalDetailsRequest) GetApprovalId() string {
+	if x != nil {
+		return x.ApprovalId
+	}
+	return ""
+}
+
+func (x *GetApprovalDetailsRequest) GetRefreshPreview() bool {
+	if x != nil {
+		return x.RefreshPreview
+	}
+	return false
+}
+
+type ApprovalDetails struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ApprovalId    string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	RunId         string                 `protobuf:"bytes,3,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	ToolCallId    string                 `protobuf:"bytes,4,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	ToolName      string                 `protobuf:"bytes,5,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ServerName    string                 `protobuf:"bytes,6,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
+	ArgsHash      string                 `protobuf:"bytes,7,opt,name=args_hash,json=argsHash,proto3" json:"args_hash,omitempty"`
+	PreviewHash   string                 `protobuf:"bytes,8,opt,name=preview_hash,json=previewHash,proto3" json:"preview_hash,omitempty"`
+	ExpiresAt     string                 `protobuf:"bytes,9,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Status        ApprovalStatus         `protobuf:"varint,10,opt,name=status,proto3,enum=turing.v1.ApprovalStatus" json:"status,omitempty"`
+	PreviewState  ApprovalPreviewState   `protobuf:"varint,11,opt,name=preview_state,json=previewState,proto3,enum=turing.v1.ApprovalPreviewState" json:"preview_state,omitempty"`
+	ArgumentsJson string                 `protobuf:"bytes,12,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"`
+	FilePreview   *FileMutationPreview   `protobuf:"bytes,13,opt,name=file_preview,json=filePreview,proto3" json:"file_preview,omitempty"`
+	CanApprove    bool                   `protobuf:"varint,14,opt,name=can_approve,json=canApprove,proto3" json:"can_approve,omitempty"`
+	CanDeny       bool                   `protobuf:"varint,15,opt,name=can_deny,json=canDeny,proto3" json:"can_deny,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApprovalDetails) Reset() {
+	*x = ApprovalDetails{}
+	mi := &file_turing_v1_approvals_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApprovalDetails) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApprovalDetails) ProtoMessage() {}
+
+func (x *ApprovalDetails) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_approvals_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApprovalDetails.ProtoReflect.Descriptor instead.
+func (*ApprovalDetails) Descriptor() ([]byte, []int) {
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ApprovalDetails) GetApprovalId() string {
+	if x != nil {
+		return x.ApprovalId
+	}
+	return ""
+}
+
+func (x *ApprovalDetails) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ApprovalDetails) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *ApprovalDetails) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ApprovalDetails) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *ApprovalDetails) GetServerName() string {
+	if x != nil {
+		return x.ServerName
+	}
+	return ""
+}
+
+func (x *ApprovalDetails) GetArgsHash() string {
+	if x != nil {
+		return x.ArgsHash
+	}
+	return ""
+}
+
+func (x *ApprovalDetails) GetPreviewHash() string {
+	if x != nil {
+		return x.PreviewHash
+	}
+	return ""
+}
+
+func (x *ApprovalDetails) GetExpiresAt() string {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return ""
+}
+
+func (x *ApprovalDetails) GetStatus() ApprovalStatus {
+	if x != nil {
+		return x.Status
+	}
+	return ApprovalStatus_APPROVAL_STATUS_UNSPECIFIED
+}
+
+func (x *ApprovalDetails) GetPreviewState() ApprovalPreviewState {
+	if x != nil {
+		return x.PreviewState
+	}
+	return ApprovalPreviewState_APPROVAL_PREVIEW_STATE_UNSPECIFIED
+}
+
+func (x *ApprovalDetails) GetArgumentsJson() string {
+	if x != nil {
+		return x.ArgumentsJson
+	}
+	return ""
+}
+
+func (x *ApprovalDetails) GetFilePreview() *FileMutationPreview {
+	if x != nil {
+		return x.FilePreview
+	}
+	return nil
+}
+
+func (x *ApprovalDetails) GetCanApprove() bool {
+	if x != nil {
+		return x.CanApprove
+	}
+	return false
+}
+
+func (x *ApprovalDetails) GetCanDeny() bool {
+	if x != nil {
+		return x.CanDeny
+	}
+	return false
+}
+
+type FileMutationPreview struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	LogicalPath   string                 `protobuf:"bytes,1,opt,name=logical_path,json=logicalPath,proto3" json:"logical_path,omitempty"`
+	PhysicalPath  string                 `protobuf:"bytes,2,opt,name=physical_path,json=physicalPath,proto3" json:"physical_path,omitempty"`
+	Operation     string                 `protobuf:"bytes,3,opt,name=operation,proto3" json:"operation,omitempty"`
+	BeforeExists  bool                   `protobuf:"varint,4,opt,name=before_exists,json=beforeExists,proto3" json:"before_exists,omitempty"`
+	BeforeHash    string                 `protobuf:"bytes,5,opt,name=before_hash,json=beforeHash,proto3" json:"before_hash,omitempty"`
+	AfterHash     string                 `protobuf:"bytes,6,opt,name=after_hash,json=afterHash,proto3" json:"after_hash,omitempty"`
+	BeforeText    string                 `protobuf:"bytes,7,opt,name=before_text,json=beforeText,proto3" json:"before_text,omitempty"`
+	AfterText     string                 `protobuf:"bytes,8,opt,name=after_text,json=afterText,proto3" json:"after_text,omitempty"`
+	UnifiedDiff   string                 `protobuf:"bytes,9,opt,name=unified_diff,json=unifiedDiff,proto3" json:"unified_diff,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileMutationPreview) Reset() {
+	*x = FileMutationPreview{}
+	mi := &file_turing_v1_approvals_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileMutationPreview) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileMutationPreview) ProtoMessage() {}
+
+func (x *FileMutationPreview) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_approvals_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileMutationPreview.ProtoReflect.Descriptor instead.
+func (*FileMutationPreview) Descriptor() ([]byte, []int) {
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *FileMutationPreview) GetLogicalPath() string {
+	if x != nil {
+		return x.LogicalPath
+	}
+	return ""
+}
+
+func (x *FileMutationPreview) GetPhysicalPath() string {
+	if x != nil {
+		return x.PhysicalPath
+	}
+	return ""
+}
+
+func (x *FileMutationPreview) GetOperation() string {
+	if x != nil {
+		return x.Operation
+	}
+	return ""
+}
+
+func (x *FileMutationPreview) GetBeforeExists() bool {
+	if x != nil {
+		return x.BeforeExists
+	}
+	return false
+}
+
+func (x *FileMutationPreview) GetBeforeHash() string {
+	if x != nil {
+		return x.BeforeHash
+	}
+	return ""
+}
+
+func (x *FileMutationPreview) GetAfterHash() string {
+	if x != nil {
+		return x.AfterHash
+	}
+	return ""
+}
+
+func (x *FileMutationPreview) GetBeforeText() string {
+	if x != nil {
+		return x.BeforeText
+	}
+	return ""
+}
+
+func (x *FileMutationPreview) GetAfterText() string {
+	if x != nil {
+		return x.AfterText
+	}
+	return ""
+}
+
+func (x *FileMutationPreview) GetUnifiedDiff() string {
+	if x != nil {
+		return x.UnifiedDiff
+	}
+	return ""
+}
+
 type DenyApprovalRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	ApprovalId string                 `protobuf:"bytes,1,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
@@ -145,7 +547,7 @@ type DenyApprovalRequest struct {
 
 func (x *DenyApprovalRequest) Reset() {
 	*x = DenyApprovalRequest{}
-	mi := &file_turing_v1_approvals_proto_msgTypes[1]
+	mi := &file_turing_v1_approvals_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -157,7 +559,7 @@ func (x *DenyApprovalRequest) String() string {
 func (*DenyApprovalRequest) ProtoMessage() {}
 
 func (x *DenyApprovalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_approvals_proto_msgTypes[1]
+	mi := &file_turing_v1_approvals_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -170,7 +572,7 @@ func (x *DenyApprovalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DenyApprovalRequest.ProtoReflect.Descriptor instead.
 func (*DenyApprovalRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{1}
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DenyApprovalRequest) GetApprovalId() string {
@@ -200,7 +602,7 @@ type ApprovalResponse struct {
 
 func (x *ApprovalResponse) Reset() {
 	*x = ApprovalResponse{}
-	mi := &file_turing_v1_approvals_proto_msgTypes[2]
+	mi := &file_turing_v1_approvals_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -212,7 +614,7 @@ func (x *ApprovalResponse) String() string {
 func (*ApprovalResponse) ProtoMessage() {}
 
 func (x *ApprovalResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_approvals_proto_msgTypes[2]
+	mi := &file_turing_v1_approvals_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -225,7 +627,7 @@ func (x *ApprovalResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalResponse.ProtoReflect.Descriptor instead.
 func (*ApprovalResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{2}
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ApprovalResponse) GetApprovalId() string {
@@ -265,7 +667,7 @@ type SandboxArtifactReservation struct {
 
 func (x *SandboxArtifactReservation) Reset() {
 	*x = SandboxArtifactReservation{}
-	mi := &file_turing_v1_approvals_proto_msgTypes[3]
+	mi := &file_turing_v1_approvals_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -277,7 +679,7 @@ func (x *SandboxArtifactReservation) String() string {
 func (*SandboxArtifactReservation) ProtoMessage() {}
 
 func (x *SandboxArtifactReservation) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_approvals_proto_msgTypes[3]
+	mi := &file_turing_v1_approvals_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -290,7 +692,7 @@ func (x *SandboxArtifactReservation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxArtifactReservation.ProtoReflect.Descriptor instead.
 func (*SandboxArtifactReservation) Descriptor() ([]byte, []int) {
-	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{3}
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SandboxArtifactReservation) GetArtifactId() string {
@@ -330,7 +732,7 @@ type GetApprovalForRuntimeRequest struct {
 
 func (x *GetApprovalForRuntimeRequest) Reset() {
 	*x = GetApprovalForRuntimeRequest{}
-	mi := &file_turing_v1_approvals_proto_msgTypes[4]
+	mi := &file_turing_v1_approvals_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -342,7 +744,7 @@ func (x *GetApprovalForRuntimeRequest) String() string {
 func (*GetApprovalForRuntimeRequest) ProtoMessage() {}
 
 func (x *GetApprovalForRuntimeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_approvals_proto_msgTypes[4]
+	mi := &file_turing_v1_approvals_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -355,7 +757,7 @@ func (x *GetApprovalForRuntimeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetApprovalForRuntimeRequest.ProtoReflect.Descriptor instead.
 func (*GetApprovalForRuntimeRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{4}
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetApprovalForRuntimeRequest) GetApprovalId() string {
@@ -376,7 +778,7 @@ type RuntimeApprovalState struct {
 
 func (x *RuntimeApprovalState) Reset() {
 	*x = RuntimeApprovalState{}
-	mi := &file_turing_v1_approvals_proto_msgTypes[5]
+	mi := &file_turing_v1_approvals_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -388,7 +790,7 @@ func (x *RuntimeApprovalState) String() string {
 func (*RuntimeApprovalState) ProtoMessage() {}
 
 func (x *RuntimeApprovalState) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_approvals_proto_msgTypes[5]
+	mi := &file_turing_v1_approvals_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -401,7 +803,7 @@ func (x *RuntimeApprovalState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeApprovalState.ProtoReflect.Descriptor instead.
 func (*RuntimeApprovalState) Descriptor() ([]byte, []int) {
-	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{5}
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RuntimeApprovalState) GetApprovalId() string {
@@ -442,7 +844,7 @@ type ConsumeApprovalRequest struct {
 
 func (x *ConsumeApprovalRequest) Reset() {
 	*x = ConsumeApprovalRequest{}
-	mi := &file_turing_v1_approvals_proto_msgTypes[6]
+	mi := &file_turing_v1_approvals_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -454,7 +856,7 @@ func (x *ConsumeApprovalRequest) String() string {
 func (*ConsumeApprovalRequest) ProtoMessage() {}
 
 func (x *ConsumeApprovalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_approvals_proto_msgTypes[6]
+	mi := &file_turing_v1_approvals_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -467,7 +869,7 @@ func (x *ConsumeApprovalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConsumeApprovalRequest.ProtoReflect.Descriptor instead.
 func (*ConsumeApprovalRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{6}
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ConsumeApprovalRequest) GetApprovalId() string {
@@ -507,7 +909,7 @@ type FinalizeSandboxArtifactRequest struct {
 
 func (x *FinalizeSandboxArtifactRequest) Reset() {
 	*x = FinalizeSandboxArtifactRequest{}
-	mi := &file_turing_v1_approvals_proto_msgTypes[7]
+	mi := &file_turing_v1_approvals_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -519,7 +921,7 @@ func (x *FinalizeSandboxArtifactRequest) String() string {
 func (*FinalizeSandboxArtifactRequest) ProtoMessage() {}
 
 func (x *FinalizeSandboxArtifactRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_approvals_proto_msgTypes[7]
+	mi := &file_turing_v1_approvals_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -532,7 +934,7 @@ func (x *FinalizeSandboxArtifactRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinalizeSandboxArtifactRequest.ProtoReflect.Descriptor instead.
 func (*FinalizeSandboxArtifactRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{7}
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *FinalizeSandboxArtifactRequest) GetArtifactId() string {
@@ -568,7 +970,7 @@ type FinalizeSandboxArtifactResponse struct {
 
 func (x *FinalizeSandboxArtifactResponse) Reset() {
 	*x = FinalizeSandboxArtifactResponse{}
-	mi := &file_turing_v1_approvals_proto_msgTypes[8]
+	mi := &file_turing_v1_approvals_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -580,7 +982,7 @@ func (x *FinalizeSandboxArtifactResponse) String() string {
 func (*FinalizeSandboxArtifactResponse) ProtoMessage() {}
 
 func (x *FinalizeSandboxArtifactResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_approvals_proto_msgTypes[8]
+	mi := &file_turing_v1_approvals_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -593,7 +995,7 @@ func (x *FinalizeSandboxArtifactResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FinalizeSandboxArtifactResponse.ProtoReflect.Descriptor instead.
 func (*FinalizeSandboxArtifactResponse) Descriptor() ([]byte, []int) {
-	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{8}
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *FinalizeSandboxArtifactResponse) GetArtifactId() string {
@@ -622,7 +1024,7 @@ type CheckSessionCapabilityRequest struct {
 
 func (x *CheckSessionCapabilityRequest) Reset() {
 	*x = CheckSessionCapabilityRequest{}
-	mi := &file_turing_v1_approvals_proto_msgTypes[9]
+	mi := &file_turing_v1_approvals_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -634,7 +1036,7 @@ func (x *CheckSessionCapabilityRequest) String() string {
 func (*CheckSessionCapabilityRequest) ProtoMessage() {}
 
 func (x *CheckSessionCapabilityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_approvals_proto_msgTypes[9]
+	mi := &file_turing_v1_approvals_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -647,7 +1049,7 @@ func (x *CheckSessionCapabilityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckSessionCapabilityRequest.ProtoReflect.Descriptor instead.
 func (*CheckSessionCapabilityRequest) Descriptor() ([]byte, []int) {
-	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{9}
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *CheckSessionCapabilityRequest) GetProvenanceToken() string {
@@ -669,7 +1071,7 @@ type SessionCapabilityState struct {
 
 func (x *SessionCapabilityState) Reset() {
 	*x = SessionCapabilityState{}
-	mi := &file_turing_v1_approvals_proto_msgTypes[10]
+	mi := &file_turing_v1_approvals_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -681,7 +1083,7 @@ func (x *SessionCapabilityState) String() string {
 func (*SessionCapabilityState) ProtoMessage() {}
 
 func (x *SessionCapabilityState) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_approvals_proto_msgTypes[10]
+	mi := &file_turing_v1_approvals_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -694,7 +1096,7 @@ func (x *SessionCapabilityState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionCapabilityState.ProtoReflect.Descriptor instead.
 func (*SessionCapabilityState) Descriptor() ([]byte, []int) {
-	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{10}
+	return file_turing_v1_approvals_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SessionCapabilityState) GetActive() bool {
@@ -715,11 +1117,54 @@ var File_turing_v1_approvals_proto protoreflect.FileDescriptor
 
 const file_turing_v1_approvals_proto_rawDesc = "" +
 	"\n" +
-	"\x19turing/v1/approvals.proto\x12\tturing.v1\"S\n" +
+	"\x19turing/v1/approvals.proto\x12\tturing.v1\"\x93\x01\n" +
 	"\x16ApproveApprovalRequest\x12\x1f\n" +
 	"\vapproval_id\x18\x01 \x01(\tR\n" +
 	"approvalId\x12\x18\n" +
-	"\acomment\x18\x02 \x01(\tR\acomment\"N\n" +
+	"\acomment\x18\x02 \x01(\tR\acomment\x12!\n" +
+	"\fpreview_hash\x18\x03 \x01(\tR\vpreviewHash\x12\x1b\n" +
+	"\targs_hash\x18\x04 \x01(\tR\bargsHash\"e\n" +
+	"\x19GetApprovalDetailsRequest\x12\x1f\n" +
+	"\vapproval_id\x18\x01 \x01(\tR\n" +
+	"approvalId\x12'\n" +
+	"\x0frefresh_preview\x18\x02 \x01(\bR\x0erefreshPreview\"\xc6\x04\n" +
+	"\x0fApprovalDetails\x12\x1f\n" +
+	"\vapproval_id\x18\x01 \x01(\tR\n" +
+	"approvalId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x15\n" +
+	"\x06run_id\x18\x03 \x01(\tR\x05runId\x12 \n" +
+	"\ftool_call_id\x18\x04 \x01(\tR\n" +
+	"toolCallId\x12\x1b\n" +
+	"\ttool_name\x18\x05 \x01(\tR\btoolName\x12\x1f\n" +
+	"\vserver_name\x18\x06 \x01(\tR\n" +
+	"serverName\x12\x1b\n" +
+	"\targs_hash\x18\a \x01(\tR\bargsHash\x12!\n" +
+	"\fpreview_hash\x18\b \x01(\tR\vpreviewHash\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\t \x01(\tR\texpiresAt\x121\n" +
+	"\x06status\x18\n" +
+	" \x01(\x0e2\x19.turing.v1.ApprovalStatusR\x06status\x12D\n" +
+	"\rpreview_state\x18\v \x01(\x0e2\x1f.turing.v1.ApprovalPreviewStateR\fpreviewState\x12%\n" +
+	"\x0earguments_json\x18\f \x01(\tR\rargumentsJson\x12A\n" +
+	"\ffile_preview\x18\r \x01(\v2\x1e.turing.v1.FileMutationPreviewR\vfilePreview\x12\x1f\n" +
+	"\vcan_approve\x18\x0e \x01(\bR\n" +
+	"canApprove\x12\x19\n" +
+	"\bcan_deny\x18\x0f \x01(\bR\acanDeny\"\xc3\x02\n" +
+	"\x13FileMutationPreview\x12!\n" +
+	"\flogical_path\x18\x01 \x01(\tR\vlogicalPath\x12#\n" +
+	"\rphysical_path\x18\x02 \x01(\tR\fphysicalPath\x12\x1c\n" +
+	"\toperation\x18\x03 \x01(\tR\toperation\x12#\n" +
+	"\rbefore_exists\x18\x04 \x01(\bR\fbeforeExists\x12\x1f\n" +
+	"\vbefore_hash\x18\x05 \x01(\tR\n" +
+	"beforeHash\x12\x1d\n" +
+	"\n" +
+	"after_hash\x18\x06 \x01(\tR\tafterHash\x12\x1f\n" +
+	"\vbefore_text\x18\a \x01(\tR\n" +
+	"beforeText\x12\x1d\n" +
+	"\n" +
+	"after_text\x18\b \x01(\tR\tafterText\x12!\n" +
+	"\funified_diff\x18\t \x01(\tR\vunifiedDiff\"N\n" +
 	"\x13DenyApprovalRequest\x12\x1f\n" +
 	"\vapproval_id\x18\x01 \x01(\tR\n" +
 	"approvalId\x12\x16\n" +
@@ -768,8 +1213,20 @@ const file_turing_v1_approvals_proto_rawDesc = "" +
 	"\x18APPROVAL_STATUS_APPROVED\x10\x02\x12\x1a\n" +
 	"\x16APPROVAL_STATUS_DENIED\x10\x03\x12\x1b\n" +
 	"\x17APPROVAL_STATUS_EXPIRED\x10\x04\x12\x1c\n" +
-	"\x18APPROVAL_STATUS_CONSUMED\x10\x052\xc0\x04\n" +
-	"\x0fApprovalService\x12Q\n" +
+	"\x18APPROVAL_STATUS_CONSUMED\x10\x05*\x89\x03\n" +
+	"\x14ApprovalPreviewState\x12&\n" +
+	"\"APPROVAL_PREVIEW_STATE_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cAPPROVAL_PREVIEW_STATE_READY\x10\x01\x12&\n" +
+	"\"APPROVAL_PREVIEW_STATE_UNAVAILABLE\x10\x02\x12&\n" +
+	"\"APPROVAL_PREVIEW_STATE_UNSUPPORTED\x10\x03\x12#\n" +
+	"\x1fAPPROVAL_PREVIEW_STATE_REDACTED\x10\x04\x12$\n" +
+	" APPROVAL_PREVIEW_STATE_OVERSIZED\x10\x05\x12!\n" +
+	"\x1dAPPROVAL_PREVIEW_STATE_BINARY\x10\x06\x12\"\n" +
+	"\x1eAPPROVAL_PREVIEW_STATE_EXPIRED\x10\a\x12 \n" +
+	"\x1cAPPROVAL_PREVIEW_STATE_STALE\x10\b\x12#\n" +
+	"\x1fAPPROVAL_PREVIEW_STATE_TERMINAL\x10\t2\x98\x05\n" +
+	"\x0fApprovalService\x12V\n" +
+	"\x12GetApprovalDetails\x12$.turing.v1.GetApprovalDetailsRequest\x1a\x1a.turing.v1.ApprovalDetails\x12Q\n" +
 	"\x0fApproveApproval\x12!.turing.v1.ApproveApprovalRequest\x1a\x1b.turing.v1.ApprovalResponse\x12K\n" +
 	"\fDenyApproval\x12\x1e.turing.v1.DenyApprovalRequest\x1a\x1b.turing.v1.ApprovalResponse\x12a\n" +
 	"\x15GetApprovalForRuntime\x12'.turing.v1.GetApprovalForRuntimeRequest\x1a\x1f.turing.v1.RuntimeApprovalState\x12Q\n" +
@@ -789,43 +1246,52 @@ func file_turing_v1_approvals_proto_rawDescGZIP() []byte {
 	return file_turing_v1_approvals_proto_rawDescData
 }
 
-var file_turing_v1_approvals_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_turing_v1_approvals_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_turing_v1_approvals_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_turing_v1_approvals_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_turing_v1_approvals_proto_goTypes = []any{
 	(ApprovalStatus)(0),                     // 0: turing.v1.ApprovalStatus
-	(*ApproveApprovalRequest)(nil),          // 1: turing.v1.ApproveApprovalRequest
-	(*DenyApprovalRequest)(nil),             // 2: turing.v1.DenyApprovalRequest
-	(*ApprovalResponse)(nil),                // 3: turing.v1.ApprovalResponse
-	(*SandboxArtifactReservation)(nil),      // 4: turing.v1.SandboxArtifactReservation
-	(*GetApprovalForRuntimeRequest)(nil),    // 5: turing.v1.GetApprovalForRuntimeRequest
-	(*RuntimeApprovalState)(nil),            // 6: turing.v1.RuntimeApprovalState
-	(*ConsumeApprovalRequest)(nil),          // 7: turing.v1.ConsumeApprovalRequest
-	(*FinalizeSandboxArtifactRequest)(nil),  // 8: turing.v1.FinalizeSandboxArtifactRequest
-	(*FinalizeSandboxArtifactResponse)(nil), // 9: turing.v1.FinalizeSandboxArtifactResponse
-	(*CheckSessionCapabilityRequest)(nil),   // 10: turing.v1.CheckSessionCapabilityRequest
-	(*SessionCapabilityState)(nil),          // 11: turing.v1.SessionCapabilityState
+	(ApprovalPreviewState)(0),               // 1: turing.v1.ApprovalPreviewState
+	(*ApproveApprovalRequest)(nil),          // 2: turing.v1.ApproveApprovalRequest
+	(*GetApprovalDetailsRequest)(nil),       // 3: turing.v1.GetApprovalDetailsRequest
+	(*ApprovalDetails)(nil),                 // 4: turing.v1.ApprovalDetails
+	(*FileMutationPreview)(nil),             // 5: turing.v1.FileMutationPreview
+	(*DenyApprovalRequest)(nil),             // 6: turing.v1.DenyApprovalRequest
+	(*ApprovalResponse)(nil),                // 7: turing.v1.ApprovalResponse
+	(*SandboxArtifactReservation)(nil),      // 8: turing.v1.SandboxArtifactReservation
+	(*GetApprovalForRuntimeRequest)(nil),    // 9: turing.v1.GetApprovalForRuntimeRequest
+	(*RuntimeApprovalState)(nil),            // 10: turing.v1.RuntimeApprovalState
+	(*ConsumeApprovalRequest)(nil),          // 11: turing.v1.ConsumeApprovalRequest
+	(*FinalizeSandboxArtifactRequest)(nil),  // 12: turing.v1.FinalizeSandboxArtifactRequest
+	(*FinalizeSandboxArtifactResponse)(nil), // 13: turing.v1.FinalizeSandboxArtifactResponse
+	(*CheckSessionCapabilityRequest)(nil),   // 14: turing.v1.CheckSessionCapabilityRequest
+	(*SessionCapabilityState)(nil),          // 15: turing.v1.SessionCapabilityState
 }
 var file_turing_v1_approvals_proto_depIdxs = []int32{
-	0,  // 0: turing.v1.ApprovalResponse.status:type_name -> turing.v1.ApprovalStatus
-	4,  // 1: turing.v1.ApprovalResponse.reservation:type_name -> turing.v1.SandboxArtifactReservation
-	0,  // 2: turing.v1.RuntimeApprovalState.status:type_name -> turing.v1.ApprovalStatus
-	1,  // 3: turing.v1.ApprovalService.ApproveApproval:input_type -> turing.v1.ApproveApprovalRequest
-	2,  // 4: turing.v1.ApprovalService.DenyApproval:input_type -> turing.v1.DenyApprovalRequest
-	5,  // 5: turing.v1.ApprovalService.GetApprovalForRuntime:input_type -> turing.v1.GetApprovalForRuntimeRequest
-	7,  // 6: turing.v1.ApprovalService.ConsumeApproval:input_type -> turing.v1.ConsumeApprovalRequest
-	8,  // 7: turing.v1.ApprovalService.FinalizeSandboxArtifact:input_type -> turing.v1.FinalizeSandboxArtifactRequest
-	10, // 8: turing.v1.ApprovalService.CheckSessionCapability:input_type -> turing.v1.CheckSessionCapabilityRequest
-	3,  // 9: turing.v1.ApprovalService.ApproveApproval:output_type -> turing.v1.ApprovalResponse
-	3,  // 10: turing.v1.ApprovalService.DenyApproval:output_type -> turing.v1.ApprovalResponse
-	6,  // 11: turing.v1.ApprovalService.GetApprovalForRuntime:output_type -> turing.v1.RuntimeApprovalState
-	3,  // 12: turing.v1.ApprovalService.ConsumeApproval:output_type -> turing.v1.ApprovalResponse
-	9,  // 13: turing.v1.ApprovalService.FinalizeSandboxArtifact:output_type -> turing.v1.FinalizeSandboxArtifactResponse
-	11, // 14: turing.v1.ApprovalService.CheckSessionCapability:output_type -> turing.v1.SessionCapabilityState
-	9,  // [9:15] is the sub-list for method output_type
-	3,  // [3:9] is the sub-list for method input_type
-	3,  // [3:3] is the sub-list for extension type_name
-	3,  // [3:3] is the sub-list for extension extendee
-	0,  // [0:3] is the sub-list for field type_name
+	0,  // 0: turing.v1.ApprovalDetails.status:type_name -> turing.v1.ApprovalStatus
+	1,  // 1: turing.v1.ApprovalDetails.preview_state:type_name -> turing.v1.ApprovalPreviewState
+	5,  // 2: turing.v1.ApprovalDetails.file_preview:type_name -> turing.v1.FileMutationPreview
+	0,  // 3: turing.v1.ApprovalResponse.status:type_name -> turing.v1.ApprovalStatus
+	8,  // 4: turing.v1.ApprovalResponse.reservation:type_name -> turing.v1.SandboxArtifactReservation
+	0,  // 5: turing.v1.RuntimeApprovalState.status:type_name -> turing.v1.ApprovalStatus
+	3,  // 6: turing.v1.ApprovalService.GetApprovalDetails:input_type -> turing.v1.GetApprovalDetailsRequest
+	2,  // 7: turing.v1.ApprovalService.ApproveApproval:input_type -> turing.v1.ApproveApprovalRequest
+	6,  // 8: turing.v1.ApprovalService.DenyApproval:input_type -> turing.v1.DenyApprovalRequest
+	9,  // 9: turing.v1.ApprovalService.GetApprovalForRuntime:input_type -> turing.v1.GetApprovalForRuntimeRequest
+	11, // 10: turing.v1.ApprovalService.ConsumeApproval:input_type -> turing.v1.ConsumeApprovalRequest
+	12, // 11: turing.v1.ApprovalService.FinalizeSandboxArtifact:input_type -> turing.v1.FinalizeSandboxArtifactRequest
+	14, // 12: turing.v1.ApprovalService.CheckSessionCapability:input_type -> turing.v1.CheckSessionCapabilityRequest
+	4,  // 13: turing.v1.ApprovalService.GetApprovalDetails:output_type -> turing.v1.ApprovalDetails
+	7,  // 14: turing.v1.ApprovalService.ApproveApproval:output_type -> turing.v1.ApprovalResponse
+	7,  // 15: turing.v1.ApprovalService.DenyApproval:output_type -> turing.v1.ApprovalResponse
+	10, // 16: turing.v1.ApprovalService.GetApprovalForRuntime:output_type -> turing.v1.RuntimeApprovalState
+	7,  // 17: turing.v1.ApprovalService.ConsumeApproval:output_type -> turing.v1.ApprovalResponse
+	13, // 18: turing.v1.ApprovalService.FinalizeSandboxArtifact:output_type -> turing.v1.FinalizeSandboxArtifactResponse
+	15, // 19: turing.v1.ApprovalService.CheckSessionCapability:output_type -> turing.v1.SessionCapabilityState
+	13, // [13:20] is the sub-list for method output_type
+	6,  // [6:13] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_approvals_proto_init() }
@@ -838,8 +1304,8 @@ func file_turing_v1_approvals_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_approvals_proto_rawDesc), len(file_turing_v1_approvals_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   11,
+			NumEnums:      2,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

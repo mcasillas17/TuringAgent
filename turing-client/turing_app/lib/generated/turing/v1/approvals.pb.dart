@@ -25,10 +25,14 @@ class ApproveApprovalRequest extends $pb.GeneratedMessage {
   factory ApproveApprovalRequest({
     $core.String? approvalId,
     $core.String? comment,
+    $core.String? previewHash,
+    $core.String? argsHash,
   }) {
     final result = create();
     if (approvalId != null) result.approvalId = approvalId;
     if (comment != null) result.comment = comment;
+    if (previewHash != null) result.previewHash = previewHash;
+    if (argsHash != null) result.argsHash = argsHash;
     return result;
   }
 
@@ -47,6 +51,8 @@ class ApproveApprovalRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..aOS(2, _omitFieldNames ? '' : 'comment')
+    ..aOS(3, _omitFieldNames ? '' : 'previewHash')
+    ..aOS(4, _omitFieldNames ? '' : 'argsHash')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -90,6 +96,474 @@ class ApproveApprovalRequest extends $pb.GeneratedMessage {
   $core.bool hasComment() => $_has(1);
   @$pb.TagNumber(2)
   void clearComment() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get previewHash => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set previewHash($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasPreviewHash() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearPreviewHash() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get argsHash => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set argsHash($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasArgsHash() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearArgsHash() => $_clearField(4);
+}
+
+class GetApprovalDetailsRequest extends $pb.GeneratedMessage {
+  factory GetApprovalDetailsRequest({
+    $core.String? approvalId,
+    $core.bool? refreshPreview,
+  }) {
+    final result = create();
+    if (approvalId != null) result.approvalId = approvalId;
+    if (refreshPreview != null) result.refreshPreview = refreshPreview;
+    return result;
+  }
+
+  GetApprovalDetailsRequest._();
+
+  factory GetApprovalDetailsRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory GetApprovalDetailsRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'GetApprovalDetailsRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'approvalId')
+    ..aOB(2, _omitFieldNames ? '' : 'refreshPreview')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetApprovalDetailsRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetApprovalDetailsRequest copyWith(
+          void Function(GetApprovalDetailsRequest) updates) =>
+      super.copyWith((message) => updates(message as GetApprovalDetailsRequest))
+          as GetApprovalDetailsRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static GetApprovalDetailsRequest create() => GetApprovalDetailsRequest._();
+  @$core.override
+  GetApprovalDetailsRequest createEmptyInstance() => create();
+  static $pb.PbList<GetApprovalDetailsRequest> createRepeated() =>
+      $pb.PbList<GetApprovalDetailsRequest>();
+  @$core.pragma('dart2js:noInline')
+  static GetApprovalDetailsRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<GetApprovalDetailsRequest>(create);
+  static GetApprovalDetailsRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get approvalId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set approvalId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasApprovalId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearApprovalId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.bool get refreshPreview => $_getBF(1);
+  @$pb.TagNumber(2)
+  set refreshPreview($core.bool value) => $_setBool(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRefreshPreview() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRefreshPreview() => $_clearField(2);
+}
+
+class ApprovalDetails extends $pb.GeneratedMessage {
+  factory ApprovalDetails({
+    $core.String? approvalId,
+    $core.String? sessionId,
+    $core.String? runId,
+    $core.String? toolCallId,
+    $core.String? toolName,
+    $core.String? serverName,
+    $core.String? argsHash,
+    $core.String? previewHash,
+    $core.String? expiresAt,
+    ApprovalStatus? status,
+    ApprovalPreviewState? previewState,
+    $core.String? argumentsJson,
+    FileMutationPreview? filePreview,
+    $core.bool? canApprove,
+    $core.bool? canDeny,
+  }) {
+    final result = create();
+    if (approvalId != null) result.approvalId = approvalId;
+    if (sessionId != null) result.sessionId = sessionId;
+    if (runId != null) result.runId = runId;
+    if (toolCallId != null) result.toolCallId = toolCallId;
+    if (toolName != null) result.toolName = toolName;
+    if (serverName != null) result.serverName = serverName;
+    if (argsHash != null) result.argsHash = argsHash;
+    if (previewHash != null) result.previewHash = previewHash;
+    if (expiresAt != null) result.expiresAt = expiresAt;
+    if (status != null) result.status = status;
+    if (previewState != null) result.previewState = previewState;
+    if (argumentsJson != null) result.argumentsJson = argumentsJson;
+    if (filePreview != null) result.filePreview = filePreview;
+    if (canApprove != null) result.canApprove = canApprove;
+    if (canDeny != null) result.canDeny = canDeny;
+    return result;
+  }
+
+  ApprovalDetails._();
+
+  factory ApprovalDetails.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ApprovalDetails.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ApprovalDetails',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'approvalId')
+    ..aOS(2, _omitFieldNames ? '' : 'sessionId')
+    ..aOS(3, _omitFieldNames ? '' : 'runId')
+    ..aOS(4, _omitFieldNames ? '' : 'toolCallId')
+    ..aOS(5, _omitFieldNames ? '' : 'toolName')
+    ..aOS(6, _omitFieldNames ? '' : 'serverName')
+    ..aOS(7, _omitFieldNames ? '' : 'argsHash')
+    ..aOS(8, _omitFieldNames ? '' : 'previewHash')
+    ..aOS(9, _omitFieldNames ? '' : 'expiresAt')
+    ..aE<ApprovalStatus>(10, _omitFieldNames ? '' : 'status',
+        enumValues: ApprovalStatus.values)
+    ..aE<ApprovalPreviewState>(11, _omitFieldNames ? '' : 'previewState',
+        enumValues: ApprovalPreviewState.values)
+    ..aOS(12, _omitFieldNames ? '' : 'argumentsJson')
+    ..aOM<FileMutationPreview>(13, _omitFieldNames ? '' : 'filePreview',
+        subBuilder: FileMutationPreview.create)
+    ..aOB(14, _omitFieldNames ? '' : 'canApprove')
+    ..aOB(15, _omitFieldNames ? '' : 'canDeny')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ApprovalDetails clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ApprovalDetails copyWith(void Function(ApprovalDetails) updates) =>
+      super.copyWith((message) => updates(message as ApprovalDetails))
+          as ApprovalDetails;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ApprovalDetails create() => ApprovalDetails._();
+  @$core.override
+  ApprovalDetails createEmptyInstance() => create();
+  static $pb.PbList<ApprovalDetails> createRepeated() =>
+      $pb.PbList<ApprovalDetails>();
+  @$core.pragma('dart2js:noInline')
+  static ApprovalDetails getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ApprovalDetails>(create);
+  static ApprovalDetails? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get approvalId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set approvalId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasApprovalId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearApprovalId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get sessionId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set sessionId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasSessionId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearSessionId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get runId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set runId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasRunId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearRunId() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get toolCallId => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set toolCallId($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasToolCallId() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearToolCallId() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get toolName => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set toolName($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasToolName() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearToolName() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get serverName => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set serverName($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasServerName() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearServerName() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.String get argsHash => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set argsHash($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasArgsHash() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearArgsHash() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.String get previewHash => $_getSZ(7);
+  @$pb.TagNumber(8)
+  set previewHash($core.String value) => $_setString(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasPreviewHash() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearPreviewHash() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.String get expiresAt => $_getSZ(8);
+  @$pb.TagNumber(9)
+  set expiresAt($core.String value) => $_setString(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasExpiresAt() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearExpiresAt() => $_clearField(9);
+
+  @$pb.TagNumber(10)
+  ApprovalStatus get status => $_getN(9);
+  @$pb.TagNumber(10)
+  set status(ApprovalStatus value) => $_setField(10, value);
+  @$pb.TagNumber(10)
+  $core.bool hasStatus() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearStatus() => $_clearField(10);
+
+  @$pb.TagNumber(11)
+  ApprovalPreviewState get previewState => $_getN(10);
+  @$pb.TagNumber(11)
+  set previewState(ApprovalPreviewState value) => $_setField(11, value);
+  @$pb.TagNumber(11)
+  $core.bool hasPreviewState() => $_has(10);
+  @$pb.TagNumber(11)
+  void clearPreviewState() => $_clearField(11);
+
+  @$pb.TagNumber(12)
+  $core.String get argumentsJson => $_getSZ(11);
+  @$pb.TagNumber(12)
+  set argumentsJson($core.String value) => $_setString(11, value);
+  @$pb.TagNumber(12)
+  $core.bool hasArgumentsJson() => $_has(11);
+  @$pb.TagNumber(12)
+  void clearArgumentsJson() => $_clearField(12);
+
+  @$pb.TagNumber(13)
+  FileMutationPreview get filePreview => $_getN(12);
+  @$pb.TagNumber(13)
+  set filePreview(FileMutationPreview value) => $_setField(13, value);
+  @$pb.TagNumber(13)
+  $core.bool hasFilePreview() => $_has(12);
+  @$pb.TagNumber(13)
+  void clearFilePreview() => $_clearField(13);
+  @$pb.TagNumber(13)
+  FileMutationPreview ensureFilePreview() => $_ensure(12);
+
+  @$pb.TagNumber(14)
+  $core.bool get canApprove => $_getBF(13);
+  @$pb.TagNumber(14)
+  set canApprove($core.bool value) => $_setBool(13, value);
+  @$pb.TagNumber(14)
+  $core.bool hasCanApprove() => $_has(13);
+  @$pb.TagNumber(14)
+  void clearCanApprove() => $_clearField(14);
+
+  @$pb.TagNumber(15)
+  $core.bool get canDeny => $_getBF(14);
+  @$pb.TagNumber(15)
+  set canDeny($core.bool value) => $_setBool(14, value);
+  @$pb.TagNumber(15)
+  $core.bool hasCanDeny() => $_has(14);
+  @$pb.TagNumber(15)
+  void clearCanDeny() => $_clearField(15);
+}
+
+class FileMutationPreview extends $pb.GeneratedMessage {
+  factory FileMutationPreview({
+    $core.String? logicalPath,
+    $core.String? physicalPath,
+    $core.String? operation,
+    $core.bool? beforeExists,
+    $core.String? beforeHash,
+    $core.String? afterHash,
+    $core.String? beforeText,
+    $core.String? afterText,
+    $core.String? unifiedDiff,
+  }) {
+    final result = create();
+    if (logicalPath != null) result.logicalPath = logicalPath;
+    if (physicalPath != null) result.physicalPath = physicalPath;
+    if (operation != null) result.operation = operation;
+    if (beforeExists != null) result.beforeExists = beforeExists;
+    if (beforeHash != null) result.beforeHash = beforeHash;
+    if (afterHash != null) result.afterHash = afterHash;
+    if (beforeText != null) result.beforeText = beforeText;
+    if (afterText != null) result.afterText = afterText;
+    if (unifiedDiff != null) result.unifiedDiff = unifiedDiff;
+    return result;
+  }
+
+  FileMutationPreview._();
+
+  factory FileMutationPreview.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory FileMutationPreview.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'FileMutationPreview',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'logicalPath')
+    ..aOS(2, _omitFieldNames ? '' : 'physicalPath')
+    ..aOS(3, _omitFieldNames ? '' : 'operation')
+    ..aOB(4, _omitFieldNames ? '' : 'beforeExists')
+    ..aOS(5, _omitFieldNames ? '' : 'beforeHash')
+    ..aOS(6, _omitFieldNames ? '' : 'afterHash')
+    ..aOS(7, _omitFieldNames ? '' : 'beforeText')
+    ..aOS(8, _omitFieldNames ? '' : 'afterText')
+    ..aOS(9, _omitFieldNames ? '' : 'unifiedDiff')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FileMutationPreview clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  FileMutationPreview copyWith(void Function(FileMutationPreview) updates) =>
+      super.copyWith((message) => updates(message as FileMutationPreview))
+          as FileMutationPreview;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static FileMutationPreview create() => FileMutationPreview._();
+  @$core.override
+  FileMutationPreview createEmptyInstance() => create();
+  static $pb.PbList<FileMutationPreview> createRepeated() =>
+      $pb.PbList<FileMutationPreview>();
+  @$core.pragma('dart2js:noInline')
+  static FileMutationPreview getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<FileMutationPreview>(create);
+  static FileMutationPreview? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get logicalPath => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set logicalPath($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasLogicalPath() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearLogicalPath() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get physicalPath => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set physicalPath($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasPhysicalPath() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearPhysicalPath() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get operation => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set operation($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasOperation() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearOperation() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.bool get beforeExists => $_getBF(3);
+  @$pb.TagNumber(4)
+  set beforeExists($core.bool value) => $_setBool(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasBeforeExists() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearBeforeExists() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get beforeHash => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set beforeHash($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasBeforeHash() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearBeforeHash() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get afterHash => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set afterHash($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasAfterHash() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearAfterHash() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.String get beforeText => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set beforeText($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasBeforeText() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearBeforeText() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.String get afterText => $_getSZ(7);
+  @$pb.TagNumber(8)
+  set afterText($core.String value) => $_setString(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasAfterText() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearAfterText() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.String get unifiedDiff => $_getSZ(8);
+  @$pb.TagNumber(9)
+  set unifiedDiff($core.String value) => $_setString(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasUnifiedDiff() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearUnifiedDiff() => $_clearField(9);
 }
 
 class DenyApprovalRequest extends $pb.GeneratedMessage {

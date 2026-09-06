@@ -119,6 +119,7 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	approvalService := approvalsvc.New(repo, eventBus, cfg.ApprovalJWTSecret, time.Duration(cfg.ApprovalTTLMS)*time.Millisecond)
+	approvalService.SetPreviewEndpoint(cfg.MCPFilesBaseURL)
 	maxConcurrentRuns := cfg.MaxConcurrentRunsGeneral
 	if maxConcurrentRuns <= 0 {
 		maxConcurrentRuns = 1

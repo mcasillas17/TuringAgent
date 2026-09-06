@@ -153,14 +153,8 @@ func (c Consumer) AuthorizeWrite(ctx context.Context, req WriteAuthorization) (R
 	if req.PhysicalPath == "" {
 		return Reservation{}, errors.New("physical path required")
 	}
-	claims, err := VerifyHS256(req.ApprovalToken, c.JWTSecret)
+	claims, err := c.verifyWriteClaims(req)
 	if err != nil {
-		return Reservation{}, err
-	}
-	if err := checkApprovalBinding(claims, req.Tool, req.Args, req.AgentID); err != nil {
-		return Reservation{}, err
-	}
-	if _, err := c.VerifyProvenance(req.ProvenanceToken, req.Tool, req.Args, req.AgentID); err != nil {
 		return Reservation{}, err
 	}
 	callCtx, cancel := context.WithTimeout(ctx, provenanceCallTimeout)

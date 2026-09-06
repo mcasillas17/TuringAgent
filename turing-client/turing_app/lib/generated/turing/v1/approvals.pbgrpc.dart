@@ -32,6 +32,13 @@ class ApprovalServiceClient extends $grpc.Client {
 
   ApprovalServiceClient(super.channel, {super.options, super.interceptors});
 
+  $grpc.ResponseFuture<$0.ApprovalDetails> getApprovalDetails(
+    $0.GetApprovalDetailsRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$getApprovalDetails, request, options: options);
+  }
+
   $grpc.ResponseFuture<$0.ApprovalResponse> approveApproval(
     $0.ApproveApprovalRequest request, {
     $grpc.CallOptions? options,
@@ -79,6 +86,11 @@ class ApprovalServiceClient extends $grpc.Client {
 
   // method descriptors
 
+  static final _$getApprovalDetails =
+      $grpc.ClientMethod<$0.GetApprovalDetailsRequest, $0.ApprovalDetails>(
+          '/turing.v1.ApprovalService/GetApprovalDetails',
+          ($0.GetApprovalDetailsRequest value) => value.writeToBuffer(),
+          $0.ApprovalDetails.fromBuffer);
   static final _$approveApproval =
       $grpc.ClientMethod<$0.ApproveApprovalRequest, $0.ApprovalResponse>(
           '/turing.v1.ApprovalService/ApproveApproval',
@@ -117,6 +129,15 @@ abstract class ApprovalServiceBase extends $grpc.Service {
   $core.String get $name => 'turing.v1.ApprovalService';
 
   ApprovalServiceBase() {
+    $addMethod(
+        $grpc.ServiceMethod<$0.GetApprovalDetailsRequest, $0.ApprovalDetails>(
+            'GetApprovalDetails',
+            getApprovalDetails_Pre,
+            false,
+            false,
+            ($core.List<$core.int> value) =>
+                $0.GetApprovalDetailsRequest.fromBuffer(value),
+            ($0.ApprovalDetails value) => value.writeToBuffer()));
     $addMethod(
         $grpc.ServiceMethod<$0.ApproveApprovalRequest, $0.ApprovalResponse>(
             'ApproveApproval',
@@ -171,6 +192,15 @@ abstract class ApprovalServiceBase extends $grpc.Service {
             $0.CheckSessionCapabilityRequest.fromBuffer(value),
         ($0.SessionCapabilityState value) => value.writeToBuffer()));
   }
+
+  $async.Future<$0.ApprovalDetails> getApprovalDetails_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.GetApprovalDetailsRequest> $request) async {
+    return getApprovalDetails($call, await $request);
+  }
+
+  $async.Future<$0.ApprovalDetails> getApprovalDetails(
+      $grpc.ServiceCall call, $0.GetApprovalDetailsRequest request);
 
   $async.Future<$0.ApprovalResponse> approveApproval_Pre(
       $grpc.ServiceCall $call,

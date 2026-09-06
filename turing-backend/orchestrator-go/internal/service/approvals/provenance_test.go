@@ -21,7 +21,7 @@ func (h *approvalHarness) approvedFileWrite(t *testing.T) (repository.EnqueueUse
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+	if _, err := reviewedApprove(t, h.service, h.database, context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
 		t.Fatal(err)
 	}
 	return enqueued, approvalID

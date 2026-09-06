@@ -192,7 +192,7 @@ func TestDefaultApprovalTTLAlignsExpiryAndJWT(t *testing.T) {
 	if expiresAt.Nanosecond() != 0 {
 		t.Fatalf("approval expiry = %s, want whole-second precision shared with JWT", approval.ExpiresAt)
 	}
-	if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+	if _, err := reviewedApprove(t, h.service, h.database, context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
 		t.Fatal(err)
 	}
 	approved, err := h.repo.GetApproval(context.Background(), approvalID)
@@ -275,7 +275,7 @@ func TestApprovalLifecycleEventsIncludePersistedCorrelationIDs(t *testing.T) {
 	t.Run("approved", func(t *testing.T) {
 		h := newApprovalHarness(t)
 		enqueued, approvalID := createApproval(t, h)
-		if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+		if _, err := reviewedApprove(t, h.service, h.database, context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
 			t.Fatal(err)
 		}
 		assertCorrelation(t, h, enqueued, "approval.approved", approvalID)
@@ -302,7 +302,7 @@ func TestApprovalLifecycleEventsIncludePersistedCorrelationIDs(t *testing.T) {
 	t.Run("consumed", func(t *testing.T) {
 		h := newApprovalHarness(t)
 		enqueued, approvalID := createApproval(t, h)
-		if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+		if _, err := reviewedApprove(t, h.service, h.database, context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := h.service.ConsumeApproval(context.Background(), h.consumeRequest(t, enqueued, approvalID, "note.txt")); err != nil {
@@ -370,7 +370,7 @@ func TestApproveApprovalReturnsStatusAndToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := turingv1.NewApprovalServiceClient(h.conn)
+	client := newReviewedClient(t, h)
 
 	comment := "Approved after checking the path"
 	resp, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{
@@ -420,7 +420,7 @@ func TestApproveApprovalNotifiesRuntimeWithToken(t *testing.T) {
 	notifier := &recordingApprovalNotifier{}
 	h.service.SetNotifier(notifier)
 
-	_, err = h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
+	_, err = reviewedApprove(t, h.service, h.database, context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +436,7 @@ func TestGetApprovalForRuntimeReturnsApprovedTokenAndConsumeConsumesOnce(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := turingv1.NewApprovalServiceClient(h.conn)
+	client := newReviewedClient(t, h)
 	if _, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +472,7 @@ func TestConsumeExpiredApprovalPublishesToolFailureBeforeRunFailure(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := turingv1.NewApprovalServiceClient(h.conn)
+	client := newReviewedClient(t, h)
 	if _, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
 		t.Fatal(err)
 	}
@@ -611,7 +611,7 @@ func TestGetApprovalForRuntimeExpiresApprovedTokenBeforeReturningIt(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := turingv1.NewApprovalServiceClient(h.conn)
+	client := newReviewedClient(t, h)
 	if _, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
 		t.Fatal(err)
 	}
@@ -843,7 +843,7 @@ func TestDenyApprovalReturnsDeniedStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := turingv1.NewApprovalServiceClient(h.conn)
+	client := newReviewedClient(t, h)
 
 	reason := "Wrong destination"
 	resp, err := client.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID, Reason: reason})
@@ -893,7 +893,7 @@ func TestHumanApprovalRationaleEmptyInputContract(t *testing.T) {
 		{
 			name: "approve omitted scalar",
 			decide: func(ctx context.Context, service *Server, approvalID string) error {
-				_, err := service.ApproveApproval(ctx, &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
+				_, err := reviewedApprove(t, service, nil, ctx, &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
 				return err
 			},
 			field: func(record repository.ApprovalRecord) sql.NullString { return record.ApprovalComment },
@@ -901,7 +901,7 @@ func TestHumanApprovalRationaleEmptyInputContract(t *testing.T) {
 		{
 			name: "approve explicit empty scalar",
 			decide: func(ctx context.Context, service *Server, approvalID string) error {
-				_, err := service.ApproveApproval(ctx, &turingv1.ApproveApprovalRequest{ApprovalId: approvalID, Comment: ""})
+				_, err := reviewedApprove(t, service, nil, ctx, &turingv1.ApproveApprovalRequest{ApprovalId: approvalID, Comment: ""})
 				return err
 			},
 			field: func(record repository.ApprovalRecord) sql.NullString { return record.ApprovalComment },
@@ -938,6 +938,7 @@ func TestHumanApprovalRationaleEmptyInputContract(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			reviewedRequest(t, h.service, h.database, &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
 			if err := test.decide(context.Background(), h.service, approvalID); err != nil {
 				t.Fatal(err)
 			}
@@ -1032,7 +1033,7 @@ func TestApprovalRationaleAuditIsBoundedAndAllowlisted(t *testing.T) {
 			comment = comment[:len(comment)-1]
 		}
 	}
-	if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{
+	if _, err := reviewedApprove(t, h.service, h.database, context.Background(), &turingv1.ApproveApprovalRequest{
 		ApprovalId: approvalID,
 		Comment:    comment,
 	}); err != nil {
@@ -1232,7 +1233,7 @@ func TestApprovalRationaleSurvivesDatabaseRestart(t *testing.T) {
 		{
 			name: "approval comment",
 			decide: func(ctx context.Context, service *Server, approvalID string) error {
-				_, err := service.ApproveApproval(ctx, &turingv1.ApproveApprovalRequest{
+				_, err := reviewedApprove(t, service, nil, ctx, &turingv1.ApproveApprovalRequest{
 					ApprovalId: approvalID,
 					Comment:    "persisted approval comment",
 				})
@@ -1306,6 +1307,7 @@ func TestApprovalRationaleSurvivesDatabaseRestart(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			reviewedRequest(t, service, database, &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
 			if err := test.decide(ctx, service, approvalID); err != nil {
 				t.Fatal(err)
 			}
@@ -1354,7 +1356,7 @@ func TestEveryApprovalDecisionOnARunIsPublished(t *testing.T) {
 	}
 	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
 	defer unsubscribe()
-	client := turingv1.NewApprovalServiceClient(h.conn)
+	client := newReviewedClient(t, h)
 
 	for _, approvalID := range []string{first, second} {
 		if _, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
@@ -1393,7 +1395,7 @@ func TestDenyApprovalPublishesCommittedTerminalRunEventOnlyOnce(t *testing.T) {
 	}
 	published, unsubscribe := h.bus.Subscribe(enqueued.SessionID)
 	defer unsubscribe()
-	client := turingv1.NewApprovalServiceClient(h.conn)
+	client := newReviewedClient(t, h)
 
 	if _, err := client.DenyApproval(context.Background(), &turingv1.DenyApprovalRequest{ApprovalId: approvalID}); err != nil {
 		t.Fatal(err)
@@ -1516,7 +1518,7 @@ func TestApproveExpiredApprovalFailsPrecondition(t *testing.T) {
 	if _, err := h.database.ExecContext(context.Background(), `UPDATE approvals SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Minute).Format(time.RFC3339Nano), approvalID); err != nil {
 		t.Fatal(err)
 	}
-	client := turingv1.NewApprovalServiceClient(h.conn)
+	client := newReviewedClient(t, h)
 
 	_, err = client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
 	if status.Code(err) != codes.FailedPrecondition {
@@ -1538,7 +1540,7 @@ func TestReapproveExpiredApprovedApprovalRevokesToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := turingv1.NewApprovalServiceClient(h.conn)
+	client := newReviewedClient(t, h)
 	if _, err := client.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
 		t.Fatal(err)
 	}

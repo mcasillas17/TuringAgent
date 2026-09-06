@@ -36,6 +36,11 @@ tools/proto/breaking.sh origin/release-branch
 
 The script validates the ref and refreshes that branch. It uses a depth-one fetch only when the checkout is already shallow; a full local repository stays full. The script fails instead of falling back to a stale local baseline when the fetch cannot complete. CI passes the pull request's base branch, so compatibility is not hardcoded to `main`.
 
+Baseline extraction first completes `git archive` into a temporary file and
+checks its exit status, then extracts that file. This avoids a tar reader
+closing a pipe at the archive end markers before the producer finishes
+padding; producer or extraction failures still fail the compatibility check.
+
 `buf.yaml` uses Buf's `FILE` breaking category because the repository tracks generated Flutter and Go source. Additive fields, messages, enums, and RPCs pass. Removing or renumbering a live field fails even if the removed field is reserved, because generated client source would still break.
 
 Mainline history contains no removed protobuf fields, enum values, or files, so TUR-019 adds no speculative reservations. If a future versioned API policy permits removal, reserve both the old number and name before either can be reused; that policy change must use an explicit new compatibility baseline because the current `FILE` policy intentionally rejects source deletion.

@@ -64,6 +64,11 @@ jobs:
           cd turing-backend/mcp-files
           go test -race ./... -count=1
 
+      - name: Verify reviewed file mutations end to end
+        run: |
+          cd turing-backend/mcp-files
+          go test -tags sqlite_fts5 -race ./cmd/server -run TestReal -count=1
+
       - name: Vet MCP files module
         run: |
           cd turing-backend/mcp-files

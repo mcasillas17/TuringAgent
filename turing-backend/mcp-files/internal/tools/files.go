@@ -540,6 +540,9 @@ func (f FilesTools) createContext(ctx context.Context, args map[string]any, appr
 	if err := f.checkCreatePreconditions(ctx, clean); err != nil {
 		return nil, err
 	}
+	if _, err := f.writeBinding(scope, approvalToken, clean, content); err != nil {
+		return nil, err
+	}
 	var reservation Reservation
 	// Flipped the instant the new file is linked into place. After that the
 	// reservation must never be withdrawn, however the call ends: the bytes are
@@ -591,6 +594,10 @@ func (f FilesTools) createContext(ctx context.Context, args map[string]any, appr
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	logical, _, _ := normalizeSandboxPath(pathValue)
+	if err := f.checkWriteBoundary(ctx, scope, logical, clean, parent, true); err != nil {
 		return nil, err
 	}
 	if err := unix.Linkat(int(parent.Fd()), temporaryName, int(parent.Fd()), leaf, 0); err != nil {
@@ -654,7 +661,7 @@ func (f FilesTools) checkCreatePreconditions(ctx context.Context, path string) e
 	if err != nil {
 		return fmt.Errorf("inspect create target %q: %w", path, err)
 	}
-	return errors.New("file already exists")
+	return errCreateTargetExists
 }
 
 func (f FilesTools) Update(args map[string]any, approvalToken string, agentID string) (map[string]any, error) {
@@ -691,6 +698,16 @@ func (f FilesTools) updateContext(ctx context.Context, args map[string]any, appr
 	defer unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	binding, err := f.writeBinding(scope, approvalToken, clean, content)
+	if err != nil {
+		return nil, err
+	}
+	if scope.active {
+		if expectedHash != "" && expectedHash != binding.BeforeHash {
+			return nil, errors.New("expectedHash differs from reviewed precondition")
+		}
+		expectedHash = binding.BeforeHash
 	}
 	parent, leaf, _, err := f.openParentPathContext(ctx, clean, false)
 	if err != nil {
@@ -781,6 +798,10 @@ func (f FilesTools) updateContext(ctx context.Context, args map[string]any, appr
 		return nil, err
 	}
 	if err := temporary.Close(); err != nil {
+		return nil, err
+	}
+	logical, _, _ := normalizeSandboxPath(pathValue)
+	if err := f.checkWriteBoundary(ctx, scope, logical, clean, parent, false); err != nil {
 		return nil, err
 	}
 	if expectedHash != "" {

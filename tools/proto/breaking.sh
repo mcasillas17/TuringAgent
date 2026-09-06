@@ -56,7 +56,9 @@ fi
 
 baseline="$(mktemp -d "${TMPDIR:-/tmp}/turing-proto-breaking.XXXXXX")"
 trap 'rm -rf -- "$baseline"' EXIT
-if ! git -C "$ROOT" archive "$base_commit" proto | tar -x -C "$baseline"; then
+# Finish the producer before tar can stop at its end markers and cause SIGPIPE.
+if ! git -C "$ROOT" archive "$base_commit" proto > "$baseline/base.tar" ||
+   ! tar -xf "$baseline/base.tar" -C "$baseline"; then
   echo "failed to extract protobuf schema from base ref $BASE_REF ($base_commit)" >&2
   exit 1
 fi

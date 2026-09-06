@@ -11,6 +11,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/approvalpreview"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -120,6 +121,8 @@ func TestAuthorizeWriteConsumesApprovalAndReturnsReservation(t *testing.T) {
 	}
 	consumer := Consumer{JWTSecret: "secret", ApprovalConsumerToken: "internal", ApprovalClient: client}
 	approvalToken := signTestToken(t, "secret", Claims{
+		Binding: approvalpreview.Binding{PreviewHash: "preview", SessionID: "sess_1", RunID: "run_1", ToolCallID: "call_1",
+			PhysicalPath: "sessions/sess_1/runs/run_1/files/notes/todo.txt", AfterHash: approvalpreview.Hash(args["content"].(string))},
 		Iss: "turing.orchestrator", Sub: "general_assistant", Aud: "mcp-files", JTI: "appr_1",
 		Tool: "files.create", ArgsHash: hashArgs(t, args), Exp: time.Now().Add(time.Minute).Unix(), Iat: time.Now().Unix(),
 	})

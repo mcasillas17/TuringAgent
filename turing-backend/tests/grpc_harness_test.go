@@ -27,6 +27,7 @@ import (
 	runtimetestkit "github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/testkit"
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	orchestratortestkit "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/testkit"
+	"github.com/mcasillas17/TuringAgent/turing-backend/testsupport/approvalfixture"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -275,6 +276,7 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 		t.Fatal(err)
 	}
 	publicLis := bufconn.Listen(4 * 1024 * 1024)
+	approvalfixture.Endpoint(t, app)
 	internalLis := bufconn.Listen(4 * 1024 * 1024)
 	go serveBufconn(app.PublicServer, publicLis)
 	go serveBufconn(app.InternalServer, internalLis)
@@ -296,7 +298,7 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 	h.chat = &consentingChatClient{inner: turingv1.NewChatServiceClient(h.publicConn)}
 	h.sessions = turingv1.NewSessionServiceClient(h.publicConn)
 	h.events = turingv1.NewEventServiceClient(h.publicConn)
-	h.approvals = turingv1.NewApprovalServiceClient(h.publicConn)
+	h.approvals = reviewingApprovalClient{ApprovalServiceClient: turingv1.NewApprovalServiceClient(h.publicConn)}
 	h.runtimeApprovals = turingv1.NewApprovalServiceClient(h.internalConn)
 	h.filesMCP.approvalClient = turingv1.NewApprovalServiceClient(h.internalConn)
 	h.waitForHealth(t)

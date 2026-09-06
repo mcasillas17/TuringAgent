@@ -10,11 +10,13 @@ import (
 	"testing"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/approvalpreview"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
+	"github.com/mcasillas17/TuringAgent/turing-backend/testsupport/approvalfixture"
 )
 
 const registryCallWorkerID = "worker-registry-call"
@@ -55,7 +57,7 @@ func TestApprovalRequiredMCPDispatchNeedsVersionedResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.approvals.ApproveApproval(ctx, &turingv1.ApproveApprovalRequest{
+	if _, err := approvalfixture.Approve(t, h.approvals, ctx, &turingv1.ApproveApprovalRequest{
 		ApprovalId: approvalID,
 	}); err != nil {
 		t.Fatal(err)
@@ -108,7 +110,7 @@ func TestTheOrchestratorConsumesTheApprovalItselfExactlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := h.approvals.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{
+	if _, err := approvalfixture.Approve(t, h.approvals, context.Background(), &turingv1.ApproveApprovalRequest{
 		ApprovalId: approvalID,
 	}); err != nil {
 		t.Fatal(err)
@@ -161,7 +163,7 @@ func TestRemoteCallCannotDispatchWithoutTheRunEgressDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.approvals.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{
+	if _, err := approvalfixture.Approve(t, h.approvals, context.Background(), &turingv1.ApproveApprovalRequest{
 		ApprovalId: approvalID,
 	}); err != nil {
 		t.Fatal(err)
@@ -336,7 +338,7 @@ func (h *registryCallHarness) runningToolCall(t *testing.T, toolCallID string, a
 		"vendor",
 		"vendor.write",
 		string(encoded),
-		"sha256:test-placeholder",
+		approvalpreview.Hash(string(encoded)),
 	); err != nil {
 		t.Fatal(err)
 	}

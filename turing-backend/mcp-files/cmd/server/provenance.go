@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/approvalpreview"
 	"github.com/project-turing/mcp-files/internal/approval"
 	"github.com/project-turing/mcp-files/internal/tools"
 )
@@ -60,6 +61,11 @@ func authorizedForInternalCleanup(presented string, configured string) bool {
 // layer stays unaware of paths.
 type provenanceGuard struct {
 	consumer approval.Consumer
+}
+
+func (g provenanceGuard) VerifyWrite(req tools.WriteAuthorization) (approvalpreview.Binding, error) {
+	return g.consumer.VerifyWrite(approval.WriteAuthorization{ApprovalToken: req.ApprovalToken, ProvenanceToken: req.ProvenanceToken,
+		Tool: req.Tool, Args: req.Args, AgentID: req.AgentID, PhysicalPath: req.PhysicalPath})
 }
 
 func (g provenanceGuard) Verify(token string, tool string, args map[string]any, agentID string) (tools.Provenance, error) {

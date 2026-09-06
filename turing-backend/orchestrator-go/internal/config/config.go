@@ -52,9 +52,9 @@ type Config struct {
 	ApprovalJWTSecret     string
 	CursorHMACKey         [32]byte
 	MCPFilesCleanupToken  string
-	// MCPFilesBaseURL is a non-secret internal endpoint used only for
-	// signed session-namespace cleanup; the orchestrator never receives the
-	// normal mcp-files bearer token.
+	// MCPFilesBaseURL is a non-secret internal endpoint for read-only signed
+	// approval previews and session-namespace cleanup. The orchestrator never
+	// receives the normal mcp-files bearer token.
 	MCPFilesBaseURL     string
 	EgressSigningSecret string
 	// IntegrationKey seals third-party credentials before they are stored.

@@ -17,7 +17,7 @@ func TestConsumeApprovalAfterExpiryRejectsAndTerminalizes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
+	if _, err := reviewedApprove(t, h.service, h.database, context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.database.ExecContext(context.Background(), `UPDATE approvals SET expires_at = ? WHERE id = ?`, time.Now().Add(-time.Second).Format(time.RFC3339Nano), approvalID); err != nil {

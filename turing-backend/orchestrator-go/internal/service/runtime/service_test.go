@@ -22,6 +22,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
+	"github.com/mcasillas17/TuringAgent/turing-backend/testsupport/approvalfixture"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -133,6 +134,7 @@ func newHarnessWithDispatch(t *testing.T, dispatch DispatchConfig) *harness {
 	}
 	bus := events.NewBus(8)
 	approvals := approvalsvc.New(repo, bus, "approval-secret")
+	approvalfixture.Endpoint(t, approvals)
 	service := NewWithConfig(repo, bus, dispatch, approvals)
 	lis := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer(grpc.StreamInterceptor(auth.StreamInterceptor("internal-token")))
@@ -2288,7 +2290,7 @@ func TestApprovingApprovalNotifiesAssignedWorkerWithToken(t *testing.T) {
 		decision := cmd.GetToolPolicyDecision()
 		return decision != nil && decision.ToolCallId == "call_approval_notify"
 	}).GetToolPolicyDecision()
-	if _, err := h.approvals.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: decision.ApprovalId}); err != nil {
+	if _, err := approvalfixture.Approve(t, h.approvals, context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: decision.ApprovalId}); err != nil {
 		t.Fatal(err)
 	}
 	update := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {

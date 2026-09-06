@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../models/agent_descriptor.dart';
+import '../models/approval.dart';
 import '../models/audit.dart';
 import '../models/external_agent.dart';
 import '../models/integration.dart';
@@ -109,6 +110,26 @@ abstract class TuringApi implements RemoteEgressApi {
     String approvalId, {
     String? comment,
   });
+
+  Future<ApprovalDetails> getApprovalDetails(
+    String approvalId, {
+    bool refreshPreview = false,
+  }) {
+    throw const TuringApiException(
+      code: 'approval_preview_unsupported',
+      message: 'This client cannot read approval previews',
+    );
+  }
+
+  Future<Map<String, dynamic>> approveReviewedApproval(
+    ApprovalDetails details, {
+    String? comment,
+  }) {
+    throw const TuringApiException(
+      code: 'approval_preview_unsupported',
+      message: 'This client cannot submit a reviewed approval',
+    );
+  }
 
   Future<Map<String, dynamic>> denyApproval(
     String approvalId, {

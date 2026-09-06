@@ -17,6 +17,7 @@ import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
 import '../utils/protobuf_enum.dart';
 import 'agent_descriptor.dart' as model_agent;
+import 'approval.dart' as model_approval;
 import 'audit.dart' as model_audit;
 import 'external_agent.dart' as model_external_agent;
 import 'integration.dart' as model_integration;
@@ -34,6 +35,76 @@ import 'tool_descriptor.dart' as model_tool;
 import 'turing_event.dart' as model_event;
 
 class GrpcMappers {
+  static model_approval.ApprovalDetails approvalDetailsToModel(
+    approvalpb.ApprovalDetails details,
+  ) {
+    final state = decodeClosedEnum(
+      message: details,
+      fieldNumber: 11,
+      unknownValue: model_approval.ApprovalPreviewState.unknown,
+      readValue: () => switch (details.previewState) {
+        approvalpb.ApprovalPreviewState.APPROVAL_PREVIEW_STATE_READY =>
+          model_approval.ApprovalPreviewState.ready,
+        approvalpb.ApprovalPreviewState.APPROVAL_PREVIEW_STATE_UNAVAILABLE =>
+          model_approval.ApprovalPreviewState.unavailable,
+        approvalpb.ApprovalPreviewState.APPROVAL_PREVIEW_STATE_UNSUPPORTED =>
+          model_approval.ApprovalPreviewState.unsupported,
+        approvalpb.ApprovalPreviewState.APPROVAL_PREVIEW_STATE_REDACTED =>
+          model_approval.ApprovalPreviewState.redacted,
+        approvalpb.ApprovalPreviewState.APPROVAL_PREVIEW_STATE_OVERSIZED =>
+          model_approval.ApprovalPreviewState.oversized,
+        approvalpb.ApprovalPreviewState.APPROVAL_PREVIEW_STATE_BINARY =>
+          model_approval.ApprovalPreviewState.binary,
+        approvalpb.ApprovalPreviewState.APPROVAL_PREVIEW_STATE_EXPIRED =>
+          model_approval.ApprovalPreviewState.expired,
+        approvalpb.ApprovalPreviewState.APPROVAL_PREVIEW_STATE_STALE =>
+          model_approval.ApprovalPreviewState.stale,
+        approvalpb.ApprovalPreviewState.APPROVAL_PREVIEW_STATE_TERMINAL =>
+          model_approval.ApprovalPreviewState.terminal,
+        _ => model_approval.ApprovalPreviewState.unknown,
+      },
+    );
+    final file =
+        details.hasFilePreview() &&
+            state == model_approval.ApprovalPreviewState.ready
+        ? details.filePreview
+        : null;
+    return model_approval.ApprovalDetails(
+      approvalId: details.approvalId,
+      sessionId: details.sessionId,
+      runId: details.runId,
+      toolCallId: details.toolCallId,
+      toolName: details.toolName,
+      serverName: details.serverName,
+      argsHash: details.argsHash,
+      previewHash: details.previewHash,
+      expiresAt: DateTime.tryParse(details.expiresAt),
+      status: decodeClosedEnum(
+        message: details,
+        fieldNumber: 10,
+        unknownValue: 'unknown',
+        readValue: () => approvalStatusToString(details.status),
+      ),
+      previewState: state,
+      argumentsJson: details.argumentsJson,
+      canApprove: details.canApprove,
+      canDeny: details.canDeny,
+      filePreview: file == null
+          ? null
+          : model_approval.FileMutationPreview(
+              logicalPath: file.logicalPath,
+              physicalPath: file.physicalPath,
+              operation: file.operation,
+              beforeExists: file.beforeExists,
+              beforeHash: file.beforeHash,
+              afterHash: file.afterHash,
+              beforeText: file.beforeText,
+              afterText: file.afterText,
+              unifiedDiff: file.unifiedDiff,
+            ),
+    );
+  }
+
   static model_external_agent.ExternalAgent externalAgentToModel(
     agentpb.ExternalAgent agent,
   ) {

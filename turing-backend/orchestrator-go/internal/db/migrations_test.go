@@ -206,6 +206,7 @@ func TestApplyMigrationsRecordsEmbeddedMigrationsInLexicalOrder(t *testing.T) {
 		"0018_mcp_approval_identity",
 		"0019_memory_vault",
 		"0020_queue_wait",
+		"0021_approval_previews",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("applied migrations = %v, want %v", got, want)
@@ -738,8 +739,8 @@ func TestCurrentSchemaVersionUsesLatestEmbeddedMigrationPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "0020" {
-		t.Fatalf("CurrentSchemaVersion = %q, want 0020", got)
+	if got != "0021" {
+		t.Fatalf("CurrentSchemaVersion = %q, want 0021", got)
 	}
 }
 
