@@ -235,6 +235,25 @@ final $typed_data.Uint8List runOutcomeReasonDescriptor = $convert.base64Decode(
     'VUQ09NRV9SRUFTT05fSU5URVJOQUxfRkFJTFVSRRAPEiUKIVJVTl9PVVRDT01FX1JFQVNPTl9M'
     'RUdBQ1lfVU5LTk9XThAQ');
 
+@$core.Deprecated('Use queueWaitReasonDescriptor instead')
+const QueueWaitReason$json = {
+  '1': 'QueueWaitReason',
+  '2': [
+    {'1': 'QUEUE_WAIT_REASON_UNSPECIFIED', '2': 0},
+    {'1': 'QUEUE_WAIT_REASON_UNKNOWN', '2': 1},
+    {'1': 'QUEUE_WAIT_REASON_NONE', '2': 2},
+    {'1': 'QUEUE_WAIT_REASON_NO_COMPATIBLE_WORKER', '2': 3},
+    {'1': 'QUEUE_WAIT_REASON_QUEUE_TIMEOUT', '2': 4},
+  ],
+};
+
+/// Descriptor for `QueueWaitReason`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List queueWaitReasonDescriptor = $convert.base64Decode(
+    'Cg9RdWV1ZVdhaXRSZWFzb24SIQodUVVFVUVfV0FJVF9SRUFTT05fVU5TUEVDSUZJRUQQABIdCh'
+    'lRVUVVRV9XQUlUX1JFQVNPTl9VTktOT1dOEAESGgoWUVVFVUVfV0FJVF9SRUFTT05fTk9ORRAC'
+    'EioKJlFVRVVFX1dBSVRfUkVBU09OX05PX0NPTVBBVElCTEVfV09SS0VSEAMSIwofUVVFVUVfV0'
+    'FJVF9SRUFTT05fUVVFVUVfVElNRU9VVBAE');
+
 @$core.Deprecated('Use runStateDescriptor instead')
 const RunState$json = {
   '1': 'RunState',
@@ -288,6 +307,14 @@ const RunState$json = {
       '5': 8,
       '10': 'hasDisplayableContent'
     },
+    {
+      '1': 'queue_wait_reason',
+      '3': 10,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.QueueWaitReason',
+      '10': 'queueWaitReason'
+    },
   ],
 };
 
@@ -301,7 +328,8 @@ final $typed_data.Uint8List runStateDescriptor = $convert.base64Decode(
     'Vyc2lvbhJEChBzdGF0ZV91cGRhdGVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVz'
     'dGFtcFIOc3RhdGVVcGRhdGVkQXQSOwoLZmluaXNoZWRfYXQYCCABKAsyGi5nb29nbGUucHJvdG'
     '9idWYuVGltZXN0YW1wUgpmaW5pc2hlZEF0EjYKF2hhc19kaXNwbGF5YWJsZV9jb250ZW50GAkg'
-    'ASgIUhVoYXNEaXNwbGF5YWJsZUNvbnRlbnQ=');
+    'ASgIUhVoYXNEaXNwbGF5YWJsZUNvbnRlbnQSRgoRcXVldWVfd2FpdF9yZWFzb24YCiABKA4yGi'
+    '50dXJpbmcudjEuUXVldWVXYWl0UmVhc29uUg9xdWV1ZVdhaXRSZWFzb24=');
 
 @$core.Deprecated('Use requestMetadataDescriptor instead')
 const RequestMetadata$json = {

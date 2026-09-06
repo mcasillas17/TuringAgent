@@ -127,6 +127,7 @@ claims.
 |---|---|
 | Local chat and tool loop | Ollama is the default; streaming, bounded tool iterations, zero-argument recovery, and unknown-tool recovery are implemented. |
 | Durable orchestration | Sessions, runs, events, jobs, leases, fencing, retries, recovery, and reopenable run outcomes are persisted in SQLite. |
+| Bounded queue waiting | A queued run records whether any live worker can serve its route, and two configurable bounds end one that waits too long. Not a pause/resume state: both outcomes are terminal. |
 | File actions | Sandboxed read/list/search plus approval-gated create/update are implemented. |
 | Approvals | Mutations use short-lived, argument-bound, single-use approval tokens. |
 | Session management | Stable titles, pagination, search, rename, archive, restore, and durable whole-session withdrawal are implemented. |
@@ -517,6 +518,14 @@ gates are satisfied.
 
 ### 3. TUR-010 - No-worker and queue-timeout truth
 
+- **Implementation introduced by this revision:** A queued run's durable state
+  records whether any live worker can serve its route, and two configurable
+  bounds — a no-worker timeout and an overall queue-age ceiling accumulated
+  across requeues — end a run that waits past them as `failed` or `cancelled`
+  under `TURING_QUEUE_TIMEOUT_POLICY`. Pausing is explicitly not offered.
+  [Bounded queue waiting](architecture/queue-wait.md) defines the semantics,
+  configuration and limits. The inspected mainline baseline above predates this
+  work; this record does not assert a subsequent merge to `main`.
 - **Outcome:** A queued run cannot wait indefinitely without explanation.
 - **Scope:** Persist queue age and worker availability notices; define
   configurable pause/terminal policy; render durable state in Flutter.

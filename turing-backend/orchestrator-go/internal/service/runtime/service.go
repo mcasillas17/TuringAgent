@@ -58,6 +58,12 @@ type Server struct {
 	// send and its delivered bookkeeping. The window between the two is where a
 	// concurrent fence lands, and nothing else can hold a test open inside it.
 	afterAssignmentSend func(repository.Assignment)
+	// queueNow is the clock the queue-wait sweep reads. It is a seam rather than
+	// a direct time.Now call so a deadline test can advance time deliberately
+	// instead of sleeping past one, which is the difference between a test that
+	// proves the bound and a test that is slow and flaky. Nil means the real
+	// clock; nothing outside this package can set it.
+	queueNow func() time.Time
 }
 
 type approvalCreator interface {
@@ -129,6 +135,33 @@ type DispatchConfig struct {
 	LeaseDuration      time.Duration
 	MaxAttempts        int
 	LegacyCapabilities *LegacyCapabilityProfile
+	// QueueWait is TUR-010's bounded-waiting policy. Its zero value leaves both
+	// bounds off, which is the honest default for a caller that has not been
+	// given one: a run then waits exactly as long as it did before, rather than
+	// being terminalized by a deadline nobody configured.
+	QueueWait QueueWaitPolicy
+}
+
+// QueueWaitPolicy bounds how long accepted queued work may wait, and says what
+// happens when it runs out.
+//
+// The two durations answer different questions and start on different events.
+// MaxWait is the run's whole queue age, accumulated across requeues, and starts
+// when the run is enqueued; it is the only bound that applies while a compatible
+// worker exists and is simply busy or working through earlier turns in the
+// session. NoWorkerTimeout starts the first time the orchestrator observes that
+// no live worker satisfies the run's frozen route — absent, past its heartbeat
+// lease, or advertising capabilities the route needs and does not have — and is
+// cleared the moment one does. A zero duration turns that bound off.
+//
+// None of this is a model timeout, an approval TTL, a heartbeat lease, or an
+// execution retry budget. Those measure work, authorization, liveness, and
+// attempts; these measure waiting, and a run that has never been dispatched has
+// consumed none of the others.
+type QueueWaitPolicy struct {
+	MaxWait         time.Duration
+	NoWorkerTimeout time.Duration
+	Policy          runoutcome.QueueTimeoutPolicy
 }
 
 var errRuntimeCommandSenderClosed = errors.New("runtime command sender closed")

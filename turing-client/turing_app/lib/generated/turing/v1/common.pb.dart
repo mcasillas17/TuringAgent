@@ -40,6 +40,7 @@ class RunState extends $pb.GeneratedMessage {
     $0.Timestamp? stateUpdatedAt,
     $0.Timestamp? finishedAt,
     $core.bool? hasDisplayableContent,
+    QueueWaitReason? queueWaitReason,
   }) {
     final result = create();
     if (runId != null) result.runId = runId;
@@ -53,6 +54,7 @@ class RunState extends $pb.GeneratedMessage {
     if (finishedAt != null) result.finishedAt = finishedAt;
     if (hasDisplayableContent != null)
       result.hasDisplayableContent = hasDisplayableContent;
+    if (queueWaitReason != null) result.queueWaitReason = queueWaitReason;
     return result;
   }
 
@@ -82,6 +84,8 @@ class RunState extends $pb.GeneratedMessage {
     ..aOM<$0.Timestamp>(8, _omitFieldNames ? '' : 'finishedAt',
         subBuilder: $0.Timestamp.create)
     ..aOB(9, _omitFieldNames ? '' : 'hasDisplayableContent')
+    ..aE<QueueWaitReason>(10, _omitFieldNames ? '' : 'queueWaitReason',
+        enumValues: QueueWaitReason.values)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -201,6 +205,18 @@ class RunState extends $pb.GeneratedMessage {
   $core.bool hasHasDisplayableContent() => $_has(8);
   @$pb.TagNumber(9)
   void clearHasDisplayableContent() => $_clearField(9);
+
+  /// Why this run is still in the queue, and — once it is terminal — why it
+  /// stopped waiting. NONE for every run that is not being held back by a
+  /// missing route, which is every run in normal operation.
+  @$pb.TagNumber(10)
+  QueueWaitReason get queueWaitReason => $_getN(9);
+  @$pb.TagNumber(10)
+  set queueWaitReason(QueueWaitReason value) => $_setField(10, value);
+  @$pb.TagNumber(10)
+  $core.bool hasQueueWaitReason() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearQueueWaitReason() => $_clearField(10);
 }
 
 class RequestMetadata extends $pb.GeneratedMessage {

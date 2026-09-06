@@ -2,7 +2,10 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,6 +13,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -558,15 +562,40 @@ func (s *Server) refreshPendingCapabilityState(
 				previousPending[item.RunID] = struct{}{}
 			}
 			routingErr := s.ValidateRouting(ctx, item.Requirements)
-			if routingErr == nil {
-				continue
+			var detail *turingv1.RoutingUnavailableDetail
+			observed := runoutcome.QueueWaitNone
+			if routingErr != nil {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				detail = routingDetail(routingErr)
+				if detail == nil {
+					return routingErr
+				}
+				observed = runoutcome.QueueWaitNoCompatibleWorker
 			}
-			if err := ctx.Err(); err != nil {
+			// The durable observation is recorded in BOTH directions and
+			// regardless of the notice flags above. Those flags govern advisory
+			// step notices — whether this particular pass is the right one to
+			// interrupt a user — while this is the authoritative state a
+			// reopened conversation reads and the clock a bounded outcome is
+			// measured from. Leaving it behind on a pass that happens not to
+			// publish would let a restored queue keep telling a user, days
+			// later, that nothing can run it.
+			expired, err := s.applyQueueWaitPolicy(ctx, item, observed)
+			if err != nil {
 				return err
 			}
-			detail := routingDetail(routingErr)
-			if detail == nil {
-				return routingErr
+			if expired {
+				// The run is terminal: it is neither pending work with a
+				// deadline nor a candidate for a loss or restoration notice.
+				delete(nextUnavailable, item.RunID)
+				delete(s.unavailablePending, item.RunID)
+				delete(previousPending, item.RunID)
+				continue
+			}
+			if routingErr == nil {
+				continue
 			}
 			fingerprint := routingRequirementsFingerprint(item.Requirements)
 			previous := s.unavailablePending[item.RunID]
@@ -663,6 +692,145 @@ func (s *Server) refreshPendingCapabilityState(
 	}
 	s.unavailablePending = nextUnavailable
 	return nil
+}
+
+// queueWaitNow reads the clock the queue-wait sweep measures against.
+func (s *Server) queueWaitNow() time.Time {
+	if s.queueNow != nil {
+		return s.queueNow().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// applyQueueWaitPolicy records what the scan saw about one queued run, applies
+// the configured bound to it, and reports whether it terminalized.
+//
+// One run's failure is never allowed to end the sweep. The pages are ordered by
+// a stable keyset, so a single row this pass cannot write — a legacy run whose
+// assistant-message correlation the guarded writer refuses, for instance — would
+// otherwise sit at a fixed position and stop every later run in the queue from
+// ever reaching its own deadline, and stop TUR-018's loss and restoration
+// notices with it. A per-run failure is logged and skipped; only a failure that
+// makes the scan itself unusable stops the pass, which is why the context error
+// is checked separately and returned.
+func (s *Server) applyQueueWaitPolicy(
+	ctx context.Context,
+	item repository.PendingRoutingWork,
+	observed runoutcome.QueueWaitReason,
+) (bool, error) {
+	if err := s.recordQueueWaitObservation(ctx, item, observed); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		log.Printf("record queue wait observation: %v", err)
+		return false, nil
+	}
+	expired, err := s.expireOverdueQueuedRun(ctx, item, observed)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		log.Printf("apply queue wait bound: %v", err)
+		return false, nil
+	}
+	return expired, nil
+}
+
+// recordQueueWaitObservation persists what the scan just saw about one queued
+// run and publishes the transition if the truth actually changed.
+//
+// The reason this page already carries is the first gate: when it agrees with
+// what the scan just observed there is nothing to write, and skipping here means
+// an unchanged queue costs no transaction at all — which matters because this
+// sweep runs on every enqueue and every worker event as well as on the reaper
+// tick, on SQLite's single connection. That value can be stale by the time this
+// runs, so it is only ever used to skip work; the authoritative check is the
+// in-transaction one the repository makes before it writes.
+func (s *Server) recordQueueWaitObservation(
+	ctx context.Context,
+	item repository.PendingRoutingWork,
+	observed runoutcome.QueueWaitReason,
+) error {
+	if item.Clock.Reason == string(observed) {
+		return nil
+	}
+	runID := item.RunID
+	result, changed, err := s.repo.ObserveQueuedRunRouting(ctx, runID, observed, s.queueWaitNow().UnixNano())
+	if err != nil {
+		// Losing the race to a claim, a cancellation, or a session deletion is
+		// the ordinary way a scan finds out the run moved on, not a failure of
+		// this pass.
+		if errors.Is(err, repository.ErrQueueWaitNotApplicable) ||
+			errors.Is(err, repository.ErrRunTransitionConflict) {
+			return nil
+		}
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	for _, event := range result.Events {
+		s.publishEvent(event)
+	}
+	return nil
+}
+
+// expireOverdueQueuedRun applies the configured bound to one queued run and
+// reports whether it terminalized.
+//
+// The no-worker bound is checked first because it is the more specific answer:
+// when both have run out, "nothing could run this" tells a user something they
+// can act on and "it waited too long" does not. Whether a bound has been reached
+// is decided entirely from the durable clock read with this page, so a
+// reconnect, a capability change, a requeue, or a restart cannot shorten or
+// restart it — and the no-worker bound is only ever applied while THIS scan
+// still sees the route as unservable, so a route restored a moment ago cannot be
+// expired on the strength of the interval it just left.
+func (s *Server) expireOverdueQueuedRun(
+	ctx context.Context,
+	item repository.PendingRoutingWork,
+	observed runoutcome.QueueWaitReason,
+) (bool, error) {
+	policy := s.dispatch.QueueWait
+	nowNanos := s.queueWaitNow().UnixNano()
+	code := ""
+	switch {
+	case policy.NoWorkerTimeout > 0 &&
+		observed == runoutcome.QueueWaitNoCompatibleWorker &&
+		item.Clock.UnroutableForNanos(nowNanos) >= policy.NoWorkerTimeout.Nanoseconds():
+		code = runoutcome.CodeQueueNoCompatibleWorker
+	case policy.MaxWait > 0 && item.Clock.TotalWaitedNanos(nowNanos) >= policy.MaxWait.Nanoseconds():
+		code = runoutcome.CodeQueueWaitExpired
+	default:
+		return false, nil
+	}
+	timeoutPolicy := policy.Policy
+	if timeoutPolicy == "" {
+		timeoutPolicy = runoutcome.QueueTimeoutPolicyFail
+	}
+	result, err := s.repo.ExpireQueuedRun(ctx, repository.ExpireQueuedRunInput{
+		RunID:  item.RunID,
+		Policy: timeoutPolicy,
+		Code:   code,
+	})
+	if err != nil {
+		// Every one of these means the run stopped being expirable between the
+		// page read and this write: a worker claimed it, the user cancelled it,
+		// the session was deleted, or it terminalized some other way. The
+		// deadline simply no longer applies.
+		if errors.Is(err, repository.ErrQueueWaitNotApplicable) ||
+			errors.Is(err, repository.ErrRunNotFailable) ||
+			errors.Is(err, repository.ErrRunNotCancellable) ||
+			errors.Is(err, repository.ErrRunTransitionConflict) ||
+			errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, event := range result.Events {
+		s.publishEvent(event)
+	}
+	return true, nil
 }
 
 func routingDetail(err error) *turingv1.RoutingUnavailableDetail {

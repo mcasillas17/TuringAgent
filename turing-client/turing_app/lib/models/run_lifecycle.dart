@@ -66,8 +66,20 @@ enum RunLifecycle {
 /// queued to completed is absent for the opposite reason: nothing ran, so there
 /// is no successful report to commit. A queued run can still end, but only by
 /// failing or being cancelled.
+///
+/// queued to queued is the one self-edge, and it is here because the backend
+/// really does commit one: TUR-010's queue observer records that a queued run
+/// has no worker able to serve it — or that one came back — as a versioned
+/// transition, so the fact reaches a reopened conversation and a live stream
+/// through the same snapshot as every other change. The run has not moved
+/// phase; what changed is [RunState.queueWaitReason], and rejecting the edge
+/// would make the client discard the only explanation it will ever get for a
+/// run that is sitting still. No other lifecycle has a self-edge, and this one
+/// is still subject to every rule around it: a higher version, never after a
+/// terminal state, and identical state at the same version is still a no-op.
 const Map<RunLifecycle, Set<RunLifecycle>> _publiclyCommittedEdges = {
   RunLifecycle.queued: {
+    RunLifecycle.queued,
     RunLifecycle.running,
     RunLifecycle.failed,
     RunLifecycle.cancelled,

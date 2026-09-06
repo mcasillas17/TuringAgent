@@ -226,6 +226,8 @@ Common values:
 | Approval-consumer scope | `ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and `CheckSessionCapability`; never runtime-only methods |
 | `TURING_APPROVAL_TIMEOUT_MS` / `TURING_APPROVAL_WAIT_TIMEOUT_MS` | Approval lifetime and the longer runtime observation bound (defaults: 65s / 71s) |
 | `TURING_TOOL_TIMEOUT_MS` / `TURING_TOOL_TOTAL_TIMEOUT_MS` | Per-request MCP timeout and whole-tool lifecycle timeout (defaults: 30s / 180s) |
+| `TURING_QUEUE_NO_WORKER_TIMEOUT_MS` / `TURING_QUEUE_MAX_WAIT_MS` | How long an already-accepted message may sit in the queue: while nothing connected can run it (default 15m), and in total across requeues (default 12h). Either may be `0` to switch that bound off. These bound waiting only — they are not the model, approval, lease or retry timeouts, and a message that never started has consumed none of those. Deadlines are noticed on `TURING_JOB_REAPER_INTERVAL_MS`, and setting that to `0` turns both bounds off whatever these say. See [bounded queue waiting](docs/architecture/queue-wait.md) |
+| `TURING_QUEUE_TIMEOUT_POLICY` | What happens when a queue bound is reached: `fail` (default) or `cancel`. Both are final; there is no paused state to resume from |
 | `HOST_IDENTITY_MODE` | Managed compatibility marker; `init.sh` always resets it to `auto` |
 | `HOST_UID` / `HOST_GID` | Current canonical non-root host IDs, managed by `init.sh` and overridden safely by `scripts/compose.sh` at launch |
 | `ORCHESTRATOR_GRPC_ADDR` | Internal orchestrator gRPC address, usually `turing-orchestrator:3001` |

@@ -23,13 +23,28 @@ import 'terminal_outcome_card.dart';
 /// first pass through the safe enum mapper, so this constructor can never
 /// receive backend prose.
 class RunCancelledCard extends StatelessWidget {
-  const RunCancelledCard({super.key, required this.reason});
+  const RunCancelledCard({
+    super.key,
+    required this.reason,
+    this.queueWaitReason = QueueWaitReason.none,
+  });
 
   final RunOutcomeReason reason;
+
+  /// Which queue bound ended this run, when one did. See [RunFailureCard] for
+  /// why the outcome reason alone cannot answer that.
+  final QueueWaitReason queueWaitReason;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final queued = localizedQueueOutcomeCopy(l10n, reason, queueWaitReason);
+    if (queued != null) {
+      return TerminalOutcomeCard(
+        outcomeLabel: queued.title,
+        message: queued.detail,
+      );
+    }
     // `none` mirrors `localizedRunStateCopy`'s own fallback: an
     // unclassified cancellation still needs truthful lifecycle-level
     // copy, not the generic cross-lifecycle "outcome unavailable" wording.

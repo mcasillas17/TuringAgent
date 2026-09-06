@@ -15,6 +15,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 	agentsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/agents"
 	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
@@ -138,6 +139,11 @@ func New(cfg config.Config) (*App, error) {
 		MaxConcurrentRuns: maxConcurrentRuns,
 		LeaseDuration:     time.Duration(cfg.JobTimeoutMS) * time.Millisecond,
 		MaxAttempts:       cfg.JobMaxAttempts,
+		QueueWait: runtimesvc.QueueWaitPolicy{
+			MaxWait:         time.Duration(cfg.QueueMaxWaitMS) * time.Millisecond,
+			NoWorkerTimeout: time.Duration(cfg.QueueNoWorkerTimeoutMS) * time.Millisecond,
+			Policy:          runoutcome.QueueTimeoutPolicy(cfg.QueueTimeoutPolicy),
+		},
 		LegacyCapabilities: &runtimesvc.LegacyCapabilityProfile{
 			Models:                      legacyModels,
 			AgentIds:                    []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},

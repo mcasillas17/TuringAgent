@@ -27,8 +27,19 @@ fields never appear in public `RunState`.
 `SessionService.ListMessages` attaches `RunState` to the correlated assistant
 message with one zero-or-one join. The public snapshot contains run,
 user-message, and assistant-message IDs; lifecycle; outcome reason; version;
-state-update time; terminal time when applicable; and whether the canonical
-assistant content is displayable.
+state-update time; terminal time when applicable; whether the canonical
+assistant content is displayable; and TUR-010's `queue_wait_reason`.
+
+`queue_wait_reason` is a closed vocabulary of its own — `none`,
+`no_compatible_worker`, and the terminal-only `queue_timeout` — answering a
+question the lifecycle cannot: `queued` says the run has not started, and this
+says whether anything is currently able to start it. A terminal run carries a value only when the queue bound
+that ended it asserted one, which is what tells a reader that an `expired` run
+ran out of queue time rather than out of an approval; a run that left the queue
+any other way reports `none`, because a run that started is not one that never
+started. Absence and `none` mean the same
+thing, so every snapshot written before TUR-010 reads correctly. See
+[bounded queue waiting](queue-wait.md).
 
 Only the event types whose own repository writer commits that snapshot may
 ever carry a typed `RunState`: `agent.run.queued`, `agent.run.started`,
@@ -197,6 +208,14 @@ and replayed states use the same pure rules:
 6. reject every update after a terminal state;
 7. otherwise accept only a defined higher-version lifecycle transition.
 
+`queued -> queued` is a defined transition, and the only self-edge in the graph.
+TUR-010's queue observer commits one when a queued run's `queue_wait_reason`
+changes: the run has not moved phase, but what it is waiting for has, and that
+is the only explanation the client will ever get for a run sitting still.
+Rejecting the edge would make the client discard it. Every other rule still
+applies to it — higher version, never after a terminal state, and an identical
+state at the same version is still a no-op.
+
 Completed content renders without a redundant success card. Completed with no
 content renders a neutral completion card. A queued, running, waiting-approval,
 or recovering run with no displayable content suppresses the blank bubble and
@@ -248,7 +267,6 @@ after migration returns the original terminal run without another write.
 
 ## Retained limitations
 
-- There is no no-worker or queue-timeout policy; TUR-010 owns it.
 - Historical tool-card reconstruction is unavailable.
 - There is no explicit user-cancel intent API; current transport cancellation is
   abandonment.

@@ -412,5 +412,61 @@ class RunOutcomeReason extends $pb.ProtobufEnum {
   const RunOutcomeReason._(super.value, super.name);
 }
 
+/// Why a queued run is still waiting, as a closed vocabulary a client can
+/// localize. It answers a different question from RunLifecycle: queued already
+/// says the run has not started, and this says whether anything is currently
+/// able to start it.
+///
+/// NONE is the normal queue: at least one live worker satisfies the run's frozen
+/// route, so the run is only waiting its turn or waiting for that worker to free
+/// a slot. NO_COMPATIBLE_WORKER means the orchestrator observed that no live
+/// worker satisfies the route at all — absent, heartbeat-expired, or advertising
+/// capabilities the route needs and does not have. Only that second state starts
+/// the no-worker deadline; the overall queue-age deadline applies to both.
+///
+/// QUEUE_TIMEOUT appears only on a terminal snapshot, and means the overall
+/// queue-age bound ran out — whichever condition the run was waiting under.
+/// NO_COMPATIBLE_WORKER is reported for a terminal run instead only when the
+/// no-worker bound is enabled and was reached first, so a run whose worker
+/// vanished shortly before its total queue age expired still reports
+/// QUEUE_TIMEOUT. Either value separates a run that ran out of queue time from
+/// an approval that ran out of its own, since both report EXPIRED.
+///
+/// A terminal snapshot carries a value only when the queue bound that ended the
+/// run asserted it, so a reopened conversation can say which bound ran out. A run
+/// that left the queue for any other reason — it was picked up, cancelled, or
+/// abandoned by its client — reports NONE, because the reason describes waiting
+/// and that run stopped waiting.
+class QueueWaitReason extends $pb.ProtobufEnum {
+  static const QueueWaitReason QUEUE_WAIT_REASON_UNSPECIFIED =
+      QueueWaitReason._(
+          0, _omitEnumNames ? '' : 'QUEUE_WAIT_REASON_UNSPECIFIED');
+  static const QueueWaitReason QUEUE_WAIT_REASON_UNKNOWN =
+      QueueWaitReason._(1, _omitEnumNames ? '' : 'QUEUE_WAIT_REASON_UNKNOWN');
+  static const QueueWaitReason QUEUE_WAIT_REASON_NONE =
+      QueueWaitReason._(2, _omitEnumNames ? '' : 'QUEUE_WAIT_REASON_NONE');
+  static const QueueWaitReason QUEUE_WAIT_REASON_NO_COMPATIBLE_WORKER =
+      QueueWaitReason._(
+          3, _omitEnumNames ? '' : 'QUEUE_WAIT_REASON_NO_COMPATIBLE_WORKER');
+  static const QueueWaitReason QUEUE_WAIT_REASON_QUEUE_TIMEOUT =
+      QueueWaitReason._(
+          4, _omitEnumNames ? '' : 'QUEUE_WAIT_REASON_QUEUE_TIMEOUT');
+
+  static const $core.List<QueueWaitReason> values = <QueueWaitReason>[
+    QUEUE_WAIT_REASON_UNSPECIFIED,
+    QUEUE_WAIT_REASON_UNKNOWN,
+    QUEUE_WAIT_REASON_NONE,
+    QUEUE_WAIT_REASON_NO_COMPATIBLE_WORKER,
+    QUEUE_WAIT_REASON_QUEUE_TIMEOUT,
+  ];
+
+  static final $core.List<QueueWaitReason?> _byValue =
+      $pb.ProtobufEnum.$_initByValueList(values, 4);
+  static QueueWaitReason? valueOf($core.int value) =>
+      value < 0 || value >= _byValue.length ? null : _byValue[value];
+
+  const QueueWaitReason._(super.value, super.name);
+}
+
 const $core.bool _omitEnumNames =
     $core.bool.fromEnvironment('protobuf.omit_enum_names');

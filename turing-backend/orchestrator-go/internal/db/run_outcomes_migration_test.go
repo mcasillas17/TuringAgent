@@ -1319,7 +1319,21 @@ func TestRunOutcomeMigrationPreservesEveryExistingRunColumnAndForeignKey(t *test
 		}
 	}
 	sort.Strings(added)
-	wantAdded := []string{"assistant_content_sha256", "outcome_reason", "state_updated_at", "state_version"}
+	// 0020 appends TUR-010's queue-wait columns after this migration runs, so
+	// the harness that applies every embedded migration sees them here too.
+	// They are listed rather than filtered out: this assertion exists to make
+	// any new agent_runs column a deliberate edit, and filtering would let the
+	// next one in unnoticed.
+	wantAdded := []string{
+		"assistant_content_sha256",
+		"outcome_reason",
+		"queue_unroutable_since_ns",
+		"queue_wait_reason",
+		"queue_waited_ns",
+		"queued_since_ns",
+		"state_updated_at",
+		"state_version",
+	}
 	if !reflect.DeepEqual(added, wantAdded) {
 		t.Fatalf("added agent_runs columns = %v, want %v", added, wantAdded)
 	}

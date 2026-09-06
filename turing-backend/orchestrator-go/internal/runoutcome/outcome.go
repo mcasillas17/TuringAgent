@@ -88,11 +88,70 @@ const (
 	// CodeClientCancelled is the only cancellation code the current transport
 	// path can justify.
 	CodeClientCancelled = "client_cancelled"
+	// CodeQueueWaitExpired is TUR-010's overall queue-age bound: the run spent
+	// longer in the queue, in total, than the configured maximum, whatever the
+	// reason nobody picked it up.
+	CodeQueueWaitExpired = "queue_wait_expired"
+	// CodeQueueNoCompatibleWorker is TUR-010's narrower bound: no live worker
+	// satisfied the run's frozen route for longer than the configured
+	// no-worker timeout.
+	CodeQueueNoCompatibleWorker = "queue_no_compatible_worker"
 )
+
+// QueueWaitReason is the closed vocabulary persisted in
+// agent_runs.queue_wait_reason and projected into RunState.queue_wait_reason.
+//
+// It is deliberately narrow. QueueWaitNone covers every run whose route at
+// least one live worker satisfies — the run is waiting its turn, or waiting for
+// a busy worker to free a slot, and neither is worth interrupting a user about.
+// QueueWaitNoCompatibleWorker is the one ongoing condition a user can act on,
+// and the only one that starts the no-worker deadline. QueueWaitQueueTimeout is
+// terminal-only and never describes a run that is still waiting.
+type QueueWaitReason string
+
+const (
+	QueueWaitNone               QueueWaitReason = "none"
+	QueueWaitNoCompatibleWorker QueueWaitReason = "no_compatible_worker"
+	// QueueWaitQueueTimeout is written only by the terminal transition of a run
+	// whose overall queue-age bound ran out. It is what tells a reader that an
+	// EXPIRED run expired in the queue rather than on an approval, which the
+	// outcome vocabulary alone cannot say.
+	QueueWaitQueueTimeout QueueWaitReason = "queue_timeout"
+)
+
+// QueueTimeoutPolicy is what the operator chose to happen when a queued run
+// runs out of the time it is allowed to wait.
+//
+// Both values are terminal. There is deliberately no pause value: a durable
+// paused queue would need a public lifecycle of its own and an explicit resume
+// RPC, and the one existing state that looks like a pause — waiting_approval —
+// belongs to an approval a human was actually asked for and must not be
+// repurposed as a generic hold.
+type QueueTimeoutPolicy string
+
+const (
+	QueueTimeoutPolicyFail   QueueTimeoutPolicy = "fail"
+	QueueTimeoutPolicyCancel QueueTimeoutPolicy = "cancel"
+)
+
+// KnownQueueTimeoutPolicy reports whether a configured string names a policy
+// this build implements.
+func KnownQueueTimeoutPolicy(value string) bool {
+	switch QueueTimeoutPolicy(value) {
+	case QueueTimeoutPolicyFail, QueueTimeoutPolicyCancel:
+		return true
+	default:
+		return false
+	}
+}
 
 // ErrUnsupportedNotice rejects a run-step notice that is not fully allowlisted.
 // It names the class of problem and never the rejected values.
 var ErrUnsupportedNotice = errors.New("unsupported run step notice")
+
+// ErrUnsupportedQueueOutcome rejects a queue-bound terminal outcome built from
+// a code outside TUR-010's two. It names the class of problem, never the code.
+var ErrUnsupportedQueueOutcome = errors.New("unsupported queue wait outcome")
 
 // MaxNoticeAttempts bounds notice counters so a caller cannot smuggle an
 // arbitrary number into a public payload.
@@ -182,6 +241,35 @@ func (c Cancellation) Reason() Reason {
 // constructor may only be added alongside an explicit typed cancel-intent RPC.
 func AbandonedCancellation() Cancellation {
 	return Cancellation{origin: OriginClientLifecycle, code: CodeClientCancelled, reason: ReasonAbandoned}
+}
+
+// QueueTimeoutCancellation is the cancellation half of TUR-010's configurable
+// queue policy: the operator chose to end an over-waiting run as cancelled
+// rather than failed.
+//
+// The reason is abandoned, not user_cancelled. Nobody asked for this — the
+// orchestrator gave up on the run's behalf — and the rule above still stands:
+// user intent may only be claimed once an explicit typed cancel RPC exists. The
+// code says which bound ran out, and an unrecognized one is refused rather than
+// smuggled into a durable column, on the same terms NormalizeFailure applies to
+// a code it does not know.
+func QueueTimeoutCancellation(code string) (Cancellation, error) {
+	switch code {
+	case CodeQueueWaitExpired, CodeQueueNoCompatibleWorker:
+		return Cancellation{origin: OriginDispatch, code: code, reason: ReasonAbandoned}, nil
+	default:
+		return Cancellation{}, ErrUnsupportedQueueOutcome
+	}
+}
+
+// QueueTimeoutFailure is the failure half of the same policy.
+func QueueTimeoutFailure(code string) (Failure, error) {
+	switch code {
+	case CodeQueueWaitExpired, CodeQueueNoCompatibleWorker:
+		return NormalizeFailure(OriginDispatch, code, RetryClassNever), nil
+	default:
+		return Failure{}, ErrUnsupportedQueueOutcome
+	}
 }
 
 // NoticeCategory is the allowlisted vocabulary for rewritten failure-like
@@ -325,6 +413,12 @@ var failureReasons = map[failureKey]Reason{
 	{OriginToolPolicy, "egress_decision_required"}:              ReasonPolicyDenied,
 	{OriginToolPolicy, "egress_decision_invalid"}:               ReasonPolicyDenied,
 	{OriginClientLifecycle, "client_cancelled"}:                 ReasonAbandoned,
+	// TUR-010 queue bounds. Both are an expiry: the run was accepted, waited,
+	// and ran out of the time the operator allowed it to wait. Which bound it
+	// ran out of is recorded by the queue_wait_reason that same terminal
+	// transition asserts, rather than by forking the public outcome vocabulary.
+	{OriginDispatch, CodeQueueWaitExpired}:        ReasonExpired,
+	{OriginDispatch, CodeQueueNoCompatibleWorker}: ReasonExpired,
 
 	// Nonterminal dispatch conditions: the run keeps outcome none while its
 	// lifecycle moves through recovering or queued. Terminalizing an exhausted

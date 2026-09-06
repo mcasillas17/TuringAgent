@@ -58,6 +58,12 @@ void main() {
         RunLifecycle.queued,
         'a confirmed release requeued the run without an uncertain phase',
       ),
+      (
+        RunLifecycle.queued,
+        RunLifecycle.queued,
+        'the queue observer recorded that nothing can serve this run, or that '
+            'something can again, without the run leaving the queue',
+      ),
     ];
 
     for (final (from, to, why) in accepted) {
@@ -130,11 +136,6 @@ void main() {
       (
         RunLifecycle.running,
         RunLifecycle.running,
-        'a repeat is the same state, not a transition',
-      ),
-      (
-        RunLifecycle.queued,
-        RunLifecycle.queued,
         'a repeat is the same state, not a transition',
       ),
       (

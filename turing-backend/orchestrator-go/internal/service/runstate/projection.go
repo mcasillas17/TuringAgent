@@ -156,6 +156,7 @@ func Project(state repository.RunState) *turingv1.RunState {
 		// string are execution detail a client has no business seeing. They are
 		// absent by never being read here, not by being read and dropped.
 		HasDisplayableContent: state.HasDisplayableContent,
+		QueueWaitReason:       queueWaitReason(state.QueueWaitReason),
 	}
 	// A run that has not reached a terminal phase has not finished, whatever a
 	// stray column says — and an unrecognized phase is not one this build can
@@ -164,6 +165,27 @@ func Project(state repository.RunState) *turingv1.RunState {
 		projected.FinishedAt = instant(state.FinishedAt.String)
 	}
 	return projected
+}
+
+// queueWaitReason maps the durable queue vocabulary, treating absence and
+// "none" identically: a payload written before TUR-010 and a run nothing is
+// holding back are the same fact, and inventing a distinction between them
+// would put "status unavailable" on every historical run.
+//
+// A value this build cannot name becomes the explicit unknown rather than none,
+// because a newer server that introduces a reason is saying something, and
+// saying nothing on its behalf would be the one wrong answer.
+func queueWaitReason(stored string) turingv1.QueueWaitReason {
+	switch runoutcome.QueueWaitReason(stored) {
+	case "", runoutcome.QueueWaitNone:
+		return turingv1.QueueWaitReason_QUEUE_WAIT_REASON_NONE
+	case runoutcome.QueueWaitNoCompatibleWorker:
+		return turingv1.QueueWaitReason_QUEUE_WAIT_REASON_NO_COMPATIBLE_WORKER
+	case runoutcome.QueueWaitQueueTimeout:
+		return turingv1.QueueWaitReason_QUEUE_WAIT_REASON_QUEUE_TIMEOUT
+	default:
+		return turingv1.QueueWaitReason_QUEUE_WAIT_REASON_UNKNOWN
+	}
 }
 
 func allowedPair(lifecycle string, reason runoutcome.Reason) bool {
