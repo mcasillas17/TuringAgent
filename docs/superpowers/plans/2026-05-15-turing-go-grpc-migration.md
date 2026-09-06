@@ -1,6 +1,7 @@
 # Turing Go gRPC Migration Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Historical plan:** This record is not current implementation or status.
+Use the [canonical roadmap](../../NORTH_STAR.md) for current truth.
 
 **Goal:** Replace the TypeScript Turing orchestrator and agent-runtime with Go services using public and internal gRPC, server-streamed AI token responses, safe dynamic JSON handling, and end-to-end cancellation.
 

@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:turing_flutter_app/features/chat/chat_screen.dart';
+import 'package:turing_flutter_app/features/search/search_screen.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
@@ -26,6 +28,77 @@ import '../support/no_skills_api.dart';
 import '../support/no_telemetry_api.dart';
 
 void main() {
+  testWidgets('search selection stays open until dismissed', (tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final api = _FakeApiClient()
+      ..sessions = [
+        Session(
+          sessionId: 'sess_initial',
+          title: 'Initial chat',
+          updatedAt: DateTime.utc(2026, 5, 11),
+        ),
+        Session(
+          sessionId: 'sess_target',
+          title: 'Target chat',
+          updatedAt: DateTime.utc(2026, 5, 10),
+        ),
+      ]
+      ..searchHits = [
+        SearchHit(
+          sessionId: 'sess_target',
+          message: Message(
+            messageId: 'search-hit',
+            role: 'user',
+            content: 'release checklist',
+            sequence: 1,
+            createdAt: DateTime.utc(2026, 5, 10),
+          ),
+        ),
+      ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ResponsiveShell(
+          apiClient: api,
+          eventSourceFactory: () => _FakeEventSource(),
+          authStorage: _FakeAuthStorage(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Initial chat'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<ChatScreen>(find.byType(ChatScreen)).sessionId,
+      'sess_initial',
+    );
+    await tester.tap(find.byTooltip('Search conversations'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('search-field')),
+      'release checklist',
+    );
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('hit-search-hit')));
+    await tester.pumpAndSettle();
+    expect(find.byType(SearchScreen), findsOneWidget);
+    final chat = tester.widget<ChatScreen>(
+      find.byType(ChatScreen, skipOffstage: false),
+    );
+    expect(chat.sessionId, 'sess_target');
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.byType(SearchScreen), findsNothing);
+    expect(find.byType(ChatScreen), findsOneWidget);
+    expect(
+      tester.widget<ChatScreen>(find.byType(ChatScreen)).sessionId,
+      'sess_target',
+    );
+  });
+
   testWidgets('the shell is one surface: conversations beside a chat', (
     tester,
   ) async {
@@ -47,16 +120,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // The old rail carried Devices/Stats/IoT: destinations for features
-    // docs/VISION.md refuses outright, rendering mock dashboards that implied
-    // the feature existed. Those stay gone.
+    // The old Devices/Stats/IoT destinations rendered mock dashboards that
+    // implied unimplemented features existed. Those stay gone.
     expect(find.text('Devices'), findsNothing);
     expect(find.text('Stats'), findsNothing);
     expect(find.text('IoT Devices Dashboard'), findsNothing);
 
-    // Destinations that ARE on the roadmap do appear — the rule is not "only
-    // implemented destinations" but "no destination that pretends", and each
-    // unimplemented one says so on arrival (asserted below).
+    // These four workspace labels remain visible in navigation.
     for (final label in ['Skills', 'Integrations', 'MCPs', 'Automations']) {
       expect(find.text(label), findsOneWidget, reason: '$label is navigable');
     }
@@ -373,8 +443,10 @@ class _FakeApiClient
     required String query,
     int limit = 50,
   }) async {
-    return const [];
+    return searchHits;
   }
+
+  List<SearchHit> searchHits = const [];
 
   /// Mutable so a test can change what the backend reports between calls —
   /// which is exactly what happens when the first message renames a session.

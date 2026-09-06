@@ -852,8 +852,8 @@ implementation it kills. Break the gate, watch the test fail, restore.
 
 ## Documentation the implementation PR must update
 
-- `docs/architecture/2026-08-18-personal-agent-audit.md` — TUR-022 status
-  moves from pending-approval to implementation-tracking.
+- [`docs/NORTH_STAR.md`](../NORTH_STAR.md) — record TUR-022 implementation
+  evidence and distinguish work awaiting merge from shipped status.
 - `CLAUDE.md` — the SQLCipher-linked build flavor, the new CI job, the
   `DATABASE_ENCRYPTION` selector, the retirement ceremony's operator notes,
   and a **rewrite of the `legacy_skill_export_recovery` gotcha's cleanup

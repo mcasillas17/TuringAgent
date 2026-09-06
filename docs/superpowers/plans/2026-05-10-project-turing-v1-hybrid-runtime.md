@@ -1,6 +1,7 @@
 # TuringAgent v1.0 Hybrid Runtime Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Historical plan:** This record is not current implementation or status.
+Use the [canonical roadmap](../../NORTH_STAR.md) for current truth.
 
 **Goal:** Build the v1.0 local-first TuringAgent vertical slice: Flutter client -> Node/TypeScript orchestrator -> SQLite -> separate agent runtime -> Ollama/MCP -> durable WebSocket event stream.
 

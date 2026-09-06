@@ -51,9 +51,16 @@ Run each from the repo root. Subshells, not `cd X && ... && cd ../..` — on fai
 
 The root module requires SQLite FTS5, so its `go test` and `go build` commands must include `-tags sqlite_fts5` (or set `GOFLAGS=-tags=sqlite_fts5`).
 
+Prepare the nested module caches first (this setup may use the network). The
+root documentation tests resolve all backend dependency profiles offline, so
+independent nested-module dependency versions must already be available.
+
 ```bash
+(cd turing-backend/mcp-files && go mod download)
+(cd turing-backend/mcp-system && go mod download)
 go test -tags sqlite_fts5 ./... -count=1
 go test -tags sqlite_fts5 -race ./... -count=1   # CI runs this; concurrency bugs hide without it
+go test -tags sqlite_fts5 ./.github/workflows -count=1
 go build -tags sqlite_fts5 ./...
 ( cd turing-backend/mcp-files  && go test ./... -count=1 && go test -race ./... -count=1 && go build ./cmd/server )
 ( cd turing-backend/mcp-system && go test ./... -count=1 && go test -race ./... -count=1 && go build ./... )

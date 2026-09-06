@@ -54,8 +54,9 @@ Flutter maps protocol event
 The shell opens `SubscribeSessionUpdates`, which first replays the latest
 durable snapshot for the same 50 most-recent sessions returned by the session
 list and then receives live updates from every session, including inactive
-conversations and new automation conversations. The event bus filters this
-subscription to `session.updated` and coalesces backlog by session, so a slow
+conversations and new automation conversations. The service filters this
+subscription to `session.updated` and `session.deleted`; the bus coalesces
+backlog by session, so a slow
 client retains each session's latest update without an unrelated event evicting
 it. The active chat's per-session stream can deliver the same event; timestamp
 idempotency makes the duplicate harmless.
@@ -117,11 +118,18 @@ Deleting a session deletes its title with the session row. Existing foreign-key
 cascades also remove its messages, jobs, runs, and durable `session.updated`
 events, so neither search nor event replay can recover the deleted title.
 
-`session.updated` is not a deletion event. A deletion performed by this Flutter
-shell is removed locally and guarded against buffered stale updates. A later
-list refresh can remove a session deleted elsewhere, but as already documented
-in `docs/VISION.md`, the deletion itself is not pushed to another subscribed
-client; cross-client deletion propagation is a separate existing protocol gap.
+`session.updated` is not a deletion event. Completed withdrawal calls
+`Bus.TerminateSession`, which publishes `session.deleted` to that session's
+subscribers and to every `SubscribeSessionUpdates` subscriber. The production
+Flutter shell opens the global stream and removes a row when it receives that
+terminal event, even if the chat is not open; a completed deletion receipt
+also removes the local row. A disconnected client that misses the live event
+uses list refresh as its reconnect/fallback reconciliation.
+
+`TestBusPublishesTerminalDeletionToGlobalSubscribers` in
+`turing-backend/orchestrator-go/internal/service/events/bus_test.go` covers the
+global publication; `ResponsiveShell._applyGlobalSessionUpdated` handles
+`session.deleted` through the same local deletion path.
 
 ## Configuration and limits
 

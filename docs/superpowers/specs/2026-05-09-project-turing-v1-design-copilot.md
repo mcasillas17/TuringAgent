@@ -1,5 +1,8 @@
 # TuringAgent v1.0 Design — Hybrid Runtime
 
+**Historical design:** This record is not current implementation or status.
+Use the [canonical roadmap](../../NORTH_STAR.md) for current truth.
+
 ## Status
 
 This is the updated Copilot-side v1.0 spec after reading and integrating the relevant pieces of:

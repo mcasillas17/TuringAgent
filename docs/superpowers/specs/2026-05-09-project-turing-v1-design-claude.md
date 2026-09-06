@@ -1,5 +1,8 @@
 # TuringAgent v1.0 — Design
 
+**Historical design:** This record is not current implementation or status.
+Use the [canonical roadmap](../../NORTH_STAR.md) for current truth.
+
 **Status:** Approved through brainstorming on 2026-05-09. Supersedes `docs/Project_Turing_Tech_Spec_Codex.md`.
 
 ## 1. Problem & Goals

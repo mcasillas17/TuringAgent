@@ -1,16 +1,22 @@
 # TuringAgent Integration Checklist
 
 Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
+The [canonical roadmap](../NORTH_STAR.md#current-status) defines current capability scope;
+this checklist does not imply that future mobile or MCP conformance work ships.
 
 ## 1. Initialization and Compose
 
-- [ ] `turing-backend/scripts/init.sh` creates mode-`0700` data and sandbox
-  directories, a mode-`0700` skills directory, mode-`0600` SQLite files, and a
-  mode-`0600` regular `.env` while running as a non-root host user.
-- [ ] Initialization rejects symlinked, non-owned, inaccessible, or
-  group/world-writable sandbox roots and unsafe writable legacy entries.
-- [ ] `turing-backend/scripts/compose.sh` revalidates the sandbox, skills, and
-  data bind sources plus SQLite modes immediately before a launch, then injects
+- [ ] `turing-backend/scripts/init.sh` provisions mode-`0700` data, sandbox,
+  skills, memory and MCP configuration directories, secures existing SQLite
+  files to `0600`, and creates a mode-`0600` regular `.env` while running as
+  a non-root host user. Database creation belongs to the orchestrator.
+- [ ] Initialization rejects symlinked data, sandbox, skills, memory and MCP
+  configuration roots and pinned vault documents. It also rejects non-owned,
+  inaccessible or group/world-writable sandbox roots and unsafe writable
+  legacy entries.
+- [ ] `turing-backend/scripts/compose.sh` revalidates the sandbox, skills,
+  memory, MCP configuration and data bind sources plus existing SQLite modes
+  immediately before a launch, then injects
   the current host UID/GID for both bind-mount writers.
 - [ ] `cd turing-backend && ./scripts/compose.sh config --quiet` resolves the
   orchestrator, agent runtime, `mcp-system`, and `mcp-files` services.
@@ -19,7 +25,7 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 - [ ] `TURING_DOCKER_SECURITY_LIVE=1 go test -tags sqlite_fts5
   ./turing-backend/tests -run TestBuiltBackendImagesDeclareNoWritableVolumes
   -count=1` confirms no built image inherits a writable volume.
-- [ ] Only orchestrator `/app/data` and `/skills` plus `mcp-files` `/sandbox`
+- [ ] Only orchestrator `/app/data`, `/skills` and `/memory` plus `mcp-files` `/sandbox`
   are writable; every service replaces Docker's default writable `/dev/shm`
   with the approved read-only tmpfs.
 - [ ] Only the orchestrator publishes a host port, fixed to `127.0.0.1`; MCP
@@ -30,11 +36,12 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 ## 2. Protobuf and gRPC Contracts
 
 - [ ] `proto/turing/v1/` is the source of truth for public and internal APIs.
-- [ ] `tools/proto/check.sh` leaves the Go generated output unchanged; the
-  Flutter contract test separately verifies checked-in Dart fields.
-- [ ] The orchestrator exposes the public gRPC API on the configured loopback
-  port (default `3000`) and its authenticated runtime API only on the internal
-  port `3001`.
+- [ ] `tools/proto/check.sh` leaves the checked-in Go and Dart output unchanged.
+- [ ] `tools/proto/breaking.sh` checks compatibility against the refreshed PR
+  base separately from generation (shipped as TUR-019).
+- [ ] The orchestrator serves the public gRPC API on the configured port
+  (default `3000`), published by Compose on `127.0.0.1` only; its authenticated
+  runtime API is internal-only on port `3001`.
 - [ ] Health, session creation, message sending, event replay/subscription, and
   approval RPCs reject missing or invalid bearer credentials.
 
@@ -58,6 +65,8 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 
 ## 4. MCP and Approval Boundary
 
+- [ ] Registry management is described separately from the HTTP JSON-RPC tools
+  subset; initialization and capability negotiation remain CON-001.
 - [ ] `mcp-system` and `mcp-files` require their per-agent bearer tokens.
 - [ ] `system.echo` and file tools enforce the bounds advertised by
   `tools/list`.
@@ -77,7 +86,12 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 - [ ] Settings, sessions, chat, event streaming, model selection, and approval
   cards use generated gRPC clients.
 - [ ] `ToolCallBeacon.modelToolCallId` survives Dart protobuf serialization.
-- [ ] Devices and Stats remain placeholders until contracts are defined.
+- [ ] Chats, Skills, Memory, Integrations, MCPs, Automations, Agents and
+  Telemetry open backend-connected surfaces; search calls backend search.
+- [ ] Provider credential storage is not called tool support. Only GitHub has
+  integration consumers; Agents is remote model routing, not A2A delegation.
+- [ ] Responsive layouts are not called production mobile support, and a
+  LAN/tailnet URL is not presented as sufficient for loopback reachability.
 - [ ] Integrations distinguishes saved connection status and recorded consent
   from functional tools. GitHub is functional; IMAP, CalDAV, and Notion remain
   visible without credential-entry forms because their tools are not implemented.
@@ -90,6 +104,8 @@ Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 Run from the repository root:
 
 ```bash
+(cd turing-backend/mcp-files && go mod download)
+(cd turing-backend/mcp-system && go mod download)
 go test -tags sqlite_fts5 -race ./... -count=1
 go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 ./...
