@@ -477,6 +477,7 @@ func (c *messageListClient) ListMessages(
 }
 
 type approvalStateClient struct {
+	turingv1.ApprovalServiceClient
 	mu            sync.Mutex
 	status        turingv1.ApprovalStatus
 	statuses      []turingv1.ApprovalStatus

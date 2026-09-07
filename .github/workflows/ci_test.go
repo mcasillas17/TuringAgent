@@ -33,6 +33,7 @@ func TestCIWorkflowCoversCoreChecks(t *testing.T) {
 	// unpaired assertions are satisfied by whichever module still has the step and
 	// deleting the other module's step would go unnoticed.
 	requireRunsIn(t, workflow, "turing-backend/mcp-files", "go test -race ./... -count=1")
+	requireRunsIn(t, workflow, "turing-backend/mcp-files", "go test -tags sqlite_fts5 -race ./cmd/server -run TestReal -count=1")
 	requireRunsIn(t, workflow, "turing-backend/mcp-files", "go vet ./...")
 	requireRunsIn(t, workflow, "turing-backend/mcp-files", "go build ./cmd/server")
 	// mcp-system is a separate module; nothing else in CI compiles it.
@@ -117,6 +118,19 @@ func TestMCPFilesImagePreparesSandboxBeforeDroppingPrivileges(t *testing.T) {
 		"mkdir -p /sandbox",
 		"chown 1000:1000 /sandbox",
 		"USER mcp-files:mcp-files",
+	)
+}
+
+func TestMCPFilesImageIncludesSharedPreviewPackage(t *testing.T) {
+	data, err := os.ReadFile("../../turing-backend/mcp-files/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireInOrder(t, string(data),
+		"WORKDIR /src",
+		"COPY turing-backend/approvalpreview ./turing-backend/approvalpreview",
+		"WORKDIR /src/turing-backend/mcp-files",
+		"RUN CGO_ENABLED=0 GOOS=linux go build",
 	)
 }
 

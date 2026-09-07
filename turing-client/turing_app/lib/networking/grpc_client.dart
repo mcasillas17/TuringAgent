@@ -31,6 +31,7 @@ import '../generated/turing/v1/skills.pbgrpc.dart' as skillgrpc;
 import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
 import '../generated/turing/v1/telemetry.pbgrpc.dart' as telemetrygrpc;
 import '../models/agent_descriptor.dart';
+import '../models/approval.dart';
 import '../models/audit.dart';
 import '../models/automation.dart';
 import '../models/external_agent.dart';
@@ -52,6 +53,7 @@ import '../utils/protobuf_enum.dart';
 import 'api_client.dart';
 
 const _startupUnaryTimeout = Duration(seconds: 10);
+const _approvalUnaryTimeout = Duration(seconds: 10);
 
 class GrpcAuthMetadata {
   const GrpcAuthMetadata({required this.apiKey});
@@ -109,7 +111,12 @@ class TuringGrpcApi
     _sessions = sessiongrpc.SessionServiceClient(_channel, options: options);
     _events = eventgrpc.EventServiceClient(_channel, options: options);
     _chat = chatgrpc.ChatServiceClient(_channel, options: options);
-    _approvals = approvalgrpc.ApprovalServiceClient(_channel, options: options);
+    _approvals = approvalgrpc.ApprovalServiceClient(
+      _channel,
+      options: options.mergedWith(
+        grpc.CallOptions(timeout: _approvalUnaryTimeout),
+      ),
+    );
     _skills = skillgrpc.SkillServiceClient(_channel, options: options);
     _externalAgents = agentgrpc.ExternalAgentServiceClient(
       _channel,
@@ -646,6 +653,45 @@ class TuringGrpcApi
       case EgressDataCategory.attachments:
         return commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_ATTACHMENTS;
     }
+  }
+
+  @override
+  Future<ApprovalDetails> getApprovalDetails(
+    String approvalId, {
+    bool refreshPreview = false,
+  }) async {
+    final response = await _approvals.getApprovalDetails(
+      approvalpb.GetApprovalDetailsRequest(
+        approvalId: approvalId,
+        refreshPreview: refreshPreview,
+      ),
+    );
+    return GrpcMappers.approvalDetailsToModel(response);
+  }
+
+  @override
+  Future<Map<String, dynamic>> approveReviewedApproval(
+    ApprovalDetails details, {
+    String? comment,
+  }) async {
+    if (!details.canApproveAt(DateTime.now())) {
+      throw const TuringApiException(
+        code: 'approval_review_required',
+        message: 'A current approval preview is required',
+      );
+    }
+    final response = await _approvals.approveApproval(
+      approvalpb.ApproveApprovalRequest(
+        approvalId: details.approvalId,
+        previewHash: details.previewHash,
+        argsHash: details.argsHash,
+        comment: comment ?? '',
+      ),
+    );
+    return {
+      'approvalId': response.approvalId,
+      'status': GrpcMappers.approvalStatusToString(response.status),
+    };
   }
 
   @override

@@ -4,9 +4,13 @@ import (
 	"context"
 	"time"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/approvalpreview"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/app"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/safejson"
+	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
 	"google.golang.org/grpc"
 )
 
@@ -84,6 +88,51 @@ func (a *App) Stop() {
 	if a != nil && a.inner != nil {
 		a.inner.Stop()
 	}
+
+}
+
+func (a *App) SetPreviewEndpoint(endpoint string) {
+	a.inner.ApprovalService.SetPreviewEndpoint(endpoint)
+}
+
+type FileApproval struct {
+	ApprovalID      string
+	ProvenanceToken string
+	SessionID       string
+	RunID           string
+	ArgsHash        string
+}
+
+// CreateFileApproval records the same immutable call/args used by the runtime,
+// enabling cross-module protected-file tests without exporting storage internals.
+func (a *App) CreateFileApproval(ctx context.Context, tool string, args map[string]any) (FileApproval, error) {
+	session, err := a.inner.Repository.CreateSession(ctx, "file preview integration")
+	if err != nil {
+		return FileApproval{}, err
+	}
+	run, err := a.inner.Repository.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{SessionID: session.SessionID, Content: "review a file", AgentID: "general_assistant", ModelProvider: "ollama", Model: "test"})
+	if err != nil {
+		return FileApproval{}, err
+	}
+	if err := a.inner.Repository.MarkRunRunning(ctx, run.RunID); err != nil {
+		return FileApproval{}, err
+	}
+	raw, err := safejson.MarshalCanonical(args)
+	if err != nil {
+		return FileApproval{}, err
+	}
+	hash := approvalpreview.Hash(string(raw))
+	callID := ids.New("call")
+	if err := a.inner.Repository.RecordToolCallBefore(ctx, repository.ToolCallRecord{ToolCallID: callID, RunID: run.RunID}, "general_assistant", "files", tool, string(raw), hash); err != nil {
+		return FileApproval{}, err
+	}
+	id, err := a.inner.ApprovalService.CreateApprovalForTool(ctx, run.RunID, callID, "general_assistant", tool, args)
+	if err != nil {
+		return FileApproval{}, err
+	}
+	logical, _ := args["path"].(string)
+	token, err := a.inner.ApprovalService.IssueToolProvenance(ctx, approvalsvc.ProvenanceRequest{SessionID: session.SessionID, RunID: run.RunID, AgentID: "general_assistant", ToolName: tool, ArgsHash: hash, LogicalPath: logical})
+	return FileApproval{ApprovalID: id, ProvenanceToken: token, SessionID: session.SessionID, RunID: run.RunID, ArgsHash: hash}, err
 }
 
 func (a *App) WaitForSessionEventSubscriber(ctx context.Context, sessionID string) error {

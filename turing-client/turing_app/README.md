@@ -42,7 +42,9 @@ Implemented in the client:
 - Localized lifecycle/outcome cards reconstructed from the same versioned
   `RunState` used by live events and persisted message history.
 - Inline safe notices for live run limits, retries, and recovery.
-- Approval cards for `approval.requested` events, cleared by approval terminal events.
+- Localized approval cards with authenticated server-derived details,
+  complete bounded file diffs, explicit retry/refresh, and bound decisions.
+  Approval terminal events and reconciled terminal runs clear their cards.
 - Model provider preference for `ollama` or `openai_compatible`; every effective
   remote send separately confirms its exact endpoint and disclosed categories.
 - Typed session-withdrawal receipts and terminal `session.deleted` events. The
@@ -53,6 +55,9 @@ Runtime prerequisites and limits:
 
 - End-to-end chat responses require the Go orchestrator, Go agent runtime, model provider, and event stream.
 - Approval cards require the backend/runtime to emit approval events.
+- Approval also requires the detail RPC and matching review hashes. Older
+  clients cannot approve without binding; a new client never falls back to
+  unbound approval when the backend lacks previews. Denial remains available.
 - A functional management page does not imply every connector or protocol it
   names works. GitHub has tool consumers; IMAP, CalDAV and Notion refuse new
   connections because their tools are not implemented. Google, Microsoft and
@@ -198,7 +203,9 @@ The Chats destination uses the generated gRPC services for commands, queries, an
 - `ChatService.SendMessage` to enqueue a user message and selected model
   provider, carrying one-time consent when the effective route is remote.
 - `EventService.ListEvents` and `EventService.SubscribeSessionEvents` for replay and live updates.
-- `ApprovalService.ApproveApproval` and `ApprovalService.DenyApproval` for approval cards.
+- `ApprovalService.GetApprovalDetails` for bounded authenticated inspection;
+  `ApproveApproval` echoes the reviewed `preview_hash` and `args_hash`, while
+  `DenyApproval` does not require a preview.
 
 When a session opens, `ChatScreen` loads persisted messages and subscribes to the session event stream. Incoming `message.delta` events update the active assistant message locally rather than making the client own model execution. Live tool calls render in order between message bubbles. Safe `agent.run.step` categories render localized notices; backend-provided failure prose is never displayed.
 
@@ -221,7 +228,30 @@ place those artifacts back into the transcript correctly. Live events committed
 after the screen's startup watermark still render normally, and the durable run
 outcome itself always comes from message history.
 
-Approval cards appear from `approval.requested` and are removed on `approval.approved`, `approval.denied`, `approval.expired`, or `approval.consumed`.
+Approval cards appear from `approval.requested` and are removed on
+`approval.approved`, `approval.denied`, `approval.expired`, or
+`approval.consumed`. A reconciled terminal run or session deletion also
+withdraws its previews; late reads cannot recreate them.
+
+For file mutations, inspect the actual sandbox-relative target and scroll
+the complete bounded diff. **Before and after content** and **Reviewed
+content identity** expose the server's text and hashes. Creation explicitly
+shows an absent file; update replaces the full content. The preview is not
+a client-generated interpretation of the old argument summary.
+
+Loading and failed reads disable Approve without hiding Deny. **Retry
+preview** or **Refresh preview** explicitly prepares current details for a
+pending request but never approves it. Review the returned content and use
+a separate Approve action. Expiry never extends on refresh; duplicate
+decisions are disabled while an RPC is in flight.
+
+Both file versions must be safe UTF-8 text within **64 KiB each**. Redacted,
+binary and oversized states cannot authorize a file change. Non-file tools
+show safe bounded structured arguments and an unsupported-effects notice;
+hidden/non-reviewable arguments are non-approvable there too. If a file
+changes after approval, request the action again for a new decision.
+See [approval previews](../../docs/architecture/approval-previews.md) for
+states, bounds, retention, redaction limits and filesystem assumptions.
 
 `session.deleted` is terminal. `ChatScreen` closes its source, ignores stale
 events, and tells `ResponsiveShell` to remove the session. A reconnect or
@@ -245,7 +275,8 @@ event replay for a deleted session is `NotFound`, not an empty history.
 - `lib/features/chat/tool_call_card.dart`: inline live tool-call lifecycle UI.
 - `lib/features/chat/run_notice_card.dart`: localized accessible metadata for
   allowlisted run notices.
-- `lib/features/approvals/approval_card.dart`: approve/deny UI.
+- `lib/features/approvals/approval_card.dart`: bounded inspection, expiry,
+  retry/refresh, accessible review content, and approve/deny controls.
 - `lib/features/chat/model_provider_selector.dart`: provider selection control.
 - `lib/models/`: typed client models for sessions, messages, approvals, config,
   versioned run state, and streamed Turing events.

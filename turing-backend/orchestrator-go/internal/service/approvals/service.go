@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/approvalpreview"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/audit"
@@ -25,12 +26,13 @@ import (
 
 type Server struct {
 	turingv1.UnimplementedApprovalServiceServer
-	repo        *repository.Repository
-	bus         *events.Bus
-	audit       *audit.Server
-	notifier    Notifier
-	jwtSecret   string
-	approvalTTL time.Duration
+	repo           *repository.Repository
+	bus            *events.Bus
+	audit          *audit.Server
+	notifier       Notifier
+	jwtSecret      string
+	approvalTTL    time.Duration
+	previewBaseURL string
 }
 
 type PublicServer struct {
@@ -157,6 +159,28 @@ func (s *Server) ApproveApproval(ctx context.Context, req *turingv1.ApproveAppro
 	if err != nil {
 		return nil, mapApprovalError(err)
 	}
+	if (approval.Status == "pending" || approval.Status == "approved") && expired(approval.ExpiresAt) {
+		if _, err := s.expireApproval(ctx, approval.ApprovalID); err != nil {
+			return nil, mapApprovalError(err)
+		}
+		return nil, status.Error(codes.FailedPrecondition, "approval expired")
+	}
+	if req.PreviewHash == "" || req.ArgsHash == "" {
+		return nil, status.Error(codes.FailedPrecondition, "review details and send preview_hash and args_hash; older clients cannot approve")
+	}
+	details, err := s.GetApprovalDetails(ctx, &turingv1.GetApprovalDetailsRequest{ApprovalId: req.ApprovalId})
+	if err != nil {
+		return nil, err
+	}
+	validDecision := details.CanApprove || (details.Status == turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED &&
+		(details.PreviewState == turingv1.ApprovalPreviewState_APPROVAL_PREVIEW_STATE_READY || details.PreviewState == turingv1.ApprovalPreviewState_APPROVAL_PREVIEW_STATE_UNSUPPORTED))
+	if details.PreviewHash != req.PreviewHash || details.ArgsHash != req.ArgsHash || !validDecision {
+		return nil, status.Error(codes.FailedPrecondition, "preview changed or unavailable; review a refreshed pending preview")
+	}
+	approval, err = s.repo.GetApproval(ctx, req.ApprovalId)
+	if err != nil {
+		return nil, mapApprovalError(err)
+	}
 	if approval.Status != "pending" {
 		if approval.Status == "approved" {
 			if expired(approval.ExpiresAt) {
@@ -175,7 +199,11 @@ func (s *Server) ApproveApproval(ctx context.Context, req *turingv1.ApproveAppro
 		}
 		return nil, status.Error(codes.FailedPrecondition, "approval expired")
 	}
-	token, err := s.signApprovalToken(approval)
+	scope, err := s.repo.GetApprovalPreviewContext(ctx, approval.ApprovalID)
+	if err != nil {
+		return nil, mapApprovalError(err)
+	}
+	token, err := s.signApprovalToken(approval, previewBinding(details, scope.Generation))
 	if err != nil {
 		return nil, err
 	}
@@ -185,6 +213,7 @@ func (s *Server) ApproveApproval(ctx context.Context, req *turingv1.ApproveAppro
 		token,
 		sql.NullString{String: req.Comment, Valid: true},
 		"",
+		req.PreviewHash,
 	)
 	if errors.Is(err, repository.ErrApprovalExpired) {
 		if _, expireErr := s.expireApproval(ctx, req.ApprovalId); expireErr != nil {
@@ -433,7 +462,7 @@ func (s *Server) GrantUnattendedApproval(ctx context.Context, approvalID string,
 	if !grant.Allows(serverName, toolName) {
 		return status.Error(codes.PermissionDenied, "tool is not on the automation's allowlist")
 	}
-	if approval.ToolName != toolName {
+	if approval.ToolName != toolName || approval.ServerName != serverName {
 		return status.Error(codes.FailedPrecondition, "approval does not match the tool being allowed")
 	}
 	if approval.Status == "approved" {
@@ -447,6 +476,19 @@ func (s *Server) GrantUnattendedApproval(ctx context.Context, approvalID string,
 			return mapApprovalError(expireErr)
 		}
 		return status.Error(codes.FailedPrecondition, "approval expired")
+	}
+	// Unattended authorization remains an allowlist grant, not human review.
+	// It must nevertheless prepare and bind the exact same write precondition.
+	details, err := s.GetApprovalDetails(ctx, &turingv1.GetApprovalDetailsRequest{ApprovalId: approvalID, RefreshPreview: true})
+	if err != nil {
+		return status.Error(codes.Internal, "unattended approval context unavailable")
+	}
+	if !details.CanApprove {
+		return status.Error(codes.FailedPrecondition, "unattended mutation preview unavailable")
+	}
+	scope, err := s.repo.GetApprovalPreviewContext(ctx, approvalID)
+	if err != nil {
+		return mapApprovalError(err)
 	}
 	// Recorded BEFORE the token exists, and its failure returned rather than
 	// logged. Every other approval audits after the fact because a person
@@ -463,11 +505,11 @@ func (s *Server) GrantUnattendedApproval(ctx context.Context, approvalID string,
 	if err != nil || !recorded {
 		return status.Error(codes.Internal, "unattended approval could not be recorded")
 	}
-	token, err := s.signApprovalToken(approval)
+	token, err := s.signApprovalToken(approval, previewBinding(details, scope.Generation))
 	if err != nil {
 		return err
 	}
-	transition, err := s.repo.ApproveApprovalWithEvent(ctx, approvalID, token, sql.NullString{}, "")
+	transition, err := s.repo.ApproveApprovalWithEvent(ctx, approvalID, token, sql.NullString{}, "", details.PreviewHash)
 	if errors.Is(err, repository.ErrApprovalExpired) {
 		if _, expireErr := s.expireApproval(ctx, approvalID); expireErr != nil {
 			return mapApprovalError(expireErr)
@@ -516,6 +558,16 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 	var artifact repository.SandboxArtifact
 	reservedHere := false
 	if strings.HasPrefix(approval.ToolName, "files.") {
+		p, err := s.repo.GetApprovalPreview(ctx, approval.ApprovalID)
+		if err != nil {
+			return nil, status.Error(codes.FailedPrecondition, "file approval has no reviewed precondition")
+		}
+		var snapshot approvalpreview.Snapshot
+		if json.Unmarshal([]byte(p.SnapshotJSON), &snapshot) != nil ||
+			snapshot.State != turingv1.ApprovalPreviewState_APPROVAL_PREVIEW_STATE_READY ||
+			snapshot.File == nil || snapshot.File.PhysicalPath != req.PhysicalPath {
+			return nil, status.Error(codes.FailedPrecondition, "file approval target differs from preview")
+		}
 		// Reserved before a file approval is spent, because the reservation is
 		// the only step that can still refuse. Other approval-gated tools have
 		// no sandbox artifact to reserve.
@@ -687,7 +739,7 @@ func approvalExpiry(start time.Time, ttl time.Duration) time.Time {
 	return expiresAt
 }
 
-func (s *Server) signApprovalToken(approval repository.ApprovalRecord) (string, error) {
+func (s *Server) signApprovalToken(approval repository.ApprovalRecord, bindings ...approvalpreview.Binding) (string, error) {
 	if s.jwtSecret == "" {
 		return "", status.Error(codes.FailedPrecondition, "approval signing is not configured")
 	}
@@ -706,6 +758,16 @@ func (s *Server) signApprovalToken(approval repository.ApprovalRecord) (string, 
 		"exp":       expiresAt.Unix(),
 		"tool":      approval.ToolName,
 		"args_hash": approval.ArgsHash,
+	}
+	if len(bindings) > 0 {
+		raw, _ := json.Marshal(bindings[0])
+		var fields map[string]any
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return "", err
+		}
+		for k, v := range fields {
+			payload[k] = v
+		}
 	}
 	headerJSON, err := json.Marshal(header)
 	if err != nil {

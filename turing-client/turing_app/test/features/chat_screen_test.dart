@@ -14,6 +14,7 @@ import 'package:turing_flutter_app/features/chat/run_state_card.dart';
 import 'package:turing_flutter_app/features/chat/chat_screen.dart';
 import 'package:turing_flutter_app/features/chat/tool_call_card.dart';
 import 'package:turing_flutter_app/l10n/generated/app_localizations.dart';
+import 'package:turing_flutter_app/models/approval.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/remote_egress.dart';
 import 'package:turing_flutter_app/models/run_lifecycle.dart';
@@ -28,6 +29,7 @@ import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 
 import '../support/no_audit_api.dart';
+import '../support/approval_details.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
 import '../support/no_session_lifecycle_api.dart';
@@ -36,6 +38,159 @@ import '../support/no_skills_api.dart';
 import '../support/no_telemetry_api.dart';
 
 void main() {
+  testWidgets('reconciled terminal run withdraws its reviewed approval', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final api = _FakeApiClient()
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_asst',
+          runId: 'run_1',
+          runState: _runState(
+            lifecycle: RunLifecycle.waitingApproval,
+            stateVersion: 3,
+          ),
+          role: 'assistant',
+          content: '',
+          sequence: 1,
+          createdAt: _fixedDate,
+        ),
+      ];
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: api,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'approval.requested',
+        sequence: 1,
+        payload: const {'approvalId': 'appr_1', 'toolName': 'files.update'},
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(ApprovalCard), findsOneWidget);
+    events.add(
+      _event(
+        type: 'agent.run.state_changed',
+        sequence: 2,
+        payload: const {},
+        runState: _runState(
+          lifecycle: RunLifecycle.cancelled,
+          outcomeReason: RunOutcomeReason.userCancelled,
+          stateVersion: 4,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byType(ApprovalCard), findsNothing);
+    events.add(
+      _event(
+        type: 'approval.requested',
+        sequence: 3,
+        payload: const {'approvalId': 'appr_1', 'toolName': 'files.update'},
+      ),
+    );
+    await tester.pump();
+    expect(find.byType(ApprovalCard), findsNothing);
+    expect(api.approveApprovalCallCount, 0);
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  for (final terminalEvent in ['approval.expired', 'session.deleted']) {
+    testWidgets('late preview cannot survive $terminalEvent', (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final gate = Completer<ApprovalDetails>();
+      final api = _FakeApiClient()..approvalDetailsGate = gate;
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: api,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pump();
+      events.add(
+        _event(
+          type: 'approval.requested',
+          sequence: 1,
+          payload: const {'approvalId': 'appr_1', 'toolName': 'files.update'},
+        ),
+      );
+      await tester.pump();
+      expect(find.byType(ApprovalCard), findsOneWidget);
+      events.add(
+        _event(
+          type: terminalEvent,
+          sequence: 2,
+          payload: const {'approvalId': 'appr_1'},
+        ),
+      );
+      await tester.pump();
+      gate.complete(approvalDetails());
+      await tester.pumpAndSettle();
+      expect(find.byType(ApprovalCard), findsNothing);
+      expect(find.textContaining('+++ after'), findsNothing);
+      expect(api.approveApprovalCallCount, 0);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    });
+  }
+
+  testWidgets('detail failure leaves denial usable without exposing errors', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final api = _FakeApiClient()
+      ..approvalDetailsError = const TuringApiException(
+        code: 'unavailable',
+        message: 'private/path/secret',
+      );
+    await tester.pumpWidget(
+      MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: api,
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+    events.add(
+      _event(
+        type: 'approval.requested',
+        sequence: 1,
+        payload: const {'approvalId': 'appr_1', 'toolName': 'files.update'},
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('private/path'), findsNothing);
+    await _tapApprove(tester);
+    expect(api.approveApprovalCallCount, 0);
+    await tester.tap(find.text('Deny'));
+    await tester.pump();
+    expect(api.denyApprovalCallCount, 1);
+    expect(find.byType(ApprovalCard), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
   testWidgets('assistant markdown renders as formatting, not raw syntax', (
     tester,
   ) async {
@@ -5497,7 +5652,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Approval requested: files.update'), findsOneWidget);
-    expect(find.text('Update note.txt'), findsOneWidget);
+    expect(find.text('Update note.txt'), findsNothing);
 
     events.add(
       _event(
@@ -5553,7 +5708,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Approval requested: files.update'), findsOneWidget);
-    expect(find.text('Update note.txt'), findsOneWidget);
+    expect(find.text('Update note.txt'), findsNothing);
 
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());
@@ -10710,7 +10865,7 @@ void main() {
       );
       await tester.pump();
 
-      await tester.tap(find.text('Approve'));
+      await _tapApprove(tester);
       await tester.pump();
 
       expect(
@@ -10736,7 +10891,7 @@ void main() {
       expect(find.textContaining('internal'), findsNothing);
 
       // Retry: the queue is now empty, so this attempt succeeds.
-      await tester.tap(find.text('Approve'));
+      await _tapApprove(tester);
       await tester.pump();
 
       expect(apiClient.approveApprovalCallCount, 2);
@@ -10847,7 +11002,7 @@ void main() {
       );
       await tester.pump();
 
-      await tester.tap(find.text('Approve'));
+      await _tapApprove(tester);
       await tester.pump();
 
       expect(
@@ -10906,7 +11061,7 @@ void main() {
     );
     await tester.pump();
 
-    await tester.tap(find.text('Approve'));
+    await _tapApprove(tester);
     await tester.pump();
     expect(apiClient.approveApprovalCallCount, 1);
 
@@ -10934,7 +11089,7 @@ void main() {
           'Approve must be refused too',
     );
 
-    await tester.tap(find.text('Approve'));
+    await _tapApprove(tester);
     await tester.tap(find.text('Deny'));
     await tester.pump();
     expect(
@@ -10993,7 +11148,7 @@ void main() {
       );
       await tester.pump();
 
-      await tester.tap(find.text('Approve'));
+      await _tapApprove(tester);
       await tester.pump();
       expect(
         find.text('Could not send your decision. Please try again.'),
@@ -11002,7 +11157,7 @@ void main() {
 
       final pending = Completer<Map<String, dynamic>>();
       apiClient.approveApprovalPending = pending;
-      await tester.tap(find.text('Approve'));
+      await _tapApprove(tester);
       await tester.pump();
 
       expect(
@@ -11059,7 +11214,7 @@ void main() {
       );
       await tester.pump();
 
-      await tester.tap(find.text('Approve'));
+      await _tapApprove(tester);
       await tester.pump();
       expect(
         find.text('Could not send your decision. Please try again.'),
@@ -11143,12 +11298,12 @@ void main() {
     // `find.text('Approve')`.
     final approveAppr1 = find.descendant(
       of: find.ancestor(
-        of: find.text('Update note.txt'),
+        of: find.text('Approval requested: files.update'),
         matching: find.byType(Card),
       ),
       matching: find.text('Approve'),
     );
-    await tester.tap(approveAppr1);
+    await _tapApprove(tester, approveAppr1);
     await tester.pump();
 
     expect(
@@ -11228,7 +11383,7 @@ void main() {
       );
       await tester.pump();
 
-      await tester.tap(find.text('Approve'));
+      await _tapApprove(tester);
       await tester.pump();
 
       await tester.pumpWidget(const SizedBox.shrink());
@@ -11295,7 +11450,7 @@ void main() {
       );
       await tester.pump();
 
-      await tester.tap(find.text('Approve'));
+      await _tapApprove(tester);
       await tester.pump();
       expect(apiClient.approveApprovalCallCount, 1);
 
@@ -11482,7 +11637,9 @@ void main() {
       await tester.pump();
 
       Finder cardFor(String argsSummary) => find.ancestor(
-        of: find.text(argsSummary),
+        of: find.text(argsSummary == 'Update note.txt'
+          ? 'Approval requested: files.update'
+          : 'Approval requested: shell.exec'),
         matching: find.byType(Card),
       );
       Finder approveButtonFor(String argsSummary) => find.descendant(
@@ -11491,7 +11648,7 @@ void main() {
       );
 
       // appr_1 fails first.
-      await tester.tap(approveButtonFor('Update note.txt'));
+      await _tapApprove(tester, approveButtonFor('Update note.txt'));
       await tester.pump();
       expect(
         find.text('Could not send your decision. Please try again.'),
@@ -11501,7 +11658,8 @@ void main() {
 
       // appr_2 fails second — under the OLD single-id design this would
       // silently displace appr_1's own tracked failure.
-      await tester.tap(approveButtonFor('Run tests'));
+      await _tapApprove(tester, approveButtonFor('Run tests'));
+      await tester.pump();
       await tester.pump();
       expect(
         find.text('Could not send your decision. Please try again.'),
@@ -11533,7 +11691,8 @@ void main() {
       // appr_2's OWN failure immediately, before it even resolves.
       final retryPending = Completer<Map<String, dynamic>>();
       apiClient.approveApprovalPending = retryPending;
-      await tester.tap(approveButtonFor('Run tests'));
+      await _tapApprove(tester, approveButtonFor('Run tests'));
+      await tester.pump();
       await tester.pump();
 
       expect(
@@ -11639,10 +11798,13 @@ void main() {
     await tester.pump();
 
     Finder cardFor(String argsSummary) =>
-        find.ancestor(of: find.text(argsSummary), matching: find.byType(Card));
+        find.ancestor(of: find.text(argsSummary == 'Update note.txt'
+          ? 'Approval requested: files.update'
+          : 'Approval requested: shell.exec'), matching: find.byType(Card));
 
     // appr_1's Approve fails.
-    await tester.tap(
+    await _tapApprove(
+      tester,
       find.descendant(
         of: cardFor('Update note.txt'),
         matching: find.text('Approve'),
@@ -11656,9 +11818,11 @@ void main() {
 
     // appr_2's Deny fails too — a DIFFERENT approval, a DIFFERENT
     // decision verb, feeding the exact same shared banner.
-    await tester.tap(
-      find.descendant(of: cardFor('Run tests'), matching: find.text('Deny')),
+    final denySecond = find.descendant(
+      of: cardFor('Run tests'), matching: find.text('Deny'),
     );
+    await tester.ensureVisible(denySecond);
+    await tester.tap(denySecond);
     await tester.pump();
     expect(apiClient.approveApprovalCallCount, 1);
     expect(apiClient.denyApprovalCallCount, 1);
@@ -11697,7 +11861,8 @@ void main() {
 
     // Retry appr_1's Approve — the queue is empty now, so it succeeds,
     // and it is the last failed id: the banner must finally clear.
-    await tester.tap(
+    await _tapApprove(
+      tester,
       find.descendant(
         of: cardFor('Update note.txt'),
         matching: find.text('Approve'),
@@ -11732,6 +11897,13 @@ Finder _sessionNoticeText(String message) => find.descendant(
   ),
   matching: find.text(message),
 );
+
+Future<void> _tapApprove(WidgetTester tester, [Finder? button]) async {
+  await tester.pump();
+  final target = button ?? find.text('Approve');
+  await tester.ensureVisible(target);
+  await tester.tap(target);
+}
 
 final _fixedDate = DateTime.parse('2026-05-10T00:00:00.000Z');
 
@@ -11843,6 +12015,34 @@ class _FakeApiClient extends TuringApi
   /// consuming [approveApprovalErrors] or resolving immediately — mirrors
   /// [sendMessagePending].
   Completer<Map<String, dynamic>>? approveApprovalPending;
+  Completer<ApprovalDetails>? approvalDetailsGate;
+  Exception? approvalDetailsError;
+  ApprovalDetails? lastReviewedApproval;
+
+  @override
+  Future<ApprovalDetails> getApprovalDetails(
+    String approvalId, {
+    bool refreshPreview = false,
+  }) async {
+    final error = approvalDetailsError;
+    if (error != null) throw error;
+    final gate = approvalDetailsGate;
+    if (gate != null) return gate.future;
+    return approvalDetails(
+      approvalId: approvalId,
+      toolName: approvalId == 'appr_2' ? 'shell.exec' : 'files.update',
+    );
+  }
+
+  @override
+  Future<Map<String, dynamic>> approveReviewedApproval(
+    ApprovalDetails details, {
+    String? comment,
+  }) {
+    lastReviewedApproval = details;
+    return approveApproval(details.approvalId, comment: comment);
+  }
+
 
   @override
   Future<Map<String, dynamic>> approveApproval(

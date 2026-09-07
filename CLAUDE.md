@@ -63,6 +63,7 @@ go test -tags sqlite_fts5 -race ./... -count=1   # CI runs this; concurrency bug
 go test -tags sqlite_fts5 ./.github/workflows -count=1
 go build -tags sqlite_fts5 ./...
 ( cd turing-backend/mcp-files  && go test ./... -count=1 && go test -race ./... -count=1 && go build ./cmd/server )
+( cd turing-backend/mcp-files  && go test -tags sqlite_fts5 -race ./cmd/server -run TestReal -count=1 )
 ( cd turing-backend/mcp-system && go test ./... -count=1 && go test -race ./... -count=1 && go build ./... )
 ( cd turing-client/turing_app  && flutter analyze && flutter test )
 tools/proto/check.sh
@@ -70,7 +71,13 @@ golangci-lint run --build-tags sqlite_fts5 ./... ./.github/workflows
 ( cd turing-backend/mcp-files  && golangci-lint run ./... )
 ( cd turing-backend/mcp-system && golangci-lint run ./... )
 ```
-The `/verify` skill runs this matrix.
+The `/verify` skill provides the base matrix. Include the tagged `TestReal`
+command above for approval-preview changes.
+
+The tagged `TestReal` file-server tests exercise the actual orchestrator,
+authenticated preview/decision RPCs, and filesystem write/privacy boundaries.
+The untagged MCP suite does not include them; CI runs the tagged command
+explicitly as well.
 
 ## Gotchas
 

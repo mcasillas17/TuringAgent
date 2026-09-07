@@ -109,6 +109,9 @@ func newHandler(cfg serverConfig) http.Handler {
 	filesTools := tools.NewFilesTools(cfg.sandboxRoot).
 		WithApprovalValidator(consumer).
 		WithProvenanceGuard(provenanceGuard{consumer: consumer})
+	mux.HandleFunc("/internal/approval-preview", func(w http.ResponseWriter, r *http.Request) {
+		handleApprovalPreview(w, r, filesTools, consumer)
+	})
 	mux.Handle("/internal/session-cleanup", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleInternalSessionCleanup(w, r, filesTools, cfg.cleanupToken)
 	}))
@@ -257,13 +260,13 @@ func listTools() []map[string]any {
 		},
 		{
 			"name":        "files.create",
-			"description": "Create a UTF-8 file at a sandbox-relative path.",
+			"description": "Create a UTF-8 file at a sandbox-relative path. Requires an inspectable approval preview: before and after content must each fit within 64 KiB (65536 bytes); oversized previews cannot be approved.",
 			"inputSchema": objectSchema(map[string]any{"path": pathStringSchema(), "content": contentStringSchema()}, []any{"path", "content"}),
 			"policy":      "approval_required",
 		},
 		{
 			"name":        "files.update",
-			"description": "Replace a UTF-8 file, optionally requiring its current SHA-256 hash.",
+			"description": "Replace a UTF-8 file, optionally requiring its current SHA-256 hash. Requires an inspectable approval preview: before and after content must each fit within 64 KiB (65536 bytes); oversized previews cannot be approved.",
 			"inputSchema": objectSchema(map[string]any{
 				"path":         pathStringSchema(),
 				"content":      contentStringSchema(),

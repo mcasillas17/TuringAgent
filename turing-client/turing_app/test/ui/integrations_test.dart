@@ -871,7 +871,7 @@ class _ConnectCall {
 
 /// A working in-memory backend, so the UI is tested against something that
 /// behaves like the real one rather than a stub that always says yes.
-class _IntegrationsApi
+class _IntegrationsApi extends TuringApi
     with
         NoAuditApi,
         NoMcpRegistryApi,
@@ -882,7 +882,7 @@ class _IntegrationsApi
         NoRemoteEgressApi,
         NoSessionLifecycleApi,
         NoTelemetryApi
-    implements TuringApi, PseudoServerPolicyApi {
+    implements PseudoServerPolicyApi {
   final List<IntegrationConnection> connections = [];
   final List<ToolDescriptor> tools = [];
   final List<_ConnectCall> connectCalls = [];

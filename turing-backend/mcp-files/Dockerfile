@@ -2,6 +2,7 @@ FROM golang:1.27-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY gen ./gen
+COPY turing-backend/approvalpreview ./turing-backend/approvalpreview
 COPY turing-backend/mcp-files/go.mod turing-backend/mcp-files/go.sum ./turing-backend/mcp-files/
 WORKDIR /src/turing-backend/mcp-files
 RUN go mod download

@@ -5,6 +5,9 @@ import (
 	"fmt"
 )
 
+// Distinguish an observed absent-target violation from an I/O failure.
+var errCreateTargetExists = errors.New("file already exists")
+
 type InvalidParamsError struct {
 	message string
 }

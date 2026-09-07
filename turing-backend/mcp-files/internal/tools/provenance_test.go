@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/approvalpreview"
 )
 
 type guardCall struct {
@@ -37,6 +39,27 @@ type fakeGuard struct {
 	sessionStates   []error
 	sessionStateEnd error
 	sessionChecks   int
+	binding         *approvalpreview.Binding
+}
+
+// Legacy filesystem fixtures model an already-reviewed current snapshot.
+// Binding regressions supply an immutable earlier snapshot explicitly.
+func (g *fakeGuard) VerifyWrite(req WriteAuthorization) (approvalpreview.Binding, error) {
+	if g.binding != nil {
+		return *g.binding, nil
+	}
+	content, _ := req.Args["content"].(string)
+	b := approvalpreview.Binding{PreviewHash: "fixture-preview", SessionID: g.provenance.SessionID, RunID: g.provenance.RunID,
+		Generation: g.provenance.DeletionGeneration, PhysicalPath: req.PhysicalPath, AfterHash: contentHash(content)}
+	if req.Tool == "files.update" {
+		before, err := os.ReadFile(filepath.Join(g.sandbox, req.PhysicalPath))
+		if err != nil {
+			return b, err
+		}
+		b.BeforeExists = true
+		b.BeforeHash = contentHash(string(before))
+	}
+	return b, nil
 }
 
 func (g *fakeGuard) CheckSession(_ context.Context, _ string) error {
@@ -709,10 +732,9 @@ func TestSafeToolsAreRefusedWhenTheSessionStateCannotBeRead(t *testing.T) {
 	}
 }
 
-func TestWritesStillCheckTheSessionThroughTheReservation(t *testing.T) {
-	// A write's before-state is the reservation and its after-state is the
-	// finalization, both server-side, so it must not also pay for a capability
-	// check on every call.
+func TestWritesRecheckSessionAtFinalMutationBoundary(t *testing.T) {
+	// The reservation still authorizes the write; a final liveness check also
+	// refuses a withdrawal that began after consumption while bytes staged.
 	guard := &fakeGuard{}
 	tools, _ := guardedTools(t, guard)
 
@@ -720,7 +742,7 @@ func TestWritesStillCheckTheSessionThroughTheReservation(t *testing.T) {
 		t.Fatalf("files.create: %v", err)
 	}
 
-	if guard.sessionChecks != 0 {
-		t.Fatalf("session checks = %d, want none for a write", guard.sessionChecks)
+	if guard.sessionChecks != 1 {
+		t.Fatalf("session checks = %d, want one at the final write boundary", guard.sessionChecks)
 	}
 }

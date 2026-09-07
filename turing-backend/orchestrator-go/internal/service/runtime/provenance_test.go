@@ -9,6 +9,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/testsupport/approvalfixture"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -187,7 +188,7 @@ func TestFileToolProvenanceCapabilityAuthorisesTheConsumeThatFollows(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.approvals.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: decision.GetApprovalId()}); err != nil {
+	if _, err := approvalfixture.Approve(t, h.approvals, context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: decision.GetApprovalId()}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/approvalpreview"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -27,6 +28,7 @@ const (
 )
 
 type Claims struct {
+	approvalpreview.Binding
 	Iss      string `json:"iss"`
 	Sub      string `json:"sub"`
 	Aud      string `json:"aud"`

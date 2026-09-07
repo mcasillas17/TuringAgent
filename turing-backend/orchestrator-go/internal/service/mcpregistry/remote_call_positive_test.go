@@ -6,8 +6,10 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/approvalpreview"
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/testsupport/approvalfixture"
 )
 
 func TestRemoteCallCoveredByTheRunDecisionDispatchesExactlyOnce(t *testing.T) {
@@ -58,7 +60,7 @@ func TestRemoteCallCoveredByTheRunDecisionDispatchesExactlyOnce(t *testing.T) {
 		"vendor",
 		"vendor.write",
 		`{"path":"x"}`,
-		"sha256:test-placeholder",
+		approvalpreview.Hash(`{"path":"x"}`),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +71,7 @@ func TestRemoteCallCoveredByTheRunDecisionDispatchesExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.approvals.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{
+	if _, err := approvalfixture.Approve(t, h.approvals, context.Background(), &turingv1.ApproveApprovalRequest{
 		ApprovalId: approvalID,
 	}); err != nil {
 		t.Fatal(err)

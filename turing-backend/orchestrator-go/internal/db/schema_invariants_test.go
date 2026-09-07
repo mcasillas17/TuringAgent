@@ -88,6 +88,7 @@ var currentSchemaTablePolicies = []schemaTablePolicy{
 	},
 	{table: "tool_calls", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{table: "approvals", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
+	{table: "approval_previews", kind: schemaTableCascadeOwned, sourceTable: "approvals"},
 	{
 		table:     "audit_logs",
 		kind:      schemaTableScrubbedException,

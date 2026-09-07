@@ -94,6 +94,162 @@ abstract class AppLocalizations {
   /// A list of this localizations delegate's supported locales.
   static const List<Locale> supportedLocales = <Locale>[Locale('en')];
 
+  /// No description provided for @approvalRequested.
+  ///
+  /// In en, this message translates to:
+  /// **'Approval requested: {tool}'**
+  String approvalRequested(String tool);
+
+  /// No description provided for @approvalLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading approval preview'**
+  String get approvalLoading;
+
+  /// No description provided for @approvalUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview unavailable. Retry or deny this request.'**
+  String get approvalUnavailable;
+
+  /// No description provided for @approvalReviewInstructions.
+  ///
+  /// In en, this message translates to:
+  /// **'Review the complete change below. Scroll to inspect all content.'**
+  String get approvalReviewInstructions;
+
+  /// No description provided for @approvalUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'Structured arguments only. This service cannot preview third-party effects.'**
+  String get approvalUnsupported;
+
+  /// No description provided for @approvalRedacted.
+  ///
+  /// In en, this message translates to:
+  /// **'Sensitive content is redacted. This file change cannot be approved here.'**
+  String get approvalRedacted;
+
+  /// No description provided for @approvalOversized.
+  ///
+  /// In en, this message translates to:
+  /// **'Content exceeds the preview limits. No partial preview can authorize this file change.'**
+  String get approvalOversized;
+
+  /// No description provided for @approvalBinary.
+  ///
+  /// In en, this message translates to:
+  /// **'This file is not previewable text. The change cannot be approved here.'**
+  String get approvalBinary;
+
+  /// No description provided for @approvalExpired.
+  ///
+  /// In en, this message translates to:
+  /// **'This approval has expired.'**
+  String get approvalExpired;
+
+  /// No description provided for @approvalStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The file changed. Refresh and review the new preview before approving.'**
+  String get approvalStale;
+
+  /// No description provided for @approvalTerminal.
+  ///
+  /// In en, this message translates to:
+  /// **'This approval is no longer pending.'**
+  String get approvalTerminal;
+
+  /// No description provided for @approvalTarget.
+  ///
+  /// In en, this message translates to:
+  /// **'Target: {path}'**
+  String approvalTarget(String path);
+
+  /// No description provided for @approvalExistingFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Before: existing file'**
+  String get approvalExistingFile;
+
+  /// No description provided for @approvalAbsentFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Before: file absent. Creation will not overwrite an existing file.'**
+  String get approvalAbsentFile;
+
+  /// No description provided for @approvalBeforeAfter.
+  ///
+  /// In en, this message translates to:
+  /// **'Before and after content'**
+  String get approvalBeforeAfter;
+
+  /// No description provided for @approvalBefore.
+  ///
+  /// In en, this message translates to:
+  /// **'Before:\n{content}'**
+  String approvalBefore(String content);
+
+  /// No description provided for @approvalAfter.
+  ///
+  /// In en, this message translates to:
+  /// **'After:\n{content}'**
+  String approvalAfter(String content);
+
+  /// No description provided for @approvalBinding.
+  ///
+  /// In en, this message translates to:
+  /// **'Reviewed content identity'**
+  String get approvalBinding;
+
+  /// No description provided for @approvalArgumentsHash.
+  ///
+  /// In en, this message translates to:
+  /// **'Arguments hash: {hash}'**
+  String approvalArgumentsHash(String hash);
+
+  /// No description provided for @approvalPreviewHash.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview hash: {hash}'**
+  String approvalPreviewHash(String hash);
+
+  /// No description provided for @approvalBeforeHash.
+  ///
+  /// In en, this message translates to:
+  /// **'Before hash: {hash}'**
+  String approvalBeforeHash(String hash);
+
+  /// No description provided for @approvalAfterHash.
+  ///
+  /// In en, this message translates to:
+  /// **'After hash: {hash}'**
+  String approvalAfterHash(String hash);
+
+  /// No description provided for @approvalApprove.
+  ///
+  /// In en, this message translates to:
+  /// **'Approve'**
+  String get approvalApprove;
+
+  /// No description provided for @approvalDeny.
+  ///
+  /// In en, this message translates to:
+  /// **'Deny'**
+  String get approvalDeny;
+
+  /// No description provided for @approvalRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry preview'**
+  String get approvalRetry;
+
+  /// No description provided for @approvalRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh preview'**
+  String get approvalRefresh;
+
   /// No description provided for @runStatusUnavailableTitle.
   ///
   /// In en, this message translates to:

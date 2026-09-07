@@ -16,6 +16,9 @@ The project is designed for local development first: secrets stay in your local 
 - Provides a Flutter client with settings, conversation search, automatically
   named and paginated session lists, rename/archive/restore actions, chat,
   streamed responses, localized durable run-outcome cards, and approval cards.
+- Shows server-derived, bounded file previews before approval, binds the
+  decision to the reviewed arguments and file state, and refuses stale writes.
+  See [approval review, limits, and compatibility](docs/architecture/approval-previews.md).
 - Exposes a redacted, paginated audit read API (`AuditService.ListAuditEntries`), including the approval comment or denial reason a person typed; audit inspection is exposed programmatically through the authenticated API and a thin client, with no built-in viewer yet.
 - Withdraws a deleted session through a durable lifecycle: reads/search/replay
   fail closed once withdrawal starts, active work is cancelled and reconciled,
@@ -199,6 +202,7 @@ go test -tags sqlite_fts5 ./.github/workflows -count=1
 go vet -tags sqlite_fts5 ./...
 go build -tags sqlite_fts5 ./...
 (cd turing-backend/mcp-files && go test -race ./... -count=1 && go vet ./... && go build ./cmd/server)
+(cd turing-backend/mcp-files && go test -tags sqlite_fts5 -race ./cmd/server -run TestReal -count=1)
 (cd turing-backend/mcp-system && go test -race ./... -count=1 && go vet ./... && go build ./...)
 (cd turing-client/turing_app && flutter analyze && flutter test)
 ```
@@ -220,7 +224,8 @@ Common values:
 | `TURING_CLIENT_API_KEY` | Bearer token for Flutter and other public gRPC clients |
 | `TURING_RUNTIME_TOKEN` | Bearer token for the agent runtime's internal gRPC calls (claim jobs, read session history, poll/consume approvals) |
 | `TURING_APPROVAL_CONSUMER_TOKEN` | Bearer token for mcp-files' internal gRPC calls; authorized for `ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and `CheckSessionCapability`, never the runtime's methods |
-| `TURING_APPROVAL_JWT_SECRET` | HS256 secret used for approval tokens |
+| `TURING_APPROVAL_JWT_SECRET` | HS256 secret for argument/preview-bound approval tokens and domain-separated private preview capabilities |
+| `MCP_FILES_BASE_URL` | Internal bundled file-server endpoint; also used for private preview reads without the normal file-tool bearer |
 | `TURING_EGRESS_SIGNING_SECRET` | Orchestrator-only key for short-lived, one-time remote-egress disclosure challenges |
 | `TURING_CURSOR_HMAC_SECRET` | Orchestrator-only 32-byte hex key authenticating opaque session cursors; rotation invalidates outstanding cursors |
 | Approval-consumer scope | `ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and `CheckSessionCapability`; never runtime-only methods |
@@ -293,7 +298,14 @@ orchestrator remains stopped, use a SQLite client to run
 - **Smoke test times out:** inspect the `turing-orchestrator` and `turing-agent-runtime-general` container logs.
 - **Initialization refuses root:** run it from the non-root host account that owns the checkout and sandbox; do not use `sudo`.
 - **Initialization reports legacy sandbox content:** restore ownership and owner read/write access (plus directory traversal) outside the script, or move the content aside, then rerun `scripts/init.sh`. The script deliberately does not recurse with `chmod` or `chown`.
-- **File tools fail:** confirm `turing-backend/sandbox/` is a real directory, rerun `scripts/init.sh`, and confirm approval-required writes were approved. Rootless Docker, `userns-remap`, and SELinux may require daemon-specific ownership/mapping or labeling; see the MCP security guide.
+- **File tools fail:** confirm `turing-backend/sandbox/` is a real directory,
+  rerun `scripts/init.sh`, and inspect the approval preview. Both before and
+  after must be safe text within 64 KiB; redacted, binary and oversized
+  changes cannot be approved. Retry unavailable previews; refresh and review
+  stale pending previews before deciding again. A file changed after approval
+  needs a new request, not reuse of the old token. Rootless Docker,
+  `userns-remap`, and SELinux may require daemon-specific ownership/mapping
+  or labeling; see the MCP security guide.
 
 ## Session withdrawal and physical erasure
 

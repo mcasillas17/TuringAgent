@@ -862,14 +862,18 @@ advertise nonblank string constraints.
 - `create` arguments: required `path` and `content`.
 - `update` arguments: required `path` and `content`, plus optional
   `expectedHash` matching exactly `sha256:[0-9a-f]{64}`.
-- Content is limited to 512 KiB by bytes.
+- Raw mutation arguments are limited to 512 KiB of content. Approval review
+  has the tighter effective limit: **64 KiB each for before and after text**.
+  Larger, binary or redacted changes are explicitly non-approvable, including
+  for unattended automations; the raw validator limit is not an approval grant.
 - Content schemas describe the byte limit without a misleading
   character-based `maxLength`.
 - Result: `{ "path": string, "sha256": "sha256:<hex>" }`.
 - `create` is exclusive and never overwrites an existing path.
 - `update` rejects non-regular files and files with no write permission bit.
-  When supplied, `expectedHash` validates the observed content before approval
-  and again before replacement.
+  It replaces the full content. When supplied, `expectedHash` must match the
+  reviewed before hash. The preview-bound before hash is enforced before
+  consumption and again before replacement even when `expectedHash` is omitted.
 
 ## Descriptor-relative confinement
 
@@ -905,33 +909,55 @@ system permissions, container isolation, or careful mount selection.
 
 ## Approval ordering
 
-The runtime and file server both enforce ordering:
+The orchestrator, runtime and file server enforce the
+[preview-bound flow](architecture/approval-previews.md#file-semantics-and-authorization-flow):
 
 1. The runtime posts a BEFORE tool-call beacon to the orchestrator.
 2. A deny stops immediately. For `APPROVAL_REQUIRED`, the runtime waits for an
-   approved token; it does not call MCP while approval is pending.
-3. The runtime calls MCP with the JWT in `params._meta.approvalToken`, outside
-   `arguments`, so the token is not included in the argument hash.
-4. `mcp-files` validates arguments and performs only non-mutating precondition
-   checks (for example, existence/type/permission and optional current-hash
-   checks) before approval consumption.
-5. The server requires `TURING_APPROVAL_JWT_SECRET` at startup. It verifies the
-   HS256 signature, `typ == "JWT"`, `iss == "turing.orchestrator"`, and expiry
-   (`exp <= now` is expired), then binds `aud` to `mcp-files`, `sub` to the
-   bearer-derived agent, `tool` to the requested tool, and `args_hash` to
-   canonical JSON of the exact arguments.
+   approved token; it does not execute MCP work while approval is pending.
+   The client reads `GetApprovalDetails`; the orchestrator obtains a bounded
+   file preview through the private `/internal/approval-preview` endpoint.
+   This read uses a domain-separated capability and fresh provenance, not
+   the normal tool bearer, and cannot consume, reserve or mutate anything.
+3. Human approval must name the current `preview_hash` and `args_hash`.
+   The orchestrator revalidates the file state and compares the stored
+   identity atomically with its normal decision. Older clients without
+   binding cannot approve; Deny remains independent of preview availability.
+4. After the existing run-resume fence, the runtime calls MCP with the JWT
+   and provenance in `_meta`, outside `arguments`. No display summary or
+   replacement arguments are used for execution.
+5. `mcp-files` verifies the normal HS256 issuer/audience/agent/tool/argument
+   claims plus the signed preview target, before state, after hash and
+   provenance. It validates actual filesystem preconditions under its
+   cooperating-writer path lock before consuming approval.
 6. It synchronously consumes the JWT `jti` through the orchestrator's
    `ApprovalService.ConsumeApproval`. Only `APPROVAL_STATUS_CONSUMED`
    succeeds; replay/not-approved maps to `FailedPrecondition`.
 7. Only after successful consumption can file content or namespace state be
-   mutated. A later write failure does not restore the single-use approval.
-8. The runtime posts an AFTER beacon with the result or failure.
+   mutated. The protected commit rechecks session/target/descriptor and
+   content preconditions before no-clobber create or atomic update. A
+   changed precondition is refused, not silently refreshed. A later write
+   failure does not restore the single-use approval.
+8. Artifact finalization and the runtime AFTER beacon report the result or
+   failure through the existing lifecycle.
+
+Preview states, response/retention bounds, conservative redaction and the
+privileged-external-writer limitation are defined in
+[Inspectable approval previews](architecture/approval-previews.md). Refresh
+is an explicit pending-only operation and never extends expiry. Once
+approved, a changed file needs a new request and authorization.
 
 ### Caller-side enforcement for non-bundled servers
 
 A third-party server does not know Turing's approval JWT format and never
 receives `TURING_APPROVAL_CONSUMER_TOKEN`. Giving it that identity would let it
 consume approvals for calls it did not make.
+
+Its human approval details contain safe bounded structured arguments and an
+unsupported-effects notice, not invented file diffs. Redacted, binary or
+oversized arguments remain non-approvable; unsupported effects do not
+authorize undisclosed arguments. The new review binding does not replace
+the existing server/run/argument enforcement or remote-egress decision.
 
 For local-container and remote tiers, the runtime sends the approved
 `approval_id` back to the orchestrator over its existing least-privilege
@@ -1298,8 +1324,8 @@ tolerance.
 
 ### Bound claims
 
-After the structural and time checks pass, the consumer enforces four claim
-bindings:
+After the structural and time checks pass, the consumer enforces the four
+base claim bindings:
 
 | Claim       | Required value                              | Threat addressed                                  |
 |-------------|---------------------------------------------|---------------------------------------------------|
@@ -1310,6 +1336,14 @@ bindings:
 
 `TestValidateRejectsMismatchedApprovalBinding` exercises each of these four
 bindings independently.
+
+File writes additionally require the signed `preview_hash`, physical target,
+`before_exists` / `before_hash`, and `after_hash`, together with session/run,
+tool-call identity and withdrawal generation. The target and content must
+match the real operation and current provenance. A normal approval token
+has no preview/provenance `kind`; those domain-separated read capabilities
+cannot be substituted for a write approval. A legacy token without a
+reviewed write binding is refused.
 
 ### Canonical argument hashing
 
@@ -1338,7 +1372,7 @@ escaping, different whitespace), every approval will fail with
 
 ### Single-use consume
 
-After the four claim checks pass, the verifier calls the orchestrator's gRPC
+After the base, preview and provenance checks pass, the verifier calls the orchestrator's gRPC
 `ApprovalService.ConsumeApproval` method with the JWT's unique identifier
 (`jti`). This is what makes approvals single-use.
 
@@ -1518,6 +1552,11 @@ JWT signing requirements:
   - `tool`: the exact `name` from the JSON-RPC `tools/call`
     (e.g. `"files.create"`).
   - `args_hash`: `sha256:<hex>` of `canonicalJSON(arguments)` (see below).
+  - `preview_hash`: the stored server-issued review identity.
+  - File bindings: `physical_path`, `before_exists`, `before_hash`,
+    `after_hash`, `sid`, `rid`, `tool_call_id`, and `gen`, derived from the
+    recorded approval and reviewed operation, never supplied as replacement
+    authorization arguments by the client.
   - `jti`: a unique identifier per approval. Must be passed as
     `ConsumeApproval.approval_id`.
   - `exp`: the configured approval expiry (65 seconds by default).

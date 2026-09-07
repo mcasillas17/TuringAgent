@@ -9,6 +9,108 @@ class AppLocalizationsEn extends AppLocalizations {
   AppLocalizationsEn([String locale = 'en']) : super(locale);
 
   @override
+  String approvalRequested(String tool) {
+    return 'Approval requested: $tool';
+  }
+
+  @override
+  String get approvalLoading => 'Loading approval preview';
+
+  @override
+  String get approvalUnavailable =>
+      'Preview unavailable. Retry or deny this request.';
+
+  @override
+  String get approvalReviewInstructions =>
+      'Review the complete change below. Scroll to inspect all content.';
+
+  @override
+  String get approvalUnsupported =>
+      'Structured arguments only. This service cannot preview third-party effects.';
+
+  @override
+  String get approvalRedacted =>
+      'Sensitive content is redacted. This file change cannot be approved here.';
+
+  @override
+  String get approvalOversized =>
+      'Content exceeds the preview limits. No partial preview can authorize this file change.';
+
+  @override
+  String get approvalBinary =>
+      'This file is not previewable text. The change cannot be approved here.';
+
+  @override
+  String get approvalExpired => 'This approval has expired.';
+
+  @override
+  String get approvalStale =>
+      'The file changed. Refresh and review the new preview before approving.';
+
+  @override
+  String get approvalTerminal => 'This approval is no longer pending.';
+
+  @override
+  String approvalTarget(String path) {
+    return 'Target: $path';
+  }
+
+  @override
+  String get approvalExistingFile => 'Before: existing file';
+
+  @override
+  String get approvalAbsentFile =>
+      'Before: file absent. Creation will not overwrite an existing file.';
+
+  @override
+  String get approvalBeforeAfter => 'Before and after content';
+
+  @override
+  String approvalBefore(String content) {
+    return 'Before:\n$content';
+  }
+
+  @override
+  String approvalAfter(String content) {
+    return 'After:\n$content';
+  }
+
+  @override
+  String get approvalBinding => 'Reviewed content identity';
+
+  @override
+  String approvalArgumentsHash(String hash) {
+    return 'Arguments hash: $hash';
+  }
+
+  @override
+  String approvalPreviewHash(String hash) {
+    return 'Preview hash: $hash';
+  }
+
+  @override
+  String approvalBeforeHash(String hash) {
+    return 'Before hash: $hash';
+  }
+
+  @override
+  String approvalAfterHash(String hash) {
+    return 'After hash: $hash';
+  }
+
+  @override
+  String get approvalApprove => 'Approve';
+
+  @override
+  String get approvalDeny => 'Deny';
+
+  @override
+  String get approvalRetry => 'Retry preview';
+
+  @override
+  String get approvalRefresh => 'Refresh preview';
+
+  @override
   String get runStatusUnavailableTitle => 'Run status unavailable';
 
   @override

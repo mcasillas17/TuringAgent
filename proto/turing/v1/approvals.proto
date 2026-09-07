@@ -18,6 +18,56 @@ message ApproveApprovalRequest {
   // Optional by convention. Proto3 scalar presence is not enabled, so omission
   // and an explicitly empty value are both persisted as an empty human comment.
   string comment = 2;
+  string preview_hash = 3;
+  string args_hash = 4;
+}
+
+message GetApprovalDetailsRequest {
+  string approval_id = 1;
+  bool refresh_preview = 2;
+}
+
+enum ApprovalPreviewState {
+  APPROVAL_PREVIEW_STATE_UNSPECIFIED = 0;
+  APPROVAL_PREVIEW_STATE_READY = 1;
+  APPROVAL_PREVIEW_STATE_UNAVAILABLE = 2;
+  APPROVAL_PREVIEW_STATE_UNSUPPORTED = 3;
+  APPROVAL_PREVIEW_STATE_REDACTED = 4;
+  APPROVAL_PREVIEW_STATE_OVERSIZED = 5;
+  APPROVAL_PREVIEW_STATE_BINARY = 6;
+  APPROVAL_PREVIEW_STATE_EXPIRED = 7;
+  APPROVAL_PREVIEW_STATE_STALE = 8;
+  APPROVAL_PREVIEW_STATE_TERMINAL = 9;
+}
+
+message ApprovalDetails {
+  string approval_id = 1;
+  string session_id = 2;
+  string run_id = 3;
+  string tool_call_id = 4;
+  string tool_name = 5;
+  string server_name = 6;
+  string args_hash = 7;
+  string preview_hash = 8;
+  string expires_at = 9;
+  ApprovalStatus status = 10;
+  ApprovalPreviewState preview_state = 11;
+  string arguments_json = 12;
+  FileMutationPreview file_preview = 13;
+  bool can_approve = 14;
+  bool can_deny = 15;
+}
+
+message FileMutationPreview {
+  string logical_path = 1;
+  string physical_path = 2;
+  string operation = 3;
+  bool before_exists = 4;
+  string before_hash = 5;
+  string after_hash = 6;
+  string before_text = 7;
+  string after_text = 8;
+  string unified_diff = 9;
 }
 
 message DenyApprovalRequest {
@@ -101,6 +151,7 @@ message SessionCapabilityState {
 }
 
 service ApprovalService {
+  rpc GetApprovalDetails(GetApprovalDetailsRequest) returns (ApprovalDetails);
   rpc ApproveApproval(ApproveApprovalRequest) returns (ApprovalResponse);
   rpc DenyApproval(DenyApprovalRequest) returns (ApprovalResponse);
   rpc GetApprovalForRuntime(GetApprovalForRuntimeRequest) returns (RuntimeApprovalState);

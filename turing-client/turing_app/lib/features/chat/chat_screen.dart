@@ -6,6 +6,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 
 import '../../constants/app_colors.dart';
+import '../../models/approval.dart';
 import '../../models/message.dart';
 import '../../models/remote_egress.dart';
 import '../../models/run_lifecycle.dart';
@@ -121,6 +122,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// [_PendingApproval] is rebuilt (not mutated in place) whenever
   /// [_addApproval] replaces one.
   final Set<String> _approvalsInFlight = {};
+  final Map<String, int> _approvalReviewVersions = {};
 
   /// Approval ids whose most recent `approveApproval`/`denyApproval` RPC
   /// rejected AND whose approval is still pending — see [_approve]/[_deny]'s
@@ -1078,6 +1080,15 @@ class _ChatScreenState extends State<ChatScreen> {
   ///
   /// Must be called from inside a `setState`.
   void _upsertRunStateCard(RunState state, _MessageEntry assistantEntry) {
+    if (state.isTerminal) {
+      _approvals.removeWhere((approval) {
+        if (approval.runId != state.runId) return false;
+        _approvalsInFlight.remove(approval.approvalId);
+        _approvalReviewVersions.remove(approval.approvalId);
+        _clearApprovalActionFailureFor(approval.approvalId);
+        return true;
+      });
+    }
     // A genuine, reconciled `RunState` is now known for this exact row —
     // any neutral "no response recorded" fallback beside it (rendered
     // because the row was originally loaded with no `RunState` at all; see
@@ -1213,7 +1224,13 @@ class _ChatScreenState extends State<ChatScreen> {
         widget.onSessionUpdated?.call(event);
         break;
       case 'session.deleted':
-        _sessionDeleted = true;
+        setState(() {
+          _sessionDeleted = true;
+          _approvals.clear();
+          _approvalsInFlight.clear();
+          _approvalReviewVersions.clear();
+          _approvalActionFailedApprovalIds.clear();
+        });
         widget.onSessionDeleted?.call(event.sessionId);
         unawaited(_subscription?.cancel());
         _eventSource.close();
@@ -1575,14 +1592,18 @@ class _ChatScreenState extends State<ChatScreen> {
     final approvalId = _asString(event.payload['approvalId']);
     final toolName = _asString(event.payload['toolName']);
     if (approvalId == null || toolName == null) return;
+    final runId = event.runId;
+    if (runId != null &&
+        (_runStateReconciler.stateFor(runId)?.isTerminal ?? false)) {
+      return;
+    }
     setState(() {
       _approvals.removeWhere((approval) => approval.approvalId == approvalId);
       _approvals.add(
         _PendingApproval(
           approvalId: approvalId,
           toolName: toolName,
-          argsSummary: _asString(event.payload['argsSummary']) ?? '',
-          fullArguments: _asString(event.payload['fullArguments']) ?? '',
+          runId: runId,
         ),
       );
     });
@@ -1600,6 +1621,7 @@ class _ChatScreenState extends State<ChatScreen> {
       // outlive it. This stream event is authoritative over that RPC's own
       // outcome (round 12, finding 1): see [_approve]/[_deny]'s `catch`.
       _approvalsInFlight.remove(approvalId);
+      _approvalReviewVersions.remove(approvalId);
       _clearApprovalActionFailureFor(approvalId);
     });
   }
@@ -1859,7 +1881,7 @@ class _ChatScreenState extends State<ChatScreen> {
           // A selected-but-empty conversation rendered as a tall black void
           // with the composer stranded at the bottom. An empty room should say
           // what to do in it.
-          child: _messages.isEmpty && !_initializing
+          child: _messages.isEmpty && !_initializing && _approvals.isEmpty
               ? const _EmptyConversation()
               : ListView.builder(
                   controller: _scrollController,
@@ -1911,14 +1933,35 @@ class _ChatScreenState extends State<ChatScreen> {
             // visually or programmatically conflated with either.
             icon: Icons.warning_amber_rounded,
           ),
-        for (final approval in _approvals)
-          ApprovalCard(
-            toolName: approval.toolName,
-            argsSummary: approval.argsSummary,
-            fullArguments: approval.fullArguments,
-            onApprove: () => _approve(approval),
-            onDeny: () => _deny(approval),
-            busy: _approvalsInFlight.contains(approval.approvalId),
+        if (_approvals.isNotEmpty)
+          Flexible(
+            flex: 0,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.55,
+              ),
+              child: SingleChildScrollView(
+                primary: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final approval in _approvals)
+                      ApprovalCard(
+                        key: ValueKey(
+                          '${approval.approvalId}:${_approvalReviewVersions[approval.approvalId] ?? 0}',
+                        ),
+                        approvalId: approval.approvalId,
+                        toolName: approval.toolName,
+                        loadDetails: (refresh) =>
+                            _loadApprovalDetails(approval, refresh),
+                        onApprove: (details) => _approve(approval, details),
+                        onDeny: () => _deny(approval),
+                        busy: _approvalsInFlight.contains(approval.approvalId),
+                      ),
+                  ],
+                ),
+              ),
+            ),
           ),
         SafeArea(
           top: false,
@@ -1986,13 +2029,47 @@ class _ChatScreenState extends State<ChatScreen> {
     _approvalActionFailedApprovalIds.remove(approvalId);
   }
 
-  Future<void> _approve(_PendingApproval approval) async {
+  Future<ApprovalDetails> _loadApprovalDetails(
+    _PendingApproval approval,
+    bool refresh,
+  ) async {
+    final details = await widget.apiClient.getApprovalDetails(
+      approval.approvalId,
+      refreshPreview: refresh,
+    );
+    if (!mounted ||
+        _sessionDeleted ||
+        !_isApprovalPending(approval.approvalId) ||
+        details.approvalId != approval.approvalId ||
+        details.sessionId != widget.sessionId ||
+        details.runId != approval.runId ||
+        details.toolName != approval.toolName) {
+      throw const TuringApiException(
+        code: 'approval_unavailable',
+        message: 'This approval is no longer available',
+      );
+    }
+    return details;
+  }
+
+  Future<void> _approve(
+    _PendingApproval approval,
+    ApprovalDetails details,
+  ) async {
     // Approve and Deny are mutually exclusive outcomes for the SAME
     // approval, so a duplicate tap or the other action racing an
     // already-in-flight decision for this one must be refused here, not
     // just at the button's own disabled state — the same reasoning
     // `_sendMessage` applies to its own `_composerDisabled` guard.
-    if (_approvalsInFlight.contains(approval.approvalId)) return;
+    if (_sessionDeleted ||
+        !_isApprovalPending(approval.approvalId) ||
+        _approvalsInFlight.contains(approval.approvalId) ||
+        details.approvalId != approval.approvalId ||
+        details.runId != approval.runId ||
+        details.sessionId != widget.sessionId ||
+        !details.canApproveAt(DateTime.now())) {
+      return;
+    }
     setState(() {
       _approvalsInFlight.add(approval.approvalId);
       _clearApprovalActionFailureFor(approval.approvalId);
@@ -2004,13 +2081,14 @@ class _ChatScreenState extends State<ChatScreen> {
     // prevent. `GrpcError`/[TuringApiException] both `implements Exception`,
     // so `on Exception` catches exactly this RPC failure boundary.
     try {
-      await widget.apiClient.approveApproval(approval.approvalId);
+      await widget.apiClient.approveReviewedApproval(details);
       if (!mounted) return;
       setState(() {
         _approvals.removeWhere(
           (item) => item.approvalId == approval.approvalId,
         );
         _approvalsInFlight.remove(approval.approvalId);
+        _approvalReviewVersions.remove(approval.approvalId);
         // Provably a no-op today: a fresh attempt always clears its own id
         // right away (above, before this `await`), and `_approvalsInFlight`
         // blocks any OTHER concurrent attempt for the same id from
@@ -2039,13 +2117,22 @@ class _ChatScreenState extends State<ChatScreen> {
         // error — see `_approvalActionFailedNotice`'s own doc.
         if (_isApprovalPending(approval.approvalId)) {
           _approvalActionFailedApprovalIds.add(approval.approvalId);
+          _approvalReviewVersions.update(
+            approval.approvalId,
+            (version) => version + 1,
+            ifAbsent: () => 1,
+          );
         }
       });
     }
   }
 
   Future<void> _deny(_PendingApproval approval) async {
-    if (_approvalsInFlight.contains(approval.approvalId)) return;
+    if (_sessionDeleted ||
+        !_isApprovalPending(approval.approvalId) ||
+        _approvalsInFlight.contains(approval.approvalId)) {
+      return;
+    }
     setState(() {
       _approvalsInFlight.add(approval.approvalId);
       _clearApprovalActionFailureFor(approval.approvalId);
@@ -2058,6 +2145,7 @@ class _ChatScreenState extends State<ChatScreen> {
           (item) => item.approvalId == approval.approvalId,
         );
         _approvalsInFlight.remove(approval.approvalId);
+        _approvalReviewVersions.remove(approval.approvalId);
         // See `_approve`'s own success path for why this is a provable
         // no-op, kept only for explicit self-consistency.
         _clearApprovalActionFailureFor(approval.approvalId);
@@ -2601,12 +2689,10 @@ class _PendingApproval {
   const _PendingApproval({
     required this.approvalId,
     required this.toolName,
-    required this.argsSummary,
-    required this.fullArguments,
+    required this.runId,
   });
 
   final String approvalId;
   final String toolName;
-  final String argsSummary;
-  final String fullArguments;
+  final String? runId;
 }

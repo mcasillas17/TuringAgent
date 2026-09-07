@@ -19,6 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	ApprovalService_GetApprovalDetails_FullMethodName      = "/turing.v1.ApprovalService/GetApprovalDetails"
 	ApprovalService_ApproveApproval_FullMethodName         = "/turing.v1.ApprovalService/ApproveApproval"
 	ApprovalService_DenyApproval_FullMethodName            = "/turing.v1.ApprovalService/DenyApproval"
 	ApprovalService_GetApprovalForRuntime_FullMethodName   = "/turing.v1.ApprovalService/GetApprovalForRuntime"
@@ -31,6 +32,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ApprovalServiceClient interface {
+	GetApprovalDetails(ctx context.Context, in *GetApprovalDetailsRequest, opts ...grpc.CallOption) (*ApprovalDetails, error)
 	ApproveApproval(ctx context.Context, in *ApproveApprovalRequest, opts ...grpc.CallOption) (*ApprovalResponse, error)
 	DenyApproval(ctx context.Context, in *DenyApprovalRequest, opts ...grpc.CallOption) (*ApprovalResponse, error)
 	GetApprovalForRuntime(ctx context.Context, in *GetApprovalForRuntimeRequest, opts ...grpc.CallOption) (*RuntimeApprovalState, error)
@@ -45,6 +47,16 @@ type approvalServiceClient struct {
 
 func NewApprovalServiceClient(cc grpc.ClientConnInterface) ApprovalServiceClient {
 	return &approvalServiceClient{cc}
+}
+
+func (c *approvalServiceClient) GetApprovalDetails(ctx context.Context, in *GetApprovalDetailsRequest, opts ...grpc.CallOption) (*ApprovalDetails, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApprovalDetails)
+	err := c.cc.Invoke(ctx, ApprovalService_GetApprovalDetails_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *approvalServiceClient) ApproveApproval(ctx context.Context, in *ApproveApprovalRequest, opts ...grpc.CallOption) (*ApprovalResponse, error) {
@@ -111,6 +123,7 @@ func (c *approvalServiceClient) CheckSessionCapability(ctx context.Context, in *
 // All implementations must embed UnimplementedApprovalServiceServer
 // for forward compatibility.
 type ApprovalServiceServer interface {
+	GetApprovalDetails(context.Context, *GetApprovalDetailsRequest) (*ApprovalDetails, error)
 	ApproveApproval(context.Context, *ApproveApprovalRequest) (*ApprovalResponse, error)
 	DenyApproval(context.Context, *DenyApprovalRequest) (*ApprovalResponse, error)
 	GetApprovalForRuntime(context.Context, *GetApprovalForRuntimeRequest) (*RuntimeApprovalState, error)
@@ -127,6 +140,9 @@ type ApprovalServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedApprovalServiceServer struct{}
 
+func (UnimplementedApprovalServiceServer) GetApprovalDetails(context.Context, *GetApprovalDetailsRequest) (*ApprovalDetails, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetApprovalDetails not implemented")
+}
 func (UnimplementedApprovalServiceServer) ApproveApproval(context.Context, *ApproveApprovalRequest) (*ApprovalResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApproveApproval not implemented")
 }
@@ -164,6 +180,24 @@ func RegisterApprovalServiceServer(s grpc.ServiceRegistrar, srv ApprovalServiceS
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&ApprovalService_ServiceDesc, srv)
+}
+
+func _ApprovalService_GetApprovalDetails_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetApprovalDetailsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ApprovalServiceServer).GetApprovalDetails(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ApprovalService_GetApprovalDetails_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ApprovalServiceServer).GetApprovalDetails(ctx, req.(*GetApprovalDetailsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _ApprovalService_ApproveApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -281,6 +315,10 @@ var ApprovalService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "turing.v1.ApprovalService",
 	HandlerType: (*ApprovalServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetApprovalDetails",
+			Handler:    _ApprovalService_GetApprovalDetails_Handler,
+		},
 		{
 			MethodName: "ApproveApproval",
 			Handler:    _ApprovalService_ApproveApproval_Handler,

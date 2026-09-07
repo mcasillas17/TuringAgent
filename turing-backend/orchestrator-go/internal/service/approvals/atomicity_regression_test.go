@@ -109,7 +109,7 @@ func TestApprovedApprovalEventFailureRollsBackCommentAndDecision(t *testing.T) {
 	}
 
 	const comment = "I checked the exact path"
-	if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{
+	if _, err := reviewedApprove(t, h.service, h.database, context.Background(), &turingv1.ApproveApprovalRequest{
 		ApprovalId: approvalID,
 		Comment:    comment,
 	}); err == nil {
@@ -125,7 +125,7 @@ func TestApprovedApprovalEventFailureRollsBackCommentAndDecision(t *testing.T) {
 	if _, err := h.database.ExecContext(context.Background(), `DROP TRIGGER fail_atomic_approved_event`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{
+	if _, err := reviewedApprove(t, h.service, h.database, context.Background(), &turingv1.ApproveApprovalRequest{
 		ApprovalId: approvalID,
 		Comment:    comment,
 	}); err != nil {
@@ -160,14 +160,14 @@ func TestApprovedApprovalIgnoresAncillaryFailuresAndRetriesIdempotently(t *testi
 	}
 	h.service.SetNotifier(failingApprovalNotifier{err: context.DeadlineExceeded})
 
-	first, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
+	first, err := reviewedApprove(t, h.service, h.database, context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
 	if err != nil {
 		t.Fatalf("ApproveApproval reported committed ancillary failure: %v", err)
 	}
 	if first.GetStatus() != turingv1.ApprovalStatus_APPROVAL_STATUS_APPROVED {
 		t.Fatalf("first approval response = %+v", first)
 	}
-	second, err := h.service.ApproveApproval(context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
+	second, err := reviewedApprove(t, h.service, h.database, context.Background(), &turingv1.ApproveApprovalRequest{ApprovalId: approvalID})
 	if err != nil {
 		t.Fatalf("same approval retry: %v", err)
 	}

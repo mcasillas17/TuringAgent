@@ -197,6 +197,14 @@ Approval resume is a two-phase fence:
 
 ## Flutter live/reopen parity
 
+Approval inspection does not change the assignment/resume lifecycle.
+A pending stale preview requires an explicit refresh and a new human decision.
+If an approved file precondition changes before the protected commit, the
+tool refuses the mutation through the existing failure/outcome path; the old
+authorization is not silently refreshed or restored after consumption.
+Request the action again for a new approval. See
+[approval preview boundaries](approval-previews.md).
+
 History first creates message rows, then reconciles their embedded states. Live
 and replayed states use the same pure rules:
 
@@ -273,4 +281,5 @@ after migration returns the original terminal run without another write.
 - Partial live deltas are not guaranteed to survive reopen.
 - Live tool-separated text segments collapse into one persisted assistant
   message after reopen.
-- Only the new run-state copy is localized.
+- Run-state and approval-review copy are localized; other legacy screen
+  strings are not all localized.

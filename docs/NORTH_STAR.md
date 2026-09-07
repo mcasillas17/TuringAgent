@@ -128,8 +128,8 @@ claims.
 | Local chat and tool loop | Ollama is the default; streaming, bounded tool iterations, zero-argument recovery, and unknown-tool recovery are implemented. |
 | Durable orchestration | Sessions, runs, events, jobs, leases, fencing, retries, recovery, and reopenable run outcomes are persisted in SQLite. |
 | Bounded queue waiting | A queued run records whether any live worker can serve its route, and two configurable bounds end one that waits too long. Not a pause/resume state: both outcomes are terminal. |
-| File actions | Sandboxed read/list/search plus approval-gated create/update are implemented. |
-| Approvals | Mutations use short-lived, argument-bound, single-use approval tokens. |
+| File actions | Sandboxed read/list/search plus preview-bound create/update are implemented; both reviewed file versions must be safe text within 64 KiB. |
+| Approvals | Authenticated bounded details bind human decisions to canonical arguments and file preconditions; stale writes are refused under the documented filesystem assumptions. |
 | Session management | Stable titles, pagination, search, rename, archive, restore, and durable whole-session withdrawal are implemented. |
 | Recall | Cross-session FTS5 recall and scored search hits are implemented and attributed. |
 | Context control | Provider context limits, output reserves, explicit omissions, and terminal notices are implemented. |
@@ -185,7 +185,7 @@ inventory; the example wording itself is not machine-checked.
 |---|---|---|
 | "Find the exact phrase 'release checklist'." | Works | FTS5 phrase search; selecting a hit sets the conversation to view after dismissing search. |
 | "Read this project file." | Works | File must be inside the sandbox. |
-| "Update this sandbox file." | Works | Requires an argument-bound approval. |
+| "Update this sandbox file." | Works within preview limits | Requires a current argument/preview-bound approval; stale, redacted, binary or oversized changes fail closed. |
 | "Remember that I prefer concise answers." | Partial | The model may call `memory.remember`; the proposal is inert until the user promotes it. There is no automatic extraction. |
 | "Comment on this GitHub issue." | Works with setup | Requires a connected GitHub credential, per-run egress coverage, and tool approval. |
 | "Run this report every morning." | Partial | The automation can run, but there is no mobile/channel delivery and unattended tools are limited to its explicit allowlist. |
@@ -538,6 +538,16 @@ gates are satisfied.
 
 ### 4. TUR-021 - Inspectable approval previews
 
+- **Implementation introduced by this revision:** Authenticated structured
+  details and complete bounded file diffs are bound to the stored approval,
+  canonical arguments and actual session/run-scoped target. Approval and the
+  protected write revalidate file preconditions; the desktop client handles
+  loading, retry, explicit refresh, expiry and terminal reconciliation.
+  [Inspectable approval previews](architecture/approval-previews.md) defines
+  the 64 KiB before/after ceiling, conservative redaction, non-file policy,
+  retention, older-client refusal and filesystem assumptions. The inspected
+  mainline baseline predates this work; this record does not assert a
+  subsequent merge to `main`.
 - **Outcome:** The user can see exactly what a mutation will change.
 - **Scope:** Add structured approval details, bounded before/after file diffs,
   redaction, content hashes, and Flutter review UX.

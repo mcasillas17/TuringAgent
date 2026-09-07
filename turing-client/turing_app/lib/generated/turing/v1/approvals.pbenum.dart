@@ -45,5 +45,58 @@ class ApprovalStatus extends $pb.ProtobufEnum {
   const ApprovalStatus._(super.value, super.name);
 }
 
+class ApprovalPreviewState extends $pb.ProtobufEnum {
+  static const ApprovalPreviewState APPROVAL_PREVIEW_STATE_UNSPECIFIED =
+      ApprovalPreviewState._(
+          0, _omitEnumNames ? '' : 'APPROVAL_PREVIEW_STATE_UNSPECIFIED');
+  static const ApprovalPreviewState APPROVAL_PREVIEW_STATE_READY =
+      ApprovalPreviewState._(
+          1, _omitEnumNames ? '' : 'APPROVAL_PREVIEW_STATE_READY');
+  static const ApprovalPreviewState APPROVAL_PREVIEW_STATE_UNAVAILABLE =
+      ApprovalPreviewState._(
+          2, _omitEnumNames ? '' : 'APPROVAL_PREVIEW_STATE_UNAVAILABLE');
+  static const ApprovalPreviewState APPROVAL_PREVIEW_STATE_UNSUPPORTED =
+      ApprovalPreviewState._(
+          3, _omitEnumNames ? '' : 'APPROVAL_PREVIEW_STATE_UNSUPPORTED');
+  static const ApprovalPreviewState APPROVAL_PREVIEW_STATE_REDACTED =
+      ApprovalPreviewState._(
+          4, _omitEnumNames ? '' : 'APPROVAL_PREVIEW_STATE_REDACTED');
+  static const ApprovalPreviewState APPROVAL_PREVIEW_STATE_OVERSIZED =
+      ApprovalPreviewState._(
+          5, _omitEnumNames ? '' : 'APPROVAL_PREVIEW_STATE_OVERSIZED');
+  static const ApprovalPreviewState APPROVAL_PREVIEW_STATE_BINARY =
+      ApprovalPreviewState._(
+          6, _omitEnumNames ? '' : 'APPROVAL_PREVIEW_STATE_BINARY');
+  static const ApprovalPreviewState APPROVAL_PREVIEW_STATE_EXPIRED =
+      ApprovalPreviewState._(
+          7, _omitEnumNames ? '' : 'APPROVAL_PREVIEW_STATE_EXPIRED');
+  static const ApprovalPreviewState APPROVAL_PREVIEW_STATE_STALE =
+      ApprovalPreviewState._(
+          8, _omitEnumNames ? '' : 'APPROVAL_PREVIEW_STATE_STALE');
+  static const ApprovalPreviewState APPROVAL_PREVIEW_STATE_TERMINAL =
+      ApprovalPreviewState._(
+          9, _omitEnumNames ? '' : 'APPROVAL_PREVIEW_STATE_TERMINAL');
+
+  static const $core.List<ApprovalPreviewState> values = <ApprovalPreviewState>[
+    APPROVAL_PREVIEW_STATE_UNSPECIFIED,
+    APPROVAL_PREVIEW_STATE_READY,
+    APPROVAL_PREVIEW_STATE_UNAVAILABLE,
+    APPROVAL_PREVIEW_STATE_UNSUPPORTED,
+    APPROVAL_PREVIEW_STATE_REDACTED,
+    APPROVAL_PREVIEW_STATE_OVERSIZED,
+    APPROVAL_PREVIEW_STATE_BINARY,
+    APPROVAL_PREVIEW_STATE_EXPIRED,
+    APPROVAL_PREVIEW_STATE_STALE,
+    APPROVAL_PREVIEW_STATE_TERMINAL,
+  ];
+
+  static final $core.List<ApprovalPreviewState?> _byValue =
+      $pb.ProtobufEnum.$_initByValueList(values, 9);
+  static ApprovalPreviewState? valueOf($core.int value) =>
+      value < 0 || value >= _byValue.length ? null : _byValue[value];
+
+  const ApprovalPreviewState._(super.value, super.name);
+}
+
 const $core.bool _omitEnumNames =
     $core.bool.fromEnvironment('protobuf.omit_enum_names');

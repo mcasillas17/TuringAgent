@@ -305,7 +305,7 @@ func (r *Repository) ApproveApproval(ctx context.Context, approvalID string, app
 	return transition.Approval, err
 }
 
-func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID string, approvalToken string, approvalComment sql.NullString, decidedAt string) (ApprovalTerminalization, error) {
+func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID string, approvalToken string, approvalComment sql.NullString, decidedAt string, previewHashes ...string) (ApprovalTerminalization, error) {
 	if decidedAt == "" {
 		decidedAt = now()
 	}
@@ -314,6 +314,11 @@ func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID st
 		return ApprovalTerminalization{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if len(previewHashes) > 0 {
+		if err := checkPreviewDecision(ctx, tx, approvalID, previewHashes[0]); err != nil {
+			return ApprovalTerminalization{}, err
+		}
+	}
 	record, err := approvalByID(ctx, tx, approvalID)
 	if err != nil {
 		return ApprovalTerminalization{}, err
@@ -725,7 +730,8 @@ func approvalByID(ctx context.Context, q approvalQuerier, approvalID string) (Ap
 	var modelToolCallID sql.NullString
 	var mcpServerID sql.NullString
 	err := q.QueryRowContext(ctx, `
-		SELECT a.id, a.run_id, a.tool_call_id, a.agent_id, COALESCE(tc.server_name, ''), a.tool_name, a.args_json, a.args_hash,
+		SELECT a.id, a.run_id, a.tool_call_id, a.agent_id, COALESCE(tc.server_name, ''), a.tool_name,
+			CASE WHEN length(CAST(a.args_json AS BLOB))<=131072 THEN a.args_json ELSE '' END, a.args_hash,
 			a.status, a.approval_token, a.approval_comment, a.denial_reason, a.expires_at, tc.model_tool_call_id, tc.mcp_server_id
 		FROM approvals a
 		LEFT JOIN tool_calls tc ON tc.id = a.tool_call_id
