@@ -63,7 +63,7 @@ threshold may be derived from it.
 
 Results are ordered by `bm25(messages_fts)` then `m.id`, so equal scores are
 broken deterministically by `message_id ASC` and repeated identical queries
-return identical order. MEM-003 will consume that relative order; nothing
+return identical order. MEM-003 consumes that relative order; nothing
 consumes the magnitude.
 
 ### Snippet safety
@@ -176,3 +176,45 @@ Migrating recall to `hits` belongs to MEM-004; this layer does not partially
 change recall ranking. The Flutter client is the consumer that requests `HITS`
 today and renders the server snippet verbatim, keeping its own opening-excerpt
 cut only as the mixed-version fallback.
+
+## Deterministic evaluation
+
+MEM-003's [offline corpus and baseline](../../turing-backend/recall/eval/README.md)
+measure the shipped path at distinct boundaries:
+
+```text
+Synthetic corpus -> migrated SQLite + real withdrawal -> close/reopen
+                         |
+                         +-> repository / SessionService phrase search
+                         |       HITS order == legacy order
+                         |       source ranking + snippet evidence
+                         |
+                         +-> runtime legacy client -> prepared term search
+                                   |
+                           real assistant context budgeting
+                                   |
+                           recall rank/render <-> admitted-history convergence
+                                   |                  |
+                           observed selection         |
+                                   +------------------+
+                                   |
+                           captured StreamChat request
+                           history + admitted recall + live question
+                                   |
+                           evidence-set coverage (question excluded)
+```
+
+The capturing provider uses the actual Ollama request estimator but performs
+no inference or network call. An optional copied-selection observer is unset
+in production; it neither changes ranking nor adds metadata to prompts.
+Request text still attributes excerpts by date and role, while source/session
+IDs are carried separately in evaluation observations.
+
+Retrieval success is not context success. A current-session source can be
+suppressed because history already contains it; omitted history can become
+recallable during convergence; an excerpt can retain the source ID but lose
+the needed text; and the complete recall block can be omitted by the final
+budget. The evaluation distinguishes all four cases. It reports observational
+temporal contamination and no-support retrieval, not answer hallucination or
+model abstention. Paraphrase, CJK and temporal limitations remain visible;
+the benchmark adds no semantic search, time filter or summary layer.
