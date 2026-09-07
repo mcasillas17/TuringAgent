@@ -84,6 +84,48 @@ func refreshQueue(t *testing.T, h *harness) {
 	}
 }
 
+// WorkerAccepted precedes registration-triggered dispatch. Observe an assignment
+// occupying the single slot before enqueueing work that must remain queued.
+func occupyQueueWorker(t *testing.T, h *harness, stream turingv1.RuntimeService_ConnectWorkerClient) repository.EnqueueUserMessageResult {
+	t.Helper()
+	if err := h.service.ValidateRouting(context.Background(), repository.RoutingRequirements{
+		AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	occupying := h.enqueueRun(t, "occupy worker")
+	if err := h.service.DispatchPending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assigned := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetRunAssigned() != nil
+	}).GetRunAssigned()
+	if assigned.GetRunId() != occupying.RunID {
+		t.Fatalf("assignment = %q, want occupying run %q", assigned.GetRunId(), occupying.RunID)
+	}
+	return occupying
+}
+
+func assertQueuedPendingRun(t *testing.T, h *harness, runID string) {
+	t.Helper()
+	var runStatus, jobStatus string
+	var executionActive bool
+	if err := h.database.QueryRowContext(context.Background(), `
+		SELECT runs.status, jobs.status, runs.execution_active
+		FROM agent_runs AS runs JOIN jobs ON jobs.run_id = runs.id
+		WHERE runs.id = ?
+	`, runID).Scan(&runStatus, &jobStatus, &executionActive); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus != "queued" || jobStatus != "pending" || executionActive {
+		t.Fatalf("queue prerequisite: run=%q job=%q execution_active=%v, want queued/pending/false",
+			runStatus, jobStatus, executionActive)
+	}
+	if state := h.runState(t, runID); state.Lifecycle != "queued" {
+		t.Fatalf("published lifecycle = %q, want queued", state.Lifecycle)
+	}
+}
+
 func TestQueuedRunLosingEveryEligibleWorkerGainsDurableQueueTruth(t *testing.T) {
 	clock := newQueueClock()
 	h := newHarnessWithDispatch(t, queueWaitDispatch(runoutcome.QueueTimeoutPolicyFail))
@@ -93,7 +135,12 @@ func TestQueuedRunLosingEveryEligibleWorkerGainsDurableQueueTruth(t *testing.T) 
 	// enqueue gets past routing validation in production.
 	stream := connectWorkerCapabilities(t, h, "worker-losing", "registration-losing",
 		modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1))
+	occupying := occupyQueueWorker(t, h, stream)
 	enqueued := h.enqueueRun(t, "answer me")
+	if err := h.service.DispatchPending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertQueuedPendingRun(t, h, enqueued.RunID)
 	refreshQueue(t, h)
 	if reason, _, _, unroutable := queueWaitState(t, h, enqueued.RunID); reason != string(runoutcome.QueueWaitNone) || unroutable != nil {
 		t.Fatalf("queue truth with a compatible worker = %q/%v, want none and no open interval", reason, unroutable)
@@ -106,7 +153,24 @@ func TestQueuedRunLosingEveryEligibleWorkerGainsDurableQueueTruth(t *testing.T) 
 	eventually(t, eventuallyTimeout, func() bool {
 		return h.service.registeredWorker("worker-losing") == nil
 	})
+	h.service.WaitForWorkerStreams()
 	refreshQueue(t, h)
+	assertQueuedPendingRun(t, h, enqueued.RunID)
+
+	// The delivered run is recovering, not queued. Full teardown must not make
+	// it eligible for the queue observer or the no-worker deadline.
+	recovering, err := h.repo.GetRun(context.Background(), occupying.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovering.Status != "recovering" || !recovering.ExecutionActive {
+		t.Fatalf("delivered run after disconnect = %s/active=%v, want recovering/active=true",
+			recovering.Status, recovering.ExecutionActive)
+	}
+	recoveringState := h.runState(t, occupying.RunID)
+	if reason, _, since, unroutable := queueWaitState(t, h, occupying.RunID); reason != string(runoutcome.QueueWaitNone) || since != nil || unroutable != nil {
+		t.Fatalf("recovering queue truth = %q/%v/%v, want none with no open intervals", reason, since, unroutable)
+	}
 
 	reason, _, _, unroutable := queueWaitState(t, h, enqueued.RunID)
 	if reason != string(runoutcome.QueueWaitNoCompatibleWorker) {
@@ -124,9 +188,7 @@ func TestQueuedRunLosingEveryEligibleWorkerGainsDurableQueueTruth(t *testing.T) 
 	// Still inside the bound: the run keeps waiting rather than being ended.
 	clock.advance(9 * time.Minute)
 	refreshQueue(t, h)
-	if state := h.runState(t, enqueued.RunID); state.Lifecycle != "queued" {
-		t.Fatalf("run inside the no-worker bound = %q, want queued", state.Lifecycle)
-	}
+	assertQueuedPendingRun(t, h, enqueued.RunID)
 
 	clock.advance(2 * time.Minute)
 	refreshQueue(t, h)
@@ -140,6 +202,9 @@ func TestQueuedRunLosingEveryEligibleWorkerGainsDurableQueueTruth(t *testing.T) 
 	if !state.FinishedAt.Valid {
 		t.Fatal("a terminal run recorded no finish time")
 	}
+	if after := h.runState(t, occupying.RunID); after != recoveringState {
+		t.Fatalf("queue expiry changed delivered/recovering work: %+v, want %+v", after, recoveringState)
+	}
 }
 
 func TestIncompatibleLiveWorkerIsNotACompatibleOne(t *testing.T) {
@@ -150,7 +215,12 @@ func TestIncompatibleLiveWorkerIsNotACompatibleOne(t *testing.T) {
 	stream := connectWorkerCapabilities(t, h, "worker-swap", "registration-swap",
 		modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1))
 	defer func() { _ = stream.CloseSend() }()
+	occupyQueueWorker(t, h, stream)
 	enqueued := h.enqueueRun(t, "route me")
+	if err := h.service.DispatchPending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertQueuedPendingRun(t, h, enqueued.RunID)
 
 	// The worker stays connected and stays live; what it can do changes.
 	if err := stream.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerCapabilitiesUpdated{
@@ -173,6 +243,7 @@ func TestIncompatibleLiveWorkerIsNotACompatibleOne(t *testing.T) {
 		}) != nil
 	})
 	refreshQueue(t, h)
+	assertQueuedPendingRun(t, h, enqueued.RunID)
 	if reason, _, _, _ := queueWaitState(t, h, enqueued.RunID); reason != string(runoutcome.QueueWaitNoCompatibleWorker) {
 		t.Fatalf("queue reason with only an incompatible live worker = %q, want %q",
 			reason, runoutcome.QueueWaitNoCompatibleWorker)
@@ -229,19 +300,30 @@ func TestBusyCompatibleWorkerNeverStartsTheNoWorkerBound(t *testing.T) {
 
 func TestCapabilityRestorationBeforeExpiryClearsTheQueueTruth(t *testing.T) {
 	clock := newQueueClock()
-	h := newHarnessWithDispatch(t, queueWaitDispatch(runoutcome.QueueTimeoutPolicyFail))
+	dispatch := queueWaitDispatch(runoutcome.QueueTimeoutPolicyFail)
+	// The disconnected occupant's execution fence keeps the global slot busy
+	// even after a new compatible worker connects.
+	dispatch.MaxConcurrentRuns = 1
+	h := newHarnessWithDispatch(t, dispatch)
 	h.service.queueNow = clock.read
 
 	first := connectWorkerCapabilities(t, h, "worker-gone", "registration-gone",
 		modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1))
+	occupyQueueWorker(t, h, first)
 	enqueued := h.enqueueRun(t, "come back")
+	if err := h.service.DispatchPending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertQueuedPendingRun(t, h, enqueued.RunID)
 	if err := first.CloseSend(); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, eventuallyTimeout, func() bool {
 		return h.service.registeredWorker("worker-gone") == nil
 	})
+	h.service.WaitForWorkerStreams()
 	refreshQueue(t, h)
+	assertQueuedPendingRun(t, h, enqueued.RunID)
 	if reason, _, _, _ := queueWaitState(t, h, enqueued.RunID); reason != string(runoutcome.QueueWaitNoCompatibleWorker) {
 		t.Fatalf("queue reason after the worker went = %q", reason)
 	}
@@ -250,7 +332,11 @@ func TestCapabilityRestorationBeforeExpiryClearsTheQueueTruth(t *testing.T) {
 	second := connectWorkerCapabilities(t, h, "worker-back", "registration-back",
 		modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1))
 	defer func() { _ = second.CloseSend() }()
+	if err := h.service.DispatchPending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	refreshQueue(t, h)
+	assertQueuedPendingRun(t, h, enqueued.RunID)
 
 	reason, _, _, unroutable := queueWaitState(t, h, enqueued.RunID)
 	if reason != string(runoutcome.QueueWaitNone) {
@@ -263,9 +349,7 @@ func TestCapabilityRestorationBeforeExpiryClearsTheQueueTruth(t *testing.T) {
 	// interval must not be resumed from where it stopped.
 	clock.advance(6 * time.Minute)
 	refreshQueue(t, h)
-	if state := h.runState(t, enqueued.RunID); state.Lifecycle == "failed" {
-		t.Fatal("a restored route expired on the interval it had already left")
-	}
+	assertQueuedPendingRun(t, h, enqueued.RunID)
 }
 
 func TestRepeatedReconciliationOverAnUnchangedQueueWritesNothing(t *testing.T) {
@@ -275,14 +359,25 @@ func TestRepeatedReconciliationOverAnUnchangedQueueWritesNothing(t *testing.T) {
 
 	stream := connectWorkerCapabilities(t, h, "worker-idle", "registration-idle",
 		modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1))
+	occupyQueueWorker(t, h, stream)
 	enqueued := h.enqueueRun(t, "reconcile me")
+	if err := h.service.DispatchPending(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertQueuedPendingRun(t, h, enqueued.RunID)
 	if err := stream.CloseSend(); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, eventuallyTimeout, func() bool {
 		return h.service.registeredWorker("worker-idle") == nil
 	})
+	h.service.WaitForWorkerStreams()
 	refreshQueue(t, h)
+	assertQueuedPendingRun(t, h, enqueued.RunID)
+	if reason, _, _, unroutable := queueWaitState(t, h, enqueued.RunID); reason != string(runoutcome.QueueWaitNoCompatibleWorker) || unroutable == nil {
+		t.Fatalf("queue truth before repeated reconciliation = %q/%v, want no compatible worker with an open interval",
+			reason, unroutable)
+	}
 	afterFirst := h.runState(t, enqueued.RunID)
 	events := countRunEvents(t, h, enqueued.RunID, "agent.run.state_changed")
 
