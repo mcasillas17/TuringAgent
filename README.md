@@ -213,6 +213,18 @@ Go and Dart generation. See the [pinned toolchain guide](tools/proto/README.md).
 The [documentation guard](tools/docs/README.md) covers explicit status claims
 and tool versions; it does not replace the behavioral suites.
 
+For deterministic recall evaluation without running the stack or a model:
+
+```bash
+go test -tags sqlite_fts5 ./turing-backend/recall/eval -count=1
+```
+
+The [recall evaluation guide](turing-backend/recall/eval/README.md) documents
+the synthetic corpus, stage-specific metrics, baseline updates and separate
+latency benchmarks. The existing root CI race suite includes its regression
+gates. Search hits, runtime-selected excerpts and evidence in the final budgeted
+request are measured separately; this does not evaluate generated answers.
+
 ## Configuration
 
 Backend configuration lives in `turing-backend/.env`, copied from `turing-backend/.env.example`.

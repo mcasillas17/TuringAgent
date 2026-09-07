@@ -532,6 +532,7 @@ func TestCanonicalRoadmapLinks(t *testing.T) {
 	for _, document := range []struct{ path, target string }{
 		{"README.md", "docs/NORTH_STAR.md"},
 		{"tools/docs/README.md", "../../docs/NORTH_STAR.md"},
+		{"turing-backend/recall/eval/README.md", "../../../docs/NORTH_STAR.md"},
 		{"turing-client/turing_app/README.md", "../../docs/NORTH_STAR.md"},
 		{"docs/architecture/tech-stack.md", "../NORTH_STAR.md"},
 		{"docs/architecture/audit-read-api.md", "../NORTH_STAR.md"},

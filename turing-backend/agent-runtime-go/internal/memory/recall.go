@@ -161,6 +161,11 @@ type Recaller struct {
 	MaxExcerpts int
 	MaxChars    int
 	Timeout     time.Duration
+	// ObserveSelection is an optional, instance-scoped observation seam.
+	// It sees a copy of the exact rank/budget selection after rendering; it
+	// cannot change the returned block. Production leaves it nil. Observers
+	// must be synchronous and must not retain sensitive text outside the run.
+	ObserveSelection func([]Excerpt)
 }
 
 // NewRecaller builds a Recaller with the default budgets. Prefer it to a struct
@@ -253,7 +258,11 @@ func (r *Recaller) PrepareRecall(
 		}
 		// rank fills in a default for any budget the caller left unset.
 		excerpts := rankPrepared(prepared, currentSessionID, inContextKeys(inContext), r.MaxExcerpts, r.MaxChars)
-		return Render(excerpts)
+		block, ok := Render(excerpts)
+		if r.ObserveSelection != nil {
+			r.ObserveSelection(append([]Excerpt(nil), excerpts...))
+		}
+		return block, ok
 	}
 }
 

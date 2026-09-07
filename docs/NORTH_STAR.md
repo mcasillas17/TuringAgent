@@ -132,6 +132,7 @@ claims.
 | Approvals | Authenticated bounded details bind human decisions to canonical arguments and file preconditions; stale writes are refused under the documented filesystem assumptions. |
 | Session management | Stable titles, pagination, search, rename, archive, restore, and durable whole-session withdrawal are implemented. |
 | Recall | Cross-session FTS5 recall and scored search hits are implemented and attributed. |
+| Recall evaluation | MEM-003 provides a deterministic synthetic baseline for search, runtime selection and budgeted request evidence, with independent safety gates; it does not judge model answers. |
 | Context control | Provider context limits, output reserves, explicit omissions, and terminal notices are implemented. |
 | Memory vault | `persona.md`, `profile.md`, `inbox/`, and `beliefs/` are user-owned Markdown; `memory.search`, `memory.read`, and `memory.remember` exist. |
 | Skills | File-backed `SKILL.md` loading, progressive disclosure, enablement, and Turing capability grants exist. |
@@ -163,7 +164,7 @@ contract) are shipped on the inspected baseline.
 - automatic memory extraction and belief revision;
 - per-session and per-turn memory controls;
 - message-level deletion and single-fact withdrawal;
-- a memory and personal-agent evaluation suite;
+- a model-answer and whole-personal-agent evaluation suite (EVAL-001);
 - native Anthropic and Gemini provider transports;
 - secure mobile reachability and per-device identity;
 - Telegram, Slack, WhatsApp, or Teams channels;
@@ -560,6 +561,14 @@ gates are satisfied.
 
 ### 5. MEM-003 - Deterministic recall evaluation
 
+- **Implementation introduced by this revision:** A versioned 21-case synthetic
+  corpus runs real FTS5 repository/RPC search, existing runtime recall and actual
+  budgeted provider-request admission offline. Per-case baseline thresholds and
+  independent privacy/deletion/framing gates run in the existing root CI race
+  suite. [Evaluation guide](../turing-backend/recall/eval/README.md) defines
+  labels, formulas, limitations, reproducible reports and deliberate baseline
+  updates. This does not change production ranking or evaluate model answers;
+  MEM-004, MEM-016 and EVAL-001 remain separate work.
 - **Outcome:** Retrieval and memory changes are selected by evidence.
 - **Scope:** Checked-in fixtures for exact identifiers, paraphrases, updates,
   temporal questions, multi-session synthesis, CJK, injection, deletion, and
