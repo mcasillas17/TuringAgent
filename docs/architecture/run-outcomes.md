@@ -81,7 +81,7 @@ Unknown protobuf numerics map to semantic unknown behavior and generic localized
 copy; raw integers are never rendered. TUR-009 does not write an unknown
 lifecycle. The current transport cannot distinguish deliberate cancellation
 from connection loss, so its `client_cancelled` path is `abandoned`.
-`user_cancelled` is reserved for a future typed cancel-intent API.
+`user_cancelled` is written only by the authenticated explicit cancel-intent API.
 
 Displayable content contains at least one scalar outside the explicit Unicode
 White_Space table shared by Go and Dart. Original bytes are preserved. Only an
@@ -89,6 +89,86 @@ explicit successful runtime report may complete a run. Empty or whitespace-only
 success is `completed/completed_no_content`; EOF, disconnect, and transport
 cancellation never synthesize success. Content already durable before failure or
 cancellation stays before the outcome card.
+
+## Explicit cancellation
+
+`ChatService.CancelRun` takes `session_id`, `run_id`, and a required opaque
+`idempotency_key`. The key is nonblank valid UTF-8, at most 128 bytes, and must
+be retained unchanged for retries of that exact target. Only the authenticated
+public client can invoke it; runtime and tool identities gain no public
+control rights. There is no model, route, context-budget, egress-consent, or
+approval preflight on this operation.
+
+| Result | Meaning |
+|---|---|
+| `ACCEPTED` | The run was nonterminal; explicit intent, the canonical `cancelled/user_cancelled` transition, one lifecycle event, one audit record and the replay receipt committed atomically. |
+| `ALREADY_TERMINAL` | Completion, failure, or an earlier cancellation already won. The existing outcome is unchanged. |
+| `UNAVAILABLE` | The exact session/run pair is missing, withdrawn, or inaccessible. No run metadata is returned. |
+
+Queued, claimed/pending-send, running, waiting-approval and recovering runs can
+all accept cancellation. The repository resolves and fences the current
+version within the transaction; a stale client snapshot cannot select a
+different run or create a replacement attempt. Concurrent duplicates and
+lost-response retries replay the original result and `RunState`, without new
+transitions, events or audit records. Reusing the key for another visible
+target returns `ALREADY_EXISTS`; visibility is checked before replay or
+conflict reporting. Receipts are removed with their run/session.
+
+The response's `progress` is a separate, fresh execution observation:
+`NOT_CANCELLED`, `STOPPING`, or `RECONCILED`. A replay may therefore return the
+same accepted `RunState` with newer progress. This does not increment the
+immutable terminal state's version. `GetRunCancellation` is a read-only query
+of the current state and progress; unavailable targets return `available=false`
+without a snapshot. A transport error is not an authoritative result. Retry
+the same operation identity or query status rather than assuming acceptance.
+
+```mermaid
+flowchart TD
+    Intent["Authenticated Stop: exact run + operation key"] --> Commit["Atomic canonical cancellation + receipt + audit"]
+    Commit --> Outcome["Terminal USER_CANCELLED; no revival"]
+    Commit --> Held["Retain any unresolved execution containment"]
+    Held --> Notify["Notify matching worker after commit; redeliver if needed"]
+    Notify --> Proof["Matching exit acknowledgement or existing recovery proof"]
+    Proof --> Released["RECONCILED execution; terminal outcome unchanged"]
+```
+
+Acceptance is **not** proof that the worker has stopped, capacity is free,
+or side effects were rolled back. A pending-send assignment remains fenced
+until the existing unsent-assignment/recovery path proves release. Delivered
+or uncertain execution retains its lease/attempt fence while stopping.
+The recovery sweep redelivers committed explicit stops to live matching
+assignments. Heartbeats alone cannot acknowledge exit. Disconnect and restart
+preserve delivered containment until acknowledgement or the existing lease
+recovery cutoff supplies release proof.
+
+Losing completion/failure reports may prove exit only with matching version
+evidence; they never overwrite the cancellation or its content. Versionless
+legacy worker reports can prove an explicit cancellation's exit only for a
+durably identified first attempt. Retried or unknown legacy lineage remains
+stopping until a versioned acknowledgement or existing recovery proves release.
+
+Pending and approved-but-unconsumed approvals are closed, while consumed-token
+provenance survives. An already committed mutation stays committed.
+Cancellation is not approval, credential revocation, session deletion, or an
+undo operation.
+
+### Client and upgrade behavior
+
+Flutter confirms the status RPC is supported before enabling **Stop**, then
+uses `cancel:<runId>` for that run's cancellation retries. It distinguishes
+unconfirmed requests, rejected requests, accepted cancellation with unresolved
+shutdown, and reconciled execution. Request state belongs to the run rather
+than a message bubble. Reopening/reconnecting reads authoritative status;
+**Check status** performs a bounded refresh without another user-cancel write.
+
+The protobuf change adds RPCs/messages/enums without removing or renumbering
+existing fields. Old clients continue their existing behavior. A new client
+talking to a backend returning `UNIMPLEMENTED` displays an unsupported state
+and never falls back to dropping the stream. A backend upgrade applies
+`0022_explicit_cancel`, adding replay receipts without changing existing run
+outcomes. Unkeyed transport loss remains `abandoned`; keyed sends preserve
+their existing replay behavior. Navigation and subscription cleanup do not
+fabricate explicit user intent.
 
 ## Ordering and exactly-once transitions
 
@@ -214,7 +294,8 @@ and replayed states use the same pure rules:
 4. ignore an equal identical state;
 5. reject an equal conflicting state;
 6. reject every update after a terminal state;
-7. otherwise accept only a defined higher-version lifecycle transition.
+7. otherwise accept only a path through the defined lifecycle graph within
+   the positive version gap; a one-version update still requires a direct edge.
 
 `queued -> queued` is a defined transition, and the only self-edge in the graph.
 TUR-010's queue observer commits one when a queued run's `queue_wait_reason`
@@ -223,6 +304,12 @@ is the only explanation the client will ever get for a run sitting still.
 Rejecting the edge would make the client discard it. Every other rule still
 applies to it — higher version, never after a terminal state, and an identical
 state at the same version is still a no-op.
+
+A version gap can also hide an approval/resume cycle or assignment followed
+by completion. A current snapshot may therefore show running again or completed
+after a queued snapshot without pretending those were single lifecycle edges.
+Reachability uses the same graph and is bounded by its number of phases, not
+by the numeric size of the version gap.
 
 Completed content renders without a redundant success card. Completed with no
 content renders a neutral completion card. A queued, running, waiting-approval,
@@ -276,8 +363,7 @@ after migration returns the original terminal run without another write.
 ## Retained limitations
 
 - Historical tool-card reconstruction is unavailable.
-- There is no explicit user-cancel intent API; current transport cancellation is
-  abandonment.
+- A cancellation cannot undo committed effects or promise immediate worker exit.
 - Partial live deltas are not guaranteed to survive reopen.
 - Live tool-separated text segments collapse into one persisted assistant
   message after reopen.

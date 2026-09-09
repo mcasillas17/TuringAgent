@@ -114,6 +114,45 @@ message RunCancelled {
   RunState run_state = 3;
 }
 
+enum CancelRunResult {
+  CANCEL_RUN_RESULT_UNSPECIFIED = 0;
+  CANCEL_RUN_RESULT_ACCEPTED = 1;
+  CANCEL_RUN_RESULT_ALREADY_TERMINAL = 2;
+  CANCEL_RUN_RESULT_UNAVAILABLE = 3;
+}
+
+enum CancellationProgress {
+  CANCELLATION_PROGRESS_UNSPECIFIED = 0;
+  CANCELLATION_PROGRESS_NOT_CANCELLED = 1;
+  CANCELLATION_PROGRESS_STOPPING = 2;
+  CANCELLATION_PROGRESS_RECONCILED = 3;
+}
+
+message CancelRunRequest {
+  string session_id = 1;
+  string run_id = 2;
+  string idempotency_key = 3;
+}
+
+message CancelRunResponse {
+  CancelRunResult result = 1;
+  // The immutable result stored for this operation, including on replay.
+  RunState run_state = 2;
+  // Fresh execution observation; accepting a stop does not prove worker exit.
+  CancellationProgress progress = 3;
+}
+
+message GetRunCancellationRequest {
+  string session_id = 1;
+  string run_id = 2;
+}
+
+message GetRunCancellationResponse {
+  bool available = 1;
+  RunState run_state = 2;
+  CancellationProgress progress = 3;
+}
+
 // A lifecycle transition that has no existing lifecycle event of its own, such
 // as entering recovering or returning to running. Terminal transitions keep
 // using their existing completed/failed/cancelled events and never also emit
@@ -150,6 +189,8 @@ message ChatStreamEvent {
 }
 
 service ChatService {
+  rpc CancelRun(CancelRunRequest) returns (CancelRunResponse);
+  rpc GetRunCancellation(GetRunCancellationRequest) returns (GetRunCancellationResponse);
   rpc PrepareRemoteEgress(PrepareRemoteEgressRequest) returns (PrepareRemoteEgressResponse);
   rpc SendMessage(SendMessageRequest) returns (stream ChatStreamEvent);
 }

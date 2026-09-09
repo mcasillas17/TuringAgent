@@ -279,10 +279,7 @@ func sortedKeys(keys map[failureKey]struct{}) []string {
 	return rendered
 }
 
-// The product has no explicit cancel affordance, so nothing in this package may
-// mint a user-cancelled claim. The source assertion is the part that survives a
-// well-meaning future edit: adding UserCancelledCancellation would fail here
-// even if every value assertion above still passed.
+// Transport loss and queue expiry cannot mint a user-cancelled claim.
 func TestAbandonedCancellationNeverClaimsUserIntent(t *testing.T) {
 	cancellation := AbandonedCancellation()
 	if cancellation.Reason() != ReasonAbandoned {
@@ -308,10 +305,11 @@ func TestAbandonedCancellationNeverClaimsUserIntent(t *testing.T) {
 	// enforces still stands — a user-cancelled constructor may only appear
 	// alongside an explicit typed cancel-intent RPC.
 	constructors := exportedFunctionsReturning(t, "Cancellation")
-	want := []string{"AbandonedCancellation", "QueueTimeoutCancellation"}
+	want := []string{"AbandonedCancellation", "QueueTimeoutCancellation", "UserCancellation"}
 	if !reflect.DeepEqual(constructors, want) {
 		t.Fatalf("exported cancellation constructors = %v, want %v", constructors, want)
 	}
+
 	for _, code := range []string{CodeQueueWaitExpired, CodeQueueNoCompatibleWorker} {
 		queued, err := QueueTimeoutCancellation(code)
 		if err != nil {
@@ -323,6 +321,13 @@ func TestAbandonedCancellationNeverClaimsUserIntent(t *testing.T) {
 	}
 	if _, err := QueueTimeoutCancellation("client_cancelled"); !errors.Is(err, ErrUnsupportedQueueOutcome) {
 		t.Fatalf("a non-queue code built a queue cancellation: %v", err)
+	}
+}
+
+func TestUserCancellationClaimsOnlyExplicitIntent(t *testing.T) {
+	cancellation := UserCancellation()
+	if cancellation.Reason() != ReasonUserCancelled || cancellation.Origin() != OriginClientLifecycle || cancellation.Code() != "user_cancelled" {
+		t.Fatalf("explicit cancellation = %+v", cancellation)
 	}
 }
 

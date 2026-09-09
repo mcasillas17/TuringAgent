@@ -223,6 +223,51 @@ class AppLocalizationsEn extends AppLocalizations {
   String get runUserCancelledDetail => 'You cancelled this run.';
 
   @override
+  String get runStop => 'Stop';
+
+  @override
+  String get runCancelRetry => 'Retry cancellation';
+
+  @override
+  String get runCancelCheck => 'Check status';
+
+  @override
+  String get runCancelChecking => 'Checking cancellation';
+
+  @override
+  String get runCancelUnconfirmed => 'Cancellation not yet confirmed.';
+
+  @override
+  String get runCancelRejected =>
+      'Cancellation was not accepted. Check status before trying again.';
+
+  @override
+  String get runCancelUnsupported =>
+      'Stopping runs is not supported by this backend.';
+
+  @override
+  String get runCancelUnavailable => 'This run is unavailable.';
+
+  @override
+  String get runCancelStatusFailed =>
+      'Cancellation status could not be confirmed.';
+
+  @override
+  String get runCancelAlreadyTerminal => 'The run had already ended.';
+
+  @override
+  String get runCancelStopping =>
+      'Worker shutdown is not yet confirmed. Completed effects are not undone.';
+
+  @override
+  String get runCancelReconciled =>
+      'Execution is no longer held for this run. Completed effects are not undone.';
+
+  @override
+  String get runCancelShutdownUnknown =>
+      'The run is cancelled. Worker shutdown status is not yet confirmed.';
+
+  @override
   String get runAbandonedTitle => 'Run interrupted';
 
   @override

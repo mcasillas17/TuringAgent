@@ -75,6 +75,22 @@ type consentingChatClient struct {
 	inner turingv1.ChatServiceClient
 }
 
+func (c *consentingChatClient) CancelRun(
+	ctx context.Context,
+	request *turingv1.CancelRunRequest,
+	options ...grpc.CallOption,
+) (*turingv1.CancelRunResponse, error) {
+	return c.inner.CancelRun(ctx, request, options...)
+}
+
+func (c *consentingChatClient) GetRunCancellation(
+	ctx context.Context,
+	request *turingv1.GetRunCancellationRequest,
+	options ...grpc.CallOption,
+) (*turingv1.GetRunCancellationResponse, error) {
+	return c.inner.GetRunCancellation(ctx, request, options...)
+}
+
 func (c *consentingChatClient) PrepareRemoteEgress(
 	ctx context.Context,
 	request *turingv1.PrepareRemoteEgressRequest,
@@ -114,6 +130,23 @@ func (c *consentingChatClient) SendMessage(
 		AcknowledgedDataCategories: disclosure.GetDataCategories(),
 	}
 	return c.inner.SendMessage(ctx, consented, options...)
+}
+
+func TestConsentingChatClientForwardsCancellationWithoutEgressConsent(t *testing.T) {
+	harness := newGRPCHarness(t, withoutRuntimeWorker())
+	ctx := harness.clientContext()
+	cancelled, err := harness.chat.CancelRun(ctx, &turingv1.CancelRunRequest{
+		SessionId: "missing-session", RunId: "missing-run", IdempotencyKey: "cancel:missing-run",
+	})
+	if err != nil || cancelled.GetResult() != turingv1.CancelRunResult_CANCEL_RUN_RESULT_UNAVAILABLE {
+		t.Fatalf("cancel forwarding = %v, %v", cancelled, err)
+	}
+	current, err := harness.chat.GetRunCancellation(ctx, &turingv1.GetRunCancellationRequest{
+		SessionId: "missing-session", RunId: "missing-run",
+	})
+	if err != nil || current.GetAvailable() || current.GetRunState() != nil {
+		t.Fatalf("cancellation read forwarding = %v, %v", current, err)
+	}
 }
 
 type fakeModelServer struct {

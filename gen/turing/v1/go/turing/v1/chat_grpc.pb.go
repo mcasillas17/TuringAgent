@@ -19,6 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	ChatService_CancelRun_FullMethodName           = "/turing.v1.ChatService/CancelRun"
+	ChatService_GetRunCancellation_FullMethodName  = "/turing.v1.ChatService/GetRunCancellation"
 	ChatService_PrepareRemoteEgress_FullMethodName = "/turing.v1.ChatService/PrepareRemoteEgress"
 	ChatService_SendMessage_FullMethodName         = "/turing.v1.ChatService/SendMessage"
 )
@@ -27,6 +29,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ChatServiceClient interface {
+	CancelRun(ctx context.Context, in *CancelRunRequest, opts ...grpc.CallOption) (*CancelRunResponse, error)
+	GetRunCancellation(ctx context.Context, in *GetRunCancellationRequest, opts ...grpc.CallOption) (*GetRunCancellationResponse, error)
 	PrepareRemoteEgress(ctx context.Context, in *PrepareRemoteEgressRequest, opts ...grpc.CallOption) (*PrepareRemoteEgressResponse, error)
 	SendMessage(ctx context.Context, in *SendMessageRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ChatStreamEvent], error)
 }
@@ -37,6 +41,26 @@ type chatServiceClient struct {
 
 func NewChatServiceClient(cc grpc.ClientConnInterface) ChatServiceClient {
 	return &chatServiceClient{cc}
+}
+
+func (c *chatServiceClient) CancelRun(ctx context.Context, in *CancelRunRequest, opts ...grpc.CallOption) (*CancelRunResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelRunResponse)
+	err := c.cc.Invoke(ctx, ChatService_CancelRun_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *chatServiceClient) GetRunCancellation(ctx context.Context, in *GetRunCancellationRequest, opts ...grpc.CallOption) (*GetRunCancellationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRunCancellationResponse)
+	err := c.cc.Invoke(ctx, ChatService_GetRunCancellation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *chatServiceClient) PrepareRemoteEgress(ctx context.Context, in *PrepareRemoteEgressRequest, opts ...grpc.CallOption) (*PrepareRemoteEgressResponse, error) {
@@ -72,6 +96,8 @@ type ChatService_SendMessageClient = grpc.ServerStreamingClient[ChatStreamEvent]
 // All implementations must embed UnimplementedChatServiceServer
 // for forward compatibility.
 type ChatServiceServer interface {
+	CancelRun(context.Context, *CancelRunRequest) (*CancelRunResponse, error)
+	GetRunCancellation(context.Context, *GetRunCancellationRequest) (*GetRunCancellationResponse, error)
 	PrepareRemoteEgress(context.Context, *PrepareRemoteEgressRequest) (*PrepareRemoteEgressResponse, error)
 	SendMessage(*SendMessageRequest, grpc.ServerStreamingServer[ChatStreamEvent]) error
 	mustEmbedUnimplementedChatServiceServer()
@@ -84,6 +110,12 @@ type ChatServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedChatServiceServer struct{}
 
+func (UnimplementedChatServiceServer) CancelRun(context.Context, *CancelRunRequest) (*CancelRunResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelRun not implemented")
+}
+func (UnimplementedChatServiceServer) GetRunCancellation(context.Context, *GetRunCancellationRequest) (*GetRunCancellationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRunCancellation not implemented")
+}
 func (UnimplementedChatServiceServer) PrepareRemoteEgress(context.Context, *PrepareRemoteEgressRequest) (*PrepareRemoteEgressResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PrepareRemoteEgress not implemented")
 }
@@ -109,6 +141,42 @@ func RegisterChatServiceServer(s grpc.ServiceRegistrar, srv ChatServiceServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&ChatService_ServiceDesc, srv)
+}
+
+func _ChatService_CancelRun_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelRunRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChatServiceServer).CancelRun(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ChatService_CancelRun_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChatServiceServer).CancelRun(ctx, req.(*CancelRunRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ChatService_GetRunCancellation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRunCancellationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChatServiceServer).GetRunCancellation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ChatService_GetRunCancellation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChatServiceServer).GetRunCancellation(ctx, req.(*GetRunCancellationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _ChatService_PrepareRemoteEgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -147,6 +215,14 @@ var ChatService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "turing.v1.ChatService",
 	HandlerType: (*ChatServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CancelRun",
+			Handler:    _ChatService_CancelRun_Handler,
+		},
+		{
+			MethodName: "GetRunCancellation",
+			Handler:    _ChatService_GetRunCancellation_Handler,
+		},
 		{
 			MethodName: "PrepareRemoteEgress",
 			Handler:    _ChatService_PrepareRemoteEgress_Handler,

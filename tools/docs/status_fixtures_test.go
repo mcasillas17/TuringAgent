@@ -420,6 +420,8 @@ func TestStatusGuardRepositoryFixtures(t *testing.T) {
 	const orchestrator = backend + "orchestrator-go/internal/"
 	for _, test := range []struct{ name, path, old, replacement, claim string }{
 		{"search RPC disconnected", app + "lib/networking/grpc_client.dart", "await _sessions.searchMessages(", "await _sessions.listMessages(", "flutter-search"},
+		{"cancel RPC disconnected", app + "lib/networking/grpc_client.dart", "await _chat.cancelRun(", "await _chat.sendMessage(", "explicit-cancel"},
+		{"cancel canonical transition disconnected", orchestrator + "repository/explicit_cancel.go", "cancelRunTx(", "completeRunTx(", "explicit-cancel"},
 		{"literal phrase conversion removed", orchestrator + "repository/sessions.go", "fts5Phrase(query)", "query", "flutter-search"},
 		{"HITS predicate disconnected", orchestrator + "repository/search_hits.go", "searchMessagesPredicate(", "unvalidatedSearchPredicate(", "flutter-search"},
 		{"workspace page replaced", app + "lib/ui/shell/responsive_shell.dart", "return IntegrationsPage(", "return PlaceholderPage(", "flutter-workspace"},

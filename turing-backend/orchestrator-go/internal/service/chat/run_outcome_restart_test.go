@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -238,13 +237,13 @@ func latestEventState(t *testing.T, h *restartHarness, run seededRun) *turingv1.
 // reopened and still reach a client through public gRPC.
 func TestEveryLifecycleAndTerminalReasonRoundTripsAfterDatabaseRestart(t *testing.T) {
 	tests := []struct {
-		name          string
-		seed          func(*testing.T, *restartHarness, *seededRun)
-		lifecycle     turingv1.RunLifecycle
-		reason        turingv1.RunOutcomeReason
-		finished      bool
-		hasContent    bool
-		wantNoProduce bool
+		name              string
+		seed              func(*testing.T, *restartHarness, *seededRun)
+		lifecycle         turingv1.RunLifecycle
+		reason            turingv1.RunOutcomeReason
+		finished          bool
+		hasContent        bool
+		wantProducerGuard bool
 	}{
 		{
 			name:      "queued",
@@ -310,31 +309,29 @@ func TestEveryLifecycleAndTerminalReasonRoundTripsAfterDatabaseRestart(t *testin
 			finished:  true,
 		},
 		{
-			// The reservation row. No current path writes user_cancelled — the
-			// assertion below proves that — but a future explicit cancel-intent
-			// RPC will, and a projection that could not carry it would silently
-			// downgrade an honest claim of intent when that lands.
-			name: "cancelled user cancelled reservation",
+			name: "explicit user cancellation",
 			seed: func(t *testing.T, h *restartHarness, run *seededRun) {
 				h.markRunning(t, run)
-				h.cancel(t, run, runoutcome.AbandonedCancellation())
-				h.seedReservedOutcome(t, run, "cancelled", string(runoutcome.ReasonUserCancelled))
+				if _, err := h.repo.CancelUserRun(context.Background(), run.sessionID, run.runID, "cancel:"+run.runID); err != nil {
+					t.Fatal(err)
+				}
+				run.stateVersion = h.currentVersion(t, run.runID)
 			},
-			lifecycle:     turingv1.RunLifecycle_RUN_LIFECYCLE_CANCELLED,
-			reason:        turingv1.RunOutcomeReason_RUN_OUTCOME_REASON_USER_CANCELLED,
-			finished:      true,
-			wantNoProduce: true,
+			lifecycle:         turingv1.RunLifecycle_RUN_LIFECYCLE_CANCELLED,
+			reason:            turingv1.RunOutcomeReason_RUN_OUTCOME_REASON_USER_CANCELLED,
+			finished:          true,
+			wantProducerGuard: true,
 		},
 	}
 	for _, failure := range failedReasonInventory() {
 		tests = append(tests, struct {
-			name          string
-			seed          func(*testing.T, *restartHarness, *seededRun)
-			lifecycle     turingv1.RunLifecycle
-			reason        turingv1.RunOutcomeReason
-			finished      bool
-			hasContent    bool
-			wantNoProduce bool
+			name              string
+			seed              func(*testing.T, *restartHarness, *seededRun)
+			lifecycle         turingv1.RunLifecycle
+			reason            turingv1.RunOutcomeReason
+			finished          bool
+			hasContent        bool
+			wantProducerGuard bool
 		}{
 			name: "failed " + failure.name,
 			seed: func(t *testing.T, h *restartHarness, run *seededRun) {
@@ -369,8 +366,8 @@ func TestEveryLifecycleAndTerminalReasonRoundTripsAfterDatabaseRestart(t *testin
 			if !proto.Equal(history, replayed) {
 				t.Fatalf("history state %+v and replayed state %+v disagree", history, replayed)
 			}
-			if test.wantNoProduce {
-				assertNoUserCancelledProducer(t)
+			if test.wantProducerGuard {
+				assertExplicitUserCancelledProducers(t)
 			}
 		})
 	}
@@ -963,7 +960,7 @@ func TestAmbiguousCancellationStaysAbandonedAcrossLiveReplayAndReopen(t *testing
 			t.Fatalf("public event republished the transport's own words: %s", event.String())
 		}
 	}
-	assertNoUserCancelledProducer(t)
+	assertExplicitUserCancelledProducers(t)
 }
 
 // listedEvent finds one row in the public replay of a session.
@@ -1011,26 +1008,23 @@ func subscribedEvent(t *testing.T, conn *grpc.ClientConn, sessionID string, even
 // asserting if it covers every path.
 func orchestratorRoot() string { return filepath.Join("..", "..", "..") }
 
-// userCancelledVocabularyFiles are the files allowed to name the reserved
-// outcome at all: the vocabulary that defines it, the two matrices that list
-// which reasons a cancelled run may hold, and the migration's stored-value
-// guard. None of them writes it onto a run.
+// Only the explicit RPC, canonical repository operation, and its reconciliation
+// may name user intent outside the outcome vocabulary and projection matrices.
 func userCancelledVocabularyFiles() map[string]string {
 	root := orchestratorRoot()
 	return map[string]string{
-		filepath.Join(root, "internal", "runoutcome", "outcome.go"):             "the closed vocabulary constant",
-		filepath.Join(root, "internal", "repository", "run_state.go"):           "the writer's lifecycle/reason matrix",
-		filepath.Join(root, "internal", "service", "runstate", "projection.go"): "the reader's lifecycle/reason matrix",
-		filepath.Join(root, "internal", "db", "run_outcomes_migration.go"):      "the migration's stored-value guard",
+		filepath.Join(root, "internal", "runoutcome", "outcome.go"):              "the closed vocabulary constant",
+		filepath.Join(root, "internal", "repository", "run_state.go"):            "the writer's lifecycle/reason matrix",
+		filepath.Join(root, "internal", "service", "runstate", "projection.go"):  "the reader's lifecycle/reason matrix",
+		filepath.Join(root, "internal", "db", "run_outcomes_migration.go"):       "the migration's stored-value guard",
+		filepath.Join(root, "internal", "repository", "explicit_cancel.go"):      "the explicit canonical operation",
+		filepath.Join(root, "internal", "repository", "assignments.go"):          "execution containment for explicit cancellation",
+		filepath.Join(root, "internal", "service", "chat", "explicit_cancel.go"): "the explicit public RPC",
+		filepath.Join(root, "internal", "service", "runtime", "service.go"):      "redelivery of committed cancellation",
 	}
 }
 
-// assertNoUserCancelledProducer reads the orchestrator's own source and refuses
-// any use of the reserved outcome outside the vocabulary and matrices above.
-// The projection has to carry it, because a future explicit cancel-intent RPC
-// will mean it — but nothing today may claim a user meant to stop a run when
-// all this product observed was a socket closing.
-func assertNoUserCancelledProducer(t *testing.T) {
+func assertExplicitUserCancelledProducers(t *testing.T) {
 	t.Helper()
 	allowed := userCancelledVocabularyFiles()
 	err := filepath.WalkDir(orchestratorRoot(), func(path string, entry os.DirEntry, err error) error {
@@ -1044,11 +1038,11 @@ func assertNoUserCancelledProducer(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if !strings.Contains(string(body), "user_cancelled") && !strings.Contains(string(body), "ReasonUserCancelled") {
+		if !strings.Contains(string(body), "user_cancelled") && !strings.Contains(string(body), "ReasonUserCancelled") && !strings.Contains(string(body), "CodeUserCancelled") && !strings.Contains(string(body), "UserCancellation(") {
 			return nil
 		}
 		if _, vocabulary := allowed[path]; !vocabulary {
-			t.Errorf("%s names the reserved user-cancelled outcome, which no current path may produce", path)
+			t.Errorf("%s claims user intent outside the explicit cancellation path", path)
 		}
 		return nil
 	})
@@ -1060,17 +1054,14 @@ func assertNoUserCancelledProducer(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s (%s): %v", file, role, err)
 		}
-		if !strings.Contains(string(body), "user_cancelled") && !strings.Contains(string(body), "ReasonUserCancelled") {
+		if !strings.Contains(string(body), "user_cancelled") && !strings.Contains(string(body), "ReasonUserCancelled") && !strings.Contains(string(body), "CodeUserCancelled") && !strings.Contains(string(body), "UserCancellation(") {
 			t.Errorf("%s no longer names the reserved outcome it exists to hold (%s)", file, role)
 		}
 	}
-	assertNoUserCancelledConstructor(t)
+	assertExplicitUserCancelledConstructor(t)
 }
 
-// assertNoUserCancelledConstructor proves the vocabulary file itself exposes no
-// way to build the reserved cancellation. A constant nobody can turn into a
-// value is a reservation; a constructor would be a producer.
-func assertNoUserCancelledConstructor(t *testing.T) {
+func assertExplicitUserCancelledConstructor(t *testing.T) {
 	t.Helper()
 	path := filepath.Join(orchestratorRoot(), "internal", "runoutcome", "outcome.go")
 	fileSet := token.NewFileSet()
@@ -1083,9 +1074,12 @@ func assertNoUserCancelledConstructor(t *testing.T) {
 		if !ok || function.Body == nil {
 			continue
 		}
+		if function.Name.Name == "UserCancellation" {
+			continue
+		}
 		ast.Inspect(function.Body, func(node ast.Node) bool {
 			identifier, ok := node.(*ast.Ident)
-			if ok && identifier.Name == "ReasonUserCancelled" {
+			if ok && (identifier.Name == "ReasonUserCancelled" || identifier.Name == "CodeUserCancelled") {
 				t.Errorf("%s builds the reserved user-cancelled outcome in %s",
 					fileSet.Position(identifier.Pos()), function.Name.Name)
 			}
@@ -1159,57 +1153,6 @@ func (h *restartHarness) cancel(t *testing.T, run *seededRun, cancellation runou
 		t.Fatalf("CancelRunCanonical: %v", err)
 	}
 	run.stateVersion = h.currentVersion(t, run.runID)
-}
-
-// seedReservedOutcome writes an outcome no current writer produces directly
-// into the row and its terminal event, which is the only way to prove the read
-// path can carry a reservation. It is a test fixture rather than a repository
-// API on purpose: giving production code a way to write this value is exactly
-// what the honesty rule forbids.
-func (h *restartHarness) seedReservedOutcome(t *testing.T, run *seededRun, lifecycle string, reason string) {
-	t.Helper()
-	ctx := context.Background()
-	if _, err := h.database.ExecContext(ctx,
-		`UPDATE agent_runs SET status = ?, outcome_reason = ? WHERE id = ?`, lifecycle, reason, run.runID); err != nil {
-		t.Fatalf("seed reserved outcome: %v", err)
-	}
-	rows, err := h.database.QueryContext(ctx,
-		`SELECT id, payload_json FROM events WHERE run_id = ? AND payload_json LIKE '%runState%'`, run.runID)
-	if err != nil {
-		t.Fatalf("read seeded events: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	updates := map[string]string{}
-	for rows.Next() {
-		var id, payloadJSON string
-		if err := rows.Scan(&id, &payloadJSON); err != nil {
-			t.Fatalf("scan seeded event: %v", err)
-		}
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
-			t.Fatalf("decode seeded payload: %v", err)
-		}
-		snapshot, ok := payload["runState"].(map[string]any)
-		if !ok {
-			continue
-		}
-		snapshot["lifecycle"] = lifecycle
-		snapshot["outcomeReason"] = reason
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			t.Fatalf("encode seeded payload: %v", err)
-		}
-		updates[id] = string(encoded)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate seeded events: %v", err)
-	}
-	for id, payloadJSON := range updates {
-		if _, err := h.database.ExecContext(ctx,
-			`UPDATE events SET payload_json = ? WHERE id = ?`, payloadJSON, id); err != nil {
-			t.Fatalf("rewrite seeded event: %v", err)
-		}
-	}
 }
 
 // chatRawDiagnostics is what an unmigrated row could still be holding. None of

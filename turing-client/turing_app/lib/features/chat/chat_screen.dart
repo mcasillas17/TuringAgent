@@ -24,6 +24,8 @@ import 'run_notice_card.dart';
 import 'remote_egress_dialog.dart';
 import 'run_state_card.dart';
 import 'run_state_reconciler.dart';
+import 'run_cancellation_controller.dart';
+import 'run_stop_control.dart';
 import 'tool_call_card.dart';
 
 final Random _sendIdempotencyRandom = Random.secure();
@@ -87,6 +89,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// and every live/replayed event alike — the design's "history and live
   /// events use this same path" requirement. See `run_state_reconciler.dart`.
   final RunStateReconciler _runStateReconciler = RunStateReconciler();
+  final Map<String, RunCancellationController> _runCancellations = {};
 
   /// The adjacent [_RunStateCardEntry] currently rendered for each run ID
   /// that wants one, per [_wantsAdjacentCard]. Removed once a run no longer
@@ -1080,6 +1083,21 @@ class _ChatScreenState extends State<ChatScreen> {
   ///
   /// Must be called from inside a `setState`.
   void _upsertRunStateCard(RunState state, _MessageEntry assistantEntry) {
+    final cancellation = _runCancellations[state.runId];
+    if (cancellation != null) {
+      cancellation.updateState(state);
+    } else if (!state.isTerminal ||
+        state.lifecycle == RunLifecycle.cancelled) {
+      _runCancellations[state.runId] = RunCancellationController(
+        api: widget.apiClient,
+        sessionId: widget.sessionId,
+        state: state,
+        onRunState: (incoming) {
+          if (!mounted || _sessionDeleted) return;
+          setState(() => _handleIncomingRunState(incoming));
+        },
+      );
+    }
     if (state.isTerminal) {
       _approvals.removeWhere((approval) {
         if (approval.runId != state.runId) return false;
@@ -1204,7 +1222,12 @@ class _ChatScreenState extends State<ChatScreen> {
     // Events are arriving, so any earlier drop notice is stale: an error does
     // not cancel the subscription (`cancelOnError` defaults to false), and the
     // stream can keep delivering after one.
-    if (_streamEnded) setState(() => _streamEnded = false);
+    if (_streamEnded) {
+      setState(() => _streamEnded = false);
+      for (final control in _runCancellations.values) {
+        control.reconnect();
+      }
+    }
     // Reconcile any canonical `RunState` this event carries BEFORE the
     // type-specific switch below, regardless of the event's own type —
     // `queued`, `started`, an approval lifecycle event, `state_changed`,
@@ -1226,6 +1249,10 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'session.deleted':
         setState(() {
           _sessionDeleted = true;
+          for (final control in _runCancellations.values) {
+            control.dispose();
+          }
+          _runCancellations.clear();
           _approvals.clear();
           _approvalsInFlight.clear();
           _approvalReviewVersions.clear();
@@ -1551,6 +1578,12 @@ class _ChatScreenState extends State<ChatScreen> {
   void _applyMessageDelta(TuringEvent event) {
     final messageId =
         _asString(event.payload['messageId']) ?? 'active_assistant';
+    final runId = event.runId ?? _assistantEntries[messageId]?.runId;
+    if (runId != null &&
+        _runStateReconciler.stateFor(runId)?.lifecycle ==
+            RunLifecycle.cancelled) {
+      return;
+    }
     // The replayed deltas that produced an already-complete history message
     // would otherwise render its text a second time below the history block.
     if (_completedHistoryMessageIds.contains(messageId)) return;
@@ -1578,8 +1611,9 @@ class _ChatScreenState extends State<ChatScreen> {
         noResponseCard.dispose();
       });
     }
-    final runId = entry.runId;
-    final state = runId == null ? null : _runStateReconciler.stateFor(runId);
+    final state = entry.runId == null
+        ? null
+        : _runStateReconciler.stateFor(entry.runId!);
     if (state != null &&
         hasDisplayableContent(entry.content.value) &&
         !_runStateCardPresenceMatchesContent(state)) {
@@ -1895,10 +1929,29 @@ class _ChatScreenState extends State<ChatScreen> {
                   // index. Without a key Flutter re-associates Elements by
                   // position, tearing down and re-subscribing each
                   // ValueListenableBuilder and resetting a running card's spinner.
-                  itemBuilder: (context, index) => _ChatMessageTile(
-                    key: ObjectKey(_messages[index]),
-                    entry: _messages[index],
-                  ),
+                  itemBuilder: (context, index) {
+                    final entry = _messages[index];
+                    final state =
+                        entry is _MessageEntry &&
+                            !entry.isUser &&
+                            entry.runId != null &&
+                            _assistantEntryIndexForRun(entry.runId!) == index
+                        ? _runStateReconciler.stateFor(entry.runId!)
+                        : null;
+                    return Column(
+                      key: ObjectKey(entry),
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _ChatMessageTile(entry: entry),
+                        if (state != null && !_sessionDeleted)
+                          if (_runCancellations[state.runId] case final control?)
+                            RunStopControl(
+                              key: ValueKey('cancel-control-${state.runId}'),
+                              controller: control,
+                            ),
+                      ],
+                    );
+                  },
                 ),
         ),
         if (_historyLoadFailed)
@@ -2171,6 +2224,9 @@ class _ChatScreenState extends State<ChatScreen> {
     // never connected to, and closing THAT would leave the live channel open
     // forever while shutting down an unused one.
     _eventSource.close();
+    for (final control in _runCancellations.values) {
+      control.dispose();
+    }
     for (final entry in _messages) {
       entry.dispose();
     }
@@ -2198,7 +2254,7 @@ class _RetryableSend {
 }
 
 class _ChatMessageTile extends StatelessWidget {
-  const _ChatMessageTile({super.key, required this.entry});
+  const _ChatMessageTile({required this.entry});
 
   final _ChatEntry entry;
 

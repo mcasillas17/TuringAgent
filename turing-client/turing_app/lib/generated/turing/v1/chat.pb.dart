@@ -16,10 +16,13 @@ import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
 
 import '../../google/protobuf/struct.pb.dart' as $2;
+import 'chat.pbenum.dart';
 import 'common.pb.dart' as $1;
 import 'events.pb.dart' as $3;
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
+
+export 'chat.pbenum.dart';
 
 class SendMessageRequest extends $pb.GeneratedMessage {
   factory SendMessageRequest({
@@ -1292,6 +1295,328 @@ class RunCancelled extends $pb.GeneratedMessage {
   void clearRunState() => $_clearField(3);
   @$pb.TagNumber(3)
   $1.RunState ensureRunState() => $_ensure(2);
+}
+
+class CancelRunRequest extends $pb.GeneratedMessage {
+  factory CancelRunRequest({
+    $core.String? sessionId,
+    $core.String? runId,
+    $core.String? idempotencyKey,
+  }) {
+    final result = create();
+    if (sessionId != null) result.sessionId = sessionId;
+    if (runId != null) result.runId = runId;
+    if (idempotencyKey != null) result.idempotencyKey = idempotencyKey;
+    return result;
+  }
+
+  CancelRunRequest._();
+
+  factory CancelRunRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory CancelRunRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'CancelRunRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'sessionId')
+    ..aOS(2, _omitFieldNames ? '' : 'runId')
+    ..aOS(3, _omitFieldNames ? '' : 'idempotencyKey')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CancelRunRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CancelRunRequest copyWith(void Function(CancelRunRequest) updates) =>
+      super.copyWith((message) => updates(message as CancelRunRequest))
+          as CancelRunRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static CancelRunRequest create() => CancelRunRequest._();
+  @$core.override
+  CancelRunRequest createEmptyInstance() => create();
+  static $pb.PbList<CancelRunRequest> createRepeated() =>
+      $pb.PbList<CancelRunRequest>();
+  @$core.pragma('dart2js:noInline')
+  static CancelRunRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<CancelRunRequest>(create);
+  static CancelRunRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get sessionId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set sessionId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSessionId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSessionId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get runId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set runId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRunId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRunId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get idempotencyKey => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set idempotencyKey($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasIdempotencyKey() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearIdempotencyKey() => $_clearField(3);
+}
+
+class CancelRunResponse extends $pb.GeneratedMessage {
+  factory CancelRunResponse({
+    CancelRunResult? result,
+    $1.RunState? runState,
+    CancellationProgress? progress,
+  }) {
+    final result$ = create();
+    if (result != null) result$.result = result;
+    if (runState != null) result$.runState = runState;
+    if (progress != null) result$.progress = progress;
+    return result$;
+  }
+
+  CancelRunResponse._();
+
+  factory CancelRunResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory CancelRunResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'CancelRunResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aE<CancelRunResult>(1, _omitFieldNames ? '' : 'result',
+        enumValues: CancelRunResult.values)
+    ..aOM<$1.RunState>(2, _omitFieldNames ? '' : 'runState',
+        subBuilder: $1.RunState.create)
+    ..aE<CancellationProgress>(3, _omitFieldNames ? '' : 'progress',
+        enumValues: CancellationProgress.values)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CancelRunResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CancelRunResponse copyWith(void Function(CancelRunResponse) updates) =>
+      super.copyWith((message) => updates(message as CancelRunResponse))
+          as CancelRunResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static CancelRunResponse create() => CancelRunResponse._();
+  @$core.override
+  CancelRunResponse createEmptyInstance() => create();
+  static $pb.PbList<CancelRunResponse> createRepeated() =>
+      $pb.PbList<CancelRunResponse>();
+  @$core.pragma('dart2js:noInline')
+  static CancelRunResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<CancelRunResponse>(create);
+  static CancelRunResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  CancelRunResult get result => $_getN(0);
+  @$pb.TagNumber(1)
+  set result(CancelRunResult value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasResult() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearResult() => $_clearField(1);
+
+  /// The immutable result stored for this operation, including on replay.
+  @$pb.TagNumber(2)
+  $1.RunState get runState => $_getN(1);
+  @$pb.TagNumber(2)
+  set runState($1.RunState value) => $_setField(2, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRunState() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRunState() => $_clearField(2);
+  @$pb.TagNumber(2)
+  $1.RunState ensureRunState() => $_ensure(1);
+
+  /// Fresh execution observation; accepting a stop does not prove worker exit.
+  @$pb.TagNumber(3)
+  CancellationProgress get progress => $_getN(2);
+  @$pb.TagNumber(3)
+  set progress(CancellationProgress value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasProgress() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearProgress() => $_clearField(3);
+}
+
+class GetRunCancellationRequest extends $pb.GeneratedMessage {
+  factory GetRunCancellationRequest({
+    $core.String? sessionId,
+    $core.String? runId,
+  }) {
+    final result = create();
+    if (sessionId != null) result.sessionId = sessionId;
+    if (runId != null) result.runId = runId;
+    return result;
+  }
+
+  GetRunCancellationRequest._();
+
+  factory GetRunCancellationRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory GetRunCancellationRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'GetRunCancellationRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'sessionId')
+    ..aOS(2, _omitFieldNames ? '' : 'runId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetRunCancellationRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetRunCancellationRequest copyWith(
+          void Function(GetRunCancellationRequest) updates) =>
+      super.copyWith((message) => updates(message as GetRunCancellationRequest))
+          as GetRunCancellationRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static GetRunCancellationRequest create() => GetRunCancellationRequest._();
+  @$core.override
+  GetRunCancellationRequest createEmptyInstance() => create();
+  static $pb.PbList<GetRunCancellationRequest> createRepeated() =>
+      $pb.PbList<GetRunCancellationRequest>();
+  @$core.pragma('dart2js:noInline')
+  static GetRunCancellationRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<GetRunCancellationRequest>(create);
+  static GetRunCancellationRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get sessionId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set sessionId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSessionId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSessionId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get runId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set runId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRunId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRunId() => $_clearField(2);
+}
+
+class GetRunCancellationResponse extends $pb.GeneratedMessage {
+  factory GetRunCancellationResponse({
+    $core.bool? available,
+    $1.RunState? runState,
+    CancellationProgress? progress,
+  }) {
+    final result = create();
+    if (available != null) result.available = available;
+    if (runState != null) result.runState = runState;
+    if (progress != null) result.progress = progress;
+    return result;
+  }
+
+  GetRunCancellationResponse._();
+
+  factory GetRunCancellationResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory GetRunCancellationResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'GetRunCancellationResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: create)
+    ..aOB(1, _omitFieldNames ? '' : 'available')
+    ..aOM<$1.RunState>(2, _omitFieldNames ? '' : 'runState',
+        subBuilder: $1.RunState.create)
+    ..aE<CancellationProgress>(3, _omitFieldNames ? '' : 'progress',
+        enumValues: CancellationProgress.values)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetRunCancellationResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetRunCancellationResponse copyWith(
+          void Function(GetRunCancellationResponse) updates) =>
+      super.copyWith(
+              (message) => updates(message as GetRunCancellationResponse))
+          as GetRunCancellationResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static GetRunCancellationResponse create() => GetRunCancellationResponse._();
+  @$core.override
+  GetRunCancellationResponse createEmptyInstance() => create();
+  static $pb.PbList<GetRunCancellationResponse> createRepeated() =>
+      $pb.PbList<GetRunCancellationResponse>();
+  @$core.pragma('dart2js:noInline')
+  static GetRunCancellationResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<GetRunCancellationResponse>(create);
+  static GetRunCancellationResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.bool get available => $_getBF(0);
+  @$pb.TagNumber(1)
+  set available($core.bool value) => $_setBool(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasAvailable() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearAvailable() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $1.RunState get runState => $_getN(1);
+  @$pb.TagNumber(2)
+  set runState($1.RunState value) => $_setField(2, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRunState() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRunState() => $_clearField(2);
+  @$pb.TagNumber(2)
+  $1.RunState ensureRunState() => $_ensure(1);
+
+  @$pb.TagNumber(3)
+  CancellationProgress get progress => $_getN(2);
+  @$pb.TagNumber(3)
+  set progress(CancellationProgress value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasProgress() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearProgress() => $_clearField(3);
 }
 
 /// A lifecycle transition that has no existing lifecycle event of its own, such

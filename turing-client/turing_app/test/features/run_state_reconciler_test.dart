@@ -32,6 +32,38 @@ void main() {
   }
 
   group('RunStateReconciler', () {
+    for (final phases in [
+      (RunLifecycle.queued, RunLifecycle.completed),
+      (RunLifecycle.running, RunLifecycle.running),
+      (RunLifecycle.recovering, RunLifecycle.waitingApproval),
+    ]) {
+      test('reconciles missing transitions from ${phases.$1} to ${phases.$2}', () {
+        final reconciler = RunStateReconciler();
+        reconciler.reconcile(state(lifecycle: phases.$1, stateVersion: 1));
+        expect(
+          reconciler.reconcile(state(lifecycle: phases.$2, stateVersion: 3)).outcome,
+          RunStateReconciliationOutcome.accepted,
+        );
+      });
+      test('rejects impossible single transition from ${phases.$1} to ${phases.$2}', () {
+        final reconciler = RunStateReconciler();
+        reconciler.reconcile(state(lifecycle: phases.$1, stateVersion: 1));
+        expect(
+          reconciler.reconcile(state(lifecycle: phases.$2, stateVersion: 2)).outcome,
+          RunStateReconciliationOutcome.inconsistent,
+        );
+      });
+    }
+
+    test('large version gaps do not admit unknown lifecycle targets', () {
+      final reconciler = RunStateReconciler();
+      reconciler.reconcile(state(lifecycle: RunLifecycle.running));
+      expect(
+        reconciler.reconcile(state(lifecycle: RunLifecycle.unknown, stateVersion: 1000000)).outcome,
+        RunStateReconciliationOutcome.inconsistent,
+      );
+    });
+
     test('accepts first valid nonzero version', () {
       final reconciler = RunStateReconciler();
       final incoming = state(stateVersion: 1);

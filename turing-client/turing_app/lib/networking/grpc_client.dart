@@ -41,6 +41,9 @@ import '../models/memory.dart';
 import '../models/message.dart';
 import '../models/mcp_server.dart';
 import '../models/remote_egress.dart';
+import '../models/run_cancellation.dart';
+import '../models/run_lifecycle.dart';
+import '../models/run_state.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
 import '../models/session_page.dart';
@@ -157,6 +160,116 @@ class TuringGrpcApi
   late final memorygrpc.MemoryServiceClient _memory;
 
   GrpcAuthMetadata get _metadata => GrpcAuthMetadata(apiKey: apiKey);
+
+  @override
+  Future<CancelRunReceipt> cancelRun({
+    required String sessionId,
+    required String runId,
+    required String idempotencyKey,
+  }) async {
+    final response = await _chat.cancelRun(
+      chatpb.CancelRunRequest(
+        sessionId: sessionId,
+        runId: runId,
+        idempotencyKey: idempotencyKey,
+      ),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    final result = switch (decodeClosedEnum(
+      message: response,
+      fieldNumber: 1,
+      readValue: () => response.result,
+      unknownValue: chatpb.CancelRunResult.CANCEL_RUN_RESULT_UNSPECIFIED,
+    )) {
+      chatpb.CancelRunResult.CANCEL_RUN_RESULT_ACCEPTED =>
+        CancelRunResult.accepted,
+      chatpb.CancelRunResult.CANCEL_RUN_RESULT_ALREADY_TERMINAL =>
+        CancelRunResult.alreadyTerminal,
+      chatpb.CancelRunResult.CANCEL_RUN_RESULT_UNAVAILABLE =>
+        CancelRunResult.unavailable,
+      _ => CancelRunResult.unknown,
+    };
+    if (result == CancelRunResult.unavailable) {
+      return const CancelRunReceipt(result: CancelRunResult.unavailable);
+    }
+    final state = _cancellationRunState(response.runState, runId);
+    if (result == CancelRunResult.unknown ||
+        !state.isTerminal ||
+        result == CancelRunResult.accepted &&
+            (state.lifecycle != RunLifecycle.cancelled ||
+                state.outcomeReason != RunOutcomeReason.userCancelled)) {
+      throw const TuringApiException(
+        code: 'run_cancel_unconfirmed',
+        message: 'The cancellation response could not be confirmed',
+      );
+    }
+    return CancelRunReceipt(
+      result: result,
+      runState: state,
+      progress: _cancellationProgress(
+        decodeClosedEnum(
+          message: response,
+          fieldNumber: 3,
+          readValue: () => response.progress,
+          unknownValue:
+              chatpb.CancellationProgress.CANCELLATION_PROGRESS_UNSPECIFIED,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Future<RunCancellationStatus> getRunCancellation({
+    required String sessionId,
+    required String runId,
+  }) async {
+    final response = await _chat.getRunCancellation(
+      chatpb.GetRunCancellationRequest(sessionId: sessionId, runId: runId),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    if (!response.available) {
+      return const RunCancellationStatus(available: false);
+    }
+    return RunCancellationStatus(
+      available: true,
+      runState: _cancellationRunState(response.runState, runId),
+      progress: _cancellationProgress(
+        decodeClosedEnum(
+          message: response,
+          fieldNumber: 3,
+          readValue: () => response.progress,
+          unknownValue:
+              chatpb.CancellationProgress.CANCELLATION_PROGRESS_UNSPECIFIED,
+        ),
+      ),
+    );
+  }
+
+  RunState _cancellationRunState(commonpb.RunState value, String runId) {
+    final state = GrpcMappers.runStateToModel(value);
+    if (state == null ||
+        state.runId != runId ||
+        state.userMessageId.isEmpty ||
+        state.assistantMessageId.isEmpty) {
+      throw const TuringApiException(
+        code: 'run_cancel_unconfirmed',
+        message: 'The cancellation response could not be confirmed',
+      );
+    }
+    return state;
+  }
+
+  CancellationProgress _cancellationProgress(
+    chatpb.CancellationProgress value,
+  ) => switch (value) {
+    chatpb.CancellationProgress.CANCELLATION_PROGRESS_NOT_CANCELLED =>
+      CancellationProgress.notCancelled,
+    chatpb.CancellationProgress.CANCELLATION_PROGRESS_STOPPING =>
+      CancellationProgress.stopping,
+    chatpb.CancellationProgress.CANCELLATION_PROGRESS_RECONCILED =>
+      CancellationProgress.reconciled,
+    _ => CancellationProgress.unknown,
+  };
 
   @override
   Future<Map<String, dynamic>> getConfig() async {

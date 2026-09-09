@@ -479,11 +479,9 @@ const maxCancelVersionAttempts = 3
 
 // cancelRun terminalizes a run whose client went away.
 //
-// The one stream-cancellation signal this product has covers a deliberate stop
-// and an unkeyed transport loss alike, and the client offers no cancel
-// affordance, so this cannot claim the user meant it. It reports abandonment,
-// which is the strongest thing that is actually true. Nothing about the
-// transport's own wording is persisted.
+// Losing an unkeyed stream does not establish explicit user intent. Only the
+// separate CancelRun RPC can claim that; this path reports abandonment and
+// never persists the transport's own wording.
 //
 // The read and the guarded update are two steps, so another writer can commit
 // between them and the update then loses on version. That loss used to be

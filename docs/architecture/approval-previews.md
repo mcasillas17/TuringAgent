@@ -220,3 +220,11 @@ Protect the sandbox mount and avoid concurrent privileged external edits.
 
 Use the existing approval TTL and runtime wait settings together. Preview
 reads never extend those lifetimes or revive cancelled/deleted work.
+
+**Stop** cancels the run, not merely its approval dialog. Pending or approved
+but unconsumed approvals expire and their unused tokens are cleared; consumed
+approval provenance remains recorded. A terminal snapshot removes the pending
+preview from the client. Cancellation never grants approval, revokes an
+external credential, deletes the session, or rolls back a mutation that already
+committed. Execution may remain contained while the worker stops; see
+[explicit cancellation](run-outcomes.md#explicit-cancellation).

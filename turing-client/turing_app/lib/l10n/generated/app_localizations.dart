@@ -454,6 +454,84 @@ abstract class AppLocalizations {
   /// **'You cancelled this run.'**
   String get runUserCancelledDetail;
 
+  /// No description provided for @runStop.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop'**
+  String get runStop;
+
+  /// No description provided for @runCancelRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry cancellation'**
+  String get runCancelRetry;
+
+  /// No description provided for @runCancelCheck.
+  ///
+  /// In en, this message translates to:
+  /// **'Check status'**
+  String get runCancelCheck;
+
+  /// No description provided for @runCancelChecking.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking cancellation'**
+  String get runCancelChecking;
+
+  /// No description provided for @runCancelUnconfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancellation not yet confirmed.'**
+  String get runCancelUnconfirmed;
+
+  /// No description provided for @runCancelRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancellation was not accepted. Check status before trying again.'**
+  String get runCancelRejected;
+
+  /// No description provided for @runCancelUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'Stopping runs is not supported by this backend.'**
+  String get runCancelUnsupported;
+
+  /// No description provided for @runCancelUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This run is unavailable.'**
+  String get runCancelUnavailable;
+
+  /// No description provided for @runCancelStatusFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancellation status could not be confirmed.'**
+  String get runCancelStatusFailed;
+
+  /// No description provided for @runCancelAlreadyTerminal.
+  ///
+  /// In en, this message translates to:
+  /// **'The run had already ended.'**
+  String get runCancelAlreadyTerminal;
+
+  /// No description provided for @runCancelStopping.
+  ///
+  /// In en, this message translates to:
+  /// **'Worker shutdown is not yet confirmed. Completed effects are not undone.'**
+  String get runCancelStopping;
+
+  /// No description provided for @runCancelReconciled.
+  ///
+  /// In en, this message translates to:
+  /// **'Execution is no longer held for this run. Completed effects are not undone.'**
+  String get runCancelReconciled;
+
+  /// No description provided for @runCancelShutdownUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'The run is cancelled. Worker shutdown status is not yet confirmed.'**
+  String get runCancelShutdownUnknown;
+
   /// No description provided for @runAbandonedTitle.
   ///
   /// In en, this message translates to:

@@ -466,11 +466,29 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 					return
 				}
 				accepted, resumeErr := s.resumeApprovedRun(ctx, resumeReady, ready.WorkerId, connectedWorker)
-				// Released before the acceptance goes out: the command loop
+				cancelled := false
+				if status.Code(resumeErr) == codes.FailedPrecondition &&
+					s.ownershipProven(ready.WorkerId, connectedWorker, resumeReady.GetRunId(), resumeReady.GetAssignmentAttemptId()) {
+					var checkErr error
+					cancelled, checkErr = s.repo.ApprovalResumeLostToUserCancellation(ctx, repository.ResumeApprovedRunInput{
+						RunID: resumeReady.GetRunId(), ApprovalID: resumeReady.GetApprovalId(),
+						WorkerID: ready.WorkerId, AssignmentAttemptID: resumeReady.GetAssignmentAttemptId(),
+						ExpectedStateVersion: resumeReady.GetExpectedStateVersion(),
+					})
+					if checkErr != nil {
+						cancelled = false
+						resumeErr = checkErr
+					}
+				}
+				// Released before acceptance or cancellation goes out: the command loop
 				// takes this same lock to deliver an assignment and then takes
 				// the sender, so holding it across a send would order the two
 				// the other way round.
 				release()
+				if cancelled {
+					s.CancelRun(ctx, resumeReady.GetRunId(), runoutcome.CodeUserCancelled)
+					continue
+				}
 				if resumeErr != nil {
 					recvErr <- resumeErr
 					return
@@ -817,9 +835,12 @@ func (s *Server) reconcileHeartbeatState(
 		if _, ok := renewedSet[assignment]; ok {
 			continue
 		}
-		result, err := s.repo.RecoverAssignmentWithLimit(ctx, assignment, s.dispatch.MaxAttempts)
+		result, err := s.repo.ReconcileHeartbeatAssignment(ctx, assignment, s.dispatch.MaxAttempts)
 		if err != nil {
 			return nil, false, err
+		}
+		if result.AwaitingExit {
+			continue
 		}
 		released := connectedWorker.releaseAssignmentAttempt(assignment.RunID, assignment.AttemptID)
 		for _, event := range result.Events {
@@ -1439,6 +1460,13 @@ func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 	}
 	for _, candidate := range assignments {
 		if s.hasLiveAssignment(candidate) {
+			run, err := s.repo.GetRun(recoveryCtx, candidate.RunID)
+			if err != nil {
+				return err
+			}
+			if run.Status == "cancelled" && run.OutcomeReason == string(runoutcome.ReasonUserCancelled) {
+				s.CancelRun(recoveryCtx, candidate.RunID, runoutcome.CodeUserCancelled)
+			}
 			continue
 		}
 		if connected := s.registeredWorker(candidate.WorkerID); connected != nil {
@@ -1680,6 +1708,15 @@ func (s *Server) CancelRun(ctx context.Context, runID string, reason string) {
 		return
 	}
 	owner := s.workerForRun(runID)
+	if reason == runoutcome.CodeUserCancelled && owner != nil {
+		run, err := s.repo.GetRun(ctx, runID)
+		held, ok := owner.assignmentForRun(runID)
+		if err != nil || !ok || run.Status != "cancelled" || !run.ExecutionActive ||
+			run.OutcomeReason != string(runoutcome.ReasonUserCancelled) ||
+			run.ExecutionAttemptID != held.attemptID || s.registeredWorker(run.WorkerID) != owner {
+			return
+		}
+	}
 	if owner == nil {
 		s.releaseUnownedTerminalRun(ctx, runID)
 		return
@@ -2297,11 +2334,16 @@ func (s *Server) handleRunCancelledAck(ctx context.Context, ack *turingv1.Runtim
 // convention matchesPreTerminalVersion applies to terminal reports. Nothing
 // further back belongs to this attempt, and nothing ahead exists.
 //
-// Zero is protobuf absence, not a claim: a worker built before the field
-// existed names no version, and is judged on the terminal status alone exactly
-// as before. This is the same absence rule matchesPreTerminalVersion and
-// terminalExpectation apply to terminal reports.
+// Zero is protobuf absence, not attempt identity. For explicit cancellation it
+// can prove exit only on a durably identified first attempt: after retry it
+// cannot distinguish the predecessor from the current executor. Other terminal
+// paths retain their legacy absence rule. The lineage is read with the run so
+// both normal reconciliation and the handler-local cancellation race enforce
+// the same rule, without relying on an in-memory assignment's current label.
 func acknowledgedVersionMatches(observed int64, run repository.Run) bool {
+	if observed == 0 && run.Status == "cancelled" && run.OutcomeReason == string(runoutcome.ReasonUserCancelled) {
+		return run.ExecutionAttemptNumber == 1
+	}
 	return observed == 0 || observed == run.StateVersion || observed == run.StateVersion-1
 }
 
@@ -2442,18 +2484,14 @@ func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorke
 	if terminalRunID(update) == "" {
 		return true, nil
 	}
-	// A cancellation is decided independently of anything a worker reports, so
-	// once the run is already cancelled, any OTHER terminal-shaped report — a
-	// completion, a failure — is accepted as exit proof without comparing its
-	// content: that outcome already lost, and content it disagrees on cannot
-	// still be the persisted one. A cancellation ack is different: its whole
-	// identity is the version it observed, so it stays behind
-	// isMatchingTerminalUpdate even when the run is cancelled — otherwise a
-	// fenced predecessor of the very same attempt, still carrying a version
-	// from before it was fenced, would release a fence the current attempt is
-	// still holding.
+	// Cancellation wins the outcome independently of a worker's completion or
+	// failure, but not its execution identity. A losing report may prove exit
+	// only at the version immediately before cancellation, or the cancellation
+	// version it learned while its terminal report was in flight. Comparing
+	// the losing content/outcome would reject that legitimate race; ignoring
+	// the version would let a predecessor release this attempt's fence.
 	//
-	// A version-mismatched ack is deliberately handled — silently ignored,
+	// A version-mismatched exit report is deliberately handled — silently ignored,
 	// not surfaced as an error — even though beginUpdate proves the worker
 	// still holds this exact assignment: the mismatch alone means it cannot
 	// release a fence it does not match, so it is treated exactly like an
@@ -2464,7 +2502,16 @@ func (s *Server) reconcileLateAssignedUpdate(ctx context.Context, connectedWorke
 	// isLateMatchingTerminalUpdate through beginUpdate's own ownership error,
 	// where an unassigned or wrong-attempt report remains the protocol
 	// violation it always was.
-	if (run.Status != "cancelled" || update.GetRunCancelledAck() != nil) && !isMatchingTerminalUpdate(run, update) {
+	matchesExit := isMatchingTerminalUpdate(run, update)
+	if run.Status == "cancelled" {
+		switch {
+		case update.GetRunCompleted() != nil:
+			matchesExit = acknowledgedVersionMatches(update.GetRunCompleted().GetExpectedStateVersion(), run)
+		case update.GetRunFailed() != nil:
+			matchesExit = acknowledgedVersionMatches(update.GetRunFailed().GetExpectedStateVersion(), run)
+		}
+	}
+	if !matchesExit {
 		return true, nil
 	}
 	assignment, assigned := connectedWorker.assignmentForRun(runID)

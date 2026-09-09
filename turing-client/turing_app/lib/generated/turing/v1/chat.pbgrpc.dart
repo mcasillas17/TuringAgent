@@ -32,6 +32,20 @@ class ChatServiceClient extends $grpc.Client {
 
   ChatServiceClient(super.channel, {super.options, super.interceptors});
 
+  $grpc.ResponseFuture<$0.CancelRunResponse> cancelRun(
+    $0.CancelRunRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$cancelRun, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.GetRunCancellationResponse> getRunCancellation(
+    $0.GetRunCancellationRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$getRunCancellation, request, options: options);
+  }
+
   $grpc.ResponseFuture<$0.PrepareRemoteEgressResponse> prepareRemoteEgress(
     $0.PrepareRemoteEgressRequest request, {
     $grpc.CallOptions? options,
@@ -50,6 +64,16 @@ class ChatServiceClient extends $grpc.Client {
 
   // method descriptors
 
+  static final _$cancelRun =
+      $grpc.ClientMethod<$0.CancelRunRequest, $0.CancelRunResponse>(
+          '/turing.v1.ChatService/CancelRun',
+          ($0.CancelRunRequest value) => value.writeToBuffer(),
+          $0.CancelRunResponse.fromBuffer);
+  static final _$getRunCancellation = $grpc.ClientMethod<
+          $0.GetRunCancellationRequest, $0.GetRunCancellationResponse>(
+      '/turing.v1.ChatService/GetRunCancellation',
+      ($0.GetRunCancellationRequest value) => value.writeToBuffer(),
+      $0.GetRunCancellationResponse.fromBuffer);
   static final _$prepareRemoteEgress = $grpc.ClientMethod<
           $0.PrepareRemoteEgressRequest, $0.PrepareRemoteEgressResponse>(
       '/turing.v1.ChatService/PrepareRemoteEgress',
@@ -67,6 +91,22 @@ abstract class ChatServiceBase extends $grpc.Service {
   $core.String get $name => 'turing.v1.ChatService';
 
   ChatServiceBase() {
+    $addMethod($grpc.ServiceMethod<$0.CancelRunRequest, $0.CancelRunResponse>(
+        'CancelRun',
+        cancelRun_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) => $0.CancelRunRequest.fromBuffer(value),
+        ($0.CancelRunResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.GetRunCancellationRequest,
+            $0.GetRunCancellationResponse>(
+        'GetRunCancellation',
+        getRunCancellation_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.GetRunCancellationRequest.fromBuffer(value),
+        ($0.GetRunCancellationResponse value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.PrepareRemoteEgressRequest,
             $0.PrepareRemoteEgressResponse>(
         'PrepareRemoteEgress',
@@ -85,6 +125,23 @@ abstract class ChatServiceBase extends $grpc.Service {
             $0.SendMessageRequest.fromBuffer(value),
         ($0.ChatStreamEvent value) => value.writeToBuffer()));
   }
+
+  $async.Future<$0.CancelRunResponse> cancelRun_Pre($grpc.ServiceCall $call,
+      $async.Future<$0.CancelRunRequest> $request) async {
+    return cancelRun($call, await $request);
+  }
+
+  $async.Future<$0.CancelRunResponse> cancelRun(
+      $grpc.ServiceCall call, $0.CancelRunRequest request);
+
+  $async.Future<$0.GetRunCancellationResponse> getRunCancellation_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.GetRunCancellationRequest> $request) async {
+    return getRunCancellation($call, await $request);
+  }
+
+  $async.Future<$0.GetRunCancellationResponse> getRunCancellation(
+      $grpc.ServiceCall call, $0.GetRunCancellationRequest request);
 
   $async.Future<$0.PrepareRemoteEgressResponse> prepareRemoteEgress_Pre(
       $grpc.ServiceCall $call,

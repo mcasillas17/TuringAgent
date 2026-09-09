@@ -52,6 +52,26 @@ enum RunLifecycle {
   /// having to guard the call.
   bool canTransitionTo(RunLifecycle next) =>
       _publiclyCommittedEdges[this]?.contains(next) ?? false;
+
+  /// A snapshot can skip intermediate versions while events are disconnected.
+  /// Explore each phase at most once, regardless of how large the gap is.
+  bool canReachWithin(RunLifecycle next, int transitions) {
+    if (transitions <= 1) return transitions == 1 && canTransitionTo(next);
+    var frontier = {this};
+    final visited = {this};
+    for (var step = 0; step < transitions && frontier.isNotEmpty; step++) {
+      final following = <RunLifecycle>{};
+      for (final phase in frontier) {
+        for (final target
+            in _publiclyCommittedEdges[phase] ?? const <RunLifecycle>{}) {
+          if (target == next) return true;
+          if (visited.add(target)) following.add(target);
+        }
+      }
+      frontier = following;
+    }
+    return false;
+  }
 }
 
 /// The transitions a committed projection can describe.

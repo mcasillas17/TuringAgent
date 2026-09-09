@@ -14,6 +14,41 @@ import 'dart:convert' as $convert;
 import 'dart:core' as $core;
 import 'dart:typed_data' as $typed_data;
 
+@$core.Deprecated('Use cancelRunResultDescriptor instead')
+const CancelRunResult$json = {
+  '1': 'CancelRunResult',
+  '2': [
+    {'1': 'CANCEL_RUN_RESULT_UNSPECIFIED', '2': 0},
+    {'1': 'CANCEL_RUN_RESULT_ACCEPTED', '2': 1},
+    {'1': 'CANCEL_RUN_RESULT_ALREADY_TERMINAL', '2': 2},
+    {'1': 'CANCEL_RUN_RESULT_UNAVAILABLE', '2': 3},
+  ],
+};
+
+/// Descriptor for `CancelRunResult`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List cancelRunResultDescriptor = $convert.base64Decode(
+    'Cg9DYW5jZWxSdW5SZXN1bHQSIQodQ0FOQ0VMX1JVTl9SRVNVTFRfVU5TUEVDSUZJRUQQABIeCh'
+    'pDQU5DRUxfUlVOX1JFU1VMVF9BQ0NFUFRFRBABEiYKIkNBTkNFTF9SVU5fUkVTVUxUX0FMUkVB'
+    'RFlfVEVSTUlOQUwQAhIhCh1DQU5DRUxfUlVOX1JFU1VMVF9VTkFWQUlMQUJMRRAD');
+
+@$core.Deprecated('Use cancellationProgressDescriptor instead')
+const CancellationProgress$json = {
+  '1': 'CancellationProgress',
+  '2': [
+    {'1': 'CANCELLATION_PROGRESS_UNSPECIFIED', '2': 0},
+    {'1': 'CANCELLATION_PROGRESS_NOT_CANCELLED', '2': 1},
+    {'1': 'CANCELLATION_PROGRESS_STOPPING', '2': 2},
+    {'1': 'CANCELLATION_PROGRESS_RECONCILED', '2': 3},
+  ],
+};
+
+/// Descriptor for `CancellationProgress`. Decode as a `google.protobuf.EnumDescriptorProto`.
+final $typed_data.Uint8List cancellationProgressDescriptor = $convert.base64Decode(
+    'ChRDYW5jZWxsYXRpb25Qcm9ncmVzcxIlCiFDQU5DRUxMQVRJT05fUFJPR1JFU1NfVU5TUEVDSU'
+    'ZJRUQQABInCiNDQU5DRUxMQVRJT05fUFJPR1JFU1NfTk9UX0NBTkNFTExFRBABEiIKHkNBTkNF'
+    'TExBVElPTl9QUk9HUkVTU19TVE9QUElORxACEiQKIENBTkNFTExBVElPTl9QUk9HUkVTU19SRU'
+    'NPTkNJTEVEEAM=');
+
 @$core.Deprecated('Use sendMessageRequestDescriptor instead')
 const SendMessageRequest$json = {
   '1': 'SendMessageRequest',
@@ -381,6 +416,106 @@ const RunCancelled$json = {
 final $typed_data.Uint8List runCancelledDescriptor = $convert.base64Decode(
     'CgxSdW5DYW5jZWxsZWQSFQoGcnVuX2lkGAEgASgJUgVydW5JZBIWCgZyZWFzb24YAiABKAlSBn'
     'JlYXNvbhIwCglydW5fc3RhdGUYAyABKAsyEy50dXJpbmcudjEuUnVuU3RhdGVSCHJ1blN0YXRl');
+
+@$core.Deprecated('Use cancelRunRequestDescriptor instead')
+const CancelRunRequest$json = {
+  '1': 'CancelRunRequest',
+  '2': [
+    {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
+    {'1': 'run_id', '3': 2, '4': 1, '5': 9, '10': 'runId'},
+    {'1': 'idempotency_key', '3': 3, '4': 1, '5': 9, '10': 'idempotencyKey'},
+  ],
+};
+
+/// Descriptor for `CancelRunRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List cancelRunRequestDescriptor = $convert.base64Decode(
+    'ChBDYW5jZWxSdW5SZXF1ZXN0Eh0KCnNlc3Npb25faWQYASABKAlSCXNlc3Npb25JZBIVCgZydW'
+    '5faWQYAiABKAlSBXJ1bklkEicKD2lkZW1wb3RlbmN5X2tleRgDIAEoCVIOaWRlbXBvdGVuY3lL'
+    'ZXk=');
+
+@$core.Deprecated('Use cancelRunResponseDescriptor instead')
+const CancelRunResponse$json = {
+  '1': 'CancelRunResponse',
+  '2': [
+    {
+      '1': 'result',
+      '3': 1,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.CancelRunResult',
+      '10': 'result'
+    },
+    {
+      '1': 'run_state',
+      '3': 2,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RunState',
+      '10': 'runState'
+    },
+    {
+      '1': 'progress',
+      '3': 3,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.CancellationProgress',
+      '10': 'progress'
+    },
+  ],
+};
+
+/// Descriptor for `CancelRunResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List cancelRunResponseDescriptor = $convert.base64Decode(
+    'ChFDYW5jZWxSdW5SZXNwb25zZRIyCgZyZXN1bHQYASABKA4yGi50dXJpbmcudjEuQ2FuY2VsUn'
+    'VuUmVzdWx0UgZyZXN1bHQSMAoJcnVuX3N0YXRlGAIgASgLMhMudHVyaW5nLnYxLlJ1blN0YXRl'
+    'UghydW5TdGF0ZRI7Cghwcm9ncmVzcxgDIAEoDjIfLnR1cmluZy52MS5DYW5jZWxsYXRpb25Qcm'
+    '9ncmVzc1IIcHJvZ3Jlc3M=');
+
+@$core.Deprecated('Use getRunCancellationRequestDescriptor instead')
+const GetRunCancellationRequest$json = {
+  '1': 'GetRunCancellationRequest',
+  '2': [
+    {'1': 'session_id', '3': 1, '4': 1, '5': 9, '10': 'sessionId'},
+    {'1': 'run_id', '3': 2, '4': 1, '5': 9, '10': 'runId'},
+  ],
+};
+
+/// Descriptor for `GetRunCancellationRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List getRunCancellationRequestDescriptor =
+    $convert.base64Decode(
+        'ChlHZXRSdW5DYW5jZWxsYXRpb25SZXF1ZXN0Eh0KCnNlc3Npb25faWQYASABKAlSCXNlc3Npb2'
+        '5JZBIVCgZydW5faWQYAiABKAlSBXJ1bklk');
+
+@$core.Deprecated('Use getRunCancellationResponseDescriptor instead')
+const GetRunCancellationResponse$json = {
+  '1': 'GetRunCancellationResponse',
+  '2': [
+    {'1': 'available', '3': 1, '4': 1, '5': 8, '10': 'available'},
+    {
+      '1': 'run_state',
+      '3': 2,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RunState',
+      '10': 'runState'
+    },
+    {
+      '1': 'progress',
+      '3': 3,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.CancellationProgress',
+      '10': 'progress'
+    },
+  ],
+};
+
+/// Descriptor for `GetRunCancellationResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List getRunCancellationResponseDescriptor = $convert.base64Decode(
+    'ChpHZXRSdW5DYW5jZWxsYXRpb25SZXNwb25zZRIcCglhdmFpbGFibGUYASABKAhSCWF2YWlsYW'
+    'JsZRIwCglydW5fc3RhdGUYAiABKAsyEy50dXJpbmcudjEuUnVuU3RhdGVSCHJ1blN0YXRlEjsK'
+    'CHByb2dyZXNzGAMgASgOMh8udHVyaW5nLnYxLkNhbmNlbGxhdGlvblByb2dyZXNzUghwcm9ncm'
+    'Vzcw==');
 
 @$core.Deprecated('Use runStateChangedDescriptor instead')
 const RunStateChanged$json = {
