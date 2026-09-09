@@ -284,6 +284,8 @@ const (
 // committed to sending.
 type terminalAttempt struct {
 	attemptID string
+	version   int64
+	done      <-chan struct{}
 }
 
 var errOutboundWriterStopped = errors.New("runtime outbound writer stopped")
@@ -815,6 +817,9 @@ func (w *Worker) handleCommand(ctx context.Context, stream RuntimeStream, cmd *t
 		}
 	case *turingv1.RuntimeCommand_RunCancelled:
 		if value.RunCancelled != nil {
+			if w.acknowledgeFinishedCancellation(ctx, stream, value.RunCancelled) {
+				return nil
+			}
 			if !w.acceptCommandVersion(value.RunCancelled.GetRunId(), value.RunCancelled.GetStateVersion()) {
 				// Computed against a state this worker has already been told to
 				// leave. Acting on it would cancel a run the orchestrator has
@@ -1081,6 +1086,32 @@ func (w *Worker) cancelRun(ctx context.Context, stream RuntimeStream, runID stri
 	return w.cancelRunWithCause(ctx, stream, runID, context.Canceled)
 }
 
+// A repeated stop can recover a lost acknowledgement without restarting work.
+// Active entries are removed only after executor exit. Once a terminal cache
+// entry ages out, absence from active is still an exit observation on this
+// registration; the orchestrator must match the echoed version and assignment
+// before releasing its fence. Versionless unknown commands prove nothing.
+func (w *Worker) acknowledgeFinishedCancellation(ctx context.Context, stream RuntimeStream, command *turingv1.RuntimeRunCancelled) bool {
+	w.mu.Lock()
+	remembered, known := w.terminalAttempts[command.GetRunId()]
+	active := w.active[command.GetRunId()] != nil
+	w.mu.Unlock()
+	if active || command.GetRunId() == "" || command.GetStateVersion() <= 0 || (known && command.GetStateVersion() < remembered.version) {
+		return false
+	}
+	if known {
+		select {
+		case <-remembered.done:
+		default:
+			return false
+		}
+	}
+	w.sendTerminalOrReport(ctx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{
+		RunCancelledAck: &turingv1.RuntimeCancelledAck{RunId: command.GetRunId(), ObservedStateVersion: command.GetStateVersion()},
+	}})
+	return true
+}
+
 func (w *Worker) cancelRunWithCause(ctx context.Context, stream RuntimeStream, runID string, cause error) error {
 	entry := w.activeRun(runID)
 	if entry == nil {
@@ -1128,12 +1159,13 @@ func (w *Worker) rememberTerminalAttempt(entry *activeRun) {
 	if runID == "" || attemptID == "" {
 		return
 	}
+	version := entry.expectedVersion()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if _, exists := w.terminalAttempts[runID]; !exists {
 		w.terminalOrder = append(w.terminalOrder, runID)
 	}
-	w.terminalAttempts[runID] = terminalAttempt{attemptID: attemptID}
+	w.terminalAttempts[runID] = terminalAttempt{attemptID: attemptID, version: version, done: entry.done}
 	w.evictTerminalAttemptsLocked()
 }
 

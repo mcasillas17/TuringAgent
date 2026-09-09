@@ -1,4 +1,3 @@
-import '../../models/run_lifecycle.dart';
 import '../../models/run_state.dart';
 
 /// What happened when a [RunState] snapshot was offered to a
@@ -20,7 +19,7 @@ import '../../models/run_state.dart';
 ///     [inconsistent] — nothing may ever follow a terminal state, not even
 ///     one that looks like a structurally valid transition;
 ///  6. a higher version from a nonterminal state -> [accepted] only if
-///     [RunLifecycle.canTransitionTo] allows that exact edge, otherwise
+///     the lifecycle graph permits a path within the version gap, otherwise
 ///     [inconsistent].
 enum RunStateReconciliationOutcome {
   /// The incoming snapshot is now this run's accepted, current state.
@@ -145,11 +144,12 @@ class RunStateReconciler {
         current: existing,
       );
     }
-    // Rule 6: a higher version from a nonterminal state is accepted only
-    // if it is a lifecycle transition the backend could actually have
-    // committed — decided purely from the lifecycle graph, never inferred
-    // from an event's own type, arrival order, or `finishedAt`.
-    if (!existing.lifecycle.canTransitionTo(incoming.lifecycle)) {
+    // A current unary/history snapshot may span transitions not yet delivered
+    // as events. A one-version update still has to be a direct lifecycle edge.
+    if (!existing.lifecycle.canReachWithin(
+      incoming.lifecycle,
+      incoming.stateVersion - existing.stateVersion,
+    )) {
       return RunStateReconciliationResult(
         outcome: RunStateReconciliationOutcome.inconsistent,
         current: existing,

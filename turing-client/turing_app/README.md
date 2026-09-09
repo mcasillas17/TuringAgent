@@ -16,6 +16,7 @@ live providers, MCP conformance, or production mobile support.
 | --- | --- | --- |
 | flutter-search | shipped | Exact-phrase conversation search is wired from the shell through gRPC to backend search. |
 | flutter-workspace | shipped | The named destinations described below load real backend state, not placeholder pages. |
+| explicit-cancel | shipped | Stop records durable user intent for one exact run; retry/status RPCs distinguish acceptance from execution reconciliation. |
 | mcp-registry | shipped | The MCPs page manages registrations, imports, enablement, tokens and tool policies. |
 | mcp-lifecycle | pending | Registry management and the HTTP JSON-RPC tools subset do not implement initialization/capability negotiation (CON-001). |
 | remote-model-routing | shipped | Agents manages endpoint records; the conversation's destination bar selects the route through ExternalAgentService, and the runtime calls the model under per-run disclosure. |
@@ -41,6 +42,8 @@ Implemented in the client:
 - Inline tool-call status cards for live `tool.call.*` events.
 - Localized lifecycle/outcome cards reconstructed from the same versioned
   `RunState` used by live events and persisted message history.
+- Localized, keyboard-accessible **Stop**, **Retry cancellation**, and
+  **Check status** actions tied to the run, not its stream subscription.
 - Inline safe notices for live run limits, retries, and recovery.
 - Localized approval cards with authenticated server-derived details,
   complete bounded file diffs, explicit retry/refresh, and bound decisions.
@@ -55,6 +58,8 @@ Runtime prerequisites and limits:
 
 - End-to-end chat responses require the Go orchestrator, Go agent runtime, model provider, and event stream.
 - Approval cards require the backend/runtime to emit approval events.
+- Stop requires the cancel/status RPCs. Unsupported backends are identified
+  explicitly; navigation and stream disposal never substitute for cancellation.
 - Approval also requires the detail RPC and matching review hashes. Older
   clients cannot approve without binding; a new client never falls back to
   unbound approval when the backend lacks previews. Denial remains available.
@@ -202,6 +207,8 @@ The Chats destination uses the generated gRPC services for commands, queries, an
   disclosure before a remote send.
 - `ChatService.SendMessage` to enqueue a user message and selected model
   provider, carrying one-time consent when the effective route is remote.
+- `ChatService.CancelRun` to record a retry-safe explicit stop for one run;
+  `GetRunCancellation` to read current state and execution reconciliation.
 - `EventService.ListEvents` and `EventService.SubscribeSessionEvents` for replay and live updates.
 - `ApprovalService.GetApprovalDetails` for bounded authenticated inspection;
   `ApproveApproval` echoes the reviewed `preview_hash` and `args_hash`, while
@@ -216,6 +223,21 @@ correlated assistant content. Completed content has no redundant card; empty
 success, failed, cancelled, missing-content, unknown, and neutral legacy states
 remain explicit. Initial buffering retains at most 64 run states and overflow
 causes one coalesced newest-page resync.
+
+Stop remains available while a run is queued, working, waiting for approval,
+or recovering, independently of model availability. The action is disabled
+while its request is pending. An uncertain response leaves **Retry
+cancellation** with the same `cancel:<runId>` identity; a definitive rejection
+offers **Check status**. A completion that wins the race remains completed.
+
+Cancellation state belongs to the run, so moving between tool-separated
+message bubbles does not lose a pending request. Reopening or reconnecting
+reads authoritative state. Version gaps may span a valid path through the
+lifecycle graph, without permitting a terminal run to change again.
+Worker shutdown may still be unconfirmed after cancellation is accepted.
+**Check status** refreshes that separate observation without resending Stop.
+Reconciled execution means containment was released by acknowledgement or
+recovery, not that a committed tool effect was undone.
 
 The shell preserves session timestamp nanoseconds and reconciles list pages,
 lifecycle RPC responses, and `session.updated` events by authoritative snapshot.

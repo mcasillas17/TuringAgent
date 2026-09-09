@@ -19,6 +19,9 @@ The project is designed for local development first: secrets stay in your local 
 - Shows server-derived, bounded file previews before approval, binds the
   decision to the reviewed arguments and file state, and refuses stale writes.
   See [approval review, limits, and compatibility](docs/architecture/approval-previews.md).
+- Provides an explicit **Stop** action for a run, backed by durable,
+  retry-safe cancellation. Acceptance and worker shutdown are separate;
+  completed side effects are not undone.
 - Exposes a redacted, paginated audit read API (`AuditService.ListAuditEntries`), including the approval comment or denial reason a person typed; audit inspection is exposed programmatically through the authenticated API and a thin client, with no built-in viewer yet.
 - Withdraws a deleted session through a durable lifecycle: reads/search/replay
   fail closed once withdrawal starts, active work is cancelled and reconciled,
@@ -32,6 +35,19 @@ backend-connected Chats, Skills, Memory, Integrations, MCPs, Automations,
 Agents and Telemetry surfaces. Agents manages model endpoint records;
 [integration and routing limits](docs/NORTH_STAR.md#guarded-capability-inventory)
 distinguish credential storage, functional tools, inference and delegation.
+
+## Stopping a run
+
+Use **Stop** beside the assistant response to cancel that exact run, including
+one waiting for a worker or approval. A lost response is shown as unconfirmed;
+**Retry cancellation** reuses the same operation identity. **Check status**
+reads the backend's current cancellation and execution observation.
+
+Closing a conversation or losing its event stream is not a Stop action.
+Cancellation does not need a model call, remote-provider consent, or approval.
+An older backend without the cancel API is shown as unsupported; the client
+never substitutes dropping the stream. See [cancel results, recovery and
+upgrade behavior](docs/architecture/run-outcomes.md#explicit-cancellation).
 
 ## Account integrations
 

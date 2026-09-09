@@ -82,8 +82,10 @@ belongs to an approval a human was actually asked for, and repurposing it as a
 generic hold would make "Turing is waiting for you" mean two unrelated things.
 
 Under `cancel` the reason is `abandoned`, not `user_cancelled`. Nobody asked for
-this; the orchestrator gave up on the run's behalf. `user_cancelled` stays
-reserved for the explicit cancel-intent API that CXL-001 owns.
+this; the orchestrator gave up on the run's behalf. `user_cancelled` is written
+only by the [explicit cancel-intent API](run-outcomes.md#explicit-cancellation).
+Flutter **Stop** can end a queued run even when no compatible worker or model
+is available. It does not change the queue-timeout policy or enqueue a replacement.
 
 The public outcome vocabulary is unchanged: a queue bound reports the existing
 `expired` (or `abandoned`) reason, and the `queue_wait_reason` the bound asserts

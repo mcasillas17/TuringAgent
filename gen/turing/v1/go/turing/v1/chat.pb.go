@@ -22,6 +22,110 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type CancelRunResult int32
+
+const (
+	CancelRunResult_CANCEL_RUN_RESULT_UNSPECIFIED      CancelRunResult = 0
+	CancelRunResult_CANCEL_RUN_RESULT_ACCEPTED         CancelRunResult = 1
+	CancelRunResult_CANCEL_RUN_RESULT_ALREADY_TERMINAL CancelRunResult = 2
+	CancelRunResult_CANCEL_RUN_RESULT_UNAVAILABLE      CancelRunResult = 3
+)
+
+// Enum value maps for CancelRunResult.
+var (
+	CancelRunResult_name = map[int32]string{
+		0: "CANCEL_RUN_RESULT_UNSPECIFIED",
+		1: "CANCEL_RUN_RESULT_ACCEPTED",
+		2: "CANCEL_RUN_RESULT_ALREADY_TERMINAL",
+		3: "CANCEL_RUN_RESULT_UNAVAILABLE",
+	}
+	CancelRunResult_value = map[string]int32{
+		"CANCEL_RUN_RESULT_UNSPECIFIED":      0,
+		"CANCEL_RUN_RESULT_ACCEPTED":         1,
+		"CANCEL_RUN_RESULT_ALREADY_TERMINAL": 2,
+		"CANCEL_RUN_RESULT_UNAVAILABLE":      3,
+	}
+)
+
+func (x CancelRunResult) Enum() *CancelRunResult {
+	p := new(CancelRunResult)
+	*p = x
+	return p
+}
+
+func (x CancelRunResult) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CancelRunResult) Descriptor() protoreflect.EnumDescriptor {
+	return file_turing_v1_chat_proto_enumTypes[0].Descriptor()
+}
+
+func (CancelRunResult) Type() protoreflect.EnumType {
+	return &file_turing_v1_chat_proto_enumTypes[0]
+}
+
+func (x CancelRunResult) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CancelRunResult.Descriptor instead.
+func (CancelRunResult) EnumDescriptor() ([]byte, []int) {
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{0}
+}
+
+type CancellationProgress int32
+
+const (
+	CancellationProgress_CANCELLATION_PROGRESS_UNSPECIFIED   CancellationProgress = 0
+	CancellationProgress_CANCELLATION_PROGRESS_NOT_CANCELLED CancellationProgress = 1
+	CancellationProgress_CANCELLATION_PROGRESS_STOPPING      CancellationProgress = 2
+	CancellationProgress_CANCELLATION_PROGRESS_RECONCILED    CancellationProgress = 3
+)
+
+// Enum value maps for CancellationProgress.
+var (
+	CancellationProgress_name = map[int32]string{
+		0: "CANCELLATION_PROGRESS_UNSPECIFIED",
+		1: "CANCELLATION_PROGRESS_NOT_CANCELLED",
+		2: "CANCELLATION_PROGRESS_STOPPING",
+		3: "CANCELLATION_PROGRESS_RECONCILED",
+	}
+	CancellationProgress_value = map[string]int32{
+		"CANCELLATION_PROGRESS_UNSPECIFIED":   0,
+		"CANCELLATION_PROGRESS_NOT_CANCELLED": 1,
+		"CANCELLATION_PROGRESS_STOPPING":      2,
+		"CANCELLATION_PROGRESS_RECONCILED":    3,
+	}
+)
+
+func (x CancellationProgress) Enum() *CancellationProgress {
+	p := new(CancellationProgress)
+	*p = x
+	return p
+}
+
+func (x CancellationProgress) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CancellationProgress) Descriptor() protoreflect.EnumDescriptor {
+	return file_turing_v1_chat_proto_enumTypes[1].Descriptor()
+}
+
+func (CancellationProgress) Type() protoreflect.EnumType {
+	return &file_turing_v1_chat_proto_enumTypes[1]
+}
+
+func (x CancellationProgress) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CancellationProgress.Descriptor instead.
+func (CancellationProgress) EnumDescriptor() ([]byte, []int) {
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{1}
+}
+
 type SendMessageRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -945,6 +1049,240 @@ func (x *RunCancelled) GetRunState() *RunState {
 	return nil
 }
 
+type CancelRunRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SessionId      string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	RunId          string                 `protobuf:"bytes,2,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	IdempotencyKey string                 `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CancelRunRequest) Reset() {
+	*x = CancelRunRequest{}
+	mi := &file_turing_v1_chat_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelRunRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelRunRequest) ProtoMessage() {}
+
+func (x *CancelRunRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_chat_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelRunRequest.ProtoReflect.Descriptor instead.
+func (*CancelRunRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *CancelRunRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *CancelRunRequest) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *CancelRunRequest) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
+}
+
+type CancelRunResponse struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Result CancelRunResult        `protobuf:"varint,1,opt,name=result,proto3,enum=turing.v1.CancelRunResult" json:"result,omitempty"`
+	// The immutable result stored for this operation, including on replay.
+	RunState *RunState `protobuf:"bytes,2,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
+	// Fresh execution observation; accepting a stop does not prove worker exit.
+	Progress      CancellationProgress `protobuf:"varint,3,opt,name=progress,proto3,enum=turing.v1.CancellationProgress" json:"progress,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelRunResponse) Reset() {
+	*x = CancelRunResponse{}
+	mi := &file_turing_v1_chat_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelRunResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelRunResponse) ProtoMessage() {}
+
+func (x *CancelRunResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_chat_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelRunResponse.ProtoReflect.Descriptor instead.
+func (*CancelRunResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *CancelRunResponse) GetResult() CancelRunResult {
+	if x != nil {
+		return x.Result
+	}
+	return CancelRunResult_CANCEL_RUN_RESULT_UNSPECIFIED
+}
+
+func (x *CancelRunResponse) GetRunState() *RunState {
+	if x != nil {
+		return x.RunState
+	}
+	return nil
+}
+
+func (x *CancelRunResponse) GetProgress() CancellationProgress {
+	if x != nil {
+		return x.Progress
+	}
+	return CancellationProgress_CANCELLATION_PROGRESS_UNSPECIFIED
+}
+
+type GetRunCancellationRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	RunId         string                 `protobuf:"bytes,2,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRunCancellationRequest) Reset() {
+	*x = GetRunCancellationRequest{}
+	mi := &file_turing_v1_chat_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRunCancellationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRunCancellationRequest) ProtoMessage() {}
+
+func (x *GetRunCancellationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_chat_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRunCancellationRequest.ProtoReflect.Descriptor instead.
+func (*GetRunCancellationRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *GetRunCancellationRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *GetRunCancellationRequest) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+type GetRunCancellationResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Available     bool                   `protobuf:"varint,1,opt,name=available,proto3" json:"available,omitempty"`
+	RunState      *RunState              `protobuf:"bytes,2,opt,name=run_state,json=runState,proto3" json:"run_state,omitempty"`
+	Progress      CancellationProgress   `protobuf:"varint,3,opt,name=progress,proto3,enum=turing.v1.CancellationProgress" json:"progress,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRunCancellationResponse) Reset() {
+	*x = GetRunCancellationResponse{}
+	mi := &file_turing_v1_chat_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRunCancellationResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRunCancellationResponse) ProtoMessage() {}
+
+func (x *GetRunCancellationResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_chat_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRunCancellationResponse.ProtoReflect.Descriptor instead.
+func (*GetRunCancellationResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *GetRunCancellationResponse) GetAvailable() bool {
+	if x != nil {
+		return x.Available
+	}
+	return false
+}
+
+func (x *GetRunCancellationResponse) GetRunState() *RunState {
+	if x != nil {
+		return x.RunState
+	}
+	return nil
+}
+
+func (x *GetRunCancellationResponse) GetProgress() CancellationProgress {
+	if x != nil {
+		return x.Progress
+	}
+	return CancellationProgress_CANCELLATION_PROGRESS_UNSPECIFIED
+}
+
 // A lifecycle transition that has no existing lifecycle event of its own, such
 // as entering recovering or returning to running. Terminal transitions keep
 // using their existing completed/failed/cancelled events and never also emit
@@ -958,7 +1296,7 @@ type RunStateChanged struct {
 
 func (x *RunStateChanged) Reset() {
 	*x = RunStateChanged{}
-	mi := &file_turing_v1_chat_proto_msgTypes[13]
+	mi := &file_turing_v1_chat_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -970,7 +1308,7 @@ func (x *RunStateChanged) String() string {
 func (*RunStateChanged) ProtoMessage() {}
 
 func (x *RunStateChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[13]
+	mi := &file_turing_v1_chat_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -983,7 +1321,7 @@ func (x *RunStateChanged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunStateChanged.ProtoReflect.Descriptor instead.
 func (*RunStateChanged) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{13}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RunStateChanged) GetRunState() *RunState {
@@ -1026,7 +1364,7 @@ type ChatStreamEvent struct {
 
 func (x *ChatStreamEvent) Reset() {
 	*x = ChatStreamEvent{}
-	mi := &file_turing_v1_chat_proto_msgTypes[14]
+	mi := &file_turing_v1_chat_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1038,7 +1376,7 @@ func (x *ChatStreamEvent) String() string {
 func (*ChatStreamEvent) ProtoMessage() {}
 
 func (x *ChatStreamEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_turing_v1_chat_proto_msgTypes[14]
+	mi := &file_turing_v1_chat_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1051,7 +1389,7 @@ func (x *ChatStreamEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChatStreamEvent.ProtoReflect.Descriptor instead.
 func (*ChatStreamEvent) Descriptor() ([]byte, []int) {
-	return file_turing_v1_chat_proto_rawDescGZIP(), []int{14}
+	return file_turing_v1_chat_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ChatStreamEvent) GetSessionId() string {
@@ -1449,7 +1787,24 @@ const file_turing_v1_chat_proto_rawDesc = "" +
 	"\fRunCancelled\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x120\n" +
-	"\trun_state\x18\x03 \x01(\v2\x13.turing.v1.RunStateR\brunState\"C\n" +
+	"\trun_state\x18\x03 \x01(\v2\x13.turing.v1.RunStateR\brunState\"q\n" +
+	"\x10CancelRunRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x15\n" +
+	"\x06run_id\x18\x02 \x01(\tR\x05runId\x12'\n" +
+	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\"\xb6\x01\n" +
+	"\x11CancelRunResponse\x122\n" +
+	"\x06result\x18\x01 \x01(\x0e2\x1a.turing.v1.CancelRunResultR\x06result\x120\n" +
+	"\trun_state\x18\x02 \x01(\v2\x13.turing.v1.RunStateR\brunState\x12;\n" +
+	"\bprogress\x18\x03 \x01(\x0e2\x1f.turing.v1.CancellationProgressR\bprogress\"Q\n" +
+	"\x19GetRunCancellationRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x15\n" +
+	"\x06run_id\x18\x02 \x01(\tR\x05runId\"\xa9\x01\n" +
+	"\x1aGetRunCancellationResponse\x12\x1c\n" +
+	"\tavailable\x18\x01 \x01(\bR\tavailable\x120\n" +
+	"\trun_state\x18\x02 \x01(\v2\x13.turing.v1.RunStateR\brunState\x12;\n" +
+	"\bprogress\x18\x03 \x01(\x0e2\x1f.turing.v1.CancellationProgressR\bprogress\"C\n" +
 	"\x0fRunStateChanged\x120\n" +
 	"\trun_state\x18\x01 \x01(\v2\x13.turing.v1.RunStateR\brunState\"\xbf\n" +
 	"\n" +
@@ -1482,8 +1837,20 @@ const file_turing_v1_chat_proto_rawDesc = "" +
 	"\rrun_cancelled\x18\x19 \x01(\v2\x17.turing.v1.RunCancelledH\x00R\frunCancelled\x12A\n" +
 	"\x0fpersisted_event\x18\x1a \x01(\v2\x16.turing.v1.TuringEventH\x00R\x0epersistedEvent\x12H\n" +
 	"\x11run_state_changed\x18\x1b \x01(\v2\x1a.turing.v1.RunStateChangedH\x00R\x0frunStateChangedB\a\n" +
-	"\x05event2\xbf\x01\n" +
-	"\vChatService\x12d\n" +
+	"\x05event*\x9f\x01\n" +
+	"\x0fCancelRunResult\x12!\n" +
+	"\x1dCANCEL_RUN_RESULT_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aCANCEL_RUN_RESULT_ACCEPTED\x10\x01\x12&\n" +
+	"\"CANCEL_RUN_RESULT_ALREADY_TERMINAL\x10\x02\x12!\n" +
+	"\x1dCANCEL_RUN_RESULT_UNAVAILABLE\x10\x03*\xb0\x01\n" +
+	"\x14CancellationProgress\x12%\n" +
+	"!CANCELLATION_PROGRESS_UNSPECIFIED\x10\x00\x12'\n" +
+	"#CANCELLATION_PROGRESS_NOT_CANCELLED\x10\x01\x12\"\n" +
+	"\x1eCANCELLATION_PROGRESS_STOPPING\x10\x02\x12$\n" +
+	" CANCELLATION_PROGRESS_RECONCILED\x10\x032\xea\x02\n" +
+	"\vChatService\x12F\n" +
+	"\tCancelRun\x12\x1b.turing.v1.CancelRunRequest\x1a\x1c.turing.v1.CancelRunResponse\x12a\n" +
+	"\x12GetRunCancellation\x12$.turing.v1.GetRunCancellationRequest\x1a%.turing.v1.GetRunCancellationResponse\x12d\n" +
 	"\x13PrepareRemoteEgress\x12%.turing.v1.PrepareRemoteEgressRequest\x1a&.turing.v1.PrepareRemoteEgressResponse\x12J\n" +
 	"\vSendMessage\x12\x1d.turing.v1.SendMessageRequest\x1a\x1a.turing.v1.ChatStreamEvent0\x01B>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
@@ -1499,75 +1866,91 @@ func file_turing_v1_chat_proto_rawDescGZIP() []byte {
 	return file_turing_v1_chat_proto_rawDescData
 }
 
-var file_turing_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_turing_v1_chat_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_turing_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_turing_v1_chat_proto_goTypes = []any{
-	(*SendMessageRequest)(nil),          // 0: turing.v1.SendMessageRequest
-	(*PrepareRemoteEgressRequest)(nil),  // 1: turing.v1.PrepareRemoteEgressRequest
-	(*PrepareRemoteEgressResponse)(nil), // 2: turing.v1.PrepareRemoteEgressResponse
-	(*RunQueued)(nil),                   // 3: turing.v1.RunQueued
-	(*RunStarted)(nil),                  // 4: turing.v1.RunStarted
-	(*MessageStarted)(nil),              // 5: turing.v1.MessageStarted
-	(*TokenDelta)(nil),                  // 6: turing.v1.TokenDelta
-	(*ToolEvent)(nil),                   // 7: turing.v1.ToolEvent
-	(*ApprovalEvent)(nil),               // 8: turing.v1.ApprovalEvent
-	(*MessageCompleted)(nil),            // 9: turing.v1.MessageCompleted
-	(*RunCompleted)(nil),                // 10: turing.v1.RunCompleted
-	(*RunFailed)(nil),                   // 11: turing.v1.RunFailed
-	(*RunCancelled)(nil),                // 12: turing.v1.RunCancelled
-	(*RunStateChanged)(nil),             // 13: turing.v1.RunStateChanged
-	(*ChatStreamEvent)(nil),             // 14: turing.v1.ChatStreamEvent
-	(AgentId)(0),                        // 15: turing.v1.AgentId
-	(ModelProvider)(0),                  // 16: turing.v1.ModelProvider
-	(*RemoteEgressConsent)(nil),         // 17: turing.v1.RemoteEgressConsent
-	(*RemoteEgressDisclosure)(nil),      // 18: turing.v1.RemoteEgressDisclosure
-	(*RunState)(nil),                    // 19: turing.v1.RunState
-	(MessageRole)(0),                    // 20: turing.v1.MessageRole
-	(*structpb.Struct)(nil),             // 21: google.protobuf.Struct
-	(*TuringEvent)(nil),                 // 22: turing.v1.TuringEvent
+	(CancelRunResult)(0),                // 0: turing.v1.CancelRunResult
+	(CancellationProgress)(0),           // 1: turing.v1.CancellationProgress
+	(*SendMessageRequest)(nil),          // 2: turing.v1.SendMessageRequest
+	(*PrepareRemoteEgressRequest)(nil),  // 3: turing.v1.PrepareRemoteEgressRequest
+	(*PrepareRemoteEgressResponse)(nil), // 4: turing.v1.PrepareRemoteEgressResponse
+	(*RunQueued)(nil),                   // 5: turing.v1.RunQueued
+	(*RunStarted)(nil),                  // 6: turing.v1.RunStarted
+	(*MessageStarted)(nil),              // 7: turing.v1.MessageStarted
+	(*TokenDelta)(nil),                  // 8: turing.v1.TokenDelta
+	(*ToolEvent)(nil),                   // 9: turing.v1.ToolEvent
+	(*ApprovalEvent)(nil),               // 10: turing.v1.ApprovalEvent
+	(*MessageCompleted)(nil),            // 11: turing.v1.MessageCompleted
+	(*RunCompleted)(nil),                // 12: turing.v1.RunCompleted
+	(*RunFailed)(nil),                   // 13: turing.v1.RunFailed
+	(*RunCancelled)(nil),                // 14: turing.v1.RunCancelled
+	(*CancelRunRequest)(nil),            // 15: turing.v1.CancelRunRequest
+	(*CancelRunResponse)(nil),           // 16: turing.v1.CancelRunResponse
+	(*GetRunCancellationRequest)(nil),   // 17: turing.v1.GetRunCancellationRequest
+	(*GetRunCancellationResponse)(nil),  // 18: turing.v1.GetRunCancellationResponse
+	(*RunStateChanged)(nil),             // 19: turing.v1.RunStateChanged
+	(*ChatStreamEvent)(nil),             // 20: turing.v1.ChatStreamEvent
+	(AgentId)(0),                        // 21: turing.v1.AgentId
+	(ModelProvider)(0),                  // 22: turing.v1.ModelProvider
+	(*RemoteEgressConsent)(nil),         // 23: turing.v1.RemoteEgressConsent
+	(*RemoteEgressDisclosure)(nil),      // 24: turing.v1.RemoteEgressDisclosure
+	(*RunState)(nil),                    // 25: turing.v1.RunState
+	(MessageRole)(0),                    // 26: turing.v1.MessageRole
+	(*structpb.Struct)(nil),             // 27: google.protobuf.Struct
+	(*TuringEvent)(nil),                 // 28: turing.v1.TuringEvent
 }
 var file_turing_v1_chat_proto_depIdxs = []int32{
-	15, // 0: turing.v1.SendMessageRequest.agent_id:type_name -> turing.v1.AgentId
-	16, // 1: turing.v1.SendMessageRequest.model_provider:type_name -> turing.v1.ModelProvider
-	17, // 2: turing.v1.SendMessageRequest.remote_egress_consent:type_name -> turing.v1.RemoteEgressConsent
-	15, // 3: turing.v1.PrepareRemoteEgressRequest.agent_id:type_name -> turing.v1.AgentId
-	16, // 4: turing.v1.PrepareRemoteEgressRequest.model_provider:type_name -> turing.v1.ModelProvider
-	18, // 5: turing.v1.PrepareRemoteEgressResponse.disclosure:type_name -> turing.v1.RemoteEgressDisclosure
-	19, // 6: turing.v1.RunQueued.run_state:type_name -> turing.v1.RunState
-	19, // 7: turing.v1.RunStarted.run_state:type_name -> turing.v1.RunState
-	20, // 8: turing.v1.MessageStarted.role:type_name -> turing.v1.MessageRole
-	21, // 9: turing.v1.ToolEvent.payload:type_name -> google.protobuf.Struct
-	19, // 10: turing.v1.ApprovalEvent.run_state:type_name -> turing.v1.RunState
-	19, // 11: turing.v1.RunCompleted.run_state:type_name -> turing.v1.RunState
-	19, // 12: turing.v1.RunFailed.run_state:type_name -> turing.v1.RunState
-	19, // 13: turing.v1.RunCancelled.run_state:type_name -> turing.v1.RunState
-	19, // 14: turing.v1.RunStateChanged.run_state:type_name -> turing.v1.RunState
-	3,  // 15: turing.v1.ChatStreamEvent.run_queued:type_name -> turing.v1.RunQueued
-	4,  // 16: turing.v1.ChatStreamEvent.run_started:type_name -> turing.v1.RunStarted
-	5,  // 17: turing.v1.ChatStreamEvent.message_started:type_name -> turing.v1.MessageStarted
-	6,  // 18: turing.v1.ChatStreamEvent.token_delta:type_name -> turing.v1.TokenDelta
-	7,  // 19: turing.v1.ChatStreamEvent.tool_call_started:type_name -> turing.v1.ToolEvent
-	7,  // 20: turing.v1.ChatStreamEvent.tool_call_completed:type_name -> turing.v1.ToolEvent
-	7,  // 21: turing.v1.ChatStreamEvent.tool_call_failed:type_name -> turing.v1.ToolEvent
-	8,  // 22: turing.v1.ChatStreamEvent.approval_requested:type_name -> turing.v1.ApprovalEvent
-	8,  // 23: turing.v1.ChatStreamEvent.approval_approved:type_name -> turing.v1.ApprovalEvent
-	8,  // 24: turing.v1.ChatStreamEvent.approval_denied:type_name -> turing.v1.ApprovalEvent
-	8,  // 25: turing.v1.ChatStreamEvent.approval_expired:type_name -> turing.v1.ApprovalEvent
-	8,  // 26: turing.v1.ChatStreamEvent.approval_consumed:type_name -> turing.v1.ApprovalEvent
-	9,  // 27: turing.v1.ChatStreamEvent.message_completed:type_name -> turing.v1.MessageCompleted
-	10, // 28: turing.v1.ChatStreamEvent.run_completed:type_name -> turing.v1.RunCompleted
-	11, // 29: turing.v1.ChatStreamEvent.run_failed:type_name -> turing.v1.RunFailed
-	12, // 30: turing.v1.ChatStreamEvent.run_cancelled:type_name -> turing.v1.RunCancelled
-	22, // 31: turing.v1.ChatStreamEvent.persisted_event:type_name -> turing.v1.TuringEvent
-	13, // 32: turing.v1.ChatStreamEvent.run_state_changed:type_name -> turing.v1.RunStateChanged
-	1,  // 33: turing.v1.ChatService.PrepareRemoteEgress:input_type -> turing.v1.PrepareRemoteEgressRequest
-	0,  // 34: turing.v1.ChatService.SendMessage:input_type -> turing.v1.SendMessageRequest
-	2,  // 35: turing.v1.ChatService.PrepareRemoteEgress:output_type -> turing.v1.PrepareRemoteEgressResponse
-	14, // 36: turing.v1.ChatService.SendMessage:output_type -> turing.v1.ChatStreamEvent
-	35, // [35:37] is the sub-list for method output_type
-	33, // [33:35] is the sub-list for method input_type
-	33, // [33:33] is the sub-list for extension type_name
-	33, // [33:33] is the sub-list for extension extendee
-	0,  // [0:33] is the sub-list for field type_name
+	21, // 0: turing.v1.SendMessageRequest.agent_id:type_name -> turing.v1.AgentId
+	22, // 1: turing.v1.SendMessageRequest.model_provider:type_name -> turing.v1.ModelProvider
+	23, // 2: turing.v1.SendMessageRequest.remote_egress_consent:type_name -> turing.v1.RemoteEgressConsent
+	21, // 3: turing.v1.PrepareRemoteEgressRequest.agent_id:type_name -> turing.v1.AgentId
+	22, // 4: turing.v1.PrepareRemoteEgressRequest.model_provider:type_name -> turing.v1.ModelProvider
+	24, // 5: turing.v1.PrepareRemoteEgressResponse.disclosure:type_name -> turing.v1.RemoteEgressDisclosure
+	25, // 6: turing.v1.RunQueued.run_state:type_name -> turing.v1.RunState
+	25, // 7: turing.v1.RunStarted.run_state:type_name -> turing.v1.RunState
+	26, // 8: turing.v1.MessageStarted.role:type_name -> turing.v1.MessageRole
+	27, // 9: turing.v1.ToolEvent.payload:type_name -> google.protobuf.Struct
+	25, // 10: turing.v1.ApprovalEvent.run_state:type_name -> turing.v1.RunState
+	25, // 11: turing.v1.RunCompleted.run_state:type_name -> turing.v1.RunState
+	25, // 12: turing.v1.RunFailed.run_state:type_name -> turing.v1.RunState
+	25, // 13: turing.v1.RunCancelled.run_state:type_name -> turing.v1.RunState
+	0,  // 14: turing.v1.CancelRunResponse.result:type_name -> turing.v1.CancelRunResult
+	25, // 15: turing.v1.CancelRunResponse.run_state:type_name -> turing.v1.RunState
+	1,  // 16: turing.v1.CancelRunResponse.progress:type_name -> turing.v1.CancellationProgress
+	25, // 17: turing.v1.GetRunCancellationResponse.run_state:type_name -> turing.v1.RunState
+	1,  // 18: turing.v1.GetRunCancellationResponse.progress:type_name -> turing.v1.CancellationProgress
+	25, // 19: turing.v1.RunStateChanged.run_state:type_name -> turing.v1.RunState
+	5,  // 20: turing.v1.ChatStreamEvent.run_queued:type_name -> turing.v1.RunQueued
+	6,  // 21: turing.v1.ChatStreamEvent.run_started:type_name -> turing.v1.RunStarted
+	7,  // 22: turing.v1.ChatStreamEvent.message_started:type_name -> turing.v1.MessageStarted
+	8,  // 23: turing.v1.ChatStreamEvent.token_delta:type_name -> turing.v1.TokenDelta
+	9,  // 24: turing.v1.ChatStreamEvent.tool_call_started:type_name -> turing.v1.ToolEvent
+	9,  // 25: turing.v1.ChatStreamEvent.tool_call_completed:type_name -> turing.v1.ToolEvent
+	9,  // 26: turing.v1.ChatStreamEvent.tool_call_failed:type_name -> turing.v1.ToolEvent
+	10, // 27: turing.v1.ChatStreamEvent.approval_requested:type_name -> turing.v1.ApprovalEvent
+	10, // 28: turing.v1.ChatStreamEvent.approval_approved:type_name -> turing.v1.ApprovalEvent
+	10, // 29: turing.v1.ChatStreamEvent.approval_denied:type_name -> turing.v1.ApprovalEvent
+	10, // 30: turing.v1.ChatStreamEvent.approval_expired:type_name -> turing.v1.ApprovalEvent
+	10, // 31: turing.v1.ChatStreamEvent.approval_consumed:type_name -> turing.v1.ApprovalEvent
+	11, // 32: turing.v1.ChatStreamEvent.message_completed:type_name -> turing.v1.MessageCompleted
+	12, // 33: turing.v1.ChatStreamEvent.run_completed:type_name -> turing.v1.RunCompleted
+	13, // 34: turing.v1.ChatStreamEvent.run_failed:type_name -> turing.v1.RunFailed
+	14, // 35: turing.v1.ChatStreamEvent.run_cancelled:type_name -> turing.v1.RunCancelled
+	28, // 36: turing.v1.ChatStreamEvent.persisted_event:type_name -> turing.v1.TuringEvent
+	19, // 37: turing.v1.ChatStreamEvent.run_state_changed:type_name -> turing.v1.RunStateChanged
+	15, // 38: turing.v1.ChatService.CancelRun:input_type -> turing.v1.CancelRunRequest
+	17, // 39: turing.v1.ChatService.GetRunCancellation:input_type -> turing.v1.GetRunCancellationRequest
+	3,  // 40: turing.v1.ChatService.PrepareRemoteEgress:input_type -> turing.v1.PrepareRemoteEgressRequest
+	2,  // 41: turing.v1.ChatService.SendMessage:input_type -> turing.v1.SendMessageRequest
+	16, // 42: turing.v1.ChatService.CancelRun:output_type -> turing.v1.CancelRunResponse
+	18, // 43: turing.v1.ChatService.GetRunCancellation:output_type -> turing.v1.GetRunCancellationResponse
+	4,  // 44: turing.v1.ChatService.PrepareRemoteEgress:output_type -> turing.v1.PrepareRemoteEgressResponse
+	20, // 45: turing.v1.ChatService.SendMessage:output_type -> turing.v1.ChatStreamEvent
+	42, // [42:46] is the sub-list for method output_type
+	38, // [38:42] is the sub-list for method input_type
+	38, // [38:38] is the sub-list for extension type_name
+	38, // [38:38] is the sub-list for extension extendee
+	0,  // [0:38] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_chat_proto_init() }
@@ -1577,7 +1960,7 @@ func file_turing_v1_chat_proto_init() {
 	}
 	file_turing_v1_common_proto_init()
 	file_turing_v1_events_proto_init()
-	file_turing_v1_chat_proto_msgTypes[14].OneofWrappers = []any{
+	file_turing_v1_chat_proto_msgTypes[18].OneofWrappers = []any{
 		(*ChatStreamEvent_RunQueued)(nil),
 		(*ChatStreamEvent_RunStarted)(nil),
 		(*ChatStreamEvent_MessageStarted)(nil),
@@ -1602,13 +1985,14 @@ func file_turing_v1_chat_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_chat_proto_rawDesc), len(file_turing_v1_chat_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   15,
+			NumEnums:      2,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_turing_v1_chat_proto_goTypes,
 		DependencyIndexes: file_turing_v1_chat_proto_depIdxs,
+		EnumInfos:         file_turing_v1_chat_proto_enumTypes,
 		MessageInfos:      file_turing_v1_chat_proto_msgTypes,
 	}.Build()
 	File_turing_v1_chat_proto = out.File

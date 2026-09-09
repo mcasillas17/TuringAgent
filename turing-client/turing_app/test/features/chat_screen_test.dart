@@ -18,6 +18,7 @@ import 'package:turing_flutter_app/models/approval.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/remote_egress.dart';
 import 'package:turing_flutter_app/models/run_lifecycle.dart';
+import 'package:turing_flutter_app/models/run_cancellation.dart';
 import 'package:turing_flutter_app/models/run_state.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
@@ -38,6 +39,232 @@ import '../support/no_skills_api.dart';
 import '../support/no_telemetry_api.dart';
 
 void main() {
+  testWidgets('Stop completion response crosses an unseen assignment', (
+    tester,
+  ) async {
+    final queued = _runState(lifecycle: RunLifecycle.queued, stateVersion: 1);
+    final events = StreamController<TuringEvent>(sync: true);
+    final gate = Completer<CancelRunReceipt>();
+    final api = _CancelApi()
+      ..activeState = queued
+      ..cancelGate = gate
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_asst', runId: 'run_1', runState: queued,
+          role: 'assistant', content: '', sequence: 1, createdAt: _fixedDate,
+        ),
+      ];
+    await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: ChatScreen(
+        sessionId: 'sess_1', apiClient: api,
+        eventSource: _FakeEventSource(events.stream),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Stop'));
+    gate.complete(CancelRunReceipt(
+      result: CancelRunResult.alreadyTerminal,
+      runState: _runState(
+        lifecycle: RunLifecycle.completed, stateVersion: 3,
+        outcomeReason: RunOutcomeReason.completedNoContent,
+      ),
+      progress: CancellationProgress.notCancelled,
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('Completed'), findsOneWidget);
+    expect(find.text('The run had already ended.'), findsOneWidget);
+    expect(find.text('Cancellation not yet confirmed.'), findsNothing);
+    expect(find.text('Stop'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('pending Stop survives a tool-separated assistant bubble', (
+    tester,
+  ) async {
+    final events = StreamController<TuringEvent>(sync: true);
+    final gate = Completer<CancelRunReceipt>();
+    final api = _CancelApi()
+      ..cancelGate = gate
+      ..initialMessages = [
+        Message(
+          messageId: 'msg_asst', runId: 'run_1',
+          runState: _runState(stateVersion: 2),
+          role: 'assistant', content: '', sequence: 1, createdAt: _fixedDate,
+        ),
+      ];
+    await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: ChatScreen(
+        sessionId: 'sess_1', apiClient: api,
+        eventSource: _FakeEventSource(events.stream),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Stop'));
+    await tester.pump();
+    events.add(_event(
+      type: 'tool.call.started', sequence: 1,
+      payload: const {
+        'toolCallId': 'tool_1', 'serverName': 'system', 'toolName': 'system.time',
+      },
+    ));
+    events.add(_event(
+      type: 'message.delta', sequence: 2,
+      payload: const {'messageId': 'msg_asst', 'delta': 'After tool'},
+    ));
+    await tester.pump();
+    await tester.pump();
+    final stop = tester.widget<TextButton>(
+      find.byKey(const ValueKey('stop-run_1')),
+    );
+    expect(stop.onPressed, isNull);
+    expect(api.cancelCalls, 1);
+    expect(find.text('Cancellation not yet confirmed.'), findsOneWidget);
+    gate.complete(CancelRunReceipt(
+      result: CancelRunResult.accepted,
+      runState: _runState(
+        lifecycle: RunLifecycle.cancelled,
+        outcomeReason: RunOutcomeReason.userCancelled,
+        stateVersion: 3,
+      ),
+      progress: CancellationProgress.stopping,
+    ));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byType(RunCancelledCard), findsOneWidget);
+    expect(find.text('Stop'), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets(
+    'Stop works while approval is pending without approving the tool',
+    (tester) async {
+      final waiting = _runState(
+        lifecycle: RunLifecycle.waitingApproval,
+        stateVersion: 3,
+      );
+      final events = StreamController<TuringEvent>(sync: true);
+      final api = _CancelApi()
+        ..activeState = waiting
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            runState: waiting,
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+          ),
+        ];
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: api,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      events.add(
+        _event(
+          type: 'approval.requested',
+          sequence: 1,
+          payload: const {'approvalId': 'appr_1', 'toolName': 'files.update'},
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(ApprovalCard), findsOneWidget);
+      await tester.tap(find.text('Stop'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ApprovalCard), findsNothing);
+      expect(find.byType(RunCancelledCard), findsOneWidget);
+      expect(api.approveApprovalCallCount, 0);
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
+  testWidgets(
+    'Stop remains bound to the run while text streams and rejects late output',
+    (tester) async {
+      final events = StreamController<TuringEvent>(sync: true);
+      final api = _CancelApi()
+        ..initialMessages = [
+          Message(
+            messageId: 'msg_asst',
+            runId: 'run_1',
+            runState: _runState(stateVersion: 2),
+            role: 'assistant',
+            content: '',
+            sequence: 1,
+            createdAt: _fixedDate,
+          ),
+        ];
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ChatScreen(
+            sessionId: 'sess_1',
+            apiClient: api,
+            eventSource: _FakeEventSource(events.stream),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Stop'), findsOneWidget);
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 1,
+          payload: const {'messageId': 'msg_asst', 'delta': 'Partial response'},
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Stop'), findsOneWidget);
+      await tester.tap(find.text('Stop'));
+      await tester.pumpAndSettle();
+      expect(api.cancelledSession, 'sess_1');
+      expect(api.cancelledRun, 'run_1');
+      expect(api.cancelKey, 'cancel:run_1');
+      expect(find.byType(RunCancelledCard), findsOneWidget);
+      expect(find.text('Stop'), findsNothing);
+      events.add(
+        _event(
+          type: 'message.delta',
+          sequence: 2,
+          payload: const {'messageId': 'msg_asst', 'delta': 'LATE OUTPUT'},
+        ),
+      );
+      events.add(
+        _event(
+          type: 'agent.run.completed',
+          sequence: 3,
+          payload: const {},
+          runState: _runState(
+            lifecycle: RunLifecycle.completed,
+            stateVersion: 4,
+            hasDisplayableContent: true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(RunCancelledCard), findsOneWidget);
+      expect(find.textContaining('LATE OUTPUT'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      unawaited(events.close());
+    },
+  );
+
   testWidgets('reconciled terminal run withdraws its reviewed approval', (
     tester,
   ) async {
@@ -11959,6 +12186,57 @@ RunState _runState({
     finishedAt: finishedAt,
     hasDisplayableContent: hasDisplayableContent,
   );
+}
+
+class _CancelApi extends _FakeApiClient {
+  RunState activeState = _runState(stateVersion: 2);
+  Completer<CancelRunReceipt>? cancelGate;
+  int cancelCalls = 0;
+  bool accepted = false;
+  String? cancelledRun;
+  String? cancelledSession;
+  String? cancelKey;
+
+  @override
+  Future<RunCancellationStatus> getRunCancellation({
+    required String sessionId,
+    required String runId,
+  }) async => RunCancellationStatus(
+    available: true,
+    runState: !accepted
+        ? activeState
+        : activeState.copyWith(
+            lifecycle: RunLifecycle.cancelled,
+            outcomeReason: RunOutcomeReason.userCancelled,
+            stateVersion: activeState.stateVersion + 1,
+          ),
+    progress: !accepted
+        ? CancellationProgress.notCancelled
+        : CancellationProgress.stopping,
+  );
+
+  @override
+  Future<CancelRunReceipt> cancelRun({
+    required String sessionId,
+    required String runId,
+    required String idempotencyKey,
+  }) async {
+    cancelledRun = runId;
+    cancelledSession = sessionId;
+    cancelKey = idempotencyKey;
+    cancelCalls++;
+    if (cancelGate case final gate?) return gate.future;
+    accepted = true;
+    return CancelRunReceipt(
+      result: CancelRunResult.accepted,
+      runState: activeState.copyWith(
+        lifecycle: RunLifecycle.cancelled,
+        outcomeReason: RunOutcomeReason.userCancelled,
+        stateVersion: activeState.stateVersion + 1,
+      ),
+      progress: CancellationProgress.stopping,
+    );
+  }
 }
 
 class _FakeApiClient extends TuringApi

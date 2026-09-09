@@ -503,6 +503,9 @@ class _MemoryService extends memorygrpc.MemoryServiceBase {
 /// unknown varint beside it says that is not what the server meant.
 class _UnknownTierChatService extends chatgrpc.ChatServiceBase {
   @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+
+  @override
   Future<chatpb.PrepareRemoteEgressResponse> prepareRemoteEgress(
     grpc.ServiceCall call,
     chatpb.PrepareRemoteEgressRequest request,
@@ -548,6 +551,9 @@ class _UnknownTierChatService extends chatgrpc.ChatServiceBase {
 }
 
 class _MemoryDisclosureChatService extends chatgrpc.ChatServiceBase {
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+
   @override
   Future<chatpb.PrepareRemoteEgressResponse> prepareRemoteEgress(
     grpc.ServiceCall call,

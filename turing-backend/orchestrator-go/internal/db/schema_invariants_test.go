@@ -62,6 +62,7 @@ var currentSchemaTablePolicies = []schemaTablePolicy{
 	},
 	{table: "messages", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
 	{table: "agent_runs", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
+	{table: "run_cancellation_receipts", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{table: "agent_run_steps", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{table: "jobs", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{table: "events", kind: schemaTableCascadeOwned, sourceTable: "sessions"},

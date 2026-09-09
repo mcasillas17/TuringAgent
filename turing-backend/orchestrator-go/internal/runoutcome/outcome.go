@@ -88,6 +88,8 @@ const (
 	// CodeClientCancelled is the only cancellation code the current transport
 	// path can justify.
 	CodeClientCancelled = "client_cancelled"
+	// CodeUserCancelled identifies an explicit user cancellation.
+	CodeUserCancelled = string(ReasonUserCancelled)
 	// CodeQueueWaitExpired is TUR-010's overall queue-age bound: the run spent
 	// longer in the queue, in total, than the configured maximum, whatever the
 	// reason nobody picked it up.
@@ -234,13 +236,14 @@ func (c Cancellation) Reason() Reason {
 	return c.reason
 }
 
-// AbandonedCancellation is the only cancellation this product can honestly
-// report. ChatService uses one stream-cancellation signal for a deliberate stop
-// and for an unkeyed transport loss, and the client exposes no cancel
-// affordance, so nothing here may claim user intent. A user-cancelled
-// constructor may only be added alongside an explicit typed cancel-intent RPC.
+// AbandonedCancellation describes transport loss, never explicit user intent.
 func AbandonedCancellation() Cancellation {
 	return Cancellation{origin: OriginClientLifecycle, code: CodeClientCancelled, reason: ReasonAbandoned}
+}
+
+// UserCancellation is reserved for the explicit, authenticated cancel RPC.
+func UserCancellation() Cancellation {
+	return Cancellation{origin: OriginClientLifecycle, code: CodeUserCancelled, reason: ReasonUserCancelled}
 }
 
 // QueueTimeoutCancellation is the cancellation half of TUR-010's configurable

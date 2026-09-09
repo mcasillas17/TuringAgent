@@ -107,6 +107,7 @@ probe are not live end-to-end product proof; see
 | proto-codegen | shipped | CI checks deterministic, committed Go and Dart protobuf output. |
 | flutter-search | shipped | Exact-phrase shell search calls the backend RPC. Selecting a hit sets the conversation shown after search is dismissed; no date filter is provided. |
 | flutter-workspace | shipped | Chats, Skills, Memory, Integrations, MCPs, Automations, Agents and Telemetry have backend-connected surfaces; this is not full support for every advertised provider or protocol. |
+| explicit-cancel | shipped | CXL-001: authenticated, idempotent exact-run cancellation and Flutter Stop distinguish durable acceptance from execution reconciliation; completed effects are not rolled back. |
 | mcp-registry | shipped | Registration, import, enablement, token rotation and tool-policy management; not protocol conformance. |
 | mcp-lifecycle | pending | HTTP JSON-RPC tools/list and tools/call exist; initialization and capability negotiation remain CON-001. |
 | remote-model-routing | shipped | The conversation's destination bar selects a route through ExternalAgentService; the runtime calls its OpenAI-compatible model endpoint under per-run disclosure. |
@@ -598,6 +599,14 @@ gates are satisfied.
 
 ### 7. CXL-001 - Explicit cancel intent
 
+- **Implementation introduced by this revision:** Authenticated `CancelRun`
+  persists explicit user intent and a replayable result using the canonical
+  transition. `GetRunCancellation` and Flutter Stop/Check status distinguish
+  acceptance from worker shutdown or recovery. Matching-attempt execution
+  fences survive lost delivery and restart; late reports cannot revive the run.
+  [Durable run outcomes](architecture/run-outcomes.md#explicit-cancellation)
+  defines retry, upgrade, and no-rollback semantics. This records the
+  implementation in this revision, not a subsequent merge to `main`.
 - **Outcome:** A user can durably request cancellation instead of relying on a
   dropped transport.
 - **Scope:** Public cancel RPC, idempotent request identity, run/version fencing,

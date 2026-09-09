@@ -37,6 +37,9 @@ type Run struct {
 	WorkerID             string
 	ExecutionAttemptID   string
 	ExecutionState       string
+	// ExecutionAttemptNumber comes from the job matching ExecutionAttemptID.
+	// Zero means the durable lineage is missing or ambiguous, not attempt one.
+	ExecutionAttemptNumber int
 	// StateVersion, OutcomeReason, and ContentSHA256 are the canonical durable
 	// state this run holds right now. They are read here rather than through a
 	// second query because every caller that has to decide whether a report is
@@ -153,7 +156,10 @@ func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
 				LIMIT 1
 			), ''),
 			r.execution_active, COALESCE(r.worker_id, ''), COALESCE(r.execution_attempt_id, ''), r.execution_state,
-			r.state_version, r.outcome_reason, r.assistant_content_sha256
+			r.state_version, r.outcome_reason, r.assistant_content_sha256,
+			(SELECT CASE WHEN COUNT(*) = 1 THEN MAX(j.attempt) ELSE 0 END
+				FROM jobs j
+				WHERE j.run_id = r.id AND j.assignment_attempt_id = r.execution_attempt_id)
 		FROM agent_runs r
 		LEFT JOIN messages m ON m.id = r.assistant_message_id
 		WHERE r.id = ?
@@ -173,6 +179,7 @@ func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
 		&run.StateVersion,
 		&run.OutcomeReason,
 		&run.ContentSHA256,
+		&run.ExecutionAttemptNumber,
 	)
 	return run, err
 }

@@ -11,10 +11,11 @@ import (
 )
 
 type AssignmentReconciliation struct {
-	Requeued bool
-	Cleared  bool
-	Fenced   bool
-	Events   []Event
+	Requeued     bool
+	Cleared      bool
+	Fenced       bool
+	AwaitingExit bool
+	Events       []Event
 }
 
 const defaultAssignmentMaxAttempts = 3
@@ -96,7 +97,7 @@ func (r *Repository) ReconcileAssignment(ctx context.Context, assignment Assignm
 }
 
 func (r *Repository) ReconcileAssignmentWithLimit(ctx context.Context, assignment Assignment, maxAttempts int) (AssignmentReconciliation, error) {
-	return r.reconcileAssignment(ctx, assignment, false, nil, maxAttempts)
+	return r.reconcileAssignment(ctx, assignment, false, nil, maxAttempts, false)
 }
 
 func (r *Repository) RecoverAssignment(ctx context.Context, assignment Assignment) (AssignmentReconciliation, error) {
@@ -104,7 +105,13 @@ func (r *Repository) RecoverAssignment(ctx context.Context, assignment Assignmen
 }
 
 func (r *Repository) RecoverAssignmentWithLimit(ctx context.Context, assignment Assignment, maxAttempts int) (AssignmentReconciliation, error) {
-	return r.reconcileAssignment(ctx, assignment, true, nil, maxAttempts)
+	return r.reconcileAssignment(ctx, assignment, true, nil, maxAttempts, false)
+}
+
+// ReconcileHeartbeatAssignment cannot treat a live worker heartbeat as proof
+// that an explicitly cancelled execution has stopped.
+func (r *Repository) ReconcileHeartbeatAssignment(ctx context.Context, assignment Assignment, maxAttempts int) (AssignmentReconciliation, error) {
+	return r.reconcileAssignment(ctx, assignment, true, nil, maxAttempts, true)
 }
 
 func (r *Repository) RecoverAssignmentAtCutoff(ctx context.Context, assignment Assignment, cutoff time.Time) (AssignmentReconciliation, error) {
@@ -113,10 +120,10 @@ func (r *Repository) RecoverAssignmentAtCutoff(ctx context.Context, assignment A
 
 func (r *Repository) RecoverAssignmentAtCutoffWithLimit(ctx context.Context, assignment Assignment, cutoff time.Time, maxAttempts int) (AssignmentReconciliation, error) {
 	cutoff = cutoff.UTC()
-	return r.reconcileAssignment(ctx, assignment, true, &cutoff, maxAttempts)
+	return r.reconcileAssignment(ctx, assignment, true, &cutoff, maxAttempts, false)
 }
 
-func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignment, staleRecovery bool, cutoff *time.Time, maxAttempts int) (AssignmentReconciliation, error) {
+func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignment, staleRecovery bool, cutoff *time.Time, maxAttempts int, liveWorker bool) (AssignmentReconciliation, error) {
 	if maxAttempts <= 0 {
 		maxAttempts = defaultAssignmentMaxAttempts
 	}
@@ -126,17 +133,17 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var runStatus, executionState, executionAttemptID, sessionID, traceID string
+	var runStatus, executionState, executionAttemptID, sessionID, traceID, outcomeReason string
 	var workerID sql.NullString
 	var leaseExpiresAtNanos sql.NullInt64
 	var active int
 	err = tx.QueryRowContext(ctx, `
-		SELECT status, execution_state, COALESCE(execution_attempt_id, ''), worker_id, execution_active, session_id, trace_id,
+		SELECT status, execution_state, COALESCE(execution_attempt_id, ''), worker_id, execution_active, session_id, trace_id, outcome_reason,
 			COALESCE(execution_lease_expires_at_ns, `+sqliteTimestampNanos("execution_lease_expires_at")+`)
 		FROM agent_runs
 		WHERE id = ?
 	`, assignment.RunID).Scan(
-		&runStatus, &executionState, &executionAttemptID, &workerID, &active, &sessionID, &traceID, &leaseExpiresAtNanos,
+		&runStatus, &executionState, &executionAttemptID, &workerID, &active, &sessionID, &traceID, &outcomeReason, &leaseExpiresAtNanos,
 	)
 	if err != nil {
 		return AssignmentReconciliation{}, err
@@ -146,6 +153,24 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 	}
 	if assignment.WorkerID != "" && (!workerID.Valid || workerID.String != assignment.WorkerID) {
 		return AssignmentReconciliation{Fenced: true}, tx.Commit()
+	}
+	if liveWorker && active == 1 && runStatus == lifecycleCancelled && outcomeReason == string(runoutcome.ReasonUserCancelled) {
+		return AssignmentReconciliation{AwaitingExit: true}, tx.Commit()
+	}
+	// Restart or a lost stream does not prove a delivered stop has exited.
+	// Preserve the existing lease fence until the recovery cutoff reaches it.
+	if staleRecovery && active == 1 && runStatus == lifecycleCancelled &&
+		outcomeReason == string(runoutcome.ReasonUserCancelled) && executionState != "pending_send" {
+		recoveryTime := time.Now().UTC()
+		if cutoff != nil {
+			recoveryTime = *cutoff
+		}
+		if leaseExpiresAtNanos.Valid && leaseExpiresAtNanos.Int64 > recoveryTime.UnixNano() {
+			if err := fenceExecutionTx(ctx, tx, assignment.RunID); err != nil {
+				return AssignmentReconciliation{}, err
+			}
+			return AssignmentReconciliation{AwaitingExit: true}, tx.Commit()
+		}
 	}
 	if cutoff != nil &&
 		active == 1 &&

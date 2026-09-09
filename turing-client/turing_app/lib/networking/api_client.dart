@@ -10,6 +10,7 @@ import '../models/memory.dart';
 import '../models/message.dart';
 import '../models/mcp_server.dart';
 import '../models/remote_egress.dart';
+import '../models/run_cancellation.dart';
 import '../models/search_hit.dart';
 import '../models/session.dart';
 import '../models/session_page.dart';
@@ -77,6 +78,27 @@ abstract class TuringApi implements RemoteEgressApi {
     String modelProvider = 'ollama',
     String? idempotencyKey,
   });
+
+  Future<CancelRunReceipt> cancelRun({
+    required String sessionId,
+    required String runId,
+    required String idempotencyKey,
+  }) async {
+    throw const TuringApiException(
+      code: 'run_cancel_unsupported',
+      message: 'This client cannot cancel runs',
+    );
+  }
+
+  Future<RunCancellationStatus> getRunCancellation({
+    required String sessionId,
+    required String runId,
+  }) async {
+    throw const TuringApiException(
+      code: 'run_cancel_unsupported',
+      message: 'This client cannot read cancellation status',
+    );
+  }
 
   @override
   Future<RemoteEgressDisclosure?> prepareRemoteEgress({
