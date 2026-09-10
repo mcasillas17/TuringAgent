@@ -5,12 +5,14 @@ registered MCP servers and their integration with the agent runtime and
 orchestrator.
 
 **Protocol scope:** Registration, import, enablement, token rotation and tool
-policies are implemented. The runtime client, registry adapter and bundled
-servers currently use an HTTP JSON-RPC subset for `tools/list` and
-`tools/call`, without MCP initialization or capability negotiation. Do not
-read "MCP server" here as full protocol conformance or guaranteed
-interoperability with a stock MCP host. CON-001 in the
-[canonical roadmap](NORTH_STAR.md#current-status) owns the bounded lifecycle work.
+policies are implemented, and so is a bounded MCP lifecycle: Turing speaks MCP
+revision `2025-11-25` over the Streamable HTTP transport in both directions.
+See [MCP lifecycle conformance](#mcp-lifecycle-conformance) for the supported
+surface and, just as importantly, for what is deliberately not implemented.
+"MCP server" here means a peer Turing initializes and negotiates with on that
+bounded surface — not a host that offers resources, prompts, sampling,
+elicitation, OAuth or stdio. The
+[canonical roadmap](NORTH_STAR.md#current-status) owns the status claim.
 
 ## Deployment boundary
 
@@ -794,7 +796,8 @@ strictly scoped session namespace request. Public audit records opaque artifact
 identity, policy, state, and error class, never path or content.
 
 Bundled discovery follows paginated `tools/list` responses in order, with limits of
-100 pages, 10,000 tools, and 4 MiB of aggregate encoded descriptors. It
+100 pages, 10,000 tools, 4 MiB of aggregate encoded descriptors, and 4 KiB per
+`nextCursor` — the one value discovery keeps and sends back to the peer. It
 validates names, descriptions, object-rooted input schemas, and duplicate
 names across servers. Catalog entries with policy `disabled` are filtered out
 of both model definitions and runtime lookup. Policies `safe` and
@@ -823,7 +826,8 @@ advertise nonblank string constraints.
 - Result:
   `{ "items": [{ "name": string, "isDir": bool }], "truncated": bool }`.
 - Scanning is bounded to 4,000 directory entries. Internal staging names are
-  omitted. Encoded collection data is capped at 384 KiB. `truncated` is true
+  omitted. Encoded collection data is capped at 320 KiB (see
+  [the budget derivation](#the-result-is-sent-twice-and-the-budgets-account-for-it)). `truncated` is true
   when the requested result limit, scan budget, or result budget prevents an
   exhaustive listing.
 
@@ -841,7 +845,8 @@ advertise nonblank string constraints.
     `filesScanned`, `skippedFiles`, and `bytesScanned`.
 - Search budgets are 2,000 visited entries, 1,000 opened files, 8 MiB of
   aggregate reads, and 512 KiB per file. At most 20 error details are returned.
-  Matches and error details share a 384 KiB encoded collection budget.
+  Matches and error details share a 320 KiB encoded collection budget (see
+  [the budget derivation](#the-result-is-sent-twice-and-the-budgets-account-for-it)).
   Symlinks and non-UTF-8 files are skipped. Snippets contain the first match
   with up to 40 bytes of context on each side, adjusted to valid UTF-8
   boundaries.
@@ -1458,6 +1463,307 @@ A concise mapping from rejection to threat:
 - **Disabled mutating tools (`delete`, `move`).** Returned as `tool disabled`
   by the dispatcher; cannot be enabled without a code change.
 
+## MCP lifecycle conformance
+
+Turing implements MCP revision **`2025-11-25`** over the **Streamable HTTP**
+transport. That is the latest *handshake-based* revision. The specification's
+own versioning page marks `2026-07-28` current, but `2026-07-28` removes
+`initialize`/`initialized` in favour of a stateless per-request core and calls
+`2025-11-25` and earlier "legacy"; the same page specifies how the two eras
+interoperate. A dual-era client probes for the modern era first, receives a
+non-modern refusal, and falls back to the handshake, so pinning one revision
+does not cut Turing off from current clients. Exactly one revision is
+advertised, because exactly one has been exercised.
+
+### What the bundled servers implement
+
+`mcp-system` and `mcp-files` each expose one MCP endpoint at `POST /mcp`,
+behind their existing bearer token.
+
+| Element | Behaviour |
+|---|---|
+| `initialize` | Echoes a supported revision, or answers with the one revision the server does speak. Advertises `{"tools":{}}` and a `serverInfo`, and nothing else. Malformed params are `-32602`. |
+| `notifications/initialized` | Accepted; answered `202 Accepted` with no body. |
+| `ping` | Answers an empty result. |
+| `tools/list` | Unchanged, with its existing bounds. Both bundled servers answer in a single page and emit no `nextCursor`, so a non-empty `cursor` is refused with `-32602` rather than silently ignored. Read-only tools now carry `annotations.readOnlyHint`. (Client-side cursor pagination is still exercised in full against third-party servers, which do page.) |
+| `tools/call` | Unchanged, including the approval and provenance capabilities under `_meta`. `_meta` is allowlisted fail-closed on both bundled servers: mcp-files accepts `approvalToken`, `provenanceToken` and `progressToken`; mcp-system accepts `approvalToken` and `progressToken` — a user may raise a system tool to approval_required, and the runtime forwards the minted token to whichever server the tool routes through, so refusing it would break an approved call; it verifies nothing there, because the orchestrator's policy decision and consumption are the gate. `provenanceToken` is refused by mcp-system, which writes nothing into the sandbox and is issued none, and anything else is `-32602` on both — a capability sent to a server that does not expect it is refused rather than silently ignored. `progressToken` is accepted and ignored — progress notifications are not implemented. The result is a conforming `CallToolResult`: the tool's own map travels in `structuredContent`, with the same data serialized into a `content` text block beside it, so a stock client can read the answer. On the
+client side the unwrap applies only when `structuredContent` is a **non-empty**
+object: a peer whose tool declares an output schema may send an empty one beside
+a populated `content` block, and replacing the result with `{}` would erase an
+answer it actually gave. **Deviation:** a tool *execution* failure is reported as a JSON-RPC error (`-32000`, or `-32602` for bad arguments) rather than as an `isError: true` result. The protocol-versus-execution distinction is preserved in the codes, but a stock client sees both as protocol errors. |
+| `notifications/cancelled` | Accepted; answered `202`. See below. |
+| Any request with no JSON-RPC id, other than the two lifecycle notifications | Dropped: `202 Accepted`, no body, no work performed. A notification-shaped `tools/call` would otherwise run the tool, spend its one-time approval token, and have no way to return either the result or the failure — and it could not be cancelled, having no id to name. |
+| A `notifications/*` method sent *with* an id | `-32601`. Those methods have no request form. |
+| Any other method | `-32601 method not found`. Unsupported protocol features never silently succeed. |
+| `MCP-Protocol-Version` header | Present and unsupported: `400 Bad Request` naming the supported revision. Absent: accepted. |
+| `Accept` header | Present and naming neither `application/json` nor `text/event-stream` nor `*/*`: `400 Bad Request`. Absent, `*/*`, or naming either type: accepted, and the comparison folds case because media types are case-insensitive. The transport obliges a client to list **both** types; these servers deliberately enforce less, refusing only a client that names media types they cannot answer with at all — tightening it would break callers that work today for no protocol benefit. All three header rules run **after** authentication, so an unauthenticated caller sees `401` rather than the transport refusal. |
+| `Origin` header | Present at all: `403 Forbidden`. These endpoints are reached only from inside the private Docker network, never from a browser. |
+| `GET` / `DELETE` on `/mcp` | `405 Method Not Allowed`. Both are optional in the transport. |
+| `Mcp-Session-Id` | Never issued. |
+
+**The bundled servers are sessionless, deliberately.** The transport makes
+sessions a MAY, and keeping none means there is no session cap to tune, no
+lifetime to expire, no session to hijack, and nothing for a restart to lose: a
+client reconnects, re-initializes, and carries on. It also means those servers
+cannot enforce that `initialize` came first, and they do not pretend to —
+`tools/list`, `tools/call` and `ping` are answered on their own. That is safe
+because **initialization confers no authority**: the bearer token, the
+argument-bound approval token and the run-scoped provenance capability are the
+gates, and none of them is reachable through the handshake.
+
+**Upgrade compatibility.** An absent `MCP-Protocol-Version` header is accepted
+rather than refused, so a caller that predates this change keeps working and no
+coordinated upgrade of the bundled pair is required. Nothing is downgraded in
+the other direction: an unsupported revision — in the header, or negotiated in
+an `initialize` result — is refused outright rather than served under assumed
+semantics.
+
+### What the two client paths implement
+
+Both of Turing's MCP clients — the agent runtime's client for the bundled
+servers, and the orchestrator's registry client for configured third-party
+endpoints — share one implementation of the wire details (`turing-backend/mcpwire`)
+and behave identically:
+
+- They `initialize` and send `notifications/initialized` before any
+  operation-phase call, advertising an **empty** client capabilities object,
+  because Turing implements no roots, sampling or elicitation.
+- The handshake never carries `_meta`. Initialization and discovery consume no
+  approval, execute no tool, register no permission and authorize no egress.
+- Every POST sends `Accept: application/json, text/event-stream`, and every
+  later request announces the negotiated revision in `MCP-Protocol-Version`.
+  The transport puts that obligation on the client; a peer may refuse a POST
+  that omits it, and what Turing's own bundled servers refuse is described in
+  the table above.
+- A response is read whether the peer answers with a single JSON object or by
+  opening an event stream. Decoding stops at the first JSON-RPC response, so a
+  peer that never terminates its stream cannot hold a call open past its own
+  answer.
+- A server-assigned `Mcp-Session-Id` is captured and echoed, after being
+  checked against what the transport permits: at most 512 bytes and visible
+  ASCII only. It is the one peer-controlled value the clients keep and re-send,
+  and `http.Transport` would accept a header of megabytes, so an id outside
+  those bounds is refused and the handshake fails naming it rather than
+  degrading into unsessioned requests a stateful peer answers with an
+  unexplained `400`. A session named by a refused id is deliberately left to the
+  peer's own timeout rather than released, because the teardown request would
+  have to echo the very value the bound refuses to keep. A `404` for a
+  request carrying one means the peer terminated that session: the client
+  re-initializes and retries **only** an idempotent method (`tools/list`,
+  `ping`). A `tools/call` is never automatically re-dispatched, because a call
+  whose delivery is ambiguous may already have executed and committed.
+- The registry client **terminates a session it opened**, with the transport's
+  `DELETE`, once the discovery or dispatch that opened it is finished — including
+  one the peer named on a response that then turned out to be unusable, such as a
+  refused status or a body that cannot be read. The peer opened the session in
+  those cases too, and the header is the only evidence of it. That
+  matters because this client is deliberately built fresh per operation: without
+  it, every third-party discovery and every third-party `tools/call` would
+  abandon a session on the peer, reclaimable only by that peer's own timeout, so
+  Turing would consume a third party's resources at its own dispatch rate. The
+  delete is best effort on a detached deadline — the caller's work is already
+  done, so a peer that answers `405`, refuses, or has already dropped the
+  session changes nothing — and a sessionless peer, including both bundled
+  servers, is never sent one. When a dispatch was cancelled, the delete waits
+  for the `notifications/cancelled` that names the same session: both are
+  detached to keep a slow peer off the credential lock, and a delete that
+  overtook the cancellation would terminate the session it refers to, so the
+  peer would answer `404` and keep working on a call nobody is waiting for.
+- A peer whose `initialize` result declares no `tools` capability is refused
+  before any `tools/list` or `tools/call`. Driving them at a server that has
+  just said it serves none would be Turing violating the handshake it completed,
+  and the resulting peer error would name nothing useful; the refusal names the
+  reason, and for a registered server it becomes that server's liveness status.
+  Presence is what counts — a peer that declares `tools` with no sub-options has
+  declared them.
+- A negotiated revision Turing does not implement is a clear, non-retryable
+  failure naming the revision Turing speaks; for a registered server it is
+  recorded as that server's liveness status, with the bearer token redacted the
+  same way every other registry error is.
+
+The orchestrator builds a **fresh client per discovery and per dispatch**. That
+costs one handshake round trip per third-party call and buys three properties
+worth more: a rotated credential, a changed endpoint or a disabled server can
+never be served out of connection state captured before the change; no session
+or authorization state is shared between two distinct servers; and there is no
+cache, so there is no invalidation to get wrong.
+
+### The result is sent twice, and the budgets account for it
+
+A conforming `CallToolResult` carries the same payload in two places: the tool's
+map in `structuredContent`, and the same data serialized into a `content` text
+block. The serialized copy is escaped a second time, so every `\"` in the first
+copy becomes `\\\"` in the second. That is not free, and the response cap is
+enforced by discarding — past `maxMCPResponseBytes` (1 MiB) `writeJSONRPCStatus`
+throws the result away and answers `-32603`, so an overrun is a failed call, not
+a truncated one.
+
+Each bundled tool's own budget is therefore set to survive the duplication, and
+each is pinned by a test that builds the worst case and measures the real
+envelope:
+
+| Budget | Bound | Worst-case envelope | Guard |
+| --- | --- | --- | --- |
+| `files.read` content (`MaxReadBytes`, 64 KiB) plus a 4 KiB path | raw bytes | 905,282 (86% of the cap) | `TestAdvertisedReadLimitFitsTransportAndAggregateBudgets` |
+| `files.list` / `files.search` results (`MaxCollectionResultJSONBytes`, 320 KiB) | already-escaped bytes | 976,202 (93%) | `TestWorstCaseCollectionResultFitsTheTransportBudget` |
+| `system.echo` (`MaxEchoCharacters`, 64 Ki characters) | characters | 852,104 (81%) | `TestEchoCharacterBoundaryFitsTransportAndAggregateBudgets` |
+
+The collection budget is the one the transport actually constrains. It counts
+bytes that are *already escaped*, so re-escaping can nearly double them, and a
+quote-dense result costs close to three times its reserved size on the wire
+rather than the roughly 2.2x a raw-byte read costs. The guard's fixture is
+deliberately the densest result `files.search` can emit rather than a plausible
+one: `query` carries no length bound and `firstSnippet` embeds the whole query,
+so a ~1 KiB all-quote query produces snippets that are almost pure
+escape-doubling material and reach 2.98x. A shorter snippet dilutes the density
+with structural characters and would let the guard pass for a budget the real
+worst case pushes past the cap. It was lowered from 384 KiB
+to 320 KiB for exactly that reason: three times 384 KiB overran the cap, which
+would have turned a previously successful `files.search` into a discarded
+result. A search that reaches the lower bound truncates and says so, which is
+the behaviour it already had when it ran out of budget.
+
+The run-aggregate budgets deliberately continue to measure the bare result:
+**both** client paths unwrap `structuredContent` before the result reaches a
+run, so what accumulates across a run's tool calls is the tool's map, not the
+envelope. The two paths share one `unwrapCallToolResult`, which is why that
+holds for a third-party server as well as a bundled one — a bundled tool and a
+registered tool are the same kind of call to the model, and they must not
+disagree about the shape of the same protocol object. A peer that sends only
+`content` is passed through untouched.
+
+Existing hardening is unchanged by any of this, and neither client was moved
+onto an SDK's own HTTP client. The two paths are hardened differently, and the
+difference predates this work:
+
+- The **registry client** keeps the per-tier hardened transports: redirect
+  refusal, endpoint and subnet validation, a dial timeout and a request
+  timeout, alongside the tool-list pagination bounds, aggregate tool-count and
+  byte limits, repeated-cursor detection, response size limits and secret
+  redaction.
+- The **runtime client** for the bundled servers is constructed with
+  `http.DefaultClient` and has no client-level timeout of its own: it is bounded
+  by the caller's context deadline and its own response-size cap. That is
+  tolerable because its two endpoints are fixed, internal Docker addresses it is
+  configured with rather than anything a peer can influence — but it is a real
+  asymmetry in *timeouts*, not a property to claim for both paths.
+
+  **Redirects are refused on both paths.** Endpoint fixity is no argument here,
+  because a redirect is precisely what leaves the configured endpoint: the
+  target is chosen by the peer, and net/http replays the request body verbatim
+  on a 307 or 308, stripping only `Authorization` and only across hosts. A
+  `tools/call` body carries the one-time approval token and the run's provenance
+  capability under `params._meta`, so a followed redirect would POST a
+  capability to an arbitrary URL. Both client constructors — `NewClient` and the
+  registry's `newMCPClient` — therefore apply `egress.NoRedirectClient` to
+  whatever client they are handed, at construction rather than at each call
+  site, so no caller can build an MCP client that follows one. That is the
+  repository's existing helper rather than an MCP-specific copy, which also
+  means the refusal arrives as a typed `*egress.RedirectBlockedError` and is
+  classified non-retryable: a peer that redirects will redirect again, so
+  reporting it as transient would tell a user to wait for something that cannot
+  change.
+
+### Cancellation
+
+`notifications/cancelled` is a request-level cancellation, scoped to the
+authenticated caller.
+
+`mcp-files` keeps a bounded in-flight registry keyed by the **authenticated
+agent identity together with the JSON-RPC request id** — the id alone is chosen
+by the sender, so on its own it would let one caller cancel another's work — and
+cancels the matching request's context. A string id and a numeric id are
+different requests. That identity is one token per agent kind rather than one
+per process, and the servers are sessionless, so nothing distinguishes two
+runtimes presenting the same token: each client therefore begins numbering its
+requests at a random point instead of at 1, so two of them do not issue the ids
+that would let either cancel the other's call. An unknown or already-finished id is ignored, which the
+specification permits, and is still answered `202`. The registry is bounded;
+past the bound a request is still served, it simply cannot be stopped by id.
+
+**Deviation:** a cancelled request is still answered, with a JSON-RPC
+`-32000` carrying the cancellation, on the POST that is still open. The
+specification says a receiver should not send a response for a cancelled
+request. Turing's own clients have already abandoned that request by then and
+ignore the late answer, but a stock client that cancels while holding the POST
+open will observe one.
+
+`mcp-system` accepts the notification and ignores it. Every tool it exposes
+computes its answer without blocking and without a context, so there is nothing
+in flight to interrupt; the specification lets a receiver ignore a cancellation
+whose request cannot be cancelled, and a registry that cancelled nothing would
+be theatre.
+
+Both clients emit `notifications/cancelled` when their caller's context ends
+mid-request, on a short detached context, best effort. Both also begin numbering
+their requests at a random point rather than at 1, so that a peer scoping
+cancellation by caller identity alone — which a sessionless peer must — never
+sees two of Turing's clients naming the same request id. `initialize` is never
+cancelled — the specification forbids it. **Cancellation asks a peer to stop
+working and free resources. It never asserts that a mutation the peer already
+committed has been undone**, and no client re-dispatches a mutation to find out.
+
+### Tool execution errors from a third-party server
+
+A registered server reports a tool *execution* failure the protocol's own way,
+with `isError: true` on an otherwise successful result. The runtime turns that
+into a failed tool call rather than handing the model a result that merely
+looks successful, exactly as it does for a bundled server — so the
+protocol-versus-execution distinction survives the orchestrator hop. The
+orchestrator still records the server itself as reachable, because the
+transport did work; it is the tool that failed, not the peer.
+
+### Annotations are untrusted
+
+A tool's `annotations` — `readOnlyHint`, `destructiveHint`, `idempotentHint`,
+`openWorldHint` — are display metadata chosen by whoever runs the server.
+Discovery of a third-party server keeps only the tool's name and input schema
+and drops everything else, so no peer can lower its own policy by claiming to
+be read-only: a newly discovered tool still arrives `approval_required`. The
+annotations the bundled servers publish are for a client's own display and are
+not what Turing's policy reads either.
+
+### Not implemented, on purpose
+
+Resources, prompts, sampling, elicitation, completions, logging, tasks, roots,
+server-initiated requests, progress notifications, `notifications/tools/list_changed`,
+resumable streams and `Last-Event-ID` replay, OAuth, stdio transport, public MCP
+ports, package installation and marketplace discovery are all outside this
+surface. A `progressToken` is accepted so a stock client's call still works, but
+no `notifications/progress` is ever sent.
+Turing does not act as an MCP server to the outside world; the bundled
+endpoints stay on private Docker networks. Advertised capabilities name only
+what is implemented.
+
+### Conformance evidence
+
+Interoperability is exercised in both directions against the official Model
+Context Protocol Go SDK, pinned at **v1.7.0** as a test-only dependency in all
+three Go modules. The SDK is an independent implementation: its server enforces
+the Accept header, answers over an event stream, assigns and requires a session
+id, and refuses operation-phase calls before `initialize`; its client is
+dual-era and negotiates down to `2025-11-25`.
+
+- A stock client initializes, discovers and calls safe tools on each bundled
+  server (`cmd/server/conformance_test.go` in `mcp-files` and `mcp-system`),
+  and is still refused a file mutation that has no approval token, provenance
+  capability or preview binding.
+- Both Turing client paths initialize, discover and call a stock server
+  (`internal/mcp/conformance_test.go` and
+  `internal/service/mcpregistry/conformance_test.go`). `ping` is exercised on
+  the runtime client only: the orchestrator's registry client issues no ping,
+  because a third-party server's liveness is already recorded from the
+  discovery and dispatch it actually performs.
+- The SDK never enters a shipped binary: it is imported only from `_test.go`
+  files. Two guards enforce that, not one —
+  `TestTheConformanceSDKNeverEntersAShippedBinary` (`tools/docs/versions_test.go`)
+  walks every non-test source under `turing-backend/` and `gen/` and fails on any SDK
+  import, covering the root module and `mcp-files`; `mcp-system` additionally
+  asserts the stronger property that its shipped binary imports **only** the
+  standard library, with `TestTheShippedBinaryImportsOnlyTheStandardLibrary`.
+
+No test reaches the network, and none needs a third-party credential.
+
 ## Runtime / orchestrator integration
 
 Flutter consumes four public event types:
@@ -1475,6 +1781,9 @@ remain in persisted tool/audit state rather than this UI payload.
   `http://turing-mcp-files:7110/mcp` on the internal Docker network. Both
   base URLs are configurable through `MCP_SYSTEM_BASE_URL` and
   `MCP_FILES_BASE_URL`, with those Docker-network URLs as defaults.
+- Initializes each connection once before its first `tools/list`, and
+  re-initializes if the peer reports the session gone. See
+  [MCP lifecycle conformance](#mcp-lifecycle-conformance).
 - For approval-gated tools, attaches the orchestrator-issued JWT to
   `params._meta.approvalToken`, not to `params.arguments`.
 - Treats any HTTP non-2xx from an MCP server as a hard error (e.g.

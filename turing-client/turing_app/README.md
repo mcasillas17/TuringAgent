@@ -9,7 +9,8 @@ The client preserves the existing polished `ResponsiveShell` experience. Backend
 The [canonical roadmap](../../docs/NORTH_STAR.md) separates current behavior
 from future work. The scoped status cells below are checked by the
 [offline documentation guard](../../tools/docs/README.md); they do not certify
-live providers, MCP conformance, or production mobile support.
+live providers, complete MCP conformance beyond the bounded lifecycle surface,
+or production mobile support.
 
 <!-- status-guard:begin -->
 | Claim | Status | Scope |
@@ -18,7 +19,7 @@ live providers, MCP conformance, or production mobile support.
 | flutter-workspace | shipped | The named destinations described below load real backend state, not placeholder pages. |
 | explicit-cancel | shipped | Stop records durable user intent for one exact run; retry/status RPCs distinguish acceptance from execution reconciliation. |
 | mcp-registry | shipped | The MCPs page manages registrations, imports, enablement, tokens and tool policies. |
-| mcp-lifecycle | pending | Registry management and the HTTP JSON-RPC tools subset do not implement initialization/capability negotiation (CON-001). |
+| mcp-lifecycle | shipped | Turing speaks MCP 2025-11-25 over Streamable HTTP in both directions: a stock MCP client can use the bundled servers, and registered servers are initialized and negotiated before any tool call. |
 | remote-model-routing | shipped | Agents manages endpoint records; the conversation's destination bar selects the route through ExternalAgentService, and the runtime calls the model under per-run disclosure. |
 | agent-delegation | pending | ExternalAgentService is model routing, not A2A or access to an existing vendor-product conversation. |
 | github-tools | shipped | Connected GitHub credentials have issue/file read tools and approval-gated issue comments. |
@@ -137,8 +138,10 @@ authorization: Bearer <api-key>
 - **Integrations** manages saved accounts and GitHub tool policies;
   unsupported providers stay visible with an explanation and no credential
   form. Existing accounts retain explicit revoke/remove actions.
-- **MCPs** manages the tool-server registry and policies. The current transport
-  is an HTTP JSON-RPC subset, not full MCP lifecycle conformance.
+- **MCPs** manages the tool-server registry and policies. Registry management is
+  separate from protocol conformance: the transport is MCP 2025-11-25 over
+  Streamable HTTP, and resources, prompts, sampling, elicitation, OAuth and
+  stdio are not implemented.
 - **Automations** manages interval/daily runs and their explicit tool allowlists;
   it does not provide mobile/channel delivery.
 - **Agents** manages remote model endpoint records. The conversation's

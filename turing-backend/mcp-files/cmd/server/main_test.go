@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -244,13 +245,51 @@ func TestAdvertisedReadLimitFitsTransportAndAggregateBudgets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encodedResponse, err := json.Marshal(jsonrpc.Response{JSONRPC: "2.0", ID: float64(1), Result: result})
+	// The transport leg measures the envelope handleMCP actually writes, which
+	// is callToolResult(result) — not the bare map. The wrapper carries the
+	// same payload twice, once as structuredContent and once re-serialized and
+	// re-escaped into a text block, so the bare map understates the real
+	// response by more than half: for this worst case 417,806 bytes (40% of the
+	// cap) against 905,282 actually sent (86%).
+	encodedResponse, err := json.Marshal(jsonrpc.Response{JSONRPC: "2.0", ID: float64(1), Result: callToolResult(result)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(encodedResponse) > expectedMCPResponseLimit {
 		t.Errorf("worst-case files.read response = %d bytes, exceeds %d-byte MCP cap", len(encodedResponse), expectedMCPResponseLimit)
 	}
+	// The guide publishes this exact figure in its budget table, and names this
+	// test as the guard for it. Asserting the number is what makes that column
+	// mean what a reader assumes: change the escaping, the fixture bound, or
+	// callToolResult, and the doc row has to move with it.
+	if len(encodedResponse) != 905282 {
+		{
+			t.Errorf(
+				"worst-case envelope = %d bytes, but docs/mcp-security-and-integration.md publishes 905282; "+
+					"update the guide's budget table if this change is intended",
+				len(encodedResponse),
+			)
+		}
+	}
+	// Pin the duplication itself, so this guard cannot quietly go back to
+	// measuring a shape the server never sends. Both representations of the
+	// payload are present, and the serialized copy is escaped a second time
+	// (each \u0001 becomes \\u0001), so the envelope is comfortably more than
+	// twice the bare result — 2.17x here. If callToolResult stopped
+	// duplicating, or this envelope were rebuilt from `result` again, the
+	// measured size would collapse and the cap assertion above would stop
+	// meaning anything.
+	if len(encodedResponse) < 2*len(encodedResult) {
+		t.Errorf(
+			"transport envelope = %d bytes for a %d-byte result: the measured shape no longer carries both "+
+				"the structured and the serialized copy, so this budget guard understates what the server sends",
+			len(encodedResponse), len(encodedResult),
+		)
+	}
+	// The run-aggregate leg deliberately stays on the bare result: the runtime
+	// client unwraps structuredContent (agent-runtime-go/internal/mcp/client.go,
+	// CallTool), so what accumulates across a run's tool calls is this map, not
+	// the transport envelope.
 	if len(encodedResult)*expectedToolCallsPerRun > expectedAggregateToolResultLimit {
 		t.Errorf(
 			"%d worst-case results total %d bytes, exceed %d-byte run aggregate",
@@ -258,6 +297,85 @@ func TestAdvertisedReadLimitFitsTransportAndAggregateBudgets(t *testing.T) {
 			len(encodedResult)*expectedToolCallsPerRun,
 			expectedAggregateToolResultLimit,
 		)
+	}
+}
+
+func TestWorstCaseCollectionResultFitsTheTransportBudget(t *testing.T) {
+	// files.read is not the only tool with a budget, and it is not the worst
+	// one. files.list and files.search reserve against ALREADY-ESCAPED bytes up
+	// to filetools.MaxCollectionResultJSONBytes, and callToolResult then sends
+	// that payload twice, escaping the serialized copy a second time. Every \"
+	// already in the reserved bytes becomes \\\", so a quote-dense collection
+	// inflates far harder than a files.read of raw bytes does: the read's worst
+	// case is \u0001, which only grows 6 bytes to 7, while a quote grows 2 to 4.
+	//
+	// The collection budget therefore has to leave room for roughly three times
+	// itself, not twice. Saturating it the way the production reservation does
+	// is the only way to see that.
+	matches := make([]map[string]any, 0)
+	used := 0
+	itemBytes := 0
+	for index := 0; ; index++ {
+		match := map[string]any{
+			// The DENSEST shape files.search can emit, not merely a plausible
+			// one. firstSnippet returns 40 bytes either side of the query and
+			// embeds the whole query, and validateSearchArgs puts no length
+			// bound on query at all — so a ~1 KiB all-quote query matched in a
+			// file of the same bytes yields a snippet that is essentially pure
+			// escape-doubling material. A short snippet would dilute the
+			// density with structural characters and let this guard pass for a
+			// budget the real worst case would push past the cap.
+			"path":    fmt.Sprintf("%d.txt", index),
+			"snippet": strings.Repeat(`"`, 40+1000+40),
+		}
+		encoded, err := json.Marshal(match)
+		if err != nil {
+			t.Fatal(err)
+		}
+		required := len(encoded)
+		if used > 0 {
+			required++
+		}
+		if required > filetools.MaxCollectionResultJSONBytes-used {
+			break
+		}
+		used += required
+		itemBytes = required
+		matches = append(matches, match)
+	}
+	// The budget must be saturated to within one item, or the fixture is not
+	// measuring the worst case the reservation actually permits.
+	if used < filetools.MaxCollectionResultJSONBytes-itemBytes {
+		t.Fatalf(
+			"fixture reserved only %d of %d budget bytes, leaving room for another %d-byte item; it is not the worst case",
+			used, filetools.MaxCollectionResultJSONBytes, itemBytes,
+		)
+	}
+
+	result := map[string]any{"matches": matches, "truncated": true}
+	encodedResponse, err := json.Marshal(jsonrpc.Response{JSONRPC: "2.0", ID: float64(1), Result: callToolResult(result)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encodedResponse) > expectedMCPResponseLimit {
+		t.Errorf(
+			"worst-case files.search response = %d bytes, exceeds the %d-byte MCP cap: writeJSONRPCStatus would "+
+				"discard the result and answer -32603, so a search that used to succeed now fails",
+			len(encodedResponse), expectedMCPResponseLimit,
+		)
+	}
+	// The guide publishes this exact figure in its budget table, and names this
+	// test as the guard for it. Asserting the number is what makes that column
+	// mean what a reader assumes: change the escaping, the fixture bound, or
+	// callToolResult, and the doc row has to move with it.
+	if len(encodedResponse) != 976202 {
+		{
+			t.Errorf(
+				"worst-case envelope = %d bytes, but docs/mcp-security-and-integration.md publishes 976202; "+
+					"update the guide's budget table if this change is intended",
+				len(encodedResponse),
+			)
+		}
 	}
 }
 
@@ -274,6 +392,39 @@ func TestMcpResponseWriterRejectsOversizedEncodedResponse(t *testing.T) {
 		t.Fatalf("response body = %d bytes, exceeds %d-byte cap", response.Body.Len(), expectedMCPResponseLimit)
 	}
 	assertRPCErrorCode(t, response.Body.Bytes(), -32603)
+}
+
+func TestMcpResponseWriterKeepsTheRequestIDWhenOnlyTheResultIsOversized(t *testing.T) {
+	// An over-cap result is answered with -32603 and the result discarded. That
+	// is only a *bounded* failure if the caller can tell which call failed: a
+	// conforming client matches responses by id, and Turing's own client reports
+	// a confusing "MCP response id must be a request ID" for a null one. The id
+	// is never the cause of the overrun — decodeID refuses anything over 256
+	// bytes — so it must survive.
+	response := httptest.NewRecorder()
+
+	writeJSONRPC(response, jsonrpc.Response{
+		JSONRPC: "2.0",
+		ID:      float64(7),
+		Result:  map[string]any{"content": strings.Repeat("x", expectedMCPResponseLimit)},
+	})
+
+	if response.Body.Len() > expectedMCPResponseLimit {
+		t.Fatalf("response body = %d bytes, exceeds %d-byte cap", response.Body.Len(), expectedMCPResponseLimit)
+	}
+	var envelope struct {
+		ID    any            `json:"id"`
+		Error map[string]any `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.ID != float64(7) {
+		t.Fatalf("fallback response id = %#v, want the request id 7 so the caller can correlate the failure", envelope.ID)
+	}
+	if code, _ := envelope.Error["code"].(float64); code != -32603 {
+		t.Fatalf("fallback error = %#v, want -32603", envelope.Error)
+	}
 }
 
 func TestMcpResponseWriterDropsOversizedIDFromFallback(t *testing.T) {

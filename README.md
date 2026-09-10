@@ -76,8 +76,8 @@ vendor separately when needed.
 ## Requirements
 
 - Docker and Docker Compose
-- Go 1.25+ — the root and `turing-backend/mcp-files` modules declare
-  `go 1.25.0` (`mcp-system` still says `go 1.23`), so 1.25 is the floor for
+- Go 1.25+ — all three modules (root, `turing-backend/mcp-files` and
+  `turing-backend/mcp-system`) declare `go 1.25.0`, so 1.25 is the floor for
   building every module with one toolchain
 - Flutter, on a release bundling Dart 3.10.4 or newer (`turing_app`'s
   pubspec declares `sdk: ^3.10.4`; `flutter pub get` fails below it). CI

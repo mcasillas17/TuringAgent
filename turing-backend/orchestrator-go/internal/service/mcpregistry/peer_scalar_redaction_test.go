@@ -20,7 +20,7 @@ import (
 // TestMCPResponseCannotReflectRegisteredBearer).
 func newScalarEchoServer(t *testing.T, resultValue any) *httptest.Server {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -30,7 +30,7 @@ func newScalarEchoServer(t *testing.T, resultValue any) *httptest.Server {
 			"jsonrpc": "2.0", "id": request.ID,
 			"result": resultValue,
 		})
-	}))
+	})))
 	t.Cleanup(server.Close)
 	return server
 }

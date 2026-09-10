@@ -113,10 +113,56 @@ func featureStatusClaims() []statusClaim {
 			function(registry+"register_test.go", "TestRegisterMcpServerArrivesDisabledWithDerivedTierAndSealedToken", "RegisterMcpServer("),
 		}},
 		{"mcp-lifecycle", true, []statusEvidence{
+			// The bounded lifecycle itself: one pinned revision, the handshake
+			// on both client paths, and the transport header rules on both
+			// bundled servers.
+			has(backend+"mcpwire/mcpwire.go", `ProtocolVersion = "2025-11-25"`),
+			has(backend+"mcpwire/mcpwire.go", `AcceptHeader = "application/json, text/event-stream"`),
+			function(backend+"mcpwire/mcpwire.go", "NegotiatedVersion", "ErrUnsupportedProtocolVersion"),
+			function(backend+"mcpwire/mcpwire.go", "ReadResponseMessage", "readSSEResponse(limited, maxBytes)"),
 			function(runtime+"mcp/client.go", "ListTools", `c.request(ctx, "tools/list", params)`),
 			function(runtime+"mcp/client.go", "CallTool", `c.request(ctx, "tools/call", params)`),
+			function(runtime+"mcp/client.go", "ensureInitialized", "mcpwire.MethodInitialize"),
+			function(runtime+"mcp/client.go", "ensureInitialized", "mcpwire.NotificationInitialized"),
+			function(runtime+"mcp/client.go", "Ping", "mcpwire.MethodPing"),
+			function(runtime+"mcp/client.go", "notifyCancelled", "mcpwire.NotificationCancelled"),
+			function(registry+"client.go", "ensureInitialized", "mcpwire.MethodInitialize"),
+			function(registry+"client.go", "ensureInitialized", "mcpwire.NotificationInitialized"),
+			// The status row and the guide both claim cancellation on *both*
+			// client paths, so the registry half needs its own witness: without
+			// one that half could be deleted without failing this guard.
+			function(registry+"client.go", "notifyCancelled", "mcpwire.NotificationCancelled"),
+			function(backend+"mcpwire/connection.go", "CancelledMidRequest", "method != MethodInitialize"),
+			has(registry+"lifecycle_test.go", "TestCancellingADispatchNotifiesThePeerWithTheSameRequestID"),
+			has(registry+"lifecycle_test.go", "TestCancellingADispatchMidStreamStillNotifiesThePeer"),
+			has(runtime+"mcp/lifecycle_test.go", "TestCancellingACallMidStreamStillNotifiesTheServer"),
+			// Behavioural evidence in both directions, against the pinned
+			// official SDK rather than against Turing's own fixtures.
 			function(runtime+"mcp/client_test.go", "TestListToolsPaginatesInOrder", "client.ListTools("),
-			pendingTask("CON-001"),
+			function(runtime+"mcp/conformance_test.go", "TestRuntimeClientInitializesDiscoversAndCallsAStockServer", "client.ListTools("),
+			function(registry+"conformance_test.go", "TestRegistryClientInitializesAndDiscoversAgainstAStockServer", "listTools(context.Background())"),
+			function(backend+"mcp-files/cmd/server/conformance_test.go", "TestAStockClientInitializesDiscoversAndCallsASafeTool", "session.ListTools("),
+			function(backend+"mcp-system/cmd/server/conformance_test.go", "TestAStockClientInitializesDiscoversAndCallsASafeTool", "session.ListTools("),
+			function(backend+"mcp-files/cmd/server/conformance_test.go", "TestAStockClientCannotMutateWithoutAnApproval", "session.CallTool("),
+			// A stock client must be able to READ a completed call's answer,
+			// not merely have the call succeed.
+			has(backend+"mcp-system/cmd/server/conformance_test.go", "len(result.Content) == 0 && result.StructuredContent == nil"),
+			has(backend+"mcp-files/cmd/server/conformance_test.go", "TestAStockClientReadsTheResultOfACompletedToolCall"),
+			// The unwrap moved into a helper both client paths call, so the
+			// witness follows it there and a second one pins that the
+			// third-party path applies the same rule.
+			function(runtime+"mcp/client.go", "unwrapCallToolResult", `result["structuredContent"].(map[string]any)`),
+			function(runtime+"mcp/registry_client.go", "CallToolWithCallerApproval", "unwrapCallToolResult(result)"),
+			// Redirect refusal is a documented security control; witnessing the
+			// symbol means moving it fails a guard rather than silently making
+			// the guide stale, which is how it drifted once already.
+			function(runtime+"mcp/client.go", "NewClient", "egress.NoRedirectClient"),
+			function(registry+"client.go", "newMCPClient", "egress.NoRedirectClient"),
+			// Both per-operation call sites release the session they opened. The
+			// conformance suite proves the discovery path behaviourally against
+			// the real SDK server; these back-stop deletion of either line.
+			function(registry+"service.go", "discover", "go peer.releaseSession()"),
+			function(registry+"call.go", "CallTool", "go peer.releaseSession()"),
 		}},
 		{"remote-model-routing", true, remote},
 		{"agent-delegation", true, []statusEvidence{
@@ -221,12 +267,48 @@ func featureStatusClaims() []statusClaim {
 			function(registry+operation.testFile, operation.testName, operation.rpc+"("),
 		)
 	}
+	// Every one of the four transports now carries the lifecycle rather than
+	// lacking it. The previous rows asserted the *absence* of "initialize" here
+	// and forced this claim to pending; they are replaced by the positive
+	// contract, not deleted to make room for a nicer status.
 	for _, file := range []string{runtime + "mcp/client.go", registry + "client.go", backend + "mcp-files/cmd/server/main.go", backend + "mcp-system/cmd/server/main.go"} {
 		addEvidence("mcp-lifecycle",
-			statusEvidence{path: file, require: `"tools/list"`, absent: `"initialize"`, limitation: "the tools transport has no initialization method"},
-			statusEvidence{path: file, require: `"tools/call"`, absent: `"notifications/initialized"`},
+			has(file, `"tools/list"`),
+			has(file, `"tools/call"`),
 		)
 	}
+	// mcp-files takes the revision from the shared mcpwire constant, so the
+	// compiler keeps it in step; mcp-system is a standalone module and keeps its
+	// own literal. Each is witnessed as it actually is.
+	addEvidence("mcp-lifecycle",
+		has(backend+"mcp-files/cmd/server/lifecycle.go", "supportedProtocolVersion = mcpwire.ProtocolVersion"),
+		has(backend+"mcp-system/cmd/server/lifecycle.go", `supportedProtocolVersion = "2025-11-25"`),
+	)
+	for _, server := range []string{backend + "mcp-files/cmd/server/", backend + "mcp-system/cmd/server/"} {
+		addEvidence("mcp-lifecycle",
+			function(server+"lifecycle.go", "checkTransportHeaders", "http.StatusBadRequest"),
+			function(server+"lifecycle.go", "checkTransportHeaders", "http.StatusForbidden"),
+			// The Accept rule is documented in the behaviour table, so it is
+			// witnessed like the sibling header rules beside it.
+			function(server+"lifecycle.go", "checkTransportHeaders", `strings.ToLower(r.Header.Get("Accept"))`),
+			function(server+"lifecycle.go", "initializeResult", `"capabilities":    map[string]any{"tools": map[string]any{}}`),
+			function(server+"lifecycle.go", "validateInitializeParams", `jsonrpc.InvalidParams(req.ID, "protocolVersion must be a string")`),
+			has(server+"main.go", `case "initialize":`),
+			has(server+"main.go", `case "notifications/initialized":`),
+			has(server+"main.go", `case "notifications/cancelled":`),
+			has(server+"main.go", `case "ping":`),
+			has(server+"lifecycle_test.go", "TestInitializeNegotiatesTheSupportedRevisionAndAdvertisesOnlyTools"),
+			function(server+"lifecycle.go", "callToolResult", `"structuredContent": result`),
+			function(server+"main.go", "handleMCP", "callToolResult(result)"),
+		)
+	}
+	// mcp-files is the server whose calls can block, so it is the one that
+	// keeps a real, identity-scoped cancellation registry.
+	addEvidence("mcp-lifecycle",
+		function(backend+"mcp-files/cmd/server/main.go", "handleMCP", "inflight.cancel(agentID, id)"),
+		function(backend+"mcp-files/cmd/server/inflight.go", "inflightKey", "agentID"),
+		has(backend+"mcp-files/cmd/server/lifecycle_test.go", "TestCancellationStopsAMatchingInFlightRequest"),
+	)
 	for _, tool := range []string{"github.list_issues", "github.get_issue", "github.get_file", "github.create_comment"} {
 		addEvidence("github-tools",
 			has(integrations+"tools.go", `name: "`+tool+`"`),

@@ -1,7 +1,12 @@
 package workflows_test
 
 import (
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -121,17 +126,116 @@ func TestMCPFilesImagePreparesSandboxBeforeDroppingPrivileges(t *testing.T) {
 	)
 }
 
-func TestMCPFilesImageIncludesSharedPreviewPackage(t *testing.T) {
-	data, err := os.ReadFile("../../turing-backend/mcp-files/Dockerfile")
+// TestMCPFilesImageCopiesEverySharedPackageItImports derives the requirement
+// from the source rather than naming one package.
+//
+// mcp-files resolves the root module through a `replace ../..`, and its image
+// copies root-module sources selectively rather than the whole tree, so every
+// root package reachable from its non-test code has to be mirrored by a COPY.
+// Nothing enforced that: the guard named `approvalpreview` literally, so when the
+// server began importing `mcpwire` the image build broke while every Go check
+// stayed green — CI builds from the checkout, never from the image context, and
+// there is no docker build step anywhere in the workflow.
+//
+// The closure is walked transitively, not just one hop: the build context needs
+// every root package reachable from ./cmd/server, so a copied package that
+// itself imports a third one would reopen the same breakage. Imports come from
+// go/parser rather than a regex over the file text, matching
+// mcp-system/cmd/server/dependency_test.go, so a string literal that merely
+// looks like an import path cannot invent a COPY requirement.
+func TestMCPFilesImageCopiesEverySharedPackageItImports(t *testing.T) {
+	const rootModule = "github.com/mcasillas17/TuringAgent/"
+	dockerfile, err := os.ReadFile("../../turing-backend/mcp-files/Dockerfile")
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireInOrder(t, string(data),
+	requireInOrder(t, string(dockerfile),
 		"WORKDIR /src",
-		"COPY turing-backend/approvalpreview ./turing-backend/approvalpreview",
 		"WORKDIR /src/turing-backend/mcp-files",
 		"RUN CGO_ENABLED=0 GOOS=linux go build",
 	)
+
+	// rootImportsOf returns the root-module packages a directory's non-test
+	// sources import.
+	rootImportsOf := func(dir string) []string {
+		var found []string
+		fileSet := token.NewFileSet()
+		err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			parsed, parseErr := parser.ParseFile(fileSet, path, nil, parser.ImportsOnly)
+			if parseErr != nil {
+				return parseErr
+			}
+			for _, imported := range parsed.Imports {
+				line, quoteErr := strconv.Unquote(imported.Path.Value)
+				if quoteErr != nil {
+					return quoteErr
+				}
+				if strings.HasPrefix(line, rootModule) {
+					found = append(found, strings.TrimPrefix(line, rootModule))
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+
+	needed := map[string]struct{}{}
+	queue := rootImportsOf("../../turing-backend/mcp-files")
+	if len(queue) == 0 {
+		t.Fatal("found no root-module imports in mcp-files' non-test sources; this guard reads them from there")
+	}
+	for len(queue) > 0 {
+		pkg := queue[0]
+		queue = queue[1:]
+		if _, seen := needed[pkg]; seen {
+			continue
+		}
+		needed[pkg] = struct{}{}
+		// gen/ is copied wholesale, so its own imports need no separate line.
+		if strings.HasPrefix(pkg, "turing-backend/") {
+			queue = append(queue, rootImportsOf(filepath.Join("../..", pkg))...)
+		}
+	}
+
+	for pkg := range needed {
+		switch {
+		case strings.HasPrefix(pkg, "turing-backend/"):
+			want := "COPY " + pkg + " ./" + pkg
+			if !strings.Contains(string(dockerfile), want) {
+				t.Errorf(
+					"the mcp-files image build needs %s%s but its Dockerfile has no %q; "+
+						"the replace target resolves to a directory that is not in the context",
+					rootModule, pkg, want,
+				)
+			}
+		case strings.HasPrefix(pkg, "gen/"):
+			// gen/ is copied wholesale rather than per package, so one line
+			// covers every generated import — but it still has to be there.
+			if !strings.Contains(string(dockerfile), "COPY gen ./gen") {
+				t.Errorf(
+					"mcp-files needs the generated package %s%s but its Dockerfile has no %q",
+					rootModule, pkg, "COPY gen ./gen",
+				)
+			}
+		default:
+			// A new top-level root dependency fails here rather than being
+			// silently waived, which is how gen/ went unchecked before.
+			t.Errorf(
+				"mcp-files imports %s%s, which this guard does not know how to satisfy in the image; "+
+					"add the COPY and teach this test about it",
+				rootModule, pkg,
+			)
+		}
+	}
 }
 
 func TestMCPSystemImageDropsPrivileges(t *testing.T) {

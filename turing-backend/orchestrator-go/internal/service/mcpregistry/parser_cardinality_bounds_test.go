@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/mcpwire"
 )
 
 // Every streaming collection decoder in import.go must enforce its own
@@ -196,15 +198,15 @@ func TestDecodeMCPHeaderEntriesCapsAtHardLimit(t *testing.T) {
 	})
 }
 
-// decodeMCPToolEntries must cap the "tools" array at maxMCPTools *before*
-// decoding (not merely before appending) the (maxMCPTools+1)-th element —
-// buildImportTools's own len(rawTools) > maxMCPTools check runs only after
+// decodeMCPToolEntries must cap the "tools" array at mcpwire.MaxTools *before*
+// decoding (not merely before appending) the (mcpwire.MaxTools+1)-th element —
+// buildImportTools's own len(rawTools) > mcpwire.MaxTools check runs only after
 // every element already fully decoded, which would let an oversized (or
-// deliberately malformed) inputSchema on tool maxMCPTools+1 be parsed for
+// deliberately malformed) inputSchema on tool mcpwire.MaxTools+1 be parsed for
 // no possible benefit before that check ever ran.
 func TestDecodeMCPToolEntriesCapsAtMaxMCPToolsBeforeDecodingOverCapElement(t *testing.T) {
-	t.Run("exactly maxMCPTools elements still decode", func(t *testing.T) {
-		tools := make([]map[string]any, maxMCPTools)
+	t.Run("exactly mcpwire.MaxTools elements still decode", func(t *testing.T) {
+		tools := make([]map[string]any, mcpwire.MaxTools)
 		for i := range tools {
 			tools[i] = map[string]any{"name": fmt.Sprintf("tool-%d", i)}
 		}
@@ -214,23 +216,23 @@ func TestDecodeMCPToolEntriesCapsAtMaxMCPToolsBeforeDecodingOverCapElement(t *te
 		}
 		decoded, err := decodeMCPToolEntries(document)
 		if err != nil {
-			t.Fatalf("a tools array with exactly maxMCPTools elements must not be refused: %v", err)
+			t.Fatalf("a tools array with exactly mcpwire.MaxTools elements must not be refused: %v", err)
 		}
-		if len(decoded) != maxMCPTools {
-			t.Fatalf("len(decoded) = %d, want exactly maxMCPTools (%d)", len(decoded), maxMCPTools)
+		if len(decoded) != mcpwire.MaxTools {
+			t.Fatalf("len(decoded) = %d, want exactly mcpwire.MaxTools (%d)", len(decoded), mcpwire.MaxTools)
 		}
 	})
 
-	t.Run("one more than maxMCPTools refuses before decoding its fields", func(t *testing.T) {
+	t.Run("one more than mcpwire.MaxTools refuses before decoding its fields", func(t *testing.T) {
 		var buf bytes.Buffer
 		buf.WriteString(`[`)
-		for i := 0; i < maxMCPTools; i++ {
+		for i := 0; i < mcpwire.MaxTools; i++ {
 			if i > 0 {
 				buf.WriteString(`,`)
 			}
 			fmt.Fprintf(&buf, `{"name":"tool-%d"}`, i)
 		}
-		// The (maxMCPTools+1)-th element's inputSchema is malformed JSON.
+		// The (mcpwire.MaxTools+1)-th element's inputSchema is malformed JSON.
 		// If decodeMCPToolEntries ever tried to decode this element at
 		// all, the error would surface as a raw JSON syntax error instead
 		// of the fixed tool-count-exceeded reason.
@@ -238,10 +240,10 @@ func TestDecodeMCPToolEntriesCapsAtMaxMCPToolsBeforeDecodingOverCapElement(t *te
 
 		_, err := decodeMCPToolEntries(buf.Bytes())
 		if err == nil {
-			t.Fatal("want an error: a tools array exceeding maxMCPTools elements must be refused")
+			t.Fatal("want an error: a tools array exceeding mcpwire.MaxTools elements must be refused")
 		}
-		if !strings.Contains(err.Error(), fmt.Sprintf("%d", maxMCPTools)) {
-			t.Fatalf("err = %q, want it to name the maxMCPTools limit", err.Error())
+		if !strings.Contains(err.Error(), fmt.Sprintf("%d", mcpwire.MaxTools)) {
+			t.Fatalf("err = %q, want it to name the mcpwire.MaxTools limit", err.Error())
 		}
 		if strings.Contains(err.Error(), "overflow-tool") {
 			t.Fatalf("err = %q, must not echo the overflowing tool's own name", err.Error())
@@ -249,14 +251,14 @@ func TestDecodeMCPToolEntriesCapsAtMaxMCPToolsBeforeDecodingOverCapElement(t *te
 	})
 }
 
-// The full ImportJSON path must still refuse an over-maxMCPTools static
+// The full ImportJSON path must still refuse an over-mcpwire.MaxTools static
 // snapshot with the same fixed, generic, limit-naming reason it always
 // has (see static_snapshot_limits_test.go) — proving the earlier,
 // decode-time cap in decodeMCPToolEntries did not change that
 // user-visible outcome, only where in the pipeline it is enforced.
 func TestImportJSONStaticSnapshotToolCountLimitStillRefusesTheSameWay(t *testing.T) {
 	service, _ := newRegistryTestService(t)
-	tools := make([]map[string]any, maxMCPTools+1)
+	tools := make([]map[string]any, mcpwire.MaxTools+1)
 	for i := range tools {
 		tools[i] = map[string]any{"name": fmt.Sprintf("vendor.tool_%d", i)}
 	}
@@ -279,7 +281,7 @@ func TestImportJSONStaticSnapshotToolCountLimitStillRefusesTheSameWay(t *testing
 	if !refused {
 		t.Fatalf("Unsupported = %+v, want vendor refused", report.Unsupported)
 	}
-	if !strings.Contains(reason, fmt.Sprintf("%d", maxMCPTools)) {
-		t.Fatalf("reason = %q, want it to name the maxMCPTools limit", reason)
+	if !strings.Contains(reason, fmt.Sprintf("%d", mcpwire.MaxTools)) {
+		t.Fatalf("reason = %q, want it to name the mcpwire.MaxTools limit", reason)
 	}
 }

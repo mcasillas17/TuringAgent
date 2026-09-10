@@ -22,12 +22,12 @@ jobs:
         with:
           go-version: "1.25.x"
           cache: true
-          # Unlike lint, the root docs suite resolves nested graphs offline;
-          # mcp-system's manifest keys preparation even while it is stdlib-only.
+          # Unlike lint, the root docs suite resolves nested graphs offline, so
+          # every module's lockfile is a cache key here.
           cache-dependency-path: |
             go.sum
             turing-backend/mcp-files/go.sum
-            turing-backend/mcp-system/go.mod
+            turing-backend/mcp-system/go.sum
 
       - name: Prepare documentation guard module caches
         run: |
@@ -91,9 +91,10 @@ jobs:
         with:
           go-version: "1.25.x"
           cache: true
-          # mcp-system is stdlib-only and has no go.sum of its own, so the root
-          # go.sum is the only real cache key available here.
-          cache-dependency-path: go.sum
+          # mcp-system's own lockfile: the shipped binary is still
+          # standard-library only, but its conformance tests pin the official
+          # MCP SDK, so there is now a module cache worth keying on.
+          cache-dependency-path: turing-backend/mcp-system/go.sum
 
       - name: Race test MCP system module
         run: |
@@ -122,10 +123,10 @@ jobs:
         with:
           go-version: "1.25.x"
           cache: true
-          # mcp-system is stdlib-only and has no go.sum, so it contributes no key.
           cache-dependency-path: |
             go.sum
             turing-backend/mcp-files/go.sum
+            turing-backend/mcp-system/go.sum
 
       - name: Install golangci-lint
         run: |

@@ -172,7 +172,10 @@ func TestEchoCharacterBoundaryFitsTransportAndAggregateBudgets(t *testing.T) {
 	encodedResponse, err := json.Marshal(jsonrpc.Response{
 		JSONRPC: "2.0",
 		ID:      float64(1),
-		Result:  result,
+		// The shape the server actually sends: callToolResult carries the same
+		// payload twice, once structured and once serialized-and-escaped, so
+		// measuring the bare map would guard a response that is never emitted.
+		Result: callToolResult(result),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -180,6 +183,33 @@ func TestEchoCharacterBoundaryFitsTransportAndAggregateBudgets(t *testing.T) {
 	if len(encodedResponse) > expectedSystemResponseLimit {
 		t.Fatalf("worst-case echo response = %d bytes, exceeds %d-byte MCP cap", len(encodedResponse), expectedSystemResponseLimit)
 	}
+	// The guide publishes this exact figure in its budget table, and names this
+	// test as the guard for it. Asserting the number is what makes that column
+	// mean what a reader assumes: change the escaping, the fixture bound, or
+	// callToolResult, and the doc row has to move with it.
+	if len(encodedResponse) != 852104 {
+		{
+			t.Errorf(
+				"worst-case envelope = %d bytes, but docs/mcp-security-and-integration.md publishes 852104; "+
+					"update the guide's budget table if this change is intended",
+				len(encodedResponse),
+			)
+		}
+	}
+	// Pin the duplication itself, so this guard cannot quietly go back to
+	// measuring a shape the server never sends. For this worst case the
+	// envelope is 852,104 bytes (81% of the cap) against a 393,227-byte bare
+	// result — 2.17x, because the serialized copy is escaped a second time.
+	if len(encodedResponse) < 2*len(encodedResult) {
+		t.Errorf(
+			"transport envelope = %d bytes for a %d-byte result: the measured shape no longer carries both "+
+				"the structured and the serialized copy, so this budget guard understates what the server sends",
+			len(encodedResponse), len(encodedResult),
+		)
+	}
+	// The run-aggregate leg deliberately stays on the bare result: the runtime
+	// client unwraps structuredContent, so what accumulates across a run's tool
+	// calls is this map, not the transport envelope.
 	if len(encodedResult)*expectedSystemToolCallsPerRun > expectedSystemAggregateResultLimit {
 		t.Fatalf(
 			"%d worst-case echo results total %d bytes, exceed %d-byte run aggregate",
@@ -187,6 +217,39 @@ func TestEchoCharacterBoundaryFitsTransportAndAggregateBudgets(t *testing.T) {
 			len(encodedResult)*expectedSystemToolCallsPerRun,
 			expectedSystemAggregateResultLimit,
 		)
+	}
+}
+
+func TestMcpResponseWriterKeepsTheRequestIDWhenOnlyTheResultIsOversized(t *testing.T) {
+	// An over-cap result is answered with -32603 and the result discarded. That
+	// is only a *bounded* failure if the caller can tell which call failed: a
+	// conforming client matches responses by id, and Turing's own client reports
+	// a confusing "MCP response id must be a request ID" for a null one. The id
+	// is never the cause of the overrun — decodeID refuses anything over 256
+	// bytes — so it must survive.
+	response := httptest.NewRecorder()
+
+	writeJSONRPC(response, jsonrpc.Response{
+		JSONRPC: "2.0",
+		ID:      float64(7),
+		Result:  map[string]any{"content": strings.Repeat("x", expectedSystemResponseLimit)},
+	})
+
+	if response.Body.Len() > expectedSystemResponseLimit {
+		t.Fatalf("response body = %d bytes, exceeds %d-byte cap", response.Body.Len(), expectedSystemResponseLimit)
+	}
+	var envelope struct {
+		ID    any            `json:"id"`
+		Error map[string]any `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.ID != float64(7) {
+		t.Fatalf("fallback response id = %#v, want the request id 7 so the caller can correlate the failure", envelope.ID)
+	}
+	if code, _ := envelope.Error["code"].(float64); code != -32603 {
+		t.Fatalf("fallback error = %#v, want -32603", envelope.Error)
 	}
 }
 

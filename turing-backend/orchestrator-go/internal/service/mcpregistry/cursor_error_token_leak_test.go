@@ -59,7 +59,7 @@ func assertNoCursorTokenLeak(t *testing.T, what string, haystack string, token s
 // error.
 func newRepeatedCursorVendor(t *testing.T, cursor string) *httptest.Server {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -69,7 +69,7 @@ func newRepeatedCursorVendor(t *testing.T, cursor string) *httptest.Server {
 			"jsonrpc": "2.0", "id": request.ID,
 			"result": map[string]any{"tools": []any{}, "nextCursor": cursor},
 		})
-	}))
+	})))
 	t.Cleanup(server.Close)
 	return server
 }
@@ -96,7 +96,7 @@ func TestListToolsRepeatedCursorErrorNeverLeaksBearerContainingQuoteOrBackslash(
 // pins that down as a regression test rather than leaving it implicit.
 func TestListToolsInvalidCursorErrorNeverLeaksBearerContainingQuoteOrBackslash(t *testing.T) {
 	const token = mcpCursorLeakSentinelToken
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -106,7 +106,7 @@ func TestListToolsInvalidCursorErrorNeverLeaksBearerContainingQuoteOrBackslash(t
 			"jsonrpc": "2.0", "id": request.ID,
 			"result": map[string]any{"tools": []any{}, "nextCursor": 42},
 		})
-	}))
+	})))
 	t.Cleanup(server.Close)
 
 	_, err := newMCPClient(server.URL, token, server.Client()).listTools(context.Background())

@@ -11,9 +11,9 @@ Local-first AI orchestration platform: a Flutter desktop client + Go gRPC backen
 This is a **multi-module** Go repo. `go build -tags sqlite_fts5 ./...` / `go test -tags sqlite_fts5 ./...` at the root does **NOT** cover these separate modules — you must `cd` into them:
 - `/go.mod` — root module `github.com/mcasillas17/TuringAgent` (orchestrator-go, agent-runtime-go, gen, tests)
 - `turing-backend/mcp-files/go.mod` — sandboxed file tools; has a `replace` back to root
-- `turing-backend/mcp-system/go.mod` — standalone system tools; stdlib-only (no `go.sum`). CI has its own `mcp-system` job, but the root `./...` never reaches it, so run it explicitly when you touch it
+- `turing-backend/mcp-system/go.mod` — standalone system tools. The **shipped binary** is stdlib-only, and a test guards that (`TestTheShippedBinaryImportsOnlyTheStandardLibrary`); the module itself now has a `go.sum`, because its MCP conformance tests pin the official Go SDK. CI has its own `mcp-system` job, but the root `./...` never reaches it, so run it explicitly when you touch it
 
-**The three modules do not declare the same Go version.** Root and `mcp-files` are `go 1.25.0` (raised by Dependabot's grpc bump #92 and x/net bump #91 respectively); `mcp-system` remains `go 1.23`. A local toolchain below 1.25 cannot build the root module or `mcp-files` directly — with the default `GOTOOLCHAIN=auto` Go selects a conforming toolchain (using one already present, downloading `go1.25.0` otherwise) instead of failing. Install **Go 1.25 or newer** and the question does not arise locally. CI pins `go-version: "1.25.x"` on all five jobs (#92 raised the other four; `ci_test.go` asserts the lint job's pin).
+**All three modules declare `go 1.25.0`.** Root and `mcp-files` were raised by Dependabot's grpc bump #92 and x/net bump #91; `mcp-system` followed when CON-001 added its pinned MCP SDK test dependency, which itself requires 1.25.0. A local toolchain below 1.25 cannot build any of them directly — with the default `GOTOOLCHAIN=auto` Go selects a conforming toolchain (using one already present, downloading `go1.25.0` otherwise) instead of failing. Install **Go 1.25 or newer** and the question does not arise locally. CI pins `go-version: "1.25.x"` on all five jobs (#92 raised the other four; `ci_test.go` asserts the lint job's pin).
 
 ## Toolchain versions (what is pinned, and where)
 
@@ -21,7 +21,7 @@ Nothing here is enforced by one place, so a bump is never a one-line edit. The *
 
 | Tool | Version | Enforcer (fails on mismatch) | Also asserted in |
 |---|---|---|---|
-| Go (local) | **1.25+** | root & `mcp-files` go.mod (`go 1.25.0`) | `mcp-system` go.mod says `1.23`; CI pins `1.25.x` on all five jobs, each asserted by `ci_test.go`; `tools/docs` asserts this table against the go.mod files |
+| Go (local) | **1.25+** | root & `mcp-files` go.mod (`go 1.25.0`) | `mcp-system` go.mod also says `1.25.0`; CI pins `1.25.x` on all five jobs, each asserted by `ci_test.go`; `tools/docs` asserts this table against the go.mod files |
 | Go (containers, MCP images) | `1.27-alpine` | `mcp-files`/`mcp-system` Dockerfiles | Dependabot `docker` entry |
 | Go (containers, orchestrator & agent-runtime) | `1.27-bookworm` | their Dockerfiles | Dependabot `docker` entry |
 | golangci-lint | v2.12.2 | — (no local guard) | `ci.yml`, `ci_test.go` |
@@ -30,6 +30,7 @@ Nothing here is enforced by one place, so a bump is never a one-line edit. The *
 | protoc-gen-go | v1.36.11 | `tools/proto/generate.sh` | `ci.yml`, `generate_test.go` |
 | protoc-gen-go-grpc | 1.6.2 | `tools/proto/generate.sh` | `ci.yml`, `generate_test.go` |
 | Dart `protoc_plugin` | 23.0.0 | `tools/proto/generate.sh` | `ci.yml`, `generate_test.go` |
+| MCP Go SDK (conformance fixtures) | v1.7.0 | root, `mcp-files` and `mcp-system` go.mod | test-only; the pinned peer implementation the CON-001 conformance tests run against |
 | Flutter | **not pinned** (`channel: stable`) | — | `ci.yml` |
 | Dart SDK | `^3.10.4` | `turing_app/pubspec.yaml` | — |
 
@@ -98,7 +99,7 @@ explicitly as well.
 cd turing-backend && ./scripts/init.sh   # generates .env, tokens, data/, sandbox/, skills/, mcp/ & memory/ (with a default persona.md); prints the Flutter API key
 ./scripts/dev.sh                          # docker compose up --build (foreground)
 ```
-Requires Docker + Compose, Go 1.25+ (the root and `mcp-files` modules' floor; see "Toolchain versions"), Flutter, and Ollama running on the host (`OLLAMA_BASE_URL=http://host.docker.internal:11434`, default model `qwen2.5:7b` (~4.9 GB resident). The runtime sends Ollama a per-request `keep_alive` (`OLLAMA_KEEP_ALIVE`, default `2m`) instead of relying on Ollama's own server-side env var, so the model is released once you stop talking to it. Keep it above `TURING_APPROVAL_WAIT_TIMEOUT_MS` or it unloads mid-run). Run the client: `cd turing-client/turing_app && flutter pub get && flutter run -d macos`.
+Requires Docker + Compose, Go 1.25+ (every module's floor; see "Toolchain versions"), Flutter, and Ollama running on the host (`OLLAMA_BASE_URL=http://host.docker.internal:11434`, default model `qwen2.5:7b` (~4.9 GB resident). The runtime sends Ollama a per-request `keep_alive` (`OLLAMA_KEEP_ALIVE`, default `2m`) instead of relying on Ollama's own server-side env var, so the model is released once you stop talking to it. Keep it above `TURING_APPROVAL_WAIT_TIMEOUT_MS` or it unloads mid-run). Run the client: `cd turing-client/turing_app && flutter pub get && flutter run -d macos`.
 
 ## Review before pushing (required)
 

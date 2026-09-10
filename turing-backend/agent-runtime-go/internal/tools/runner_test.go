@@ -1307,3 +1307,48 @@ func TestRunBoundsApprovalWaitAndResumeByOneDeadline(t *testing.T) {
 		t.Fatal("the resume context carried no deadline")
 	}
 }
+
+func TestAnApprovedSystemToolForwardsItsApprovalTokenToTheServer(t *testing.T) {
+	// This pins the contract a bundled server has to honour. A user may raise a
+	// system tool to approval_required — UpdateToolPolicyByName blocks only
+	// *lowering* a bundled mutating tool to safe, and any newly discovered tool
+	// defaults to approval_required — and the runner then forwards the minted
+	// token to whatever client the tool routes through, mcp-system included,
+	// because only a CallerEnforcedMCPClient takes the other branch.
+	//
+	// A server that refuses `_meta.approvalToken` therefore breaks a supported
+	// configuration after the user has already approved: prompt, approve, mint,
+	// reject. Nothing asserted that until this test, and mcp-system's `_meta`
+	// allowlist briefly did exactly that.
+	var forwarded []string
+	runner := &Runner{
+		PostBeacon: func(_ context.Context, beacon *turingv1.ToolCallBeacon) (*turingv1.ToolPolicyDecision, error) {
+			if beacon.GetPhase() == turingv1.ToolCallPhase_TOOL_CALL_PHASE_AFTER {
+				return allowDecision(beacon), nil
+			}
+			return &turingv1.ToolPolicyDecision{
+				Decision:   turingv1.ToolPolicyDecision_DECISION_APPROVAL_REQUIRED,
+				ApprovalId: "approval_1",
+				ToolCallId: beacon.GetToolCallId(),
+			}, nil
+		},
+		WaitApproval: func(context.Context, string) (string, error) {
+			return "minted-after-the-user-approved", nil
+		},
+		ResumeApproved: allowResume,
+	}
+
+	_, err := runner.Run(context.Background(), RunInput{
+		ToolName: "system.echo",
+		MCPClient: mcpClientFunc(func(_ context.Context, _ string, _ map[string]any, tokens ...string) (map[string]any, error) {
+			forwarded = tokens
+			return map[string]any{"ok": true}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(forwarded) == 0 || forwarded[0] != "minted-after-the-user-approved" {
+		t.Fatalf("tokens forwarded to the server = %#v, want the approval token first", forwarded)
+	}
+}

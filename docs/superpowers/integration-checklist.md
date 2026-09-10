@@ -2,7 +2,8 @@
 
 Use this checklist against the current Go gRPC, MCP, and Flutter architecture.
 The [canonical roadmap](../NORTH_STAR.md#current-status) defines current capability scope;
-this checklist does not imply that future mobile or MCP conformance work ships.
+this checklist does not imply that future mobile work, or MCP surfaces beyond
+CON-001's bounded lifecycle, ship.
 
 ## 1. Initialization and Compose
 
@@ -66,7 +67,7 @@ this checklist does not imply that future mobile or MCP conformance work ships.
 ## 4. MCP and Approval Boundary
 
 - [ ] Registry management is described separately from the HTTP JSON-RPC tools
-  subset; initialization and capability negotiation remain CON-001.
+  subset; initialization and capability negotiation shipped with CON-001 (see [MCP lifecycle conformance](../mcp-security-and-integration.md#mcp-lifecycle-conformance)); resources, prompts, sampling, elicitation, OAuth and stdio remain out of scope.
 - [ ] `mcp-system` and `mcp-files` require their per-agent bearer tokens.
 - [ ] `system.echo` and file tools enforce the bounds advertised by
   `tools/list`.

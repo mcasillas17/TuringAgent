@@ -95,7 +95,7 @@ func TestRedactMCPErrorValueNeverLeavesMarkerSubstringTokenPresent(t *testing.T)
 func TestPeerToolsCallResultRedactsOrdinaryStringForMarkerSubstringTokens(t *testing.T) {
 	for _, token := range markerSubstringTokens {
 		t.Run(token, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var request struct {
 					ID int64 `json:"id"`
 				}
@@ -105,7 +105,7 @@ func TestPeerToolsCallResultRedactsOrdinaryStringForMarkerSubstringTokens(t *tes
 					"jsonrpc": "2.0", "id": request.ID,
 					"result": map[string]any{"info": "value containing " + token + " inline"},
 				})
-			}))
+			})))
 			t.Cleanup(server.Close)
 
 			result, err := newMCPClient(server.URL, token, server.Client()).callTool(
@@ -194,7 +194,7 @@ func TestPeerToolsCallResultEmptiesBooleanScalarWhenMarkerWouldStillLeak(t *test
 func TestPeerErrorNeverLeavesMarkerSubstringToken(t *testing.T) {
 	for _, token := range markerSubstringTokens {
 		t.Run(token, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var request struct {
 					ID int64 `json:"id"`
 				}
@@ -206,7 +206,7 @@ func TestPeerErrorNeverLeavesMarkerSubstringToken(t *testing.T) {
 						"code": -32000, "message": "failed near " + token + " boundary",
 					},
 				})
-			}))
+			})))
 			t.Cleanup(server.Close)
 
 			_, err := newMCPClient(server.URL, token, server.Client()).callTool(

@@ -11,7 +11,7 @@ import (
 
 func TestMCPErrorCannotReflectRegisteredBearer(t *testing.T) {
 	const token = "vendor-secret-error-reflection"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -24,7 +24,7 @@ func TestMCPErrorCannotReflectRegisteredBearer(t *testing.T) {
 				"code": -32000, "message": "reflected " + token,
 			},
 		})
-	}))
+	})))
 	t.Cleanup(server.Close)
 
 	_, err := newMCPClient(server.URL, token, server.Client()).callTool(

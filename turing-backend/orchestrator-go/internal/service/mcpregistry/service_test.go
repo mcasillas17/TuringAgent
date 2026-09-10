@@ -16,7 +16,7 @@ import (
 
 func TestEnablingLocalContainerDiscoversToolsAndShowsLiveness(t *testing.T) {
 	service, repo := newRegistryTestService(t)
-	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	vendor := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID     int64  `json:"id"`
 			Method string `json:"method"`
@@ -37,7 +37,7 @@ func TestEnablingLocalContainerDiscoversToolsAndShowsLiveness(t *testing.T) {
 				"inputSchema": map[string]any{"type": "object"},
 			}}},
 		})
-	}))
+	})))
 	t.Cleanup(vendor.Close)
 	service.httpClient = vendor.Client()
 	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
@@ -72,7 +72,7 @@ func TestEnablingLocalContainerDiscoversToolsAndShowsLiveness(t *testing.T) {
 func TestEnablingRemoteServerDiscoversToolsOnFirstEnable(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	var requests atomic.Int32
-	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	vendor := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		var request struct {
 			ID     int64  `json:"id"`
@@ -94,7 +94,7 @@ func TestEnablingRemoteServerDiscoversToolsOnFirstEnable(t *testing.T) {
 				"inputSchema": map[string]any{"type": "object"},
 			}}},
 		})
-	}))
+	})))
 	t.Cleanup(vendor.Close)
 	service.httpClient = vendor.Client()
 	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
@@ -133,7 +133,7 @@ func TestEnablingRemoteServerDiscoversToolsOnFirstEnable(t *testing.T) {
 // disable/enable cycle that triggers rediscovery.
 func TestReEnablingRemoteServerPreservesEditedToolPolicy(t *testing.T) {
 	service, repo := newRegistryTestService(t)
-	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	vendor := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -146,7 +146,7 @@ func TestReEnablingRemoteServerPreservesEditedToolPolicy(t *testing.T) {
 				"name": "remote-vendor.lookup", "inputSchema": map[string]any{"type": "object"},
 			}}},
 		})
-	}))
+	})))
 	t.Cleanup(vendor.Close)
 	service.httpClient = vendor.Client()
 	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
@@ -192,7 +192,7 @@ func TestReEnablingRemoteServerPreservesEditedToolPolicy(t *testing.T) {
 func TestEnablingRemoteServerDiscoveryFailureKeepsServerEnabledAndRedactsToken(t *testing.T) {
 	const remoteFailureSentinel = "remote-enable-sentinel-7c2f9a1e5b6d3084-do-not-leak"
 	service, repo := newRegistryTestService(t)
-	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	vendor := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -206,7 +206,7 @@ func TestEnablingRemoteServerDiscoveryFailureKeepsServerEnabledAndRedactsToken(t
 				"message": "unauthorized for Bearer " + remoteFailureSentinel,
 			},
 		})
-	}))
+	})))
 	t.Cleanup(vendor.Close)
 	service.httpClient = vendor.Client()
 	// Registered through the repository directly (like
@@ -260,7 +260,7 @@ func TestEnablingRemoteServerDiscoveryFailureKeepsServerEnabledAndRedactsToken(t
 
 func TestDiscoveryRejectsToolNameThatShadowsBundledTool(t *testing.T) {
 	service, repo := newRegistryTestService(t)
-	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	vendor := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -274,7 +274,7 @@ func TestDiscoveryRejectsToolNameThatShadowsBundledTool(t *testing.T) {
 				"name": "system.time", "inputSchema": map[string]any{"type": "object"},
 			}}},
 		})
-	}))
+	})))
 	t.Cleanup(vendor.Close)
 	service.httpClient = vendor.Client()
 	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
@@ -301,7 +301,7 @@ func TestDiscoveryRejectsToolNameThatShadowsBundledTool(t *testing.T) {
 
 func TestMalformedToolsListRemainsVisibleAsDown(t *testing.T) {
 	service, repo := newRegistryTestService(t)
-	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	vendor := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -312,7 +312,7 @@ func TestMalformedToolsListRemainsVisibleAsDown(t *testing.T) {
 			"id":      request.ID,
 			"result":  map[string]any{"tools": "not-an-array"},
 		})
-	}))
+	})))
 	t.Cleanup(vendor.Close)
 	server, err := repo.RegisterMCPServer(context.Background(), repository.ImportedMCPServer{
 		Name: "malformed", URL: vendor.URL, Tier: repository.MCPServerTierLocalContainer,

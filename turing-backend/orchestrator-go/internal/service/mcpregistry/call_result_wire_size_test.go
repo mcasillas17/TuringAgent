@@ -50,7 +50,7 @@ func newWireSizeCallHarness(t *testing.T) *wireSizeCallHarness {
 		t.Fatal(err)
 	}
 	h := &wireSizeCallHarness{repo: repo, database: database}
-	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	vendor := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -68,7 +68,7 @@ func newWireSizeCallHarness(t *testing.T) *wireSizeCallHarness {
 			"id":      request.ID,
 			"result":  json.RawMessage(h.resultJSON),
 		})
-	}))
+	})))
 	t.Cleanup(vendor.Close)
 	sealed, err := sealer.Seal([]byte("vendor-token"), []byte("vendor"))
 	if err != nil {

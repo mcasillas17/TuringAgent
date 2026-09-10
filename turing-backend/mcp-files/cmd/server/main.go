@@ -115,13 +115,16 @@ func newHandler(cfg serverConfig) http.Handler {
 	mux.Handle("/internal/session-cleanup", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleInternalSessionCleanup(w, r, filesTools, cfg.cleanupToken)
 	}))
+	// One registry per handler, so a cancellation can only ever reach a request
+	// this same server process is currently running.
+	inflight := newInflightRegistry(maxInflightCancellableRequests)
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		agentID, err := auth.AgentFromBearer(r, cfg.filesToken)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		handleMCP(w, r, filesTools, agentID)
+		handleMCP(w, r, filesTools, agentID, inflight)
 	}))
 	return mux
 }
@@ -142,9 +145,16 @@ func checkHealth(ctx context.Context, endpoint string) error {
 	return nil
 }
 
-func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesTools, agentID string) {
+func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesTools, agentID string, inflight *inflightRegistry) {
+	// GET (open a server-to-client SSE stream) and DELETE (terminate a session)
+	// are both optional in the Streamable HTTP transport. This server offers
+	// neither — it never pushes to a client and keeps no session — so 405 is
+	// the answer the transport defines, and a stock client carries on.
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !checkTransportHeaders(w, r) {
 		return
 	}
 
@@ -175,21 +185,76 @@ func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesToo
 		return
 	}
 
+	if req.Notification && !notificationAllowed(req.Method) {
+		// A request that is not one of the lifecycle notifications, sent
+		// without an id, is dropped without doing any work. The transport
+		// answers every notification 202 with no body, so serving it would
+		// perform the method and discard both its result and its error.
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	if !req.Notification && notificationAllowed(req.Method) {
+		// And the inverse: a `notifications/*` method has no request form, so
+		// an id-bearing one is an unsupported shape and gets the same
+		// -32601 every other unsupported method gets. Answering it with a
+		// result would let a caller drive the cancellation through a shape the
+		// protocol does not define.
+		writeJSONRPC(w, jsonrpc.Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   map[string]any{"code": -32601, "message": "method not found"},
+		})
+		return
+	}
+
 	switch req.Method {
-	case "tools/list":
-		if paramsErr := validateToolsListParams(req); paramsErr != nil {
-			writeJSONRPCForRequest(w, req, jsonrpc.Response{
+	case "initialize":
+		if paramsErr := validateInitializeParams(req); paramsErr != nil {
+			writeJSONRPC(w, jsonrpc.Response{
 				JSONRPC: "2.0",
 				ID:      req.ID,
 				Error:   map[string]any{"code": paramsErr.Code, "message": paramsErr.Message},
 			})
 			return
 		}
-		writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": listTools()}})
+		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: initializeResult()})
+	case "notifications/initialized":
+		// Nothing to record: this server keeps no session, so the operation
+		// phase needs no state to enter. The 202 is the whole answer.
+		acceptNotification(w)
+	case "notifications/cancelled":
+		// Scoped to the authenticated caller: a cancellation can only ever
+		// reach a request that same identity issued. An unknown or already
+		// finished request is ignored, which the specification allows and the
+		// transport answers with the same 202.
+		if id, named := cancelledRequestID(req); named {
+			inflight.cancel(agentID, id)
+		}
+		acceptNotification(w)
+	case "ping":
+		if paramsErr := rejectUnknownParams(req, "_meta"); paramsErr != nil {
+			writeJSONRPC(w, jsonrpc.Response{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   map[string]any{"code": paramsErr.Code, "message": paramsErr.Message},
+			})
+			return
+		}
+		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}})
+	case "tools/list":
+		if paramsErr := validateToolsListParams(req); paramsErr != nil {
+			writeJSONRPC(w, jsonrpc.Response{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   map[string]any{"code": paramsErr.Code, "message": paramsErr.Message},
+			})
+			return
+		}
+		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": listTools()}})
 	case "tools/call":
 		call, paramsErr := parseToolCallParams(req)
 		if paramsErr != nil {
-			writeJSONRPCForRequest(w, req, jsonrpc.Response{
+			writeJSONRPC(w, jsonrpc.Response{
 				JSONRPC: "2.0",
 				ID:      req.ID,
 				Error:   map[string]any{"code": paramsErr.Code, "message": paramsErr.Message},
@@ -198,34 +263,44 @@ func handleMCP(w http.ResponseWriter, r *http.Request, filesTools tools.FilesToo
 		}
 		call.AgentID = agentID
 		if call.Name == tools.SessionCleanupTool {
-			writeJSONRPCForRequest(w, req, jsonrpc.Response{
+			writeJSONRPC(w, jsonrpc.Response{
 				JSONRPC: "2.0",
 				ID:      req.ID,
 				Error:   map[string]any{"code": -32602, "message": "unknown tool"},
 			})
 			return
 		}
-		result, err := filesTools.CallRequestContext(r.Context(), call)
+		// Register before dispatching so a cancellation that arrives on
+		// another connection can reach this call. Releasing on the way out
+		// keeps a finished request from being "cancelled" later, and the
+		// registry's own sequence check keeps this release from evicting a
+		// later request that reused the same id.
+		callCtx, cancelCall := context.WithCancel(r.Context())
+		release, _ := inflight.add(agentID, req.ID, cancelCall)
+		result, err := filesTools.CallRequestContext(callCtx, call)
+		release()
+		cancelCall()
 		if err != nil {
 			code := -32000
 			if tools.IsInvalidParams(err) {
 				code = -32602
 			}
-			writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": code, "message": err.Error()}})
+			writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": code, "message": err.Error()}})
 			return
 		}
-		writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: result})
+		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: callToolResult(result)})
 	default:
-		writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": -32601, "message": "method not found"}})
+		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": -32601, "message": "method not found"}})
 	}
 }
 
-func writeJSONRPCForRequest(w http.ResponseWriter, req jsonrpc.Request, response jsonrpc.Response) {
-	if req.Notification {
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
-	writeJSONRPC(w, response)
+// acceptNotification is the whole answer to a notification: 202, no body. The
+// two id-shape guards at the top of handleMCP are what make this correct
+// without a per-call check — a notification reaches the switch only for a
+// method notificationAllowed permits, and such a method never reaches it
+// carrying an id. Any method added to notificationAllowed must answer here.
+func acceptNotification(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func listTools() []map[string]any {
@@ -237,7 +312,8 @@ func listTools() []map[string]any {
 				"path":  pathStringSchema(),
 				"limit": integerSchema(1, 1000),
 			}, []any{}),
-			"policy": "safe",
+			"policy":      "safe",
+			"annotations": readOnlyAnnotations(),
 		},
 		{
 			"name":        "files.search",
@@ -247,7 +323,8 @@ func listTools() []map[string]any {
 				"query": nonBlankStringSchema("Nonblank text to find."),
 				"limit": integerSchema(1, 200),
 			}, []any{"query"}),
-			"policy": "safe",
+			"policy":      "safe",
+			"annotations": readOnlyAnnotations(),
 		},
 		{
 			"name":        "files.read",
@@ -256,13 +333,15 @@ func listTools() []map[string]any {
 				"path":     pathStringSchema(),
 				"maxBytes": integerSchema(1, tools.MaxReadBytes),
 			}, []any{"path"}),
-			"policy": "safe",
+			"policy":      "safe",
+			"annotations": readOnlyAnnotations(),
 		},
 		{
 			"name":        "files.create",
 			"description": "Create a UTF-8 file at a sandbox-relative path. Requires an inspectable approval preview: before and after content must each fit within 64 KiB (65536 bytes); oversized previews cannot be approved.",
 			"inputSchema": objectSchema(map[string]any{"path": pathStringSchema(), "content": contentStringSchema()}, []any{"path", "content"}),
 			"policy":      "approval_required",
+			"annotations": mutatingAnnotations(false),
 		},
 		{
 			"name":        "files.update",
@@ -272,7 +351,8 @@ func listTools() []map[string]any {
 				"content":      contentStringSchema(),
 				"expectedHash": expectedHashStringSchema(),
 			}, []any{"path", "content"}),
-			"policy": "approval_required",
+			"policy":      "approval_required",
+			"annotations": mutatingAnnotations(true),
 		},
 	}
 }
@@ -337,13 +417,26 @@ func writeJSONRPCStatus(w http.ResponseWriter, statusCode int, res jsonrpc.Respo
 		return
 	}
 	if payload.Len() > maxMCPResponseBytes {
+		// Discard the result, but keep the id: a conforming client matches
+		// responses by id, so a null one turns a bounded failure into a call
+		// that never resolves. The id cannot be what overran the cap — decodeID
+		// refuses anything over maxIDBytes — so it is only dropped if the error
+		// envelope is somehow still too large, which needs an id that never
+		// came off the wire.
 		payload.Reset()
-		res.ID = nil
 		res.Result = nil
 		res.Error = map[string]any{"code": -32603, "message": "response body too large"}
 		if err := json.NewEncoder(&payload).Encode(res); err != nil {
 			http.Error(w, "failed to encode response", http.StatusInternalServerError)
 			return
+		}
+		if payload.Len() > maxMCPResponseBytes {
+			payload.Reset()
+			res.ID = nil
+			if err := json.NewEncoder(&payload).Encode(res); err != nil {
+				http.Error(w, "failed to encode response", http.StatusInternalServerError)
+				return
+			}
 		}
 	}
 	w.Header().Set("content-type", "application/json")
@@ -373,8 +466,16 @@ func parseToolCallParams(req jsonrpc.Request) (tools.CallRequest, *jsonrpc.Reque
 		if !object || meta == nil {
 			return tools.CallRequest{}, jsonrpc.InvalidParams(req.ID, "_meta must be an object")
 		}
+		// The allowlist is fail-closed on purpose: a capability this server is
+		// not issued must be refused, not silently ignored, which is what lets
+		// the orchestrator decline to send a provenance capability to a server
+		// that expects none and rely on the refusal. progressToken is the
+		// protocol's own member and a stock client attaches it when it asks for
+		// progress, so refusing it would fail an ordinary conforming call; it is
+		// accepted and ignored, because progress notifications are not
+		// implemented.
 		for key := range meta {
-			if key != "approvalToken" && key != "provenanceToken" {
+			if key != "approvalToken" && key != "provenanceToken" && key != "progressToken" {
 				return tools.CallRequest{}, jsonrpc.InvalidParams(req.ID, "unknown _meta key")
 			}
 		}
@@ -409,8 +510,16 @@ func validateToolsListParams(req jsonrpc.Request) *jsonrpc.RequestError {
 		return paramsErr
 	}
 	if cursor, present := req.Params["cursor"]; present {
-		if _, valid := cursor.(string); !valid {
+		text, valid := cursor.(string)
+		if !valid {
 			return jsonrpc.InvalidParams(req.ID, "cursor must be a string")
+		}
+		// This server returns its whole tool list in one page and never emits a
+		// nextCursor, so no client can hold a cursor this server issued.
+		// Honouring one by silently returning the first page again would be an
+		// unsupported protocol feature quietly succeeding.
+		if text != "" {
+			return jsonrpc.InvalidParams(req.ID, "cursor is not supported: this server returns a single page")
 		}
 	}
 	if meta, present := req.Params["_meta"]; present {

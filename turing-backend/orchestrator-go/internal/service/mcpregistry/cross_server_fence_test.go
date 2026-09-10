@@ -59,7 +59,7 @@ func TestCredentialFenceDoesNotBlockRotationOrCallForADifferentServer(t *testing
 	// reached over plain HTTP so the composite transport below needs no
 	// special TLS trust for it (h.vendor is already TLS-backed, and the
 	// blocking transport must still handle both).
-	vendor2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	vendor2 := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -68,7 +68,7 @@ func TestCredentialFenceDoesNotBlockRotationOrCallForADifferentServer(t *testing
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"content": []any{}},
 		})
-	}))
+	})))
 	t.Cleanup(vendor2.Close)
 	sealed2, err := h.registry.sealServerToken("vendor2", "vendor2-token")
 	if err != nil {
@@ -169,7 +169,7 @@ func TestConcurrentCallToolAndRotateAcrossTwoServersRace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	vendor2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	vendor2 := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -178,7 +178,7 @@ func TestConcurrentCallToolAndRotateAcrossTwoServersRace(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"content": []any{}},
 		})
-	}))
+	})))
 	t.Cleanup(vendor2.Close)
 	sealed2, err := h.registry.sealServerToken("vendor2", "vendor2-token")
 	if err != nil {

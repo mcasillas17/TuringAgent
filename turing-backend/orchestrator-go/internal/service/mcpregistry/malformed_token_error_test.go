@@ -11,10 +11,10 @@ import (
 
 func TestMalformedMCPEnvelopeCannotReflectRegisteredBearer(t *testing.T) {
 	const token = "vendor-secret-envelope-reflection"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,%q:true,"result":{}}`, token)
-	}))
+	})))
 	t.Cleanup(server.Close)
 
 	_, err := newMCPClient(server.URL, token, server.Client()).callTool(

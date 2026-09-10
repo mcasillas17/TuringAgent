@@ -87,6 +87,20 @@ func TestRemoteCallCoveredByTheRunDecisionDispatchesExactlyOnce(t *testing.T) {
 	if got := h.reached.Load(); got != 1 {
 		t.Fatalf("vendor requests = %d, want one", got)
 	}
+
+	// CallTool has its own `defer func() { go peer.releaseSession() }()`, and
+	// deleting that line failed no test: the discovery-path conformance test
+	// drives a different entry point, and the direct releaseSession tests call
+	// the method by hand. CallTool also returns early on several paths before
+	// the peer exists, so this proves the wiring on a real dispatch.
+	select {
+	case session := <-h.sessionDeleted:
+		if session != "vendor-session-1" {
+			t.Fatalf("delete carried session %q, want the one the vendor assigned", session)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the dispatch never released the session the vendor assigned it")
+	}
 }
 
 // vaultlessMemoryFingerprint is the memory binding for a repository with no

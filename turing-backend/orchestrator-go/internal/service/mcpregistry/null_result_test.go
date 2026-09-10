@@ -9,7 +9,7 @@ import (
 )
 
 func TestNullMCPResultIsRejected(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -18,7 +18,7 @@ func TestNullMCPResultIsRejected(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"jsonrpc": "2.0", "id": request.ID, "result": nil,
 		})
-	}))
+	})))
 	t.Cleanup(server.Close)
 	if _, err := newMCPClient(server.URL, "", server.Client()).callTool(
 		context.Background(), "vendor.null", map[string]any{},

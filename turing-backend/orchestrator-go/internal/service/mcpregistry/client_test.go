@@ -24,7 +24,7 @@ import (
 // client layer, independent of discover's own behavior.
 func TestListToolsReturnsRawUnredactedToolMetadata(t *testing.T) {
 	const token = "mcp-listtools-raw-sentinel-1a7c9e3f6b2d5084"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -36,7 +36,7 @@ func TestListToolsReturnsRawUnredactedToolMetadata(t *testing.T) {
 				"name": "vendor." + token, "inputSchema": map[string]any{"type": "object"},
 			}}},
 		})
-	}))
+	})))
 	t.Cleanup(server.Close)
 
 	tools, err := newMCPClient(server.URL, token, server.Client()).listTools(context.Background())

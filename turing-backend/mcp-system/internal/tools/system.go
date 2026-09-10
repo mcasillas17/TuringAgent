@@ -15,8 +15,8 @@ func List() []map[string]any {
 		"additionalProperties": false,
 	}
 	return []map[string]any{
-		{"name": "system.health", "description": "Check whether the system MCP service is healthy.", "inputSchema": emptySchema, "policy": "safe"},
-		{"name": "system.time", "description": "Return the current UTC time.", "inputSchema": emptySchema, "policy": "safe"},
+		{"name": "system.health", "description": "Check whether the system MCP service is healthy.", "inputSchema": emptySchema, "policy": "safe", "annotations": readOnlyAnnotations()},
+		{"name": "system.time", "description": "Return the current UTC time.", "inputSchema": emptySchema, "policy": "safe", "annotations": readOnlyAnnotations()},
 		{
 			"name":        "system.echo",
 			"description": "Echo the supplied text, or an empty string when text is omitted.",
@@ -29,10 +29,21 @@ func List() []map[string]any {
 				}},
 				"additionalProperties": false,
 			},
-			"policy": "safe",
+			"policy":      "safe",
+			"annotations": readOnlyAnnotations(),
 		},
-		{"name": "system.info", "description": "Return operating system, architecture, and Go runtime information.", "inputSchema": emptySchema, "policy": "safe"},
+		{"name": "system.info", "description": "Return operating system, architecture, and Go runtime information.", "inputSchema": emptySchema, "policy": "safe", "annotations": readOnlyAnnotations()},
 	}
+}
+
+// readOnlyAnnotations is the standard hint block for the tools here, every one
+// of which only reads. Annotations are advisory display metadata for a client:
+// Turing's own policy comes from the `policy` field the orchestrator reads,
+// never from a hint, and the same rule holds in the other direction — a
+// third-party server's annotations are dropped during discovery, so no peer can
+// soften a policy by claiming to be read-only.
+func readOnlyAnnotations() map[string]any {
+	return map[string]any{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
 }
 
 func Call(name string, args map[string]any) (map[string]any, error) {

@@ -40,7 +40,7 @@ Session withdrawal uses the separate orchestrator-to-mcp-files HTTP cleanup
 edge. Its cleanup-only bearer is not the approval-consumer identity used by
 the reverse gRPC edge.
 The orchestrator also mediates registered third-party MCP and integration
-calls. Registry management is not full MCP conformance (CON-001).
+calls. Registry management is separate from protocol conformance; the bounded MCP lifecycle shipped with CON-001 and is described in [MCP lifecycle conformance](../mcp-security-and-integration.md#mcp-lifecycle-conformance). Resources, prompts, sampling, elicitation, OAuth and stdio are not implemented.
 Mobile scaffolding does not add pairing, non-loopback TLS or reachability:
 a LAN/tailnet URL alone cannot reach the Compose loopback publication.
 
