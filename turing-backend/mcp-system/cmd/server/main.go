@@ -79,8 +79,15 @@ func checkHealth(ctx context.Context, endpoint string) error {
 }
 
 func handleMCP(w http.ResponseWriter, r *http.Request) {
+	// GET (open a server-to-client SSE stream) and DELETE (terminate a session)
+	// are both optional in the Streamable HTTP transport. This server offers
+	// neither — it never pushes to a client and keeps no session — so 405 is
+	// the answer the transport defines, and a stock client carries on.
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !checkTransportHeaders(w, r) {
 		return
 	}
 
@@ -111,21 +118,76 @@ func handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Notification && !notificationAllowed(req.Method) {
+		// A request that is not one of the lifecycle notifications, sent
+		// without an id, is dropped without doing any work. The transport
+		// answers every notification 202 with no body, so serving it would
+		// perform the method and discard both its result and its error.
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	if !req.Notification && notificationAllowed(req.Method) {
+		// And the inverse: a `notifications/*` method has no request form, so
+		// an id-bearing one is an unsupported shape and gets the same
+		// -32601 every other unsupported method gets. Answering it with a
+		// result would let a caller drive the cancellation through a shape the
+		// protocol does not define.
+		writeJSONRPC(w, jsonrpc.Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   map[string]any{"code": -32601, "message": "method not found"},
+		})
+		return
+	}
+
 	switch req.Method {
-	case "tools/list":
-		if paramsErr := validateToolsListParams(req); paramsErr != nil {
-			writeJSONRPCForRequest(w, req, jsonrpc.Response{
+	case "initialize":
+		if paramsErr := validateInitializeParams(req); paramsErr != nil {
+			writeJSONRPC(w, jsonrpc.Response{
 				JSONRPC: "2.0",
 				ID:      req.ID,
 				Error:   map[string]any{"code": paramsErr.Code, "message": paramsErr.Message},
 			})
 			return
 		}
-		writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": tools.List()}})
+		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: initializeResult()})
+	case "notifications/initialized":
+		// Nothing to record: this server keeps no session, so the operation
+		// phase needs no state to enter. The 202 is the whole answer.
+		acceptNotification(w)
+	case "notifications/cancelled":
+		// Accepted and ignored, deliberately. Every tool this server exposes
+		// computes its answer without blocking and without a context, so there
+		// is nothing in flight a cancellation could stop; the specification
+		// lets a receiver ignore a cancellation whose request cannot be
+		// cancelled, and pretending otherwise with a registry that cancels
+		// nothing would be theatre. mcp-files, whose calls do block on the
+		// orchestrator, keeps a real one.
+		acceptNotification(w)
+	case "ping":
+		if paramsErr := rejectUnknownParams(req, "_meta"); paramsErr != nil {
+			writeJSONRPC(w, jsonrpc.Response{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   map[string]any{"code": paramsErr.Code, "message": paramsErr.Message},
+			})
+			return
+		}
+		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}})
+	case "tools/list":
+		if paramsErr := validateToolsListParams(req); paramsErr != nil {
+			writeJSONRPC(w, jsonrpc.Response{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   map[string]any{"code": paramsErr.Code, "message": paramsErr.Message},
+			})
+			return
+		}
+		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": tools.List()}})
 	case "tools/call":
 		name, args, paramsErr := parseToolCallParams(req)
 		if paramsErr != nil {
-			writeJSONRPCForRequest(w, req, jsonrpc.Response{
+			writeJSONRPC(w, jsonrpc.Response{
 				JSONRPC: "2.0",
 				ID:      req.ID,
 				Error:   map[string]any{"code": paramsErr.Code, "message": paramsErr.Message},
@@ -138,21 +200,22 @@ func handleMCP(w http.ResponseWriter, r *http.Request) {
 			if tools.IsInvalidParams(err) {
 				code = -32602
 			}
-			writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": code, "message": err.Error()}})
+			writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": code, "message": err.Error()}})
 			return
 		}
-		writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: result})
+		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Result: callToolResult(result)})
 	default:
-		writeJSONRPCForRequest(w, req, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": -32601, "message": "method not found"}})
+		writeJSONRPC(w, jsonrpc.Response{JSONRPC: "2.0", ID: req.ID, Error: map[string]any{"code": -32601, "message": "method not found"}})
 	}
 }
 
-func writeJSONRPCForRequest(w http.ResponseWriter, req jsonrpc.Request, response jsonrpc.Response) {
-	if req.Notification {
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
-	writeJSONRPC(w, response)
+// acceptNotification is the whole answer to a notification: 202, no body. The
+// two id-shape guards at the top of handleMCP are what make this correct
+// without a per-call check — a notification reaches the switch only for a
+// method notificationAllowed permits, and such a method never reaches it
+// carrying an id. Any method added to notificationAllowed must answer here.
+func acceptNotification(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func writeJSONRPC(w http.ResponseWriter, res jsonrpc.Response) {
@@ -166,13 +229,26 @@ func writeJSONRPCStatus(w http.ResponseWriter, statusCode int, res jsonrpc.Respo
 		return
 	}
 	if payload.Len() > maxMCPResponseBytes {
+		// Discard the result, but keep the id: a conforming client matches
+		// responses by id, so a null one turns a bounded failure into a call
+		// that never resolves. The id cannot be what overran the cap — decodeID
+		// refuses anything over maxIDBytes — so it is only dropped if the error
+		// envelope is somehow still too large, which needs an id that never
+		// came off the wire.
 		payload.Reset()
-		res.ID = nil
 		res.Result = nil
 		res.Error = map[string]any{"code": -32603, "message": "response body too large"}
 		if err := json.NewEncoder(&payload).Encode(res); err != nil {
 			http.Error(w, "failed to encode response", http.StatusInternalServerError)
 			return
+		}
+		if payload.Len() > maxMCPResponseBytes {
+			payload.Reset()
+			res.ID = nil
+			if err := json.NewEncoder(&payload).Encode(res); err != nil {
+				http.Error(w, "failed to encode response", http.StatusInternalServerError)
+				return
+			}
 		}
 	}
 	w.Header().Set("content-type", "application/json")
@@ -201,6 +277,27 @@ func parseToolCallParams(req jsonrpc.Request) (string, map[string]any, *jsonrpc.
 		if !object || meta == nil {
 			return "", nil, jsonrpc.InvalidParams(req.ID, "_meta must be an object")
 		}
+		// Fail-closed like mcp-files, but scoped to what can legitimately arrive
+		// here. approvalToken can: a user may raise a system tool to
+		// approval_required, and the runtime then forwards the minted token to
+		// whichever client the tool routes through, this server included. This
+		// server verifies no approval — the orchestrator's policy decision and
+		// consumption are the gate — so the token is accepted and ignored, and
+		// refusing it would make an approved call fail after the user had
+		// already approved it. provenanceToken cannot legitimately arrive:
+		// nothing here writes into the sandbox, so a provenance capability is a
+		// misrouted one and is refused. The orchestrator relies on that refusal
+		// when it declines to issue a provenance capability to any server but
+		// the file server; the reasoning lives with it, in orchestrator-go's
+		// internal/service/runtime, since this module cannot see across the
+		// boundary.
+		// progressToken is the protocol's own member, accepted and ignored
+		// because progress notifications are not implemented.
+		for key := range meta {
+			if key != "progressToken" && key != "approvalToken" {
+				return "", nil, jsonrpc.InvalidParams(req.ID, "unknown _meta key")
+			}
+		}
 	}
 	return name, args, nil
 }
@@ -210,8 +307,16 @@ func validateToolsListParams(req jsonrpc.Request) *jsonrpc.RequestError {
 		return paramsErr
 	}
 	if cursor, present := req.Params["cursor"]; present {
-		if _, valid := cursor.(string); !valid {
+		text, valid := cursor.(string)
+		if !valid {
 			return jsonrpc.InvalidParams(req.ID, "cursor must be a string")
+		}
+		// This server returns its whole tool list in one page and never emits a
+		// nextCursor, so no client can hold a cursor this server issued.
+		// Honouring one by silently returning the first page again would be an
+		// unsupported protocol feature quietly succeeding.
+		if text != "" {
+			return jsonrpc.InvalidParams(req.ID, "cursor is not supported: this server returns a single page")
 		}
 	}
 	if meta, present := req.Params["_meta"]; present {

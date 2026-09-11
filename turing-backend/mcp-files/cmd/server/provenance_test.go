@@ -48,8 +48,15 @@ func testProvenanceToken(t *testing.T, tool string, args map[string]any, logical
 
 func provenanceCallBody(t *testing.T, tool string, args map[string]any, logicalPath string) string {
 	t.Helper()
+	return provenanceCallBodyWithID(t, 1, tool, args, logicalPath)
+}
+
+// provenanceCallBodyWithID is provenanceCallBody with an explicit JSON-RPC id,
+// which a cancellation has to name.
+func provenanceCallBodyWithID(t *testing.T, id any, tool string, args map[string]any, logicalPath string) string {
+	t.Helper()
 	body, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"jsonrpc": "2.0", "id": id, "method": "tools/call",
 		"params": map[string]any{
 			"name":      tool,
 			"arguments": args,
@@ -104,8 +111,20 @@ func TestMcpHandlerAcceptsProvenanceCapabilityForSafeTool(t *testing.T) {
 	if envelope.Error != nil {
 		t.Fatalf("response error = %v", envelope.Error)
 	}
-	if envelope.Result["content"] != "hello" {
-		t.Fatalf("result = %+v, want the pre-existing root file read through the capability", envelope.Result)
+	// The tool's own data now travels in `structuredContent`: the wire shape is
+	// a CallToolResult, so a stock client can read it. `content` alongside it is
+	// the same data serialized as a text block, per the specification's
+	// backwards-compatibility advice.
+	structured, ok := envelope.Result["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("result = %+v, want a CallToolResult carrying structuredContent", envelope.Result)
+	}
+	if structured["content"] != "hello" {
+		t.Fatalf("structuredContent = %+v, want the pre-existing root file read through the capability", structured)
+	}
+	blocks, ok := envelope.Result["content"].([]any)
+	if !ok || len(blocks) == 0 {
+		t.Fatalf("result = %+v, want an unstructured content block alongside", envelope.Result)
 	}
 }
 

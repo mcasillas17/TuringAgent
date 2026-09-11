@@ -11,7 +11,7 @@ import (
 
 func TestToolsListErrorCannotReflectRegisteredBearer(t *testing.T) {
 	const token = "vendor-secret-cursor"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -21,7 +21,7 @@ func TestToolsListErrorCannotReflectRegisteredBearer(t *testing.T) {
 			"jsonrpc": "2.0", "id": request.ID,
 			"result": map[string]any{"tools": []any{}, "nextCursor": token},
 		})
-	}))
+	})))
 	t.Cleanup(server.Close)
 	_, err := newMCPClient(server.URL, token, server.Client()).listTools(context.Background())
 	if err == nil || strings.Contains(err.Error(), token) {

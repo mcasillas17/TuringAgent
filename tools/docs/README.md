@@ -60,8 +60,7 @@ cannot justify `shipped`; otherwise the bounded implementation witnesses
 justify `shipped`. Missing/changed witnesses yield an error, not an automatic
 promotion. Landing a capability requires reconciling the limiting witnesses
 with new implementation and behavioral coverage.
-For example, absence of initialization is a
-limitation, whereas absence of placeholder destinations supports the wired
+For example, absence of placeholder destinations supports the wired
 workspace claim; absence of navigation calls in SearchScreen supports the
 documented no-dismissal behavior, alongside a real shell-route regression.
 A task registered through `pendingTask` is explicitly
@@ -78,7 +77,7 @@ absence alone or prose in any file format cannot establish a shipped capability.
 | `flutter-workspace` | Shell page wiring, per-page read API call, gRPC forwarding, public service registration and widget-test witnesses; not just `implemented: true`. |
 | `explicit-cancel` | Public cancel/status contracts and registration, canonical cancellation and audit wiring, authentication/late-output/stale-attempt regressions, client RPC forwarding, and run-owned Stop state across message remounts. It does not claim rollback or immediate worker shutdown. |
 | `mcp-registry` | Page and gRPC calls, RPC contracts, service/repository operations and named regressions for registration, import, enablement, token rotation and tool policies. |
-| `mcp-lifecycle` | Positive tools/list and tools/call witnesses in both clients and bundled servers, no initialize/initialized method literals there, and the CON-001 task marker. |
+| `mcp-lifecycle` | The pinned revision and shared wire helpers, the `initialize`/`initialized` handshake in both clients, the lifecycle methods and the version/Origin header rules in both bundled servers, mcp-files's identity-scoped cancellation registry, and named conformance regressions in both directions against the pinned official MCP SDK. |
 | `remote-model-routing`, `agent-delegation` | Endpoint management, mounted SessionAgentBar get/set/clear routing, service/repository calls, job snapshot, runtime resolver wiring and disclosure/consent regressions. The current adapter performs inference; bounded A2A identifier checks cover current runtime/orchestrator entry points. A2A-001 tracks the separate delegation contract. |
 | `github-tools`, `other-integration-tools` | GitHub discovery, dispatch, request builders, argument-bound approval consumption and mutating-policy refusal plus named regressions. INT-001's unsupported-provider refusal, GitHub-only credential lookup and legacy-account cleanup have concrete witnesses. The other providers' tool consumers remain unimplemented. |
 | `mobile-client`, `mobile-reachability` | Parsed main/debug/profile permissions, which back the guides' debug/profile qualification; responsive layout, loopback Compose publication versus in-container listener, shared-bearer authentication, SEC-001 and MOB-001 markers. |

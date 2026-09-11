@@ -26,6 +26,7 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	runtimetestkit "github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/testkit"
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
+	"github.com/mcasillas17/TuringAgent/turing-backend/mcpwire"
 	orchestratortestkit "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/testkit"
 	"github.com/mcasillas17/TuringAgent/turing-backend/testsupport/approvalfixture"
 	"google.golang.org/grpc"
@@ -827,6 +828,14 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 		f.reject(w, http.StatusUnsupportedMediaType, fmt.Errorf("%s MCP content-type = %q, want application/json", f.name, got))
 		return
 	}
+	// The Streamable HTTP transport requires a client to advertise both
+	// response media types on every POST; a conforming server answers 400
+	// otherwise, so the harness holds the runtime to it.
+	accept := r.Header.Get("accept")
+	if !strings.Contains(accept, "application/json") || !strings.Contains(accept, "text/event-stream") {
+		f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP accept = %q, want both Streamable HTTP media types", f.name, accept))
+		return
+	}
 	defer r.Body.Close()
 	var req struct {
 		JSONRPC string         `json:"jsonrpc"`
@@ -848,6 +857,26 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 		f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP jsonrpc = %q, want 2.0", f.name, req.JSONRPC))
 		return
 	}
+	if req.ID == nil {
+		// A JSON-RPC notification. The only ones this client sends are the
+		// handshake's `initialized` and a cancellation, and the transport
+		// answers both with 202 and no body.
+		switch req.Method {
+		case "notifications/initialized", "notifications/cancelled":
+			if got := r.Header.Get(mcpwire.ProtocolVersionHeader); got != mcpwire.ProtocolVersion {
+				f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP %s header = %q, want %q after initialization",
+					f.name, mcpwire.ProtocolVersionHeader, got, mcpwire.ProtocolVersion))
+				return
+			}
+			f.mu.Lock()
+			f.requests = append(f.requests, fakeMCPRequest{method: req.Method, params: req.Params})
+			f.mu.Unlock()
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP unexpected notification %q", f.name, req.Method))
+		}
+		return
+	}
 	requestID, ok := req.ID.(json.Number)
 	if !ok {
 		f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP request ID = %#v, want integer", f.name, req.ID))
@@ -862,6 +891,27 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 		f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP: %w", f.name, err))
 		return
 	}
+	if req.Method == "initialize" {
+		if got := r.Header.Get(mcpwire.ProtocolVersionHeader); got != "" {
+			f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP initialize carried %s = %q before negotiating one",
+				f.name, mcpwire.ProtocolVersionHeader, got))
+			return
+		}
+		f.mu.Lock()
+		f.requests = append(f.requests, fakeMCPRequest{method: req.Method, params: req.Params, id: requestID})
+		f.mu.Unlock()
+		writeJSONRPCResult(w, requestID, map[string]any{
+			"protocolVersion": mcpwire.ProtocolVersion,
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]any{"name": "fake-" + f.name, "version": "1.0.0"},
+		})
+		return
+	}
+	if got := r.Header.Get(mcpwire.ProtocolVersionHeader); got != mcpwire.ProtocolVersion {
+		f.reject(w, http.StatusBadRequest, fmt.Errorf("%s MCP %s header = %q, want %q after initialization",
+			f.name, mcpwire.ProtocolVersionHeader, got, mcpwire.ProtocolVersion))
+		return
+	}
 	f.mu.Lock()
 	f.requests = append(f.requests, fakeMCPRequest{method: req.Method, params: req.Params, id: requestID})
 	advertiseTime := f.advertiseTime
@@ -869,6 +919,10 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 	validateApproval := f.validateApproval
 	blockCreate := f.blockCreate
 	f.mu.Unlock()
+	if req.Method == "ping" {
+		writeJSONRPCResult(w, requestID, map[string]any{})
+		return
+	}
 	if req.Method == "tools/list" {
 		tools := []any{}
 		if advertiseTime && f.name == "system" {
@@ -980,6 +1034,21 @@ func (f *fakeMCPServer) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// assertMCPMethodSequence pins the full sequence a bundled MCP connection sees,
+// handshake included: the runtime initializes once per connection before any
+// operation-phase call, so `tools/list` is never the first thing on the wire.
+func assertMCPMethodSequence(t *testing.T, name string, requests []fakeMCPRequest, operations ...string) {
+	t.Helper()
+	want := append([]string{"initialize", "notifications/initialized"}, operations...)
+	got := make([]string, len(requests))
+	for index, request := range requests {
+		got[index] = request.method
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("%s MCP methods = %v, want %v", name, got, want)
+	}
+}
+
 func (f *fakeMCPServer) reject(w http.ResponseWriter, statusCode int, err error) {
 	f.handlerErrorOnce.Do(func() { f.handlerErrors <- err })
 	http.Error(w, err.Error(), statusCode)
@@ -990,6 +1059,22 @@ func validateMCPParams(method string, params map[string]any) error {
 		return fmt.Errorf("%s params = nil, want object", method)
 	}
 	switch method {
+	case "initialize":
+		if params["protocolVersion"] != mcpwire.ProtocolVersion {
+			return fmt.Errorf("initialize protocolVersion = %#v, want %q", params["protocolVersion"], mcpwire.ProtocolVersion)
+		}
+		capabilities, ok := params["capabilities"].(map[string]any)
+		if !ok || len(capabilities) != 0 {
+			return fmt.Errorf("initialize capabilities = %#v, want an empty object", params["capabilities"])
+		}
+		if _, present := params["_meta"]; present {
+			return fmt.Errorf("initialize carried _meta; discovery consumes no approval and grants no capability")
+		}
+	case "notifications/initialized", "ping":
+	case "notifications/cancelled":
+		if _, present := params["requestId"]; !present {
+			return fmt.Errorf("notifications/cancelled params = %#v, want a requestId", params)
+		}
 	case "tools/list":
 		if len(params) != 0 {
 			return fmt.Errorf("tools/list params = %#v, want empty object", params)
@@ -1013,7 +1098,7 @@ func validateMCPParams(method string, params map[string]any) error {
 			}
 		}
 	default:
-		return fmt.Errorf("method = %q, want tools/list or tools/call", method)
+		return fmt.Errorf("method = %q, want a supported MCP lifecycle or tool method", method)
 	}
 	return nil
 }
@@ -1793,16 +1878,13 @@ func TestModelDrivenFilesCreateCompletesApprovalFlow(t *testing.T) {
 
 	systemRequests := harness.systemMCP.recordedRequests()
 	filesRequests := harness.filesMCP.recordedRequests()
-	if len(systemRequests) != 1 || systemRequests[0].method != "tools/list" {
-		t.Fatalf("system MCP requests = %#v, want only tools/list", systemRequests)
+	assertMCPMethodSequence(t, "system", systemRequests, "tools/list")
+	assertMCPMethodSequence(t, "files", filesRequests, "tools/list", "tools/call")
+	call := filesRequests[len(filesRequests)-1]
+	if call.params["name"] != "files.create" || !reflect.DeepEqual(call.params["arguments"], wantArgs) {
+		t.Fatalf("files MCP call params = %#v", call.params)
 	}
-	if len(filesRequests) != 2 || filesRequests[0].method != "tools/list" || filesRequests[1].method != "tools/call" {
-		t.Fatalf("files MCP requests = %#v, want tools/list then tools/call", filesRequests)
-	}
-	if filesRequests[1].params["name"] != "files.create" || !reflect.DeepEqual(filesRequests[1].params["arguments"], wantArgs) {
-		t.Fatalf("files MCP call params = %#v", filesRequests[1].params)
-	}
-	meta, _ := filesRequests[1].params["_meta"].(map[string]any)
+	meta, _ := call.params["_meta"].(map[string]any)
 	token, _ := meta["approvalToken"].(string)
 	if token == "" {
 		t.Fatal("files MCP call has empty approval token")
@@ -2493,22 +2575,19 @@ func isOpenAIFunctionAlias(name string) bool {
 
 func assertModelDrivenMCPRequests(t *testing.T, system, files []fakeMCPRequest) {
 	t.Helper()
-	if len(system) != 2 || system[0].method != "tools/list" || system[1].method != "tools/call" {
-		t.Fatalf("system MCP requests = %#v, want tools/list then tools/call", system)
+	assertMCPMethodSequence(t, "system", system, "tools/list", "tools/call")
+	assertMCPMethodSequence(t, "files", files, "tools/list")
+	systemList, systemCall, filesList := system[2], system[3], files[2]
+	if len(systemList.params) != 0 || len(filesList.params) != 0 {
+		t.Fatalf("MCP tools/list params: system=%#v files=%#v, want empty objects", systemList.params, filesList.params)
 	}
-	if len(files) != 1 || files[0].method != "tools/list" {
-		t.Fatalf("files MCP requests = %#v, want only tools/list", files)
-	}
-	if len(system[0].params) != 0 || len(files[0].params) != 0 {
-		t.Fatalf("MCP tools/list params: system=%#v files=%#v, want empty objects", system[0].params, files[0].params)
-	}
-	if system[0].id == "" || system[1].id == "" || files[0].id == "" {
+	if systemList.id == "" || systemCall.id == "" || filesList.id == "" {
 		t.Fatalf("MCP request IDs must be present integers: system=%#v files=%#v", system, files)
 	}
-	if got := system[1].params["name"]; got != "system.time" {
+	if got := systemCall.params["name"]; got != "system.time" {
 		t.Fatalf("MCP tools/call name = %#v, want system.time", got)
 	}
-	if got := system[1].params["arguments"]; !reflect.DeepEqual(got, map[string]any{"timezone": "UTC"}) {
+	if got := systemCall.params["arguments"]; !reflect.DeepEqual(got, map[string]any{"timezone": "UTC"}) {
 		t.Fatalf("MCP tools/call arguments = %#v", got)
 	}
 }

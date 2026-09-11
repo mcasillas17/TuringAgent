@@ -20,7 +20,6 @@ var localMCPNetwork = netip.MustParsePrefix("172.31.254.0/24")
 func (s *Server) clientFor(server repository.MCPServerRecord) *http.Client {
 	if s.httpClient != nil {
 		client := *s.httpClient
-		client.CheckRedirect = rejectMCPRedirect
 		if client.Timeout <= 0 {
 			client.Timeout = 30 * time.Second
 		}
@@ -28,7 +27,6 @@ func (s *Server) clientFor(server repository.MCPServerRecord) *http.Client {
 	}
 	if server.Tier == repository.MCPServerTierBundled {
 		client := *http.DefaultClient
-		client.CheckRedirect = rejectMCPRedirect
 		client.Timeout = 30 * time.Second
 		return &client
 	}
@@ -64,8 +62,8 @@ func (s *Server) clientFor(server repository.MCPServerRecord) *http.Client {
 		},
 	}
 	client := &http.Client{
-		Transport: transport, CheckRedirect: rejectMCPRedirect,
-		Timeout: 30 * time.Second,
+		Transport: transport,
+		Timeout:   30 * time.Second,
 	}
 	if server.Tier == repository.MCPServerTierLocalContainer {
 		s.localClient = client
@@ -98,8 +96,4 @@ func resolveLocalMCPAddress(ctx context.Context, address string, lookup mcpLooku
 
 func resolvePublicMCPAddress(ctx context.Context, address string, lookup mcpLookupIP) (string, error) {
 	return backendegress.ResolvePublicAddress(ctx, address, backendegress.LookupIP(lookup))
-}
-
-func rejectMCPRedirect(_ *http.Request, _ []*http.Request) error {
-	return errors.New("MCP redirects are not allowed")
 }

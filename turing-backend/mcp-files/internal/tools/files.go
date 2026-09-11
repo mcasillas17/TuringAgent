@@ -39,7 +39,18 @@ const (
 	searchDirBatchSize    = 64
 	maxSearchErrorDetails = 20
 
-	maxCollectionResultJSONBytes = 384 * 1024
+	// MaxCollectionResultJSONBytes bounds files.list and files.search results,
+	// counted in already-escaped bytes. The transport, not the collection, sets
+	// this ceiling: the MCP layer sends every result twice — once structured and
+	// once serialized into a text block — and escapes the serialized copy a
+	// second time, so a quote-dense result costs up to three times its reserved
+	// size on the wire. The densest result files.search can emit measures
+	// 976,202 bytes at this budget — 93% of the 1 MiB response cap — while the
+	// previous 384 KiB overran it, and an overrun is not a truncation:
+	// writeJSONRPCStatus discards the whole result and answers -32603.
+	// TestWorstCaseCollectionResultFitsTheTransportBudget pins that arithmetic
+	// against the densest shape, not merely a plausible one.
+	MaxCollectionResultJSONBytes = 320 * 1024
 )
 
 type ApprovalValidator interface {
@@ -1068,7 +1079,7 @@ func reserveCollectionResultJSON(used *int, value any) bool {
 	if *used > 0 {
 		required++
 	}
-	if required > maxCollectionResultJSONBytes-*used {
+	if required > MaxCollectionResultJSONBytes-*used {
 		return false
 	}
 	*used += required

@@ -108,8 +108,8 @@ probe are not live end-to-end product proof; see
 | flutter-search | shipped | Exact-phrase shell search calls the backend RPC. Selecting a hit sets the conversation shown after search is dismissed; no date filter is provided. |
 | flutter-workspace | shipped | Chats, Skills, Memory, Integrations, MCPs, Automations, Agents and Telemetry have backend-connected surfaces; this is not full support for every advertised provider or protocol. |
 | explicit-cancel | shipped | CXL-001: authenticated, idempotent exact-run cancellation and Flutter Stop distinguish durable acceptance from execution reconciliation; completed effects are not rolled back. |
-| mcp-registry | shipped | Registration, import, enablement, token rotation and tool-policy management; not protocol conformance. |
-| mcp-lifecycle | pending | HTTP JSON-RPC tools/list and tools/call exist; initialization and capability negotiation remain CON-001. |
+| mcp-registry | shipped | Registration, import, enablement, token rotation and tool-policy management. Protocol conformance is the separate `mcp-lifecycle` row. |
+| mcp-lifecycle | shipped | CON-001: MCP 2025-11-25 over Streamable HTTP — initialization, version negotiation, advertised capabilities, tools/list and tools/call on both client paths and both bundled servers, with cursor pagination on the client side and ping on the runtime client and both bundled servers — the client's ping is protocol surface exercised by the conformance fixtures, not the mechanism container liveness uses. The bundled servers are sessionless, answer tools/list in one page and refuse a cursor, and only mcp-files cancels an in-flight request. No resources, prompts, sampling, elicitation or stdio. |
 | remote-model-routing | shipped | The conversation's destination bar selects a route through ExternalAgentService; the runtime calls its OpenAI-compatible model endpoint under per-run disclosure. |
 | agent-delegation | pending | No A2A delegation or connection to an existing Claude, Copilot, Gemini or ChatGPT product conversation. |
 | github-tools | shipped | Connected GitHub credentials support issue listing/reading, file reading and issue comments under egress and approval policy. |
@@ -126,6 +126,7 @@ claims.
 
 | Capability | Current state |
 |---|---|
+| MCP lifecycle | Turing speaks MCP revision `2025-11-25` over the Streamable HTTP transport in both directions: the two bundled servers answer `initialize`, `notifications/initialized`, `ping`, `tools/list` (one page; a cursor is refused), `tools/call` and `notifications/cancelled`, and both client paths negotiate before any tool call and page through a third-party server's cursors. Bundled servers are sessionless, and only mcp-files cancels in-flight work; resources, prompts, sampling, elicitation, OAuth and stdio are out of scope. |
 | Local chat and tool loop | Ollama is the default; streaming, bounded tool iterations, zero-argument recovery, and unknown-tool recovery are implemented. |
 | Durable orchestration | Sessions, runs, events, jobs, leases, fencing, retries, recovery, and reopenable run outcomes are persisted in SQLite. |
 | Bounded queue waiting | A queued run records whether any live worker can serve its route, and two configurable bounds end one that waits too long. Not a pause/resume state: both outcomes are terminal. |
@@ -143,8 +144,10 @@ claims.
 The configuration-driven registry scope originally named `CON-002` is treated
 as shipped by the registry, import, enablement, token-rotation, and policy work
 merged in PRs #73, #81, and #82. Dependencies on `CON-002` below are therefore
-satisfied. `CON-001` remains open because protocol initialization and
-capability negotiation did not ship with that registry.
+satisfied. `CON-001` is now shipped as well: the bounded MCP lifecycle
+described below landed after that registry, so "MCP server" in this repository
+means a peer Turing initializes and negotiates with, not only an HTTP endpoint
+it posts `tools/list` to.
 
 Other stable dependencies referenced by pending tasks are already satisfied:
 `TUR-001` (idempotent sends), `TUR-004` (session withdrawal), `TUR-006`
@@ -581,8 +584,12 @@ gates are satisfied.
   regression thresholds fail CI; expected lexical failures remain visible.
 - **Dependencies:** MEM-002 (shipped).
 
-### 6. CON-001 - Bounded MCP tool lifecycle conformance
+### 6. CON-001 - Bounded MCP tool lifecycle conformance (shipped)
 
+- **Status:** Shipped. The selected revision, transport profile, negotiated
+  capabilities and deliberate non-scope are documented in
+  [MCP security and integration](mcp-security-and-integration.md#mcp-lifecycle-conformance);
+  the guarded `mcp-lifecycle` row above owns the status claim.
 - **Outcome:** Turing interoperates honestly with standard MCP tool clients and
   test servers on the surface it supports.
 - **Scope:** Implement `initialize`/`initialized`, protocol and capability
@@ -595,6 +602,20 @@ gates are satisfied.
 - **Acceptance:** A stock test client discovers and calls bundled tools; Turing
   calls a stock test server; version skew fails clearly; ports remain internal;
   stdio remains refused.
+- **Delivered:** MCP `2025-11-25` over Streamable HTTP. Both bundled servers
+  answer `initialize` (negotiating the one supported revision, advertising only
+  a `tools` capability), `notifications/initialized`, `ping`,
+  `notifications/cancelled`, and `tools/list` / `tools/call` (each server
+  answers tools/list in a single page and refuses a cursor; client-side cursor
+  pagination is exercised against third-party servers, which do page); both refuse an unsupported `MCP-Protocol-Version` header with
+  400, refuse any request carrying an `Origin`, and answer GET and DELETE on
+  `/mcp` with 405. Both client paths — the runtime's client for the bundled
+  servers and the orchestrator's registry client for configured third-party
+  endpoints — handshake before any operation-phase call, announce the
+  negotiated revision and any server-assigned session, read either a JSON or an
+  event-stream response, and emit `notifications/cancelled` when their caller
+  goes away. Conformance is exercised in both directions against the official
+  MCP Go SDK, pinned at v1.7.0 as a test-only dependency.
 - **Dependencies:** TUR-019 (shipped).
 
 ### 7. CXL-001 - Explicit cancel intent

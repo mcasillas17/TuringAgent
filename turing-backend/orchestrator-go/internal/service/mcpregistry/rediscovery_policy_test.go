@@ -61,7 +61,7 @@ func TestRediscoveryPreservesDisabledToolPolicy(t *testing.T) {
 // reports.
 func TestImportedRemoteServerToolsSnapshotReplacedByLiveDiscoveryOnEnable(t *testing.T) {
 	service, repo := newRegistryTestService(t)
-	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	vendor := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -81,7 +81,7 @@ func TestImportedRemoteServerToolsSnapshotReplacedByLiveDiscoveryOnEnable(t *tes
 				},
 			}},
 		})
-	}))
+	})))
 	t.Cleanup(vendor.Close)
 	service.httpClient = vendor.Client()
 

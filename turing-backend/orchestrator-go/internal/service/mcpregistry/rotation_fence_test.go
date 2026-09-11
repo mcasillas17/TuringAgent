@@ -50,6 +50,21 @@ func (t *blockUntilReleasedTransport) authAt(index int) string {
 	return t.authHeaders[index]
 }
 
+// lastAuth is what the post-rotation assertions use instead of a fixed index:
+// one discovery or dispatch is several HTTP requests now (the `initialize`
+// handshake, then the operation itself), so "the request after the first one"
+// is no longer a stable way to name the operation that ran after the rotation.
+// The credential the peer saw most recently is, and it is exactly what those
+// assertions mean.
+func (t *blockUntilReleasedTransport) lastAuth() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.authHeaders) == 0 {
+		return ""
+	}
+	return t.authHeaders[len(t.authHeaders)-1]
+}
+
 // requireNotDone fails the test if channel ch is already readable —
 // proving a goroutine waiting to signal completion on ch has not (yet)
 // completed, rather than merely "completed within some window."
@@ -154,7 +169,7 @@ func TestCallToolCredentialFenceBlocksRotationUntilInFlightCallFinishes(t *testi
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := transport.authAt(1); got != "Bearer vendor-token-rotated" {
+	if got := transport.lastAuth(); got != "Bearer vendor-token-rotated" {
 		t.Fatalf("post-rotation call authorization = %q, want the newly rotated token", got)
 	}
 
@@ -244,7 +259,7 @@ func TestDiscoverCredentialFenceBlocksRotationUntilInFlightDiscoveryFinishes(t *
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := transport.authAt(1); got != "Bearer vendor-token-rotated" {
+	if got := transport.lastAuth(); got != "Bearer vendor-token-rotated" {
 		t.Fatalf("post-rotation discovery authorization = %q, want the newly rotated token", got)
 	}
 }

@@ -83,7 +83,7 @@ const mcpRegistryIssueCountOverCapMessage = "MCP registry import issue count exc
 // enableDiscoveryTimeout bounds the entire enable-time discovery operation
 // (every tools/list page, not just a single HTTP request) so a vendor that
 // never stops paginating cannot force SetMcpServerEnabled to hang for up to
-// maxMCPToolPages times the HTTP client's own 30s timeout. It matches that
+// mcpwire.MaxToolPages times the HTTP client's own 30s timeout. It matches that
 // existing per-request timeout, since one bounded round trip's worth of
 // budget for the whole operation is the intended behavior, not an
 // additional allowance on top of it.
@@ -330,7 +330,7 @@ func (s *Server) SetMcpServerEnabled(ctx context.Context, req *turingv1.SetMcpSe
 		// time exactly like a local-container one always has. The whole
 		// operation — not each individual HTTP request — is bounded by
 		// enableDiscoveryTimeout so a vendor cannot force up to
-		// maxMCPToolPages x the HTTP client's own timeout.
+		// mcpwire.MaxToolPages x the HTTP client's own timeout.
 		//
 		// discoverLocked holds this server's own credential lock for
 		// reading across discover's read/decrypt-token-through-network-
@@ -1219,7 +1219,11 @@ func (s *Server) discover(ctx context.Context, serverID string) (err error) {
 	defer func() {
 		err = redactMCPErrorValue(err, token)
 	}()
-	rawTools, err := newMCPClient(server.URL, token, s.clientFor(server)).listTools(ctx)
+	peer := newMCPClient(server.URL, token, s.clientFor(server))
+	// Detached, for the same reason as the dispatch path: a slow peer must
+	// not extend discovery or the lock it runs under.
+	defer func() { go peer.releaseSession() }()
+	rawTools, err := peer.listTools(ctx)
 	if err != nil {
 		return err
 	}

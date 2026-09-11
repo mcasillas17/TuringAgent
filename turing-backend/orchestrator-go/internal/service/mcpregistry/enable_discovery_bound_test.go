@@ -12,6 +12,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/mcpwire"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
@@ -190,7 +191,7 @@ func (t *blockUntilContextDoneTransport) RoundTrip(req *http.Request) (*http.Res
 // enableDiscoveryTimeoutOverride substitutes a short duration for the real
 // 30s constant so this test proves the wrapper without ever sleeping in
 // real time; the same mechanism is what stops a page-hungry vendor from
-// being able to force up to maxMCPToolPages times the per-request HTTP
+// being able to force up to mcpwire.MaxToolPages times the per-request HTTP
 // timeout.
 func TestSetMcpServerEnabledBoundsWholeDiscoveryByASingleContextTimeout(t *testing.T) {
 	service, repo := newRegistryTestService(t)
@@ -291,13 +292,13 @@ func (t *slowButValidPageTransport) RoundTrip(req *http.Request) (*http.Response
 // small number of pages; a per-page timeout regression (a fresh deadline
 // re-armed on every request instead of one deadline wrapping the entire
 // discover() call) would instead let every page keep finishing inside its
-// own fresh budget and paginate all the way to maxMCPToolPages (100),
-// taking roughly maxMCPToolPages x perPage and making that many HTTP
+// own fresh budget and paginate all the way to mcpwire.MaxToolPages (100),
+// taking roughly mcpwire.MaxToolPages x perPage and making that many HTTP
 // calls — both far more than this test allows, while still finishing in
 // well under a second either way, so it stays fast and deterministic.
 func TestSetMcpServerEnabledWholeOperationTimeoutStopsAfterFewPagesNotAllPages(t *testing.T) {
 	var pageCount int32
-	vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	vendor := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -312,7 +313,7 @@ func TestSetMcpServerEnabledWholeOperationTimeoutStopsAfterFewPagesNotAllPages(t
 				"nextCursor": fmt.Sprintf("page-%d", n),
 			},
 		})
-	}))
+	})))
 	t.Cleanup(vendor.Close)
 
 	const perPage = 30 * time.Millisecond
@@ -339,13 +340,13 @@ func TestSetMcpServerEnabledWholeOperationTimeoutStopsAfterFewPagesNotAllPages(t
 	})
 	elapsed := time.Since(start)
 
-	const maxAcceptablePages = 10 // generously above ~3, nowhere near maxMCPToolPages (100)
+	const maxAcceptablePages = 10 // generously above ~3, nowhere near mcpwire.MaxToolPages (100)
 	if calls := atomic.LoadInt32(&transport.calls); calls > maxAcceptablePages {
 		t.Fatalf("HTTP calls = %d, want at most %d: a per-page timeout regression would keep "+
-			"paginating toward maxMCPToolPages (%d) instead of stopping early", calls, maxAcceptablePages, maxMCPToolPages)
+			"paginating toward mcpwire.MaxToolPages (%d) instead of stopping early", calls, maxAcceptablePages, mcpwire.MaxToolPages)
 	}
 	if elapsed > 2*time.Second {
-		t.Fatalf("elapsed = %v, want well under what maxMCPToolPages pages at %v each would take: "+
+		t.Fatalf("elapsed = %v, want well under what mcpwire.MaxToolPages pages at %v each would take: "+
 			"the whole-operation timeout must stop discovery after a handful of pages", elapsed, perPage)
 	}
 

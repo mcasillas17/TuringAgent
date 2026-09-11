@@ -70,7 +70,10 @@ func documentationPreparationProblem(data []byte) string {
 			for _, line := range strings.Split(step.With.CachePaths, "\n") {
 				paths[strings.TrimSpace(line)] = true
 			}
-			if !paths["go.sum"] || !paths["turing-backend/mcp-files/go.sum"] || !paths["turing-backend/mcp-system/go.mod"] {
+			// mcp-system keys on its own go.sum now that its conformance
+			// tests pin the official MCP SDK; the shipped binary is still
+			// standard-library only.
+			if !paths["go.sum"] || !paths["turing-backend/mcp-files/go.sum"] || !paths["turing-backend/mcp-system/go.sum"] {
 				return "root setup-go cache paths are missing module inputs"
 			}
 			setup = index
@@ -118,7 +121,7 @@ func TestDocumentationPreparationFixtures(t *testing.T) {
 	}
 	for _, fixture := range []struct{ name, old, replacement, want string }{
 		{"baseline", "", "", ""},
-		{"commented cache path", "            turing-backend/mcp-system/go.mod", "            # turing-backend/mcp-system/go.mod", "cache paths"},
+		{"commented cache path", "            turing-backend/mcp-system/go.sum", "            # turing-backend/mcp-system/go.sum", "cache paths"},
 		{"commented download", "          (cd turing-backend/mcp-files && go mod download)", "          # (cd turing-backend/mcp-files && go mod download)", "module preparation"},
 		{"conditional preparation", "- name: Prepare documentation guard module caches", "- name: Prepare documentation guard module caches\n        if: false", "unconditional"},
 		{"ignored preparation error", "- name: Prepare documentation guard module caches", "- name: Prepare documentation guard module caches\n        continue-on-error: true", "gating"},

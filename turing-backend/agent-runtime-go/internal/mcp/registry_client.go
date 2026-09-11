@@ -90,5 +90,14 @@ func (c *RegistryClient) CallToolWithCallerApproval(
 	if response.GetResult() == nil {
 		return nil, errors.New("registered MCP server returned no result")
 	}
-	return response.GetResult().AsMap(), nil
+	result := response.GetResult().AsMap()
+	// A registered server reports a tool *execution* failure the protocol's own
+	// way, with isError on an otherwise successful result. Classify it here,
+	// exactly as the bundled client does: without this the orchestrator hop
+	// turns a failed tool into a completed one, and the model is handed a
+	// result that only looks successful.
+	if isError, ok := result["isError"].(bool); ok && isError {
+		return nil, ToolCallError{Result: result}
+	}
+	return unwrapCallToolResult(result), nil
 }

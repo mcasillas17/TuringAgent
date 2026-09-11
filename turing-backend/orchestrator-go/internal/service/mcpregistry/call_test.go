@@ -214,15 +214,18 @@ func TestServerDisappearingBetweenDiscoveryAndDispatchIsRecordedDown(t *testing.
 }
 
 type registryCallHarness struct {
-	registry      *Server
-	approvals     *approvalsvc.Server
-	repo          *repository.Repository
-	database      *db.DB
-	vendor        *httptest.Server
-	serverID      string
-	reached       atomic.Int32
-	authorization atomic.Value
-	deleteOnCall  atomic.Bool
+	registry  *Server
+	approvals *approvalsvc.Server
+	repo      *repository.Repository
+	database  *db.DB
+	vendor    *httptest.Server
+	// sessionDeleted receives the id from the vendor's session delete, so a
+	// dispatch test can prove CallTool released what it opened.
+	sessionDeleted chan string
+	serverID       string
+	reached        atomic.Int32
+	authorization  atomic.Value
+	deleteOnCall   atomic.Bool
 	// result, when set (see setResult), overrides the vendor's default
 	// {"content": []any{}} JSON-RPC result for every subsequent call.
 	result atomic.Value
@@ -252,7 +255,8 @@ func newRegistryCallHarness(t *testing.T) *registryCallHarness {
 		t.Fatal(err)
 	}
 	h := &registryCallHarness{repo: repo, database: database}
-	vendor := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h.sessionDeleted = make(chan string, 4)
+	vendor := httptest.NewTLSServer(answerMCPHandshakeWithSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.reached.Add(1)
 		h.authorization.Store(r.Header.Get("authorization"))
 		var request struct {
@@ -280,7 +284,7 @@ func newRegistryCallHarness(t *testing.T) *registryCallHarness {
 			"id":      request.ID,
 			"result":  result,
 		})
-	}))
+	}), "vendor-session-1", h.sessionDeleted))
 	t.Cleanup(vendor.Close)
 	h.vendor = vendor
 	sealed, err := sealer.Seal([]byte("vendor-token"), []byte("vendor"))

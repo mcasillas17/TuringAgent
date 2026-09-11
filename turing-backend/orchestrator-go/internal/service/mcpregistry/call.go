@@ -166,7 +166,11 @@ func (s *Server) CallTool(ctx context.Context, input CallInput) (map[string]any,
 		}
 		token = string(opened)
 	}
-	result, err := newMCPClient(current.URL, token, s.clientFor(current)).callTool(ctx, input.ToolName, input.Args)
+	peer := newMCPClient(current.URL, token, s.clientFor(current))
+	// Detached: the peer controls how slowly it answers, and this must not
+	// extend either the dispatch or the credential read lock it runs under.
+	defer func() { go peer.releaseSession() }()
+	result, err := peer.callTool(ctx, input.ToolName, input.Args)
 	if err != nil {
 		_ = s.repo.SetMCPServerStatus(ctx, server.ID, "down", boundedStatusMessage(err.Error()))
 		return nil, err

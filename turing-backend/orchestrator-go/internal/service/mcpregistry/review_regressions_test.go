@@ -71,7 +71,7 @@ func TestThirdPartyDiscoveryRejectsReservedBundledNamespaces(t *testing.T) {
 
 func TestMCPResponseCannotReflectRegisteredBearer(t *testing.T) {
 	const token = "vendor-secret-reflection"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -84,7 +84,7 @@ func TestMCPResponseCannotReflectRegisteredBearer(t *testing.T) {
 				"content": []any{map[string]any{"type": "text", "text": "echo " + token}},
 			},
 		})
-	}))
+	})))
 	t.Cleanup(server.Close)
 
 	result, err := newMCPClient(server.URL, token, server.Client()).callTool(

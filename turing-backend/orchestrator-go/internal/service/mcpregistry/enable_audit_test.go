@@ -21,7 +21,7 @@ import (
 // single, harmless tool — enough for discover() to succeed.
 func toolsListVendor(t *testing.T) *httptest.Server {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -34,7 +34,7 @@ func toolsListVendor(t *testing.T) *httptest.Server {
 				"name": "vendor.lookup", "inputSchema": map[string]any{"type": "object"},
 			}}},
 		})
-	}))
+	})))
 	t.Cleanup(server.Close)
 	return server
 }
@@ -43,7 +43,7 @@ func toolsListVendor(t *testing.T) *httptest.Server {
 // fails with the given message, so discover() reports an error.
 func failingVendor(t *testing.T, message string) *httptest.Server {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(answerMCPHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			ID int64 `json:"id"`
 		}
@@ -54,7 +54,7 @@ func failingVendor(t *testing.T, message string) *httptest.Server {
 			"id":      request.ID,
 			"error":   map[string]any{"code": -32000, "message": message},
 		})
-	}))
+	})))
 	t.Cleanup(server.Close)
 	return server
 }

@@ -8,11 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/mcpwire"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 )
 
 // mcp.json's static "tools" snapshot must be bounded by the exact same
-// maxMCPTools count limit a live tools/list response is bounded by
+// mcpwire.MaxTools count limit a live tools/list response is bounded by
 // (mcpClient.listTools): an entry naming more tools than that must be
 // refused entirely, with a fixed, generic, bounded reason, and must leave
 // no server row behind — never a partial import a corrected, smaller
@@ -21,7 +22,7 @@ func TestImportJSONStaticSnapshotToolCountLimitRefusesWholeEntryWithNoPartialRow
 	service, repo := newRegistryTestService(t)
 	ctx := context.Background()
 
-	tools := make([]map[string]any, maxMCPTools+1)
+	tools := make([]map[string]any, mcpwire.MaxTools+1)
 	for i := range tools {
 		tools[i] = map[string]any{
 			"name":        fmt.Sprintf("vendor.tool_%d", i),
@@ -45,14 +46,14 @@ func TestImportJSONStaticSnapshotToolCountLimitRefusesWholeEntryWithNoPartialRow
 		t.Fatal(err)
 	}
 	if len(report.Imported) != 0 {
-		t.Fatalf("Imported = %v, want none: exceeding maxMCPTools must refuse the whole entry", report.Imported)
+		t.Fatalf("Imported = %v, want none: exceeding mcpwire.MaxTools must refuse the whole entry", report.Imported)
 	}
 	reason, refused := report.Unsupported["vendor"]
 	if !refused {
 		t.Fatalf("Unsupported = %+v, want vendor refused", report.Unsupported)
 	}
-	if !strings.Contains(reason, fmt.Sprintf("%d", maxMCPTools)) {
-		t.Fatalf("reason = %q, want it to name the maxMCPTools limit", reason)
+	if !strings.Contains(reason, fmt.Sprintf("%d", mcpwire.MaxTools)) {
+		t.Fatalf("reason = %q, want it to name the mcpwire.MaxTools limit", reason)
 	}
 	if _, err := repo.GetMCPServerByName(ctx, "vendor"); err != repository.ErrMCPServerNotFound {
 		t.Fatalf("err = %v, want ErrMCPServerNotFound: no row may remain after the refusal", err)
@@ -60,7 +61,7 @@ func TestImportJSONStaticSnapshotToolCountLimitRefusesWholeEntryWithNoPartialRow
 }
 
 // mcp.json's static "tools" snapshot must also be bounded by the same
-// maxMCPToolBytes serialized-size limit a live tools/list response is
+// mcpwire.MaxToolBytes serialized-size limit a live tools/list response is
 // bounded by, counted the same way live discovery counts it: a running
 // total of each tool's encoded descriptor. A single tool whose serialized
 // name+schema alone exceeds the limit must refuse the whole entry with a
@@ -72,7 +73,7 @@ func TestImportJSONStaticSnapshotByteLimitRefusesWholeEntryWithNoPartialRow(t *t
 
 	oversizedSchema := map[string]any{
 		"type":    "object",
-		"padding": strings.Repeat("a", maxMCPToolBytes+1),
+		"padding": strings.Repeat("a", mcpwire.MaxToolBytes+1),
 	}
 	document, err := json.Marshal(map[string]any{
 		"mcpServers": map[string]any{
@@ -93,7 +94,7 @@ func TestImportJSONStaticSnapshotByteLimitRefusesWholeEntryWithNoPartialRow(t *t
 		t.Fatal(err)
 	}
 	if len(report.Imported) != 0 {
-		t.Fatalf("Imported = %v, want none: exceeding maxMCPToolBytes must refuse the whole entry", report.Imported)
+		t.Fatalf("Imported = %v, want none: exceeding mcpwire.MaxToolBytes must refuse the whole entry", report.Imported)
 	}
 	reason, refused := report.Unsupported["vendor"]
 	if !refused {
@@ -102,8 +103,8 @@ func TestImportJSONStaticSnapshotByteLimitRefusesWholeEntryWithNoPartialRow(t *t
 	if strings.Contains(reason, "aaaa") {
 		t.Fatalf("reason = %q, must not echo the oversized schema back", reason)
 	}
-	if !strings.Contains(reason, fmt.Sprintf("%d", maxMCPToolBytes)) {
-		t.Fatalf("reason = %q, want it to name the maxMCPToolBytes limit", reason)
+	if !strings.Contains(reason, fmt.Sprintf("%d", mcpwire.MaxToolBytes)) {
+		t.Fatalf("reason = %q, want it to name the mcpwire.MaxToolBytes limit", reason)
 	}
 	if _, err := repo.GetMCPServerByName(ctx, "vendor"); err != repository.ErrMCPServerNotFound {
 		t.Fatalf("err = %v, want ErrMCPServerNotFound: no row may remain after the refusal", err)
@@ -179,7 +180,7 @@ func TestImportJSONStaticSnapshotDescriptionIsAcceptedButNeverStored(t *testing.
 }
 
 // A tool's "description" is never stored (repository.MCPServerTool has no
-// field for it), but it must still count toward maxMCPToolBytes: otherwise
+// field for it), but it must still count toward mcpwire.MaxToolBytes: otherwise
 // an oversized description would inflate this call's real in-memory and
 // wire footprint arbitrarily while completely evading the one limit meant
 // to bound a static snapshot's size, since the byte accounting previously
@@ -188,7 +189,7 @@ func TestImportJSONStaticSnapshotByteLimitCountsDescriptionBytes(t *testing.T) {
 	service, repo := newRegistryTestService(t)
 	ctx := context.Background()
 
-	oversizedDescription := strings.Repeat("a", maxMCPToolBytes+1)
+	oversizedDescription := strings.Repeat("a", mcpwire.MaxToolBytes+1)
 	document, err := json.Marshal(map[string]any{
 		"mcpServers": map[string]any{
 			"vendor": map[string]any{
@@ -218,8 +219,8 @@ func TestImportJSONStaticSnapshotByteLimitCountsDescriptionBytes(t *testing.T) {
 	if !refused {
 		t.Fatalf("Unsupported = %+v, want vendor refused", report.Unsupported)
 	}
-	if !strings.Contains(reason, fmt.Sprintf("%d", maxMCPToolBytes)) {
-		t.Fatalf("reason = %q, want it to name the maxMCPToolBytes limit", reason)
+	if !strings.Contains(reason, fmt.Sprintf("%d", mcpwire.MaxToolBytes)) {
+		t.Fatalf("reason = %q, want it to name the mcpwire.MaxToolBytes limit", reason)
 	}
 	if strings.Contains(reason, "aaaa") {
 		t.Fatalf("reason = %q, must not echo the oversized description back", reason)

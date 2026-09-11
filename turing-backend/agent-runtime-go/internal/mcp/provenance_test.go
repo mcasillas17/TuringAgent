@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,14 +13,18 @@ import (
 func capturedToolCallParams(t *testing.T, call func(client *Client) error) map[string]any {
 	t.Helper()
 	var params map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// answerHandshake absorbs `initialize` and the `initialized` notification,
+	// so only the tool call itself reaches this handler and `params` is the
+	// tool call's own — not the handshake's.
+	server := httptest.NewServer(answerHandshake(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Error(err)
 			return
 		}
 		var request struct {
-			Params map[string]any `json:"params"`
+			ID     json.RawMessage `json:"id"`
+			Params map[string]any  `json:"params"`
 		}
 		if err := json.Unmarshal(body, &request); err != nil {
 			t.Error(err)
@@ -27,8 +32,8 @@ func capturedToolCallParams(t *testing.T, call func(client *Client) error) map[s
 		}
 		params = request.Params
 		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
-	}))
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"ok":true}}`, request.ID)
+	})))
 	defer server.Close()
 	if err := call(NewClient(server.URL, "", server.Client())); err != nil {
 		t.Fatalf("CallTool: %v", err)

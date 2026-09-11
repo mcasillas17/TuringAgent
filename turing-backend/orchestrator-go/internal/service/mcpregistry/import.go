@@ -23,6 +23,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
+	"github.com/mcasillas17/TuringAgent/turing-backend/mcpwire"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 	toolpolicy "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/tools"
@@ -809,24 +810,24 @@ func mcpRawMetadataContainsToken(value any, token string) bool {
 // instance) can never be found by a scan of decoded values at all,
 // regardless of type. Neither scan replaces the other.
 //
-// A static snapshot is bounded by the exact same maxMCPTools/
-// maxMCPToolBytes limits mcpClient.listTools applies to a live
+// A static snapshot is bounded by the exact same mcpwire.MaxTools/
+// mcpwire.MaxToolBytes limits mcpClient.listTools applies to a live
 // tools/list response, counted the same way plus one addition: the tool
-// count against maxMCPTools, and a running total of each tool's
+// count against mcpwire.MaxTools, and a running total of each tool's
 // serialized name, its already-built schemaJSON, and its description
 // (never stored, but still counted — otherwise an oversized description
 // could inflate this call's real footprint while wholly evading the
-// limit) against maxMCPToolBytes. Either limit being exceeded refuses the
+// limit) against mcpwire.MaxToolBytes. Either limit being exceeded refuses the
 // whole snapshot with a fixed, generic message — bounded and free of the
 // offending name or schema, the same way an over-limit live discovery
 // response never repeats it — before anything here has mutated the
 // repository, so there is never a partial row a corrected, smaller
 // snapshot could only skip.
 func buildImportTools(tier repository.MCPServerTier, serverName string, rawTools []mcpJSONTool, token string) ([]repository.MCPServerTool, error) {
-	if len(rawTools) > maxMCPTools {
+	if len(rawTools) > mcpwire.MaxTools {
 		// Defense-in-depth only: decodeMCPToolEntries (see its own
 		// errMCPStaticToolCountExceeded check) already refuses a static
-		// snapshot naming more than maxMCPTools entries before rawTools
+		// snapshot naming more than mcpwire.MaxTools entries before rawTools
 		// is ever built, so this should be unreachable in practice.
 		return nil, errMCPStaticToolCountExceeded
 	}
@@ -888,8 +889,8 @@ func buildImportTools(tier repository.MCPServerTier, serverName string, rawTools
 			return nil, errors.New(mcpToolDefinitionRefusedMessage)
 		}
 		size := len(tool.Name) + len(schemaJSON) + len(tool.Description)
-		if size > maxMCPToolBytes-encodedBytes {
-			return nil, fmt.Errorf("static tools snapshot exceeds encoded descriptor limit of %d bytes", maxMCPToolBytes)
+		if size > mcpwire.MaxToolBytes-encodedBytes {
+			return nil, fmt.Errorf("static tools snapshot exceeds encoded descriptor limit of %d bytes", mcpwire.MaxToolBytes)
 		}
 		encodedBytes += size
 		built, err := buildRepositoryTool(tier, serverName, tool.Name, schemaJSON)
@@ -951,7 +952,7 @@ func (s *Server) ImportJSON(ctx context.Context, data []byte) (report ImportRepo
 	// The whole document's raw size is bounded before it is ever handed
 	// to json.Decoder, independent of (and prior to) any per-server or
 	// per-tool limit below: most of a document sits outside any single
-	// entry's own "tools" snapshot, so maxMCPToolBytes alone never bounds
+	// entry's own "tools" snapshot, so mcpwire.MaxToolBytes alone never bounds
 	// how much this call would otherwise buffer and decode. The message
 	// stays generic and bounded — a byte count and the fixed cap, never
 	// any of the document's own content — and nothing below it, including
@@ -1692,14 +1693,14 @@ func mcpToolFromFields(fields []mcpToolField) (mcpJSONTool, error) {
 }
 
 // errMCPStaticToolCountExceeded is the one fixed, generic reason a static
-// "tools" snapshot naming more than maxMCPTools entries is refused —
+// "tools" snapshot naming more than mcpwire.MaxTools entries is refused —
 // shared by decodeMCPToolEntries (checked before the
-// (maxMCPTools+1)-th element is ever decoded) and buildImportTools' own
-// defense-in-depth len(rawTools) > maxMCPTools check, so both report the
+// (mcpwire.MaxTools+1)-th element is ever decoded) and buildImportTools' own
+// defense-in-depth len(rawTools) > mcpwire.MaxTools check, so both report the
 // exact same wording regardless of which one actually trips. It names the
 // fixed limit itself, never the offending entry's own tool count or any
 // tool's name.
-var errMCPStaticToolCountExceeded = fmt.Errorf("static tools snapshot exceeds limit of %d tools", maxMCPTools)
+var errMCPStaticToolCountExceeded = fmt.Errorf("static tools snapshot exceeds limit of %d tools", mcpwire.MaxTools)
 
 // decodeMCPToolEntries parses an mcp.json entry's raw "tools" value —
 // captured as json.RawMessage (see mcpJSONServer.Tools) precisely so this
@@ -1716,9 +1717,9 @@ var errMCPStaticToolCountExceeded = fmt.Errorf("static tools snapshot exceeds li
 // fixed, generic mcpToolDefinitionRefusedMessage.
 //
 // The element count is enforced (errMCPStaticToolCountExceeded) the
-// instant it would exceed maxMCPTools — the same maxMCPTools limit
+// instant it would exceed mcpwire.MaxTools — the same mcpwire.MaxTools limit
 // buildImportTools itself already enforces, checked here first, before
-// that (maxMCPTools+1)-th element's own raw bytes are even decoded, let
+// that (mcpwire.MaxTools+1)-th element's own raw bytes are even decoded, let
 // alone its (potentially large) inputSchema or description parsed by
 // decodeMCPToolFields/mcpToolFromFields. Without this, an attacker-sized
 // static snapshot could force every excess tool's full shape to be
@@ -1739,7 +1740,7 @@ func decodeMCPToolEntries(raw json.RawMessage) ([]mcpJSONTool, error) {
 	}
 	var tools []mcpJSONTool
 	for decoder.More() {
-		if len(tools) >= maxMCPTools {
+		if len(tools) >= mcpwire.MaxTools {
 			return nil, errMCPStaticToolCountExceeded
 		}
 		var element json.RawMessage
