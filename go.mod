@@ -3,7 +3,7 @@ module github.com/mcasillas17/TuringAgent
 go 1.25.0
 
 require (
-	github.com/mattn/go-sqlite3 v1.14.50
+	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/yuin/goldmark v1.8.6
