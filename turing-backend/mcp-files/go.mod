@@ -13,7 +13,7 @@ require (
 
 require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
-	github.com/mattn/go-sqlite3 v1.14.50 // indirect
+	github.com/mattn/go-sqlite3 v1.14.52 // indirect
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
