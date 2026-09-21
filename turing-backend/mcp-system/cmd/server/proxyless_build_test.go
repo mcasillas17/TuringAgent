@@ -29,7 +29,7 @@ import (
 // GOROOT. Go keeps downloaded toolchains in the module cache, so the isolation
 // hides those too: comparing this module's directive against the PATH `go`
 // instead would make the guard skip whenever that binary is older —including on
-// CI, which pins go-version 1.25.x while the directive moves independently with
+// CI, which pins go-version 1.26.x while the directive moves independently with
 // Dependabot, so the next bump would turn the assertion inert on the one machine
 // meant to run it. The running toolchain necessarily satisfies the directive, or
 // this test binary would not exist, so there is no version to compare.
