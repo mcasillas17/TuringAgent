@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/mcasillas17/TuringAgent v0.0.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.42.0
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
