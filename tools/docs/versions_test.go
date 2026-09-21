@@ -241,8 +241,8 @@ func TestDocumentedGoFloorMatchesTheModules(t *testing.T) {
 	// Compared with go/version rather than string ordering, which would rank
 	// "1.9" above "1.10".
 	floor := strings.TrimPrefix(version.Lang(highest), "go")
-	// The floor is written two ways on purpose — a table wants "Go 1.25+",
-	// running prose wants "Go 1.25 or newer" — so accept either rather than
+	// The floor is written two ways on purpose — a table wants "Go 1.26+",
+	// running prose wants "Go 1.26 or newer" — so accept either rather than
 	// reddening the build over a legitimate rewording.
 	phrasing := regexp.MustCompile(`Go ` + regexp.QuoteMeta(floor) + `(\+| or newer)`)
 	for _, doc := range []struct{ name, body string }{{"CLAUDE.md", claude}, {"README.md", readme}} {
