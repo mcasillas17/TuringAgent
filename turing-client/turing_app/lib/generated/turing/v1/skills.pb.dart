@@ -8,7 +8,7 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
@@ -36,7 +36,7 @@ class Skill extends $pb.GeneratedMessage {
     $core.String? parseError,
     $core.String? folderPath,
   }) {
-    final result = create();
+    final result = Skill._();
     if (skillId != null) result.skillId = skillId;
     if (name != null) result.name = name;
     if (description != null) result.description = description;
@@ -60,15 +60,15 @@ class Skill extends $pb.GeneratedMessage {
 
   factory Skill.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      Skill()..mergeFromBuffer(data, registry);
   factory Skill.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      Skill()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'Skill',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: Skill.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'skillId')
     ..aOS(2, _omitFieldNames ? '' : 'name')
     ..aOS(3, _omitFieldNames ? '' : 'description')
@@ -95,13 +95,14 @@ class Skill extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use Skill() / Skill.new instead')
   static Skill create() => Skill._();
+  static $pb.GeneratedMessage $_createMessage() => Skill._();
   @$core.override
-  Skill createEmptyInstance() => create();
-  static $pb.PbList<Skill> createRepeated() => $pb.PbList<Skill>();
+  Skill createEmptyInstance() => Skill._();
   @$core.pragma('dart2js:noInline')
-  static Skill getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<Skill>(create);
+  static Skill getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<Skill>(Skill.$_createMessage);
   static Skill? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -214,21 +215,21 @@ class Skill extends $pb.GeneratedMessage {
 }
 
 class ListSkillsRequest extends $pb.GeneratedMessage {
-  factory ListSkillsRequest() => create();
+  factory ListSkillsRequest() => ListSkillsRequest._();
 
   ListSkillsRequest._();
 
   factory ListSkillsRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListSkillsRequest()..mergeFromBuffer(data, registry);
   factory ListSkillsRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListSkillsRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListSkillsRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListSkillsRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -242,14 +243,15 @@ class ListSkillsRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ListSkillsRequest() / ListSkillsRequest.new instead')
   static ListSkillsRequest create() => ListSkillsRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ListSkillsRequest._();
   @$core.override
-  ListSkillsRequest createEmptyInstance() => create();
-  static $pb.PbList<ListSkillsRequest> createRepeated() =>
-      $pb.PbList<ListSkillsRequest>();
+  ListSkillsRequest createEmptyInstance() => ListSkillsRequest._();
   @$core.pragma('dart2js:noInline')
-  static ListSkillsRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListSkillsRequest>(create);
+  static ListSkillsRequest getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ListSkillsRequest>(
+          ListSkillsRequest.$_createMessage);
   static ListSkillsRequest? _defaultInstance;
 }
 
@@ -257,7 +259,7 @@ class ListSkillsResponse extends $pb.GeneratedMessage {
   factory ListSkillsResponse({
     $core.Iterable<Skill>? skills,
   }) {
-    final result = create();
+    final result = ListSkillsResponse._();
     if (skills != null) result.skills.addAll(skills);
     return result;
   }
@@ -266,16 +268,17 @@ class ListSkillsResponse extends $pb.GeneratedMessage {
 
   factory ListSkillsResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListSkillsResponse()..mergeFromBuffer(data, registry);
   factory ListSkillsResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListSkillsResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListSkillsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
-    ..pPM<Skill>(1, _omitFieldNames ? '' : 'skills', subBuilder: Skill.create)
+      createEmptyInstance: ListSkillsResponse.$_createMessage)
+    ..pPM<Skill>(1, _omitFieldNames ? '' : 'skills',
+        subBuilder: Skill.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -289,14 +292,15 @@ class ListSkillsResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ListSkillsResponse() / ListSkillsResponse.new instead')
   static ListSkillsResponse create() => ListSkillsResponse._();
+  static $pb.GeneratedMessage $_createMessage() => ListSkillsResponse._();
   @$core.override
-  ListSkillsResponse createEmptyInstance() => create();
-  static $pb.PbList<ListSkillsResponse> createRepeated() =>
-      $pb.PbList<ListSkillsResponse>();
+  ListSkillsResponse createEmptyInstance() => ListSkillsResponse._();
   @$core.pragma('dart2js:noInline')
   static ListSkillsResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListSkillsResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListSkillsResponse>(
+          ListSkillsResponse.$_createMessage);
   static ListSkillsResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -307,7 +311,7 @@ class GetSkillRequest extends $pb.GeneratedMessage {
   factory GetSkillRequest({
     $core.String? skillId,
   }) {
-    final result = create();
+    final result = GetSkillRequest._();
     if (skillId != null) result.skillId = skillId;
     return result;
   }
@@ -316,15 +320,15 @@ class GetSkillRequest extends $pb.GeneratedMessage {
 
   factory GetSkillRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      GetSkillRequest()..mergeFromBuffer(data, registry);
   factory GetSkillRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      GetSkillRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'GetSkillRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: GetSkillRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'skillId')
     ..hasRequiredFields = false;
 
@@ -339,14 +343,15 @@ class GetSkillRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use GetSkillRequest() / GetSkillRequest.new instead')
   static GetSkillRequest create() => GetSkillRequest._();
+  static $pb.GeneratedMessage $_createMessage() => GetSkillRequest._();
   @$core.override
-  GetSkillRequest createEmptyInstance() => create();
-  static $pb.PbList<GetSkillRequest> createRepeated() =>
-      $pb.PbList<GetSkillRequest>();
+  GetSkillRequest createEmptyInstance() => GetSkillRequest._();
   @$core.pragma('dart2js:noInline')
-  static GetSkillRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<GetSkillRequest>(create);
+  static GetSkillRequest getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<GetSkillRequest>(
+          GetSkillRequest.$_createMessage);
   static GetSkillRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -364,7 +369,7 @@ class SetSkillEnabledRequest extends $pb.GeneratedMessage {
     $core.String? skillId,
     $core.bool? enabled,
   }) {
-    final result = create();
+    final result = SetSkillEnabledRequest._();
     if (skillId != null) result.skillId = skillId;
     if (enabled != null) result.enabled = enabled;
     return result;
@@ -374,15 +379,15 @@ class SetSkillEnabledRequest extends $pb.GeneratedMessage {
 
   factory SetSkillEnabledRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SetSkillEnabledRequest()..mergeFromBuffer(data, registry);
   factory SetSkillEnabledRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SetSkillEnabledRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SetSkillEnabledRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SetSkillEnabledRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'skillId')
     ..aOB(2, _omitFieldNames ? '' : 'enabled')
     ..hasRequiredFields = false;
@@ -399,14 +404,16 @@ class SetSkillEnabledRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SetSkillEnabledRequest() / SetSkillEnabledRequest.new instead')
   static SetSkillEnabledRequest create() => SetSkillEnabledRequest._();
+  static $pb.GeneratedMessage $_createMessage() => SetSkillEnabledRequest._();
   @$core.override
-  SetSkillEnabledRequest createEmptyInstance() => create();
-  static $pb.PbList<SetSkillEnabledRequest> createRepeated() =>
-      $pb.PbList<SetSkillEnabledRequest>();
+  SetSkillEnabledRequest createEmptyInstance() => SetSkillEnabledRequest._();
   @$core.pragma('dart2js:noInline')
   static SetSkillEnabledRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SetSkillEnabledRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<SetSkillEnabledRequest>(
+          SetSkillEnabledRequest.$_createMessage);
   static SetSkillEnabledRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -434,7 +441,7 @@ class SetSkillCapabilityGrantRequest extends $pb.GeneratedMessage {
     $core.String? capability,
     $core.bool? granted,
   }) {
-    final result = create();
+    final result = SetSkillCapabilityGrantRequest._();
     if (skillId != null) result.skillId = skillId;
     if (capability != null) result.capability = capability;
     if (granted != null) result.granted = granted;
@@ -445,15 +452,15 @@ class SetSkillCapabilityGrantRequest extends $pb.GeneratedMessage {
 
   factory SetSkillCapabilityGrantRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SetSkillCapabilityGrantRequest()..mergeFromBuffer(data, registry);
   factory SetSkillCapabilityGrantRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SetSkillCapabilityGrantRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SetSkillCapabilityGrantRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SetSkillCapabilityGrantRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'skillId')
     ..aOS(2, _omitFieldNames ? '' : 'capability')
     ..aOB(3, _omitFieldNames ? '' : 'granted')
@@ -472,15 +479,19 @@ class SetSkillCapabilityGrantRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SetSkillCapabilityGrantRequest() / SetSkillCapabilityGrantRequest.new instead')
   static SetSkillCapabilityGrantRequest create() =>
       SetSkillCapabilityGrantRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      SetSkillCapabilityGrantRequest._();
   @$core.override
-  SetSkillCapabilityGrantRequest createEmptyInstance() => create();
-  static $pb.PbList<SetSkillCapabilityGrantRequest> createRepeated() =>
-      $pb.PbList<SetSkillCapabilityGrantRequest>();
+  SetSkillCapabilityGrantRequest createEmptyInstance() =>
+      SetSkillCapabilityGrantRequest._();
   @$core.pragma('dart2js:noInline')
   static SetSkillCapabilityGrantRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SetSkillCapabilityGrantRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<SetSkillCapabilityGrantRequest>(
+          SetSkillCapabilityGrantRequest.$_createMessage);
   static SetSkillCapabilityGrantRequest? _defaultInstance;
 
   @$pb.TagNumber(1)

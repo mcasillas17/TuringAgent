@@ -8,15 +8,16 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
 import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
+import 'package:protobuf/well_known_types/google/protobuf/struct.pb.dart' as $2;
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
+    as $1;
 
-import '../../google/protobuf/struct.pb.dart' as $2;
-import '../../google/protobuf/timestamp.pb.dart' as $1;
 import 'common.pb.dart' as $3;
 import 'events.pbenum.dart';
 
@@ -36,7 +37,7 @@ class TuringEvent extends $pb.GeneratedMessage {
     $2.Struct? payload,
     $3.RunState? runState,
   }) {
-    final result = create();
+    final result = TuringEvent._();
     if (eventId != null) result.eventId = eventId;
     if (sessionId != null) result.sessionId = sessionId;
     if (runId != null) result.runId = runId;
@@ -53,15 +54,15 @@ class TuringEvent extends $pb.GeneratedMessage {
 
   factory TuringEvent.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      TuringEvent()..mergeFromBuffer(data, registry);
   factory TuringEvent.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      TuringEvent()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'TuringEvent',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: TuringEvent.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'eventId')
     ..aOS(2, _omitFieldNames ? '' : 'sessionId')
     ..aOS(3, _omitFieldNames ? '' : 'runId')
@@ -70,11 +71,11 @@ class TuringEvent extends $pb.GeneratedMessage {
     ..aE<TuringEventType>(6, _omitFieldNames ? '' : 'type',
         enumValues: TuringEventType.values)
     ..aOM<$1.Timestamp>(7, _omitFieldNames ? '' : 'createdAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOM<$2.Struct>(8, _omitFieldNames ? '' : 'payload',
-        subBuilder: $2.Struct.create)
+        subBuilder: $2.Struct.$_createMessage)
     ..aOM<$3.RunState>(9, _omitFieldNames ? '' : 'runState',
-        subBuilder: $3.RunState.create)
+        subBuilder: $3.RunState.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -88,13 +89,15 @@ class TuringEvent extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use TuringEvent() / TuringEvent.new instead')
   static TuringEvent create() => TuringEvent._();
+  static $pb.GeneratedMessage $_createMessage() => TuringEvent._();
   @$core.override
-  TuringEvent createEmptyInstance() => create();
-  static $pb.PbList<TuringEvent> createRepeated() => $pb.PbList<TuringEvent>();
+  TuringEvent createEmptyInstance() => TuringEvent._();
   @$core.pragma('dart2js:noInline')
-  static TuringEvent getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<TuringEvent>(create);
+  static TuringEvent getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<TuringEvent>(
+          TuringEvent.$_createMessage);
   static TuringEvent? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -200,7 +203,7 @@ class ListEventsRequest extends $pb.GeneratedMessage {
     $fixnum.Int64? afterSequence,
     $core.int? limit,
   }) {
-    final result = create();
+    final result = ListEventsRequest._();
     if (sessionId != null) result.sessionId = sessionId;
     if (afterSequence != null) result.afterSequence = afterSequence;
     if (limit != null) result.limit = limit;
@@ -211,15 +214,15 @@ class ListEventsRequest extends $pb.GeneratedMessage {
 
   factory ListEventsRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListEventsRequest()..mergeFromBuffer(data, registry);
   factory ListEventsRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListEventsRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListEventsRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListEventsRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..aInt64(2, _omitFieldNames ? '' : 'afterSequence')
     ..aI(3, _omitFieldNames ? '' : 'limit')
@@ -236,14 +239,15 @@ class ListEventsRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ListEventsRequest() / ListEventsRequest.new instead')
   static ListEventsRequest create() => ListEventsRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ListEventsRequest._();
   @$core.override
-  ListEventsRequest createEmptyInstance() => create();
-  static $pb.PbList<ListEventsRequest> createRepeated() =>
-      $pb.PbList<ListEventsRequest>();
+  ListEventsRequest createEmptyInstance() => ListEventsRequest._();
   @$core.pragma('dart2js:noInline')
-  static ListEventsRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListEventsRequest>(create);
+  static ListEventsRequest getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ListEventsRequest>(
+          ListEventsRequest.$_createMessage);
   static ListEventsRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -280,7 +284,7 @@ class ListEventsResponse extends $pb.GeneratedMessage {
     $fixnum.Int64? latestSequence,
     $core.bool? resyncRequired,
   }) {
-    final result = create();
+    final result = ListEventsResponse._();
     if (events != null) result.events.addAll(events);
     if (latestSequence != null) result.latestSequence = latestSequence;
     if (resyncRequired != null) result.resyncRequired = resyncRequired;
@@ -291,17 +295,17 @@ class ListEventsResponse extends $pb.GeneratedMessage {
 
   factory ListEventsResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListEventsResponse()..mergeFromBuffer(data, registry);
   factory ListEventsResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListEventsResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListEventsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListEventsResponse.$_createMessage)
     ..pPM<TuringEvent>(1, _omitFieldNames ? '' : 'events',
-        subBuilder: TuringEvent.create)
+        subBuilder: TuringEvent.$_createMessage)
     ..aInt64(2, _omitFieldNames ? '' : 'latestSequence')
     ..aOB(3, _omitFieldNames ? '' : 'resyncRequired')
     ..hasRequiredFields = false;
@@ -317,14 +321,15 @@ class ListEventsResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ListEventsResponse() / ListEventsResponse.new instead')
   static ListEventsResponse create() => ListEventsResponse._();
+  static $pb.GeneratedMessage $_createMessage() => ListEventsResponse._();
   @$core.override
-  ListEventsResponse createEmptyInstance() => create();
-  static $pb.PbList<ListEventsResponse> createRepeated() =>
-      $pb.PbList<ListEventsResponse>();
+  ListEventsResponse createEmptyInstance() => ListEventsResponse._();
   @$core.pragma('dart2js:noInline')
   static ListEventsResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListEventsResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListEventsResponse>(
+          ListEventsResponse.$_createMessage);
   static ListEventsResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -354,7 +359,7 @@ class SubscribeSessionEventsRequest extends $pb.GeneratedMessage {
     $core.String? sessionId,
     $fixnum.Int64? afterSequence,
   }) {
-    final result = create();
+    final result = SubscribeSessionEventsRequest._();
     if (sessionId != null) result.sessionId = sessionId;
     if (afterSequence != null) result.afterSequence = afterSequence;
     return result;
@@ -364,15 +369,15 @@ class SubscribeSessionEventsRequest extends $pb.GeneratedMessage {
 
   factory SubscribeSessionEventsRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SubscribeSessionEventsRequest()..mergeFromBuffer(data, registry);
   factory SubscribeSessionEventsRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SubscribeSessionEventsRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SubscribeSessionEventsRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SubscribeSessionEventsRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..aInt64(2, _omitFieldNames ? '' : 'afterSequence')
     ..hasRequiredFields = false;
@@ -390,15 +395,19 @@ class SubscribeSessionEventsRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SubscribeSessionEventsRequest() / SubscribeSessionEventsRequest.new instead')
   static SubscribeSessionEventsRequest create() =>
       SubscribeSessionEventsRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      SubscribeSessionEventsRequest._();
   @$core.override
-  SubscribeSessionEventsRequest createEmptyInstance() => create();
-  static $pb.PbList<SubscribeSessionEventsRequest> createRepeated() =>
-      $pb.PbList<SubscribeSessionEventsRequest>();
+  SubscribeSessionEventsRequest createEmptyInstance() =>
+      SubscribeSessionEventsRequest._();
   @$core.pragma('dart2js:noInline')
   static SubscribeSessionEventsRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SubscribeSessionEventsRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<SubscribeSessionEventsRequest>(
+          SubscribeSessionEventsRequest.$_createMessage);
   static SubscribeSessionEventsRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -421,21 +430,22 @@ class SubscribeSessionEventsRequest extends $pb.GeneratedMessage {
 }
 
 class SubscribeSessionUpdatesRequest extends $pb.GeneratedMessage {
-  factory SubscribeSessionUpdatesRequest() => create();
+  factory SubscribeSessionUpdatesRequest() =>
+      SubscribeSessionUpdatesRequest._();
 
   SubscribeSessionUpdatesRequest._();
 
   factory SubscribeSessionUpdatesRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SubscribeSessionUpdatesRequest()..mergeFromBuffer(data, registry);
   factory SubscribeSessionUpdatesRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SubscribeSessionUpdatesRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SubscribeSessionUpdatesRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SubscribeSessionUpdatesRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -451,15 +461,19 @@ class SubscribeSessionUpdatesRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SubscribeSessionUpdatesRequest() / SubscribeSessionUpdatesRequest.new instead')
   static SubscribeSessionUpdatesRequest create() =>
       SubscribeSessionUpdatesRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      SubscribeSessionUpdatesRequest._();
   @$core.override
-  SubscribeSessionUpdatesRequest createEmptyInstance() => create();
-  static $pb.PbList<SubscribeSessionUpdatesRequest> createRepeated() =>
-      $pb.PbList<SubscribeSessionUpdatesRequest>();
+  SubscribeSessionUpdatesRequest createEmptyInstance() =>
+      SubscribeSessionUpdatesRequest._();
   @$core.pragma('dart2js:noInline')
   static SubscribeSessionUpdatesRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SubscribeSessionUpdatesRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<SubscribeSessionUpdatesRequest>(
+          SubscribeSessionUpdatesRequest.$_createMessage);
   static SubscribeSessionUpdatesRequest? _defaultInstance;
 }
 

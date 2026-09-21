@@ -8,13 +8,13 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
 import 'package:protobuf/protobuf.dart' as $pb;
+import 'package:protobuf/well_known_types/google/protobuf/struct.pb.dart' as $1;
 
-import '../../google/protobuf/struct.pb.dart' as $1;
 import 'common.pbenum.dart' as $2;
 import 'mcp.pbenum.dart';
 
@@ -30,7 +30,7 @@ class McpToolDescriptor extends $pb.GeneratedMessage {
     $core.bool? enabled,
     $core.bool? present,
   }) {
-    final result = create();
+    final result = McpToolDescriptor._();
     if (toolName != null) result.toolName = toolName;
     if (policy != null) result.policy = policy;
     if (schema != null) result.schema = schema;
@@ -43,20 +43,20 @@ class McpToolDescriptor extends $pb.GeneratedMessage {
 
   factory McpToolDescriptor.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      McpToolDescriptor()..mergeFromBuffer(data, registry);
   factory McpToolDescriptor.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      McpToolDescriptor()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'McpToolDescriptor',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: McpToolDescriptor.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'toolName')
     ..aE<$2.ToolPolicy>(2, _omitFieldNames ? '' : 'policy',
         enumValues: $2.ToolPolicy.values)
     ..aOM<$1.Struct>(3, _omitFieldNames ? '' : 'schema',
-        subBuilder: $1.Struct.create)
+        subBuilder: $1.Struct.$_createMessage)
     ..aOB(4, _omitFieldNames ? '' : 'enabled')
     ..aOB(5, _omitFieldNames ? '' : 'present')
     ..hasRequiredFields = false;
@@ -72,14 +72,15 @@ class McpToolDescriptor extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use McpToolDescriptor() / McpToolDescriptor.new instead')
   static McpToolDescriptor create() => McpToolDescriptor._();
+  static $pb.GeneratedMessage $_createMessage() => McpToolDescriptor._();
   @$core.override
-  McpToolDescriptor createEmptyInstance() => create();
-  static $pb.PbList<McpToolDescriptor> createRepeated() =>
-      $pb.PbList<McpToolDescriptor>();
+  McpToolDescriptor createEmptyInstance() => McpToolDescriptor._();
   @$core.pragma('dart2js:noInline')
-  static McpToolDescriptor getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<McpToolDescriptor>(create);
+  static McpToolDescriptor getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<McpToolDescriptor>(
+          McpToolDescriptor.$_createMessage);
   static McpToolDescriptor? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -143,7 +144,7 @@ class McpServerDescriptor extends $pb.GeneratedMessage {
     $core.bool? sandboxConfined,
     $core.Iterable<McpToolDescriptor>? tools,
   }) {
-    final result = create();
+    final result = McpServerDescriptor._();
     if (serverId != null) result.serverId = serverId;
     if (name != null) result.name = name;
     if (transport != null) result.transport = transport;
@@ -161,15 +162,15 @@ class McpServerDescriptor extends $pb.GeneratedMessage {
 
   factory McpServerDescriptor.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      McpServerDescriptor()..mergeFromBuffer(data, registry);
   factory McpServerDescriptor.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      McpServerDescriptor()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'McpServerDescriptor',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: McpServerDescriptor.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'serverId')
     ..aOS(2, _omitFieldNames ? '' : 'name')
     ..aOS(3, _omitFieldNames ? '' : 'transport')
@@ -182,7 +183,7 @@ class McpServerDescriptor extends $pb.GeneratedMessage {
     ..aOS(8, _omitFieldNames ? '' : 'statusMessage')
     ..aOB(9, _omitFieldNames ? '' : 'sandboxConfined')
     ..pPM<McpToolDescriptor>(10, _omitFieldNames ? '' : 'tools',
-        subBuilder: McpToolDescriptor.create)
+        subBuilder: McpToolDescriptor.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -196,14 +197,16 @@ class McpServerDescriptor extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core
+      .Deprecated('Use McpServerDescriptor() / McpServerDescriptor.new instead')
   static McpServerDescriptor create() => McpServerDescriptor._();
+  static $pb.GeneratedMessage $_createMessage() => McpServerDescriptor._();
   @$core.override
-  McpServerDescriptor createEmptyInstance() => create();
-  static $pb.PbList<McpServerDescriptor> createRepeated() =>
-      $pb.PbList<McpServerDescriptor>();
+  McpServerDescriptor createEmptyInstance() => McpServerDescriptor._();
   @$core.pragma('dart2js:noInline')
   static McpServerDescriptor getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<McpServerDescriptor>(create);
+      $pb.GeneratedMessage.$_defaultFor<McpServerDescriptor>(
+          McpServerDescriptor.$_createMessage);
   static McpServerDescriptor? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -296,7 +299,7 @@ class UnsupportedMcpServer extends $pb.GeneratedMessage {
     $core.String? name,
     $core.String? reason,
   }) {
-    final result = create();
+    final result = UnsupportedMcpServer._();
     if (name != null) result.name = name;
     if (reason != null) result.reason = reason;
     return result;
@@ -306,15 +309,15 @@ class UnsupportedMcpServer extends $pb.GeneratedMessage {
 
   factory UnsupportedMcpServer.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      UnsupportedMcpServer()..mergeFromBuffer(data, registry);
   factory UnsupportedMcpServer.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      UnsupportedMcpServer()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'UnsupportedMcpServer',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: UnsupportedMcpServer.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'name')
     ..aOS(2, _omitFieldNames ? '' : 'reason')
     ..hasRequiredFields = false;
@@ -330,14 +333,16 @@ class UnsupportedMcpServer extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use UnsupportedMcpServer() / UnsupportedMcpServer.new instead')
   static UnsupportedMcpServer create() => UnsupportedMcpServer._();
+  static $pb.GeneratedMessage $_createMessage() => UnsupportedMcpServer._();
   @$core.override
-  UnsupportedMcpServer createEmptyInstance() => create();
-  static $pb.PbList<UnsupportedMcpServer> createRepeated() =>
-      $pb.PbList<UnsupportedMcpServer>();
+  UnsupportedMcpServer createEmptyInstance() => UnsupportedMcpServer._();
   @$core.pragma('dart2js:noInline')
   static UnsupportedMcpServer getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<UnsupportedMcpServer>(create);
+      $pb.GeneratedMessage.$_defaultFor<UnsupportedMcpServer>(
+          UnsupportedMcpServer.$_createMessage);
   static UnsupportedMcpServer? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -360,21 +365,21 @@ class UnsupportedMcpServer extends $pb.GeneratedMessage {
 }
 
 class ListMcpServersRequest extends $pb.GeneratedMessage {
-  factory ListMcpServersRequest() => create();
+  factory ListMcpServersRequest() => ListMcpServersRequest._();
 
   ListMcpServersRequest._();
 
   factory ListMcpServersRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListMcpServersRequest()..mergeFromBuffer(data, registry);
   factory ListMcpServersRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListMcpServersRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListMcpServersRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListMcpServersRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -389,14 +394,16 @@ class ListMcpServersRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListMcpServersRequest() / ListMcpServersRequest.new instead')
   static ListMcpServersRequest create() => ListMcpServersRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ListMcpServersRequest._();
   @$core.override
-  ListMcpServersRequest createEmptyInstance() => create();
-  static $pb.PbList<ListMcpServersRequest> createRepeated() =>
-      $pb.PbList<ListMcpServersRequest>();
+  ListMcpServersRequest createEmptyInstance() => ListMcpServersRequest._();
   @$core.pragma('dart2js:noInline')
   static ListMcpServersRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListMcpServersRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListMcpServersRequest>(
+          ListMcpServersRequest.$_createMessage);
   static ListMcpServersRequest? _defaultInstance;
 }
 
@@ -407,7 +414,7 @@ class ListMcpServersResponse extends $pb.GeneratedMessage {
     $core.bool? registryDegraded,
     $core.String? registryDegradationReason,
   }) {
-    final result = create();
+    final result = ListMcpServersResponse._();
     if (servers != null) result.servers.addAll(servers);
     if (unsupported != null) result.unsupported.addAll(unsupported);
     if (registryDegraded != null) result.registryDegraded = registryDegraded;
@@ -420,19 +427,19 @@ class ListMcpServersResponse extends $pb.GeneratedMessage {
 
   factory ListMcpServersResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListMcpServersResponse()..mergeFromBuffer(data, registry);
   factory ListMcpServersResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListMcpServersResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListMcpServersResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListMcpServersResponse.$_createMessage)
     ..pPM<McpServerDescriptor>(1, _omitFieldNames ? '' : 'servers',
-        subBuilder: McpServerDescriptor.create)
+        subBuilder: McpServerDescriptor.$_createMessage)
     ..pPM<UnsupportedMcpServer>(2, _omitFieldNames ? '' : 'unsupported',
-        subBuilder: UnsupportedMcpServer.create)
+        subBuilder: UnsupportedMcpServer.$_createMessage)
     ..aOB(3, _omitFieldNames ? '' : 'registryDegraded')
     ..aOS(4, _omitFieldNames ? '' : 'registryDegradationReason')
     ..hasRequiredFields = false;
@@ -449,14 +456,16 @@ class ListMcpServersResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListMcpServersResponse() / ListMcpServersResponse.new instead')
   static ListMcpServersResponse create() => ListMcpServersResponse._();
+  static $pb.GeneratedMessage $_createMessage() => ListMcpServersResponse._();
   @$core.override
-  ListMcpServersResponse createEmptyInstance() => create();
-  static $pb.PbList<ListMcpServersResponse> createRepeated() =>
-      $pb.PbList<ListMcpServersResponse>();
+  ListMcpServersResponse createEmptyInstance() => ListMcpServersResponse._();
   @$core.pragma('dart2js:noInline')
   static ListMcpServersResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListMcpServersResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListMcpServersResponse>(
+          ListMcpServersResponse.$_createMessage);
   static ListMcpServersResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -509,7 +518,7 @@ class SetMcpServerEnabledRequest extends $pb.GeneratedMessage {
     $core.String? serverId,
     $core.bool? enabled,
   }) {
-    final result = create();
+    final result = SetMcpServerEnabledRequest._();
     if (serverId != null) result.serverId = serverId;
     if (enabled != null) result.enabled = enabled;
     return result;
@@ -519,15 +528,15 @@ class SetMcpServerEnabledRequest extends $pb.GeneratedMessage {
 
   factory SetMcpServerEnabledRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SetMcpServerEnabledRequest()..mergeFromBuffer(data, registry);
   factory SetMcpServerEnabledRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SetMcpServerEnabledRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SetMcpServerEnabledRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SetMcpServerEnabledRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'serverId')
     ..aOB(2, _omitFieldNames ? '' : 'enabled')
     ..hasRequiredFields = false;
@@ -545,14 +554,18 @@ class SetMcpServerEnabledRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SetMcpServerEnabledRequest() / SetMcpServerEnabledRequest.new instead')
   static SetMcpServerEnabledRequest create() => SetMcpServerEnabledRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      SetMcpServerEnabledRequest._();
   @$core.override
-  SetMcpServerEnabledRequest createEmptyInstance() => create();
-  static $pb.PbList<SetMcpServerEnabledRequest> createRepeated() =>
-      $pb.PbList<SetMcpServerEnabledRequest>();
+  SetMcpServerEnabledRequest createEmptyInstance() =>
+      SetMcpServerEnabledRequest._();
   @$core.pragma('dart2js:noInline')
   static SetMcpServerEnabledRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SetMcpServerEnabledRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<SetMcpServerEnabledRequest>(
+          SetMcpServerEnabledRequest.$_createMessage);
   static SetMcpServerEnabledRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -580,7 +593,7 @@ class UpdateMcpToolPolicyRequest extends $pb.GeneratedMessage {
     $core.String? toolName,
     $2.ToolPolicy? policy,
   }) {
-    final result = create();
+    final result = UpdateMcpToolPolicyRequest._();
     if (serverId != null) result.serverId = serverId;
     if (toolName != null) result.toolName = toolName;
     if (policy != null) result.policy = policy;
@@ -591,15 +604,15 @@ class UpdateMcpToolPolicyRequest extends $pb.GeneratedMessage {
 
   factory UpdateMcpToolPolicyRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      UpdateMcpToolPolicyRequest()..mergeFromBuffer(data, registry);
   factory UpdateMcpToolPolicyRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      UpdateMcpToolPolicyRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'UpdateMcpToolPolicyRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: UpdateMcpToolPolicyRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'serverId')
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
     ..aE<$2.ToolPolicy>(3, _omitFieldNames ? '' : 'policy',
@@ -619,14 +632,18 @@ class UpdateMcpToolPolicyRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use UpdateMcpToolPolicyRequest() / UpdateMcpToolPolicyRequest.new instead')
   static UpdateMcpToolPolicyRequest create() => UpdateMcpToolPolicyRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      UpdateMcpToolPolicyRequest._();
   @$core.override
-  UpdateMcpToolPolicyRequest createEmptyInstance() => create();
-  static $pb.PbList<UpdateMcpToolPolicyRequest> createRepeated() =>
-      $pb.PbList<UpdateMcpToolPolicyRequest>();
+  UpdateMcpToolPolicyRequest createEmptyInstance() =>
+      UpdateMcpToolPolicyRequest._();
   @$core.pragma('dart2js:noInline')
   static UpdateMcpToolPolicyRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<UpdateMcpToolPolicyRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<UpdateMcpToolPolicyRequest>(
+          UpdateMcpToolPolicyRequest.$_createMessage);
   static UpdateMcpToolPolicyRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -663,7 +680,7 @@ class UpdateToolPolicyByNameRequest extends $pb.GeneratedMessage {
     $core.String? toolName,
     $2.ToolPolicy? policy,
   }) {
-    final result = create();
+    final result = UpdateToolPolicyByNameRequest._();
     if (serverName != null) result.serverName = serverName;
     if (toolName != null) result.toolName = toolName;
     if (policy != null) result.policy = policy;
@@ -674,15 +691,15 @@ class UpdateToolPolicyByNameRequest extends $pb.GeneratedMessage {
 
   factory UpdateToolPolicyByNameRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      UpdateToolPolicyByNameRequest()..mergeFromBuffer(data, registry);
   factory UpdateToolPolicyByNameRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      UpdateToolPolicyByNameRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'UpdateToolPolicyByNameRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: UpdateToolPolicyByNameRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'serverName')
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
     ..aE<$2.ToolPolicy>(3, _omitFieldNames ? '' : 'policy',
@@ -702,15 +719,19 @@ class UpdateToolPolicyByNameRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use UpdateToolPolicyByNameRequest() / UpdateToolPolicyByNameRequest.new instead')
   static UpdateToolPolicyByNameRequest create() =>
       UpdateToolPolicyByNameRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      UpdateToolPolicyByNameRequest._();
   @$core.override
-  UpdateToolPolicyByNameRequest createEmptyInstance() => create();
-  static $pb.PbList<UpdateToolPolicyByNameRequest> createRepeated() =>
-      $pb.PbList<UpdateToolPolicyByNameRequest>();
+  UpdateToolPolicyByNameRequest createEmptyInstance() =>
+      UpdateToolPolicyByNameRequest._();
   @$core.pragma('dart2js:noInline')
   static UpdateToolPolicyByNameRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<UpdateToolPolicyByNameRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<UpdateToolPolicyByNameRequest>(
+          UpdateToolPolicyByNameRequest.$_createMessage);
   static UpdateToolPolicyByNameRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -745,7 +766,7 @@ class ListPseudoServerToolsRequest extends $pb.GeneratedMessage {
   factory ListPseudoServerToolsRequest({
     $core.String? serverName,
   }) {
-    final result = create();
+    final result = ListPseudoServerToolsRequest._();
     if (serverName != null) result.serverName = serverName;
     return result;
   }
@@ -754,15 +775,15 @@ class ListPseudoServerToolsRequest extends $pb.GeneratedMessage {
 
   factory ListPseudoServerToolsRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListPseudoServerToolsRequest()..mergeFromBuffer(data, registry);
   factory ListPseudoServerToolsRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListPseudoServerToolsRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListPseudoServerToolsRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListPseudoServerToolsRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'serverName')
     ..hasRequiredFields = false;
 
@@ -779,15 +800,19 @@ class ListPseudoServerToolsRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListPseudoServerToolsRequest() / ListPseudoServerToolsRequest.new instead')
   static ListPseudoServerToolsRequest create() =>
       ListPseudoServerToolsRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      ListPseudoServerToolsRequest._();
   @$core.override
-  ListPseudoServerToolsRequest createEmptyInstance() => create();
-  static $pb.PbList<ListPseudoServerToolsRequest> createRepeated() =>
-      $pb.PbList<ListPseudoServerToolsRequest>();
+  ListPseudoServerToolsRequest createEmptyInstance() =>
+      ListPseudoServerToolsRequest._();
   @$core.pragma('dart2js:noInline')
   static ListPseudoServerToolsRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListPseudoServerToolsRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListPseudoServerToolsRequest>(
+          ListPseudoServerToolsRequest.$_createMessage);
   static ListPseudoServerToolsRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -804,7 +829,7 @@ class ListPseudoServerToolsResponse extends $pb.GeneratedMessage {
   factory ListPseudoServerToolsResponse({
     $core.Iterable<McpToolDescriptor>? tools,
   }) {
-    final result = create();
+    final result = ListPseudoServerToolsResponse._();
     if (tools != null) result.tools.addAll(tools);
     return result;
   }
@@ -813,17 +838,17 @@ class ListPseudoServerToolsResponse extends $pb.GeneratedMessage {
 
   factory ListPseudoServerToolsResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListPseudoServerToolsResponse()..mergeFromBuffer(data, registry);
   factory ListPseudoServerToolsResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListPseudoServerToolsResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListPseudoServerToolsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListPseudoServerToolsResponse.$_createMessage)
     ..pPM<McpToolDescriptor>(1, _omitFieldNames ? '' : 'tools',
-        subBuilder: McpToolDescriptor.create)
+        subBuilder: McpToolDescriptor.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -839,15 +864,19 @@ class ListPseudoServerToolsResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListPseudoServerToolsResponse() / ListPseudoServerToolsResponse.new instead')
   static ListPseudoServerToolsResponse create() =>
       ListPseudoServerToolsResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      ListPseudoServerToolsResponse._();
   @$core.override
-  ListPseudoServerToolsResponse createEmptyInstance() => create();
-  static $pb.PbList<ListPseudoServerToolsResponse> createRepeated() =>
-      $pb.PbList<ListPseudoServerToolsResponse>();
+  ListPseudoServerToolsResponse createEmptyInstance() =>
+      ListPseudoServerToolsResponse._();
   @$core.pragma('dart2js:noInline')
   static ListPseudoServerToolsResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListPseudoServerToolsResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListPseudoServerToolsResponse>(
+          ListPseudoServerToolsResponse.$_createMessage);
   static ListPseudoServerToolsResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -858,7 +887,7 @@ class DeleteMcpServerRequest extends $pb.GeneratedMessage {
   factory DeleteMcpServerRequest({
     $core.String? serverId,
   }) {
-    final result = create();
+    final result = DeleteMcpServerRequest._();
     if (serverId != null) result.serverId = serverId;
     return result;
   }
@@ -867,15 +896,15 @@ class DeleteMcpServerRequest extends $pb.GeneratedMessage {
 
   factory DeleteMcpServerRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      DeleteMcpServerRequest()..mergeFromBuffer(data, registry);
   factory DeleteMcpServerRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      DeleteMcpServerRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'DeleteMcpServerRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: DeleteMcpServerRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'serverId')
     ..hasRequiredFields = false;
 
@@ -891,14 +920,16 @@ class DeleteMcpServerRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use DeleteMcpServerRequest() / DeleteMcpServerRequest.new instead')
   static DeleteMcpServerRequest create() => DeleteMcpServerRequest._();
+  static $pb.GeneratedMessage $_createMessage() => DeleteMcpServerRequest._();
   @$core.override
-  DeleteMcpServerRequest createEmptyInstance() => create();
-  static $pb.PbList<DeleteMcpServerRequest> createRepeated() =>
-      $pb.PbList<DeleteMcpServerRequest>();
+  DeleteMcpServerRequest createEmptyInstance() => DeleteMcpServerRequest._();
   @$core.pragma('dart2js:noInline')
   static DeleteMcpServerRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<DeleteMcpServerRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<DeleteMcpServerRequest>(
+          DeleteMcpServerRequest.$_createMessage);
   static DeleteMcpServerRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -912,21 +943,21 @@ class DeleteMcpServerRequest extends $pb.GeneratedMessage {
 }
 
 class DeleteMcpServerResponse extends $pb.GeneratedMessage {
-  factory DeleteMcpServerResponse() => create();
+  factory DeleteMcpServerResponse() => DeleteMcpServerResponse._();
 
   DeleteMcpServerResponse._();
 
   factory DeleteMcpServerResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      DeleteMcpServerResponse()..mergeFromBuffer(data, registry);
   factory DeleteMcpServerResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      DeleteMcpServerResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'DeleteMcpServerResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: DeleteMcpServerResponse.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -941,14 +972,16 @@ class DeleteMcpServerResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use DeleteMcpServerResponse() / DeleteMcpServerResponse.new instead')
   static DeleteMcpServerResponse create() => DeleteMcpServerResponse._();
+  static $pb.GeneratedMessage $_createMessage() => DeleteMcpServerResponse._();
   @$core.override
-  DeleteMcpServerResponse createEmptyInstance() => create();
-  static $pb.PbList<DeleteMcpServerResponse> createRepeated() =>
-      $pb.PbList<DeleteMcpServerResponse>();
+  DeleteMcpServerResponse createEmptyInstance() => DeleteMcpServerResponse._();
   @$core.pragma('dart2js:noInline')
   static DeleteMcpServerResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<DeleteMcpServerResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<DeleteMcpServerResponse>(
+          DeleteMcpServerResponse.$_createMessage);
   static DeleteMcpServerResponse? _defaultInstance;
 }
 
@@ -959,7 +992,7 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
     $core.String? bearerToken,
     McpServerTier? tier,
   }) {
-    final result = create();
+    final result = RegisterMcpServerRequest._();
     if (name != null) result.name = name;
     if (url != null) result.url = url;
     if (bearerToken != null) result.bearerToken = bearerToken;
@@ -971,15 +1004,15 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
 
   factory RegisterMcpServerRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RegisterMcpServerRequest()..mergeFromBuffer(data, registry);
   factory RegisterMcpServerRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RegisterMcpServerRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RegisterMcpServerRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RegisterMcpServerRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'name')
     ..aOS(2, _omitFieldNames ? '' : 'url')
     ..aOS(3, _omitFieldNames ? '' : 'bearerToken')
@@ -999,14 +1032,17 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use RegisterMcpServerRequest() / RegisterMcpServerRequest.new instead')
   static RegisterMcpServerRequest create() => RegisterMcpServerRequest._();
+  static $pb.GeneratedMessage $_createMessage() => RegisterMcpServerRequest._();
   @$core.override
-  RegisterMcpServerRequest createEmptyInstance() => create();
-  static $pb.PbList<RegisterMcpServerRequest> createRepeated() =>
-      $pb.PbList<RegisterMcpServerRequest>();
+  RegisterMcpServerRequest createEmptyInstance() =>
+      RegisterMcpServerRequest._();
   @$core.pragma('dart2js:noInline')
   static RegisterMcpServerRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RegisterMcpServerRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<RegisterMcpServerRequest>(
+          RegisterMcpServerRequest.$_createMessage);
   static RegisterMcpServerRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1055,21 +1091,21 @@ class RegisterMcpServerRequest extends $pb.GeneratedMessage {
 }
 
 class ReimportMcpJsonRequest extends $pb.GeneratedMessage {
-  factory ReimportMcpJsonRequest() => create();
+  factory ReimportMcpJsonRequest() => ReimportMcpJsonRequest._();
 
   ReimportMcpJsonRequest._();
 
   factory ReimportMcpJsonRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ReimportMcpJsonRequest()..mergeFromBuffer(data, registry);
   factory ReimportMcpJsonRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ReimportMcpJsonRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ReimportMcpJsonRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ReimportMcpJsonRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1084,14 +1120,16 @@ class ReimportMcpJsonRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ReimportMcpJsonRequest() / ReimportMcpJsonRequest.new instead')
   static ReimportMcpJsonRequest create() => ReimportMcpJsonRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ReimportMcpJsonRequest._();
   @$core.override
-  ReimportMcpJsonRequest createEmptyInstance() => create();
-  static $pb.PbList<ReimportMcpJsonRequest> createRepeated() =>
-      $pb.PbList<ReimportMcpJsonRequest>();
+  ReimportMcpJsonRequest createEmptyInstance() => ReimportMcpJsonRequest._();
   @$core.pragma('dart2js:noInline')
   static ReimportMcpJsonRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ReimportMcpJsonRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ReimportMcpJsonRequest>(
+          ReimportMcpJsonRequest.$_createMessage);
   static ReimportMcpJsonRequest? _defaultInstance;
 }
 
@@ -1101,7 +1139,7 @@ class ReimportMcpJsonResponse extends $pb.GeneratedMessage {
     $core.Iterable<UnsupportedMcpServer>? unsupported,
     $core.Iterable<$core.String>? skipped,
   }) {
-    final result = create();
+    final result = ReimportMcpJsonResponse._();
     if (imported != null) result.imported.addAll(imported);
     if (unsupported != null) result.unsupported.addAll(unsupported);
     if (skipped != null) result.skipped.addAll(skipped);
@@ -1112,18 +1150,18 @@ class ReimportMcpJsonResponse extends $pb.GeneratedMessage {
 
   factory ReimportMcpJsonResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ReimportMcpJsonResponse()..mergeFromBuffer(data, registry);
   factory ReimportMcpJsonResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ReimportMcpJsonResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ReimportMcpJsonResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ReimportMcpJsonResponse.$_createMessage)
     ..pPS(1, _omitFieldNames ? '' : 'imported')
     ..pPM<UnsupportedMcpServer>(2, _omitFieldNames ? '' : 'unsupported',
-        subBuilder: UnsupportedMcpServer.create)
+        subBuilder: UnsupportedMcpServer.$_createMessage)
     ..pPS(3, _omitFieldNames ? '' : 'skipped')
     ..hasRequiredFields = false;
 
@@ -1139,14 +1177,16 @@ class ReimportMcpJsonResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ReimportMcpJsonResponse() / ReimportMcpJsonResponse.new instead')
   static ReimportMcpJsonResponse create() => ReimportMcpJsonResponse._();
+  static $pb.GeneratedMessage $_createMessage() => ReimportMcpJsonResponse._();
   @$core.override
-  ReimportMcpJsonResponse createEmptyInstance() => create();
-  static $pb.PbList<ReimportMcpJsonResponse> createRepeated() =>
-      $pb.PbList<ReimportMcpJsonResponse>();
+  ReimportMcpJsonResponse createEmptyInstance() => ReimportMcpJsonResponse._();
   @$core.pragma('dart2js:noInline')
   static ReimportMcpJsonResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ReimportMcpJsonResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<ReimportMcpJsonResponse>(
+          ReimportMcpJsonResponse.$_createMessage);
   static ReimportMcpJsonResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1166,7 +1206,7 @@ class RotateMcpServerTokenRequest extends $pb.GeneratedMessage {
     $core.String? serverId,
     $core.String? bearerToken,
   }) {
-    final result = create();
+    final result = RotateMcpServerTokenRequest._();
     if (serverId != null) result.serverId = serverId;
     if (bearerToken != null) result.bearerToken = bearerToken;
     return result;
@@ -1176,15 +1216,15 @@ class RotateMcpServerTokenRequest extends $pb.GeneratedMessage {
 
   factory RotateMcpServerTokenRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RotateMcpServerTokenRequest()..mergeFromBuffer(data, registry);
   factory RotateMcpServerTokenRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RotateMcpServerTokenRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RotateMcpServerTokenRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RotateMcpServerTokenRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'serverId')
     ..aOS(2, _omitFieldNames ? '' : 'bearerToken')
     ..hasRequiredFields = false;
@@ -1202,15 +1242,19 @@ class RotateMcpServerTokenRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use RotateMcpServerTokenRequest() / RotateMcpServerTokenRequest.new instead')
   static RotateMcpServerTokenRequest create() =>
       RotateMcpServerTokenRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      RotateMcpServerTokenRequest._();
   @$core.override
-  RotateMcpServerTokenRequest createEmptyInstance() => create();
-  static $pb.PbList<RotateMcpServerTokenRequest> createRepeated() =>
-      $pb.PbList<RotateMcpServerTokenRequest>();
+  RotateMcpServerTokenRequest createEmptyInstance() =>
+      RotateMcpServerTokenRequest._();
   @$core.pragma('dart2js:noInline')
   static RotateMcpServerTokenRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RotateMcpServerTokenRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<RotateMcpServerTokenRequest>(
+          RotateMcpServerTokenRequest.$_createMessage);
   static RotateMcpServerTokenRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1242,7 +1286,7 @@ class CallRegisteredMcpToolRequest extends $pb.GeneratedMessage {
     $core.String? toolName,
     $1.Struct? args,
   }) {
-    final result = create();
+    final result = CallRegisteredMcpToolRequest._();
     if (serverId != null) result.serverId = serverId;
     if (runId != null) result.runId = runId;
     if (approvalId != null) result.approvalId = approvalId;
@@ -1255,21 +1299,21 @@ class CallRegisteredMcpToolRequest extends $pb.GeneratedMessage {
 
   factory CallRegisteredMcpToolRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      CallRegisteredMcpToolRequest()..mergeFromBuffer(data, registry);
   factory CallRegisteredMcpToolRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      CallRegisteredMcpToolRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'CallRegisteredMcpToolRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: CallRegisteredMcpToolRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'serverId')
     ..aOS(2, _omitFieldNames ? '' : 'runId')
     ..aOS(3, _omitFieldNames ? '' : 'approvalId')
     ..aOS(4, _omitFieldNames ? '' : 'toolName')
     ..aOM<$1.Struct>(5, _omitFieldNames ? '' : 'args',
-        subBuilder: $1.Struct.create)
+        subBuilder: $1.Struct.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1285,15 +1329,19 @@ class CallRegisteredMcpToolRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use CallRegisteredMcpToolRequest() / CallRegisteredMcpToolRequest.new instead')
   static CallRegisteredMcpToolRequest create() =>
       CallRegisteredMcpToolRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      CallRegisteredMcpToolRequest._();
   @$core.override
-  CallRegisteredMcpToolRequest createEmptyInstance() => create();
-  static $pb.PbList<CallRegisteredMcpToolRequest> createRepeated() =>
-      $pb.PbList<CallRegisteredMcpToolRequest>();
+  CallRegisteredMcpToolRequest createEmptyInstance() =>
+      CallRegisteredMcpToolRequest._();
   @$core.pragma('dart2js:noInline')
   static CallRegisteredMcpToolRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<CallRegisteredMcpToolRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<CallRegisteredMcpToolRequest>(
+          CallRegisteredMcpToolRequest.$_createMessage);
   static CallRegisteredMcpToolRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1348,7 +1396,7 @@ class CallRegisteredMcpToolResponse extends $pb.GeneratedMessage {
   factory CallRegisteredMcpToolResponse({
     $1.Struct? result,
   }) {
-    final result$ = create();
+    final result$ = CallRegisteredMcpToolResponse._();
     if (result != null) result$.result = result;
     return result$;
   }
@@ -1357,17 +1405,17 @@ class CallRegisteredMcpToolResponse extends $pb.GeneratedMessage {
 
   factory CallRegisteredMcpToolResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      CallRegisteredMcpToolResponse()..mergeFromBuffer(data, registry);
   factory CallRegisteredMcpToolResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      CallRegisteredMcpToolResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'CallRegisteredMcpToolResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: CallRegisteredMcpToolResponse.$_createMessage)
     ..aOM<$1.Struct>(1, _omitFieldNames ? '' : 'result',
-        subBuilder: $1.Struct.create)
+        subBuilder: $1.Struct.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1383,15 +1431,19 @@ class CallRegisteredMcpToolResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use CallRegisteredMcpToolResponse() / CallRegisteredMcpToolResponse.new instead')
   static CallRegisteredMcpToolResponse create() =>
       CallRegisteredMcpToolResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      CallRegisteredMcpToolResponse._();
   @$core.override
-  CallRegisteredMcpToolResponse createEmptyInstance() => create();
-  static $pb.PbList<CallRegisteredMcpToolResponse> createRepeated() =>
-      $pb.PbList<CallRegisteredMcpToolResponse>();
+  CallRegisteredMcpToolResponse createEmptyInstance() =>
+      CallRegisteredMcpToolResponse._();
   @$core.pragma('dart2js:noInline')
   static CallRegisteredMcpToolResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<CallRegisteredMcpToolResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<CallRegisteredMcpToolResponse>(
+          CallRegisteredMcpToolResponse.$_createMessage);
   static CallRegisteredMcpToolResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1412,7 +1464,7 @@ class McpRequest extends $pb.GeneratedMessage {
     $core.String? method,
     $1.Struct? params,
   }) {
-    final result = create();
+    final result = McpRequest._();
     if (serverName != null) result.serverName = serverName;
     if (method != null) result.method = method;
     if (params != null) result.params = params;
@@ -1423,19 +1475,19 @@ class McpRequest extends $pb.GeneratedMessage {
 
   factory McpRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      McpRequest()..mergeFromBuffer(data, registry);
   factory McpRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      McpRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'McpRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: McpRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'serverName')
     ..aOS(2, _omitFieldNames ? '' : 'method')
     ..aOM<$1.Struct>(3, _omitFieldNames ? '' : 'params',
-        subBuilder: $1.Struct.create)
+        subBuilder: $1.Struct.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1448,13 +1500,14 @@ class McpRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use McpRequest() / McpRequest.new instead')
   static McpRequest create() => McpRequest._();
+  static $pb.GeneratedMessage $_createMessage() => McpRequest._();
   @$core.override
-  McpRequest createEmptyInstance() => create();
-  static $pb.PbList<McpRequest> createRepeated() => $pb.PbList<McpRequest>();
+  McpRequest createEmptyInstance() => McpRequest._();
   @$core.pragma('dart2js:noInline')
   static McpRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<McpRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<McpRequest>(McpRequest.$_createMessage);
   static McpRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1491,7 +1544,7 @@ class McpResult extends $pb.GeneratedMessage {
   factory McpResult({
     $1.Struct? result,
   }) {
-    final result$ = create();
+    final result$ = McpResult._();
     if (result != null) result$.result = result;
     return result$;
   }
@@ -1500,17 +1553,17 @@ class McpResult extends $pb.GeneratedMessage {
 
   factory McpResult.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      McpResult()..mergeFromBuffer(data, registry);
   factory McpResult.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      McpResult()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'McpResult',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: McpResult.$_createMessage)
     ..aOM<$1.Struct>(1, _omitFieldNames ? '' : 'result',
-        subBuilder: $1.Struct.create)
+        subBuilder: $1.Struct.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1523,13 +1576,14 @@ class McpResult extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use McpResult() / McpResult.new instead')
   static McpResult create() => McpResult._();
+  static $pb.GeneratedMessage $_createMessage() => McpResult._();
   @$core.override
-  McpResult createEmptyInstance() => create();
-  static $pb.PbList<McpResult> createRepeated() => $pb.PbList<McpResult>();
+  McpResult createEmptyInstance() => McpResult._();
   @$core.pragma('dart2js:noInline')
-  static McpResult getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<McpResult>(create);
+  static McpResult getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<McpResult>(McpResult.$_createMessage);
   static McpResult? _defaultInstance;
 
   @$pb.TagNumber(1)

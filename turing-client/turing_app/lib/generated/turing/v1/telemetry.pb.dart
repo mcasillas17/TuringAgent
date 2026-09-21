@@ -8,14 +8,14 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
 import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
-
-import '../../google/protobuf/timestamp.pb.dart' as $1;
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
+    as $1;
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
 
@@ -28,7 +28,7 @@ class TelemetryWindow extends $pb.GeneratedMessage {
     $1.Timestamp? start,
     $1.Timestamp? end,
   }) {
-    final result = create();
+    final result = TelemetryWindow._();
     if (days != null) result.days = days;
     if (start != null) result.start = start;
     if (end != null) result.end = end;
@@ -39,20 +39,20 @@ class TelemetryWindow extends $pb.GeneratedMessage {
 
   factory TelemetryWindow.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      TelemetryWindow()..mergeFromBuffer(data, registry);
   factory TelemetryWindow.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      TelemetryWindow()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'TelemetryWindow',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: TelemetryWindow.$_createMessage)
     ..aI(1, _omitFieldNames ? '' : 'days')
     ..aOM<$1.Timestamp>(2, _omitFieldNames ? '' : 'start',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOM<$1.Timestamp>(3, _omitFieldNames ? '' : 'end',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -66,14 +66,15 @@ class TelemetryWindow extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use TelemetryWindow() / TelemetryWindow.new instead')
   static TelemetryWindow create() => TelemetryWindow._();
+  static $pb.GeneratedMessage $_createMessage() => TelemetryWindow._();
   @$core.override
-  TelemetryWindow createEmptyInstance() => create();
-  static $pb.PbList<TelemetryWindow> createRepeated() =>
-      $pb.PbList<TelemetryWindow>();
+  TelemetryWindow createEmptyInstance() => TelemetryWindow._();
   @$core.pragma('dart2js:noInline')
-  static TelemetryWindow getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<TelemetryWindow>(create);
+  static TelemetryWindow getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<TelemetryWindow>(
+          TelemetryWindow.$_createMessage);
   static TelemetryWindow? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -127,7 +128,7 @@ class RunTotals extends $pb.GeneratedMessage {
     $fixnum.Int64? inFlight,
     $fixnum.Int64? averageDurationMs,
   }) {
-    final result = create();
+    final result = RunTotals._();
     if (total != null) result.total = total;
     if (completed != null) result.completed = completed;
     if (failed != null) result.failed = failed;
@@ -141,15 +142,15 @@ class RunTotals extends $pb.GeneratedMessage {
 
   factory RunTotals.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RunTotals()..mergeFromBuffer(data, registry);
   factory RunTotals.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RunTotals()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RunTotals',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RunTotals.$_createMessage)
     ..aInt64(1, _omitFieldNames ? '' : 'total')
     ..aInt64(2, _omitFieldNames ? '' : 'completed')
     ..aInt64(3, _omitFieldNames ? '' : 'failed')
@@ -168,13 +169,14 @@ class RunTotals extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RunTotals() / RunTotals.new instead')
   static RunTotals create() => RunTotals._();
+  static $pb.GeneratedMessage $_createMessage() => RunTotals._();
   @$core.override
-  RunTotals createEmptyInstance() => create();
-  static $pb.PbList<RunTotals> createRepeated() => $pb.PbList<RunTotals>();
+  RunTotals createEmptyInstance() => RunTotals._();
   @$core.pragma('dart2js:noInline')
-  static RunTotals getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RunTotals>(create);
+  static RunTotals getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RunTotals>(RunTotals.$_createMessage);
   static RunTotals? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -248,7 +250,7 @@ class TokenTotals extends $pb.GeneratedMessage {
     $fixnum.Int64? runsWithUsage,
     $fixnum.Int64? runsWithoutUsage,
   }) {
-    final result = create();
+    final result = TokenTotals._();
     if (inputTokens != null) result.inputTokens = inputTokens;
     if (outputTokens != null) result.outputTokens = outputTokens;
     if (runsWithUsage != null) result.runsWithUsage = runsWithUsage;
@@ -260,15 +262,15 @@ class TokenTotals extends $pb.GeneratedMessage {
 
   factory TokenTotals.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      TokenTotals()..mergeFromBuffer(data, registry);
   factory TokenTotals.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      TokenTotals()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'TokenTotals',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: TokenTotals.$_createMessage)
     ..aInt64(1, _omitFieldNames ? '' : 'inputTokens')
     ..aInt64(2, _omitFieldNames ? '' : 'outputTokens')
     ..aInt64(3, _omitFieldNames ? '' : 'runsWithUsage')
@@ -286,13 +288,15 @@ class TokenTotals extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use TokenTotals() / TokenTotals.new instead')
   static TokenTotals create() => TokenTotals._();
+  static $pb.GeneratedMessage $_createMessage() => TokenTotals._();
   @$core.override
-  TokenTotals createEmptyInstance() => create();
-  static $pb.PbList<TokenTotals> createRepeated() => $pb.PbList<TokenTotals>();
+  TokenTotals createEmptyInstance() => TokenTotals._();
   @$core.pragma('dart2js:noInline')
-  static TokenTotals getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<TokenTotals>(create);
+  static TokenTotals getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<TokenTotals>(
+          TokenTotals.$_createMessage);
   static TokenTotals? _defaultInstance;
 
   /// MEASURED, summed over the runs whose provider reported usage. Absent when
@@ -349,7 +353,7 @@ class ToolUsage extends $pb.GeneratedMessage {
     $fixnum.Int64? denied,
     $fixnum.Int64? averageDurationMs,
   }) {
-    final result = create();
+    final result = ToolUsage._();
     if (serverName != null) result.serverName = serverName;
     if (toolName != null) result.toolName = toolName;
     if (calls != null) result.calls = calls;
@@ -363,15 +367,15 @@ class ToolUsage extends $pb.GeneratedMessage {
 
   factory ToolUsage.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ToolUsage()..mergeFromBuffer(data, registry);
   factory ToolUsage.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ToolUsage()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ToolUsage',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ToolUsage.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'serverName')
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
     ..aInt64(3, _omitFieldNames ? '' : 'calls')
@@ -390,13 +394,14 @@ class ToolUsage extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ToolUsage() / ToolUsage.new instead')
   static ToolUsage create() => ToolUsage._();
+  static $pb.GeneratedMessage $_createMessage() => ToolUsage._();
   @$core.override
-  ToolUsage createEmptyInstance() => create();
-  static $pb.PbList<ToolUsage> createRepeated() => $pb.PbList<ToolUsage>();
+  ToolUsage createEmptyInstance() => ToolUsage._();
   @$core.pragma('dart2js:noInline')
-  static ToolUsage getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ToolUsage>(create);
+  static ToolUsage getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ToolUsage>(ToolUsage.$_createMessage);
   static ToolUsage? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -469,7 +474,7 @@ class ModelUsage extends $pb.GeneratedMessage {
     $fixnum.Int64? outputTokens,
     $fixnum.Int64? runsWithoutUsage,
   }) {
-    final result = create();
+    final result = ModelUsage._();
     if (provider != null) result.provider = provider;
     if (model != null) result.model = model;
     if (runs != null) result.runs = runs;
@@ -483,15 +488,15 @@ class ModelUsage extends $pb.GeneratedMessage {
 
   factory ModelUsage.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ModelUsage()..mergeFromBuffer(data, registry);
   factory ModelUsage.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ModelUsage()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ModelUsage',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ModelUsage.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'provider')
     ..aOS(2, _omitFieldNames ? '' : 'model')
     ..aInt64(3, _omitFieldNames ? '' : 'runs')
@@ -510,13 +515,14 @@ class ModelUsage extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ModelUsage() / ModelUsage.new instead')
   static ModelUsage create() => ModelUsage._();
+  static $pb.GeneratedMessage $_createMessage() => ModelUsage._();
   @$core.override
-  ModelUsage createEmptyInstance() => create();
-  static $pb.PbList<ModelUsage> createRepeated() => $pb.PbList<ModelUsage>();
+  ModelUsage createEmptyInstance() => ModelUsage._();
   @$core.pragma('dart2js:noInline')
   static ModelUsage getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ModelUsage>(create);
+      $pb.GeneratedMessage.$_defaultFor<ModelUsage>(ModelUsage.$_createMessage);
   static ModelUsage? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -592,7 +598,7 @@ class ExternalAgentUsage extends $pb.GeneratedMessage {
     $fixnum.Int64? outputTokens,
     $fixnum.Int64? runsWithoutUsage,
   }) {
-    final result = create();
+    final result = ExternalAgentUsage._();
     if (displayName != null) result.displayName = displayName;
     if (endpointHost != null) result.endpointHost = endpointHost;
     if (runs != null) result.runs = runs;
@@ -606,15 +612,15 @@ class ExternalAgentUsage extends $pb.GeneratedMessage {
 
   factory ExternalAgentUsage.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ExternalAgentUsage()..mergeFromBuffer(data, registry);
   factory ExternalAgentUsage.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ExternalAgentUsage()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ExternalAgentUsage',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ExternalAgentUsage.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'displayName')
     ..aOS(2, _omitFieldNames ? '' : 'endpointHost')
     ..aInt64(3, _omitFieldNames ? '' : 'runs')
@@ -634,14 +640,15 @@ class ExternalAgentUsage extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ExternalAgentUsage() / ExternalAgentUsage.new instead')
   static ExternalAgentUsage create() => ExternalAgentUsage._();
+  static $pb.GeneratedMessage $_createMessage() => ExternalAgentUsage._();
   @$core.override
-  ExternalAgentUsage createEmptyInstance() => create();
-  static $pb.PbList<ExternalAgentUsage> createRepeated() =>
-      $pb.PbList<ExternalAgentUsage>();
+  ExternalAgentUsage createEmptyInstance() => ExternalAgentUsage._();
   @$core.pragma('dart2js:noInline')
   static ExternalAgentUsage getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ExternalAgentUsage>(create);
+      $pb.GeneratedMessage.$_defaultFor<ExternalAgentUsage>(
+          ExternalAgentUsage.$_createMessage);
   static ExternalAgentUsage? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -712,7 +719,7 @@ class AutomationTotals extends $pb.GeneratedMessage {
     $fixnum.Int64? failed,
     $fixnum.Int64? unattendedApprovals,
   }) {
-    final result = create();
+    final result = AutomationTotals._();
     if (runs != null) result.runs = runs;
     if (completed != null) result.completed = completed;
     if (failed != null) result.failed = failed;
@@ -725,15 +732,15 @@ class AutomationTotals extends $pb.GeneratedMessage {
 
   factory AutomationTotals.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      AutomationTotals()..mergeFromBuffer(data, registry);
   factory AutomationTotals.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      AutomationTotals()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'AutomationTotals',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: AutomationTotals.$_createMessage)
     ..aInt64(1, _omitFieldNames ? '' : 'runs')
     ..aInt64(2, _omitFieldNames ? '' : 'completed')
     ..aInt64(3, _omitFieldNames ? '' : 'failed')
@@ -751,14 +758,15 @@ class AutomationTotals extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use AutomationTotals() / AutomationTotals.new instead')
   static AutomationTotals create() => AutomationTotals._();
+  static $pb.GeneratedMessage $_createMessage() => AutomationTotals._();
   @$core.override
-  AutomationTotals createEmptyInstance() => create();
-  static $pb.PbList<AutomationTotals> createRepeated() =>
-      $pb.PbList<AutomationTotals>();
+  AutomationTotals createEmptyInstance() => AutomationTotals._();
   @$core.pragma('dart2js:noInline')
-  static AutomationTotals getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<AutomationTotals>(create);
+  static AutomationTotals getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<AutomationTotals>(
+          AutomationTotals.$_createMessage);
   static AutomationTotals? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -812,7 +820,7 @@ class IntegrationTotals extends $pb.GeneratedMessage {
     $fixnum.Int64? connected,
     $fixnum.Int64? revoked,
   }) {
-    final result = create();
+    final result = IntegrationTotals._();
     if (connected != null) result.connected = connected;
     if (revoked != null) result.revoked = revoked;
     return result;
@@ -822,15 +830,15 @@ class IntegrationTotals extends $pb.GeneratedMessage {
 
   factory IntegrationTotals.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      IntegrationTotals()..mergeFromBuffer(data, registry);
   factory IntegrationTotals.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      IntegrationTotals()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'IntegrationTotals',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: IntegrationTotals.$_createMessage)
     ..aInt64(1, _omitFieldNames ? '' : 'connected')
     ..aInt64(2, _omitFieldNames ? '' : 'revoked')
     ..hasRequiredFields = false;
@@ -846,14 +854,15 @@ class IntegrationTotals extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use IntegrationTotals() / IntegrationTotals.new instead')
   static IntegrationTotals create() => IntegrationTotals._();
+  static $pb.GeneratedMessage $_createMessage() => IntegrationTotals._();
   @$core.override
-  IntegrationTotals createEmptyInstance() => create();
-  static $pb.PbList<IntegrationTotals> createRepeated() =>
-      $pb.PbList<IntegrationTotals>();
+  IntegrationTotals createEmptyInstance() => IntegrationTotals._();
   @$core.pragma('dart2js:noInline')
-  static IntegrationTotals getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<IntegrationTotals>(create);
+  static IntegrationTotals getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<IntegrationTotals>(
+          IntegrationTotals.$_createMessage);
   static IntegrationTotals? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -889,7 +898,7 @@ class DailyActivity extends $pb.GeneratedMessage {
     $fixnum.Int64? inputTokens,
     $fixnum.Int64? outputTokens,
   }) {
-    final result = create();
+    final result = DailyActivity._();
     if (date != null) result.date = date;
     if (runs != null) result.runs = runs;
     if (toolCalls != null) result.toolCalls = toolCalls;
@@ -902,15 +911,15 @@ class DailyActivity extends $pb.GeneratedMessage {
 
   factory DailyActivity.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      DailyActivity()..mergeFromBuffer(data, registry);
   factory DailyActivity.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      DailyActivity()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'DailyActivity',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: DailyActivity.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'date')
     ..aInt64(2, _omitFieldNames ? '' : 'runs')
     ..aInt64(3, _omitFieldNames ? '' : 'toolCalls')
@@ -929,14 +938,15 @@ class DailyActivity extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use DailyActivity() / DailyActivity.new instead')
   static DailyActivity create() => DailyActivity._();
+  static $pb.GeneratedMessage $_createMessage() => DailyActivity._();
   @$core.override
-  DailyActivity createEmptyInstance() => create();
-  static $pb.PbList<DailyActivity> createRepeated() =>
-      $pb.PbList<DailyActivity>();
+  DailyActivity createEmptyInstance() => DailyActivity._();
   @$core.pragma('dart2js:noInline')
-  static DailyActivity getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<DailyActivity>(create);
+  static DailyActivity getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<DailyActivity>(
+          DailyActivity.$_createMessage);
   static DailyActivity? _defaultInstance;
 
   /// YYYY-MM-DD, UTC. UTC rather than local time because that is what the rows
@@ -992,7 +1002,7 @@ class GetTelemetrySummaryRequest extends $pb.GeneratedMessage {
   factory GetTelemetrySummaryRequest({
     $core.int? windowDays,
   }) {
-    final result = create();
+    final result = GetTelemetrySummaryRequest._();
     if (windowDays != null) result.windowDays = windowDays;
     return result;
   }
@@ -1001,15 +1011,15 @@ class GetTelemetrySummaryRequest extends $pb.GeneratedMessage {
 
   factory GetTelemetrySummaryRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      GetTelemetrySummaryRequest()..mergeFromBuffer(data, registry);
   factory GetTelemetrySummaryRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      GetTelemetrySummaryRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'GetTelemetrySummaryRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: GetTelemetrySummaryRequest.$_createMessage)
     ..aI(1, _omitFieldNames ? '' : 'windowDays')
     ..hasRequiredFields = false;
 
@@ -1026,14 +1036,18 @@ class GetTelemetrySummaryRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetTelemetrySummaryRequest() / GetTelemetrySummaryRequest.new instead')
   static GetTelemetrySummaryRequest create() => GetTelemetrySummaryRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      GetTelemetrySummaryRequest._();
   @$core.override
-  GetTelemetrySummaryRequest createEmptyInstance() => create();
-  static $pb.PbList<GetTelemetrySummaryRequest> createRepeated() =>
-      $pb.PbList<GetTelemetrySummaryRequest>();
+  GetTelemetrySummaryRequest createEmptyInstance() =>
+      GetTelemetrySummaryRequest._();
   @$core.pragma('dart2js:noInline')
   static GetTelemetrySummaryRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<GetTelemetrySummaryRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<GetTelemetrySummaryRequest>(
+          GetTelemetrySummaryRequest.$_createMessage);
   static GetTelemetrySummaryRequest? _defaultInstance;
 
   /// Whole days back from now. Must be between 1 and 365; the server clamps
@@ -1061,7 +1075,7 @@ class GetTelemetrySummaryResponse extends $pb.GeneratedMessage {
     IntegrationTotals? integrations,
     $core.Iterable<DailyActivity>? daily,
   }) {
-    final result = create();
+    final result = GetTelemetrySummaryResponse._();
     if (window != null) result.window = window;
     if (runs != null) result.runs = runs;
     if (tokens != null) result.tokens = tokens;
@@ -1078,33 +1092,33 @@ class GetTelemetrySummaryResponse extends $pb.GeneratedMessage {
 
   factory GetTelemetrySummaryResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      GetTelemetrySummaryResponse()..mergeFromBuffer(data, registry);
   factory GetTelemetrySummaryResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      GetTelemetrySummaryResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'GetTelemetrySummaryResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: GetTelemetrySummaryResponse.$_createMessage)
     ..aOM<TelemetryWindow>(1, _omitFieldNames ? '' : 'window',
-        subBuilder: TelemetryWindow.create)
+        subBuilder: TelemetryWindow.$_createMessage)
     ..aOM<RunTotals>(2, _omitFieldNames ? '' : 'runs',
-        subBuilder: RunTotals.create)
+        subBuilder: RunTotals.$_createMessage)
     ..aOM<TokenTotals>(3, _omitFieldNames ? '' : 'tokens',
-        subBuilder: TokenTotals.create)
+        subBuilder: TokenTotals.$_createMessage)
     ..pPM<ToolUsage>(4, _omitFieldNames ? '' : 'tools',
-        subBuilder: ToolUsage.create)
+        subBuilder: ToolUsage.$_createMessage)
     ..pPM<ModelUsage>(5, _omitFieldNames ? '' : 'models',
-        subBuilder: ModelUsage.create)
+        subBuilder: ModelUsage.$_createMessage)
     ..pPM<ExternalAgentUsage>(6, _omitFieldNames ? '' : 'externalAgents',
-        subBuilder: ExternalAgentUsage.create)
+        subBuilder: ExternalAgentUsage.$_createMessage)
     ..aOM<AutomationTotals>(7, _omitFieldNames ? '' : 'automations',
-        subBuilder: AutomationTotals.create)
+        subBuilder: AutomationTotals.$_createMessage)
     ..aOM<IntegrationTotals>(8, _omitFieldNames ? '' : 'integrations',
-        subBuilder: IntegrationTotals.create)
+        subBuilder: IntegrationTotals.$_createMessage)
     ..pPM<DailyActivity>(9, _omitFieldNames ? '' : 'daily',
-        subBuilder: DailyActivity.create)
+        subBuilder: DailyActivity.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1120,15 +1134,19 @@ class GetTelemetrySummaryResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetTelemetrySummaryResponse() / GetTelemetrySummaryResponse.new instead')
   static GetTelemetrySummaryResponse create() =>
       GetTelemetrySummaryResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      GetTelemetrySummaryResponse._();
   @$core.override
-  GetTelemetrySummaryResponse createEmptyInstance() => create();
-  static $pb.PbList<GetTelemetrySummaryResponse> createRepeated() =>
-      $pb.PbList<GetTelemetrySummaryResponse>();
+  GetTelemetrySummaryResponse createEmptyInstance() =>
+      GetTelemetrySummaryResponse._();
   @$core.pragma('dart2js:noInline')
   static GetTelemetrySummaryResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<GetTelemetrySummaryResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<GetTelemetrySummaryResponse>(
+          GetTelemetrySummaryResponse.$_createMessage);
   static GetTelemetrySummaryResponse? _defaultInstance;
 
   @$pb.TagNumber(1)

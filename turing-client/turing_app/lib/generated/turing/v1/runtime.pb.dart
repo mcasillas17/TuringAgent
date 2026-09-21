@@ -8,14 +8,14 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
 import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
+import 'package:protobuf/well_known_types/google/protobuf/struct.pb.dart' as $2;
 
-import '../../google/protobuf/struct.pb.dart' as $2;
 import 'common.pb.dart' as $1;
 import 'events.pb.dart' as $3;
 import 'runtime.pbenum.dart';
@@ -51,7 +51,7 @@ class AgentJob extends $pb.GeneratedMessage {
     PinnedProfileSnapshot? pinnedProfile,
     $core.String? memorySnapshotFingerprint,
   }) {
-    final result = create();
+    final result = AgentJob._();
     if (jobId != null) result.jobId = jobId;
     if (runId != null) result.runId = runId;
     if (sessionId != null) result.sessionId = sessionId;
@@ -88,15 +88,15 @@ class AgentJob extends $pb.GeneratedMessage {
 
   factory AgentJob.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      AgentJob()..mergeFromBuffer(data, registry);
   factory AgentJob.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      AgentJob()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'AgentJob',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: AgentJob.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'jobId')
     ..aOS(2, _omitFieldNames ? '' : 'runId')
     ..aOS(3, _omitFieldNames ? '' : 'sessionId')
@@ -112,20 +112,20 @@ class AgentJob extends $pb.GeneratedMessage {
     ..pPS(11, _omitFieldNames ? '' : 'requestedTools')
     ..aI(12, _omitFieldNames ? '' : 'attempt')
     ..pPM<SkillSnapshot>(13, _omitFieldNames ? '' : 'skills',
-        subBuilder: SkillSnapshot.create)
+        subBuilder: SkillSnapshot.$_createMessage)
     ..aOM<ExternalAgentTarget>(14, _omitFieldNames ? '' : 'externalAgent',
-        subBuilder: ExternalAgentTarget.create)
+        subBuilder: ExternalAgentTarget.$_createMessage)
     ..aI(15, _omitFieldNames ? '' : 'requiredContextTokens')
     ..aI(16, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns')
     ..aOM<$1.RunEgressDecision>(17, _omitFieldNames ? '' : 'egressDecision',
-        subBuilder: $1.RunEgressDecision.create)
+        subBuilder: $1.RunEgressDecision.$_createMessage)
     ..pPS(18, _omitFieldNames ? '' : 'selectedTools')
     ..aInt64(19, _omitFieldNames ? '' : 'expectedStateVersion')
     ..aOS(20, _omitFieldNames ? '' : 'assignmentAttemptId')
     ..aOM<PinnedPersonaSnapshot>(21, _omitFieldNames ? '' : 'pinnedPersona',
-        subBuilder: PinnedPersonaSnapshot.create)
+        subBuilder: PinnedPersonaSnapshot.$_createMessage)
     ..aOM<PinnedProfileSnapshot>(22, _omitFieldNames ? '' : 'pinnedProfile',
-        subBuilder: PinnedProfileSnapshot.create)
+        subBuilder: PinnedProfileSnapshot.$_createMessage)
     ..aOS(23, _omitFieldNames ? '' : 'memorySnapshotFingerprint')
     ..hasRequiredFields = false;
 
@@ -139,13 +139,14 @@ class AgentJob extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use AgentJob() / AgentJob.new instead')
   static AgentJob create() => AgentJob._();
+  static $pb.GeneratedMessage $_createMessage() => AgentJob._();
   @$core.override
-  AgentJob createEmptyInstance() => create();
-  static $pb.PbList<AgentJob> createRepeated() => $pb.PbList<AgentJob>();
+  AgentJob createEmptyInstance() => AgentJob._();
   @$core.pragma('dart2js:noInline')
-  static AgentJob getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<AgentJob>(create);
+  static AgentJob getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<AgentJob>(AgentJob.$_createMessage);
   static AgentJob? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -374,7 +375,7 @@ class PinnedPersonaSnapshot extends $pb.GeneratedMessage {
     $core.String? contentHash,
     $core.bool? withheld,
   }) {
-    final result = create();
+    final result = PinnedPersonaSnapshot._();
     if (personaId != null) result.personaId = personaId;
     if (displayName != null) result.displayName = displayName;
     if (body != null) result.body = body;
@@ -387,15 +388,15 @@ class PinnedPersonaSnapshot extends $pb.GeneratedMessage {
 
   factory PinnedPersonaSnapshot.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      PinnedPersonaSnapshot()..mergeFromBuffer(data, registry);
   factory PinnedPersonaSnapshot.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      PinnedPersonaSnapshot()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'PinnedPersonaSnapshot',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: PinnedPersonaSnapshot.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'personaId')
     ..aOS(2, _omitFieldNames ? '' : 'displayName')
     ..aOS(3, _omitFieldNames ? '' : 'body')
@@ -415,14 +416,16 @@ class PinnedPersonaSnapshot extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use PinnedPersonaSnapshot() / PinnedPersonaSnapshot.new instead')
   static PinnedPersonaSnapshot create() => PinnedPersonaSnapshot._();
+  static $pb.GeneratedMessage $_createMessage() => PinnedPersonaSnapshot._();
   @$core.override
-  PinnedPersonaSnapshot createEmptyInstance() => create();
-  static $pb.PbList<PinnedPersonaSnapshot> createRepeated() =>
-      $pb.PbList<PinnedPersonaSnapshot>();
+  PinnedPersonaSnapshot createEmptyInstance() => PinnedPersonaSnapshot._();
   @$core.pragma('dart2js:noInline')
   static PinnedPersonaSnapshot getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<PinnedPersonaSnapshot>(create);
+      $pb.GeneratedMessage.$_defaultFor<PinnedPersonaSnapshot>(
+          PinnedPersonaSnapshot.$_createMessage);
   static PinnedPersonaSnapshot? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -478,7 +481,7 @@ class PinnedProfileSnapshot extends $pb.GeneratedMessage {
     $core.String? contentHash,
     $core.bool? withheld,
   }) {
-    final result = create();
+    final result = PinnedProfileSnapshot._();
     if (profileId != null) result.profileId = profileId;
     if (body != null) result.body = body;
     if (contentHash != null) result.contentHash = contentHash;
@@ -490,15 +493,15 @@ class PinnedProfileSnapshot extends $pb.GeneratedMessage {
 
   factory PinnedProfileSnapshot.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      PinnedProfileSnapshot()..mergeFromBuffer(data, registry);
   factory PinnedProfileSnapshot.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      PinnedProfileSnapshot()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'PinnedProfileSnapshot',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: PinnedProfileSnapshot.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'profileId')
     ..aOS(2, _omitFieldNames ? '' : 'body')
     ..aOS(3, _omitFieldNames ? '' : 'contentHash')
@@ -517,14 +520,16 @@ class PinnedProfileSnapshot extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use PinnedProfileSnapshot() / PinnedProfileSnapshot.new instead')
   static PinnedProfileSnapshot create() => PinnedProfileSnapshot._();
+  static $pb.GeneratedMessage $_createMessage() => PinnedProfileSnapshot._();
   @$core.override
-  PinnedProfileSnapshot createEmptyInstance() => create();
-  static $pb.PbList<PinnedProfileSnapshot> createRepeated() =>
-      $pb.PbList<PinnedProfileSnapshot>();
+  PinnedProfileSnapshot createEmptyInstance() => PinnedProfileSnapshot._();
   @$core.pragma('dart2js:noInline')
   static PinnedProfileSnapshot getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<PinnedProfileSnapshot>(create);
+      $pb.GeneratedMessage.$_defaultFor<PinnedProfileSnapshot>(
+          PinnedProfileSnapshot.$_createMessage);
   static PinnedProfileSnapshot? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -583,7 +588,7 @@ class ExternalAgentTarget extends $pb.GeneratedMessage {
     $core.String? credentialRef,
     $core.String? agentId,
   }) {
-    final result = create();
+    final result = ExternalAgentTarget._();
     if (displayName != null) result.displayName = displayName;
     if (baseUrl != null) result.baseUrl = baseUrl;
     if (credentialRef != null) result.credentialRef = credentialRef;
@@ -595,15 +600,15 @@ class ExternalAgentTarget extends $pb.GeneratedMessage {
 
   factory ExternalAgentTarget.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ExternalAgentTarget()..mergeFromBuffer(data, registry);
   factory ExternalAgentTarget.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ExternalAgentTarget()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ExternalAgentTarget',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ExternalAgentTarget.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'displayName')
     ..aOS(2, _omitFieldNames ? '' : 'baseUrl')
     ..aOS(3, _omitFieldNames ? '' : 'credentialRef')
@@ -621,14 +626,16 @@ class ExternalAgentTarget extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core
+      .Deprecated('Use ExternalAgentTarget() / ExternalAgentTarget.new instead')
   static ExternalAgentTarget create() => ExternalAgentTarget._();
+  static $pb.GeneratedMessage $_createMessage() => ExternalAgentTarget._();
   @$core.override
-  ExternalAgentTarget createEmptyInstance() => create();
-  static $pb.PbList<ExternalAgentTarget> createRepeated() =>
-      $pb.PbList<ExternalAgentTarget>();
+  ExternalAgentTarget createEmptyInstance() => ExternalAgentTarget._();
   @$core.pragma('dart2js:noInline')
   static ExternalAgentTarget getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ExternalAgentTarget>(create);
+      $pb.GeneratedMessage.$_defaultFor<ExternalAgentTarget>(
+          ExternalAgentTarget.$_createMessage);
   static ExternalAgentTarget? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -682,7 +689,7 @@ class SkillSnapshot extends $pb.GeneratedMessage {
     $core.bool? withheld,
     $core.Iterable<$core.String>? missingCapabilities,
   }) {
-    final result = create();
+    final result = SkillSnapshot._();
     if (name != null) result.name = name;
     if (instructions != null) result.instructions = instructions;
     if (skillId != null) result.skillId = skillId;
@@ -699,15 +706,15 @@ class SkillSnapshot extends $pb.GeneratedMessage {
 
   factory SkillSnapshot.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SkillSnapshot()..mergeFromBuffer(data, registry);
   factory SkillSnapshot.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SkillSnapshot()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SkillSnapshot',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SkillSnapshot.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'name')
     ..aOS(2, _omitFieldNames ? '' : 'instructions')
     ..aOS(3, _omitFieldNames ? '' : 'skillId')
@@ -733,14 +740,15 @@ class SkillSnapshot extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use SkillSnapshot() / SkillSnapshot.new instead')
   static SkillSnapshot create() => SkillSnapshot._();
+  static $pb.GeneratedMessage $_createMessage() => SkillSnapshot._();
   @$core.override
-  SkillSnapshot createEmptyInstance() => create();
-  static $pb.PbList<SkillSnapshot> createRepeated() =>
-      $pb.PbList<SkillSnapshot>();
+  SkillSnapshot createEmptyInstance() => SkillSnapshot._();
   @$core.pragma('dart2js:noInline')
-  static SkillSnapshot getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SkillSnapshot>(create);
+  static SkillSnapshot getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<SkillSnapshot>(
+          SkillSnapshot.$_createMessage);
   static SkillSnapshot? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -813,7 +821,7 @@ class DiscoveredTool extends $pb.GeneratedMessage {
     $core.String? toolName,
     $2.Struct? schema,
   }) {
-    final result = create();
+    final result = DiscoveredTool._();
     if (serverName != null) result.serverName = serverName;
     if (toolName != null) result.toolName = toolName;
     if (schema != null) result.schema = schema;
@@ -824,19 +832,19 @@ class DiscoveredTool extends $pb.GeneratedMessage {
 
   factory DiscoveredTool.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      DiscoveredTool()..mergeFromBuffer(data, registry);
   factory DiscoveredTool.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      DiscoveredTool()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'DiscoveredTool',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: DiscoveredTool.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'serverName')
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
     ..aOM<$2.Struct>(3, _omitFieldNames ? '' : 'schema',
-        subBuilder: $2.Struct.create)
+        subBuilder: $2.Struct.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -850,14 +858,15 @@ class DiscoveredTool extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use DiscoveredTool() / DiscoveredTool.new instead')
   static DiscoveredTool create() => DiscoveredTool._();
+  static $pb.GeneratedMessage $_createMessage() => DiscoveredTool._();
   @$core.override
-  DiscoveredTool createEmptyInstance() => create();
-  static $pb.PbList<DiscoveredTool> createRepeated() =>
-      $pb.PbList<DiscoveredTool>();
+  DiscoveredTool createEmptyInstance() => DiscoveredTool._();
   @$core.pragma('dart2js:noInline')
-  static DiscoveredTool getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<DiscoveredTool>(create);
+  static DiscoveredTool getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<DiscoveredTool>(
+          DiscoveredTool.$_createMessage);
   static DiscoveredTool? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -901,7 +910,7 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
     $core.Iterable<$core.String>? externalAgentCredentialRefs,
     $core.int? remoteEgressDecisionVersion,
   }) {
-    final result = create();
+    final result = WorkerCapabilities._();
     if (models != null) result.models.addAll(models);
     if (agentIds != null) result.agentIds.addAll(agentIds);
     if (tools != null) result.tools.addAll(tools);
@@ -919,23 +928,23 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
 
   factory WorkerCapabilities.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      WorkerCapabilities()..mergeFromBuffer(data, registry);
   factory WorkerCapabilities.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      WorkerCapabilities()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'WorkerCapabilities',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: WorkerCapabilities.$_createMessage)
     ..pPM<$1.ModelCapability>(1, _omitFieldNames ? '' : 'models',
-        subBuilder: $1.ModelCapability.create)
+        subBuilder: $1.ModelCapability.$_createMessage)
     ..pc<$1.AgentId>(2, _omitFieldNames ? '' : 'agentIds', $pb.PbFieldType.KE,
         valueOf: $1.AgentId.valueOf,
         enumValues: $1.AgentId.values,
         defaultEnumValue: $1.AgentId.AGENT_ID_UNSPECIFIED)
     ..pPM<DiscoveredTool>(3, _omitFieldNames ? '' : 'tools',
-        subBuilder: DiscoveredTool.create)
+        subBuilder: DiscoveredTool.$_createMessage)
     ..aI(4, _omitFieldNames ? '' : 'maxConcurrentRuns')
     ..aOB(5, _omitFieldNames ? '' : 'supportsExternalAgents')
     ..pPS(6, _omitFieldNames ? '' : 'externalAgentCredentialRefs')
@@ -953,14 +962,15 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use WorkerCapabilities() / WorkerCapabilities.new instead')
   static WorkerCapabilities create() => WorkerCapabilities._();
+  static $pb.GeneratedMessage $_createMessage() => WorkerCapabilities._();
   @$core.override
-  WorkerCapabilities createEmptyInstance() => create();
-  static $pb.PbList<WorkerCapabilities> createRepeated() =>
-      $pb.PbList<WorkerCapabilities>();
+  WorkerCapabilities createEmptyInstance() => WorkerCapabilities._();
   @$core.pragma('dart2js:noInline')
   static WorkerCapabilities getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<WorkerCapabilities>(create);
+      $pb.GeneratedMessage.$_defaultFor<WorkerCapabilities>(
+          WorkerCapabilities.$_createMessage);
   static WorkerCapabilities? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1020,7 +1030,7 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
     $core.String? registrationId,
     WorkerCapabilities? capabilities,
   }) {
-    final result = create();
+    final result = RuntimeWorkerReady._();
     if (workerId != null) result.workerId = workerId;
     if (agentId != null) result.agentId = agentId;
     if (maxConcurrentRuns != null) result.maxConcurrentRuns = maxConcurrentRuns;
@@ -1036,26 +1046,26 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
 
   factory RuntimeWorkerReady.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeWorkerReady()..mergeFromBuffer(data, registry);
   factory RuntimeWorkerReady.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeWorkerReady()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeWorkerReady',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeWorkerReady.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'workerId')
     ..aE<$1.AgentId>(2, _omitFieldNames ? '' : 'agentId',
         enumValues: $1.AgentId.values)
     ..aI(3, _omitFieldNames ? '' : 'maxConcurrentRuns')
     ..pPM<DiscoveredTool>(4, _omitFieldNames ? '' : 'tools',
-        subBuilder: DiscoveredTool.create)
+        subBuilder: DiscoveredTool.$_createMessage)
     ..aE<ToolDiscoveryStatus>(5, _omitFieldNames ? '' : 'toolDiscoveryStatus',
         enumValues: ToolDiscoveryStatus.values)
     ..aOS(6, _omitFieldNames ? '' : 'registrationId')
     ..aOM<WorkerCapabilities>(7, _omitFieldNames ? '' : 'capabilities',
-        subBuilder: WorkerCapabilities.create)
+        subBuilder: WorkerCapabilities.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1069,14 +1079,15 @@ class RuntimeWorkerReady extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RuntimeWorkerReady() / RuntimeWorkerReady.new instead')
   static RuntimeWorkerReady create() => RuntimeWorkerReady._();
+  static $pb.GeneratedMessage $_createMessage() => RuntimeWorkerReady._();
   @$core.override
-  RuntimeWorkerReady createEmptyInstance() => create();
-  static $pb.PbList<RuntimeWorkerReady> createRepeated() =>
-      $pb.PbList<RuntimeWorkerReady>();
+  RuntimeWorkerReady createEmptyInstance() => RuntimeWorkerReady._();
   @$core.pragma('dart2js:noInline')
   static RuntimeWorkerReady getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeWorkerReady>(create);
+      $pb.GeneratedMessage.$_defaultFor<RuntimeWorkerReady>(
+          RuntimeWorkerReady.$_createMessage);
   static RuntimeWorkerReady? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1147,7 +1158,7 @@ class RuntimeWorkerCapabilitiesUpdated extends $pb.GeneratedMessage {
     $core.String? registrationId,
     WorkerCapabilities? capabilities,
   }) {
-    final result = create();
+    final result = RuntimeWorkerCapabilitiesUpdated._();
     if (workerId != null) result.workerId = workerId;
     if (registrationId != null) result.registrationId = registrationId;
     if (capabilities != null) result.capabilities = capabilities;
@@ -1159,19 +1170,19 @@ class RuntimeWorkerCapabilitiesUpdated extends $pb.GeneratedMessage {
   factory RuntimeWorkerCapabilitiesUpdated.fromBuffer(
           $core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeWorkerCapabilitiesUpdated()..mergeFromBuffer(data, registry);
   factory RuntimeWorkerCapabilitiesUpdated.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeWorkerCapabilitiesUpdated()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeWorkerCapabilitiesUpdated',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeWorkerCapabilitiesUpdated.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'workerId')
     ..aOS(2, _omitFieldNames ? '' : 'registrationId')
     ..aOM<WorkerCapabilities>(3, _omitFieldNames ? '' : 'capabilities',
-        subBuilder: WorkerCapabilities.create)
+        subBuilder: WorkerCapabilities.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1187,16 +1198,19 @@ class RuntimeWorkerCapabilitiesUpdated extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use RuntimeWorkerCapabilitiesUpdated() / RuntimeWorkerCapabilitiesUpdated.new instead')
   static RuntimeWorkerCapabilitiesUpdated create() =>
       RuntimeWorkerCapabilitiesUpdated._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      RuntimeWorkerCapabilitiesUpdated._();
   @$core.override
-  RuntimeWorkerCapabilitiesUpdated createEmptyInstance() => create();
-  static $pb.PbList<RuntimeWorkerCapabilitiesUpdated> createRepeated() =>
-      $pb.PbList<RuntimeWorkerCapabilitiesUpdated>();
+  RuntimeWorkerCapabilitiesUpdated createEmptyInstance() =>
+      RuntimeWorkerCapabilitiesUpdated._();
   @$core.pragma('dart2js:noInline')
   static RuntimeWorkerCapabilitiesUpdated getDefault() => _defaultInstance ??=
       $pb.GeneratedMessage.$_defaultFor<RuntimeWorkerCapabilitiesUpdated>(
-          create);
+          RuntimeWorkerCapabilitiesUpdated.$_createMessage);
   static RuntimeWorkerCapabilitiesUpdated? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1234,7 +1248,7 @@ class RuntimeHeartbeat extends $pb.GeneratedMessage {
   factory RuntimeHeartbeat({
     $core.String? workerId,
   }) {
-    final result = create();
+    final result = RuntimeHeartbeat._();
     if (workerId != null) result.workerId = workerId;
     return result;
   }
@@ -1243,15 +1257,15 @@ class RuntimeHeartbeat extends $pb.GeneratedMessage {
 
   factory RuntimeHeartbeat.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeHeartbeat()..mergeFromBuffer(data, registry);
   factory RuntimeHeartbeat.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeHeartbeat()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeHeartbeat',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeHeartbeat.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'workerId')
     ..hasRequiredFields = false;
 
@@ -1266,14 +1280,15 @@ class RuntimeHeartbeat extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RuntimeHeartbeat() / RuntimeHeartbeat.new instead')
   static RuntimeHeartbeat create() => RuntimeHeartbeat._();
+  static $pb.GeneratedMessage $_createMessage() => RuntimeHeartbeat._();
   @$core.override
-  RuntimeHeartbeat createEmptyInstance() => create();
-  static $pb.PbList<RuntimeHeartbeat> createRepeated() =>
-      $pb.PbList<RuntimeHeartbeat>();
+  RuntimeHeartbeat createEmptyInstance() => RuntimeHeartbeat._();
   @$core.pragma('dart2js:noInline')
-  static RuntimeHeartbeat getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeHeartbeat>(create);
+  static RuntimeHeartbeat getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RuntimeHeartbeat>(
+          RuntimeHeartbeat.$_createMessage);
   static RuntimeHeartbeat? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1299,7 +1314,7 @@ class RunTokenUsage extends $pb.GeneratedMessage {
     $fixnum.Int64? inputTokens,
     $fixnum.Int64? outputTokens,
   }) {
-    final result = create();
+    final result = RunTokenUsage._();
     if (inputTokens != null) result.inputTokens = inputTokens;
     if (outputTokens != null) result.outputTokens = outputTokens;
     return result;
@@ -1309,15 +1324,15 @@ class RunTokenUsage extends $pb.GeneratedMessage {
 
   factory RunTokenUsage.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RunTokenUsage()..mergeFromBuffer(data, registry);
   factory RunTokenUsage.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RunTokenUsage()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RunTokenUsage',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RunTokenUsage.$_createMessage)
     ..aInt64(1, _omitFieldNames ? '' : 'inputTokens')
     ..aInt64(2, _omitFieldNames ? '' : 'outputTokens')
     ..hasRequiredFields = false;
@@ -1333,14 +1348,15 @@ class RunTokenUsage extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RunTokenUsage() / RunTokenUsage.new instead')
   static RunTokenUsage create() => RunTokenUsage._();
+  static $pb.GeneratedMessage $_createMessage() => RunTokenUsage._();
   @$core.override
-  RunTokenUsage createEmptyInstance() => create();
-  static $pb.PbList<RunTokenUsage> createRepeated() =>
-      $pb.PbList<RunTokenUsage>();
+  RunTokenUsage createEmptyInstance() => RunTokenUsage._();
   @$core.pragma('dart2js:noInline')
-  static RunTokenUsage getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RunTokenUsage>(create);
+  static RunTokenUsage getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RunTokenUsage>(
+          RunTokenUsage.$_createMessage);
   static RunTokenUsage? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1371,7 +1387,7 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
     RunTokenUsage? tokenUsage,
     $fixnum.Int64? expectedStateVersion,
   }) {
-    final result = create();
+    final result = RuntimeRunCompleted._();
     if (runId != null) result.runId = runId;
     if (assistantMessageId != null)
       result.assistantMessageId = assistantMessageId;
@@ -1387,22 +1403,22 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
 
   factory RuntimeRunCompleted.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeRunCompleted()..mergeFromBuffer(data, registry);
   factory RuntimeRunCompleted.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeRunCompleted()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeRunCompleted',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeRunCompleted.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'assistantMessageId')
     ..aOS(3, _omitFieldNames ? '' : 'content')
     ..aOM<$2.Struct>(4, _omitFieldNames ? '' : 'usage',
-        subBuilder: $2.Struct.create)
+        subBuilder: $2.Struct.$_createMessage)
     ..aOM<RunTokenUsage>(5, _omitFieldNames ? '' : 'tokenUsage',
-        subBuilder: RunTokenUsage.create)
+        subBuilder: RunTokenUsage.$_createMessage)
     ..aInt64(6, _omitFieldNames ? '' : 'expectedStateVersion')
     ..hasRequiredFields = false;
 
@@ -1417,14 +1433,16 @@ class RuntimeRunCompleted extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core
+      .Deprecated('Use RuntimeRunCompleted() / RuntimeRunCompleted.new instead')
   static RuntimeRunCompleted create() => RuntimeRunCompleted._();
+  static $pb.GeneratedMessage $_createMessage() => RuntimeRunCompleted._();
   @$core.override
-  RuntimeRunCompleted createEmptyInstance() => create();
-  static $pb.PbList<RuntimeRunCompleted> createRepeated() =>
-      $pb.PbList<RuntimeRunCompleted>();
+  RuntimeRunCompleted createEmptyInstance() => RuntimeRunCompleted._();
   @$core.pragma('dart2js:noInline')
   static RuntimeRunCompleted getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeRunCompleted>(create);
+      $pb.GeneratedMessage.$_defaultFor<RuntimeRunCompleted>(
+          RuntimeRunCompleted.$_createMessage);
   static RuntimeRunCompleted? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1502,7 +1520,7 @@ class RuntimeRunFailed extends $pb.GeneratedMessage {
     AutomaticRetryClass? automaticRetryClass,
     $fixnum.Int64? expectedStateVersion,
   }) {
-    final result = create();
+    final result = RuntimeRunFailed._();
     if (runId != null) result.runId = runId;
     if (code != null) result.code = code;
     if (message != null) result.message = message;
@@ -1519,15 +1537,15 @@ class RuntimeRunFailed extends $pb.GeneratedMessage {
 
   factory RuntimeRunFailed.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeRunFailed()..mergeFromBuffer(data, registry);
   factory RuntimeRunFailed.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeRunFailed()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeRunFailed',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeRunFailed.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'code')
     ..aOS(3, _omitFieldNames ? '' : 'message')
@@ -1550,14 +1568,15 @@ class RuntimeRunFailed extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RuntimeRunFailed() / RuntimeRunFailed.new instead')
   static RuntimeRunFailed create() => RuntimeRunFailed._();
+  static $pb.GeneratedMessage $_createMessage() => RuntimeRunFailed._();
   @$core.override
-  RuntimeRunFailed createEmptyInstance() => create();
-  static $pb.PbList<RuntimeRunFailed> createRepeated() =>
-      $pb.PbList<RuntimeRunFailed>();
+  RuntimeRunFailed createEmptyInstance() => RuntimeRunFailed._();
   @$core.pragma('dart2js:noInline')
-  static RuntimeRunFailed getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeRunFailed>(create);
+  static RuntimeRunFailed getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RuntimeRunFailed>(
+          RuntimeRunFailed.$_createMessage);
   static RuntimeRunFailed? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1636,7 +1655,7 @@ class RuntimeCancelledAck extends $pb.GeneratedMessage {
     $core.String? runId,
     $fixnum.Int64? observedStateVersion,
   }) {
-    final result = create();
+    final result = RuntimeCancelledAck._();
     if (runId != null) result.runId = runId;
     if (observedStateVersion != null)
       result.observedStateVersion = observedStateVersion;
@@ -1647,15 +1666,15 @@ class RuntimeCancelledAck extends $pb.GeneratedMessage {
 
   factory RuntimeCancelledAck.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeCancelledAck()..mergeFromBuffer(data, registry);
   factory RuntimeCancelledAck.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeCancelledAck()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeCancelledAck',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeCancelledAck.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aInt64(2, _omitFieldNames ? '' : 'observedStateVersion')
     ..hasRequiredFields = false;
@@ -1671,14 +1690,16 @@ class RuntimeCancelledAck extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core
+      .Deprecated('Use RuntimeCancelledAck() / RuntimeCancelledAck.new instead')
   static RuntimeCancelledAck create() => RuntimeCancelledAck._();
+  static $pb.GeneratedMessage $_createMessage() => RuntimeCancelledAck._();
   @$core.override
-  RuntimeCancelledAck createEmptyInstance() => create();
-  static $pb.PbList<RuntimeCancelledAck> createRepeated() =>
-      $pb.PbList<RuntimeCancelledAck>();
+  RuntimeCancelledAck createEmptyInstance() => RuntimeCancelledAck._();
   @$core.pragma('dart2js:noInline')
   static RuntimeCancelledAck getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeCancelledAck>(create);
+      $pb.GeneratedMessage.$_defaultFor<RuntimeCancelledAck>(
+          RuntimeCancelledAck.$_createMessage);
   static RuntimeCancelledAck? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1714,7 +1735,7 @@ class RuntimeApprovalResumeReady extends $pb.GeneratedMessage {
     $fixnum.Int64? expectedStateVersion,
     $core.String? assignmentAttemptId,
   }) {
-    final result = create();
+    final result = RuntimeApprovalResumeReady._();
     if (runId != null) result.runId = runId;
     if (approvalId != null) result.approvalId = approvalId;
     if (expectedStateVersion != null)
@@ -1728,15 +1749,15 @@ class RuntimeApprovalResumeReady extends $pb.GeneratedMessage {
 
   factory RuntimeApprovalResumeReady.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeApprovalResumeReady()..mergeFromBuffer(data, registry);
   factory RuntimeApprovalResumeReady.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeApprovalResumeReady()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeApprovalResumeReady',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeApprovalResumeReady.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'approvalId')
     ..aInt64(3, _omitFieldNames ? '' : 'expectedStateVersion')
@@ -1756,14 +1777,18 @@ class RuntimeApprovalResumeReady extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use RuntimeApprovalResumeReady() / RuntimeApprovalResumeReady.new instead')
   static RuntimeApprovalResumeReady create() => RuntimeApprovalResumeReady._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      RuntimeApprovalResumeReady._();
   @$core.override
-  RuntimeApprovalResumeReady createEmptyInstance() => create();
-  static $pb.PbList<RuntimeApprovalResumeReady> createRepeated() =>
-      $pb.PbList<RuntimeApprovalResumeReady>();
+  RuntimeApprovalResumeReady createEmptyInstance() =>
+      RuntimeApprovalResumeReady._();
   @$core.pragma('dart2js:noInline')
   static RuntimeApprovalResumeReady getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeApprovalResumeReady>(create);
+      $pb.GeneratedMessage.$_defaultFor<RuntimeApprovalResumeReady>(
+          RuntimeApprovalResumeReady.$_createMessage);
   static RuntimeApprovalResumeReady? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1830,7 +1855,7 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
     RuntimeWorkerCapabilitiesUpdated? workerCapabilitiesUpdated,
     RuntimeApprovalResumeReady? approvalResumeReady,
   }) {
-    final result = create();
+    final result = RuntimeUpdate._();
     if (workerReady != null) result.workerReady = workerReady;
     if (heartbeat != null) result.heartbeat = heartbeat;
     if (event != null) result.event = event;
@@ -1849,10 +1874,10 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
 
   factory RuntimeUpdate.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeUpdate()..mergeFromBuffer(data, registry);
   factory RuntimeUpdate.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeUpdate()..mergeFromJson(json, registry);
 
   static const $core.Map<$core.int, RuntimeUpdate_Update>
       _RuntimeUpdate_UpdateByTag = {
@@ -1870,28 +1895,28 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeUpdate',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeUpdate.$_createMessage)
     ..oo(0, [1, 2, 3, 4, 5, 6, 7, 8, 9])
     ..aOM<RuntimeWorkerReady>(1, _omitFieldNames ? '' : 'workerReady',
-        subBuilder: RuntimeWorkerReady.create)
+        subBuilder: RuntimeWorkerReady.$_createMessage)
     ..aOM<RuntimeHeartbeat>(2, _omitFieldNames ? '' : 'heartbeat',
-        subBuilder: RuntimeHeartbeat.create)
+        subBuilder: RuntimeHeartbeat.$_createMessage)
     ..aOM<$3.TuringEvent>(3, _omitFieldNames ? '' : 'event',
-        subBuilder: $3.TuringEvent.create)
+        subBuilder: $3.TuringEvent.$_createMessage)
     ..aOM<$4.ToolCallBeacon>(4, _omitFieldNames ? '' : 'toolBeacon',
-        subBuilder: $4.ToolCallBeacon.create)
+        subBuilder: $4.ToolCallBeacon.$_createMessage)
     ..aOM<RuntimeRunCompleted>(5, _omitFieldNames ? '' : 'runCompleted',
-        subBuilder: RuntimeRunCompleted.create)
+        subBuilder: RuntimeRunCompleted.$_createMessage)
     ..aOM<RuntimeRunFailed>(6, _omitFieldNames ? '' : 'runFailed',
-        subBuilder: RuntimeRunFailed.create)
+        subBuilder: RuntimeRunFailed.$_createMessage)
     ..aOM<RuntimeCancelledAck>(7, _omitFieldNames ? '' : 'runCancelledAck',
-        subBuilder: RuntimeCancelledAck.create)
+        subBuilder: RuntimeCancelledAck.$_createMessage)
     ..aOM<RuntimeWorkerCapabilitiesUpdated>(
         8, _omitFieldNames ? '' : 'workerCapabilitiesUpdated',
-        subBuilder: RuntimeWorkerCapabilitiesUpdated.create)
+        subBuilder: RuntimeWorkerCapabilitiesUpdated.$_createMessage)
     ..aOM<RuntimeApprovalResumeReady>(
         9, _omitFieldNames ? '' : 'approvalResumeReady',
-        subBuilder: RuntimeApprovalResumeReady.create)
+        subBuilder: RuntimeApprovalResumeReady.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1905,14 +1930,15 @@ class RuntimeUpdate extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RuntimeUpdate() / RuntimeUpdate.new instead')
   static RuntimeUpdate create() => RuntimeUpdate._();
+  static $pb.GeneratedMessage $_createMessage() => RuntimeUpdate._();
   @$core.override
-  RuntimeUpdate createEmptyInstance() => create();
-  static $pb.PbList<RuntimeUpdate> createRepeated() =>
-      $pb.PbList<RuntimeUpdate>();
+  RuntimeUpdate createEmptyInstance() => RuntimeUpdate._();
   @$core.pragma('dart2js:noInline')
-  static RuntimeUpdate getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeUpdate>(create);
+  static RuntimeUpdate getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RuntimeUpdate>(
+          RuntimeUpdate.$_createMessage);
   static RuntimeUpdate? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2045,7 +2071,7 @@ class RuntimeWorkerAccepted extends $pb.GeneratedMessage {
     $core.String? workerId,
     $core.String? registrationId,
   }) {
-    final result = create();
+    final result = RuntimeWorkerAccepted._();
     if (workerId != null) result.workerId = workerId;
     if (registrationId != null) result.registrationId = registrationId;
     return result;
@@ -2055,15 +2081,15 @@ class RuntimeWorkerAccepted extends $pb.GeneratedMessage {
 
   factory RuntimeWorkerAccepted.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeWorkerAccepted()..mergeFromBuffer(data, registry);
   factory RuntimeWorkerAccepted.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeWorkerAccepted()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeWorkerAccepted',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeWorkerAccepted.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'workerId')
     ..aOS(2, _omitFieldNames ? '' : 'registrationId')
     ..hasRequiredFields = false;
@@ -2080,14 +2106,16 @@ class RuntimeWorkerAccepted extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use RuntimeWorkerAccepted() / RuntimeWorkerAccepted.new instead')
   static RuntimeWorkerAccepted create() => RuntimeWorkerAccepted._();
+  static $pb.GeneratedMessage $_createMessage() => RuntimeWorkerAccepted._();
   @$core.override
-  RuntimeWorkerAccepted createEmptyInstance() => create();
-  static $pb.PbList<RuntimeWorkerAccepted> createRepeated() =>
-      $pb.PbList<RuntimeWorkerAccepted>();
+  RuntimeWorkerAccepted createEmptyInstance() => RuntimeWorkerAccepted._();
   @$core.pragma('dart2js:noInline')
   static RuntimeWorkerAccepted getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeWorkerAccepted>(create);
+      $pb.GeneratedMessage.$_defaultFor<RuntimeWorkerAccepted>(
+          RuntimeWorkerAccepted.$_createMessage);
   static RuntimeWorkerAccepted? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2115,7 +2143,7 @@ class RuntimeRunCancelled extends $pb.GeneratedMessage {
     $core.String? reason,
     $fixnum.Int64? stateVersion,
   }) {
-    final result = create();
+    final result = RuntimeRunCancelled._();
     if (runId != null) result.runId = runId;
     if (reason != null) result.reason = reason;
     if (stateVersion != null) result.stateVersion = stateVersion;
@@ -2126,15 +2154,15 @@ class RuntimeRunCancelled extends $pb.GeneratedMessage {
 
   factory RuntimeRunCancelled.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeRunCancelled()..mergeFromBuffer(data, registry);
   factory RuntimeRunCancelled.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeRunCancelled()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeRunCancelled',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeRunCancelled.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'reason')
     ..aInt64(3, _omitFieldNames ? '' : 'stateVersion')
@@ -2151,14 +2179,16 @@ class RuntimeRunCancelled extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core
+      .Deprecated('Use RuntimeRunCancelled() / RuntimeRunCancelled.new instead')
   static RuntimeRunCancelled create() => RuntimeRunCancelled._();
+  static $pb.GeneratedMessage $_createMessage() => RuntimeRunCancelled._();
   @$core.override
-  RuntimeRunCancelled createEmptyInstance() => create();
-  static $pb.PbList<RuntimeRunCancelled> createRepeated() =>
-      $pb.PbList<RuntimeRunCancelled>();
+  RuntimeRunCancelled createEmptyInstance() => RuntimeRunCancelled._();
   @$core.pragma('dart2js:noInline')
   static RuntimeRunCancelled getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeRunCancelled>(create);
+      $pb.GeneratedMessage.$_defaultFor<RuntimeRunCancelled>(
+          RuntimeRunCancelled.$_createMessage);
   static RuntimeRunCancelled? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2198,7 +2228,7 @@ class RuntimeApprovalUpdated extends $pb.GeneratedMessage {
     $core.String? status,
     $fixnum.Int64? stateVersion,
   }) {
-    final result = create();
+    final result = RuntimeApprovalUpdated._();
     if (approvalId != null) result.approvalId = approvalId;
     if (approvalToken != null) result.approvalToken = approvalToken;
     if (status != null) result.status = status;
@@ -2210,15 +2240,15 @@ class RuntimeApprovalUpdated extends $pb.GeneratedMessage {
 
   factory RuntimeApprovalUpdated.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeApprovalUpdated()..mergeFromBuffer(data, registry);
   factory RuntimeApprovalUpdated.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeApprovalUpdated()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeApprovalUpdated',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeApprovalUpdated.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..aOS(2, _omitFieldNames ? '' : 'approvalToken')
     ..aOS(3, _omitFieldNames ? '' : 'status')
@@ -2237,14 +2267,16 @@ class RuntimeApprovalUpdated extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use RuntimeApprovalUpdated() / RuntimeApprovalUpdated.new instead')
   static RuntimeApprovalUpdated create() => RuntimeApprovalUpdated._();
+  static $pb.GeneratedMessage $_createMessage() => RuntimeApprovalUpdated._();
   @$core.override
-  RuntimeApprovalUpdated createEmptyInstance() => create();
-  static $pb.PbList<RuntimeApprovalUpdated> createRepeated() =>
-      $pb.PbList<RuntimeApprovalUpdated>();
+  RuntimeApprovalUpdated createEmptyInstance() => RuntimeApprovalUpdated._();
   @$core.pragma('dart2js:noInline')
   static RuntimeApprovalUpdated getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeApprovalUpdated>(create);
+      $pb.GeneratedMessage.$_defaultFor<RuntimeApprovalUpdated>(
+          RuntimeApprovalUpdated.$_createMessage);
   static RuntimeApprovalUpdated? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2298,7 +2330,7 @@ class RuntimeApprovalResumeAccepted extends $pb.GeneratedMessage {
     $fixnum.Int64? stateVersion,
     $core.String? assignmentAttemptId,
   }) {
-    final result = create();
+    final result = RuntimeApprovalResumeAccepted._();
     if (runId != null) result.runId = runId;
     if (approvalId != null) result.approvalId = approvalId;
     if (stateVersion != null) result.stateVersion = stateVersion;
@@ -2311,15 +2343,15 @@ class RuntimeApprovalResumeAccepted extends $pb.GeneratedMessage {
 
   factory RuntimeApprovalResumeAccepted.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeApprovalResumeAccepted()..mergeFromBuffer(data, registry);
   factory RuntimeApprovalResumeAccepted.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeApprovalResumeAccepted()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeApprovalResumeAccepted',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeApprovalResumeAccepted.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'approvalId')
     ..aInt64(3, _omitFieldNames ? '' : 'stateVersion')
@@ -2339,15 +2371,19 @@ class RuntimeApprovalResumeAccepted extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use RuntimeApprovalResumeAccepted() / RuntimeApprovalResumeAccepted.new instead')
   static RuntimeApprovalResumeAccepted create() =>
       RuntimeApprovalResumeAccepted._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      RuntimeApprovalResumeAccepted._();
   @$core.override
-  RuntimeApprovalResumeAccepted createEmptyInstance() => create();
-  static $pb.PbList<RuntimeApprovalResumeAccepted> createRepeated() =>
-      $pb.PbList<RuntimeApprovalResumeAccepted>();
+  RuntimeApprovalResumeAccepted createEmptyInstance() =>
+      RuntimeApprovalResumeAccepted._();
   @$core.pragma('dart2js:noInline')
   static RuntimeApprovalResumeAccepted getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeApprovalResumeAccepted>(create);
+      $pb.GeneratedMessage.$_defaultFor<RuntimeApprovalResumeAccepted>(
+          RuntimeApprovalResumeAccepted.$_createMessage);
   static RuntimeApprovalResumeAccepted? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2391,7 +2427,7 @@ class RuntimeShutdownRequested extends $pb.GeneratedMessage {
   factory RuntimeShutdownRequested({
     $core.String? reason,
   }) {
-    final result = create();
+    final result = RuntimeShutdownRequested._();
     if (reason != null) result.reason = reason;
     return result;
   }
@@ -2400,15 +2436,15 @@ class RuntimeShutdownRequested extends $pb.GeneratedMessage {
 
   factory RuntimeShutdownRequested.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeShutdownRequested()..mergeFromBuffer(data, registry);
   factory RuntimeShutdownRequested.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeShutdownRequested()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeShutdownRequested',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeShutdownRequested.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'reason')
     ..hasRequiredFields = false;
 
@@ -2424,14 +2460,17 @@ class RuntimeShutdownRequested extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use RuntimeShutdownRequested() / RuntimeShutdownRequested.new instead')
   static RuntimeShutdownRequested create() => RuntimeShutdownRequested._();
+  static $pb.GeneratedMessage $_createMessage() => RuntimeShutdownRequested._();
   @$core.override
-  RuntimeShutdownRequested createEmptyInstance() => create();
-  static $pb.PbList<RuntimeShutdownRequested> createRepeated() =>
-      $pb.PbList<RuntimeShutdownRequested>();
+  RuntimeShutdownRequested createEmptyInstance() =>
+      RuntimeShutdownRequested._();
   @$core.pragma('dart2js:noInline')
   static RuntimeShutdownRequested getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeShutdownRequested>(create);
+      $pb.GeneratedMessage.$_defaultFor<RuntimeShutdownRequested>(
+          RuntimeShutdownRequested.$_createMessage);
   static RuntimeShutdownRequested? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2448,7 +2487,7 @@ class RuntimeMcpRegistryChanged extends $pb.GeneratedMessage {
   factory RuntimeMcpRegistryChanged({
     $core.String? registrationId,
   }) {
-    final result = create();
+    final result = RuntimeMcpRegistryChanged._();
     if (registrationId != null) result.registrationId = registrationId;
     return result;
   }
@@ -2457,15 +2496,15 @@ class RuntimeMcpRegistryChanged extends $pb.GeneratedMessage {
 
   factory RuntimeMcpRegistryChanged.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeMcpRegistryChanged()..mergeFromBuffer(data, registry);
   factory RuntimeMcpRegistryChanged.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeMcpRegistryChanged()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeMcpRegistryChanged',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeMcpRegistryChanged.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'registrationId')
     ..hasRequiredFields = false;
 
@@ -2481,14 +2520,18 @@ class RuntimeMcpRegistryChanged extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use RuntimeMcpRegistryChanged() / RuntimeMcpRegistryChanged.new instead')
   static RuntimeMcpRegistryChanged create() => RuntimeMcpRegistryChanged._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      RuntimeMcpRegistryChanged._();
   @$core.override
-  RuntimeMcpRegistryChanged createEmptyInstance() => create();
-  static $pb.PbList<RuntimeMcpRegistryChanged> createRepeated() =>
-      $pb.PbList<RuntimeMcpRegistryChanged>();
+  RuntimeMcpRegistryChanged createEmptyInstance() =>
+      RuntimeMcpRegistryChanged._();
   @$core.pragma('dart2js:noInline')
   static RuntimeMcpRegistryChanged getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeMcpRegistryChanged>(create);
+      $pb.GeneratedMessage.$_defaultFor<RuntimeMcpRegistryChanged>(
+          RuntimeMcpRegistryChanged.$_createMessage);
   static RuntimeMcpRegistryChanged? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2524,7 +2567,7 @@ class RuntimeCommand extends $pb.GeneratedMessage {
     RuntimeMcpRegistryChanged? mcpRegistryChanged,
     RuntimeApprovalResumeAccepted? approvalResumeAccepted,
   }) {
-    final result = create();
+    final result = RuntimeCommand._();
     if (workerAccepted != null) result.workerAccepted = workerAccepted;
     if (runAssigned != null) result.runAssigned = runAssigned;
     if (runCancelled != null) result.runCancelled = runCancelled;
@@ -2543,10 +2586,10 @@ class RuntimeCommand extends $pb.GeneratedMessage {
 
   factory RuntimeCommand.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeCommand()..mergeFromBuffer(data, registry);
   factory RuntimeCommand.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeCommand()..mergeFromJson(json, registry);
 
   static const $core.Map<$core.int, RuntimeCommand_Command>
       _RuntimeCommand_CommandByTag = {
@@ -2563,27 +2606,27 @@ class RuntimeCommand extends $pb.GeneratedMessage {
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeCommand',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeCommand.$_createMessage)
     ..oo(0, [1, 2, 3, 4, 5, 6, 7, 8])
     ..aOM<RuntimeWorkerAccepted>(1, _omitFieldNames ? '' : 'workerAccepted',
-        subBuilder: RuntimeWorkerAccepted.create)
+        subBuilder: RuntimeWorkerAccepted.$_createMessage)
     ..aOM<AgentJob>(2, _omitFieldNames ? '' : 'runAssigned',
-        subBuilder: AgentJob.create)
+        subBuilder: AgentJob.$_createMessage)
     ..aOM<RuntimeRunCancelled>(3, _omitFieldNames ? '' : 'runCancelled',
-        subBuilder: RuntimeRunCancelled.create)
+        subBuilder: RuntimeRunCancelled.$_createMessage)
     ..aOM<RuntimeApprovalUpdated>(4, _omitFieldNames ? '' : 'approvalUpdated',
-        subBuilder: RuntimeApprovalUpdated.create)
+        subBuilder: RuntimeApprovalUpdated.$_createMessage)
     ..aOM<RuntimeShutdownRequested>(
         5, _omitFieldNames ? '' : 'shutdownRequested',
-        subBuilder: RuntimeShutdownRequested.create)
+        subBuilder: RuntimeShutdownRequested.$_createMessage)
     ..aOM<$4.ToolPolicyDecision>(6, _omitFieldNames ? '' : 'toolPolicyDecision',
-        subBuilder: $4.ToolPolicyDecision.create)
+        subBuilder: $4.ToolPolicyDecision.$_createMessage)
     ..aOM<RuntimeMcpRegistryChanged>(
         7, _omitFieldNames ? '' : 'mcpRegistryChanged',
-        subBuilder: RuntimeMcpRegistryChanged.create)
+        subBuilder: RuntimeMcpRegistryChanged.$_createMessage)
     ..aOM<RuntimeApprovalResumeAccepted>(
         8, _omitFieldNames ? '' : 'approvalResumeAccepted',
-        subBuilder: RuntimeApprovalResumeAccepted.create)
+        subBuilder: RuntimeApprovalResumeAccepted.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -2597,14 +2640,15 @@ class RuntimeCommand extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RuntimeCommand() / RuntimeCommand.new instead')
   static RuntimeCommand create() => RuntimeCommand._();
+  static $pb.GeneratedMessage $_createMessage() => RuntimeCommand._();
   @$core.override
-  RuntimeCommand createEmptyInstance() => create();
-  static $pb.PbList<RuntimeCommand> createRepeated() =>
-      $pb.PbList<RuntimeCommand>();
+  RuntimeCommand createEmptyInstance() => RuntimeCommand._();
   @$core.pragma('dart2js:noInline')
-  static RuntimeCommand getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeCommand>(create);
+  static RuntimeCommand getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RuntimeCommand>(
+          RuntimeCommand.$_createMessage);
   static RuntimeCommand? _defaultInstance;
 
   @$pb.TagNumber(1)

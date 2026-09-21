@@ -9,12 +9,12 @@ import 'package:turing_flutter_app/generated/turing/v1/events.pb.dart'
     as eventpb;
 import 'package:turing_flutter_app/generated/turing/v1/sessions.pb.dart'
     as sessionpb;
-import 'package:turing_flutter_app/generated/google/protobuf/timestamp.pb.dart'
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
     as timestamppb;
 import 'package:turing_flutter_app/models/grpc_mappers.dart';
 import 'package:turing_flutter_app/models/session.dart';
 import 'package:turing_flutter_app/models/session_page.dart';
-import 'package:turing_flutter_app/generated/google/protobuf/struct.pb.dart'
+import 'package:protobuf/well_known_types/google/protobuf/struct.pb.dart'
     as structpb;
 import 'package:turing_flutter_app/models/run_lifecycle.dart';
 import 'package:turing_flutter_app/models/run_state.dart';

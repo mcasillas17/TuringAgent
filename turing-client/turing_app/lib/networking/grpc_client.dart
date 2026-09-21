@@ -4,7 +4,8 @@ import 'package:fixnum/fixnum.dart';
 import 'package:grpc/grpc.dart' as grpc;
 import 'package:grpc/service_api.dart' as grpc_api;
 
-import '../generated/google/protobuf/timestamp.pb.dart' as timestamppb;
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
+    as timestamppb;
 import '../generated/turing/v1/agents.pb.dart' as agentpb;
 import '../generated/turing/v1/agents.pbgrpc.dart' as agentgrpc;
 import '../generated/turing/v1/approvals.pb.dart' as approvalpb;
