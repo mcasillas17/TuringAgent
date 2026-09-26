@@ -8,7 +8,7 @@ and [retrieval architecture](../../../docs/architecture/session-recall.md).
 
 ## Run and reproduce
 
-From the repository root, with the existing Go dependencies available, Go 1.25+
+From the repository root, with the existing Go dependencies available, Go 1.26+
 and a working CGO C toolchain:
 
 ```bash
