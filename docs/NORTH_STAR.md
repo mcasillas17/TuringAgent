@@ -615,7 +615,7 @@ gates are satisfied.
   negotiated revision and any server-assigned session, read either a JSON or an
   event-stream response, and emit `notifications/cancelled` when their caller
   goes away. Conformance is exercised in both directions against the official
-  MCP Go SDK, pinned at v1.7.0 as a test-only dependency.
+  MCP Go SDK, pinned at v1.8.0 as a test-only dependency.
 - **Dependencies:** TUR-019 (shipped).
 
 ### 7. CXL-001 - Explicit cancel intent

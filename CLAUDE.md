@@ -30,7 +30,7 @@ Nothing here is enforced by one place, so a bump is never a one-line edit. The *
 | protoc-gen-go | v1.36.11 | `tools/proto/generate.sh` | `ci.yml`, `generate_test.go` |
 | protoc-gen-go-grpc | 1.6.2 | `tools/proto/generate.sh` | `ci.yml`, `generate_test.go` |
 | Dart `protoc_plugin` | 23.0.0 | `tools/proto/generate.sh` | `ci.yml`, `generate_test.go` |
-| MCP Go SDK (conformance fixtures) | v1.7.0 | root, `mcp-files` and `mcp-system` go.mod | test-only; the pinned peer implementation the CON-001 conformance tests run against |
+| MCP Go SDK (conformance fixtures) | v1.8.0 | root, `mcp-files` and `mcp-system` go.mod | test-only; the pinned peer implementation the CON-001 conformance tests run against |
 | Flutter | **not pinned** (`channel: stable`) | — | `ci.yml` |
 | Dart SDK | `^3.10.4` | `turing_app/pubspec.yaml` | — |
 

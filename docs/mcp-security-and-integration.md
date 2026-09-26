@@ -1738,7 +1738,7 @@ what is implemented.
 ### Conformance evidence
 
 Interoperability is exercised in both directions against the official Model
-Context Protocol Go SDK, pinned at **v1.7.0** as a test-only dependency in all
+Context Protocol Go SDK, pinned at **v1.8.0** as a test-only dependency in all
 three Go modules. The SDK is an independent implementation: its server enforces
 the Accept header, answers over an event stream, assigns and requires a session
 id, and refuses operation-phase calls before `initialize`; its client is
