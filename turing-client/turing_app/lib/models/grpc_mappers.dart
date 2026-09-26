@@ -1,7 +1,9 @@
 import 'package:fixnum/fixnum.dart';
 
-import '../generated/google/protobuf/struct.pb.dart' as structpb;
-import '../generated/google/protobuf/timestamp.pb.dart' as timestamppb;
+import 'package:protobuf/well_known_types/google/protobuf/struct.pb.dart'
+    as structpb;
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
+    as timestamppb;
 
 import '../generated/turing/v1/agents.pb.dart' as agentpb;
 import '../generated/turing/v1/approvals.pb.dart' as approvalpb;

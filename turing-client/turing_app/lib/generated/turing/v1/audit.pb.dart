@@ -8,14 +8,15 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
 import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
+    as $1;
 
-import '../../google/protobuf/timestamp.pb.dart' as $1;
 import 'audit.pbenum.dart';
 import 'common.pb.dart' as $2;
 
@@ -61,7 +62,7 @@ class AuditPayload extends $pb.GeneratedMessage {
     $fixnum.Int64? refusedServers,
     $core.String? toolPolicy,
   }) {
-    final result = create();
+    final result = AuditPayload._();
     if (state != null) result.state = state;
     if (toolName != null) result.toolName = toolName;
     if (serverName != null) result.serverName = serverName;
@@ -111,15 +112,15 @@ class AuditPayload extends $pb.GeneratedMessage {
 
   factory AuditPayload.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      AuditPayload()..mergeFromBuffer(data, registry);
   factory AuditPayload.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      AuditPayload()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'AuditPayload',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: AuditPayload.$_createMessage)
     ..aE<AuditPayloadState>(1, _omitFieldNames ? '' : 'state',
         enumValues: AuditPayloadState.values)
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
@@ -151,7 +152,7 @@ class AuditPayload extends $pb.GeneratedMessage {
             $2.EgressDataCategory.EGRESS_DATA_CATEGORY_UNSPECIFIED)
     ..aI(24, _omitFieldNames ? '' : 'egressDecisionVersion')
     ..aOM<$1.Timestamp>(25, _omitFieldNames ? '' : 'egressConsentGrantedAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOS(26, _omitFieldNames ? '' : 'mcpServerTier')
     ..aOS(27, _omitFieldNames ? '' : 'mcpServerUrl')
     ..aOB(28, _omitFieldNames ? '' : 'adopted')
@@ -175,14 +176,15 @@ class AuditPayload extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use AuditPayload() / AuditPayload.new instead')
   static AuditPayload create() => AuditPayload._();
+  static $pb.GeneratedMessage $_createMessage() => AuditPayload._();
   @$core.override
-  AuditPayload createEmptyInstance() => create();
-  static $pb.PbList<AuditPayload> createRepeated() =>
-      $pb.PbList<AuditPayload>();
+  AuditPayload createEmptyInstance() => AuditPayload._();
   @$core.pragma('dart2js:noInline')
-  static AuditPayload getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<AuditPayload>(create);
+  static AuditPayload getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<AuditPayload>(
+          AuditPayload.$_createMessage);
   static AuditPayload? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -527,7 +529,7 @@ class AuditEntry extends $pb.GeneratedMessage {
     AuditPayload? payload,
     $1.Timestamp? createdAt,
   }) {
-    final result = create();
+    final result = AuditEntry._();
     if (auditId != null) result.auditId = auditId;
     if (correlationId != null) result.correlationId = correlationId;
     if (actorType != null) result.actorType = actorType;
@@ -543,15 +545,15 @@ class AuditEntry extends $pb.GeneratedMessage {
 
   factory AuditEntry.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      AuditEntry()..mergeFromBuffer(data, registry);
   factory AuditEntry.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      AuditEntry()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'AuditEntry',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: AuditEntry.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'auditId')
     ..aOS(2, _omitFieldNames ? '' : 'correlationId')
     ..aOS(3, _omitFieldNames ? '' : 'actorType')
@@ -559,9 +561,9 @@ class AuditEntry extends $pb.GeneratedMessage {
     ..aOS(5, _omitFieldNames ? '' : 'action')
     ..aOS(6, _omitFieldNames ? '' : 'target')
     ..aOM<AuditPayload>(7, _omitFieldNames ? '' : 'payload',
-        subBuilder: AuditPayload.create)
+        subBuilder: AuditPayload.$_createMessage)
     ..aOM<$1.Timestamp>(8, _omitFieldNames ? '' : 'createdAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -574,13 +576,14 @@ class AuditEntry extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use AuditEntry() / AuditEntry.new instead')
   static AuditEntry create() => AuditEntry._();
+  static $pb.GeneratedMessage $_createMessage() => AuditEntry._();
   @$core.override
-  AuditEntry createEmptyInstance() => create();
-  static $pb.PbList<AuditEntry> createRepeated() => $pb.PbList<AuditEntry>();
+  AuditEntry createEmptyInstance() => AuditEntry._();
   @$core.pragma('dart2js:noInline')
   static AuditEntry getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<AuditEntry>(create);
+      $pb.GeneratedMessage.$_defaultFor<AuditEntry>(AuditEntry.$_createMessage);
   static AuditEntry? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -669,7 +672,7 @@ class ListAuditEntriesRequest extends $pb.GeneratedMessage {
     AuditOrder? order,
     $2.PageRequest? page,
   }) {
-    final result = create();
+    final result = ListAuditEntriesRequest._();
     if (correlationId != null) result.correlationId = correlationId;
     if (action != null) result.action = action;
     if (createdAtStart != null) result.createdAtStart = createdAtStart;
@@ -683,25 +686,25 @@ class ListAuditEntriesRequest extends $pb.GeneratedMessage {
 
   factory ListAuditEntriesRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListAuditEntriesRequest()..mergeFromBuffer(data, registry);
   factory ListAuditEntriesRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListAuditEntriesRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListAuditEntriesRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListAuditEntriesRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'correlationId')
     ..aOS(2, _omitFieldNames ? '' : 'action')
     ..aOM<$1.Timestamp>(3, _omitFieldNames ? '' : 'createdAtStart',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOM<$1.Timestamp>(4, _omitFieldNames ? '' : 'createdAtEnd',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aE<AuditOrder>(5, _omitFieldNames ? '' : 'order',
         enumValues: AuditOrder.values)
     ..aOM<$2.PageRequest>(6, _omitFieldNames ? '' : 'page',
-        subBuilder: $2.PageRequest.create)
+        subBuilder: $2.PageRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -716,14 +719,16 @@ class ListAuditEntriesRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListAuditEntriesRequest() / ListAuditEntriesRequest.new instead')
   static ListAuditEntriesRequest create() => ListAuditEntriesRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ListAuditEntriesRequest._();
   @$core.override
-  ListAuditEntriesRequest createEmptyInstance() => create();
-  static $pb.PbList<ListAuditEntriesRequest> createRepeated() =>
-      $pb.PbList<ListAuditEntriesRequest>();
+  ListAuditEntriesRequest createEmptyInstance() => ListAuditEntriesRequest._();
   @$core.pragma('dart2js:noInline')
   static ListAuditEntriesRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListAuditEntriesRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListAuditEntriesRequest>(
+          ListAuditEntriesRequest.$_createMessage);
   static ListAuditEntriesRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -795,7 +800,7 @@ class ListAuditEntriesResponse extends $pb.GeneratedMessage {
     $core.Iterable<AuditEntry>? entries,
     $2.PageResponse? page,
   }) {
-    final result = create();
+    final result = ListAuditEntriesResponse._();
     if (entries != null) result.entries.addAll(entries);
     if (page != null) result.page = page;
     return result;
@@ -805,19 +810,19 @@ class ListAuditEntriesResponse extends $pb.GeneratedMessage {
 
   factory ListAuditEntriesResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListAuditEntriesResponse()..mergeFromBuffer(data, registry);
   factory ListAuditEntriesResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListAuditEntriesResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListAuditEntriesResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListAuditEntriesResponse.$_createMessage)
     ..pPM<AuditEntry>(1, _omitFieldNames ? '' : 'entries',
-        subBuilder: AuditEntry.create)
+        subBuilder: AuditEntry.$_createMessage)
     ..aOM<$2.PageResponse>(2, _omitFieldNames ? '' : 'page',
-        subBuilder: $2.PageResponse.create)
+        subBuilder: $2.PageResponse.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -832,14 +837,17 @@ class ListAuditEntriesResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListAuditEntriesResponse() / ListAuditEntriesResponse.new instead')
   static ListAuditEntriesResponse create() => ListAuditEntriesResponse._();
+  static $pb.GeneratedMessage $_createMessage() => ListAuditEntriesResponse._();
   @$core.override
-  ListAuditEntriesResponse createEmptyInstance() => create();
-  static $pb.PbList<ListAuditEntriesResponse> createRepeated() =>
-      $pb.PbList<ListAuditEntriesResponse>();
+  ListAuditEntriesResponse createEmptyInstance() =>
+      ListAuditEntriesResponse._();
   @$core.pragma('dart2js:noInline')
   static ListAuditEntriesResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListAuditEntriesResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListAuditEntriesResponse>(
+          ListAuditEntriesResponse.$_createMessage);
   static ListAuditEntriesResponse? _defaultInstance;
 
   @$pb.TagNumber(1)

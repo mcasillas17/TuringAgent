@@ -8,13 +8,14 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
 import 'package:protobuf/protobuf.dart' as $pb;
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
+    as $1;
 
-import '../../google/protobuf/timestamp.pb.dart' as $1;
 import 'automations.pbenum.dart';
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
@@ -46,7 +47,7 @@ class Automation extends $pb.GeneratedMessage {
     $core.String? lastOccurrenceFailureCode,
     $1.Timestamp? lastOccurrenceFailedAt,
   }) {
-    final result = create();
+    final result = Automation._();
     if (automationId != null) result.automationId = automationId;
     if (name != null) result.name = name;
     if (prompt != null) result.prompt = prompt;
@@ -72,38 +73,38 @@ class Automation extends $pb.GeneratedMessage {
 
   factory Automation.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      Automation()..mergeFromBuffer(data, registry);
   factory Automation.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      Automation()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'Automation',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: Automation.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'automationId')
     ..aOS(2, _omitFieldNames ? '' : 'name')
     ..aOS(3, _omitFieldNames ? '' : 'prompt')
     ..aOM<AutomationSchedule>(4, _omitFieldNames ? '' : 'schedule',
-        subBuilder: AutomationSchedule.create)
+        subBuilder: AutomationSchedule.$_createMessage)
     ..aOB(5, _omitFieldNames ? '' : 'enabled')
     ..pPM<AutomationTool>(6, _omitFieldNames ? '' : 'allowedTools',
-        subBuilder: AutomationTool.create)
+        subBuilder: AutomationTool.$_createMessage)
     ..aOM<$1.Timestamp>(7, _omitFieldNames ? '' : 'lastRunAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOM<$1.Timestamp>(8, _omitFieldNames ? '' : 'nextRunAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOS(9, _omitFieldNames ? '' : 'sessionId')
     ..aOS(10, _omitFieldNames ? '' : 'lastRunId')
     ..aOS(11, _omitFieldNames ? '' : 'lastRunStatus')
     ..aOS(12, _omitFieldNames ? '' : 'lastRunError')
     ..aOM<$1.Timestamp>(13, _omitFieldNames ? '' : 'createdAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOM<$1.Timestamp>(14, _omitFieldNames ? '' : 'updatedAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOS(15, _omitFieldNames ? '' : 'lastOccurrenceFailureCode')
     ..aOM<$1.Timestamp>(16, _omitFieldNames ? '' : 'lastOccurrenceFailedAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -116,13 +117,14 @@ class Automation extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use Automation() / Automation.new instead')
   static Automation create() => Automation._();
+  static $pb.GeneratedMessage $_createMessage() => Automation._();
   @$core.override
-  Automation createEmptyInstance() => create();
-  static $pb.PbList<Automation> createRepeated() => $pb.PbList<Automation>();
+  Automation createEmptyInstance() => Automation._();
   @$core.pragma('dart2js:noInline')
   static Automation getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<Automation>(create);
+      $pb.GeneratedMessage.$_defaultFor<Automation>(Automation.$_createMessage);
   static Automation? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -298,7 +300,7 @@ class AutomationTool extends $pb.GeneratedMessage {
     $core.String? serverName,
     $core.String? toolName,
   }) {
-    final result = create();
+    final result = AutomationTool._();
     if (serverName != null) result.serverName = serverName;
     if (toolName != null) result.toolName = toolName;
     return result;
@@ -308,15 +310,15 @@ class AutomationTool extends $pb.GeneratedMessage {
 
   factory AutomationTool.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      AutomationTool()..mergeFromBuffer(data, registry);
   factory AutomationTool.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      AutomationTool()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'AutomationTool',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: AutomationTool.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'serverName')
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
     ..hasRequiredFields = false;
@@ -332,14 +334,15 @@ class AutomationTool extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use AutomationTool() / AutomationTool.new instead')
   static AutomationTool create() => AutomationTool._();
+  static $pb.GeneratedMessage $_createMessage() => AutomationTool._();
   @$core.override
-  AutomationTool createEmptyInstance() => create();
-  static $pb.PbList<AutomationTool> createRepeated() =>
-      $pb.PbList<AutomationTool>();
+  AutomationTool createEmptyInstance() => AutomationTool._();
   @$core.pragma('dart2js:noInline')
-  static AutomationTool getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<AutomationTool>(create);
+  static AutomationTool getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<AutomationTool>(
+          AutomationTool.$_createMessage);
   static AutomationTool? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -369,7 +372,7 @@ class AutomationSchedule extends $pb.GeneratedMessage {
     $core.int? intervalMinutes,
     $core.int? dailyMinuteUtc,
   }) {
-    final result = create();
+    final result = AutomationSchedule._();
     if (kind != null) result.kind = kind;
     if (intervalMinutes != null) result.intervalMinutes = intervalMinutes;
     if (dailyMinuteUtc != null) result.dailyMinuteUtc = dailyMinuteUtc;
@@ -380,15 +383,15 @@ class AutomationSchedule extends $pb.GeneratedMessage {
 
   factory AutomationSchedule.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      AutomationSchedule()..mergeFromBuffer(data, registry);
   factory AutomationSchedule.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      AutomationSchedule()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'AutomationSchedule',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: AutomationSchedule.$_createMessage)
     ..aE<AutomationScheduleKind>(1, _omitFieldNames ? '' : 'kind',
         enumValues: AutomationScheduleKind.values)
     ..aI(2, _omitFieldNames ? '' : 'intervalMinutes')
@@ -406,14 +409,15 @@ class AutomationSchedule extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use AutomationSchedule() / AutomationSchedule.new instead')
   static AutomationSchedule create() => AutomationSchedule._();
+  static $pb.GeneratedMessage $_createMessage() => AutomationSchedule._();
   @$core.override
-  AutomationSchedule createEmptyInstance() => create();
-  static $pb.PbList<AutomationSchedule> createRepeated() =>
-      $pb.PbList<AutomationSchedule>();
+  AutomationSchedule createEmptyInstance() => AutomationSchedule._();
   @$core.pragma('dart2js:noInline')
   static AutomationSchedule getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<AutomationSchedule>(create);
+      $pb.GeneratedMessage.$_defaultFor<AutomationSchedule>(
+          AutomationSchedule.$_createMessage);
   static AutomationSchedule? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -456,7 +460,7 @@ class CreateAutomationRequest extends $pb.GeneratedMessage {
     $core.bool? enabled,
     $core.Iterable<AutomationTool>? allowedTools,
   }) {
-    final result = create();
+    final result = CreateAutomationRequest._();
     if (name != null) result.name = name;
     if (prompt != null) result.prompt = prompt;
     if (schedule != null) result.schedule = schedule;
@@ -469,22 +473,22 @@ class CreateAutomationRequest extends $pb.GeneratedMessage {
 
   factory CreateAutomationRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      CreateAutomationRequest()..mergeFromBuffer(data, registry);
   factory CreateAutomationRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      CreateAutomationRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'CreateAutomationRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: CreateAutomationRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'name')
     ..aOS(2, _omitFieldNames ? '' : 'prompt')
     ..aOM<AutomationSchedule>(3, _omitFieldNames ? '' : 'schedule',
-        subBuilder: AutomationSchedule.create)
+        subBuilder: AutomationSchedule.$_createMessage)
     ..aOB(4, _omitFieldNames ? '' : 'enabled')
     ..pPM<AutomationTool>(5, _omitFieldNames ? '' : 'allowedTools',
-        subBuilder: AutomationTool.create)
+        subBuilder: AutomationTool.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -499,14 +503,16 @@ class CreateAutomationRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use CreateAutomationRequest() / CreateAutomationRequest.new instead')
   static CreateAutomationRequest create() => CreateAutomationRequest._();
+  static $pb.GeneratedMessage $_createMessage() => CreateAutomationRequest._();
   @$core.override
-  CreateAutomationRequest createEmptyInstance() => create();
-  static $pb.PbList<CreateAutomationRequest> createRepeated() =>
-      $pb.PbList<CreateAutomationRequest>();
+  CreateAutomationRequest createEmptyInstance() => CreateAutomationRequest._();
   @$core.pragma('dart2js:noInline')
   static CreateAutomationRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<CreateAutomationRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<CreateAutomationRequest>(
+          CreateAutomationRequest.$_createMessage);
   static CreateAutomationRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -559,7 +565,7 @@ class UpdateAutomationRequest extends $pb.GeneratedMessage {
     AutomationSchedule? schedule,
     $core.Iterable<AutomationTool>? allowedTools,
   }) {
-    final result = create();
+    final result = UpdateAutomationRequest._();
     if (automationId != null) result.automationId = automationId;
     if (name != null) result.name = name;
     if (prompt != null) result.prompt = prompt;
@@ -572,22 +578,22 @@ class UpdateAutomationRequest extends $pb.GeneratedMessage {
 
   factory UpdateAutomationRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      UpdateAutomationRequest()..mergeFromBuffer(data, registry);
   factory UpdateAutomationRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      UpdateAutomationRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'UpdateAutomationRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: UpdateAutomationRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'automationId')
     ..aOS(2, _omitFieldNames ? '' : 'name')
     ..aOS(3, _omitFieldNames ? '' : 'prompt')
     ..aOM<AutomationSchedule>(4, _omitFieldNames ? '' : 'schedule',
-        subBuilder: AutomationSchedule.create)
+        subBuilder: AutomationSchedule.$_createMessage)
     ..pPM<AutomationTool>(5, _omitFieldNames ? '' : 'allowedTools',
-        subBuilder: AutomationTool.create)
+        subBuilder: AutomationTool.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -602,14 +608,16 @@ class UpdateAutomationRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use UpdateAutomationRequest() / UpdateAutomationRequest.new instead')
   static UpdateAutomationRequest create() => UpdateAutomationRequest._();
+  static $pb.GeneratedMessage $_createMessage() => UpdateAutomationRequest._();
   @$core.override
-  UpdateAutomationRequest createEmptyInstance() => create();
-  static $pb.PbList<UpdateAutomationRequest> createRepeated() =>
-      $pb.PbList<UpdateAutomationRequest>();
+  UpdateAutomationRequest createEmptyInstance() => UpdateAutomationRequest._();
   @$core.pragma('dart2js:noInline')
   static UpdateAutomationRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<UpdateAutomationRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<UpdateAutomationRequest>(
+          UpdateAutomationRequest.$_createMessage);
   static UpdateAutomationRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -659,7 +667,7 @@ class SetAutomationEnabledRequest extends $pb.GeneratedMessage {
     $core.String? automationId,
     $core.bool? enabled,
   }) {
-    final result = create();
+    final result = SetAutomationEnabledRequest._();
     if (automationId != null) result.automationId = automationId;
     if (enabled != null) result.enabled = enabled;
     return result;
@@ -669,15 +677,15 @@ class SetAutomationEnabledRequest extends $pb.GeneratedMessage {
 
   factory SetAutomationEnabledRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SetAutomationEnabledRequest()..mergeFromBuffer(data, registry);
   factory SetAutomationEnabledRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SetAutomationEnabledRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SetAutomationEnabledRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SetAutomationEnabledRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'automationId')
     ..aOB(2, _omitFieldNames ? '' : 'enabled')
     ..hasRequiredFields = false;
@@ -695,15 +703,19 @@ class SetAutomationEnabledRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SetAutomationEnabledRequest() / SetAutomationEnabledRequest.new instead')
   static SetAutomationEnabledRequest create() =>
       SetAutomationEnabledRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      SetAutomationEnabledRequest._();
   @$core.override
-  SetAutomationEnabledRequest createEmptyInstance() => create();
-  static $pb.PbList<SetAutomationEnabledRequest> createRepeated() =>
-      $pb.PbList<SetAutomationEnabledRequest>();
+  SetAutomationEnabledRequest createEmptyInstance() =>
+      SetAutomationEnabledRequest._();
   @$core.pragma('dart2js:noInline')
   static SetAutomationEnabledRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SetAutomationEnabledRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<SetAutomationEnabledRequest>(
+          SetAutomationEnabledRequest.$_createMessage);
   static SetAutomationEnabledRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -729,7 +741,7 @@ class DeleteAutomationRequest extends $pb.GeneratedMessage {
   factory DeleteAutomationRequest({
     $core.String? automationId,
   }) {
-    final result = create();
+    final result = DeleteAutomationRequest._();
     if (automationId != null) result.automationId = automationId;
     return result;
   }
@@ -738,15 +750,15 @@ class DeleteAutomationRequest extends $pb.GeneratedMessage {
 
   factory DeleteAutomationRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      DeleteAutomationRequest()..mergeFromBuffer(data, registry);
   factory DeleteAutomationRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      DeleteAutomationRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'DeleteAutomationRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: DeleteAutomationRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'automationId')
     ..hasRequiredFields = false;
 
@@ -762,14 +774,16 @@ class DeleteAutomationRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use DeleteAutomationRequest() / DeleteAutomationRequest.new instead')
   static DeleteAutomationRequest create() => DeleteAutomationRequest._();
+  static $pb.GeneratedMessage $_createMessage() => DeleteAutomationRequest._();
   @$core.override
-  DeleteAutomationRequest createEmptyInstance() => create();
-  static $pb.PbList<DeleteAutomationRequest> createRepeated() =>
-      $pb.PbList<DeleteAutomationRequest>();
+  DeleteAutomationRequest createEmptyInstance() => DeleteAutomationRequest._();
   @$core.pragma('dart2js:noInline')
   static DeleteAutomationRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<DeleteAutomationRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<DeleteAutomationRequest>(
+          DeleteAutomationRequest.$_createMessage);
   static DeleteAutomationRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -783,21 +797,21 @@ class DeleteAutomationRequest extends $pb.GeneratedMessage {
 }
 
 class DeleteAutomationResponse extends $pb.GeneratedMessage {
-  factory DeleteAutomationResponse() => create();
+  factory DeleteAutomationResponse() => DeleteAutomationResponse._();
 
   DeleteAutomationResponse._();
 
   factory DeleteAutomationResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      DeleteAutomationResponse()..mergeFromBuffer(data, registry);
   factory DeleteAutomationResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      DeleteAutomationResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'DeleteAutomationResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: DeleteAutomationResponse.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -812,33 +826,36 @@ class DeleteAutomationResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use DeleteAutomationResponse() / DeleteAutomationResponse.new instead')
   static DeleteAutomationResponse create() => DeleteAutomationResponse._();
+  static $pb.GeneratedMessage $_createMessage() => DeleteAutomationResponse._();
   @$core.override
-  DeleteAutomationResponse createEmptyInstance() => create();
-  static $pb.PbList<DeleteAutomationResponse> createRepeated() =>
-      $pb.PbList<DeleteAutomationResponse>();
+  DeleteAutomationResponse createEmptyInstance() =>
+      DeleteAutomationResponse._();
   @$core.pragma('dart2js:noInline')
   static DeleteAutomationResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<DeleteAutomationResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<DeleteAutomationResponse>(
+          DeleteAutomationResponse.$_createMessage);
   static DeleteAutomationResponse? _defaultInstance;
 }
 
 class ListAutomationsRequest extends $pb.GeneratedMessage {
-  factory ListAutomationsRequest() => create();
+  factory ListAutomationsRequest() => ListAutomationsRequest._();
 
   ListAutomationsRequest._();
 
   factory ListAutomationsRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListAutomationsRequest()..mergeFromBuffer(data, registry);
   factory ListAutomationsRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListAutomationsRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListAutomationsRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListAutomationsRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -853,14 +870,16 @@ class ListAutomationsRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListAutomationsRequest() / ListAutomationsRequest.new instead')
   static ListAutomationsRequest create() => ListAutomationsRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ListAutomationsRequest._();
   @$core.override
-  ListAutomationsRequest createEmptyInstance() => create();
-  static $pb.PbList<ListAutomationsRequest> createRepeated() =>
-      $pb.PbList<ListAutomationsRequest>();
+  ListAutomationsRequest createEmptyInstance() => ListAutomationsRequest._();
   @$core.pragma('dart2js:noInline')
   static ListAutomationsRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListAutomationsRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListAutomationsRequest>(
+          ListAutomationsRequest.$_createMessage);
   static ListAutomationsRequest? _defaultInstance;
 }
 
@@ -868,7 +887,7 @@ class ListAutomationsResponse extends $pb.GeneratedMessage {
   factory ListAutomationsResponse({
     $core.Iterable<Automation>? automations,
   }) {
-    final result = create();
+    final result = ListAutomationsResponse._();
     if (automations != null) result.automations.addAll(automations);
     return result;
   }
@@ -877,17 +896,17 @@ class ListAutomationsResponse extends $pb.GeneratedMessage {
 
   factory ListAutomationsResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListAutomationsResponse()..mergeFromBuffer(data, registry);
   factory ListAutomationsResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListAutomationsResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListAutomationsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListAutomationsResponse.$_createMessage)
     ..pPM<Automation>(1, _omitFieldNames ? '' : 'automations',
-        subBuilder: Automation.create)
+        subBuilder: Automation.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -902,14 +921,16 @@ class ListAutomationsResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListAutomationsResponse() / ListAutomationsResponse.new instead')
   static ListAutomationsResponse create() => ListAutomationsResponse._();
+  static $pb.GeneratedMessage $_createMessage() => ListAutomationsResponse._();
   @$core.override
-  ListAutomationsResponse createEmptyInstance() => create();
-  static $pb.PbList<ListAutomationsResponse> createRepeated() =>
-      $pb.PbList<ListAutomationsResponse>();
+  ListAutomationsResponse createEmptyInstance() => ListAutomationsResponse._();
   @$core.pragma('dart2js:noInline')
   static ListAutomationsResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListAutomationsResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListAutomationsResponse>(
+          ListAutomationsResponse.$_createMessage);
   static ListAutomationsResponse? _defaultInstance;
 
   @$pb.TagNumber(1)

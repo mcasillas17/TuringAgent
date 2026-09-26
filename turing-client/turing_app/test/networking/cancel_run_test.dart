@@ -1,7 +1,7 @@
 import 'package:fixnum/fixnum.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart' as grpc;
-import 'package:turing_flutter_app/generated/google/protobuf/timestamp.pb.dart';
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart';
 import 'package:turing_flutter_app/generated/turing/v1/chat.pbgrpc.dart' as pb;
 import 'package:turing_flutter_app/generated/turing/v1/common.pb.dart'
     as common;
