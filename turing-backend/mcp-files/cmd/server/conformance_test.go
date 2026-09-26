@@ -11,7 +11,7 @@ import (
 )
 
 // These tests drive this server with a client built by the official Model
-// Context Protocol Go SDK, pinned in go.mod at v1.7.0. The stock client is a
+// Context Protocol Go SDK, pinned in go.mod at v1.8.0. The stock client is a
 // dual-era implementation: it probes for the modern stateless revision first,
 // receives this server's refusal, falls back to the `initialize` handshake at
 // 2025-11-25, opens (and is refused) the optional GET stream, and only then

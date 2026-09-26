@@ -13,7 +13,7 @@ import (
 )
 
 // These tests point the runtime's own MCP client at a server built by the
-// official Model Context Protocol Go SDK, pinned in go.mod at v1.7.0. That
+// official Model Context Protocol Go SDK, pinned in go.mod at v1.8.0. That
 // server is an independent implementation of the specification — it enforces
 // the Accept header, answers over an event stream, assigns and requires a
 // session id, and refuses operation-phase calls before `initialize` — so
