@@ -8,14 +8,15 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
 import 'package:protobuf/protobuf.dart' as $pb;
+import 'package:protobuf/well_known_types/google/protobuf/struct.pb.dart' as $2;
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
+    as $1;
 
-import '../../google/protobuf/struct.pb.dart' as $2;
-import '../../google/protobuf/timestamp.pb.dart' as $1;
 import 'common.pbenum.dart' as $3;
 import 'memory.pbenum.dart';
 
@@ -34,7 +35,7 @@ class MemoryProvenance extends $pb.GeneratedMessage {
     $1.Timestamp? withdrawnAt,
     $core.int? evidenceCount,
   }) {
-    final result = create();
+    final result = MemoryProvenance._();
     if (kind != null) result.kind = kind;
     if (sourceSessionId != null) result.sourceSessionId = sourceSessionId;
     if (sourceSessionTitle != null)
@@ -50,24 +51,24 @@ class MemoryProvenance extends $pb.GeneratedMessage {
 
   factory MemoryProvenance.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      MemoryProvenance()..mergeFromBuffer(data, registry);
   factory MemoryProvenance.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      MemoryProvenance()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MemoryProvenance',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: MemoryProvenance.$_createMessage)
     ..aE<MemoryProvenanceKind>(1, _omitFieldNames ? '' : 'kind',
         enumValues: MemoryProvenanceKind.values)
     ..aOS(2, _omitFieldNames ? '' : 'sourceSessionId')
     ..aOS(3, _omitFieldNames ? '' : 'sourceSessionTitle')
     ..aOM<$1.Timestamp>(4, _omitFieldNames ? '' : 'observedAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOB(5, _omitFieldNames ? '' : 'withdrawn')
     ..aOM<$1.Timestamp>(6, _omitFieldNames ? '' : 'withdrawnAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aI(7, _omitFieldNames ? '' : 'evidenceCount')
     ..hasRequiredFields = false;
 
@@ -82,14 +83,15 @@ class MemoryProvenance extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use MemoryProvenance() / MemoryProvenance.new instead')
   static MemoryProvenance create() => MemoryProvenance._();
+  static $pb.GeneratedMessage $_createMessage() => MemoryProvenance._();
   @$core.override
-  MemoryProvenance createEmptyInstance() => create();
-  static $pb.PbList<MemoryProvenance> createRepeated() =>
-      $pb.PbList<MemoryProvenance>();
+  MemoryProvenance createEmptyInstance() => MemoryProvenance._();
   @$core.pragma('dart2js:noInline')
-  static MemoryProvenance getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<MemoryProvenance>(create);
+  static MemoryProvenance getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<MemoryProvenance>(
+          MemoryProvenance.$_createMessage);
   static MemoryProvenance? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -183,7 +185,7 @@ class MemoryCandidate extends $pb.GeneratedMessage {
     $core.bool? managed,
     $core.bool? untracked,
   }) {
-    final result = create();
+    final result = MemoryCandidate._();
     if (candidateId != null) result.candidateId = candidateId;
     if (kind != null) result.kind = kind;
     if (inboxPath != null) result.inboxPath = inboxPath;
@@ -206,15 +208,15 @@ class MemoryCandidate extends $pb.GeneratedMessage {
 
   factory MemoryCandidate.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      MemoryCandidate()..mergeFromBuffer(data, registry);
   factory MemoryCandidate.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      MemoryCandidate()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MemoryCandidate',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: MemoryCandidate.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'candidateId')
     ..aE<MemoryCandidateKind>(2, _omitFieldNames ? '' : 'kind',
         enumValues: MemoryCandidateKind.values)
@@ -224,14 +226,14 @@ class MemoryCandidate extends $pb.GeneratedMessage {
     ..aE<MemoryCandidateState>(6, _omitFieldNames ? '' : 'state',
         enumValues: MemoryCandidateState.values)
     ..pPM<MemoryProvenance>(7, _omitFieldNames ? '' : 'provenance',
-        subBuilder: MemoryProvenance.create)
+        subBuilder: MemoryProvenance.$_createMessage)
     ..aOS(8, _omitFieldNames ? '' : 'promotedNoteId')
     ..aOM<$1.Timestamp>(9, _omitFieldNames ? '' : 'createdAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOM<$1.Timestamp>(10, _omitFieldNames ? '' : 'updatedAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOM<$1.Timestamp>(11, _omitFieldNames ? '' : 'decidedAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOS(12, _omitFieldNames ? '' : 'parseError')
     ..aE<MemoryUnavailableReason>(
         13, _omitFieldNames ? '' : 'unavailableReason',
@@ -251,14 +253,15 @@ class MemoryCandidate extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use MemoryCandidate() / MemoryCandidate.new instead')
   static MemoryCandidate create() => MemoryCandidate._();
+  static $pb.GeneratedMessage $_createMessage() => MemoryCandidate._();
   @$core.override
-  MemoryCandidate createEmptyInstance() => create();
-  static $pb.PbList<MemoryCandidate> createRepeated() =>
-      $pb.PbList<MemoryCandidate>();
+  MemoryCandidate createEmptyInstance() => MemoryCandidate._();
   @$core.pragma('dart2js:noInline')
-  static MemoryCandidate getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<MemoryCandidate>(create);
+  static MemoryCandidate getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<MemoryCandidate>(
+          MemoryCandidate.$_createMessage);
   static MemoryCandidate? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -430,7 +433,7 @@ class MemoryNote extends $pb.GeneratedMessage {
     $core.String? parseError,
     MemoryUnavailableReason? unavailableReason,
   }) {
-    final result = create();
+    final result = MemoryNote._();
     if (noteId != null) result.noteId = noteId;
     if (path != null) result.path = path;
     if (title != null) result.title = title;
@@ -450,15 +453,15 @@ class MemoryNote extends $pb.GeneratedMessage {
 
   factory MemoryNote.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      MemoryNote()..mergeFromBuffer(data, registry);
   factory MemoryNote.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      MemoryNote()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MemoryNote',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: MemoryNote.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'noteId')
     ..aOS(2, _omitFieldNames ? '' : 'path')
     ..aOS(3, _omitFieldNames ? '' : 'title')
@@ -469,11 +472,11 @@ class MemoryNote extends $pb.GeneratedMessage {
     ..aE<$3.MemoryTier>(7, _omitFieldNames ? '' : 'tier',
         enumValues: $3.MemoryTier.values)
     ..pPM<MemoryProvenance>(8, _omitFieldNames ? '' : 'provenance',
-        subBuilder: MemoryProvenance.create)
+        subBuilder: MemoryProvenance.$_createMessage)
     ..aOM<$1.Timestamp>(9, _omitFieldNames ? '' : 'createdAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOM<$1.Timestamp>(10, _omitFieldNames ? '' : 'updatedAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOS(11, _omitFieldNames ? '' : 'parseError')
     ..aE<MemoryUnavailableReason>(
         12, _omitFieldNames ? '' : 'unavailableReason',
@@ -490,13 +493,14 @@ class MemoryNote extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use MemoryNote() / MemoryNote.new instead')
   static MemoryNote create() => MemoryNote._();
+  static $pb.GeneratedMessage $_createMessage() => MemoryNote._();
   @$core.override
-  MemoryNote createEmptyInstance() => create();
-  static $pb.PbList<MemoryNote> createRepeated() => $pb.PbList<MemoryNote>();
+  MemoryNote createEmptyInstance() => MemoryNote._();
   @$core.pragma('dart2js:noInline')
   static MemoryNote getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<MemoryNote>(create);
+      $pb.GeneratedMessage.$_defaultFor<MemoryNote>(MemoryNote.$_createMessage);
   static MemoryNote? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -618,7 +622,7 @@ class MemoryProfile extends $pb.GeneratedMessage {
     $core.bool? pinnedTruncated,
     $core.int? pinnedBytes,
   }) {
-    final result = create();
+    final result = MemoryProfile._();
     if (content != null) result.content = content;
     if (contentHash != null) result.contentHash = contentHash;
     if (status != null) result.status = status;
@@ -634,21 +638,21 @@ class MemoryProfile extends $pb.GeneratedMessage {
 
   factory MemoryProfile.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      MemoryProfile()..mergeFromBuffer(data, registry);
   factory MemoryProfile.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      MemoryProfile()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MemoryProfile',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: MemoryProfile.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'content')
     ..aOS(2, _omitFieldNames ? '' : 'contentHash')
     ..aE<MemoryNoteStatus>(3, _omitFieldNames ? '' : 'status',
         enumValues: MemoryNoteStatus.values)
     ..aOM<$1.Timestamp>(4, _omitFieldNames ? '' : 'updatedAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOS(5, _omitFieldNames ? '' : 'parseError')
     ..aE<MemoryUnavailableReason>(6, _omitFieldNames ? '' : 'unavailableReason',
         enumValues: MemoryUnavailableReason.values)
@@ -667,14 +671,15 @@ class MemoryProfile extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use MemoryProfile() / MemoryProfile.new instead')
   static MemoryProfile create() => MemoryProfile._();
+  static $pb.GeneratedMessage $_createMessage() => MemoryProfile._();
   @$core.override
-  MemoryProfile createEmptyInstance() => create();
-  static $pb.PbList<MemoryProfile> createRepeated() =>
-      $pb.PbList<MemoryProfile>();
+  MemoryProfile createEmptyInstance() => MemoryProfile._();
   @$core.pragma('dart2js:noInline')
-  static MemoryProfile getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<MemoryProfile>(create);
+  static MemoryProfile getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<MemoryProfile>(
+          MemoryProfile.$_createMessage);
   static MemoryProfile? _defaultInstance;
 
   /// The document as it stands on disk, whole. This is an editor's view, not a
@@ -785,7 +790,7 @@ class MemoryPersona extends $pb.GeneratedMessage {
     $core.bool? pinnedTruncated,
     $core.int? pinnedBytes,
   }) {
-    final result = create();
+    final result = MemoryPersona._();
     if (content != null) result.content = content;
     if (contentHash != null) result.contentHash = contentHash;
     if (status != null) result.status = status;
@@ -801,21 +806,21 @@ class MemoryPersona extends $pb.GeneratedMessage {
 
   factory MemoryPersona.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      MemoryPersona()..mergeFromBuffer(data, registry);
   factory MemoryPersona.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      MemoryPersona()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MemoryPersona',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: MemoryPersona.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'content')
     ..aOS(2, _omitFieldNames ? '' : 'contentHash')
     ..aE<MemoryNoteStatus>(3, _omitFieldNames ? '' : 'status',
         enumValues: MemoryNoteStatus.values)
     ..aOM<$1.Timestamp>(4, _omitFieldNames ? '' : 'updatedAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOS(5, _omitFieldNames ? '' : 'parseError')
     ..aE<MemoryUnavailableReason>(6, _omitFieldNames ? '' : 'unavailableReason',
         enumValues: MemoryUnavailableReason.values)
@@ -834,14 +839,15 @@ class MemoryPersona extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use MemoryPersona() / MemoryPersona.new instead')
   static MemoryPersona create() => MemoryPersona._();
+  static $pb.GeneratedMessage $_createMessage() => MemoryPersona._();
   @$core.override
-  MemoryPersona createEmptyInstance() => create();
-  static $pb.PbList<MemoryPersona> createRepeated() =>
-      $pb.PbList<MemoryPersona>();
+  MemoryPersona createEmptyInstance() => MemoryPersona._();
   @$core.pragma('dart2js:noInline')
-  static MemoryPersona getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<MemoryPersona>(create);
+  static MemoryPersona getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<MemoryPersona>(
+          MemoryPersona.$_createMessage);
   static MemoryPersona? _defaultInstance;
 
   /// The document as it stands on disk, whole. See MemoryProfile.content.
@@ -935,7 +941,7 @@ class MemoryTierState extends $pb.GeneratedMessage {
     MemoryUnavailableReason? unavailableReason,
     $core.String? parseError,
   }) {
-    final result = create();
+    final result = MemoryTierState._();
     if (tier != null) result.tier = tier;
     if (enabled != null) result.enabled = enabled;
     if (noteCount != null) result.noteCount = noteCount;
@@ -951,22 +957,22 @@ class MemoryTierState extends $pb.GeneratedMessage {
 
   factory MemoryTierState.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      MemoryTierState()..mergeFromBuffer(data, registry);
   factory MemoryTierState.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      MemoryTierState()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MemoryTierState',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: MemoryTierState.$_createMessage)
     ..aE<$3.MemoryTier>(1, _omitFieldNames ? '' : 'tier',
         enumValues: $3.MemoryTier.values)
     ..aOB(2, _omitFieldNames ? '' : 'enabled')
     ..aI(3, _omitFieldNames ? '' : 'noteCount')
     ..aI(4, _omitFieldNames ? '' : 'pendingCandidateCount')
     ..aOM<$1.Timestamp>(5, _omitFieldNames ? '' : 'updatedAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aE<MemoryUnavailableReason>(6, _omitFieldNames ? '' : 'unavailableReason',
         enumValues: MemoryUnavailableReason.values)
     ..aOS(7, _omitFieldNames ? '' : 'parseError')
@@ -983,14 +989,15 @@ class MemoryTierState extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use MemoryTierState() / MemoryTierState.new instead')
   static MemoryTierState create() => MemoryTierState._();
+  static $pb.GeneratedMessage $_createMessage() => MemoryTierState._();
   @$core.override
-  MemoryTierState createEmptyInstance() => create();
-  static $pb.PbList<MemoryTierState> createRepeated() =>
-      $pb.PbList<MemoryTierState>();
+  MemoryTierState createEmptyInstance() => MemoryTierState._();
   @$core.pragma('dart2js:noInline')
-  static MemoryTierState getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<MemoryTierState>(create);
+  static MemoryTierState getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<MemoryTierState>(
+          MemoryTierState.$_createMessage);
   static MemoryTierState? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1067,7 +1074,7 @@ class MemorySettings extends $pb.GeneratedMessage {
     MemoryUnavailableReason? unavailableReason,
     $core.String? parseError,
   }) {
-    final result = create();
+    final result = MemorySettings._();
     if (enabled != null) result.enabled = enabled;
     if (vaultRoot != null) result.vaultRoot = vaultRoot;
     if (vaultWritable != null) result.vaultWritable = vaultWritable;
@@ -1080,15 +1087,15 @@ class MemorySettings extends $pb.GeneratedMessage {
 
   factory MemorySettings.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      MemorySettings()..mergeFromBuffer(data, registry);
   factory MemorySettings.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      MemorySettings()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MemorySettings',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: MemorySettings.$_createMessage)
     ..aOB(1, _omitFieldNames ? '' : 'enabled')
     ..aOS(2, _omitFieldNames ? '' : 'vaultRoot')
     ..aOB(3, _omitFieldNames ? '' : 'vaultWritable')
@@ -1108,14 +1115,15 @@ class MemorySettings extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use MemorySettings() / MemorySettings.new instead')
   static MemorySettings create() => MemorySettings._();
+  static $pb.GeneratedMessage $_createMessage() => MemorySettings._();
   @$core.override
-  MemorySettings createEmptyInstance() => create();
-  static $pb.PbList<MemorySettings> createRepeated() =>
-      $pb.PbList<MemorySettings>();
+  MemorySettings createEmptyInstance() => MemorySettings._();
   @$core.pragma('dart2js:noInline')
-  static MemorySettings getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<MemorySettings>(create);
+  static MemorySettings getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<MemorySettings>(
+          MemorySettings.$_createMessage);
   static MemorySettings? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1166,21 +1174,21 @@ class MemorySettings extends $pb.GeneratedMessage {
 }
 
 class ListMemoryStateRequest extends $pb.GeneratedMessage {
-  factory ListMemoryStateRequest() => create();
+  factory ListMemoryStateRequest() => ListMemoryStateRequest._();
 
   ListMemoryStateRequest._();
 
   factory ListMemoryStateRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListMemoryStateRequest()..mergeFromBuffer(data, registry);
   factory ListMemoryStateRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListMemoryStateRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListMemoryStateRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListMemoryStateRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1195,14 +1203,16 @@ class ListMemoryStateRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListMemoryStateRequest() / ListMemoryStateRequest.new instead')
   static ListMemoryStateRequest create() => ListMemoryStateRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ListMemoryStateRequest._();
   @$core.override
-  ListMemoryStateRequest createEmptyInstance() => create();
-  static $pb.PbList<ListMemoryStateRequest> createRepeated() =>
-      $pb.PbList<ListMemoryStateRequest>();
+  ListMemoryStateRequest createEmptyInstance() => ListMemoryStateRequest._();
   @$core.pragma('dart2js:noInline')
   static ListMemoryStateRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListMemoryStateRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListMemoryStateRequest>(
+          ListMemoryStateRequest.$_createMessage);
   static ListMemoryStateRequest? _defaultInstance;
 }
 
@@ -1215,7 +1225,7 @@ class ListMemoryStateResponse extends $pb.GeneratedMessage {
     MemoryProfile? profile,
     MemoryPersona? persona,
   }) {
-    final result = create();
+    final result = ListMemoryStateResponse._();
     if (settings != null) result.settings = settings;
     if (tiers != null) result.tiers.addAll(tiers);
     if (notes != null) result.notes.addAll(notes);
@@ -1229,27 +1239,27 @@ class ListMemoryStateResponse extends $pb.GeneratedMessage {
 
   factory ListMemoryStateResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListMemoryStateResponse()..mergeFromBuffer(data, registry);
   factory ListMemoryStateResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListMemoryStateResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListMemoryStateResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListMemoryStateResponse.$_createMessage)
     ..aOM<MemorySettings>(1, _omitFieldNames ? '' : 'settings',
-        subBuilder: MemorySettings.create)
+        subBuilder: MemorySettings.$_createMessage)
     ..pPM<MemoryTierState>(2, _omitFieldNames ? '' : 'tiers',
-        subBuilder: MemoryTierState.create)
+        subBuilder: MemoryTierState.$_createMessage)
     ..pPM<MemoryNote>(3, _omitFieldNames ? '' : 'notes',
-        subBuilder: MemoryNote.create)
+        subBuilder: MemoryNote.$_createMessage)
     ..pPM<MemoryCandidate>(4, _omitFieldNames ? '' : 'candidates',
-        subBuilder: MemoryCandidate.create)
+        subBuilder: MemoryCandidate.$_createMessage)
     ..aOM<MemoryProfile>(5, _omitFieldNames ? '' : 'profile',
-        subBuilder: MemoryProfile.create)
+        subBuilder: MemoryProfile.$_createMessage)
     ..aOM<MemoryPersona>(6, _omitFieldNames ? '' : 'persona',
-        subBuilder: MemoryPersona.create)
+        subBuilder: MemoryPersona.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1264,14 +1274,16 @@ class ListMemoryStateResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListMemoryStateResponse() / ListMemoryStateResponse.new instead')
   static ListMemoryStateResponse create() => ListMemoryStateResponse._();
+  static $pb.GeneratedMessage $_createMessage() => ListMemoryStateResponse._();
   @$core.override
-  ListMemoryStateResponse createEmptyInstance() => create();
-  static $pb.PbList<ListMemoryStateResponse> createRepeated() =>
-      $pb.PbList<ListMemoryStateResponse>();
+  ListMemoryStateResponse createEmptyInstance() => ListMemoryStateResponse._();
   @$core.pragma('dart2js:noInline')
   static ListMemoryStateResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListMemoryStateResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListMemoryStateResponse>(
+          ListMemoryStateResponse.$_createMessage);
   static ListMemoryStateResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1318,21 +1330,21 @@ class ListMemoryStateResponse extends $pb.GeneratedMessage {
 }
 
 class GetMemorySettingsRequest extends $pb.GeneratedMessage {
-  factory GetMemorySettingsRequest() => create();
+  factory GetMemorySettingsRequest() => GetMemorySettingsRequest._();
 
   GetMemorySettingsRequest._();
 
   factory GetMemorySettingsRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      GetMemorySettingsRequest()..mergeFromBuffer(data, registry);
   factory GetMemorySettingsRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      GetMemorySettingsRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'GetMemorySettingsRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: GetMemorySettingsRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1347,14 +1359,17 @@ class GetMemorySettingsRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetMemorySettingsRequest() / GetMemorySettingsRequest.new instead')
   static GetMemorySettingsRequest create() => GetMemorySettingsRequest._();
+  static $pb.GeneratedMessage $_createMessage() => GetMemorySettingsRequest._();
   @$core.override
-  GetMemorySettingsRequest createEmptyInstance() => create();
-  static $pb.PbList<GetMemorySettingsRequest> createRepeated() =>
-      $pb.PbList<GetMemorySettingsRequest>();
+  GetMemorySettingsRequest createEmptyInstance() =>
+      GetMemorySettingsRequest._();
   @$core.pragma('dart2js:noInline')
   static GetMemorySettingsRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<GetMemorySettingsRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<GetMemorySettingsRequest>(
+          GetMemorySettingsRequest.$_createMessage);
   static GetMemorySettingsRequest? _defaultInstance;
 }
 
@@ -1363,7 +1378,7 @@ class SetMemoryEnabledRequest extends $pb.GeneratedMessage {
     $core.bool? enabled,
     $3.MemoryTier? tier,
   }) {
-    final result = create();
+    final result = SetMemoryEnabledRequest._();
     if (enabled != null) result.enabled = enabled;
     if (tier != null) result.tier = tier;
     return result;
@@ -1373,15 +1388,15 @@ class SetMemoryEnabledRequest extends $pb.GeneratedMessage {
 
   factory SetMemoryEnabledRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SetMemoryEnabledRequest()..mergeFromBuffer(data, registry);
   factory SetMemoryEnabledRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SetMemoryEnabledRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SetMemoryEnabledRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SetMemoryEnabledRequest.$_createMessage)
     ..aOB(1, _omitFieldNames ? '' : 'enabled')
     ..aE<$3.MemoryTier>(2, _omitFieldNames ? '' : 'tier',
         enumValues: $3.MemoryTier.values)
@@ -1399,14 +1414,16 @@ class SetMemoryEnabledRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SetMemoryEnabledRequest() / SetMemoryEnabledRequest.new instead')
   static SetMemoryEnabledRequest create() => SetMemoryEnabledRequest._();
+  static $pb.GeneratedMessage $_createMessage() => SetMemoryEnabledRequest._();
   @$core.override
-  SetMemoryEnabledRequest createEmptyInstance() => create();
-  static $pb.PbList<SetMemoryEnabledRequest> createRepeated() =>
-      $pb.PbList<SetMemoryEnabledRequest>();
+  SetMemoryEnabledRequest createEmptyInstance() => SetMemoryEnabledRequest._();
   @$core.pragma('dart2js:noInline')
   static SetMemoryEnabledRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SetMemoryEnabledRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<SetMemoryEnabledRequest>(
+          SetMemoryEnabledRequest.$_createMessage);
   static SetMemoryEnabledRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1434,7 +1451,7 @@ class ListMemoryCandidatesRequest extends $pb.GeneratedMessage {
     MemoryCandidateState? state,
     MemoryCandidateKind? kind,
   }) {
-    final result = create();
+    final result = ListMemoryCandidatesRequest._();
     if (state != null) result.state = state;
     if (kind != null) result.kind = kind;
     return result;
@@ -1444,15 +1461,15 @@ class ListMemoryCandidatesRequest extends $pb.GeneratedMessage {
 
   factory ListMemoryCandidatesRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListMemoryCandidatesRequest()..mergeFromBuffer(data, registry);
   factory ListMemoryCandidatesRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListMemoryCandidatesRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListMemoryCandidatesRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListMemoryCandidatesRequest.$_createMessage)
     ..aE<MemoryCandidateState>(1, _omitFieldNames ? '' : 'state',
         enumValues: MemoryCandidateState.values)
     ..aE<MemoryCandidateKind>(2, _omitFieldNames ? '' : 'kind',
@@ -1472,15 +1489,19 @@ class ListMemoryCandidatesRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListMemoryCandidatesRequest() / ListMemoryCandidatesRequest.new instead')
   static ListMemoryCandidatesRequest create() =>
       ListMemoryCandidatesRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      ListMemoryCandidatesRequest._();
   @$core.override
-  ListMemoryCandidatesRequest createEmptyInstance() => create();
-  static $pb.PbList<ListMemoryCandidatesRequest> createRepeated() =>
-      $pb.PbList<ListMemoryCandidatesRequest>();
+  ListMemoryCandidatesRequest createEmptyInstance() =>
+      ListMemoryCandidatesRequest._();
   @$core.pragma('dart2js:noInline')
   static ListMemoryCandidatesRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListMemoryCandidatesRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListMemoryCandidatesRequest>(
+          ListMemoryCandidatesRequest.$_createMessage);
   static ListMemoryCandidatesRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1507,7 +1528,7 @@ class ListMemoryCandidatesResponse extends $pb.GeneratedMessage {
     $core.Iterable<MemoryCandidate>? candidates,
     MemoryUnavailableReason? unavailableReason,
   }) {
-    final result = create();
+    final result = ListMemoryCandidatesResponse._();
     if (candidates != null) result.candidates.addAll(candidates);
     if (unavailableReason != null) result.unavailableReason = unavailableReason;
     return result;
@@ -1517,17 +1538,17 @@ class ListMemoryCandidatesResponse extends $pb.GeneratedMessage {
 
   factory ListMemoryCandidatesResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListMemoryCandidatesResponse()..mergeFromBuffer(data, registry);
   factory ListMemoryCandidatesResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListMemoryCandidatesResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListMemoryCandidatesResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListMemoryCandidatesResponse.$_createMessage)
     ..pPM<MemoryCandidate>(1, _omitFieldNames ? '' : 'candidates',
-        subBuilder: MemoryCandidate.create)
+        subBuilder: MemoryCandidate.$_createMessage)
     ..aE<MemoryUnavailableReason>(2, _omitFieldNames ? '' : 'unavailableReason',
         enumValues: MemoryUnavailableReason.values)
     ..hasRequiredFields = false;
@@ -1545,15 +1566,19 @@ class ListMemoryCandidatesResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListMemoryCandidatesResponse() / ListMemoryCandidatesResponse.new instead')
   static ListMemoryCandidatesResponse create() =>
       ListMemoryCandidatesResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      ListMemoryCandidatesResponse._();
   @$core.override
-  ListMemoryCandidatesResponse createEmptyInstance() => create();
-  static $pb.PbList<ListMemoryCandidatesResponse> createRepeated() =>
-      $pb.PbList<ListMemoryCandidatesResponse>();
+  ListMemoryCandidatesResponse createEmptyInstance() =>
+      ListMemoryCandidatesResponse._();
   @$core.pragma('dart2js:noInline')
   static ListMemoryCandidatesResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListMemoryCandidatesResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListMemoryCandidatesResponse>(
+          ListMemoryCandidatesResponse.$_createMessage);
   static ListMemoryCandidatesResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1573,7 +1598,7 @@ class GetMemoryCandidateRequest extends $pb.GeneratedMessage {
   factory GetMemoryCandidateRequest({
     $core.String? candidateId,
   }) {
-    final result = create();
+    final result = GetMemoryCandidateRequest._();
     if (candidateId != null) result.candidateId = candidateId;
     return result;
   }
@@ -1582,15 +1607,15 @@ class GetMemoryCandidateRequest extends $pb.GeneratedMessage {
 
   factory GetMemoryCandidateRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      GetMemoryCandidateRequest()..mergeFromBuffer(data, registry);
   factory GetMemoryCandidateRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      GetMemoryCandidateRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'GetMemoryCandidateRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: GetMemoryCandidateRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'candidateId')
     ..hasRequiredFields = false;
 
@@ -1606,14 +1631,18 @@ class GetMemoryCandidateRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetMemoryCandidateRequest() / GetMemoryCandidateRequest.new instead')
   static GetMemoryCandidateRequest create() => GetMemoryCandidateRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      GetMemoryCandidateRequest._();
   @$core.override
-  GetMemoryCandidateRequest createEmptyInstance() => create();
-  static $pb.PbList<GetMemoryCandidateRequest> createRepeated() =>
-      $pb.PbList<GetMemoryCandidateRequest>();
+  GetMemoryCandidateRequest createEmptyInstance() =>
+      GetMemoryCandidateRequest._();
   @$core.pragma('dart2js:noInline')
   static GetMemoryCandidateRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<GetMemoryCandidateRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<GetMemoryCandidateRequest>(
+          GetMemoryCandidateRequest.$_createMessage);
   static GetMemoryCandidateRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1635,7 +1664,7 @@ class PromoteMemoryCandidateRequest extends $pb.GeneratedMessage {
     $3.MemoryTier? targetTier,
     $core.String? expectedCandidateHash,
   }) {
-    final result = create();
+    final result = PromoteMemoryCandidateRequest._();
     if (candidateId != null) result.candidateId = candidateId;
     if (expectedContentHash != null)
       result.expectedContentHash = expectedContentHash;
@@ -1650,15 +1679,15 @@ class PromoteMemoryCandidateRequest extends $pb.GeneratedMessage {
 
   factory PromoteMemoryCandidateRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      PromoteMemoryCandidateRequest()..mergeFromBuffer(data, registry);
   factory PromoteMemoryCandidateRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      PromoteMemoryCandidateRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'PromoteMemoryCandidateRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: PromoteMemoryCandidateRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'candidateId')
     ..aOS(2, _omitFieldNames ? '' : 'expectedContentHash')
     ..aOS(3, _omitFieldNames ? '' : 'editedContent')
@@ -1680,15 +1709,19 @@ class PromoteMemoryCandidateRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use PromoteMemoryCandidateRequest() / PromoteMemoryCandidateRequest.new instead')
   static PromoteMemoryCandidateRequest create() =>
       PromoteMemoryCandidateRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      PromoteMemoryCandidateRequest._();
   @$core.override
-  PromoteMemoryCandidateRequest createEmptyInstance() => create();
-  static $pb.PbList<PromoteMemoryCandidateRequest> createRepeated() =>
-      $pb.PbList<PromoteMemoryCandidateRequest>();
+  PromoteMemoryCandidateRequest createEmptyInstance() =>
+      PromoteMemoryCandidateRequest._();
   @$core.pragma('dart2js:noInline')
   static PromoteMemoryCandidateRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<PromoteMemoryCandidateRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<PromoteMemoryCandidateRequest>(
+          PromoteMemoryCandidateRequest.$_createMessage);
   static PromoteMemoryCandidateRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1768,7 +1801,7 @@ class PromoteMemoryCandidateResponse extends $pb.GeneratedMessage {
     MemoryCandidate? candidate,
     MemoryNote? note,
   }) {
-    final result = create();
+    final result = PromoteMemoryCandidateResponse._();
     if (candidate != null) result.candidate = candidate;
     if (note != null) result.note = note;
     return result;
@@ -1778,19 +1811,19 @@ class PromoteMemoryCandidateResponse extends $pb.GeneratedMessage {
 
   factory PromoteMemoryCandidateResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      PromoteMemoryCandidateResponse()..mergeFromBuffer(data, registry);
   factory PromoteMemoryCandidateResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      PromoteMemoryCandidateResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'PromoteMemoryCandidateResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: PromoteMemoryCandidateResponse.$_createMessage)
     ..aOM<MemoryCandidate>(1, _omitFieldNames ? '' : 'candidate',
-        subBuilder: MemoryCandidate.create)
+        subBuilder: MemoryCandidate.$_createMessage)
     ..aOM<MemoryNote>(2, _omitFieldNames ? '' : 'note',
-        subBuilder: MemoryNote.create)
+        subBuilder: MemoryNote.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1806,15 +1839,19 @@ class PromoteMemoryCandidateResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use PromoteMemoryCandidateResponse() / PromoteMemoryCandidateResponse.new instead')
   static PromoteMemoryCandidateResponse create() =>
       PromoteMemoryCandidateResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      PromoteMemoryCandidateResponse._();
   @$core.override
-  PromoteMemoryCandidateResponse createEmptyInstance() => create();
-  static $pb.PbList<PromoteMemoryCandidateResponse> createRepeated() =>
-      $pb.PbList<PromoteMemoryCandidateResponse>();
+  PromoteMemoryCandidateResponse createEmptyInstance() =>
+      PromoteMemoryCandidateResponse._();
   @$core.pragma('dart2js:noInline')
   static PromoteMemoryCandidateResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<PromoteMemoryCandidateResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<PromoteMemoryCandidateResponse>(
+          PromoteMemoryCandidateResponse.$_createMessage);
   static PromoteMemoryCandidateResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1848,7 +1885,7 @@ class RejectMemoryCandidateRequest extends $pb.GeneratedMessage {
     $core.String? reason,
     $core.String? expectedCandidateHash,
   }) {
-    final result = create();
+    final result = RejectMemoryCandidateRequest._();
     if (candidateId != null) result.candidateId = candidateId;
     if (expectedContentHash != null)
       result.expectedContentHash = expectedContentHash;
@@ -1862,15 +1899,15 @@ class RejectMemoryCandidateRequest extends $pb.GeneratedMessage {
 
   factory RejectMemoryCandidateRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RejectMemoryCandidateRequest()..mergeFromBuffer(data, registry);
   factory RejectMemoryCandidateRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RejectMemoryCandidateRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RejectMemoryCandidateRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RejectMemoryCandidateRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'candidateId')
     ..aOS(2, _omitFieldNames ? '' : 'expectedContentHash')
     ..aOS(3, _omitFieldNames ? '' : 'reason')
@@ -1890,15 +1927,19 @@ class RejectMemoryCandidateRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use RejectMemoryCandidateRequest() / RejectMemoryCandidateRequest.new instead')
   static RejectMemoryCandidateRequest create() =>
       RejectMemoryCandidateRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      RejectMemoryCandidateRequest._();
   @$core.override
-  RejectMemoryCandidateRequest createEmptyInstance() => create();
-  static $pb.PbList<RejectMemoryCandidateRequest> createRepeated() =>
-      $pb.PbList<RejectMemoryCandidateRequest>();
+  RejectMemoryCandidateRequest createEmptyInstance() =>
+      RejectMemoryCandidateRequest._();
   @$core.pragma('dart2js:noInline')
   static RejectMemoryCandidateRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RejectMemoryCandidateRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<RejectMemoryCandidateRequest>(
+          RejectMemoryCandidateRequest.$_createMessage);
   static RejectMemoryCandidateRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1963,7 +2004,7 @@ class RejectMemoryCandidateResponse extends $pb.GeneratedMessage {
   factory RejectMemoryCandidateResponse({
     MemoryCandidate? candidate,
   }) {
-    final result = create();
+    final result = RejectMemoryCandidateResponse._();
     if (candidate != null) result.candidate = candidate;
     return result;
   }
@@ -1972,17 +2013,17 @@ class RejectMemoryCandidateResponse extends $pb.GeneratedMessage {
 
   factory RejectMemoryCandidateResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RejectMemoryCandidateResponse()..mergeFromBuffer(data, registry);
   factory RejectMemoryCandidateResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RejectMemoryCandidateResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RejectMemoryCandidateResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RejectMemoryCandidateResponse.$_createMessage)
     ..aOM<MemoryCandidate>(1, _omitFieldNames ? '' : 'candidate',
-        subBuilder: MemoryCandidate.create)
+        subBuilder: MemoryCandidate.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1998,15 +2039,19 @@ class RejectMemoryCandidateResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use RejectMemoryCandidateResponse() / RejectMemoryCandidateResponse.new instead')
   static RejectMemoryCandidateResponse create() =>
       RejectMemoryCandidateResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      RejectMemoryCandidateResponse._();
   @$core.override
-  RejectMemoryCandidateResponse createEmptyInstance() => create();
-  static $pb.PbList<RejectMemoryCandidateResponse> createRepeated() =>
-      $pb.PbList<RejectMemoryCandidateResponse>();
+  RejectMemoryCandidateResponse createEmptyInstance() =>
+      RejectMemoryCandidateResponse._();
   @$core.pragma('dart2js:noInline')
   static RejectMemoryCandidateResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RejectMemoryCandidateResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<RejectMemoryCandidateResponse>(
+          RejectMemoryCandidateResponse.$_createMessage);
   static RejectMemoryCandidateResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2022,21 +2067,21 @@ class RejectMemoryCandidateResponse extends $pb.GeneratedMessage {
 }
 
 class GetMemoryProfileRequest extends $pb.GeneratedMessage {
-  factory GetMemoryProfileRequest() => create();
+  factory GetMemoryProfileRequest() => GetMemoryProfileRequest._();
 
   GetMemoryProfileRequest._();
 
   factory GetMemoryProfileRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      GetMemoryProfileRequest()..mergeFromBuffer(data, registry);
   factory GetMemoryProfileRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      GetMemoryProfileRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'GetMemoryProfileRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: GetMemoryProfileRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -2051,14 +2096,16 @@ class GetMemoryProfileRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetMemoryProfileRequest() / GetMemoryProfileRequest.new instead')
   static GetMemoryProfileRequest create() => GetMemoryProfileRequest._();
+  static $pb.GeneratedMessage $_createMessage() => GetMemoryProfileRequest._();
   @$core.override
-  GetMemoryProfileRequest createEmptyInstance() => create();
-  static $pb.PbList<GetMemoryProfileRequest> createRepeated() =>
-      $pb.PbList<GetMemoryProfileRequest>();
+  GetMemoryProfileRequest createEmptyInstance() => GetMemoryProfileRequest._();
   @$core.pragma('dart2js:noInline')
   static GetMemoryProfileRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<GetMemoryProfileRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<GetMemoryProfileRequest>(
+          GetMemoryProfileRequest.$_createMessage);
   static GetMemoryProfileRequest? _defaultInstance;
 }
 
@@ -2069,7 +2116,7 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
     $core.String? candidateId,
     $core.String? expectedCandidateHash,
   }) {
-    final result = create();
+    final result = ApplyMemoryProfileRequest._();
     if (content != null) result.content = content;
     if (expectedContentHash != null)
       result.expectedContentHash = expectedContentHash;
@@ -2083,15 +2130,15 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
 
   factory ApplyMemoryProfileRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ApplyMemoryProfileRequest()..mergeFromBuffer(data, registry);
   factory ApplyMemoryProfileRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ApplyMemoryProfileRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ApplyMemoryProfileRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ApplyMemoryProfileRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'content')
     ..aOS(2, _omitFieldNames ? '' : 'expectedContentHash')
     ..aOS(3, _omitFieldNames ? '' : 'candidateId')
@@ -2110,14 +2157,18 @@ class ApplyMemoryProfileRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ApplyMemoryProfileRequest() / ApplyMemoryProfileRequest.new instead')
   static ApplyMemoryProfileRequest create() => ApplyMemoryProfileRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      ApplyMemoryProfileRequest._();
   @$core.override
-  ApplyMemoryProfileRequest createEmptyInstance() => create();
-  static $pb.PbList<ApplyMemoryProfileRequest> createRepeated() =>
-      $pb.PbList<ApplyMemoryProfileRequest>();
+  ApplyMemoryProfileRequest createEmptyInstance() =>
+      ApplyMemoryProfileRequest._();
   @$core.pragma('dart2js:noInline')
   static ApplyMemoryProfileRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ApplyMemoryProfileRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ApplyMemoryProfileRequest>(
+          ApplyMemoryProfileRequest.$_createMessage);
   static ApplyMemoryProfileRequest? _defaultInstance;
 
   /// The whole resulting profile document, as the user reviewed it — never the
@@ -2183,7 +2234,7 @@ class ApplyMemoryProfileResponse extends $pb.GeneratedMessage {
     MemoryProfile? profile,
     $core.bool? cleanupPending,
   }) {
-    final result = create();
+    final result = ApplyMemoryProfileResponse._();
     if (profile != null) result.profile = profile;
     if (cleanupPending != null) result.cleanupPending = cleanupPending;
     return result;
@@ -2193,17 +2244,17 @@ class ApplyMemoryProfileResponse extends $pb.GeneratedMessage {
 
   factory ApplyMemoryProfileResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ApplyMemoryProfileResponse()..mergeFromBuffer(data, registry);
   factory ApplyMemoryProfileResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ApplyMemoryProfileResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ApplyMemoryProfileResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ApplyMemoryProfileResponse.$_createMessage)
     ..aOM<MemoryProfile>(1, _omitFieldNames ? '' : 'profile',
-        subBuilder: MemoryProfile.create)
+        subBuilder: MemoryProfile.$_createMessage)
     ..aOB(2, _omitFieldNames ? '' : 'cleanupPending')
     ..hasRequiredFields = false;
 
@@ -2220,14 +2271,18 @@ class ApplyMemoryProfileResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ApplyMemoryProfileResponse() / ApplyMemoryProfileResponse.new instead')
   static ApplyMemoryProfileResponse create() => ApplyMemoryProfileResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      ApplyMemoryProfileResponse._();
   @$core.override
-  ApplyMemoryProfileResponse createEmptyInstance() => create();
-  static $pb.PbList<ApplyMemoryProfileResponse> createRepeated() =>
-      $pb.PbList<ApplyMemoryProfileResponse>();
+  ApplyMemoryProfileResponse createEmptyInstance() =>
+      ApplyMemoryProfileResponse._();
   @$core.pragma('dart2js:noInline')
   static ApplyMemoryProfileResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ApplyMemoryProfileResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<ApplyMemoryProfileResponse>(
+          ApplyMemoryProfileResponse.$_createMessage);
   static ApplyMemoryProfileResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2258,21 +2313,21 @@ class ApplyMemoryProfileResponse extends $pb.GeneratedMessage {
 }
 
 class GetMemoryPersonaRequest extends $pb.GeneratedMessage {
-  factory GetMemoryPersonaRequest() => create();
+  factory GetMemoryPersonaRequest() => GetMemoryPersonaRequest._();
 
   GetMemoryPersonaRequest._();
 
   factory GetMemoryPersonaRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      GetMemoryPersonaRequest()..mergeFromBuffer(data, registry);
   factory GetMemoryPersonaRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      GetMemoryPersonaRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'GetMemoryPersonaRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: GetMemoryPersonaRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -2287,14 +2342,16 @@ class GetMemoryPersonaRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetMemoryPersonaRequest() / GetMemoryPersonaRequest.new instead')
   static GetMemoryPersonaRequest create() => GetMemoryPersonaRequest._();
+  static $pb.GeneratedMessage $_createMessage() => GetMemoryPersonaRequest._();
   @$core.override
-  GetMemoryPersonaRequest createEmptyInstance() => create();
-  static $pb.PbList<GetMemoryPersonaRequest> createRepeated() =>
-      $pb.PbList<GetMemoryPersonaRequest>();
+  GetMemoryPersonaRequest createEmptyInstance() => GetMemoryPersonaRequest._();
   @$core.pragma('dart2js:noInline')
   static GetMemoryPersonaRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<GetMemoryPersonaRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<GetMemoryPersonaRequest>(
+          GetMemoryPersonaRequest.$_createMessage);
   static GetMemoryPersonaRequest? _defaultInstance;
 }
 
@@ -2306,7 +2363,7 @@ class SaveMemoryPersonaRequest extends $pb.GeneratedMessage {
     $core.String? content,
     $core.String? expectedContentHash,
   }) {
-    final result = create();
+    final result = SaveMemoryPersonaRequest._();
     if (content != null) result.content = content;
     if (expectedContentHash != null)
       result.expectedContentHash = expectedContentHash;
@@ -2317,15 +2374,15 @@ class SaveMemoryPersonaRequest extends $pb.GeneratedMessage {
 
   factory SaveMemoryPersonaRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SaveMemoryPersonaRequest()..mergeFromBuffer(data, registry);
   factory SaveMemoryPersonaRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SaveMemoryPersonaRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SaveMemoryPersonaRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SaveMemoryPersonaRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'content')
     ..aOS(2, _omitFieldNames ? '' : 'expectedContentHash')
     ..hasRequiredFields = false;
@@ -2342,14 +2399,17 @@ class SaveMemoryPersonaRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SaveMemoryPersonaRequest() / SaveMemoryPersonaRequest.new instead')
   static SaveMemoryPersonaRequest create() => SaveMemoryPersonaRequest._();
+  static $pb.GeneratedMessage $_createMessage() => SaveMemoryPersonaRequest._();
   @$core.override
-  SaveMemoryPersonaRequest createEmptyInstance() => create();
-  static $pb.PbList<SaveMemoryPersonaRequest> createRepeated() =>
-      $pb.PbList<SaveMemoryPersonaRequest>();
+  SaveMemoryPersonaRequest createEmptyInstance() =>
+      SaveMemoryPersonaRequest._();
   @$core.pragma('dart2js:noInline')
   static SaveMemoryPersonaRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SaveMemoryPersonaRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<SaveMemoryPersonaRequest>(
+          SaveMemoryPersonaRequest.$_createMessage);
   static SaveMemoryPersonaRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2380,7 +2440,7 @@ class SaveMemoryPersonaResponse extends $pb.GeneratedMessage {
   factory SaveMemoryPersonaResponse({
     MemoryPersona? persona,
   }) {
-    final result = create();
+    final result = SaveMemoryPersonaResponse._();
     if (persona != null) result.persona = persona;
     return result;
   }
@@ -2389,17 +2449,17 @@ class SaveMemoryPersonaResponse extends $pb.GeneratedMessage {
 
   factory SaveMemoryPersonaResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SaveMemoryPersonaResponse()..mergeFromBuffer(data, registry);
   factory SaveMemoryPersonaResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SaveMemoryPersonaResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SaveMemoryPersonaResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SaveMemoryPersonaResponse.$_createMessage)
     ..aOM<MemoryPersona>(1, _omitFieldNames ? '' : 'persona',
-        subBuilder: MemoryPersona.create)
+        subBuilder: MemoryPersona.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -2414,14 +2474,18 @@ class SaveMemoryPersonaResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SaveMemoryPersonaResponse() / SaveMemoryPersonaResponse.new instead')
   static SaveMemoryPersonaResponse create() => SaveMemoryPersonaResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      SaveMemoryPersonaResponse._();
   @$core.override
-  SaveMemoryPersonaResponse createEmptyInstance() => create();
-  static $pb.PbList<SaveMemoryPersonaResponse> createRepeated() =>
-      $pb.PbList<SaveMemoryPersonaResponse>();
+  SaveMemoryPersonaResponse createEmptyInstance() =>
+      SaveMemoryPersonaResponse._();
   @$core.pragma('dart2js:noInline')
   static SaveMemoryPersonaResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SaveMemoryPersonaResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<SaveMemoryPersonaResponse>(
+          SaveMemoryPersonaResponse.$_createMessage);
   static SaveMemoryPersonaResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2445,7 +2509,7 @@ class SaveMemoryProfileRequest extends $pb.GeneratedMessage {
     $core.String? content,
     $core.String? expectedContentHash,
   }) {
-    final result = create();
+    final result = SaveMemoryProfileRequest._();
     if (content != null) result.content = content;
     if (expectedContentHash != null)
       result.expectedContentHash = expectedContentHash;
@@ -2456,15 +2520,15 @@ class SaveMemoryProfileRequest extends $pb.GeneratedMessage {
 
   factory SaveMemoryProfileRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SaveMemoryProfileRequest()..mergeFromBuffer(data, registry);
   factory SaveMemoryProfileRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SaveMemoryProfileRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SaveMemoryProfileRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SaveMemoryProfileRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'content')
     ..aOS(2, _omitFieldNames ? '' : 'expectedContentHash')
     ..hasRequiredFields = false;
@@ -2481,14 +2545,17 @@ class SaveMemoryProfileRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SaveMemoryProfileRequest() / SaveMemoryProfileRequest.new instead')
   static SaveMemoryProfileRequest create() => SaveMemoryProfileRequest._();
+  static $pb.GeneratedMessage $_createMessage() => SaveMemoryProfileRequest._();
   @$core.override
-  SaveMemoryProfileRequest createEmptyInstance() => create();
-  static $pb.PbList<SaveMemoryProfileRequest> createRepeated() =>
-      $pb.PbList<SaveMemoryProfileRequest>();
+  SaveMemoryProfileRequest createEmptyInstance() =>
+      SaveMemoryProfileRequest._();
   @$core.pragma('dart2js:noInline')
   static SaveMemoryProfileRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SaveMemoryProfileRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<SaveMemoryProfileRequest>(
+          SaveMemoryProfileRequest.$_createMessage);
   static SaveMemoryProfileRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2516,7 +2583,7 @@ class SaveMemoryProfileResponse extends $pb.GeneratedMessage {
   factory SaveMemoryProfileResponse({
     MemoryProfile? profile,
   }) {
-    final result = create();
+    final result = SaveMemoryProfileResponse._();
     if (profile != null) result.profile = profile;
     return result;
   }
@@ -2525,17 +2592,17 @@ class SaveMemoryProfileResponse extends $pb.GeneratedMessage {
 
   factory SaveMemoryProfileResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SaveMemoryProfileResponse()..mergeFromBuffer(data, registry);
   factory SaveMemoryProfileResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SaveMemoryProfileResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SaveMemoryProfileResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SaveMemoryProfileResponse.$_createMessage)
     ..aOM<MemoryProfile>(1, _omitFieldNames ? '' : 'profile',
-        subBuilder: MemoryProfile.create)
+        subBuilder: MemoryProfile.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -2550,14 +2617,18 @@ class SaveMemoryProfileResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SaveMemoryProfileResponse() / SaveMemoryProfileResponse.new instead')
   static SaveMemoryProfileResponse create() => SaveMemoryProfileResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      SaveMemoryProfileResponse._();
   @$core.override
-  SaveMemoryProfileResponse createEmptyInstance() => create();
-  static $pb.PbList<SaveMemoryProfileResponse> createRepeated() =>
-      $pb.PbList<SaveMemoryProfileResponse>();
+  SaveMemoryProfileResponse createEmptyInstance() =>
+      SaveMemoryProfileResponse._();
   @$core.pragma('dart2js:noInline')
   static SaveMemoryProfileResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SaveMemoryProfileResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<SaveMemoryProfileResponse>(
+          SaveMemoryProfileResponse.$_createMessage);
   static SaveMemoryProfileResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2580,7 +2651,7 @@ class MemoryToolDescriptor extends $pb.GeneratedMessage {
     $core.bool? enabled,
     $core.String? description,
   }) {
-    final result = create();
+    final result = MemoryToolDescriptor._();
     if (toolName != null) result.toolName = toolName;
     if (policy != null) result.policy = policy;
     if (schema != null) result.schema = schema;
@@ -2593,20 +2664,20 @@ class MemoryToolDescriptor extends $pb.GeneratedMessage {
 
   factory MemoryToolDescriptor.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      MemoryToolDescriptor()..mergeFromBuffer(data, registry);
   factory MemoryToolDescriptor.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      MemoryToolDescriptor()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MemoryToolDescriptor',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: MemoryToolDescriptor.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'toolName')
     ..aE<$3.ToolPolicy>(2, _omitFieldNames ? '' : 'policy',
         enumValues: $3.ToolPolicy.values)
     ..aOM<$2.Struct>(3, _omitFieldNames ? '' : 'schema',
-        subBuilder: $2.Struct.create)
+        subBuilder: $2.Struct.$_createMessage)
     ..aOB(4, _omitFieldNames ? '' : 'enabled')
     ..aOS(5, _omitFieldNames ? '' : 'description')
     ..hasRequiredFields = false;
@@ -2622,14 +2693,16 @@ class MemoryToolDescriptor extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use MemoryToolDescriptor() / MemoryToolDescriptor.new instead')
   static MemoryToolDescriptor create() => MemoryToolDescriptor._();
+  static $pb.GeneratedMessage $_createMessage() => MemoryToolDescriptor._();
   @$core.override
-  MemoryToolDescriptor createEmptyInstance() => create();
-  static $pb.PbList<MemoryToolDescriptor> createRepeated() =>
-      $pb.PbList<MemoryToolDescriptor>();
+  MemoryToolDescriptor createEmptyInstance() => MemoryToolDescriptor._();
   @$core.pragma('dart2js:noInline')
   static MemoryToolDescriptor getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<MemoryToolDescriptor>(create);
+      $pb.GeneratedMessage.$_defaultFor<MemoryToolDescriptor>(
+          MemoryToolDescriptor.$_createMessage);
   static MemoryToolDescriptor? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2681,21 +2754,21 @@ class MemoryToolDescriptor extends $pb.GeneratedMessage {
 }
 
 class ListMemoryToolsRequest extends $pb.GeneratedMessage {
-  factory ListMemoryToolsRequest() => create();
+  factory ListMemoryToolsRequest() => ListMemoryToolsRequest._();
 
   ListMemoryToolsRequest._();
 
   factory ListMemoryToolsRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListMemoryToolsRequest()..mergeFromBuffer(data, registry);
   factory ListMemoryToolsRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListMemoryToolsRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListMemoryToolsRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListMemoryToolsRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -2710,14 +2783,16 @@ class ListMemoryToolsRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListMemoryToolsRequest() / ListMemoryToolsRequest.new instead')
   static ListMemoryToolsRequest create() => ListMemoryToolsRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ListMemoryToolsRequest._();
   @$core.override
-  ListMemoryToolsRequest createEmptyInstance() => create();
-  static $pb.PbList<ListMemoryToolsRequest> createRepeated() =>
-      $pb.PbList<ListMemoryToolsRequest>();
+  ListMemoryToolsRequest createEmptyInstance() => ListMemoryToolsRequest._();
   @$core.pragma('dart2js:noInline')
   static ListMemoryToolsRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListMemoryToolsRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListMemoryToolsRequest>(
+          ListMemoryToolsRequest.$_createMessage);
   static ListMemoryToolsRequest? _defaultInstance;
 }
 
@@ -2725,7 +2800,7 @@ class ListMemoryToolsResponse extends $pb.GeneratedMessage {
   factory ListMemoryToolsResponse({
     $core.Iterable<MemoryToolDescriptor>? tools,
   }) {
-    final result = create();
+    final result = ListMemoryToolsResponse._();
     if (tools != null) result.tools.addAll(tools);
     return result;
   }
@@ -2734,17 +2809,17 @@ class ListMemoryToolsResponse extends $pb.GeneratedMessage {
 
   factory ListMemoryToolsResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListMemoryToolsResponse()..mergeFromBuffer(data, registry);
   factory ListMemoryToolsResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListMemoryToolsResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListMemoryToolsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListMemoryToolsResponse.$_createMessage)
     ..pPM<MemoryToolDescriptor>(1, _omitFieldNames ? '' : 'tools',
-        subBuilder: MemoryToolDescriptor.create)
+        subBuilder: MemoryToolDescriptor.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -2759,14 +2834,16 @@ class ListMemoryToolsResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListMemoryToolsResponse() / ListMemoryToolsResponse.new instead')
   static ListMemoryToolsResponse create() => ListMemoryToolsResponse._();
+  static $pb.GeneratedMessage $_createMessage() => ListMemoryToolsResponse._();
   @$core.override
-  ListMemoryToolsResponse createEmptyInstance() => create();
-  static $pb.PbList<ListMemoryToolsResponse> createRepeated() =>
-      $pb.PbList<ListMemoryToolsResponse>();
+  ListMemoryToolsResponse createEmptyInstance() => ListMemoryToolsResponse._();
   @$core.pragma('dart2js:noInline')
   static ListMemoryToolsResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListMemoryToolsResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListMemoryToolsResponse>(
+          ListMemoryToolsResponse.$_createMessage);
   static ListMemoryToolsResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2786,7 +2863,7 @@ class CallMemoryToolRequest extends $pb.GeneratedMessage {
     $core.String? toolName,
     $2.Struct? args,
   }) {
-    final result = create();
+    final result = CallMemoryToolRequest._();
     if (runId != null) result.runId = runId;
     if (approvalId != null) result.approvalId = approvalId;
     if (toolName != null) result.toolName = toolName;
@@ -2798,20 +2875,20 @@ class CallMemoryToolRequest extends $pb.GeneratedMessage {
 
   factory CallMemoryToolRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      CallMemoryToolRequest()..mergeFromBuffer(data, registry);
   factory CallMemoryToolRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      CallMemoryToolRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'CallMemoryToolRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: CallMemoryToolRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'approvalId')
     ..aOS(3, _omitFieldNames ? '' : 'toolName')
     ..aOM<$2.Struct>(4, _omitFieldNames ? '' : 'args',
-        subBuilder: $2.Struct.create)
+        subBuilder: $2.Struct.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -2826,14 +2903,16 @@ class CallMemoryToolRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use CallMemoryToolRequest() / CallMemoryToolRequest.new instead')
   static CallMemoryToolRequest create() => CallMemoryToolRequest._();
+  static $pb.GeneratedMessage $_createMessage() => CallMemoryToolRequest._();
   @$core.override
-  CallMemoryToolRequest createEmptyInstance() => create();
-  static $pb.PbList<CallMemoryToolRequest> createRepeated() =>
-      $pb.PbList<CallMemoryToolRequest>();
+  CallMemoryToolRequest createEmptyInstance() => CallMemoryToolRequest._();
   @$core.pragma('dart2js:noInline')
   static CallMemoryToolRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<CallMemoryToolRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<CallMemoryToolRequest>(
+          CallMemoryToolRequest.$_createMessage);
   static CallMemoryToolRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -2879,7 +2958,7 @@ class CallMemoryToolResponse extends $pb.GeneratedMessage {
   factory CallMemoryToolResponse({
     $2.Struct? result,
   }) {
-    final result$ = create();
+    final result$ = CallMemoryToolResponse._();
     if (result != null) result$.result = result;
     return result$;
   }
@@ -2888,17 +2967,17 @@ class CallMemoryToolResponse extends $pb.GeneratedMessage {
 
   factory CallMemoryToolResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      CallMemoryToolResponse()..mergeFromBuffer(data, registry);
   factory CallMemoryToolResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      CallMemoryToolResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'CallMemoryToolResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: CallMemoryToolResponse.$_createMessage)
     ..aOM<$2.Struct>(1, _omitFieldNames ? '' : 'result',
-        subBuilder: $2.Struct.create)
+        subBuilder: $2.Struct.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -2913,14 +2992,16 @@ class CallMemoryToolResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use CallMemoryToolResponse() / CallMemoryToolResponse.new instead')
   static CallMemoryToolResponse create() => CallMemoryToolResponse._();
+  static $pb.GeneratedMessage $_createMessage() => CallMemoryToolResponse._();
   @$core.override
-  CallMemoryToolResponse createEmptyInstance() => create();
-  static $pb.PbList<CallMemoryToolResponse> createRepeated() =>
-      $pb.PbList<CallMemoryToolResponse>();
+  CallMemoryToolResponse createEmptyInstance() => CallMemoryToolResponse._();
   @$core.pragma('dart2js:noInline')
   static CallMemoryToolResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<CallMemoryToolResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<CallMemoryToolResponse>(
+          CallMemoryToolResponse.$_createMessage);
   static CallMemoryToolResponse? _defaultInstance;
 
   @$pb.TagNumber(1)

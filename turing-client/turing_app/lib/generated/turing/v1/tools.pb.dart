@@ -8,14 +8,14 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
 import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
+import 'package:protobuf/well_known_types/google/protobuf/struct.pb.dart' as $0;
 
-import '../../google/protobuf/struct.pb.dart' as $0;
 import 'common.pbenum.dart' as $1;
 import 'tools.pbenum.dart';
 
@@ -28,7 +28,7 @@ class ToolCallError extends $pb.GeneratedMessage {
     $core.String? code,
     $core.String? message,
   }) {
-    final result = create();
+    final result = ToolCallError._();
     if (code != null) result.code = code;
     if (message != null) result.message = message;
     return result;
@@ -38,15 +38,15 @@ class ToolCallError extends $pb.GeneratedMessage {
 
   factory ToolCallError.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ToolCallError()..mergeFromBuffer(data, registry);
   factory ToolCallError.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ToolCallError()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ToolCallError',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ToolCallError.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'code')
     ..aOS(2, _omitFieldNames ? '' : 'message')
     ..hasRequiredFields = false;
@@ -62,14 +62,15 @@ class ToolCallError extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ToolCallError() / ToolCallError.new instead')
   static ToolCallError create() => ToolCallError._();
+  static $pb.GeneratedMessage $_createMessage() => ToolCallError._();
   @$core.override
-  ToolCallError createEmptyInstance() => create();
-  static $pb.PbList<ToolCallError> createRepeated() =>
-      $pb.PbList<ToolCallError>();
+  ToolCallError createEmptyInstance() => ToolCallError._();
   @$core.pragma('dart2js:noInline')
-  static ToolCallError getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ToolCallError>(create);
+  static ToolCallError getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ToolCallError>(
+          ToolCallError.$_createMessage);
   static ToolCallError? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -107,7 +108,7 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
     $core.String? traceId,
     $core.String? modelToolCallId,
   }) {
-    final result = create();
+    final result = ToolCallBeacon._();
     if (phase != null) result.phase = phase;
     if (toolCallId != null) result.toolCallId = toolCallId;
     if (agentId != null) result.agentId = agentId;
@@ -128,15 +129,15 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
 
   factory ToolCallBeacon.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ToolCallBeacon()..mergeFromBuffer(data, registry);
   factory ToolCallBeacon.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ToolCallBeacon()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ToolCallBeacon',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ToolCallBeacon.$_createMessage)
     ..aE<ToolCallPhase>(1, _omitFieldNames ? '' : 'phase',
         enumValues: ToolCallPhase.values)
     ..aOS(2, _omitFieldNames ? '' : 'toolCallId')
@@ -145,13 +146,13 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
     ..aOS(4, _omitFieldNames ? '' : 'serverName')
     ..aOS(5, _omitFieldNames ? '' : 'toolName')
     ..aOM<$0.Struct>(6, _omitFieldNames ? '' : 'args',
-        subBuilder: $0.Struct.create)
+        subBuilder: $0.Struct.$_createMessage)
     ..aE<ToolCallStatus>(7, _omitFieldNames ? '' : 'status',
         enumValues: ToolCallStatus.values)
     ..aOS(8, _omitFieldNames ? '' : 'resultSummary')
     ..aInt64(9, _omitFieldNames ? '' : 'durationMs')
     ..aOM<ToolCallError>(10, _omitFieldNames ? '' : 'error',
-        subBuilder: ToolCallError.create)
+        subBuilder: ToolCallError.$_createMessage)
     ..aOS(11, _omitFieldNames ? '' : 'runId')
     ..aOS(12, _omitFieldNames ? '' : 'traceId')
     ..aOS(13, _omitFieldNames ? '' : 'modelToolCallId')
@@ -168,14 +169,15 @@ class ToolCallBeacon extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ToolCallBeacon() / ToolCallBeacon.new instead')
   static ToolCallBeacon create() => ToolCallBeacon._();
+  static $pb.GeneratedMessage $_createMessage() => ToolCallBeacon._();
   @$core.override
-  ToolCallBeacon createEmptyInstance() => create();
-  static $pb.PbList<ToolCallBeacon> createRepeated() =>
-      $pb.PbList<ToolCallBeacon>();
+  ToolCallBeacon createEmptyInstance() => ToolCallBeacon._();
   @$core.pragma('dart2js:noInline')
-  static ToolCallBeacon getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ToolCallBeacon>(create);
+  static ToolCallBeacon getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ToolCallBeacon>(
+          ToolCallBeacon.$_createMessage);
   static ToolCallBeacon? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -312,7 +314,7 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
     $core.bool? readOnly,
     $fixnum.Int64? runStateVersion,
   }) {
-    final result = create();
+    final result = ToolPolicyDecision._();
     if (decision != null) result.decision = decision;
     if (toolCallId != null) result.toolCallId = toolCallId;
     if (approvalId != null) result.approvalId = approvalId;
@@ -329,15 +331,15 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
 
   factory ToolPolicyDecision.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ToolPolicyDecision()..mergeFromBuffer(data, registry);
   factory ToolPolicyDecision.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ToolPolicyDecision()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ToolPolicyDecision',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ToolPolicyDecision.$_createMessage)
     ..aE<ToolPolicyDecision_Decision>(1, _omitFieldNames ? '' : 'decision',
         enumValues: ToolPolicyDecision_Decision.values)
     ..aOS(2, _omitFieldNames ? '' : 'toolCallId')
@@ -362,14 +364,15 @@ class ToolPolicyDecision extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ToolPolicyDecision() / ToolPolicyDecision.new instead')
   static ToolPolicyDecision create() => ToolPolicyDecision._();
+  static $pb.GeneratedMessage $_createMessage() => ToolPolicyDecision._();
   @$core.override
-  ToolPolicyDecision createEmptyInstance() => create();
-  static $pb.PbList<ToolPolicyDecision> createRepeated() =>
-      $pb.PbList<ToolPolicyDecision>();
+  ToolPolicyDecision createEmptyInstance() => ToolPolicyDecision._();
   @$core.pragma('dart2js:noInline')
   static ToolPolicyDecision getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ToolPolicyDecision>(create);
+      $pb.GeneratedMessage.$_defaultFor<ToolPolicyDecision>(
+          ToolPolicyDecision.$_createMessage);
   static ToolPolicyDecision? _defaultInstance;
 
   @$pb.TagNumber(1)

@@ -8,14 +8,14 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
 import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
+import 'package:protobuf/well_known_types/google/protobuf/struct.pb.dart' as $2;
 
-import '../../google/protobuf/struct.pb.dart' as $2;
 import 'chat.pbenum.dart';
 import 'common.pb.dart' as $1;
 import 'events.pb.dart' as $3;
@@ -38,7 +38,7 @@ class SendMessageRequest extends $pb.GeneratedMessage {
     $core.int? minimumWorkerMaxConcurrentRuns,
     $1.RemoteEgressConsent? remoteEgressConsent,
   }) {
-    final result = create();
+    final result = SendMessageRequest._();
     if (sessionId != null) result.sessionId = sessionId;
     if (content != null) result.content = content;
     if (contentType != null) result.contentType = contentType;
@@ -60,15 +60,15 @@ class SendMessageRequest extends $pb.GeneratedMessage {
 
   factory SendMessageRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SendMessageRequest()..mergeFromBuffer(data, registry);
   factory SendMessageRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SendMessageRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SendMessageRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SendMessageRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..aOS(2, _omitFieldNames ? '' : 'content')
     ..aOS(3, _omitFieldNames ? '' : 'contentType')
@@ -83,7 +83,7 @@ class SendMessageRequest extends $pb.GeneratedMessage {
     ..aI(10, _omitFieldNames ? '' : 'minimumWorkerMaxConcurrentRuns')
     ..aOM<$1.RemoteEgressConsent>(
         11, _omitFieldNames ? '' : 'remoteEgressConsent',
-        subBuilder: $1.RemoteEgressConsent.create)
+        subBuilder: $1.RemoteEgressConsent.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -97,14 +97,15 @@ class SendMessageRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use SendMessageRequest() / SendMessageRequest.new instead')
   static SendMessageRequest create() => SendMessageRequest._();
+  static $pb.GeneratedMessage $_createMessage() => SendMessageRequest._();
   @$core.override
-  SendMessageRequest createEmptyInstance() => create();
-  static $pb.PbList<SendMessageRequest> createRepeated() =>
-      $pb.PbList<SendMessageRequest>();
+  SendMessageRequest createEmptyInstance() => SendMessageRequest._();
   @$core.pragma('dart2js:noInline')
   static SendMessageRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SendMessageRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<SendMessageRequest>(
+          SendMessageRequest.$_createMessage);
   static SendMessageRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -223,7 +224,7 @@ class PrepareRemoteEgressRequest extends $pb.GeneratedMessage {
     $core.int? requiredContextTokens,
     $core.int? minimumWorkerMaxConcurrentRuns,
   }) {
-    final result = create();
+    final result = PrepareRemoteEgressRequest._();
     if (sessionId != null) result.sessionId = sessionId;
     if (content != null) result.content = content;
     if (contentType != null) result.contentType = contentType;
@@ -243,15 +244,15 @@ class PrepareRemoteEgressRequest extends $pb.GeneratedMessage {
 
   factory PrepareRemoteEgressRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      PrepareRemoteEgressRequest()..mergeFromBuffer(data, registry);
   factory PrepareRemoteEgressRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      PrepareRemoteEgressRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'PrepareRemoteEgressRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: PrepareRemoteEgressRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..aOS(2, _omitFieldNames ? '' : 'content')
     ..aOS(3, _omitFieldNames ? '' : 'contentType')
@@ -279,14 +280,18 @@ class PrepareRemoteEgressRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use PrepareRemoteEgressRequest() / PrepareRemoteEgressRequest.new instead')
   static PrepareRemoteEgressRequest create() => PrepareRemoteEgressRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      PrepareRemoteEgressRequest._();
   @$core.override
-  PrepareRemoteEgressRequest createEmptyInstance() => create();
-  static $pb.PbList<PrepareRemoteEgressRequest> createRepeated() =>
-      $pb.PbList<PrepareRemoteEgressRequest>();
+  PrepareRemoteEgressRequest createEmptyInstance() =>
+      PrepareRemoteEgressRequest._();
   @$core.pragma('dart2js:noInline')
   static PrepareRemoteEgressRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<PrepareRemoteEgressRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<PrepareRemoteEgressRequest>(
+          PrepareRemoteEgressRequest.$_createMessage);
   static PrepareRemoteEgressRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -379,7 +384,7 @@ class PrepareRemoteEgressResponse extends $pb.GeneratedMessage {
   factory PrepareRemoteEgressResponse({
     $1.RemoteEgressDisclosure? disclosure,
   }) {
-    final result = create();
+    final result = PrepareRemoteEgressResponse._();
     if (disclosure != null) result.disclosure = disclosure;
     return result;
   }
@@ -388,17 +393,17 @@ class PrepareRemoteEgressResponse extends $pb.GeneratedMessage {
 
   factory PrepareRemoteEgressResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      PrepareRemoteEgressResponse()..mergeFromBuffer(data, registry);
   factory PrepareRemoteEgressResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      PrepareRemoteEgressResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'PrepareRemoteEgressResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: PrepareRemoteEgressResponse.$_createMessage)
     ..aOM<$1.RemoteEgressDisclosure>(1, _omitFieldNames ? '' : 'disclosure',
-        subBuilder: $1.RemoteEgressDisclosure.create)
+        subBuilder: $1.RemoteEgressDisclosure.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -414,15 +419,19 @@ class PrepareRemoteEgressResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use PrepareRemoteEgressResponse() / PrepareRemoteEgressResponse.new instead')
   static PrepareRemoteEgressResponse create() =>
       PrepareRemoteEgressResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      PrepareRemoteEgressResponse._();
   @$core.override
-  PrepareRemoteEgressResponse createEmptyInstance() => create();
-  static $pb.PbList<PrepareRemoteEgressResponse> createRepeated() =>
-      $pb.PbList<PrepareRemoteEgressResponse>();
+  PrepareRemoteEgressResponse createEmptyInstance() =>
+      PrepareRemoteEgressResponse._();
   @$core.pragma('dart2js:noInline')
   static PrepareRemoteEgressResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<PrepareRemoteEgressResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<PrepareRemoteEgressResponse>(
+          PrepareRemoteEgressResponse.$_createMessage);
   static PrepareRemoteEgressResponse? _defaultInstance;
 
   /// Absent for a request whose effective route is local.
@@ -445,7 +454,7 @@ class RunQueued extends $pb.GeneratedMessage {
     $core.String? traceId,
     $1.RunState? runState,
   }) {
-    final result = create();
+    final result = RunQueued._();
     if (runId != null) result.runId = runId;
     if (jobId != null) result.jobId = jobId;
     if (traceId != null) result.traceId = traceId;
@@ -457,20 +466,20 @@ class RunQueued extends $pb.GeneratedMessage {
 
   factory RunQueued.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RunQueued()..mergeFromBuffer(data, registry);
   factory RunQueued.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RunQueued()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RunQueued',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RunQueued.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'jobId')
     ..aOS(3, _omitFieldNames ? '' : 'traceId')
     ..aOM<$1.RunState>(4, _omitFieldNames ? '' : 'runState',
-        subBuilder: $1.RunState.create)
+        subBuilder: $1.RunState.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -483,13 +492,14 @@ class RunQueued extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RunQueued() / RunQueued.new instead')
   static RunQueued create() => RunQueued._();
+  static $pb.GeneratedMessage $_createMessage() => RunQueued._();
   @$core.override
-  RunQueued createEmptyInstance() => create();
-  static $pb.PbList<RunQueued> createRepeated() => $pb.PbList<RunQueued>();
+  RunQueued createEmptyInstance() => RunQueued._();
   @$core.pragma('dart2js:noInline')
-  static RunQueued getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RunQueued>(create);
+  static RunQueued getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RunQueued>(RunQueued.$_createMessage);
   static RunQueued? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -538,7 +548,7 @@ class RunStarted extends $pb.GeneratedMessage {
     $core.int? attempt,
     $1.RunState? runState,
   }) {
-    final result = create();
+    final result = RunStarted._();
     if (runId != null) result.runId = runId;
     if (jobId != null) result.jobId = jobId;
     if (attempt != null) result.attempt = attempt;
@@ -550,20 +560,20 @@ class RunStarted extends $pb.GeneratedMessage {
 
   factory RunStarted.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RunStarted()..mergeFromBuffer(data, registry);
   factory RunStarted.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RunStarted()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RunStarted',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RunStarted.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'jobId')
     ..aI(3, _omitFieldNames ? '' : 'attempt')
     ..aOM<$1.RunState>(4, _omitFieldNames ? '' : 'runState',
-        subBuilder: $1.RunState.create)
+        subBuilder: $1.RunState.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -576,13 +586,14 @@ class RunStarted extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RunStarted() / RunStarted.new instead')
   static RunStarted create() => RunStarted._();
+  static $pb.GeneratedMessage $_createMessage() => RunStarted._();
   @$core.override
-  RunStarted createEmptyInstance() => create();
-  static $pb.PbList<RunStarted> createRepeated() => $pb.PbList<RunStarted>();
+  RunStarted createEmptyInstance() => RunStarted._();
   @$core.pragma('dart2js:noInline')
   static RunStarted getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RunStarted>(create);
+      $pb.GeneratedMessage.$_defaultFor<RunStarted>(RunStarted.$_createMessage);
   static RunStarted? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -629,7 +640,7 @@ class MessageStarted extends $pb.GeneratedMessage {
     $core.String? messageId,
     $1.MessageRole? role,
   }) {
-    final result = create();
+    final result = MessageStarted._();
     if (messageId != null) result.messageId = messageId;
     if (role != null) result.role = role;
     return result;
@@ -639,15 +650,15 @@ class MessageStarted extends $pb.GeneratedMessage {
 
   factory MessageStarted.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      MessageStarted()..mergeFromBuffer(data, registry);
   factory MessageStarted.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      MessageStarted()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MessageStarted',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: MessageStarted.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'messageId')
     ..aE<$1.MessageRole>(2, _omitFieldNames ? '' : 'role',
         enumValues: $1.MessageRole.values)
@@ -664,14 +675,15 @@ class MessageStarted extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use MessageStarted() / MessageStarted.new instead')
   static MessageStarted create() => MessageStarted._();
+  static $pb.GeneratedMessage $_createMessage() => MessageStarted._();
   @$core.override
-  MessageStarted createEmptyInstance() => create();
-  static $pb.PbList<MessageStarted> createRepeated() =>
-      $pb.PbList<MessageStarted>();
+  MessageStarted createEmptyInstance() => MessageStarted._();
   @$core.pragma('dart2js:noInline')
-  static MessageStarted getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<MessageStarted>(create);
+  static MessageStarted getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<MessageStarted>(
+          MessageStarted.$_createMessage);
   static MessageStarted? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -698,7 +710,7 @@ class TokenDelta extends $pb.GeneratedMessage {
     $core.String? messageId,
     $core.String? delta,
   }) {
-    final result = create();
+    final result = TokenDelta._();
     if (messageId != null) result.messageId = messageId;
     if (delta != null) result.delta = delta;
     return result;
@@ -708,15 +720,15 @@ class TokenDelta extends $pb.GeneratedMessage {
 
   factory TokenDelta.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      TokenDelta()..mergeFromBuffer(data, registry);
   factory TokenDelta.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      TokenDelta()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'TokenDelta',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: TokenDelta.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'messageId')
     ..aOS(2, _omitFieldNames ? '' : 'delta')
     ..hasRequiredFields = false;
@@ -731,13 +743,14 @@ class TokenDelta extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use TokenDelta() / TokenDelta.new instead')
   static TokenDelta create() => TokenDelta._();
+  static $pb.GeneratedMessage $_createMessage() => TokenDelta._();
   @$core.override
-  TokenDelta createEmptyInstance() => create();
-  static $pb.PbList<TokenDelta> createRepeated() => $pb.PbList<TokenDelta>();
+  TokenDelta createEmptyInstance() => TokenDelta._();
   @$core.pragma('dart2js:noInline')
   static TokenDelta getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<TokenDelta>(create);
+      $pb.GeneratedMessage.$_defaultFor<TokenDelta>(TokenDelta.$_createMessage);
   static TokenDelta? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -766,7 +779,7 @@ class ToolEvent extends $pb.GeneratedMessage {
     $core.String? toolName,
     $2.Struct? payload,
   }) {
-    final result = create();
+    final result = ToolEvent._();
     if (toolCallId != null) result.toolCallId = toolCallId;
     if (serverName != null) result.serverName = serverName;
     if (toolName != null) result.toolName = toolName;
@@ -778,20 +791,20 @@ class ToolEvent extends $pb.GeneratedMessage {
 
   factory ToolEvent.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ToolEvent()..mergeFromBuffer(data, registry);
   factory ToolEvent.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ToolEvent()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ToolEvent',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ToolEvent.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'toolCallId')
     ..aOS(2, _omitFieldNames ? '' : 'serverName')
     ..aOS(3, _omitFieldNames ? '' : 'toolName')
     ..aOM<$2.Struct>(4, _omitFieldNames ? '' : 'payload',
-        subBuilder: $2.Struct.create)
+        subBuilder: $2.Struct.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -804,13 +817,14 @@ class ToolEvent extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ToolEvent() / ToolEvent.new instead')
   static ToolEvent create() => ToolEvent._();
+  static $pb.GeneratedMessage $_createMessage() => ToolEvent._();
   @$core.override
-  ToolEvent createEmptyInstance() => create();
-  static $pb.PbList<ToolEvent> createRepeated() => $pb.PbList<ToolEvent>();
+  ToolEvent createEmptyInstance() => ToolEvent._();
   @$core.pragma('dart2js:noInline')
-  static ToolEvent getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ToolEvent>(create);
+  static ToolEvent getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ToolEvent>(ToolEvent.$_createMessage);
   static ToolEvent? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -859,7 +873,7 @@ class ApprovalEvent extends $pb.GeneratedMessage {
     $core.String? argsSummary,
     $1.RunState? runState,
   }) {
-    final result = create();
+    final result = ApprovalEvent._();
     if (approvalId != null) result.approvalId = approvalId;
     if (toolName != null) result.toolName = toolName;
     if (argsSummary != null) result.argsSummary = argsSummary;
@@ -871,20 +885,20 @@ class ApprovalEvent extends $pb.GeneratedMessage {
 
   factory ApprovalEvent.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ApprovalEvent()..mergeFromBuffer(data, registry);
   factory ApprovalEvent.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ApprovalEvent()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ApprovalEvent',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ApprovalEvent.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..aOS(2, _omitFieldNames ? '' : 'toolName')
     ..aOS(3, _omitFieldNames ? '' : 'argsSummary')
     ..aOM<$1.RunState>(4, _omitFieldNames ? '' : 'runState',
-        subBuilder: $1.RunState.create)
+        subBuilder: $1.RunState.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -898,14 +912,15 @@ class ApprovalEvent extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ApprovalEvent() / ApprovalEvent.new instead')
   static ApprovalEvent create() => ApprovalEvent._();
+  static $pb.GeneratedMessage $_createMessage() => ApprovalEvent._();
   @$core.override
-  ApprovalEvent createEmptyInstance() => create();
-  static $pb.PbList<ApprovalEvent> createRepeated() =>
-      $pb.PbList<ApprovalEvent>();
+  ApprovalEvent createEmptyInstance() => ApprovalEvent._();
   @$core.pragma('dart2js:noInline')
-  static ApprovalEvent getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ApprovalEvent>(create);
+  static ApprovalEvent getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ApprovalEvent>(
+          ApprovalEvent.$_createMessage);
   static ApprovalEvent? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -955,7 +970,7 @@ class MessageCompleted extends $pb.GeneratedMessage {
     $core.String? messageId,
     $core.String? content,
   }) {
-    final result = create();
+    final result = MessageCompleted._();
     if (messageId != null) result.messageId = messageId;
     if (content != null) result.content = content;
     return result;
@@ -965,15 +980,15 @@ class MessageCompleted extends $pb.GeneratedMessage {
 
   factory MessageCompleted.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      MessageCompleted()..mergeFromBuffer(data, registry);
   factory MessageCompleted.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      MessageCompleted()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MessageCompleted',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: MessageCompleted.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'messageId')
     ..aOS(2, _omitFieldNames ? '' : 'content')
     ..hasRequiredFields = false;
@@ -989,14 +1004,15 @@ class MessageCompleted extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use MessageCompleted() / MessageCompleted.new instead')
   static MessageCompleted create() => MessageCompleted._();
+  static $pb.GeneratedMessage $_createMessage() => MessageCompleted._();
   @$core.override
-  MessageCompleted createEmptyInstance() => create();
-  static $pb.PbList<MessageCompleted> createRepeated() =>
-      $pb.PbList<MessageCompleted>();
+  MessageCompleted createEmptyInstance() => MessageCompleted._();
   @$core.pragma('dart2js:noInline')
-  static MessageCompleted getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<MessageCompleted>(create);
+  static MessageCompleted getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<MessageCompleted>(
+          MessageCompleted.$_createMessage);
   static MessageCompleted? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1024,7 +1040,7 @@ class RunCompleted extends $pb.GeneratedMessage {
     $core.String? assistantMessageId,
     $1.RunState? runState,
   }) {
-    final result = create();
+    final result = RunCompleted._();
     if (runId != null) result.runId = runId;
     if (assistantMessageId != null)
       result.assistantMessageId = assistantMessageId;
@@ -1036,19 +1052,19 @@ class RunCompleted extends $pb.GeneratedMessage {
 
   factory RunCompleted.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RunCompleted()..mergeFromBuffer(data, registry);
   factory RunCompleted.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RunCompleted()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RunCompleted',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RunCompleted.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'assistantMessageId')
     ..aOM<$1.RunState>(3, _omitFieldNames ? '' : 'runState',
-        subBuilder: $1.RunState.create)
+        subBuilder: $1.RunState.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1062,14 +1078,15 @@ class RunCompleted extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RunCompleted() / RunCompleted.new instead')
   static RunCompleted create() => RunCompleted._();
+  static $pb.GeneratedMessage $_createMessage() => RunCompleted._();
   @$core.override
-  RunCompleted createEmptyInstance() => create();
-  static $pb.PbList<RunCompleted> createRepeated() =>
-      $pb.PbList<RunCompleted>();
+  RunCompleted createEmptyInstance() => RunCompleted._();
   @$core.pragma('dart2js:noInline')
-  static RunCompleted getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RunCompleted>(create);
+  static RunCompleted getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RunCompleted>(
+          RunCompleted.$_createMessage);
   static RunCompleted? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1110,7 +1127,7 @@ class RunFailed extends $pb.GeneratedMessage {
     @$core.Deprecated('This field is deprecated.') $core.bool? retryable,
     $1.RunState? runState,
   }) {
-    final result = create();
+    final result = RunFailed._();
     if (runId != null) result.runId = runId;
     if (code != null) result.code = code;
     if (message != null) result.message = message;
@@ -1123,21 +1140,21 @@ class RunFailed extends $pb.GeneratedMessage {
 
   factory RunFailed.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RunFailed()..mergeFromBuffer(data, registry);
   factory RunFailed.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RunFailed()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RunFailed',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RunFailed.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'code')
     ..aOS(3, _omitFieldNames ? '' : 'message')
     ..aOB(4, _omitFieldNames ? '' : 'retryable')
     ..aOM<$1.RunState>(5, _omitFieldNames ? '' : 'runState',
-        subBuilder: $1.RunState.create)
+        subBuilder: $1.RunState.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1150,13 +1167,14 @@ class RunFailed extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RunFailed() / RunFailed.new instead')
   static RunFailed create() => RunFailed._();
+  static $pb.GeneratedMessage $_createMessage() => RunFailed._();
   @$core.override
-  RunFailed createEmptyInstance() => create();
-  static $pb.PbList<RunFailed> createRepeated() => $pb.PbList<RunFailed>();
+  RunFailed createEmptyInstance() => RunFailed._();
   @$core.pragma('dart2js:noInline')
-  static RunFailed getDefault() =>
-      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RunFailed>(create);
+  static RunFailed getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<RunFailed>(RunFailed.$_createMessage);
   static RunFailed? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1220,7 +1238,7 @@ class RunCancelled extends $pb.GeneratedMessage {
     $core.String? reason,
     $1.RunState? runState,
   }) {
-    final result = create();
+    final result = RunCancelled._();
     if (runId != null) result.runId = runId;
     if (reason != null) result.reason = reason;
     if (runState != null) result.runState = runState;
@@ -1231,19 +1249,19 @@ class RunCancelled extends $pb.GeneratedMessage {
 
   factory RunCancelled.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RunCancelled()..mergeFromBuffer(data, registry);
   factory RunCancelled.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RunCancelled()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RunCancelled',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RunCancelled.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'runId')
     ..aOS(2, _omitFieldNames ? '' : 'reason')
     ..aOM<$1.RunState>(3, _omitFieldNames ? '' : 'runState',
-        subBuilder: $1.RunState.create)
+        subBuilder: $1.RunState.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1257,14 +1275,15 @@ class RunCancelled extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RunCancelled() / RunCancelled.new instead')
   static RunCancelled create() => RunCancelled._();
+  static $pb.GeneratedMessage $_createMessage() => RunCancelled._();
   @$core.override
-  RunCancelled createEmptyInstance() => create();
-  static $pb.PbList<RunCancelled> createRepeated() =>
-      $pb.PbList<RunCancelled>();
+  RunCancelled createEmptyInstance() => RunCancelled._();
   @$core.pragma('dart2js:noInline')
-  static RunCancelled getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RunCancelled>(create);
+  static RunCancelled getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RunCancelled>(
+          RunCancelled.$_createMessage);
   static RunCancelled? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1303,7 +1322,7 @@ class CancelRunRequest extends $pb.GeneratedMessage {
     $core.String? runId,
     $core.String? idempotencyKey,
   }) {
-    final result = create();
+    final result = CancelRunRequest._();
     if (sessionId != null) result.sessionId = sessionId;
     if (runId != null) result.runId = runId;
     if (idempotencyKey != null) result.idempotencyKey = idempotencyKey;
@@ -1314,15 +1333,15 @@ class CancelRunRequest extends $pb.GeneratedMessage {
 
   factory CancelRunRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      CancelRunRequest()..mergeFromBuffer(data, registry);
   factory CancelRunRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      CancelRunRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'CancelRunRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: CancelRunRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..aOS(2, _omitFieldNames ? '' : 'runId')
     ..aOS(3, _omitFieldNames ? '' : 'idempotencyKey')
@@ -1339,14 +1358,15 @@ class CancelRunRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use CancelRunRequest() / CancelRunRequest.new instead')
   static CancelRunRequest create() => CancelRunRequest._();
+  static $pb.GeneratedMessage $_createMessage() => CancelRunRequest._();
   @$core.override
-  CancelRunRequest createEmptyInstance() => create();
-  static $pb.PbList<CancelRunRequest> createRepeated() =>
-      $pb.PbList<CancelRunRequest>();
+  CancelRunRequest createEmptyInstance() => CancelRunRequest._();
   @$core.pragma('dart2js:noInline')
-  static CancelRunRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<CancelRunRequest>(create);
+  static CancelRunRequest getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<CancelRunRequest>(
+          CancelRunRequest.$_createMessage);
   static CancelRunRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1383,7 +1403,7 @@ class CancelRunResponse extends $pb.GeneratedMessage {
     $1.RunState? runState,
     CancellationProgress? progress,
   }) {
-    final result$ = create();
+    final result$ = CancelRunResponse._();
     if (result != null) result$.result = result;
     if (runState != null) result$.runState = runState;
     if (progress != null) result$.progress = progress;
@@ -1394,19 +1414,19 @@ class CancelRunResponse extends $pb.GeneratedMessage {
 
   factory CancelRunResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      CancelRunResponse()..mergeFromBuffer(data, registry);
   factory CancelRunResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      CancelRunResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'CancelRunResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: CancelRunResponse.$_createMessage)
     ..aE<CancelRunResult>(1, _omitFieldNames ? '' : 'result',
         enumValues: CancelRunResult.values)
     ..aOM<$1.RunState>(2, _omitFieldNames ? '' : 'runState',
-        subBuilder: $1.RunState.create)
+        subBuilder: $1.RunState.$_createMessage)
     ..aE<CancellationProgress>(3, _omitFieldNames ? '' : 'progress',
         enumValues: CancellationProgress.values)
     ..hasRequiredFields = false;
@@ -1422,14 +1442,15 @@ class CancelRunResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use CancelRunResponse() / CancelRunResponse.new instead')
   static CancelRunResponse create() => CancelRunResponse._();
+  static $pb.GeneratedMessage $_createMessage() => CancelRunResponse._();
   @$core.override
-  CancelRunResponse createEmptyInstance() => create();
-  static $pb.PbList<CancelRunResponse> createRepeated() =>
-      $pb.PbList<CancelRunResponse>();
+  CancelRunResponse createEmptyInstance() => CancelRunResponse._();
   @$core.pragma('dart2js:noInline')
-  static CancelRunResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<CancelRunResponse>(create);
+  static CancelRunResponse getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<CancelRunResponse>(
+          CancelRunResponse.$_createMessage);
   static CancelRunResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1469,7 +1490,7 @@ class GetRunCancellationRequest extends $pb.GeneratedMessage {
     $core.String? sessionId,
     $core.String? runId,
   }) {
-    final result = create();
+    final result = GetRunCancellationRequest._();
     if (sessionId != null) result.sessionId = sessionId;
     if (runId != null) result.runId = runId;
     return result;
@@ -1479,15 +1500,15 @@ class GetRunCancellationRequest extends $pb.GeneratedMessage {
 
   factory GetRunCancellationRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      GetRunCancellationRequest()..mergeFromBuffer(data, registry);
   factory GetRunCancellationRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      GetRunCancellationRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'GetRunCancellationRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: GetRunCancellationRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..aOS(2, _omitFieldNames ? '' : 'runId')
     ..hasRequiredFields = false;
@@ -1504,14 +1525,18 @@ class GetRunCancellationRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetRunCancellationRequest() / GetRunCancellationRequest.new instead')
   static GetRunCancellationRequest create() => GetRunCancellationRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      GetRunCancellationRequest._();
   @$core.override
-  GetRunCancellationRequest createEmptyInstance() => create();
-  static $pb.PbList<GetRunCancellationRequest> createRepeated() =>
-      $pb.PbList<GetRunCancellationRequest>();
+  GetRunCancellationRequest createEmptyInstance() =>
+      GetRunCancellationRequest._();
   @$core.pragma('dart2js:noInline')
   static GetRunCancellationRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<GetRunCancellationRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<GetRunCancellationRequest>(
+          GetRunCancellationRequest.$_createMessage);
   static GetRunCancellationRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1539,7 +1564,7 @@ class GetRunCancellationResponse extends $pb.GeneratedMessage {
     $1.RunState? runState,
     CancellationProgress? progress,
   }) {
-    final result = create();
+    final result = GetRunCancellationResponse._();
     if (available != null) result.available = available;
     if (runState != null) result.runState = runState;
     if (progress != null) result.progress = progress;
@@ -1550,18 +1575,18 @@ class GetRunCancellationResponse extends $pb.GeneratedMessage {
 
   factory GetRunCancellationResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      GetRunCancellationResponse()..mergeFromBuffer(data, registry);
   factory GetRunCancellationResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      GetRunCancellationResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'GetRunCancellationResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: GetRunCancellationResponse.$_createMessage)
     ..aOB(1, _omitFieldNames ? '' : 'available')
     ..aOM<$1.RunState>(2, _omitFieldNames ? '' : 'runState',
-        subBuilder: $1.RunState.create)
+        subBuilder: $1.RunState.$_createMessage)
     ..aE<CancellationProgress>(3, _omitFieldNames ? '' : 'progress',
         enumValues: CancellationProgress.values)
     ..hasRequiredFields = false;
@@ -1579,14 +1604,18 @@ class GetRunCancellationResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetRunCancellationResponse() / GetRunCancellationResponse.new instead')
   static GetRunCancellationResponse create() => GetRunCancellationResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      GetRunCancellationResponse._();
   @$core.override
-  GetRunCancellationResponse createEmptyInstance() => create();
-  static $pb.PbList<GetRunCancellationResponse> createRepeated() =>
-      $pb.PbList<GetRunCancellationResponse>();
+  GetRunCancellationResponse createEmptyInstance() =>
+      GetRunCancellationResponse._();
   @$core.pragma('dart2js:noInline')
   static GetRunCancellationResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<GetRunCancellationResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<GetRunCancellationResponse>(
+          GetRunCancellationResponse.$_createMessage);
   static GetRunCancellationResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1627,7 +1656,7 @@ class RunStateChanged extends $pb.GeneratedMessage {
   factory RunStateChanged({
     $1.RunState? runState,
   }) {
-    final result = create();
+    final result = RunStateChanged._();
     if (runState != null) result.runState = runState;
     return result;
   }
@@ -1636,17 +1665,17 @@ class RunStateChanged extends $pb.GeneratedMessage {
 
   factory RunStateChanged.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RunStateChanged()..mergeFromBuffer(data, registry);
   factory RunStateChanged.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RunStateChanged()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RunStateChanged',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RunStateChanged.$_createMessage)
     ..aOM<$1.RunState>(1, _omitFieldNames ? '' : 'runState',
-        subBuilder: $1.RunState.create)
+        subBuilder: $1.RunState.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1660,14 +1689,15 @@ class RunStateChanged extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use RunStateChanged() / RunStateChanged.new instead')
   static RunStateChanged create() => RunStateChanged._();
+  static $pb.GeneratedMessage $_createMessage() => RunStateChanged._();
   @$core.override
-  RunStateChanged createEmptyInstance() => create();
-  static $pb.PbList<RunStateChanged> createRepeated() =>
-      $pb.PbList<RunStateChanged>();
+  RunStateChanged createEmptyInstance() => RunStateChanged._();
   @$core.pragma('dart2js:noInline')
-  static RunStateChanged getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RunStateChanged>(create);
+  static RunStateChanged getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RunStateChanged>(
+          RunStateChanged.$_createMessage);
   static RunStateChanged? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1729,7 +1759,7 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
     $3.TuringEvent? persistedEvent,
     RunStateChanged? runStateChanged,
   }) {
-    final result = create();
+    final result = ChatStreamEvent._();
     if (sessionId != null) result.sessionId = sessionId;
     if (runId != null) result.runId = runId;
     if (traceId != null) result.traceId = traceId;
@@ -1759,10 +1789,10 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
 
   factory ChatStreamEvent.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ChatStreamEvent()..mergeFromBuffer(data, registry);
   factory ChatStreamEvent.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ChatStreamEvent()..mergeFromJson(json, registry);
 
   static const $core.Map<$core.int, ChatStreamEvent_Event>
       _ChatStreamEvent_EventByTag = {
@@ -1789,7 +1819,7 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ChatStreamEvent',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ChatStreamEvent.$_createMessage)
     ..oo(0, [
       10,
       11,
@@ -1815,41 +1845,41 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
     ..aOS(3, _omitFieldNames ? '' : 'traceId')
     ..aInt64(4, _omitFieldNames ? '' : 'sequence')
     ..aOM<RunQueued>(10, _omitFieldNames ? '' : 'runQueued',
-        subBuilder: RunQueued.create)
+        subBuilder: RunQueued.$_createMessage)
     ..aOM<RunStarted>(11, _omitFieldNames ? '' : 'runStarted',
-        subBuilder: RunStarted.create)
+        subBuilder: RunStarted.$_createMessage)
     ..aOM<MessageStarted>(12, _omitFieldNames ? '' : 'messageStarted',
-        subBuilder: MessageStarted.create)
+        subBuilder: MessageStarted.$_createMessage)
     ..aOM<TokenDelta>(13, _omitFieldNames ? '' : 'tokenDelta',
-        subBuilder: TokenDelta.create)
+        subBuilder: TokenDelta.$_createMessage)
     ..aOM<ToolEvent>(14, _omitFieldNames ? '' : 'toolCallStarted',
-        subBuilder: ToolEvent.create)
+        subBuilder: ToolEvent.$_createMessage)
     ..aOM<ToolEvent>(15, _omitFieldNames ? '' : 'toolCallCompleted',
-        subBuilder: ToolEvent.create)
+        subBuilder: ToolEvent.$_createMessage)
     ..aOM<ToolEvent>(16, _omitFieldNames ? '' : 'toolCallFailed',
-        subBuilder: ToolEvent.create)
+        subBuilder: ToolEvent.$_createMessage)
     ..aOM<ApprovalEvent>(17, _omitFieldNames ? '' : 'approvalRequested',
-        subBuilder: ApprovalEvent.create)
+        subBuilder: ApprovalEvent.$_createMessage)
     ..aOM<ApprovalEvent>(18, _omitFieldNames ? '' : 'approvalApproved',
-        subBuilder: ApprovalEvent.create)
+        subBuilder: ApprovalEvent.$_createMessage)
     ..aOM<ApprovalEvent>(19, _omitFieldNames ? '' : 'approvalDenied',
-        subBuilder: ApprovalEvent.create)
+        subBuilder: ApprovalEvent.$_createMessage)
     ..aOM<ApprovalEvent>(20, _omitFieldNames ? '' : 'approvalExpired',
-        subBuilder: ApprovalEvent.create)
+        subBuilder: ApprovalEvent.$_createMessage)
     ..aOM<ApprovalEvent>(21, _omitFieldNames ? '' : 'approvalConsumed',
-        subBuilder: ApprovalEvent.create)
+        subBuilder: ApprovalEvent.$_createMessage)
     ..aOM<MessageCompleted>(22, _omitFieldNames ? '' : 'messageCompleted',
-        subBuilder: MessageCompleted.create)
+        subBuilder: MessageCompleted.$_createMessage)
     ..aOM<RunCompleted>(23, _omitFieldNames ? '' : 'runCompleted',
-        subBuilder: RunCompleted.create)
+        subBuilder: RunCompleted.$_createMessage)
     ..aOM<RunFailed>(24, _omitFieldNames ? '' : 'runFailed',
-        subBuilder: RunFailed.create)
+        subBuilder: RunFailed.$_createMessage)
     ..aOM<RunCancelled>(25, _omitFieldNames ? '' : 'runCancelled',
-        subBuilder: RunCancelled.create)
+        subBuilder: RunCancelled.$_createMessage)
     ..aOM<$3.TuringEvent>(26, _omitFieldNames ? '' : 'persistedEvent',
-        subBuilder: $3.TuringEvent.create)
+        subBuilder: $3.TuringEvent.$_createMessage)
     ..aOM<RunStateChanged>(27, _omitFieldNames ? '' : 'runStateChanged',
-        subBuilder: RunStateChanged.create)
+        subBuilder: RunStateChanged.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1863,14 +1893,15 @@ class ChatStreamEvent extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ChatStreamEvent() / ChatStreamEvent.new instead')
   static ChatStreamEvent create() => ChatStreamEvent._();
+  static $pb.GeneratedMessage $_createMessage() => ChatStreamEvent._();
   @$core.override
-  ChatStreamEvent createEmptyInstance() => create();
-  static $pb.PbList<ChatStreamEvent> createRepeated() =>
-      $pb.PbList<ChatStreamEvent>();
+  ChatStreamEvent createEmptyInstance() => ChatStreamEvent._();
   @$core.pragma('dart2js:noInline')
-  static ChatStreamEvent getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ChatStreamEvent>(create);
+  static ChatStreamEvent getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ChatStreamEvent>(
+          ChatStreamEvent.$_createMessage);
   static ChatStreamEvent? _defaultInstance;
 
   @$pb.TagNumber(10)

@@ -8,7 +8,7 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
@@ -28,7 +28,7 @@ class ApproveApprovalRequest extends $pb.GeneratedMessage {
     $core.String? previewHash,
     $core.String? argsHash,
   }) {
-    final result = create();
+    final result = ApproveApprovalRequest._();
     if (approvalId != null) result.approvalId = approvalId;
     if (comment != null) result.comment = comment;
     if (previewHash != null) result.previewHash = previewHash;
@@ -40,15 +40,15 @@ class ApproveApprovalRequest extends $pb.GeneratedMessage {
 
   factory ApproveApprovalRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ApproveApprovalRequest()..mergeFromBuffer(data, registry);
   factory ApproveApprovalRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ApproveApprovalRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ApproveApprovalRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ApproveApprovalRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..aOS(2, _omitFieldNames ? '' : 'comment')
     ..aOS(3, _omitFieldNames ? '' : 'previewHash')
@@ -67,14 +67,16 @@ class ApproveApprovalRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ApproveApprovalRequest() / ApproveApprovalRequest.new instead')
   static ApproveApprovalRequest create() => ApproveApprovalRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ApproveApprovalRequest._();
   @$core.override
-  ApproveApprovalRequest createEmptyInstance() => create();
-  static $pb.PbList<ApproveApprovalRequest> createRepeated() =>
-      $pb.PbList<ApproveApprovalRequest>();
+  ApproveApprovalRequest createEmptyInstance() => ApproveApprovalRequest._();
   @$core.pragma('dart2js:noInline')
   static ApproveApprovalRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ApproveApprovalRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ApproveApprovalRequest>(
+          ApproveApprovalRequest.$_createMessage);
   static ApproveApprovalRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -121,7 +123,7 @@ class GetApprovalDetailsRequest extends $pb.GeneratedMessage {
     $core.String? approvalId,
     $core.bool? refreshPreview,
   }) {
-    final result = create();
+    final result = GetApprovalDetailsRequest._();
     if (approvalId != null) result.approvalId = approvalId;
     if (refreshPreview != null) result.refreshPreview = refreshPreview;
     return result;
@@ -131,15 +133,15 @@ class GetApprovalDetailsRequest extends $pb.GeneratedMessage {
 
   factory GetApprovalDetailsRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      GetApprovalDetailsRequest()..mergeFromBuffer(data, registry);
   factory GetApprovalDetailsRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      GetApprovalDetailsRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'GetApprovalDetailsRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: GetApprovalDetailsRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..aOB(2, _omitFieldNames ? '' : 'refreshPreview')
     ..hasRequiredFields = false;
@@ -156,14 +158,18 @@ class GetApprovalDetailsRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetApprovalDetailsRequest() / GetApprovalDetailsRequest.new instead')
   static GetApprovalDetailsRequest create() => GetApprovalDetailsRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      GetApprovalDetailsRequest._();
   @$core.override
-  GetApprovalDetailsRequest createEmptyInstance() => create();
-  static $pb.PbList<GetApprovalDetailsRequest> createRepeated() =>
-      $pb.PbList<GetApprovalDetailsRequest>();
+  GetApprovalDetailsRequest createEmptyInstance() =>
+      GetApprovalDetailsRequest._();
   @$core.pragma('dart2js:noInline')
   static GetApprovalDetailsRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<GetApprovalDetailsRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<GetApprovalDetailsRequest>(
+          GetApprovalDetailsRequest.$_createMessage);
   static GetApprovalDetailsRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -203,7 +209,7 @@ class ApprovalDetails extends $pb.GeneratedMessage {
     $core.bool? canApprove,
     $core.bool? canDeny,
   }) {
-    final result = create();
+    final result = ApprovalDetails._();
     if (approvalId != null) result.approvalId = approvalId;
     if (sessionId != null) result.sessionId = sessionId;
     if (runId != null) result.runId = runId;
@@ -226,15 +232,15 @@ class ApprovalDetails extends $pb.GeneratedMessage {
 
   factory ApprovalDetails.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ApprovalDetails()..mergeFromBuffer(data, registry);
   factory ApprovalDetails.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ApprovalDetails()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ApprovalDetails',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ApprovalDetails.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..aOS(2, _omitFieldNames ? '' : 'sessionId')
     ..aOS(3, _omitFieldNames ? '' : 'runId')
@@ -250,7 +256,7 @@ class ApprovalDetails extends $pb.GeneratedMessage {
         enumValues: ApprovalPreviewState.values)
     ..aOS(12, _omitFieldNames ? '' : 'argumentsJson')
     ..aOM<FileMutationPreview>(13, _omitFieldNames ? '' : 'filePreview',
-        subBuilder: FileMutationPreview.create)
+        subBuilder: FileMutationPreview.$_createMessage)
     ..aOB(14, _omitFieldNames ? '' : 'canApprove')
     ..aOB(15, _omitFieldNames ? '' : 'canDeny')
     ..hasRequiredFields = false;
@@ -266,14 +272,15 @@ class ApprovalDetails extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ApprovalDetails() / ApprovalDetails.new instead')
   static ApprovalDetails create() => ApprovalDetails._();
+  static $pb.GeneratedMessage $_createMessage() => ApprovalDetails._();
   @$core.override
-  ApprovalDetails createEmptyInstance() => create();
-  static $pb.PbList<ApprovalDetails> createRepeated() =>
-      $pb.PbList<ApprovalDetails>();
+  ApprovalDetails createEmptyInstance() => ApprovalDetails._();
   @$core.pragma('dart2js:noInline')
-  static ApprovalDetails getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ApprovalDetails>(create);
+  static ApprovalDetails getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ApprovalDetails>(
+          ApprovalDetails.$_createMessage);
   static ApprovalDetails? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -426,7 +433,7 @@ class FileMutationPreview extends $pb.GeneratedMessage {
     $core.String? afterText,
     $core.String? unifiedDiff,
   }) {
-    final result = create();
+    final result = FileMutationPreview._();
     if (logicalPath != null) result.logicalPath = logicalPath;
     if (physicalPath != null) result.physicalPath = physicalPath;
     if (operation != null) result.operation = operation;
@@ -443,15 +450,15 @@ class FileMutationPreview extends $pb.GeneratedMessage {
 
   factory FileMutationPreview.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      FileMutationPreview()..mergeFromBuffer(data, registry);
   factory FileMutationPreview.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      FileMutationPreview()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'FileMutationPreview',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: FileMutationPreview.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'logicalPath')
     ..aOS(2, _omitFieldNames ? '' : 'physicalPath')
     ..aOS(3, _omitFieldNames ? '' : 'operation')
@@ -474,14 +481,16 @@ class FileMutationPreview extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core
+      .Deprecated('Use FileMutationPreview() / FileMutationPreview.new instead')
   static FileMutationPreview create() => FileMutationPreview._();
+  static $pb.GeneratedMessage $_createMessage() => FileMutationPreview._();
   @$core.override
-  FileMutationPreview createEmptyInstance() => create();
-  static $pb.PbList<FileMutationPreview> createRepeated() =>
-      $pb.PbList<FileMutationPreview>();
+  FileMutationPreview createEmptyInstance() => FileMutationPreview._();
   @$core.pragma('dart2js:noInline')
   static FileMutationPreview getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<FileMutationPreview>(create);
+      $pb.GeneratedMessage.$_defaultFor<FileMutationPreview>(
+          FileMutationPreview.$_createMessage);
   static FileMutationPreview? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -571,7 +580,7 @@ class DenyApprovalRequest extends $pb.GeneratedMessage {
     $core.String? approvalId,
     $core.String? reason,
   }) {
-    final result = create();
+    final result = DenyApprovalRequest._();
     if (approvalId != null) result.approvalId = approvalId;
     if (reason != null) result.reason = reason;
     return result;
@@ -581,15 +590,15 @@ class DenyApprovalRequest extends $pb.GeneratedMessage {
 
   factory DenyApprovalRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      DenyApprovalRequest()..mergeFromBuffer(data, registry);
   factory DenyApprovalRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      DenyApprovalRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'DenyApprovalRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: DenyApprovalRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..aOS(2, _omitFieldNames ? '' : 'reason')
     ..hasRequiredFields = false;
@@ -605,14 +614,16 @@ class DenyApprovalRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core
+      .Deprecated('Use DenyApprovalRequest() / DenyApprovalRequest.new instead')
   static DenyApprovalRequest create() => DenyApprovalRequest._();
+  static $pb.GeneratedMessage $_createMessage() => DenyApprovalRequest._();
   @$core.override
-  DenyApprovalRequest createEmptyInstance() => create();
-  static $pb.PbList<DenyApprovalRequest> createRepeated() =>
-      $pb.PbList<DenyApprovalRequest>();
+  DenyApprovalRequest createEmptyInstance() => DenyApprovalRequest._();
   @$core.pragma('dart2js:noInline')
   static DenyApprovalRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<DenyApprovalRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<DenyApprovalRequest>(
+          DenyApprovalRequest.$_createMessage);
   static DenyApprovalRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -642,7 +653,7 @@ class ApprovalResponse extends $pb.GeneratedMessage {
     ApprovalStatus? status,
     SandboxArtifactReservation? reservation,
   }) {
-    final result = create();
+    final result = ApprovalResponse._();
     if (approvalId != null) result.approvalId = approvalId;
     if (status != null) result.status = status;
     if (reservation != null) result.reservation = reservation;
@@ -653,20 +664,20 @@ class ApprovalResponse extends $pb.GeneratedMessage {
 
   factory ApprovalResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ApprovalResponse()..mergeFromBuffer(data, registry);
   factory ApprovalResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ApprovalResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ApprovalResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ApprovalResponse.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..aE<ApprovalStatus>(2, _omitFieldNames ? '' : 'status',
         enumValues: ApprovalStatus.values)
     ..aOM<SandboxArtifactReservation>(3, _omitFieldNames ? '' : 'reservation',
-        subBuilder: SandboxArtifactReservation.create)
+        subBuilder: SandboxArtifactReservation.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -680,14 +691,15 @@ class ApprovalResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ApprovalResponse() / ApprovalResponse.new instead')
   static ApprovalResponse create() => ApprovalResponse._();
+  static $pb.GeneratedMessage $_createMessage() => ApprovalResponse._();
   @$core.override
-  ApprovalResponse createEmptyInstance() => create();
-  static $pb.PbList<ApprovalResponse> createRepeated() =>
-      $pb.PbList<ApprovalResponse>();
+  ApprovalResponse createEmptyInstance() => ApprovalResponse._();
   @$core.pragma('dart2js:noInline')
-  static ApprovalResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ApprovalResponse>(create);
+  static ApprovalResponse getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ApprovalResponse>(
+          ApprovalResponse.$_createMessage);
   static ApprovalResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -731,7 +743,7 @@ class SandboxArtifactReservation extends $pb.GeneratedMessage {
     $core.String? policy,
     $fixnum.Int64? deletionGeneration,
   }) {
-    final result = create();
+    final result = SandboxArtifactReservation._();
     if (artifactId != null) result.artifactId = artifactId;
     if (physicalPath != null) result.physicalPath = physicalPath;
     if (policy != null) result.policy = policy;
@@ -744,15 +756,15 @@ class SandboxArtifactReservation extends $pb.GeneratedMessage {
 
   factory SandboxArtifactReservation.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SandboxArtifactReservation()..mergeFromBuffer(data, registry);
   factory SandboxArtifactReservation.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SandboxArtifactReservation()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SandboxArtifactReservation',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SandboxArtifactReservation.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'artifactId')
     ..aOS(2, _omitFieldNames ? '' : 'physicalPath')
     ..aOS(3, _omitFieldNames ? '' : 'policy')
@@ -772,14 +784,18 @@ class SandboxArtifactReservation extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SandboxArtifactReservation() / SandboxArtifactReservation.new instead')
   static SandboxArtifactReservation create() => SandboxArtifactReservation._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      SandboxArtifactReservation._();
   @$core.override
-  SandboxArtifactReservation createEmptyInstance() => create();
-  static $pb.PbList<SandboxArtifactReservation> createRepeated() =>
-      $pb.PbList<SandboxArtifactReservation>();
+  SandboxArtifactReservation createEmptyInstance() =>
+      SandboxArtifactReservation._();
   @$core.pragma('dart2js:noInline')
   static SandboxArtifactReservation getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SandboxArtifactReservation>(create);
+      $pb.GeneratedMessage.$_defaultFor<SandboxArtifactReservation>(
+          SandboxArtifactReservation.$_createMessage);
   static SandboxArtifactReservation? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -825,7 +841,7 @@ class GetApprovalForRuntimeRequest extends $pb.GeneratedMessage {
   factory GetApprovalForRuntimeRequest({
     $core.String? approvalId,
   }) {
-    final result = create();
+    final result = GetApprovalForRuntimeRequest._();
     if (approvalId != null) result.approvalId = approvalId;
     return result;
   }
@@ -834,15 +850,15 @@ class GetApprovalForRuntimeRequest extends $pb.GeneratedMessage {
 
   factory GetApprovalForRuntimeRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      GetApprovalForRuntimeRequest()..mergeFromBuffer(data, registry);
   factory GetApprovalForRuntimeRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      GetApprovalForRuntimeRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'GetApprovalForRuntimeRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: GetApprovalForRuntimeRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..hasRequiredFields = false;
 
@@ -859,15 +875,19 @@ class GetApprovalForRuntimeRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetApprovalForRuntimeRequest() / GetApprovalForRuntimeRequest.new instead')
   static GetApprovalForRuntimeRequest create() =>
       GetApprovalForRuntimeRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      GetApprovalForRuntimeRequest._();
   @$core.override
-  GetApprovalForRuntimeRequest createEmptyInstance() => create();
-  static $pb.PbList<GetApprovalForRuntimeRequest> createRepeated() =>
-      $pb.PbList<GetApprovalForRuntimeRequest>();
+  GetApprovalForRuntimeRequest createEmptyInstance() =>
+      GetApprovalForRuntimeRequest._();
   @$core.pragma('dart2js:noInline')
   static GetApprovalForRuntimeRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<GetApprovalForRuntimeRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<GetApprovalForRuntimeRequest>(
+          GetApprovalForRuntimeRequest.$_createMessage);
   static GetApprovalForRuntimeRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -886,7 +906,7 @@ class RuntimeApprovalState extends $pb.GeneratedMessage {
     ApprovalStatus? status,
     $core.String? approvalToken,
   }) {
-    final result = create();
+    final result = RuntimeApprovalState._();
     if (approvalId != null) result.approvalId = approvalId;
     if (status != null) result.status = status;
     if (approvalToken != null) result.approvalToken = approvalToken;
@@ -897,15 +917,15 @@ class RuntimeApprovalState extends $pb.GeneratedMessage {
 
   factory RuntimeApprovalState.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      RuntimeApprovalState()..mergeFromBuffer(data, registry);
   factory RuntimeApprovalState.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      RuntimeApprovalState()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RuntimeApprovalState',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: RuntimeApprovalState.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..aE<ApprovalStatus>(2, _omitFieldNames ? '' : 'status',
         enumValues: ApprovalStatus.values)
@@ -923,14 +943,16 @@ class RuntimeApprovalState extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use RuntimeApprovalState() / RuntimeApprovalState.new instead')
   static RuntimeApprovalState create() => RuntimeApprovalState._();
+  static $pb.GeneratedMessage $_createMessage() => RuntimeApprovalState._();
   @$core.override
-  RuntimeApprovalState createEmptyInstance() => create();
-  static $pb.PbList<RuntimeApprovalState> createRepeated() =>
-      $pb.PbList<RuntimeApprovalState>();
+  RuntimeApprovalState createEmptyInstance() => RuntimeApprovalState._();
   @$core.pragma('dart2js:noInline')
   static RuntimeApprovalState getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<RuntimeApprovalState>(create);
+      $pb.GeneratedMessage.$_defaultFor<RuntimeApprovalState>(
+          RuntimeApprovalState.$_createMessage);
   static RuntimeApprovalState? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -967,7 +989,7 @@ class ConsumeApprovalRequest extends $pb.GeneratedMessage {
     $core.String? provenanceToken,
     $core.String? physicalPath,
   }) {
-    final result = create();
+    final result = ConsumeApprovalRequest._();
     if (approvalId != null) result.approvalId = approvalId;
     if (provenanceToken != null) result.provenanceToken = provenanceToken;
     if (physicalPath != null) result.physicalPath = physicalPath;
@@ -978,15 +1000,15 @@ class ConsumeApprovalRequest extends $pb.GeneratedMessage {
 
   factory ConsumeApprovalRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ConsumeApprovalRequest()..mergeFromBuffer(data, registry);
   factory ConsumeApprovalRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ConsumeApprovalRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ConsumeApprovalRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ConsumeApprovalRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'approvalId')
     ..aOS(2, _omitFieldNames ? '' : 'provenanceToken')
     ..aOS(3, _omitFieldNames ? '' : 'physicalPath')
@@ -1004,14 +1026,16 @@ class ConsumeApprovalRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ConsumeApprovalRequest() / ConsumeApprovalRequest.new instead')
   static ConsumeApprovalRequest create() => ConsumeApprovalRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ConsumeApprovalRequest._();
   @$core.override
-  ConsumeApprovalRequest createEmptyInstance() => create();
-  static $pb.PbList<ConsumeApprovalRequest> createRepeated() =>
-      $pb.PbList<ConsumeApprovalRequest>();
+  ConsumeApprovalRequest createEmptyInstance() => ConsumeApprovalRequest._();
   @$core.pragma('dart2js:noInline')
   static ConsumeApprovalRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ConsumeApprovalRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ConsumeApprovalRequest>(
+          ConsumeApprovalRequest.$_createMessage);
   static ConsumeApprovalRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1056,7 +1080,7 @@ class FinalizeSandboxArtifactRequest extends $pb.GeneratedMessage {
     $core.String? provenanceToken,
     $core.bool? committed,
   }) {
-    final result = create();
+    final result = FinalizeSandboxArtifactRequest._();
     if (artifactId != null) result.artifactId = artifactId;
     if (provenanceToken != null) result.provenanceToken = provenanceToken;
     if (committed != null) result.committed = committed;
@@ -1067,15 +1091,15 @@ class FinalizeSandboxArtifactRequest extends $pb.GeneratedMessage {
 
   factory FinalizeSandboxArtifactRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      FinalizeSandboxArtifactRequest()..mergeFromBuffer(data, registry);
   factory FinalizeSandboxArtifactRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      FinalizeSandboxArtifactRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'FinalizeSandboxArtifactRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: FinalizeSandboxArtifactRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'artifactId')
     ..aOS(2, _omitFieldNames ? '' : 'provenanceToken')
     ..aOB(3, _omitFieldNames ? '' : 'committed')
@@ -1094,15 +1118,19 @@ class FinalizeSandboxArtifactRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use FinalizeSandboxArtifactRequest() / FinalizeSandboxArtifactRequest.new instead')
   static FinalizeSandboxArtifactRequest create() =>
       FinalizeSandboxArtifactRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      FinalizeSandboxArtifactRequest._();
   @$core.override
-  FinalizeSandboxArtifactRequest createEmptyInstance() => create();
-  static $pb.PbList<FinalizeSandboxArtifactRequest> createRepeated() =>
-      $pb.PbList<FinalizeSandboxArtifactRequest>();
+  FinalizeSandboxArtifactRequest createEmptyInstance() =>
+      FinalizeSandboxArtifactRequest._();
   @$core.pragma('dart2js:noInline')
   static FinalizeSandboxArtifactRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<FinalizeSandboxArtifactRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<FinalizeSandboxArtifactRequest>(
+          FinalizeSandboxArtifactRequest.$_createMessage);
   static FinalizeSandboxArtifactRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1141,7 +1169,7 @@ class FinalizeSandboxArtifactResponse extends $pb.GeneratedMessage {
     $core.String? artifactId,
     $core.String? state,
   }) {
-    final result = create();
+    final result = FinalizeSandboxArtifactResponse._();
     if (artifactId != null) result.artifactId = artifactId;
     if (state != null) result.state = state;
     return result;
@@ -1151,15 +1179,15 @@ class FinalizeSandboxArtifactResponse extends $pb.GeneratedMessage {
 
   factory FinalizeSandboxArtifactResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      FinalizeSandboxArtifactResponse()..mergeFromBuffer(data, registry);
   factory FinalizeSandboxArtifactResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      FinalizeSandboxArtifactResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'FinalizeSandboxArtifactResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: FinalizeSandboxArtifactResponse.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'artifactId')
     ..aOS(2, _omitFieldNames ? '' : 'state')
     ..hasRequiredFields = false;
@@ -1177,16 +1205,19 @@ class FinalizeSandboxArtifactResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use FinalizeSandboxArtifactResponse() / FinalizeSandboxArtifactResponse.new instead')
   static FinalizeSandboxArtifactResponse create() =>
       FinalizeSandboxArtifactResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      FinalizeSandboxArtifactResponse._();
   @$core.override
-  FinalizeSandboxArtifactResponse createEmptyInstance() => create();
-  static $pb.PbList<FinalizeSandboxArtifactResponse> createRepeated() =>
-      $pb.PbList<FinalizeSandboxArtifactResponse>();
+  FinalizeSandboxArtifactResponse createEmptyInstance() =>
+      FinalizeSandboxArtifactResponse._();
   @$core.pragma('dart2js:noInline')
   static FinalizeSandboxArtifactResponse getDefault() => _defaultInstance ??=
       $pb.GeneratedMessage.$_defaultFor<FinalizeSandboxArtifactResponse>(
-          create);
+          FinalizeSandboxArtifactResponse.$_createMessage);
   static FinalizeSandboxArtifactResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1217,7 +1248,7 @@ class CheckSessionCapabilityRequest extends $pb.GeneratedMessage {
   factory CheckSessionCapabilityRequest({
     $core.String? provenanceToken,
   }) {
-    final result = create();
+    final result = CheckSessionCapabilityRequest._();
     if (provenanceToken != null) result.provenanceToken = provenanceToken;
     return result;
   }
@@ -1226,15 +1257,15 @@ class CheckSessionCapabilityRequest extends $pb.GeneratedMessage {
 
   factory CheckSessionCapabilityRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      CheckSessionCapabilityRequest()..mergeFromBuffer(data, registry);
   factory CheckSessionCapabilityRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      CheckSessionCapabilityRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'CheckSessionCapabilityRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: CheckSessionCapabilityRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'provenanceToken')
     ..hasRequiredFields = false;
 
@@ -1251,15 +1282,19 @@ class CheckSessionCapabilityRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use CheckSessionCapabilityRequest() / CheckSessionCapabilityRequest.new instead')
   static CheckSessionCapabilityRequest create() =>
       CheckSessionCapabilityRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      CheckSessionCapabilityRequest._();
   @$core.override
-  CheckSessionCapabilityRequest createEmptyInstance() => create();
-  static $pb.PbList<CheckSessionCapabilityRequest> createRepeated() =>
-      $pb.PbList<CheckSessionCapabilityRequest>();
+  CheckSessionCapabilityRequest createEmptyInstance() =>
+      CheckSessionCapabilityRequest._();
   @$core.pragma('dart2js:noInline')
   static CheckSessionCapabilityRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<CheckSessionCapabilityRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<CheckSessionCapabilityRequest>(
+          CheckSessionCapabilityRequest.$_createMessage);
   static CheckSessionCapabilityRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -1277,7 +1312,7 @@ class SessionCapabilityState extends $pb.GeneratedMessage {
     $core.bool? active,
     $fixnum.Int64? deletionGeneration,
   }) {
-    final result = create();
+    final result = SessionCapabilityState._();
     if (active != null) result.active = active;
     if (deletionGeneration != null)
       result.deletionGeneration = deletionGeneration;
@@ -1288,15 +1323,15 @@ class SessionCapabilityState extends $pb.GeneratedMessage {
 
   factory SessionCapabilityState.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SessionCapabilityState()..mergeFromBuffer(data, registry);
   factory SessionCapabilityState.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SessionCapabilityState()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SessionCapabilityState',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SessionCapabilityState.$_createMessage)
     ..aOB(1, _omitFieldNames ? '' : 'active')
     ..aInt64(2, _omitFieldNames ? '' : 'deletionGeneration')
     ..hasRequiredFields = false;
@@ -1313,14 +1348,16 @@ class SessionCapabilityState extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SessionCapabilityState() / SessionCapabilityState.new instead')
   static SessionCapabilityState create() => SessionCapabilityState._();
+  static $pb.GeneratedMessage $_createMessage() => SessionCapabilityState._();
   @$core.override
-  SessionCapabilityState createEmptyInstance() => create();
-  static $pb.PbList<SessionCapabilityState> createRepeated() =>
-      $pb.PbList<SessionCapabilityState>();
+  SessionCapabilityState createEmptyInstance() => SessionCapabilityState._();
   @$core.pragma('dart2js:noInline')
   static SessionCapabilityState getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SessionCapabilityState>(create);
+      $pb.GeneratedMessage.$_defaultFor<SessionCapabilityState>(
+          SessionCapabilityState.$_createMessage);
   static SessionCapabilityState? _defaultInstance;
 
   /// True only when the session exists, is not being withdrawn, and is still on

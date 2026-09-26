@@ -4,7 +4,7 @@ import 'package:protobuf/protobuf.dart';
 import 'package:turing_flutter_app/generated/turing/v1/common.pb.dart'
     as commonpb;
 import 'package:turing_flutter_app/models/grpc_mappers.dart';
-import 'package:turing_flutter_app/generated/google/protobuf/timestamp.pb.dart'
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
     as timestamppb;
 import 'package:turing_flutter_app/models/run_state.dart';
 

@@ -8,13 +8,14 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
 import 'package:protobuf/protobuf.dart' as $pb;
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
+    as $1;
 
-import '../../google/protobuf/timestamp.pb.dart' as $1;
 import 'agents.pbenum.dart';
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
@@ -40,7 +41,7 @@ class ExternalAgent extends $pb.GeneratedMessage {
     $1.Timestamp? createdAt,
     $1.Timestamp? updatedAt,
   }) {
-    final result = create();
+    final result = ExternalAgent._();
     if (agentId != null) result.agentId = agentId;
     if (displayName != null) result.displayName = displayName;
     if (provider != null) result.provider = provider;
@@ -58,15 +59,15 @@ class ExternalAgent extends $pb.GeneratedMessage {
 
   factory ExternalAgent.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ExternalAgent()..mergeFromBuffer(data, registry);
   factory ExternalAgent.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ExternalAgent()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ExternalAgent',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ExternalAgent.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'agentId')
     ..aOS(2, _omitFieldNames ? '' : 'displayName')
     ..aE<ExternalAgentProvider>(3, _omitFieldNames ? '' : 'provider',
@@ -76,9 +77,9 @@ class ExternalAgent extends $pb.GeneratedMessage {
     ..aOS(6, _omitFieldNames ? '' : 'credentialRef')
     ..aOB(7, _omitFieldNames ? '' : 'credentialAvailable')
     ..aOM<$1.Timestamp>(8, _omitFieldNames ? '' : 'createdAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..aOM<$1.Timestamp>(9, _omitFieldNames ? '' : 'updatedAt',
-        subBuilder: $1.Timestamp.create)
+        subBuilder: $1.Timestamp.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -92,14 +93,15 @@ class ExternalAgent extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use ExternalAgent() / ExternalAgent.new instead')
   static ExternalAgent create() => ExternalAgent._();
+  static $pb.GeneratedMessage $_createMessage() => ExternalAgent._();
   @$core.override
-  ExternalAgent createEmptyInstance() => create();
-  static $pb.PbList<ExternalAgent> createRepeated() =>
-      $pb.PbList<ExternalAgent>();
+  ExternalAgent createEmptyInstance() => ExternalAgent._();
   @$core.pragma('dart2js:noInline')
-  static ExternalAgent getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ExternalAgent>(create);
+  static ExternalAgent getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ExternalAgent>(
+          ExternalAgent.$_createMessage);
   static ExternalAgent? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -203,7 +205,7 @@ class CreateExternalAgentRequest extends $pb.GeneratedMessage {
     $core.String? model,
     $core.String? credentialRef,
   }) {
-    final result = create();
+    final result = CreateExternalAgentRequest._();
     if (displayName != null) result.displayName = displayName;
     if (provider != null) result.provider = provider;
     if (baseUrl != null) result.baseUrl = baseUrl;
@@ -216,15 +218,15 @@ class CreateExternalAgentRequest extends $pb.GeneratedMessage {
 
   factory CreateExternalAgentRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      CreateExternalAgentRequest()..mergeFromBuffer(data, registry);
   factory CreateExternalAgentRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      CreateExternalAgentRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'CreateExternalAgentRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: CreateExternalAgentRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'displayName')
     ..aE<ExternalAgentProvider>(2, _omitFieldNames ? '' : 'provider',
         enumValues: ExternalAgentProvider.values)
@@ -246,14 +248,18 @@ class CreateExternalAgentRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use CreateExternalAgentRequest() / CreateExternalAgentRequest.new instead')
   static CreateExternalAgentRequest create() => CreateExternalAgentRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      CreateExternalAgentRequest._();
   @$core.override
-  CreateExternalAgentRequest createEmptyInstance() => create();
-  static $pb.PbList<CreateExternalAgentRequest> createRepeated() =>
-      $pb.PbList<CreateExternalAgentRequest>();
+  CreateExternalAgentRequest createEmptyInstance() =>
+      CreateExternalAgentRequest._();
   @$core.pragma('dart2js:noInline')
   static CreateExternalAgentRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<CreateExternalAgentRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<CreateExternalAgentRequest>(
+          CreateExternalAgentRequest.$_createMessage);
   static CreateExternalAgentRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -311,7 +317,7 @@ class UpdateExternalAgentRequest extends $pb.GeneratedMessage {
     $core.String? model,
     $core.String? credentialRef,
   }) {
-    final result = create();
+    final result = UpdateExternalAgentRequest._();
     if (agentId != null) result.agentId = agentId;
     if (displayName != null) result.displayName = displayName;
     if (provider != null) result.provider = provider;
@@ -325,15 +331,15 @@ class UpdateExternalAgentRequest extends $pb.GeneratedMessage {
 
   factory UpdateExternalAgentRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      UpdateExternalAgentRequest()..mergeFromBuffer(data, registry);
   factory UpdateExternalAgentRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      UpdateExternalAgentRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'UpdateExternalAgentRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: UpdateExternalAgentRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'agentId')
     ..aOS(2, _omitFieldNames ? '' : 'displayName')
     ..aE<ExternalAgentProvider>(3, _omitFieldNames ? '' : 'provider',
@@ -356,14 +362,18 @@ class UpdateExternalAgentRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use UpdateExternalAgentRequest() / UpdateExternalAgentRequest.new instead')
   static UpdateExternalAgentRequest create() => UpdateExternalAgentRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      UpdateExternalAgentRequest._();
   @$core.override
-  UpdateExternalAgentRequest createEmptyInstance() => create();
-  static $pb.PbList<UpdateExternalAgentRequest> createRepeated() =>
-      $pb.PbList<UpdateExternalAgentRequest>();
+  UpdateExternalAgentRequest createEmptyInstance() =>
+      UpdateExternalAgentRequest._();
   @$core.pragma('dart2js:noInline')
   static UpdateExternalAgentRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<UpdateExternalAgentRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<UpdateExternalAgentRequest>(
+          UpdateExternalAgentRequest.$_createMessage);
   static UpdateExternalAgentRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -425,7 +435,7 @@ class DeleteExternalAgentRequest extends $pb.GeneratedMessage {
   factory DeleteExternalAgentRequest({
     $core.String? agentId,
   }) {
-    final result = create();
+    final result = DeleteExternalAgentRequest._();
     if (agentId != null) result.agentId = agentId;
     return result;
   }
@@ -434,15 +444,15 @@ class DeleteExternalAgentRequest extends $pb.GeneratedMessage {
 
   factory DeleteExternalAgentRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      DeleteExternalAgentRequest()..mergeFromBuffer(data, registry);
   factory DeleteExternalAgentRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      DeleteExternalAgentRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'DeleteExternalAgentRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: DeleteExternalAgentRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'agentId')
     ..hasRequiredFields = false;
 
@@ -459,14 +469,18 @@ class DeleteExternalAgentRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use DeleteExternalAgentRequest() / DeleteExternalAgentRequest.new instead')
   static DeleteExternalAgentRequest create() => DeleteExternalAgentRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      DeleteExternalAgentRequest._();
   @$core.override
-  DeleteExternalAgentRequest createEmptyInstance() => create();
-  static $pb.PbList<DeleteExternalAgentRequest> createRepeated() =>
-      $pb.PbList<DeleteExternalAgentRequest>();
+  DeleteExternalAgentRequest createEmptyInstance() =>
+      DeleteExternalAgentRequest._();
   @$core.pragma('dart2js:noInline')
   static DeleteExternalAgentRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<DeleteExternalAgentRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<DeleteExternalAgentRequest>(
+          DeleteExternalAgentRequest.$_createMessage);
   static DeleteExternalAgentRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -480,21 +494,21 @@ class DeleteExternalAgentRequest extends $pb.GeneratedMessage {
 }
 
 class DeleteExternalAgentResponse extends $pb.GeneratedMessage {
-  factory DeleteExternalAgentResponse() => create();
+  factory DeleteExternalAgentResponse() => DeleteExternalAgentResponse._();
 
   DeleteExternalAgentResponse._();
 
   factory DeleteExternalAgentResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      DeleteExternalAgentResponse()..mergeFromBuffer(data, registry);
   factory DeleteExternalAgentResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      DeleteExternalAgentResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'DeleteExternalAgentResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: DeleteExternalAgentResponse.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -510,34 +524,38 @@ class DeleteExternalAgentResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use DeleteExternalAgentResponse() / DeleteExternalAgentResponse.new instead')
   static DeleteExternalAgentResponse create() =>
       DeleteExternalAgentResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      DeleteExternalAgentResponse._();
   @$core.override
-  DeleteExternalAgentResponse createEmptyInstance() => create();
-  static $pb.PbList<DeleteExternalAgentResponse> createRepeated() =>
-      $pb.PbList<DeleteExternalAgentResponse>();
+  DeleteExternalAgentResponse createEmptyInstance() =>
+      DeleteExternalAgentResponse._();
   @$core.pragma('dart2js:noInline')
   static DeleteExternalAgentResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<DeleteExternalAgentResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<DeleteExternalAgentResponse>(
+          DeleteExternalAgentResponse.$_createMessage);
   static DeleteExternalAgentResponse? _defaultInstance;
 }
 
 class ListExternalAgentsRequest extends $pb.GeneratedMessage {
-  factory ListExternalAgentsRequest() => create();
+  factory ListExternalAgentsRequest() => ListExternalAgentsRequest._();
 
   ListExternalAgentsRequest._();
 
   factory ListExternalAgentsRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListExternalAgentsRequest()..mergeFromBuffer(data, registry);
   factory ListExternalAgentsRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListExternalAgentsRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListExternalAgentsRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListExternalAgentsRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -552,14 +570,18 @@ class ListExternalAgentsRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListExternalAgentsRequest() / ListExternalAgentsRequest.new instead')
   static ListExternalAgentsRequest create() => ListExternalAgentsRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      ListExternalAgentsRequest._();
   @$core.override
-  ListExternalAgentsRequest createEmptyInstance() => create();
-  static $pb.PbList<ListExternalAgentsRequest> createRepeated() =>
-      $pb.PbList<ListExternalAgentsRequest>();
+  ListExternalAgentsRequest createEmptyInstance() =>
+      ListExternalAgentsRequest._();
   @$core.pragma('dart2js:noInline')
   static ListExternalAgentsRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListExternalAgentsRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListExternalAgentsRequest>(
+          ListExternalAgentsRequest.$_createMessage);
   static ListExternalAgentsRequest? _defaultInstance;
 }
 
@@ -567,7 +589,7 @@ class ListExternalAgentsResponse extends $pb.GeneratedMessage {
   factory ListExternalAgentsResponse({
     $core.Iterable<ExternalAgent>? agents,
   }) {
-    final result = create();
+    final result = ListExternalAgentsResponse._();
     if (agents != null) result.agents.addAll(agents);
     return result;
   }
@@ -576,17 +598,17 @@ class ListExternalAgentsResponse extends $pb.GeneratedMessage {
 
   factory ListExternalAgentsResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ListExternalAgentsResponse()..mergeFromBuffer(data, registry);
   factory ListExternalAgentsResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ListExternalAgentsResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ListExternalAgentsResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ListExternalAgentsResponse.$_createMessage)
     ..pPM<ExternalAgent>(1, _omitFieldNames ? '' : 'agents',
-        subBuilder: ExternalAgent.create)
+        subBuilder: ExternalAgent.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -602,14 +624,18 @@ class ListExternalAgentsResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListExternalAgentsResponse() / ListExternalAgentsResponse.new instead')
   static ListExternalAgentsResponse create() => ListExternalAgentsResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      ListExternalAgentsResponse._();
   @$core.override
-  ListExternalAgentsResponse createEmptyInstance() => create();
-  static $pb.PbList<ListExternalAgentsResponse> createRepeated() =>
-      $pb.PbList<ListExternalAgentsResponse>();
+  ListExternalAgentsResponse createEmptyInstance() =>
+      ListExternalAgentsResponse._();
   @$core.pragma('dart2js:noInline')
   static ListExternalAgentsResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ListExternalAgentsResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<ListExternalAgentsResponse>(
+          ListExternalAgentsResponse.$_createMessage);
   static ListExternalAgentsResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -620,7 +646,7 @@ class GetSessionAgentRequest extends $pb.GeneratedMessage {
   factory GetSessionAgentRequest({
     $core.String? sessionId,
   }) {
-    final result = create();
+    final result = GetSessionAgentRequest._();
     if (sessionId != null) result.sessionId = sessionId;
     return result;
   }
@@ -629,15 +655,15 @@ class GetSessionAgentRequest extends $pb.GeneratedMessage {
 
   factory GetSessionAgentRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      GetSessionAgentRequest()..mergeFromBuffer(data, registry);
   factory GetSessionAgentRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      GetSessionAgentRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'GetSessionAgentRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: GetSessionAgentRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..hasRequiredFields = false;
 
@@ -653,14 +679,16 @@ class GetSessionAgentRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetSessionAgentRequest() / GetSessionAgentRequest.new instead')
   static GetSessionAgentRequest create() => GetSessionAgentRequest._();
+  static $pb.GeneratedMessage $_createMessage() => GetSessionAgentRequest._();
   @$core.override
-  GetSessionAgentRequest createEmptyInstance() => create();
-  static $pb.PbList<GetSessionAgentRequest> createRepeated() =>
-      $pb.PbList<GetSessionAgentRequest>();
+  GetSessionAgentRequest createEmptyInstance() => GetSessionAgentRequest._();
   @$core.pragma('dart2js:noInline')
   static GetSessionAgentRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<GetSessionAgentRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<GetSessionAgentRequest>(
+          GetSessionAgentRequest.$_createMessage);
   static GetSessionAgentRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -678,7 +706,7 @@ class SetSessionAgentRequest extends $pb.GeneratedMessage {
     $core.String? sessionId,
     $core.String? agentId,
   }) {
-    final result = create();
+    final result = SetSessionAgentRequest._();
     if (sessionId != null) result.sessionId = sessionId;
     if (agentId != null) result.agentId = agentId;
     return result;
@@ -688,15 +716,15 @@ class SetSessionAgentRequest extends $pb.GeneratedMessage {
 
   factory SetSessionAgentRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SetSessionAgentRequest()..mergeFromBuffer(data, registry);
   factory SetSessionAgentRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SetSessionAgentRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SetSessionAgentRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SetSessionAgentRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..aOS(2, _omitFieldNames ? '' : 'agentId')
     ..hasRequiredFields = false;
@@ -713,14 +741,16 @@ class SetSessionAgentRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SetSessionAgentRequest() / SetSessionAgentRequest.new instead')
   static SetSessionAgentRequest create() => SetSessionAgentRequest._();
+  static $pb.GeneratedMessage $_createMessage() => SetSessionAgentRequest._();
   @$core.override
-  SetSessionAgentRequest createEmptyInstance() => create();
-  static $pb.PbList<SetSessionAgentRequest> createRepeated() =>
-      $pb.PbList<SetSessionAgentRequest>();
+  SetSessionAgentRequest createEmptyInstance() => SetSessionAgentRequest._();
   @$core.pragma('dart2js:noInline')
   static SetSessionAgentRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SetSessionAgentRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<SetSessionAgentRequest>(
+          SetSessionAgentRequest.$_createMessage);
   static SetSessionAgentRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -746,7 +776,7 @@ class ClearSessionAgentRequest extends $pb.GeneratedMessage {
   factory ClearSessionAgentRequest({
     $core.String? sessionId,
   }) {
-    final result = create();
+    final result = ClearSessionAgentRequest._();
     if (sessionId != null) result.sessionId = sessionId;
     return result;
   }
@@ -755,15 +785,15 @@ class ClearSessionAgentRequest extends $pb.GeneratedMessage {
 
   factory ClearSessionAgentRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      ClearSessionAgentRequest()..mergeFromBuffer(data, registry);
   factory ClearSessionAgentRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      ClearSessionAgentRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ClearSessionAgentRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: ClearSessionAgentRequest.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'sessionId')
     ..hasRequiredFields = false;
 
@@ -779,14 +809,17 @@ class ClearSessionAgentRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ClearSessionAgentRequest() / ClearSessionAgentRequest.new instead')
   static ClearSessionAgentRequest create() => ClearSessionAgentRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ClearSessionAgentRequest._();
   @$core.override
-  ClearSessionAgentRequest createEmptyInstance() => create();
-  static $pb.PbList<ClearSessionAgentRequest> createRepeated() =>
-      $pb.PbList<ClearSessionAgentRequest>();
+  ClearSessionAgentRequest createEmptyInstance() =>
+      ClearSessionAgentRequest._();
   @$core.pragma('dart2js:noInline')
   static ClearSessionAgentRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<ClearSessionAgentRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<ClearSessionAgentRequest>(
+          ClearSessionAgentRequest.$_createMessage);
   static ClearSessionAgentRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -806,7 +839,7 @@ class SessionAgentResponse extends $pb.GeneratedMessage {
   factory SessionAgentResponse({
     ExternalAgent? agent,
   }) {
-    final result = create();
+    final result = SessionAgentResponse._();
     if (agent != null) result.agent = agent;
     return result;
   }
@@ -815,17 +848,17 @@ class SessionAgentResponse extends $pb.GeneratedMessage {
 
   factory SessionAgentResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      SessionAgentResponse()..mergeFromBuffer(data, registry);
   factory SessionAgentResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      SessionAgentResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'SessionAgentResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: SessionAgentResponse.$_createMessage)
     ..aOM<ExternalAgent>(1, _omitFieldNames ? '' : 'agent',
-        subBuilder: ExternalAgent.create)
+        subBuilder: ExternalAgent.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -839,14 +872,16 @@ class SessionAgentResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SessionAgentResponse() / SessionAgentResponse.new instead')
   static SessionAgentResponse create() => SessionAgentResponse._();
+  static $pb.GeneratedMessage $_createMessage() => SessionAgentResponse._();
   @$core.override
-  SessionAgentResponse createEmptyInstance() => create();
-  static $pb.PbList<SessionAgentResponse> createRepeated() =>
-      $pb.PbList<SessionAgentResponse>();
+  SessionAgentResponse createEmptyInstance() => SessionAgentResponse._();
   @$core.pragma('dart2js:noInline')
   static SessionAgentResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<SessionAgentResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<SessionAgentResponse>(
+          SessionAgentResponse.$_createMessage);
   static SessionAgentResponse? _defaultInstance;
 
   @$pb.TagNumber(1)

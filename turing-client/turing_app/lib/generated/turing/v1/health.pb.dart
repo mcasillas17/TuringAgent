@@ -8,7 +8,7 @@
 // ignore_for_file: constant_identifier_names
 // ignore_for_file: curly_braces_in_flow_control_structures
 // ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
 
 import 'dart:core' as $core;
 
@@ -17,21 +17,21 @@ import 'package:protobuf/protobuf.dart' as $pb;
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
 
 class HealthCheckRequest extends $pb.GeneratedMessage {
-  factory HealthCheckRequest() => create();
+  factory HealthCheckRequest() => HealthCheckRequest._();
 
   HealthCheckRequest._();
 
   factory HealthCheckRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      HealthCheckRequest()..mergeFromBuffer(data, registry);
   factory HealthCheckRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      HealthCheckRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'HealthCheckRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: HealthCheckRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -45,14 +45,15 @@ class HealthCheckRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use HealthCheckRequest() / HealthCheckRequest.new instead')
   static HealthCheckRequest create() => HealthCheckRequest._();
+  static $pb.GeneratedMessage $_createMessage() => HealthCheckRequest._();
   @$core.override
-  HealthCheckRequest createEmptyInstance() => create();
-  static $pb.PbList<HealthCheckRequest> createRepeated() =>
-      $pb.PbList<HealthCheckRequest>();
+  HealthCheckRequest createEmptyInstance() => HealthCheckRequest._();
   @$core.pragma('dart2js:noInline')
   static HealthCheckRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<HealthCheckRequest>(create);
+      $pb.GeneratedMessage.$_defaultFor<HealthCheckRequest>(
+          HealthCheckRequest.$_createMessage);
   static HealthCheckRequest? _defaultInstance;
 }
 
@@ -60,7 +61,7 @@ class HealthCheckResponse extends $pb.GeneratedMessage {
   factory HealthCheckResponse({
     $core.bool? ok,
   }) {
-    final result = create();
+    final result = HealthCheckResponse._();
     if (ok != null) result.ok = ok;
     return result;
   }
@@ -69,15 +70,15 @@ class HealthCheckResponse extends $pb.GeneratedMessage {
 
   factory HealthCheckResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      HealthCheckResponse()..mergeFromBuffer(data, registry);
   factory HealthCheckResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      HealthCheckResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'HealthCheckResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: HealthCheckResponse.$_createMessage)
     ..aOB(1, _omitFieldNames ? '' : 'ok')
     ..hasRequiredFields = false;
 
@@ -92,14 +93,16 @@ class HealthCheckResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core
+      .Deprecated('Use HealthCheckResponse() / HealthCheckResponse.new instead')
   static HealthCheckResponse create() => HealthCheckResponse._();
+  static $pb.GeneratedMessage $_createMessage() => HealthCheckResponse._();
   @$core.override
-  HealthCheckResponse createEmptyInstance() => create();
-  static $pb.PbList<HealthCheckResponse> createRepeated() =>
-      $pb.PbList<HealthCheckResponse>();
+  HealthCheckResponse createEmptyInstance() => HealthCheckResponse._();
   @$core.pragma('dart2js:noInline')
   static HealthCheckResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<HealthCheckResponse>(create);
+      $pb.GeneratedMessage.$_defaultFor<HealthCheckResponse>(
+          HealthCheckResponse.$_createMessage);
   static HealthCheckResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
@@ -113,21 +116,21 @@ class HealthCheckResponse extends $pb.GeneratedMessage {
 }
 
 class VersionRequest extends $pb.GeneratedMessage {
-  factory VersionRequest() => create();
+  factory VersionRequest() => VersionRequest._();
 
   VersionRequest._();
 
   factory VersionRequest.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      VersionRequest()..mergeFromBuffer(data, registry);
   factory VersionRequest.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      VersionRequest()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'VersionRequest',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: VersionRequest.$_createMessage)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -141,14 +144,15 @@ class VersionRequest extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use VersionRequest() / VersionRequest.new instead')
   static VersionRequest create() => VersionRequest._();
+  static $pb.GeneratedMessage $_createMessage() => VersionRequest._();
   @$core.override
-  VersionRequest createEmptyInstance() => create();
-  static $pb.PbList<VersionRequest> createRepeated() =>
-      $pb.PbList<VersionRequest>();
+  VersionRequest createEmptyInstance() => VersionRequest._();
   @$core.pragma('dart2js:noInline')
-  static VersionRequest getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<VersionRequest>(create);
+  static VersionRequest getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<VersionRequest>(
+          VersionRequest.$_createMessage);
   static VersionRequest? _defaultInstance;
 }
 
@@ -157,7 +161,7 @@ class VersionResponse extends $pb.GeneratedMessage {
     $core.String? version,
     $core.String? schemaVersion,
   }) {
-    final result = create();
+    final result = VersionResponse._();
     if (version != null) result.version = version;
     if (schemaVersion != null) result.schemaVersion = schemaVersion;
     return result;
@@ -167,15 +171,15 @@ class VersionResponse extends $pb.GeneratedMessage {
 
   factory VersionResponse.fromBuffer($core.List<$core.int> data,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromBuffer(data, registry);
+      VersionResponse()..mergeFromBuffer(data, registry);
   factory VersionResponse.fromJson($core.String json,
           [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
-      create()..mergeFromJson(json, registry);
+      VersionResponse()..mergeFromJson(json, registry);
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'VersionResponse',
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
-      createEmptyInstance: create)
+      createEmptyInstance: VersionResponse.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'version')
     ..aOS(2, _omitFieldNames ? '' : 'schemaVersion')
     ..hasRequiredFields = false;
@@ -191,14 +195,15 @@ class VersionResponse extends $pb.GeneratedMessage {
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use VersionResponse() / VersionResponse.new instead')
   static VersionResponse create() => VersionResponse._();
+  static $pb.GeneratedMessage $_createMessage() => VersionResponse._();
   @$core.override
-  VersionResponse createEmptyInstance() => create();
-  static $pb.PbList<VersionResponse> createRepeated() =>
-      $pb.PbList<VersionResponse>();
+  VersionResponse createEmptyInstance() => VersionResponse._();
   @$core.pragma('dart2js:noInline')
-  static VersionResponse getDefault() => _defaultInstance ??=
-      $pb.GeneratedMessage.$_defaultFor<VersionResponse>(create);
+  static VersionResponse getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<VersionResponse>(
+          VersionResponse.$_createMessage);
   static VersionResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
