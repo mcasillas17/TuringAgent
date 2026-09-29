@@ -116,9 +116,7 @@ func TestPromoteMemoryCandidateRefusesWhatItMayNotPromote(t *testing.T) {
 	}
 
 	withdrawn := pendingBeliefCandidate(t, repo, sessionID)
-	if _, err := repo.WithdrawMemoryCandidate(ctx(), withdrawn.CandidateID); err != nil {
-		t.Fatalf("WithdrawMemoryCandidate: %v", err)
-	}
+	withdrawCandidate(t, repo, withdrawn.CandidateID)
 	if _, err := repo.PromoteMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: withdrawn.CandidateID}); !errors.Is(err, ErrMemoryCandidateInvalidTransition) {
 		t.Fatalf("withdrawn promotion error = %v, want ErrMemoryCandidateInvalidTransition", err)
 	}
@@ -334,15 +332,10 @@ func TestCandidateDecisionsRecordRedactedAuditRows(t *testing.T) {
 	if err := repo.RejectMemoryCandidate(ctx(), MemoryCandidateDecision{CandidateID: rejected.CandidateID}); err != nil {
 		t.Fatalf("RejectMemoryCandidate: %v", err)
 	}
-	withdrawn := pendingBeliefCandidate(t, repo, sessionID)
-	if _, err := repo.WithdrawMemoryCandidate(ctx(), withdrawn.CandidateID); err != nil {
-		t.Fatalf("WithdrawMemoryCandidate: %v", err)
-	}
 
 	decisions := map[string]MemoryCandidate{
-		MemoryCandidateStatePromoted:  promoted,
-		MemoryCandidateStateRejected:  rejected,
-		MemoryCandidateStateWithdrawn: withdrawn,
+		MemoryCandidateStatePromoted: promoted,
+		MemoryCandidateStateRejected: rejected,
 	}
 	for state, candidate := range decisions {
 		var action, payload string

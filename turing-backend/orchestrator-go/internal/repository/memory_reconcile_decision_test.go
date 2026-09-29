@@ -369,9 +369,7 @@ func TestReconcileStillRetiresAWithdrawnCandidateWhoseFileIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.WithdrawMemoryCandidate(ctx(), candidate.CandidateID); err != nil {
-		t.Fatalf("withdraw: %v", err)
-	}
+	withdrawCandidate(t, repo, candidate.CandidateID)
 	repo.memoryReconcileScanAnchor = now()
 	removeVaultNote(t, vault, candidate.InboxPath)
 

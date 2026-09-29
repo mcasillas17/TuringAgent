@@ -19,6 +19,7 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository/repotest"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -1094,7 +1095,7 @@ func TestDeleteSessionScrubsApprovalRationaleAudit(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.DeleteSessionForTests(context.Background(), enqueued.SessionID); err != nil {
+	if err := repotest.DeleteSession(context.Background(), h.repo, enqueued.SessionID); err != nil {
 		t.Fatal(err)
 	}
 	var approvals int
@@ -1146,7 +1147,7 @@ func TestLateApprovalAuditAfterSessionDeletionDoesNotRestoreRationale(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.repo.DeleteSessionForTests(context.Background(), enqueued.SessionID); err != nil {
+	if err := repotest.DeleteSession(context.Background(), h.repo, enqueued.SessionID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1192,7 +1193,7 @@ func TestApprovedUnchangedTransitionSkipsPostCommitEffects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	approved, err := h.repo.ApproveApproval(
+	approved, err := h.repo.ApproveApprovalWithEvent(
 		context.Background(),
 		approvalID,
 		"already-committed-token",
@@ -1205,7 +1206,7 @@ func TestApprovedUnchangedTransitionSkipsPostCommitEffects(t *testing.T) {
 	notifier := &recordingApprovalNotifier{}
 	h.service.SetNotifier(notifier)
 
-	h.service.runChangedApprovalPostCommitEffects(repository.ApprovalTerminalization{Approval: approved})
+	h.service.runChangedApprovalPostCommitEffects(repository.ApprovalTerminalization{Approval: approved.Approval})
 
 	if got := notifier.snapshot(); got.count != 0 {
 		t.Fatalf("unchanged transition notified runtime %d time(s)", got.count)

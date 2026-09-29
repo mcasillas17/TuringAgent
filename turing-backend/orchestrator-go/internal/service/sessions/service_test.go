@@ -784,7 +784,7 @@ func TestDeleteSessionStartsWithdrawalForLiveRun(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.repo.ClaimNextJob(ctx, "general_assistant", "worker-delete-live"); err != nil {
+	if _, err := h.repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-delete-live", 0, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1731,7 +1731,7 @@ func TestSessionServiceSearchMessagesCannotReturnWithdrawnContentInEitherFormat(
 	// A claimed job keeps the withdrawal in progress, so the sentinel row stays
 	// on disk and is hidden by the search predicate rather than by having been
 	// physically removed. That is the case a leak would actually come from.
-	if _, err := h.repo.ClaimNextJob(ctx, "general_assistant", "worker-withdrawal"); err != nil {
+	if _, err := h.repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-withdrawal", 0, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	assertSearchSentinelVisibility(t, ctx, client, true)

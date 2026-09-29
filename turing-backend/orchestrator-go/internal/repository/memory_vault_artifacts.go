@@ -79,9 +79,6 @@ var (
 	// ErrVaultArtifactNotFound reports an artifact id with no manifest row in
 	// this session.
 	ErrVaultArtifactNotFound = errors.New("vault artifact not found")
-	// ErrVaultArtifactInvalidTransition refuses a state change the lifecycle
-	// does not allow, such as finalizing an artifact twice.
-	ErrVaultArtifactInvalidTransition = errors.New("vault artifact state transition is not allowed")
 	// ErrVaultArtifactExists reports a second reservation for a path that is
 	// already claimed — by this session or by any other. A vault path belongs
 	// to one session at a time, because two claims on one file means one
@@ -233,73 +230,10 @@ func (r *Repository) ReserveVaultArtifact(ctx context.Context, input ReserveVaul
 	return artifact, nil
 }
 
-// FinalizeVaultArtifact closes a reservation once the file is on disk, and
-// binds the row to the bytes that landed. It only advances a reservation that
-// is still writing, so a second finalization is a refused transition rather
-// than a silently rewritten timestamp.
-//
-// The hash is required, and it is required here rather than at the reservation
-// because this is the first moment it can be true. A row that reaches 'ready'
-// without one would claim a file it cannot identify, and the cleanup that reads
-// it would be back to trusting a path.
-func (r *Repository) FinalizeVaultArtifact(
-	ctx context.Context,
-	artifactID string,
-	sessionID string,
-	contentHash string,
-) (VaultArtifact, error) {
-	if strings.TrimSpace(contentHash) == "" {
-		return VaultArtifact{}, ErrVaultArtifactOwnershipUnproven
-	}
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return VaultArtifact{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	artifact, err := vaultArtifactByID(ctx, tx, artifactID, sessionID)
-	if err != nil {
-		return VaultArtifact{}, err
-	}
-	if artifact.State != VaultArtifactStateWriting {
-		return VaultArtifact{}, ErrVaultArtifactInvalidTransition
-	}
-	finalizedAt := now()
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE vault_artifacts
-		SET state = ?, finalized_at = ?, expected_content_hash = ?
-		WHERE id = ? AND session_id = ? AND state = ?
-	`, VaultArtifactStateReady, finalizedAt, contentHash, artifactID, sessionID, VaultArtifactStateWriting); err != nil {
-		return VaultArtifact{}, err
-	}
-	artifact.State = VaultArtifactStateReady
-	artifact.FinalizedAt = finalizedAt
-	artifact.ExpectedContentHash = contentHash
-	if err := tx.Commit(); err != nil {
-		return VaultArtifact{}, err
-	}
-	return artifact, nil
-}
-
-// ReleaseVaultArtifactReservation withdraws a reservation whose write never
-// happened. It refuses to touch anything already finalized, so a later failure
-// cannot erase the manifest row for a file that is sitting in the user's vault.
-func (r *Repository) ReleaseVaultArtifactReservation(ctx context.Context, artifactID string, sessionID string) (bool, error) {
-	result, err := r.db.ExecContext(ctx, `
-		DELETE FROM vault_artifacts
-		WHERE id = ? AND session_id = ? AND state = ?
-	`, artifactID, sessionID, VaultArtifactStateWriting)
-	if err != nil {
-		return false, err
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return changed == 1, nil
-}
-
 // SessionVaultArtifacts lists every vault file one session is responsible for.
+// It is also the cleaner's worklist, delete_failed rows included: each of those
+// names a file still sitting in the user's vault, and leaving it out is how a
+// retry would report a completed withdrawal over a note that is still there.
 func (r *Repository) SessionVaultArtifacts(ctx context.Context, sessionID string) ([]VaultArtifact, error) {
 	return queryVaultArtifacts(ctx, r.db, `
 		SELECT id, session_id, vault_path, physical_path, state,
@@ -308,52 +242,6 @@ func (r *Repository) SessionVaultArtifacts(ctx context.Context, sessionID string
 		WHERE session_id = ?
 		ORDER BY created_at, id
 	`, sessionID)
-}
-
-// PendingSessionVaultArtifacts is the cleaner's worklist: every manifest row
-// the session still owns, including the ones a previous pass could not delete.
-//
-// A delete_failed row is not a closed matter — it is a file still sitting in
-// the user's vault. Leaving those rows out of the worklist is how a retry
-// reports a completed withdrawal while the note it was supposed to remove is
-// still there, and the manifest can never drain. The row only disappears when
-// the file actually does, so re-attempting a failed deletion is idempotent by
-// construction: a file that is already gone removes cleanly.
-func (r *Repository) PendingSessionVaultArtifacts(ctx context.Context, sessionID string) ([]VaultArtifact, error) {
-	return r.SessionVaultArtifacts(ctx, sessionID)
-}
-
-// CountSessionVaultArtifacts reports how many vault files a session still owns,
-// which is what a withdrawal receipt reports as outstanding work.
-func (r *Repository) CountSessionVaultArtifacts(ctx context.Context, sessionID string) (int, error) {
-	var count int
-	if err := r.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM vault_artifacts WHERE session_id = ?
-	`, sessionID).Scan(&count); err != nil {
-		return 0, err
-	}
-	return count, nil
-}
-
-// MarkSessionVaultArtifactsDeleteFailed records that cleanup reached the vault
-// and could not remove the named files, so a withdrawal stays retryable instead
-// of reporting a completion that left the user's notes behind.
-//
-// It marks exactly the artifacts it is given and no others. A pass that could
-// not remove some of the session's files has already deleted the rest, and
-// marking those as failures would file an audit row saying Turing could not
-// delete a file it just deleted — a false record of the user's own withdrawal,
-// and a retry sent looking for something that is already gone.
-//
-// The statement names vault_artifacts and only vault_artifacts: sandbox rows
-// have their own cleaner, their own policy column and their own audit action,
-// and an id from that manifest matches nothing here.
-func (r *Repository) MarkSessionVaultArtifactsDeleteFailed(ctx context.Context, sessionID string, artifactIDs []string, errorCode string) error {
-	failures := make([]vaultArtifactFailure, 0, len(artifactIDs))
-	for _, artifactID := range artifactIDs {
-		failures = append(failures, vaultArtifactFailure{artifactID: artifactID, errorCode: errorCode})
-	}
-	return r.markVaultArtifactsDeleteFailed(ctx, sessionID, failures)
 }
 
 // vaultArtifactFailure is one row a pass could not remove, with the class it
@@ -555,7 +443,7 @@ func (r *Repository) DeleteVaultArtifacts(ctx context.Context, artifactIDs []str
 // one, having already been reached from a call that will itself need that lock
 // to finish.
 func (r *Repository) PurgeSessionVaultArtifacts(ctx context.Context, sessionID string) (int, error) {
-	artifacts, err := r.PendingSessionVaultArtifacts(ctx, sessionID)
+	artifacts, err := r.SessionVaultArtifacts(ctx, sessionID)
 	if err != nil {
 		return 0, err
 	}

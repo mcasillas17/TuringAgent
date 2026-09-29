@@ -1260,14 +1260,6 @@ func normalizeEnqueueUserMessageInput(input EnqueueUserMessageInput) EnqueueUser
 	return input
 }
 
-func (r *Repository) ClaimNextJob(ctx context.Context, agentID string, leaseOwner string) (Job, error) {
-	return r.ClaimNextJobWithLimit(ctx, agentID, leaseOwner, 0, 5*time.Minute)
-}
-
-func (r *Repository) ClaimNextJobWithLimit(ctx context.Context, agentID string, leaseOwner string, globalLimit int, leaseDuration time.Duration) (Job, error) {
-	return r.ClaimNextCompatibleJobWithLimit(ctx, agentID, leaseOwner, globalLimit, leaseDuration, nil, nil)
-}
-
 func (r *Repository) ClaimNextCompatibleJobWithLimit(
 	ctx context.Context,
 	agentID string,

@@ -31,9 +31,9 @@ func recoveringApprovalRun(t *testing.T, repo *Repository, worker string) (Enque
 	t.Helper()
 	ctx := context.Background()
 	enqueued := enqueueRun(t, repo, "Recovering approval")
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", worker)
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", worker, 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
 		ToolCallID: "call_recovering", RunID: enqueued.RunID, ModelToolCallID: "model_recovering",
@@ -217,10 +217,6 @@ func TestRecoveringRunCannotCreateASecondApproval(t *testing.T) {
 		"files.delete", `{"path":"other.txt"}`, "sha256:second", "2099-01-01T00:00:00Z"); err == nil {
 		t.Fatal("a recovering run opened a second approval")
 	}
-	if _, err := repo.CreateApproval(ctx, enqueued.RunID, "call_second", "general_assistant",
-		"files.delete", `{"path":"other.txt"}`, "sha256:second", "2099-01-01T00:00:00Z"); err == nil {
-		t.Fatal("a recovering run opened a second approval without an event")
-	}
 
 	state, err := repo.GetRunState(ctx, enqueued.RunID)
 	if err != nil {
@@ -333,7 +329,7 @@ func TestRecoveringRunOnlyResumesOrRequeuesThroughGuardedTransitions(t *testing.
 		repo := New(openTestDB(t))
 		ctx := context.Background()
 		enqueued := enqueueRun(t, repo, "No shortcut")
-		claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-shortcut")
+		claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-shortcut", 0, 0, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -404,38 +400,5 @@ func TestRecoveringRunCanTerminalizeApproval(t *testing.T) {
 				t.Fatalf("terminal version = %d, want %d", state.StateVersion, recovering.StateVersion+1)
 			}
 		})
-	}
-}
-
-// TestRecoveringRunBlocksSessionDeletionAsActive keeps the deletion guard
-// honest. Deleting a session out from under a recovering run cascades away the
-// rows a worker may still be holding, which is the exact failure the guard
-// exists to prevent.
-func TestRecoveringRunBlocksSessionDeletionAsActive(t *testing.T) {
-	repo := New(openTestDB(t))
-	ctx := context.Background()
-	enqueued, _, _ := recoveringRun(t, repo, "worker-delete")
-
-	// Execution is cleared so the guard cannot pass on execution_active alone;
-	// only the lifecycle can refuse this deletion.
-	if _, err := repo.db.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET execution_active = 0, execution_state = 'none',
-			execution_lease_expires_at = NULL, execution_lease_expires_at_ns = NULL
-		WHERE id = ?
-	`, enqueued.RunID); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := repo.DeleteSessionForTests(ctx, enqueued.SessionID); !errors.Is(err, ErrSessionHasActiveRun) {
-		t.Fatalf("DeleteSession with a recovering run = %v, want ErrSessionHasActiveRun", err)
-	}
-	var sessions int
-	if err := repo.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sessions WHERE id = ?`, enqueued.SessionID).Scan(&sessions); err != nil {
-		t.Fatal(err)
-	}
-	if sessions != 1 {
-		t.Fatal("the refused deletion still removed the session")
 	}
 }

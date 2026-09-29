@@ -14,7 +14,6 @@ import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
-import '../support/no_audit_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_integrations_api.dart';
 import '../support/no_session_lifecycle_api.dart';
@@ -573,7 +572,6 @@ class _Offline implements Exception {
 /// behaves like the real one rather than a stub that always says yes.
 class _AgentApi extends TuringApi
     with
-        NoAuditApi,
         NoSkillsApi,
         NoIntegrationsApi,
         NoSessionLifecycleApi,
@@ -713,11 +711,6 @@ class _AgentApi extends TuringApi
   Future<List<ToolDescriptor>> listTools() async => const [];
 
   @override
-  Future<Map<String, dynamic>> getConfig() async => const {
-    'enabledProviders': ['ollama'],
-  };
-
-  @override
   Future<Map<String, dynamic>> createSession({String? title}) async => {
     'sessionId': 'sess_1',
   };
@@ -769,12 +762,6 @@ class _AgentApi extends TuringApi
     String modelProvider = 'ollama',
     String? idempotencyKey,
   }) async => {'runId': 'run_1'};
-
-  @override
-  Future<Map<String, dynamic>> approveApproval(
-    String approvalId, {
-    String? comment,
-  }) async => {'approvalId': approvalId, 'status': 'approved'};
 
   @override
   Future<Map<String, dynamic>> denyApproval(

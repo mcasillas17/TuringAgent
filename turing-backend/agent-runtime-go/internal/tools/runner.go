@@ -8,7 +8,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
-	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/safejson"
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/safejson"
 	"github.com/oklog/ulid/v2"
 	"golang.org/x/sync/errgroup"
 )

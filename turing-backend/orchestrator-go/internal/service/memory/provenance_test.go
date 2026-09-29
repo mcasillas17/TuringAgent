@@ -9,6 +9,7 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository/repotest"
 )
 
 // What a belief rests on is read, never assumed.
@@ -52,7 +53,7 @@ func TestMemoryStateReportsAWithdrawnBeliefAsGroundedInNothing(t *testing.T) {
 		t.Fatalf("ListMemoryState: %v", err)
 	}
 
-	if err := repo.DeleteSessionForTests(ctx, sessionID); err != nil {
+	if err := repotest.DeleteSession(ctx, repo, sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 
@@ -95,7 +96,7 @@ func TestMemoryStateLeavesAnUnevidencedBeliefWithNoProvenanceRow(t *testing.T) {
 // still rest on that conversation either. Saying "withdrawn" and "1 piece of
 // evidence" in the same breath is the page contradicting itself.
 func TestMemoryStateReportsAWithdrawnProposalAsGroundedInNothing(t *testing.T) {
-	service, repo, _, ctx := newMemoryService(t)
+	service, repo, _, database, ctx := newMemoryServiceStack(t, filepath.Join(t.TempDir(), "turing.db"), newVaultRoot(t), nil)
 	sessionID := newMemorySession(t, repo, ctx)
 	candidate, err := repo.CreateMemoryCandidate(ctx, repository.CreateMemoryCandidateInput{
 		SessionID: sessionID,
@@ -106,8 +107,11 @@ func TestMemoryStateReportsAWithdrawnProposalAsGroundedInNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateMemoryCandidate: %v", err)
 	}
-	if _, err := repo.WithdrawMemoryCandidate(ctx, candidate.CandidateID); err != nil {
-		t.Fatalf("WithdrawMemoryCandidate: %v", err)
+	// No production path writes 'withdrawn' any more; rows in that state are
+	// still read, so the state is placed directly.
+	if _, err := database.ExecContext(ctx, `UPDATE memory_candidates SET state = ?, decided_at = updated_at WHERE id = ?`,
+		repository.MemoryCandidateStateWithdrawn, candidate.CandidateID); err != nil {
+		t.Fatalf("withdraw candidate: %v", err)
 	}
 
 	state := listState(t, service, ctx)

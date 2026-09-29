@@ -105,8 +105,8 @@ func TestReconcileKeepsAReservationWhoseCleanupFailed(t *testing.T) {
 	if err := os.Rename(full, residue); err != nil {
 		t.Fatalf("stage the residue a failed removal leaves: %v", err)
 	}
-	if err := repo.MarkSessionVaultArtifactsDeleteFailed(
-		ctx(), sessionID, []string{artifact.ArtifactID}, "vault_remove_failed",
+	if err := repo.markVaultArtifactsDeleteFailed(
+		ctx(), sessionID, vaultFailures("vault_remove_failed", artifact.ArtifactID),
 	); err != nil {
 		t.Fatalf("mark the failed cleanup: %v", err)
 	}
@@ -201,8 +201,8 @@ func TestVaultCleanupTakesBytesLeftUnderAReservedName(t *testing.T) {
 	if err := os.Rename(full, residue); err != nil {
 		t.Fatalf("stage the residue a failed removal leaves: %v", err)
 	}
-	if err := repo.MarkSessionVaultArtifactsDeleteFailed(
-		ctx(), sessionID, []string{artifact.ArtifactID}, "vault_remove_failed",
+	if err := repo.markVaultArtifactsDeleteFailed(
+		ctx(), sessionID, vaultFailures("vault_remove_failed", artifact.ArtifactID),
 	); err != nil {
 		t.Fatalf("mark the failed cleanup: %v", err)
 	}

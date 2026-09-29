@@ -21,7 +21,7 @@ func TestLateFailedAfterForTerminalSafeCallIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-late-safe"); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-late-safe", 0, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
@@ -72,7 +72,7 @@ func TestLateCompletedAfterCorrectsConsumedApprovalTerminalCleanup(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-late-committed"); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-late-committed", 0, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	const toolCallID = "call_late_committed"
@@ -81,11 +81,11 @@ func TestLateCompletedAfterCorrectsConsumedApprovalTerminalCleanup(t *testing.T)
 	}, "general_assistant", "files", "files.update", `{"path":"note.txt","content":"changed"}`, "sha256:late-committed"); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, toolCallID, "general_assistant", "files.update", `{"path":"note.txt","content":"changed"}`, "sha256:late-committed", "2099-01-01T00:00:00Z")
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, toolCallID, "general_assistant", "files.update", `{"path":"note.txt","content":"changed"}`, "sha256:late-committed", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approval-token", sql.NullString{}, ""); err != nil {
+	if _, err := repo.ApproveApprovalWithEvent(ctx, approval.ApprovalID, "approval-token", sql.NullString{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.ConsumeApprovalWithEvent(ctx, approval.ApprovalID, ""); err != nil {

@@ -142,7 +142,7 @@ func TestRemoteEnqueuePersistsAndFreezesEgressDecision(t *testing.T) {
 		t.Fatalf("selected tools = %v", decision.SelectedTools)
 	}
 
-	job, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-egress")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-egress", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestSessionDeletionScrubsEgressAuditMetadata(t *testing.T) {
 		FormatTimestamp(time.Now().UTC()), enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.DeleteSessionForTests(ctx, session.SessionID); err != nil {
+	if err := deleteSession(ctx, repo, session.SessionID); err != nil {
 		t.Fatal(err)
 	}
 	var payload string

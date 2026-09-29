@@ -92,16 +92,8 @@ func (r *Repository) RenewAssignments(ctx context.Context, assignments []Assignm
 	return renewed, nil
 }
 
-func (r *Repository) ReconcileAssignment(ctx context.Context, assignment Assignment) (AssignmentReconciliation, error) {
-	return r.ReconcileAssignmentWithLimit(ctx, assignment, defaultAssignmentMaxAttempts)
-}
-
 func (r *Repository) ReconcileAssignmentWithLimit(ctx context.Context, assignment Assignment, maxAttempts int) (AssignmentReconciliation, error) {
 	return r.reconcileAssignment(ctx, assignment, false, nil, maxAttempts, false)
-}
-
-func (r *Repository) RecoverAssignment(ctx context.Context, assignment Assignment) (AssignmentReconciliation, error) {
-	return r.RecoverAssignmentWithLimit(ctx, assignment, defaultAssignmentMaxAttempts)
 }
 
 func (r *Repository) RecoverAssignmentWithLimit(ctx context.Context, assignment Assignment, maxAttempts int) (AssignmentReconciliation, error) {
@@ -112,10 +104,6 @@ func (r *Repository) RecoverAssignmentWithLimit(ctx context.Context, assignment 
 // that an explicitly cancelled execution has stopped.
 func (r *Repository) ReconcileHeartbeatAssignment(ctx context.Context, assignment Assignment, maxAttempts int) (AssignmentReconciliation, error) {
 	return r.reconcileAssignment(ctx, assignment, true, nil, maxAttempts, true)
-}
-
-func (r *Repository) RecoverAssignmentAtCutoff(ctx context.Context, assignment Assignment, cutoff time.Time) (AssignmentReconciliation, error) {
-	return r.RecoverAssignmentAtCutoffWithLimit(ctx, assignment, cutoff, defaultAssignmentMaxAttempts)
 }
 
 func (r *Repository) RecoverAssignmentAtCutoffWithLimit(ctx context.Context, assignment Assignment, cutoff time.Time, maxAttempts int) (AssignmentReconciliation, error) {
@@ -755,22 +743,6 @@ func reconcileWaitingApprovalTx(ctx context.Context, tx *sql.Tx, runID, sessionI
 	return AssignmentReconciliation{Cleared: !preserveExecution, Fenced: preserveExecution, Events: events}, nil
 }
 
-func (r *Repository) RecoverStaleAssignments(ctx context.Context, cutoff time.Time) ([]Event, error) {
-	return r.RecoverStaleAssignmentsWithLimit(ctx, cutoff, defaultAssignmentMaxAttempts)
-}
-
-func (r *Repository) RecoverStaleAssignmentsWithLimit(ctx context.Context, cutoff time.Time, maxAttempts int) ([]Event, error) {
-	assignments, err := r.RecoverableAssignments(ctx, cutoff)
-	if err != nil {
-		return nil, err
-	}
-	return r.recoverAssignments(ctx, assignments, &cutoff, maxAttempts)
-}
-
-func (r *Repository) RecoverAllActiveAssignments(ctx context.Context) ([]Event, error) {
-	return r.RecoverAllActiveAssignmentsWithLimit(ctx, defaultAssignmentMaxAttempts)
-}
-
 func (r *Repository) RecoverAllActiveAssignmentsWithLimit(ctx context.Context, maxAttempts int) ([]Event, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -794,7 +766,7 @@ func (r *Repository) RecoverAllActiveAssignmentsWithLimit(ctx context.Context, m
 	if err != nil {
 		return nil, err
 	}
-	return r.recoverAssignments(ctx, assignments, nil, maxAttempts)
+	return r.recoverAssignments(ctx, assignments, maxAttempts)
 }
 
 func (r *Repository) RecoverableAssignments(ctx context.Context, cutoff time.Time) ([]Assignment, error) {
@@ -882,16 +854,10 @@ func (r *Repository) startupRecoveryAssignments(ctx context.Context) ([]Assignme
 	return assignments, nil
 }
 
-func (r *Repository) recoverAssignments(ctx context.Context, assignments []Assignment, cutoff *time.Time, maxAttempts int) ([]Event, error) {
+func (r *Repository) recoverAssignments(ctx context.Context, assignments []Assignment, maxAttempts int) ([]Event, error) {
 	var events []Event
 	for _, assignment := range assignments {
-		var reconciliation AssignmentReconciliation
-		var err error
-		if cutoff == nil {
-			reconciliation, err = r.RecoverAssignmentWithLimit(ctx, assignment, maxAttempts)
-		} else {
-			reconciliation, err = r.RecoverAssignmentAtCutoffWithLimit(ctx, assignment, *cutoff, maxAttempts)
-		}
+		reconciliation, err := r.RecoverAssignmentWithLimit(ctx, assignment, maxAttempts)
 		if err != nil {
 			return events, err
 		}

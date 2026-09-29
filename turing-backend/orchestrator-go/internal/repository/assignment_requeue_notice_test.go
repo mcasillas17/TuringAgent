@@ -24,7 +24,7 @@ func runningAssignment(t *testing.T, repo *Repository, worker string) (EnqueueUs
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", worker)
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", worker, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,17 +117,17 @@ func TestExhaustedRecoveryOrdersGiveUpBeforeApprovalCleanup(t *testing.T) {
 	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.CreateApproval(ctx, enqueued.RunID, "call_giveup", "general_assistant",
+	if _, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_giveup", "general_assistant",
 		"files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	// CreateApproval parks the run in waiting_approval; put it back to running so
+	// CreateApprovalWithEvent parks the run in waiting_approval; put it back to running so
 	// reconciliation takes the branch that terminalizes on exhausted attempts,
 	// with the approval still pending underneath it.
 	//
 	// This is a shortcut to a REACHABLE state, not a manufactured one. A run can
 	// hold several pending approvals — the unique index is on tool_call_id, not
-	// one-per-run (0001_initial.sql) — and CreateApproval accepts a run that is
+	// one-per-run (0001_initial.sql) — and CreateApprovalWithEvent accepts a run that is
 	// already 'running'. So: approval B is created (run -> waiting_approval),
 	// then an earlier approval A is approved, which sets the run back to
 	// 'running' and leaves B pending. Two SQL statements here stand in for that

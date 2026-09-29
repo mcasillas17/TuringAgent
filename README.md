@@ -22,7 +22,7 @@ The project is designed for local development first: secrets stay in your local 
 - Provides an explicit **Stop** action for a run, backed by durable,
   retry-safe cancellation. Acceptance and worker shutdown are separate;
   completed side effects are not undone.
-- Exposes a redacted, paginated audit read API (`AuditService.ListAuditEntries`), including the approval comment or denial reason a person typed; audit inspection is exposed programmatically through the authenticated API and a thin client, with no built-in viewer yet.
+- Exposes a redacted, paginated audit read API (`AuditService.ListAuditEntries`), including the approval comment or denial reason a person typed; audit inspection is exposed programmatically through the authenticated API, with no client or built-in viewer yet.
 - Withdraws a deleted session through a durable lifecycle: reads/search/replay
   fail closed once withdrawal starts, active work is cancelled and reconciled,
   existing subscribers receive one terminal deletion event, and newly
@@ -261,7 +261,6 @@ Common values:
 | `TURING_TOOL_TIMEOUT_MS` / `TURING_TOOL_TOTAL_TIMEOUT_MS` | Per-request MCP timeout and whole-tool lifecycle timeout (defaults: 30s / 180s) |
 | `TURING_QUEUE_NO_WORKER_TIMEOUT_MS` / `TURING_QUEUE_MAX_WAIT_MS` | How long an already-accepted message may sit in the queue: while nothing connected can run it (default 15m), and in total across requeues (default 12h). Either may be `0` to switch that bound off. These bound waiting only — they are not the model, approval, lease or retry timeouts, and a message that never started has consumed none of those. Deadlines are noticed on `TURING_JOB_REAPER_INTERVAL_MS`, and setting that to `0` turns both bounds off whatever these say. See [bounded queue waiting](docs/architecture/queue-wait.md) |
 | `TURING_QUEUE_TIMEOUT_POLICY` | What happens when a queue bound is reached: `fail` (default) or `cancel`. Both are final; there is no paused state to resume from |
-| `HOST_IDENTITY_MODE` | Managed compatibility marker; `init.sh` always resets it to `auto` |
 | `HOST_UID` / `HOST_GID` | Current canonical non-root host IDs, managed by `init.sh` and overridden safely by `scripts/compose.sh` at launch |
 | `ORCHESTRATOR_GRPC_ADDR` | Internal orchestrator gRPC address, usually `turing-orchestrator:3001` |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model endpoint and default model. The URL must use localhost, `host.docker.internal`, or a loopback IP literal; remote Ollama hosts are refused rather than treated as local |

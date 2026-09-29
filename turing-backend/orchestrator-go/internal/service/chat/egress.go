@@ -59,7 +59,6 @@ const memoryDriftMessage = "your pinned memory changed since consent was prepare
 type EgressConfig struct {
 	OpenAIBaseURL string
 	SigningSecret string
-	ChallengeTTL  time.Duration
 }
 
 type liveToolSource interface {
@@ -142,10 +141,6 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 		return nil, status.Error(codes.FailedPrecondition, "remote egress consent is not configured")
 	}
 	now := s.now().UTC()
-	ttl := s.egress.ChallengeTTL
-	if ttl <= 0 {
-		ttl = defaultEgressChallengeTTL
-	}
 	nonce, err := s.nonce()
 	if err != nil {
 		return nil, status.Error(codes.Internal, "create remote egress disclosure failed")
@@ -158,7 +153,7 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 		Version:                   egressChallengeVersion,
 		Nonce:                     nonce,
 		IssuedAtUnixNano:          now.UnixNano(),
-		ExpiresAtUnixNano:         now.Add(ttl).UnixNano(),
+		ExpiresAtUnixNano:         now.Add(defaultEgressChallengeTTL).UnixNano(),
 		SessionID:                 input.SessionID,
 		IdempotencyKey:            input.IdempotencyKey,
 		RequestDigest:             requestDigest,

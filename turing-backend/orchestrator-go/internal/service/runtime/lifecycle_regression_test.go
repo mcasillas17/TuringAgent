@@ -50,7 +50,7 @@ func TestAmbiguousAssignmentSendKeepsAttemptFenced(t *testing.T) {
 	if run.Status != "recovering" || !run.ExecutionActive {
 		t.Fatalf("ambiguous assignment run = %+v, want active recovering fence", run)
 	}
-	claimed, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-fresh")
+	claimed, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-fresh", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestDisconnectFencesDeliveredAssignmentUntilRecovery(t *testing.T) {
 func TestDisconnectReconciliationRacingDenialPreservesExecutionFence(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "disconnect and deny")
-	claimed, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-disconnect-race")
+	claimed, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-disconnect-race", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestDisconnectReconciliationRacingDenialPreservesExecutionFence(t *testing.
 	go func() {
 		defer wg.Done()
 		<-start
-		_, err := h.repo.ReconcileAssignment(context.Background(), assignment)
+		_, err := h.repo.ReconcileAssignmentWithLimit(context.Background(), assignment, 0)
 		errs <- err
 	}()
 	go func() {
@@ -492,7 +492,7 @@ func TestFencedRunRefusesGenericOwnershipClaims(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	enqueued := h.enqueueRun(t, "fenced narration")
-	claimed, err := h.repo.ClaimNextJob(ctx, "general_assistant", "worker-fenced")
+	claimed, err := h.repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-fenced", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

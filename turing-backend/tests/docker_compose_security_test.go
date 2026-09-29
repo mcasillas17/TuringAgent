@@ -93,7 +93,6 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// client can name a folder the user can actually open. No file
 		// operation and no confinement check ever reads it.
 		"MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:-}",
-		"OLLAMA_BASE_URL:",
 		// The orchestrator never calls OpenAI or mcp-files through its normal
 		// bearer: it only reports
 		// through GetConfig whether each is configured, so it holds a
@@ -234,7 +233,6 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"MEMORY_ROOT",
 			"MEMORY_DISPLAY_ROOT",
 			"MCP_CONFIG_ROOT",
-			"OLLAMA_BASE_URL",
 			"OLLAMA_MODEL",
 			"OLLAMA_CONTEXT_WINDOW_TOKENS",
 			"OPENAI_BASE_URL",
@@ -253,10 +251,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"TURING_JOB_MAX_ATTEMPTS",
 			"TURING_MAX_CONCURRENT_RUNS_GENERAL",
 			"TURING_MAX_TOOL_CALLS_PER_RUN",
-			"TURING_MODEL_TIMEOUT_MS",
-			"TURING_TOOL_TIMEOUT_MS",
 			"TURING_APPROVAL_TIMEOUT_MS",
-			"LOG_LEVEL",
 		},
 		"turing-agent-runtime-general": {
 			"TURING_RUNTIME_TOKEN",
@@ -285,12 +280,9 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"OPENAI_CONTEXT_WINDOW_TOKENS",
 			"OPENAI_MAX_OUTPUT_TOKENS",
 			"TURING_AGENT_API_KEYS",
-			"LOG_LEVEL",
 		},
 		"turing-mcp-system": {
 			"MCP_SYSTEM_TOKEN_GENERAL",
-			"LOG_LEVEL",
-			"LOG_PRETTY",
 		},
 		"turing-mcp-files": {
 			"MCP_FILES_TOKEN_GENERAL",
@@ -299,8 +291,6 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"TURING_MCP_FILES_CLEANUP_TOKEN",
 			"ORCHESTRATOR_GRPC_ADDR",
 			"FILES_SANDBOX_ROOT",
-			"LOG_LEVEL",
-			"LOG_PRETTY",
 		},
 	}
 	document := decodeComposeDocument(t, compose)

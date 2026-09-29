@@ -28,8 +28,8 @@ func approvalPairFixture(t *testing.T, repo *Repository, worker string) (Enqueue
 	t.Helper()
 	ctx := context.Background()
 	enqueued := enqueueRun(t, repo, "Approval lifecycle")
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", worker); err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", worker, 0, 0, nil, nil); err != nil {
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
 		ToolCallID: "call_approval_pair", RunID: enqueued.RunID, ModelToolCallID: "model_approval_pair",

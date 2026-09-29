@@ -148,9 +148,9 @@ func recoveringRun(t *testing.T, repo *Repository, worker string) (EnqueueUserMe
 	t.Helper()
 	ctx := context.Background()
 	enqueued := enqueueRun(t, repo, "Recovering run")
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", worker)
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", worker, 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	running, err := repo.GetRunState(ctx, enqueued.RunID)
 	if err != nil {
@@ -281,9 +281,9 @@ func TestRealLifecycleTransitionIncrementsVersionAndAppendsOneProjection(t *test
 	enqueued := enqueueRun(t, repo, "Assignment start")
 	before := countRunEvents(t, repo, enqueued.RunID)
 
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-start")
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-start", 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	state, err := repo.GetRunState(ctx, enqueued.RunID)
 	if err != nil {
@@ -488,7 +488,7 @@ func TestTerminalRowsRejectEveryLaterTransition(t *testing.T) {
 				},
 				"start": func() error { return repo.MarkRunRunning(ctx, enqueued.RunID) },
 				"wait for approval": func() error {
-					_, err := repo.CreateApproval(ctx, enqueued.RunID, "", "general_assistant",
+					_, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "", "general_assistant",
 						"files.update", `{}`, "sha256:x", "2099-01-01T00:00:00Z")
 					return err
 				},
@@ -564,9 +564,9 @@ func TestTransitionRejectsZeroNegativeAndMaxInt64Version(t *testing.T) {
 			t.Helper()
 			ctx := context.Background()
 			enqueued := enqueueRun(t, repo, "Fence version range")
-			claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-range")
+			claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-range", 0, 0, nil, nil)
 			if err != nil {
-				t.Fatalf("ClaimNextJob: %v", err)
+				t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 			}
 			running, err := repo.GetRunState(ctx, enqueued.RunID)
 			if err != nil {
@@ -1028,7 +1028,7 @@ func absentLinkSurfaces() []absentLinkSurface {
 				t.Helper()
 				enqueued := enqueueRun(t, repo, "Absent link claim")
 				return enqueued.RunID, func() error {
-					_, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-absent")
+					_, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-absent", 0, 0, nil, nil)
 					return err
 				}
 			},
@@ -1092,9 +1092,9 @@ func absentLinkSurfaces() []absentLinkSurface {
 			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
 				t.Helper()
 				enqueued := enqueueRun(t, repo, "Absent link fence")
-				claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-absent-fence")
+				claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-absent-fence", 0, 0, nil, nil)
 				if err != nil {
-					t.Fatalf("ClaimNextJob: %v", err)
+					t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 				}
 				return enqueued.RunID, func() error {
 					_, err := repo.FenceRunOwnership(ctx, FenceRunOwnershipInput{
@@ -1140,9 +1140,9 @@ func absentLinkSurfaces() []absentLinkSurface {
 			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
 				t.Helper()
 				enqueued := enqueueRun(t, repo, "Absent link unsent requeue")
-				claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-absent-unsent")
+				claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-absent-unsent", 0, 0, nil, nil)
 				if err != nil {
-					t.Fatalf("ClaimNextJob: %v", err)
+					t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 				}
 				return enqueued.RunID, func() error {
 					return repo.AbortPendingAssignment(ctx, Assignment{
@@ -1159,9 +1159,9 @@ func absentLinkSurfaces() []absentLinkSurface {
 			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
 				t.Helper()
 				enqueued := enqueueRun(t, repo, "Absent link uncertain requeue")
-				claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-absent-delivered")
+				claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-absent-delivered", 0, 0, nil, nil)
 				if err != nil {
-					t.Fatalf("ClaimNextJob: %v", err)
+					t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 				}
 				if err := repo.BeginAssignmentSend(ctx, Assignment{
 					JobID: claimed.JobID, RunID: enqueued.RunID,
@@ -1188,8 +1188,8 @@ func absentLinkSurfaces() []absentLinkSurface {
 func runningRunForAbsentLink(t *testing.T, repo *Repository, worker string) string {
 	t.Helper()
 	enqueued := enqueueRun(t, repo, "Absent link terminal")
-	if _, err := repo.ClaimNextJob(context.Background(), "general_assistant", worker); err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", worker, 0, 0, nil, nil); err != nil {
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	return enqueued.RunID
 }

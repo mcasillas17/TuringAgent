@@ -24,7 +24,7 @@ func TestRecoverStaleUncertainAssignmentFencesAndRequeuesAtInjectedCutoff(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-lost")
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-lost", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestRecoverStaleUncertainAssignmentFencesAndRequeuesAtInjectedCutoff(t *tes
 	if err := repo.MarkAssignmentDeliveryUncertain(ctx, assignment); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ReconcileAssignment(ctx, assignment); err != nil {
+	if _, err := repo.ReconcileAssignmentWithLimit(ctx, assignment, 0); err != nil {
 		t.Fatal(err)
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -54,7 +54,7 @@ func TestRecoverStaleUncertainAssignmentFencesAndRequeuesAtInjectedCutoff(t *tes
 	if _, err := database.ExecContext(ctx, `UPDATE agent_runs SET execution_lease_expires_at = ?, execution_lease_expires_at_ns = ? WHERE id = ?`, FormatTimestamp(expiredLease), expiredLease.UnixNano(), enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.RecoverStaleAssignments(ctx, cutoff); err != nil {
+	if _, err := repo.recoverStaleAssignments(ctx, cutoff); err != nil {
 		t.Fatal(err)
 	}
 	run, err = repo.GetRun(ctx, enqueued.RunID)
@@ -64,7 +64,7 @@ func TestRecoverStaleUncertainAssignmentFencesAndRequeuesAtInjectedCutoff(t *tes
 	if run.Status != "queued" || run.ExecutionActive {
 		t.Fatalf("stale recovery run = %+v, want queued inactive", run)
 	}
-	recovered, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-fresh")
+	recovered, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-fresh", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestPendingSendRecoveryDoesNotConsumeExecutionAttempt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-pending-send")
+			claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-pending-send", 0, 0, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -167,7 +167,7 @@ func TestRecoverAssignmentAtCutoffDoesNotRequeueRenewedLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-renewed")
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-renewed", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestRecoverAssignmentAtCutoffDoesNotRequeueRenewedLease(t *testing.T) {
 		t.Fatalf("renewed assignments = %+v, want one", renewed)
 	}
 
-	reconciliation, err := repo.RecoverAssignmentAtCutoff(ctx, assignment, cutoff)
+	reconciliation, err := repo.RecoverAssignmentAtCutoffWithLimit(ctx, assignment, cutoff, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestRecoverAssignmentAtCutoffFailsAtConfiguredMaximumAttempt(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-expired")
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-expired", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestReconcileWaitingApprovalReturnsExactLifecycleEventsInOrder(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-lost")
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-lost", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,14 +328,14 @@ func TestReconcileWaitingApprovalReturnsExactLifecycleEventsInOrder(t *testing.T
 	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "call_recovery", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z")
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_recovery", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	reconciliation, err := repo.ReconcileAssignment(ctx, Assignment{
+	reconciliation, err := repo.ReconcileAssignmentWithLimit(ctx, Assignment{
 		JobID: claimed.JobID, RunID: claimed.RunID, WorkerID: "worker-lost", AttemptID: claimed.AssignmentAttemptID,
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,4 +375,23 @@ func TestReconcileWaitingApprovalReturnsExactLifecycleEventsInOrder(t *testing.T
 	if !reflect.DeepEqual(toolPayload, wantToolPayload) {
 		t.Fatalf("tool payload = %#v, want %#v", toolPayload, wantToolPayload)
 	}
+}
+
+// recoverStaleAssignments is the runtime's stale sweep in one call: every
+// assignment recoverable at cutoff, each recovered at that cutoff with the
+// default attempt limit.
+func (r *Repository) recoverStaleAssignments(ctx context.Context, cutoff time.Time) ([]Event, error) {
+	assignments, err := r.RecoverableAssignments(ctx, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	var events []Event
+	for _, assignment := range assignments {
+		reconciliation, err := r.RecoverAssignmentAtCutoffWithLimit(ctx, assignment, cutoff, 0)
+		if err != nil {
+			return events, err
+		}
+		events = append(events, reconciliation.Events...)
+	}
+	return events, nil
 }

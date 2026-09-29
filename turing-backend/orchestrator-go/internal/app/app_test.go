@@ -19,6 +19,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository/repotest"
 	"github.com/mcasillas17/TuringAgent/turing-backend/testsupport/approvalfixture"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -259,7 +260,7 @@ func TestAppRestartRecoversStaleRunningAssignment(t *testing.T) {
 	if run.Status != "queued" {
 		t.Fatalf("restart left stale run %q, want queued for recovery", run.Status)
 	}
-	claimed, err := restarted.Repository.ClaimNextJob(context.Background(), "general_assistant", "worker-after-restart")
+	claimed, err := restarted.Repository.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-after-restart", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -813,7 +814,7 @@ func TestDeletedSessionAuditIsListableOnlyAsScrubbedEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.Repository.ClaimNextJob(ctx, "general_assistant", "worker-delete-audit"); err != nil {
+	if _, err := app.Repository.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-delete-audit", 0, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	// toolName is part of tool.call.before's reviewed allowlist (service.go's
@@ -866,13 +867,12 @@ func TestDeletedSessionAuditIsListableOnlyAsScrubbedEvidence(t *testing.T) {
 		t.Fatalf("before delete: tool name = %q, want the recorded sentinel (precondition failed)", beforeDelete.Entries[0].GetPayload().GetToolName())
 	}
 
-	// The run must be terminal — not queued/running/waiting_approval and not
-	// execution_active — or DeleteSession refuses it (see
-	// repository.ErrSessionHasActiveRun).
+	// The run must be terminal with execution_active cleared, or the
+	// withdrawal quiesces instead of completing.
 	if _, err := app.database.ExecContext(ctx, `UPDATE agent_runs SET status = 'completed', execution_active = 0 WHERE id = ?`, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.Repository.DeleteSessionForTests(ctx, session.SessionID); err != nil {
+	if err := repotest.DeleteSession(ctx, app.Repository, session.SessionID); err != nil {
 		t.Fatal(err)
 	}
 

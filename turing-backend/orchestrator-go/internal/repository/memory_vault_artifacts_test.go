@@ -122,28 +122,50 @@ func TestVaultArtifactStateTransitionsAreScopedToTheSession(t *testing.T) {
 		t.Fatalf("ReserveVaultArtifact: %v", err)
 	}
 
-	if _, err := repo.FinalizeVaultArtifact(ctx, artifact.ArtifactID, stranger.SessionID, "sha256:written"); !errors.Is(err, ErrVaultArtifactNotFound) {
+	if err := finalizeVaultArtifact(ctx, repo, artifact.ArtifactID, stranger.SessionID, "sha256:written"); !errors.Is(err, ErrVaultArtifactNotFound) {
 		t.Fatalf("stranger finalize error = %v, want ErrVaultArtifactNotFound", err)
 	}
-	if released, err := repo.ReleaseVaultArtifactReservation(ctx, artifact.ArtifactID, stranger.SessionID); err != nil || released {
-		t.Fatalf("stranger release = (%v, %v), want (false, nil)", released, err)
+	if err := finalizeVaultArtifact(ctx, repo, artifact.ArtifactID, owner.SessionID, "sha256:written"); err != nil {
+		t.Fatalf("finalize: %v", err)
 	}
-
-	finalized, err := repo.FinalizeVaultArtifact(ctx, artifact.ArtifactID, owner.SessionID, "sha256:written")
+	artifacts, err := repo.SessionVaultArtifacts(ctx, owner.SessionID)
 	if err != nil {
-		t.Fatalf("FinalizeVaultArtifact: %v", err)
+		t.Fatalf("SessionVaultArtifacts: %v", err)
 	}
-	if finalized.State != VaultArtifactStateReady || finalized.FinalizedAt == "" {
-		t.Fatalf("unexpected finalized artifact: %+v", finalized)
+	if len(artifacts) != 1 || artifacts[0].State != VaultArtifactStateReady || artifacts[0].FinalizedAt == "" {
+		t.Fatalf("unexpected finalized artifacts: %+v", artifacts)
 	}
-	// A finalized artifact names a file that exists, so its reservation can no
-	// longer be dropped as if the write never happened.
-	if released, err := repo.ReleaseVaultArtifactReservation(ctx, artifact.ArtifactID, owner.SessionID); err != nil || released {
-		t.Fatalf("release after finalize = (%v, %v), want (false, nil)", released, err)
+	// A second finalization naming the same bytes is agreement; naming other
+	// bytes is a refused rebinding of a file that is already accounted for.
+	if err := finalizeVaultArtifact(ctx, repo, artifact.ArtifactID, owner.SessionID, "sha256:written"); err != nil {
+		t.Fatalf("repeat finalize with the same hash: %v", err)
 	}
-	if _, err := repo.FinalizeVaultArtifact(ctx, artifact.ArtifactID, owner.SessionID, "sha256:written"); !errors.Is(err, ErrVaultArtifactInvalidTransition) {
-		t.Fatalf("second finalize error = %v, want ErrVaultArtifactInvalidTransition", err)
+	if err := finalizeVaultArtifact(ctx, repo, artifact.ArtifactID, owner.SessionID, "sha256:other"); !errors.Is(err, ErrVaultArtifactNotFound) {
+		t.Fatalf("finalize with a different hash error = %v, want ErrVaultArtifactNotFound", err)
 	}
+}
+
+// finalizeVaultArtifact runs the production finalization step in a
+// transaction of its own.
+func finalizeVaultArtifact(ctx context.Context, repo *Repository, artifactID string, sessionID string, contentHash string) error {
+	tx, err := repo.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := finalizeVaultArtifactTx(ctx, tx, artifactID, sessionID, contentHash); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// vaultFailures marks every id as failed under one error class.
+func vaultFailures(errorCode string, artifactIDs ...string) []vaultArtifactFailure {
+	failures := make([]vaultArtifactFailure, 0, len(artifactIDs))
+	for _, artifactID := range artifactIDs {
+		failures = append(failures, vaultArtifactFailure{artifactID: artifactID, errorCode: errorCode})
+	}
+	return failures
 }
 
 func TestSessionVaultArtifactListingsAreScopedAndCounted(t *testing.T) {
@@ -179,30 +201,15 @@ func TestSessionVaultArtifactListingsAreScopedAndCounted(t *testing.T) {
 			t.Fatalf("listing leaked another session's artifact: %+v", artifact)
 		}
 	}
-	count, err := repo.CountSessionVaultArtifacts(ctx, owner.SessionID)
-	if err != nil {
-		t.Fatalf("CountSessionVaultArtifacts: %v", err)
-	}
-	if count != 2 {
-		t.Fatalf("count = %d, want 2", count)
-	}
-
-	pending, err := repo.PendingSessionVaultArtifacts(ctx, owner.SessionID)
-	if err != nil {
-		t.Fatalf("PendingSessionVaultArtifacts: %v", err)
-	}
-	if len(pending) != 2 {
-		t.Fatalf("pending count = %d, want 2", len(pending))
-	}
-	if err := repo.MarkSessionVaultArtifactsDeleteFailed(ctx, owner.SessionID, artifactIDsOf(artifacts), "vault_unavailable"); err != nil {
-		t.Fatalf("MarkSessionVaultArtifactsDeleteFailed: %v", err)
+	if err := repo.markVaultArtifactsDeleteFailed(ctx, owner.SessionID, vaultFailures("vault_unavailable", artifactIDsOf(artifacts)...)); err != nil {
+		t.Fatalf("markVaultArtifactsDeleteFailed: %v", err)
 	}
 	// A delete_failed row is a file still sitting in the user's vault. Leaving
 	// it out of the worklist is how a retry reports a completed withdrawal
 	// while the note it was supposed to remove is still there.
-	pending, err = repo.PendingSessionVaultArtifacts(ctx, owner.SessionID)
+	pending, err := repo.SessionVaultArtifacts(ctx, owner.SessionID)
 	if err != nil {
-		t.Fatalf("PendingSessionVaultArtifacts after failure: %v", err)
+		t.Fatalf("SessionVaultArtifacts after failure: %v", err)
 	}
 	if len(pending) != 2 {
 		t.Fatalf("pending after delete_failed = %d, want both rows retried", len(pending))
@@ -226,7 +233,7 @@ func artifactIDsOf(artifacts []VaultArtifact) []string {
 // one redacted audit row per artifact, naming the artifact and the error code
 // and nothing about what the file said. It must never reach across into
 // sandbox_artifacts, which has its own cleaner and its own retention answer.
-func TestMarkSessionVaultArtifactsDeleteFailedAuditsEachArtifactAndSpareSandboxRows(t *testing.T) {
+func TestMarkVaultArtifactsDeleteFailedAuditsEachArtifactAndSpareSandboxRows(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)
 	ctx := context.Background()
@@ -265,9 +272,9 @@ func TestMarkSessionVaultArtifactsDeleteFailedAuditsEachArtifactAndSpareSandboxR
 	// The sandbox id is passed in deliberately: the statement names
 	// vault_artifacts and only vault_artifacts, so an id from another manifest
 	// matches nothing and changes nothing.
-	if err := repo.MarkSessionVaultArtifactsDeleteFailed(ctx, session.SessionID,
-		[]string{first.ArtifactID, second.ArtifactID, sandbox.ArtifactID}, "vault_unavailable"); err != nil {
-		t.Fatalf("MarkSessionVaultArtifactsDeleteFailed: %v", err)
+	if err := repo.markVaultArtifactsDeleteFailed(ctx, session.SessionID,
+		vaultFailures("vault_unavailable", first.ArtifactID, second.ArtifactID, sandbox.ArtifactID)); err != nil {
+		t.Fatalf("markVaultArtifactsDeleteFailed: %v", err)
 	}
 
 	var sandboxState string
@@ -359,7 +366,7 @@ func TestDeleteVaultArtifactsRemovesOnlyTheNamedRows(t *testing.T) {
 	}
 }
 
-// Deleting the session deletes what it wrote into the vault manifest with it.
+// Deleting the session row deletes what it wrote into the vault manifest with it.
 func TestVaultArtifactsCascadeWithTheSession(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)
@@ -371,8 +378,10 @@ func TestVaultArtifactsCascadeWithTheSession(t *testing.T) {
 	if _, err := repo.ReserveVaultArtifact(ctx, ReserveVaultArtifactInput{SessionID: session.SessionID, VaultPath: "inbox/a.md"}); err != nil {
 		t.Fatalf("ReserveVaultArtifact: %v", err)
 	}
-	if err := repo.DeleteSessionForTests(ctx, session.SessionID); err != nil {
-		t.Fatalf("DeleteSession: %v", err)
+	// The schema's cascade itself, not the withdrawal pipeline, which purges
+	// the manifest before it ever deletes the session row.
+	if _, err := database.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, session.SessionID); err != nil {
+		t.Fatalf("delete session row: %v", err)
 	}
 	var rows int
 	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM vault_artifacts WHERE session_id = ?`, session.SessionID).Scan(&rows); err != nil {
@@ -428,8 +437,8 @@ func TestReserveVaultArtifactRefusesAPathAnotherSessionOwns(t *testing.T) {
 	if len(ownerArtifacts) != 1 {
 		t.Fatalf("owner artifacts = %+v, want its reservation intact", ownerArtifacts)
 	}
-	if released, err := repo.ReleaseVaultArtifactReservation(ctx, ownerArtifacts[0].ArtifactID, owner.SessionID); err != nil || !released {
-		t.Fatalf("ReleaseVaultArtifactReservation = (%v, %v), want (true, nil)", released, err)
+	if err := repo.DeleteVaultArtifacts(ctx, []string{ownerArtifacts[0].ArtifactID}); err != nil {
+		t.Fatalf("DeleteVaultArtifacts: %v", err)
 	}
 	if _, err := repo.ReserveVaultArtifact(ctx, ReserveVaultArtifactInput{
 		SessionID: stranger.SessionID,

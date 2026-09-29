@@ -47,7 +47,7 @@ func TestExplicitCancelLifecycleAndExecutionFences(t *testing.T) {
 			default:
 				run, state = queuedTerminalSource(t, repo)
 				if phase != "queued" {
-					job, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-cancel")
+					job, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-cancel", 0, 0, nil, nil)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -318,7 +318,7 @@ func TestExplicitCancelReadObservesReconciliationWithoutRewritingReceipt(t *test
 func explicitApprovalFixture(t *testing.T, repo *Repository) (EnqueueUserMessageResult, ApprovalRecord) {
 	t.Helper()
 	run, _ := approvalPairFixture(t, repo, "worker-approval-cancel")
-	approval, err := repo.CreateApproval(context.Background(), run.RunID, "call_approval_pair", "general_assistant",
+	approval, _, err := repo.CreateApprovalWithEvent(context.Background(), run.RunID, "call_approval_pair", "general_assistant",
 		"files.update", `{"path":"note.txt"}`, "sha256:pair", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
@@ -343,14 +343,14 @@ func TestExplicitCancelRestartPreservesLeaseUntilExistingRecoveryCutoff(t *testi
 		t.Fatal(err)
 	}
 	restarted := New(database)
-	if _, err := restarted.RecoverAllActiveAssignments(ctx); err != nil {
+	if _, err := restarted.RecoverAllActiveAssignmentsWithLimit(ctx, 0); err != nil {
 		t.Fatal(err)
 	}
 	waiting, err := restarted.GetRun(ctx, run.RunID)
 	if err != nil || !waiting.ExecutionActive || waiting.ExecutionState != "uncertain" || waiting.StateVersion != receipt.State.StateVersion {
 		t.Fatalf("restart prematurely released stop: %+v, %v", waiting, err)
 	}
-	if _, err := restarted.RecoverStaleAssignments(ctx, time.Now().Add(time.Hour)); err != nil {
+	if _, err := restarted.recoverStaleAssignments(ctx, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	finished, err := restarted.GetRun(ctx, run.RunID)
@@ -380,7 +380,7 @@ func TestExplicitCancelResolvesVersionAfterCompetingClaimOrCompletion(t *testing
 				errors <- err
 			}()
 			<-started
-			if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-competing"); err != nil {
+			if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-competing", 0, 0, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			current, err := repo.GetRunState(ctx, run.RunID)

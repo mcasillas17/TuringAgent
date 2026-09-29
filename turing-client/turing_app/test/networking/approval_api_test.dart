@@ -91,18 +91,6 @@ void main() {
     expect(details.canApproveAt(DateTime.now()), isFalse);
   });
 
-  test('legacy decision sends no fabricated review binding', () async {
-    final started = DateTime.now();
-    await api.approveApproval('appr_1');
-    expect(service.approveRequest?.previewHash, isEmpty);
-    expect(service.approveRequest?.argsHash, isEmpty);
-    expect(service.approveDeadline, isNotNull);
-    expect(
-      service.approveDeadline!.difference(started),
-      lessThanOrEqualTo(const Duration(seconds: 11)),
-    );
-  });
-
   test('denial preserves rationale and has a bounded deadline', () async {
     final started = DateTime.now();
     final result = await api.denyApproval(

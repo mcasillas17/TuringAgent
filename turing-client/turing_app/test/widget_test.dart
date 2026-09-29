@@ -15,7 +15,6 @@ import 'package:turing_flutter_app/networking/auth_storage.dart';
 import 'package:turing_flutter_app/networking/grpc_client.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
 
-import 'support/no_audit_api.dart';
 import 'support/no_external_agents_api.dart';
 import 'support/no_integrations_api.dart';
 import 'support/no_session_lifecycle_api.dart';
@@ -91,7 +90,6 @@ class _FakeAuthStorage implements ClientAuthStorage {
 
 class _ClosableFakeApiClient extends ClosableTuringApi
     with
-        NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
@@ -106,14 +104,6 @@ class _ClosableFakeApiClient extends ClosableTuringApi
   }
 
   @override
-  Future<Map<String, dynamic>> approveApproval(
-    String approvalId, {
-    String? comment,
-  }) async {
-    return {'approvalId': approvalId, 'status': 'approved'};
-  }
-
-  @override
   Future<Map<String, dynamic>> createSession({String? title}) async {
     return {'sessionId': 'sess_1', 'createdAt': '2026-05-10T00:00:00.000Z'};
   }
@@ -124,13 +114,6 @@ class _ClosableFakeApiClient extends ClosableTuringApi
     String? reason,
   }) async {
     return {'approvalId': approvalId, 'status': 'denied'};
-  }
-
-  @override
-  Future<Map<String, dynamic>> getConfig() async {
-    return {
-      'enabledProviders': ['ollama'],
-    };
   }
 
   @override

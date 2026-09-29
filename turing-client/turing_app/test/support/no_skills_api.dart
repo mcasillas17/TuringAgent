@@ -5,9 +5,6 @@ import 'package:turing_flutter_app/models/skill.dart';
 mixin NoSkillsApi {
   Future<List<Skill>> listSkills() async => const [];
 
-  Future<Skill> getSkill({required String skillId}) async =>
-      throw UnimplementedError('this test does not exercise skills');
-
   Future<Skill> setSkillEnabled({
     required String skillId,
     required bool enabled,

@@ -42,8 +42,6 @@ tracked as its own task, not implied here.
 - Service: `turing-backend/orchestrator-go/internal/service/audit/service.go`
 - Repository: `turing-backend/orchestrator-go/internal/repository/audit.go`
 - Registration: `turing-backend/orchestrator-go/internal/app/app.go`
-- Flutter access: `turing-client/turing_app/lib/networking/api_client.dart`,
-  `grpc_client.dart`, `lib/models/audit.dart`, `lib/models/grpc_mappers.dart`
 
 ## Authentication and registration
 
@@ -74,15 +72,12 @@ client bearer secret. Only the orchestrator derives the audit cursor subkey
 from it, so holding the client bearer token lets a caller page through the
 trail without letting it forge or tamper with a cursor.
 
-## Flutter access: thin, not a viewer
+## Flutter access: none yet
 
-`TuringApi.listAuditEntries(...)` and the models in `lib/models/audit.dart`
-give the client a typed way to call the RPC and decode its response. That is
-the entire client-side surface TUR-013 ships: there is no audit screen, no
-navigation entry, and no UI that renders these rows anywhere in
-`turing_app/lib`. The canonical roadmap tracks the missing UI as
-[AUD-001 - Flutter audit viewer](../NORTH_STAR.md#aud-001---flutter-audit-viewer);
-the existing API is not itself a shipped viewer.
+The client has only the generated `AuditService` stubs; there is no
+hand-written API method, model, mapper or screen for the trail in
+`turing_app/lib`. The client and the viewer ship together as
+[AUD-001 - Flutter audit viewer](../NORTH_STAR.md#aud-001---flutter-audit-viewer).
 
 ## Request: filters, ordering, and paging
 

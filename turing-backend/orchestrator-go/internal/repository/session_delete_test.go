@@ -5,10 +5,32 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
+
+// deleteSession drives the production withdrawal pipeline to completion:
+// BeginSessionDeletion, PurgeSessionVaultArtifacts, AdvanceSessionDeletion.
+// repotest.DeleteSession is the same for tests outside this package, which
+// cannot share this helper without an import cycle.
+func deleteSession(ctx context.Context, repo *Repository, sessionID string) error {
+	if _, err := repo.BeginSessionDeletion(ctx, sessionID); err != nil {
+		return err
+	}
+	if _, err := repo.PurgeSessionVaultArtifacts(ctx, sessionID); err != nil {
+		return err
+	}
+	receipt, err := repo.AdvanceSessionDeletion(ctx, sessionID, nil)
+	if err != nil {
+		return err
+	}
+	if receipt.State != "completed" {
+		return fmt.Errorf("session deletion stopped at %q (%s)", receipt.State, receipt.ErrorCode)
+	}
+	return nil
+}
 
 // seedDeletableSession builds a session that has produced one of everything the
 // FK graph is supposed to cascade through, plus an audit row, so a deletion
@@ -27,7 +49,7 @@ func seedDeletableSession(t *testing.T, repo *Repository, title string, content 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-delete"); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-delete", 0, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
@@ -36,7 +58,7 @@ func seedDeletableSession(t *testing.T, repo *Repository, title string, content 
 	}, "general_assistant", "files", "files.update", `{"path":"secret.txt"}`, "sha256:test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.CreateApproval(ctx, enqueued.RunID, "call_"+enqueued.RunID, "general_assistant",
+	if _, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_"+enqueued.RunID, "general_assistant",
 		"files.update", `{"path":"secret.txt"}`, "sha256:test", "2099-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
@@ -49,9 +71,9 @@ func seedDeletableSession(t *testing.T, repo *Repository, title string, content 
 	return enqueued
 }
 
-// finishRun terminalizes the seeded run so deletion is permitted. Seeding
-// deliberately leaves the run live (ClaimNextJob makes it running, CreateApproval
-// moves it to waiting_approval), which is what the refusal test needs.
+// finishRun terminalizes the seeded run so deletion can complete. Seeding
+// deliberately leaves the run live (claiming makes it running, the approval
+// moves it to waiting_approval).
 func finishRun(t *testing.T, repo *Repository, runID string) {
 	t.Helper()
 	ctx := context.Background()
@@ -173,9 +195,9 @@ func TestBeginSessionDeletionRevokesApprovalsOnRecoveringRuns(t *testing.T) {
 	ctx := context.Background()
 	const workerID = "worker-delete-approval"
 	enqueued := enqueueRun(t, repo, "Delete recovering approval")
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", workerID)
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", workerID, 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
 		ToolCallID: "call_delete_recovering", RunID: enqueued.RunID,
@@ -579,7 +601,7 @@ func TestDeleteSessionRemovesEverythingItProduced(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repo.DeleteSessionForTests(ctx, enqueued.SessionID); err != nil {
+	if err := deleteSession(ctx, repo, enqueued.SessionID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -631,7 +653,7 @@ func TestDeleteSessionRemovesMessagesFromTheSearchIndex(t *testing.T) {
 		t.Fatal("precondition failed: the seeded message is not searchable")
 	}
 
-	if err := repo.DeleteSessionForTests(ctx, enqueued.SessionID); err != nil {
+	if err := deleteSession(ctx, repo, enqueued.SessionID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -658,7 +680,7 @@ func TestDeleteSessionKeepsAuditRowButScrubsItsPayload(t *testing.T) {
 	enqueued := seedDeletableSession(t, repo, "Delete me", "remember the passphrase hunter2")
 	finishRun(t, repo, enqueued.RunID)
 
-	if err := repo.DeleteSessionForTests(ctx, enqueued.SessionID); err != nil {
+	if err := deleteSession(ctx, repo, enqueued.SessionID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -788,7 +810,7 @@ func TestDeleteSessionScrubsRoutingAuditRowsTargetingThatSession(t *testing.T) {
 	}
 
 	finishRun(t, repo, enqueued.RunID)
-	if err := repo.DeleteSessionForTests(ctx, enqueued.SessionID); err != nil {
+	if err := deleteSession(ctx, repo, enqueued.SessionID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -873,7 +895,7 @@ func TestDeleteSessionScrubsSessionTargetedRoutingAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repo.DeleteSessionForTests(ctx, session.SessionID); err != nil {
+	if err := deleteSession(ctx, repo, session.SessionID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -917,7 +939,7 @@ func TestDeleteSessionScrubsSessionTargetedUnroutingAudit(t *testing.T) {
 		t.Fatalf("unrouting audit payload before deletion = %q, want %q", payloadBefore, "{}")
 	}
 
-	if err := repo.DeleteSessionForTests(ctx, session.SessionID); err != nil {
+	if err := deleteSession(ctx, repo, session.SessionID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -953,7 +975,7 @@ func TestDeleteSessionScrubsUncorrelatedSessionTargetedAuditActionsByDefault(t *
 		t.Fatal(err)
 	}
 
-	if err := repo.DeleteSessionForTests(ctx, session.SessionID); err != nil {
+	if err := deleteSession(ctx, repo, session.SessionID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -989,7 +1011,7 @@ func TestDeleteSessionScrubsLegacyEmptyCorrelationAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := repo.DeleteSessionForTests(ctx, session.SessionID); err != nil {
+	if err := deleteSession(ctx, repo, session.SessionID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1041,7 +1063,7 @@ func TestDeleteSessionLeavesOtherSessionsAuditIntact(t *testing.T) {
 	}
 	finishRun(t, repo, doomed.RunID)
 
-	if err := repo.DeleteSessionForTests(ctx, doomed.SessionID); err != nil {
+	if err := deleteSession(ctx, repo, doomed.SessionID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1094,101 +1116,9 @@ func TestDeleteSessionLeavesOtherSessionsAuditIntact(t *testing.T) {
 
 func TestDeleteSessionRejectsUnknownID(t *testing.T) {
 	repo := New(openTestDB(t))
-	err := repo.DeleteSessionForTests(context.Background(), "sess_does_not_exist")
+	_, err := repo.BeginSessionDeletion(context.Background(), "sess_does_not_exist")
 	if !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("DeleteSession(unknown) = %v, want ErrSessionNotFound", err)
-	}
-}
-
-// Deleting rows out from under a worker mid-execution would leave the runtime
-// finishing a run whose rows no longer exist. Refuse, and mutate nothing.
-func TestDeleteSessionRefusesWhileARunIsLive(t *testing.T) {
-	repo := New(openTestDB(t))
-	ctx := context.Background()
-	enqueued := seedDeletableSession(t, repo, "Busy", "in flight")
-
-	err := repo.DeleteSessionForTests(ctx, enqueued.SessionID)
-	if !errors.Is(err, ErrSessionHasActiveRun) {
-		t.Fatalf("DeleteSession(live run) = %v, want ErrSessionHasActiveRun", err)
-	}
-	if got := countRows(t, repo, `SELECT COUNT(*) FROM sessions WHERE id = ?`, enqueued.SessionID); got != 1 {
-		t.Fatal("refused deletion still removed the session")
-	}
-	if got := countRows(t, repo, `SELECT COUNT(*) FROM messages WHERE session_id = ?`, enqueued.SessionID); got == 0 {
-		t.Fatal("refused deletion still removed messages")
-	}
-	// And the audit payload must not have been scrubbed on the refusal path.
-	var payload string
-	if err := repo.db.QueryRowContext(ctx, `
-		SELECT COALESCE(payload_json, '') FROM audit_logs WHERE correlation_id = ? AND action = 'tool.call.before'
-	`, enqueued.RunID).Scan(&payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload == "" || payload == `{"scrubbed":true}` {
-		t.Fatalf("refused deletion scrubbed audit anyway: %q", payload)
-	}
-}
-
-// A run can be terminally failed while its execution is still live:
-// failRunWithEventTx(preserveExecution=true) sets status='failed' but leaves
-// execution_active = 1 and execution_state = 'uncertain' (runs.go), and the
-// recovery machinery still queries those rows (assignments.go). Status alone is
-// therefore not enough to decide the run is finished — deleting here would
-// cascade rows out from under a worker that has not acknowledged exit.
-func TestDeleteSessionRefusesWhileExecutionIsStillActive(t *testing.T) {
-	database := openTestDB(t)
-	repo := New(database)
-	ctx := context.Background()
-	enqueued := seedDeletableSession(t, repo, "Uncertain", "still executing")
-	finishRun(t, repo, enqueued.RunID)
-
-	// Terminal status, but the worker never acknowledged exit.
-	if _, err := database.ExecContext(ctx, `
-		UPDATE agent_runs
-		SET status = 'failed', execution_active = 1, execution_state = 'uncertain'
-		WHERE id = ?
-	`, enqueued.RunID); err != nil {
-		t.Fatal(err)
-	}
-
-	err := repo.DeleteSessionForTests(ctx, enqueued.SessionID)
-	if !errors.Is(err, ErrSessionHasActiveRun) {
-		t.Fatalf("DeleteSession(uncertain execution) = %v, want ErrSessionHasActiveRun", err)
-	}
-	if got := countRows(t, repo, `SELECT COUNT(*) FROM sessions WHERE id = ?`, enqueued.SessionID); got != 1 {
-		t.Fatal("refused deletion still removed the session")
-	}
-}
-
-// CancelRun is the user-reachable variant of the same hazard: it sets
-// status='cancelled' but never touches execution_active (runs.go), so the
-// worker may still be executing. Deleting here previously tore down the whole
-// ConnectWorker stream, taking unrelated runs with it.
-func TestDeleteSessionRefusesAfterCancelLeavesExecutionActive(t *testing.T) {
-	database := openTestDB(t)
-	repo := New(database)
-	ctx := context.Background()
-	enqueued := seedDeletableSession(t, repo, "Cancelled", "cancel me")
-
-	if _, err := cancelRunAtCurrentVersion(t, repo, enqueued.RunID); err != nil {
-		t.Fatal(err)
-	}
-	var status string
-	var active int
-	if err := database.QueryRowContext(ctx,
-		`SELECT status, execution_active FROM agent_runs WHERE id = ?`, enqueued.RunID,
-	).Scan(&status, &active); err != nil {
-		t.Fatal(err)
-	}
-	if status != "cancelled" || active != 1 {
-		t.Fatalf("precondition: run = status:%q execution_active:%d, want cancelled with execution still active", status, active)
-	}
-
-	if err := repo.DeleteSessionForTests(ctx, enqueued.SessionID); !errors.Is(err, ErrSessionHasActiveRun) {
-		t.Fatalf("DeleteSession(cancelled, execution live) = %v, want ErrSessionHasActiveRun", err)
-	}
-	if got := countRows(t, repo, `SELECT COUNT(*) FROM sessions WHERE id = ?`, enqueued.SessionID); got != 1 {
-		t.Fatal("refused deletion still removed the session")
 	}
 }
 

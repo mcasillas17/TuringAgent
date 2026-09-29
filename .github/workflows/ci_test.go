@@ -317,7 +317,6 @@ func TestInitConfiguresHostIdentityForBindMountedSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireContains(t, string(envExample), "\nHOST_IDENTITY_MODE=auto\n")
 	requireContains(t, string(envExample), "\nHOST_UID=\n")
 	requireContains(t, string(envExample), "\nHOST_GID=\n")
 

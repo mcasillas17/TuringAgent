@@ -4,14 +4,10 @@ import 'package:fixnum/fixnum.dart';
 import 'package:grpc/grpc.dart' as grpc;
 import 'package:grpc/service_api.dart' as grpc_api;
 
-import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
-    as timestamppb;
 import '../generated/turing/v1/agents.pb.dart' as agentpb;
 import '../generated/turing/v1/agents.pbgrpc.dart' as agentgrpc;
 import '../generated/turing/v1/approvals.pb.dart' as approvalpb;
 import '../generated/turing/v1/approvals.pbgrpc.dart' as approvalgrpc;
-import '../generated/turing/v1/audit.pb.dart' as auditpb;
-import '../generated/turing/v1/audit.pbgrpc.dart' as auditgrpc;
 import '../generated/turing/v1/automations.pb.dart' as automationpb;
 import '../generated/turing/v1/automations.pbgrpc.dart' as automationgrpc;
 import '../generated/turing/v1/chat.pb.dart' as chatpb;
@@ -33,7 +29,6 @@ import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
 import '../generated/turing/v1/telemetry.pbgrpc.dart' as telemetrygrpc;
 import '../models/agent_descriptor.dart';
 import '../models/approval.dart';
-import '../models/audit.dart';
 import '../models/automation.dart';
 import '../models/external_agent.dart';
 import '../models/grpc_mappers.dart';
@@ -138,7 +133,6 @@ class TuringGrpcApi
       _channel,
       options: options,
     );
-    _audit = auditgrpc.AuditServiceClient(_channel, options: options);
     _mcpRegistry = mcpgrpc.McpRegistryServiceClient(_channel, options: options);
     _memory = memorygrpc.MemoryServiceClient(_channel, options: options);
   }
@@ -156,7 +150,6 @@ class TuringGrpcApi
   late final integrationgrpc.IntegrationServiceClient _integrations;
   late final automationgrpc.AutomationServiceClient _automations;
   late final telemetrygrpc.TelemetryServiceClient _telemetry;
-  late final auditgrpc.AuditServiceClient _audit;
   late final mcpgrpc.McpRegistryServiceClient _mcpRegistry;
   late final memorygrpc.MemoryServiceClient _memory;
 
@@ -273,30 +266,6 @@ class TuringGrpcApi
   };
 
   @override
-  Future<Map<String, dynamic>> getConfig() async {
-    final response = await _sessions.getConfig(sessionpb.GetConfigRequest());
-    final providers = <String, Map<String, dynamic>>{};
-    for (final provider in response.providers) {
-      providers[GrpcMappers.modelProviderToString(provider.provider)] = {
-        'enabled': provider.enabled,
-        'defaultModel': provider.defaultModel,
-        'remoteEndpoint': provider.remoteEndpoint,
-        'requiresPerRunConsent': provider.requiresPerRunConsent,
-      };
-    }
-    final enabledProviders = response.providers
-        .where((provider) => provider.enabled)
-        .map((provider) => GrpcMappers.modelProviderToString(provider.provider))
-        .toList();
-    return {
-      'providers': providers,
-      'enabledProviders': enabledProviders,
-      'approvalsEnabled': response.approvalsEnabled,
-      'filesMcpEnabled': response.filesMcpEnabled,
-    };
-  }
-
-  @override
   Future<Map<String, dynamic>> createSession({String? title}) async {
     final response = await _sessions.createSession(
       sessionpb.CreateSessionRequest(title: title ?? ''),
@@ -308,12 +277,6 @@ class TuringGrpcApi
           response.createdAt.seconds.toInt() * 1000000000 +
           response.createdAt.nanos,
     };
-  }
-
-  @override
-  Future<List<Session>> listSessions({int limit = 50, String? after}) async {
-    final page = await listSessionPage(limit: limit, cursor: after);
-    return page.sessions;
   }
 
   @override
@@ -809,23 +772,6 @@ class TuringGrpcApi
   }
 
   @override
-  Future<Map<String, dynamic>> approveApproval(
-    String approvalId, {
-    String? comment,
-  }) async {
-    final response = await _approvals.approveApproval(
-      approvalpb.ApproveApprovalRequest(
-        approvalId: approvalId,
-        comment: comment ?? '',
-      ),
-    );
-    return {
-      'approvalId': response.approvalId,
-      'status': GrpcMappers.approvalStatusToString(response.status),
-    };
-  }
-
-  @override
   Future<Map<String, dynamic>> denyApproval(
     String approvalId, {
     String? reason,
@@ -1229,14 +1175,6 @@ class TuringGrpcApi
   }
 
   @override
-  Future<Skill> getSkill({required String skillId}) async {
-    final response = await _skills.getSkill(
-      skillpb.GetSkillRequest(skillId: skillId),
-    );
-    return GrpcMappers.skillToModel(response);
-  }
-
-  @override
   Future<Skill> setSkillEnabled({
     required String skillId,
     required bool enabled,
@@ -1489,36 +1427,6 @@ class TuringGrpcApi
       telemetrypb.GetTelemetrySummaryRequest(windowDays: windowDays),
     );
     return GrpcMappers.telemetrySummaryToModel(response);
-  }
-
-  @override
-  Future<AuditPage> listAuditEntries({
-    String? correlationId,
-    String? action,
-    DateTime? createdAtStart,
-    DateTime? createdAtEnd,
-    AuditOrder order = AuditOrder.descending,
-    int limit = 50,
-    String? cursor,
-  }) async {
-    final response = await _audit.listAuditEntries(
-      auditpb.ListAuditEntriesRequest(
-        correlationId: correlationId,
-        action: action,
-        createdAtStart: createdAtStart == null
-            ? null
-            : timestamppb.Timestamp.fromDateTime(createdAtStart.toUtc()),
-        createdAtEnd: createdAtEnd == null
-            ? null
-            : timestamppb.Timestamp.fromDateTime(createdAtEnd.toUtc()),
-        order: order == AuditOrder.ascending
-            ? auditpb.AuditOrder.AUDIT_ORDER_ASCENDING
-            : auditpb.AuditOrder.AUDIT_ORDER_DESCENDING,
-        page: commonpb.PageRequest(limit: limit, cursor: cursor ?? ''),
-      ),
-      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
-    );
-    return GrpcMappers.auditPageToModel(response);
   }
 
   @override

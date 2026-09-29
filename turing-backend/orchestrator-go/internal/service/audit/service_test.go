@@ -14,6 +14,7 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository/repotest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -2319,7 +2320,7 @@ func TestRecordForExistingRunDoesNotRecreatePayloadAfterSessionDeletion(t *testi
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.DeleteSessionForTests(ctx, session.SessionID); err != nil {
+	if err := repotest.DeleteSession(ctx, repo, session.SessionID); err != nil {
 		t.Fatal(err)
 	}
 

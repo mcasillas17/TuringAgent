@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"sort"
 	"unicode/utf8"
@@ -24,11 +23,6 @@ func DecodeObject(decoder *json.Decoder) (map[string]any, error) {
 		return nil, errors.New("expected JSON object")
 	}
 	return obj, nil
-}
-
-func DecodeLimitedObject(reader io.Reader, maxBytes int64) (map[string]any, error) {
-	decoder := json.NewDecoder(io.LimitReader(reader, maxBytes))
-	return DecodeObject(decoder)
 }
 
 func Normalize(value any) (any, error) {

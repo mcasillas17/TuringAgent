@@ -15,7 +15,6 @@ import 'package:turing_flutter_app/networking/api_client.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 
-import '../../support/no_audit_api.dart';
 import '../../support/no_external_agents_api.dart';
 import '../../support/no_integrations_api.dart';
 import '../../support/no_session_lifecycle_api.dart';
@@ -2882,7 +2881,6 @@ class _SessionCall {
 
 class _FakeSearchApi extends TuringApi
     with
-        NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
@@ -2936,14 +2934,6 @@ class _FakeSearchApi extends TuringApi
   }
 
   @override
-  Future<Map<String, dynamic>> approveApproval(
-    String approvalId, {
-    String? comment,
-  }) async {
-    return {'approvalId': approvalId, 'status': 'approved'};
-  }
-
-  @override
   Future<Map<String, dynamic>> createSession({String? title}) async {
     return {'sessionId': 'sess_1', 'createdAt': '2026-05-10T00:00:00.000Z'};
   }
@@ -2961,13 +2951,6 @@ class _FakeSearchApi extends TuringApi
 
   @override
   Future<List<AgentDescriptor>> listAgents() async => const [];
-
-  @override
-  Future<Map<String, dynamic>> getConfig() async {
-    return {
-      'enabledProviders': ['ollama'],
-    };
-  }
 
   @override
   Future<TuringEventPage> listEvents({

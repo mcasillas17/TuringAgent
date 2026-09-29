@@ -147,17 +147,6 @@ func (s *Server) ConnectAccount(ctx context.Context, req *turingv1.ConnectAccoun
 	if strings.IndexFunc(credential, isForbiddenInCredential) >= 0 {
 		return nil, status.Error(codes.InvalidArgument, "credential contains characters that are not part of a token")
 	}
-	endpoint := strings.TrimSpace(req.GetEndpoint())
-	if entry.requiresEndpoint && endpoint == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "%s is required", strings.ToLower(entry.endpointLabel))
-	}
-	if !entry.requiresEndpoint {
-		// A hosted provider has one address and it is not the user's to set.
-		// Dropped rather than stored, so a form that left a stale value behind
-		// cannot make a GitHub connection claim to live on somebody's IMAP
-		// server.
-		endpoint = ""
-	}
 	// The id is chosen here so the credential can be sealed against it: the
 	// sealed value is bound to this row and will not open under another, which
 	// is what stops someone with write access to the database moving a token
@@ -169,12 +158,14 @@ func (s *Server) ConnectAccount(ctx context.Context, req *turingv1.ConnectAccoun
 		// place a credential should be able to reach a log line.
 		return nil, status.Error(codes.Internal, "could not store the credential")
 	}
+	// Endpoint is left empty: every provider is hosted, so its one address is
+	// not the user's to set. A stale form value is dropped rather than stored,
+	// so a GitHub connection cannot claim to live on somebody's IMAP server.
 	connection, err := s.repo.CreateConnection(ctx, repository.NewConnection{
 		ConnectionID:         connectionID,
 		Provider:             entry.storageKey,
 		DisplayName:          req.GetDisplayName(),
 		AccountLabel:         req.GetAccountLabel(),
-		Endpoint:             endpoint,
 		CredentialCiphertext: sealed,
 		CredentialHint:       redact(credential),
 		GrantedScopes:        entry.grants,

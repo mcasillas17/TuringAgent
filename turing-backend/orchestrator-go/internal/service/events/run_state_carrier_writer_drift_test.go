@@ -54,9 +54,9 @@ func startDriftGuardRun(t *testing.T, repo *repository.Repository, title string)
 		t.Fatalf("EnqueueUserMessage: %v", err)
 	}
 	workerID := "worker-" + title
-	job, err := repo.ClaimNextJob(ctx, "general_assistant", workerID)
+	job, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", workerID, 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	return driftGuardRun{enqueued: enqueued, job: job, workerID: workerID}
 }

@@ -8,7 +8,6 @@ import 'package:turing_flutter_app/models/mcp_server.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
-import '../support/no_audit_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
 import '../support/no_remote_egress_api.dart';
@@ -2789,7 +2788,6 @@ Future<void> _pumpMcps(
 /// that behaves like the backend rather than a stub that always says yes.
 class _McpApi
     with
-        NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,

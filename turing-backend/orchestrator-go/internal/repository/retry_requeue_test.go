@@ -25,7 +25,7 @@ func claimRetryRun(t *testing.T, repo *Repository, worker string) (EnqueueUserMe
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", worker)
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", worker, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestRequeueOrFailRetryableRunFailsAfterAttemptCap(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertStepNotice(t, onlyRunStepEvent(t, decision.Events), runoutcome.NoticeDispatchRetry, i+2, maxAttempts, requeued.StateVersion)
-		if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-busy"); err != nil {
+		if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-busy", 0, 0, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -901,9 +901,9 @@ func waitingApprovalRun(t *testing.T, repo *Repository, worker string) (EnqueueU
 	t.Helper()
 	ctx := context.Background()
 	enqueued := enqueueRun(t, repo, "Waiting approval release")
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", worker)
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", worker, 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
 		ToolCallID: "call_waiting_release", RunID: enqueued.RunID, ModelToolCallID: "model_waiting_release",

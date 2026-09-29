@@ -12,8 +12,8 @@ import (
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/mcp"
-	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/safejson"
 )
 
 // ToolLister discovers and invokes tools for an MCP server.
