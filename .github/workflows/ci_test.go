@@ -57,7 +57,7 @@ func TestCIWorkflowCoversCoreChecks(t *testing.T) {
 	requireRunsIn(t, workflow, "turing-backend/mcp-system", `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" ./...`)
 
 	protoJob := requireIndentedBlock(t, workflow, "  proto-and-scripts:", 2)
-	requireContains(t, protoJob, "uses: bufbuild/buf-action@8c6a16e16f12ba20b6470afa9c2ba9b5ba8c97c3 # v1.5.0")
+	requireContains(t, protoJob, "uses: bufbuild/buf-action@85aebf73123b5c15fd5528aaecbf9129cddf7fa7 # v1.6.0")
 	requireContains(t, protoJob, `version: "1.72.0"`)
 	requireContains(t, protoJob, "setup_only: true")
 	requireContains(t, protoJob, `TURING_REQUIRE_BUF=1 go test ./tools/proto -run '^TestBreaking' -count=1`)
