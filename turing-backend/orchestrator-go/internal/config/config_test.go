@@ -91,15 +91,6 @@ func TestLoadFromMapRejectsCredentialBearingDisabledEndpoint(t *testing.T) {
 
 }
 
-func TestLoadFromMapRejectsRemoteOllamaEndpoint(t *testing.T) {
-	env := requiredEnv()
-	env["OLLAMA_BASE_URL"] = "https://ollama.example.com"
-	_, err := LoadFromMap(env)
-	if err == nil || !strings.Contains(err.Error(), "OLLAMA_BASE_URL") {
-		t.Fatalf("LoadFromMap error = %v, want local Ollama endpoint rejection", err)
-	}
-}
-
 func TestLoadFromMapValidatesMaxConcurrentRunsWithinRuntimeBound(t *testing.T) {
 	base := requiredEnv()
 	for _, value := range []string{"0", "129", "2147483648"} {
@@ -163,8 +154,6 @@ func TestLoadFromMapRejectsZeroSharedRuntimeSettings(t *testing.T) {
 	for _, name := range []string{
 		"TURING_JOB_TIMEOUT_MS",
 		"TURING_MAX_TOOL_CALLS_PER_RUN",
-		"TURING_MODEL_TIMEOUT_MS",
-		"TURING_TOOL_TIMEOUT_MS",
 	} {
 		t.Run(name, func(t *testing.T) {
 			env := cloneEnv(base)
@@ -182,8 +171,6 @@ func TestLoadFromMapRejectsSharedRuntimeDurationsOutsideTimeRange(t *testing.T) 
 	tooLarge := strconv.FormatInt(int64(math.MaxInt64/int64(time.Millisecond))+1, 10)
 	for _, name := range []string{
 		"TURING_JOB_TIMEOUT_MS",
-		"TURING_MODEL_TIMEOUT_MS",
-		"TURING_TOOL_TIMEOUT_MS",
 	} {
 		t.Run(name, func(t *testing.T) {
 			env := cloneEnv(base)

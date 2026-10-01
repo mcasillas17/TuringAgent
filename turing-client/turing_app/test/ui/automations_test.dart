@@ -6,7 +6,6 @@ import 'package:turing_flutter_app/models/skill.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
-import '../support/no_audit_api.dart';
 import '../support/no_mcp_registry_api.dart';
 import '../support/no_skills_api.dart';
 import '../support/no_external_agents_api.dart';
@@ -835,7 +834,6 @@ Future<void> _pumpAutomations(
 /// yes.
 class _FakeApi
     with
-        NoAuditApi,
         NoMcpRegistryApi,
         NoSkillsApi,
         NoExternalAgentsApi,

@@ -66,7 +66,7 @@ func TestRemoteEnqueueFreezesMemorySnapshotAndFingerprint(t *testing.T) {
 		t.Fatalf("stored memory fingerprint = %q, want %q",
 			stored.MemorySnapshotFingerprint, decision.MemorySnapshotFingerprint)
 	}
-	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-memory")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-memory", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestLocalEnqueueFreezesPinnedSnapshotWithoutADecision(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("EnqueueUserMessage: %v", err)
 	}
-	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-local")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-local", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestQueuedJobKeepsItsSnapshotAcrossAToggleFlip(t *testing.T) {
 	}
 	writePin(t, vault, memoryfiles.PersonaFileName, "Speak grandly.")
 
-	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-frozen")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-frozen", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,11 +320,11 @@ func TestAVaultEditReachesTheNextRunAndNotTheQueuedOne(t *testing.T) {
 	writePin(t, vault, memoryfiles.PersonaFileName, "Speak grandly.")
 	enqueueLocal(secondSession, "second")
 
-	first, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-a")
+	first, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-a", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-b")
+	second, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-b", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ func TestQueuedJobKeepsItsProfileSnapshotAcrossAToggleFlip(t *testing.T) {
 	}
 	writePin(t, vault, memoryfiles.ProfileFileName, "The user keeps bees.")
 
-	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-frozen-profile")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-frozen-profile", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,11 +387,11 @@ func TestAProfileEditReachesTheNextRunAndNotTheQueuedOne(t *testing.T) {
 	writePin(t, vault, memoryfiles.ProfileFileName, "The user keeps bees.")
 	enqueueLocal(secondSession, "second")
 
-	first, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-profile-a")
+	first, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-profile-a", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-profile-b")
+	second, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-profile-b", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +432,7 @@ func TestEnqueueDoesNotWalkTheVault(t *testing.T) {
 	if indexed != 0 {
 		t.Fatalf("enqueue indexed %d vault notes; it must read only the two pinned files", indexed)
 	}
-	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-walk")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-walk", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,9 +464,9 @@ func TestQueuedJobKeepsItsConsentDecisionAcrossAToggleFlip(t *testing.T) {
 		t.Fatalf("SetMemoryEnabled: %v", err)
 	}
 
-	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-consent")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-consent", 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	if job.EgressDecision == nil {
 		t.Fatal("the toggle retracted a consent the user had already granted")
@@ -512,9 +512,9 @@ func TestEnqueueStillFreezesPinsForAVaultTheScanRefuses(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("a vault over the index bound blocked the enqueue: %v", err)
 	}
-	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-over-bound")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-over-bound", 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	if job.PinnedPersona == nil || job.PinnedPersona.Withheld {
 		t.Fatalf("job persona = %+v, want it pinned despite the unscannable vault", job.PinnedPersona)
@@ -539,7 +539,7 @@ func TestAnOversizedPersonaTruncatesRatherThanBlockingTheEnqueue(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("an over-budget persona blocked the enqueue: %v", err)
 	}
-	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker-truncated")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-truncated", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1749,7 +1749,7 @@ func TestCancelRunPublishesDependentLifecycleEventsInOrder(t *testing.T) {
 	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.repo.CreateApproval(context.Background(), enqueued.RunID, "call_cancelled", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z"); err != nil {
+	if _, _, err := h.repo.CreateApprovalWithEvent(context.Background(), enqueued.RunID, "call_cancelled", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	ch, unsubscribe := h.bus.Subscribe(enqueued.SessionID)

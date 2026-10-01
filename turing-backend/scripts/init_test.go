@@ -22,7 +22,6 @@ HOST_GID=2000
 
 func TestInitUsesCurrentNonRootIdentityInsteadOfConfiguredOverrides(t *testing.T) {
 	result := runInit(t, "501", "20", `
-HOST_IDENTITY_MODE=manual
 HOST_UID=1234
 HOST_GID=2345
 `)

@@ -53,7 +53,7 @@ func newApprovalResumeFixture(t *testing.T, repo *Repository, worker string) *ap
 func (f *approvalResumeFixture) approve(t *testing.T, toolCallID string, path string) string {
 	t.Helper()
 	approvalID := f.request(t, toolCallID, path)
-	if _, err := f.repo.ApproveApproval(context.Background(), approvalID, "token-"+approvalID, sql.NullString{}, now()); err != nil {
+	if _, err := f.repo.ApproveApprovalWithEvent(context.Background(), approvalID, "token-"+approvalID, sql.NullString{}, now()); err != nil {
 		t.Fatalf("ApproveApproval: %v", err)
 	}
 	f.readWaiting(t)
@@ -289,12 +289,12 @@ func foreignApproval(t *testing.T, repo *Repository, title string) string {
 	if err := repo.MarkRunRunning(ctx, other.RunID); err != nil {
 		t.Fatalf("MarkRunRunning: %v", err)
 	}
-	approval, err := repo.CreateApproval(ctx, other.RunID, "", "general_assistant",
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, other.RunID, "", "general_assistant",
 		"files.update", `{}`, "sha256:foreign", "2099-01-01T00:00:00Z")
 	if err != nil {
-		t.Fatalf("CreateApproval: %v", err)
+		t.Fatalf("CreateApprovalWithEvent: %v", err)
 	}
-	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "token-foreign", sql.NullString{}, now()); err != nil {
+	if _, err := repo.ApproveApprovalWithEvent(ctx, approval.ApprovalID, "token-foreign", sql.NullString{}, now()); err != nil {
 		t.Fatalf("ApproveApproval: %v", err)
 	}
 	return approval.ApprovalID
@@ -388,7 +388,7 @@ func TestApprovalResumeRequiresAnAuthorizedApproval(t *testing.T) {
 	})
 
 	// Denied and expired are written straight onto the approval row here, with
-	// the run left waiting. Going through DenyApproval or ExpireApproval would
+	// the run left waiting. Going through DenyApprovalWithEvent or ExpireApprovalWithEvent would
 	// terminalize the run in the same transaction, and a terminal run is
 	// already refused by the lifecycle guard — which would prove the lifecycle
 	// check works and say nothing about this one. The pair is not invented: the
@@ -426,7 +426,7 @@ func TestApprovalResumeRequiresAnAuthorizedApproval(t *testing.T) {
 		// The approved call ran and spent its token. The authorization is used
 		// up, not withdrawn, so a worker that lost the acceptance still gets
 		// the same answer rather than a fence.
-		if _, err := repo.ConsumeApproval(context.Background(), approvalID, now()); err != nil {
+		if _, err := repo.ConsumeApprovalWithEvent(context.Background(), approvalID, now()); err != nil {
 			t.Fatalf("ConsumeApproval: %v", err)
 		}
 

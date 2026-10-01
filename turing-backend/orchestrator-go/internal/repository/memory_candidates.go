@@ -376,62 +376,6 @@ func (r *Repository) bindAbandonedVaultWrite(ctx context.Context, artifact Vault
 	}
 }
 
-// WithdrawMemoryCandidate retires a proposal without deciding it.
-//
-// It is the only lifecycle move that keeps the row, and it is a method rather
-// than an argument to a generic transition on purpose. A caller that could name
-// the state a candidate moves to could mark one promoted or rejected while its
-// file is still sitting in the inbox and its row still claims to be a live
-// proposal — a decision the user never sees, on a claim they never reviewed.
-// Promotion, profile application and rejection consume the row instead, because
-// a decided candidate's file has left the inbox and a row describing an inbox
-// entry that is gone is a lie the cleaner would trust.
-//
-// The UPDATE is the state machine, not a step after it: it moves only a row
-// that is still pending, and the audit row is written only once that statement
-// reports it changed exactly one row. Auditing on the strength of the read
-// instead would record a decision that never happened — the loudest possible
-// version of losing a candidate silently.
-func (r *Repository) WithdrawMemoryCandidate(ctx context.Context, candidateID string) (MemoryCandidate, error) {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return MemoryCandidate{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	candidate, err := memoryCandidateByIDTx(ctx, tx, candidateID)
-	if err != nil {
-		return MemoryCandidate{}, err
-	}
-	decidedAt := now()
-	result, err := tx.ExecContext(ctx, `
-		UPDATE memory_candidates
-		SET state = ?, decided_at = ?, updated_at = ?
-		WHERE id = ? AND state = ?
-	`, MemoryCandidateStateWithdrawn, decidedAt, decidedAt, candidateID, MemoryCandidateStatePending)
-	if err != nil {
-		return MemoryCandidate{}, err
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return MemoryCandidate{}, err
-	}
-	if changed != 1 {
-		return MemoryCandidate{}, fmt.Errorf("%w: %q cannot become %q",
-			ErrMemoryCandidateInvalidTransition, candidate.State, MemoryCandidateStateWithdrawn)
-	}
-	if err := recordMemoryCandidateDecisionTx(ctx, tx, candidate, MemoryCandidateStateWithdrawn); err != nil {
-		return MemoryCandidate{}, err
-	}
-	candidate.State = MemoryCandidateStateWithdrawn
-	candidate.DecidedAt = decidedAt
-	candidate.UpdatedAt = decidedAt
-	if err := tx.Commit(); err != nil {
-		return MemoryCandidate{}, err
-	}
-	return candidate, nil
-}
-
 // MemoryCandidateByID reads one candidate.
 func (r *Repository) MemoryCandidateByID(ctx context.Context, candidateID string) (MemoryCandidate, error) {
 	return memoryCandidateByIDTx(ctx, r.db, candidateID)

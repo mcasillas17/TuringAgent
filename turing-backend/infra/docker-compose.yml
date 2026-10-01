@@ -54,7 +54,6 @@ services:
       # them.
       MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:-}
       MCP_CONFIG_ROOT: /mcp
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
       OLLAMA_CONTEXT_WINDOW_TOKENS: ${OLLAMA_CONTEXT_WINDOW_TOKENS:-32768}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -81,10 +80,7 @@ services:
       TURING_JOB_MAX_ATTEMPTS: ${TURING_JOB_MAX_ATTEMPTS:-3}
       TURING_MAX_CONCURRENT_RUNS_GENERAL: ${TURING_MAX_CONCURRENT_RUNS_GENERAL:-1}
       TURING_MAX_TOOL_CALLS_PER_RUN: ${TURING_MAX_TOOL_CALLS_PER_RUN:-10}
-      TURING_MODEL_TIMEOUT_MS: ${TURING_MODEL_TIMEOUT_MS:-120000}
-      TURING_TOOL_TIMEOUT_MS: ${TURING_TOOL_TIMEOUT_MS:-30000}
       TURING_APPROVAL_TIMEOUT_MS: ${TURING_APPROVAL_TIMEOUT_MS:-65000}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:${ORCHESTRATOR_PUBLIC_PORT:-3000}"
     expose:
@@ -146,7 +142,6 @@ services:
       # The only process that actually calls an external agent, and so the only
       # one that needs the keys themselves rather than just their names.
       TURING_AGENT_API_KEYS: ${TURING_AGENT_API_KEYS:-}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       turing-orchestrator:
         condition: service_started
@@ -175,8 +170,6 @@ services:
       - no-new-privileges:true
     environment:
       MCP_SYSTEM_TOKEN_GENERAL: ${MCP_SYSTEM_TOKEN_GENERAL}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      LOG_PRETTY: ${LOG_PRETTY:-false}
     expose:
       - "7100"
     healthcheck:
@@ -210,8 +203,6 @@ services:
       TURING_MCP_FILES_CLEANUP_TOKEN: ${TURING_MCP_FILES_CLEANUP_TOKEN}
       ORCHESTRATOR_GRPC_ADDR: ${ORCHESTRATOR_GRPC_ADDR:-turing-orchestrator:3001}
       FILES_SANDBOX_ROOT: /sandbox
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      LOG_PRETTY: ${LOG_PRETTY:-false}
     expose:
       - "7110"
     healthcheck:

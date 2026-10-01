@@ -5,11 +5,11 @@ import (
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/approvalpreview"
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/app"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
-	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/safejson"
 	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
 	"google.golang.org/grpc"
 )

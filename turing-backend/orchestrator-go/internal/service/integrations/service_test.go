@@ -549,9 +549,6 @@ func TestListProvidersDescribesEveryEntryHonestly(t *testing.T) {
 			if descriptor.GetUnsupportedReason() != "" {
 				t.Fatalf("%v is supported but carries a refusal reason", descriptor.GetProvider())
 			}
-			if descriptor.GetRequiresEndpoint() && descriptor.GetEndpointLabel() == "" {
-				t.Fatalf("%v needs an endpoint but does not say which", descriptor.GetProvider())
-			}
 			continue
 		}
 		if descriptor.GetUnsupportedReason() == "" {

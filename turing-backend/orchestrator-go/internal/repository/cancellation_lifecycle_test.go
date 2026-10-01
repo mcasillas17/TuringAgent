@@ -26,7 +26,7 @@ func TestCancelRunTerminalizesPendingApprovalAndToolCall(t *testing.T) {
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{ToolCallID: "call_cancel_approval", RunID: enqueued.RunID}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:cancel"); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "call_cancel_approval", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:cancel", "2099-01-01T00:00:00Z")
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_cancel_approval", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:cancel", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,10 +50,10 @@ func TestCancelRunTerminalizesPendingApprovalAndToolCall(t *testing.T) {
 	if approvalStatus == "pending" || toolStatus == "approval_required" || runStatus != "cancelled" || jobStatus != "cancelled" {
 		t.Fatalf("cancellation left lifecycle open: approval=%q tool=%q run=%q job=%q", approvalStatus, toolStatus, runStatus, jobStatus)
 	}
-	if _, err := repo.RecordToolCallAfter(ctx, ToolCallAfterRecord{
+	if _, _, err := repo.RecordToolCallAfterWithEvent(ctx, ToolCallAfterRecord{
 		ToolCallID: "call_cancel_approval", RunID: enqueued.RunID, ServerName: "files", ToolName: "files.update",
 		Status: "failed", ErrorCode: "cancelled", ErrorMessage: "client_cancelled",
-	}); err != nil {
+	}, "tool.call.failed", `{"status":"failed"}`); err != nil {
 		t.Fatalf("late cancellation cleanup AFTER: %v", err)
 	}
 }
@@ -87,7 +87,7 @@ func TestCancelRunFencesPendingAssignmentBeforeDelivery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-cancel-pending")
+			claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-cancel-pending", 0, 0, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -127,7 +127,7 @@ func TestPreservingFailureFencesActiveExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-fence"); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-fence", 0, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

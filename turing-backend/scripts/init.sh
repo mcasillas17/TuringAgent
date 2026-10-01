@@ -136,7 +136,6 @@ validate_env_file() {
 configure_host_identity() {
   local current_uid="$1"
   local current_gid="$2"
-  set_var HOST_IDENTITY_MODE auto
   set_var HOST_UID "$current_uid"
   set_var HOST_GID "$current_gid"
 }

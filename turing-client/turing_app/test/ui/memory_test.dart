@@ -14,7 +14,6 @@ import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
-import '../support/no_audit_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
@@ -1530,7 +1529,6 @@ MemoryState _state({
 
 class _MemoryApi extends TuringApi
     with
-        NoAuditApi,
         NoAutomationsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
@@ -1648,9 +1646,6 @@ class _MemoryApi extends TuringApi
   }
 
   @override
-  Future<Map<String, dynamic>> getConfig() async => const {};
-
-  @override
   Future<Map<String, dynamic>> createSession({String? title}) async => const {};
 
   @override
@@ -1692,12 +1687,6 @@ class _MemoryApi extends TuringApi
     required String content,
     String modelProvider = 'ollama',
     String? idempotencyKey,
-  }) async => const {};
-
-  @override
-  Future<Map<String, dynamic>> approveApproval(
-    String approvalId, {
-    String? comment,
   }) async => const {};
 
   @override

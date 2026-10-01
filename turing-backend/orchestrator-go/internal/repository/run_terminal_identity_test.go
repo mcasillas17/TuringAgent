@@ -16,9 +16,9 @@ func runningRun(t *testing.T, repo *Repository, worker string) (EnqueueUserMessa
 	t.Helper()
 	ctx := context.Background()
 	enqueued := enqueueRun(t, repo, "Terminal identity")
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", worker)
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", worker, 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	state, err := repo.GetRunState(ctx, enqueued.RunID)
 	if err != nil {
@@ -519,9 +519,9 @@ func TestClaimingAJobForANonQueuedRunFailsInsteadOfPanicking(t *testing.T) {
 		`UPDATE agent_runs SET status = 'running' WHERE id = ?`, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-guard")
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-guard", 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	if claimed.JobID != "" {
 		t.Fatalf("claimed %+v for a run that is not queued", claimed)

@@ -29,13 +29,13 @@ func TestGlobalCapacityRetainsTerminalExecutionUntilExitAcknowledged(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-one", 1, 0); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-one", 1, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := cancelRunEvents(t, repo, first.RunID); err != nil {
 		t.Fatal(err)
 	}
-	blocked, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-two", 1, 0)
+	blocked, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-two", 1, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestGlobalCapacityRetainsTerminalExecutionUntilExitAcknowledged(t *testing.
 	if err := repo.AcknowledgeExecutionExit(ctx, first.RunID); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-two", 1, 0)
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-two", 1, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

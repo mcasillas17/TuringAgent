@@ -161,9 +161,9 @@ type deliveredAssignment struct {
 func (h *harness) deliverRecoveringAssignment(t *testing.T, workerID string, content string) deliveredAssignment {
 	t.Helper()
 	enqueued := h.enqueueRun(t, content)
-	claimed, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", workerID)
+	claimed, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", workerID, 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	repositoryAssignment := repository.Assignment{
 		JobID: claimed.JobID, RunID: claimed.RunID, WorkerID: workerID, AttemptID: claimed.AssignmentAttemptID,

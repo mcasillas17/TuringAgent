@@ -124,9 +124,9 @@ func TestVaultCleanupRefusesAFileTheUserPutAtTheCandidatesOldPath(t *testing.T) 
 	}
 	// And the retry is not a dead end: the row is still in the worklist, so
 	// once the user's file is out of the way the proposal is removed.
-	pending, err := repo.PendingSessionVaultArtifacts(ctx(), sessionID)
+	pending, err := repo.SessionVaultArtifacts(ctx(), sessionID)
 	if err != nil {
-		t.Fatalf("PendingSessionVaultArtifacts: %v", err)
+		t.Fatalf("SessionVaultArtifacts: %v", err)
 	}
 	if len(pending) != 1 {
 		t.Fatalf("pending rows = %d, want the refused row retried", len(pending))

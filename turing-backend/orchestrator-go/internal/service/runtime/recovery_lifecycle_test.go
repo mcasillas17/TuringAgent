@@ -41,7 +41,7 @@ func TestCancelRunFencesUnownedUncertainExecutionUntilRecovery(t *testing.T) {
 	h := newHarness(t)
 	first := h.enqueueRun(t, "cancel uncertain attempt")
 	second := h.enqueueRun(t, "claim after uncertain cancellation")
-	claimed, err := h.repo.ClaimNextJobWithLimit(context.Background(), "general_assistant", "worker-gone", 1, time.Hour)
+	claimed, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-gone", 1, time.Hour, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestCancelRunFencesUnownedUncertainExecutionUntilRecovery(t *testing.T) {
 	if run.Status != "cancelled" || !run.ExecutionActive || run.ExecutionState != "uncertain" {
 		t.Fatalf("cancelled orphan run = %+v, want terminal active uncertain fence", run)
 	}
-	next, err := h.repo.ClaimNextJobWithLimit(context.Background(), "general_assistant", "worker-after-cancel", 1, time.Hour)
+	next, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-after-cancel", 1, time.Hour, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestCancelRunFencesUnownedUncertainExecutionUntilRecovery(t *testing.T) {
 	if err := h.service.RecoverOrphanedAssignments(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	next, err = h.repo.ClaimNextJobWithLimit(context.Background(), "general_assistant", "worker-after-cancel", 1, time.Hour)
+	next, err = h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-after-cancel", 1, time.Hour, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,8 +137,8 @@ func TestRecoveryDoesNotRequeueExpiredAttemptOwnedByConnectedWorker(t *testing.T
 func TestRecoveryDispatchesRequeuedWorkAfterRoutingNoticeFailure(t *testing.T) {
 	h := newHarness(t)
 	recoverable := h.enqueueRun(t, "recover despite notice failure")
-	claimed, err := h.repo.ClaimNextJobWithLimit(
-		context.Background(), "general_assistant", "worker-gone", 1, time.Millisecond,
+	claimed, err := h.repo.ClaimNextCompatibleJobWithLimit(
+		context.Background(), "general_assistant", "worker-gone", 1, time.Millisecond, nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

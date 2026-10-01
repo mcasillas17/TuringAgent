@@ -87,7 +87,6 @@ type Config struct {
 	// terminal, and a relative fragment or a traversal is not that.
 	MemoryDisplayRoot         string
 	MCPConfigRoot             string
-	OllamaBaseURL             string
 	OllamaModel               string
 	OllamaContextWindowTokens int
 	OpenAIBaseURL             string
@@ -117,8 +116,6 @@ type Config struct {
 	JobMaxAttempts           int
 	MaxConcurrentRunsGeneral int
 	MaxToolCallsPerRun       int
-	ModelTimeoutMS           int
-	ToolTimeoutMS            int
 	ApprovalTTLMS            int
 	// QueueMaxWaitMS bounds the TOTAL time an accepted run may spend queued,
 	// accumulated across every queued interval so a requeue cannot restart it.
@@ -140,7 +137,6 @@ type Config struct {
 	// QueueTimeoutPolicy is what happens when either bound is reached: "fail"
 	// (the default) or "cancel". Both are terminal; pausing is not offered.
 	QueueTimeoutPolicy string
-	LogLevel           string
 }
 
 func Load() (Config, error) {
@@ -345,14 +341,6 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	modelTimeout, err := durationMillisecondsValue("TURING_MODEL_TIMEOUT_MS", 120000)
-	if err != nil {
-		return Config{}, err
-	}
-	toolTimeout, err := durationMillisecondsValue("TURING_TOOL_TIMEOUT_MS", 30000)
-	if err != nil {
-		return Config{}, err
-	}
 	approvalTTL, err := intValue("TURING_APPROVAL_TIMEOUT_MS", 65000)
 	if err != nil {
 		return Config{}, err
@@ -400,12 +388,6 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		}
 		openAIBaseURL = endpoint.Canonical
 	}
-	ollamaEndpoint, err := egress.ParseLocalEndpoint(
-		stringValue("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
-	)
-	if err != nil {
-		return Config{}, fmt.Errorf("OLLAMA_BASE_URL: %w", err)
-	}
 
 	skillsRoot := stringValue("SKILLS_ROOT", "/skills")
 	if !filepath.IsAbs(skillsRoot) || filepath.Clean(skillsRoot) != skillsRoot {
@@ -443,7 +425,6 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		MemoryRoot:                memoryRoot,
 		MemoryDisplayRoot:         memoryDisplayRoot,
 		MCPConfigRoot:             mcpConfigRoot,
-		OllamaBaseURL:             ollamaEndpoint.Canonical,
 		OllamaModel:               stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
 		OllamaContextWindowTokens: ollamaContextWindowTokens,
 		OpenAIBaseURL:             openAIBaseURL,
@@ -458,13 +439,10 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		JobMaxAttempts:            maxAttempts,
 		MaxConcurrentRunsGeneral:  maxRuns,
 		MaxToolCallsPerRun:        maxTools,
-		ModelTimeoutMS:            modelTimeout,
-		ToolTimeoutMS:             toolTimeout,
 		ApprovalTTLMS:             approvalTTL,
 		QueueMaxWaitMS:            queueMaxWait,
 		QueueNoWorkerTimeoutMS:    queueNoWorkerTimeout,
 		QueueTimeoutPolicy:        queueTimeoutPolicy,
-		LogLevel:                  stringValue("LOG_LEVEL", "info"),
 	}, nil
 }
 

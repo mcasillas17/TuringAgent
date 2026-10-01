@@ -352,9 +352,9 @@ func TestLeavingTheQueueClearsTheWaitReason(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-late")
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-late", 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	if claimed.RunID != enqueued.RunID {
 		t.Fatalf("claimed %q, want the run under test", claimed.RunID)

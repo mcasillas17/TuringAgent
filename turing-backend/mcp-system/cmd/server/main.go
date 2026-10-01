@@ -25,13 +25,13 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
 		defer cancel()
-		if err := checkHealth(ctx, "http://127.0.0.1:"+envOrDefault("PORT", "7100")+"/healthz"); err != nil {
+		if err := checkHealth(ctx, "http://127.0.0.1:7100/healthz"); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
 
-	addr := ":" + envOrDefault("PORT", "7100")
+	addr := ":7100"
 	log.Printf("starting mcp-system on %s", addr)
 	if err := newHTTPServer(addr, newHandler(os.Getenv("MCP_SYSTEM_TOKEN_GENERAL"))).ListenAndServe(); err != nil {
 		log.Fatal(err)
@@ -338,11 +338,4 @@ func rejectUnknownParams(req jsonrpc.Request, allowed ...string) *jsonrpc.Reques
 		}
 	}
 	return nil
-}
-
-func envOrDefault(name string, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
 }

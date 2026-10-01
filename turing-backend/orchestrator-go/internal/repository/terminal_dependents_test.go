@@ -24,7 +24,7 @@ func TestTerminalRunRevokesApprovedToolLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-terminal", 1, time.Hour); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-terminal", 1, time.Hour, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
@@ -32,11 +32,11 @@ func TestTerminalRunRevokesApprovedToolLifecycle(t *testing.T) {
 	}, "general_assistant", "files", "files.update", `{}`, "sha256:test"); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "call_terminal", "general_assistant", "files.update", `{}`, "sha256:test", "2099-01-01T00:00:00Z")
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_terminal", "general_assistant", "files.update", `{}`, "sha256:test", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "issued-token", sql.NullString{}, ""); err != nil {
+	if _, err := repo.ApproveApprovalWithEvent(ctx, approval.ApprovalID, "issued-token", sql.NullString{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := cancelRunEvents(t, repo, enqueued.RunID); err != nil {
@@ -54,7 +54,7 @@ func TestTerminalRunRevokesApprovedToolLifecycle(t *testing.T) {
 	if approvalStatus != "expired" || approvalToken.Valid || toolStatus != "failed" {
 		t.Fatalf("terminal cleanup approval=%s token=%q tool=%s", approvalStatus, approvalToken.String, toolStatus)
 	}
-	if _, err := repo.ConsumeApproval(ctx, approval.ApprovalID, ""); err == nil {
+	if _, err := repo.ConsumeApprovalWithEvent(ctx, approval.ApprovalID, ""); err == nil {
 		t.Fatal("ConsumeApproval succeeded after terminal transition")
 	}
 }
@@ -74,7 +74,7 @@ func TestApproveApprovalRejectsDatabaseExpiryBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-boundary", 1, time.Hour); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-boundary", 1, time.Hour, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
@@ -82,7 +82,7 @@ func TestApproveApprovalRejectsDatabaseExpiryBoundary(t *testing.T) {
 	}, "general_assistant", "files", "files.update", `{}`, "sha256:test"); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "call_boundary", "general_assistant", "files.update", `{}`, "sha256:test", "2099-01-01T00:00:00Z")
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_boundary", "general_assistant", "files.update", `{}`, "sha256:test", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestTerminalRunEmitsFailureEventForActiveSafeToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-safe", 1, time.Hour); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-safe", 1, time.Hour, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{

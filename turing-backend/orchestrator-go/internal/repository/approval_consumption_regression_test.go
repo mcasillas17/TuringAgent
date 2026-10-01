@@ -24,7 +24,7 @@ func TestConsumeApprovalAfterExpiryTerminalizesVerifiedAuthorization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-consume-expiry"); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-consume-expiry", 0, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
@@ -33,7 +33,7 @@ func TestConsumeApprovalAfterExpiryTerminalizesVerifiedAuthorization(t *testing.
 		t.Fatal(err)
 	}
 	expiresAt := time.Date(2030, 1, 1, 0, 0, 0, 100_000_000, time.UTC)
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "call_consume_expiry", "general_assistant", "files.update", `{}`, "sha256:consume-expiry", expiresAt.Format(time.RFC3339Nano))
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_consume_expiry", "general_assistant", "files.update", `{}`, "sha256:consume-expiry", expiresAt.Format(time.RFC3339Nano))
 	if err != nil {
 		t.Fatal(err)
 	}

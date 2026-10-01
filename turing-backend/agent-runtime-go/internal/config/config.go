@@ -66,7 +66,6 @@ type Config struct {
 	ToolTimeout        time.Duration
 	ApprovalTimeout    time.Duration
 	TotalToolTimeout   time.Duration
-	LogLevel           string
 }
 
 func Load() (Config, error) {
@@ -204,7 +203,6 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		ToolTimeout:               toolTimeout,
 		ApprovalTimeout:           approvalTimeout,
 		TotalToolTimeout:          totalToolTimeout,
-		LogLevel:                  defaultString(getenv("LOG_LEVEL"), "info"),
 	}, nil
 }
 

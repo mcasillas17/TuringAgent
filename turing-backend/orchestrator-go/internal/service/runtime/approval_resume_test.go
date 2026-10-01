@@ -202,7 +202,7 @@ func (f *approvalResumeFixture) awaitApproval(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("CreateApprovalWithEvent: %v", err)
 	}
-	if _, err := f.h.repo.ApproveApproval(context.Background(), approval.ApprovalID, "approval-token", sql.NullString{}, ""); err != nil {
+	if _, err := f.h.repo.ApproveApprovalWithEvent(context.Background(), approval.ApprovalID, "approval-token", sql.NullString{}, ""); err != nil {
 		t.Fatalf("ApproveApproval: %v", err)
 	}
 	return approval.ApprovalID
@@ -642,7 +642,7 @@ func (f *approvalResumeFixture) siblingApproval(t *testing.T, decided bool) stri
 		t.Fatalf("sibling CreateApprovalWithEvent: %v", err)
 	}
 	if decided {
-		if _, err := f.h.repo.ApproveApproval(context.Background(), approval.ApprovalID, "sibling-token", sql.NullString{}, ""); err != nil {
+		if _, err := f.h.repo.ApproveApprovalWithEvent(context.Background(), approval.ApprovalID, "sibling-token", sql.NullString{}, ""); err != nil {
 			t.Fatalf("sibling ApproveApproval: %v", err)
 		}
 	}

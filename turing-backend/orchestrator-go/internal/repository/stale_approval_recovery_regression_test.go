@@ -23,7 +23,7 @@ func TestRecoverStaleApprovedAuthorizationTerminalizesInsteadOfRequeueing(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-stale-approved")
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-stale-approved", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,11 +32,11 @@ func TestRecoverStaleApprovedAuthorizationTerminalizesInsteadOfRequeueing(t *tes
 	}, "general_assistant", "files", "files.update", `{}`, "sha256:stale-approved"); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "call_stale_approved", "general_assistant", "files.update", `{}`, "sha256:stale-approved", "2099-01-01T00:00:00Z")
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_stale_approved", "general_assistant", "files.update", `{}`, "sha256:stale-approved", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approved-token", sql.NullString{}, ""); err != nil {
+	if _, err := repo.ApproveApprovalWithEvent(ctx, approval.ApprovalID, "approved-token", sql.NullString{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	cutoff := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -49,7 +49,7 @@ func TestRecoverStaleApprovedAuthorizationTerminalizesInsteadOfRequeueing(t *tes
 		t.Fatal(err)
 	}
 
-	events, err := repo.RecoverStaleAssignments(ctx, cutoff)
+	events, err := repo.recoverStaleAssignments(ctx, cutoff)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestRecoverStaleApprovedAuthorizationTerminalizesInsteadOfRequeueing(t *tes
 	if current.Status != "expired" || current.ApprovalToken != "" {
 		t.Fatalf("stale approved authorization = %+v, want revoked expired token", current)
 	}
-	if _, err := repo.ConsumeApproval(ctx, approval.ApprovalID, ""); err == nil {
+	if _, err := repo.ConsumeApprovalWithEvent(ctx, approval.ApprovalID, ""); err == nil {
 		t.Fatal("old approved token was consumable after stale recovery")
 	}
 	var toolStatus, jobStatus string

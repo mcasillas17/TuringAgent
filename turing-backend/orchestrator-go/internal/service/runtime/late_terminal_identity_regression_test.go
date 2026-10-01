@@ -11,7 +11,7 @@ import (
 func claimLateTerminalAssignment(t *testing.T, h *harness, content string) (repository.EnqueueUserMessageResult, repository.Assignment, *worker) {
 	t.Helper()
 	enqueued := h.enqueueRun(t, content)
-	claimed, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-terminal-fence")
+	claimed, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-terminal-fence", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

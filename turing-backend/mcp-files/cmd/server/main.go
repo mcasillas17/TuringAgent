@@ -35,7 +35,7 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
 		ctx, cancel := context.WithTimeout(context.Background(), healthcheckTimeout)
 		defer cancel()
-		if err := checkHealth(ctx, "http://127.0.0.1:"+envOrDefault("PORT", "7110")+"/healthz"); err != nil {
+		if err := checkHealth(ctx, "http://127.0.0.1:7110/healthz"); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -49,7 +49,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	addr := ":" + envOrDefault("PORT", "7110")
+	addr := ":7110"
 	log.Printf("starting mcp-files on %s", addr)
 	if err := newHTTPServer(addr, newHandler(cfg)).ListenAndServe(); err != nil {
 		log.Fatal(err)

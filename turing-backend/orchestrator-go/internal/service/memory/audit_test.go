@@ -12,6 +12,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository/repotest"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/audit"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -40,28 +41,6 @@ func onlyAuditRowFor(t *testing.T, repo *repository.Repository, ctx context.Cont
 		t.Fatalf("%s rows = %d, want exactly one", action, len(records))
 	}
 	return records[0]
-}
-
-// deleteSession runs the whole withdrawal the user's delete performs, which is
-// the only thing that scrubs an audit payload.
-func deleteSession(t *testing.T, repo *repository.Repository, ctx context.Context, sessionID string) {
-	t.Helper()
-	if _, err := repo.BeginSessionDeletion(ctx, sessionID); err != nil {
-		t.Fatalf("BeginSessionDeletion: %v", err)
-	}
-	// A proposal left a file in the vault inbox, so the withdrawal holds at the
-	// artifact gate until the vault cleaner has drained it — the same order the
-	// session service dispatches in.
-	if _, err := repo.PurgeSessionVaultArtifacts(ctx, sessionID); err != nil {
-		t.Fatalf("PurgeSessionVaultArtifacts: %v", err)
-	}
-	receipt, err := repo.AdvanceSessionDeletion(ctx, sessionID, nil)
-	if err != nil {
-		t.Fatalf("AdvanceSessionDeletion: %v", err)
-	}
-	if receipt.State != "completed" {
-		t.Fatalf("deletion state = %q, want completed", receipt.State)
-	}
 }
 
 func remember(t *testing.T, service *Server, ctx context.Context, runID string, title, body string) string {
@@ -171,7 +150,9 @@ func TestDeletingTheConversationScrubsItsMemoryProposalAudit(t *testing.T) {
 
 	remember(t, service, ctx, runID, "Card", "They drink it black.")
 	finishRun(t, repo, ctx, runID)
-	deleteSession(t, repo, ctx, sessionID)
+	if err := repotest.DeleteSession(ctx, repo, sessionID); err != nil {
+		t.Fatal(err)
+	}
 
 	record := onlyAuditRowFor(t, repo, ctx, "memory.tool.proposed")
 	if !record.PayloadJSON.Valid || record.PayloadJSON.String != `{"scrubbed":true}` {

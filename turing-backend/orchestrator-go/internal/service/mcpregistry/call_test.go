@@ -352,9 +352,9 @@ func (h *registryCallHarness) runningToolCall(t *testing.T, toolCallID string, a
 func (h *registryCallHarness) claimAndDeliverRun(t *testing.T, runID string) {
 	t.Helper()
 	ctx := context.Background()
-	claimed, err := h.repo.ClaimNextJob(ctx, "general_assistant", registryCallWorkerID)
+	claimed, err := h.repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", registryCallWorkerID, 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	if claimed.RunID != runID {
 		t.Fatalf("claimed run = %q, want %q", claimed.RunID, runID)

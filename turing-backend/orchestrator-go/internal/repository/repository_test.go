@@ -362,7 +362,7 @@ func TestFailRunWithEventPreservingExecutionHoldsGlobalCapacityUntilExitAck(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-1", 1, time.Hour)
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-1", 1, time.Hour, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +379,7 @@ func TestFailRunWithEventPreservingExecutionHoldsGlobalCapacityUntilExitAck(t *t
 	if run.Status != "failed" || !run.ExecutionActive || run.WorkerID != "worker-1" || run.ExecutionAttemptID != claimed.AssignmentAttemptID {
 		t.Fatalf("preserved terminal run = %+v, want failed active worker-owned attempt", run)
 	}
-	blocked, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-2", 1, time.Hour)
+	blocked, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-2", 1, time.Hour, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func TestFailRunWithEventPreservingExecutionHoldsGlobalCapacityUntilExitAck(t *t
 	if err := repo.AcknowledgeExecutionExit(ctx, first.RunID); err != nil {
 		t.Fatal(err)
 	}
-	released, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-2", 1, time.Hour)
+	released, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-2", 1, time.Hour, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestClaimNextJobMarksRunAndJobRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-1")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-1", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,14 +514,14 @@ func TestClaimNextJobWaitsForEarlierSessionRunToTerminalize(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	claimedFirst, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-1")
+	claimedFirst, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-1", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if claimedFirst.RunID != first.RunID {
 		t.Fatalf("first claim run = %q, want %q", claimedFirst.RunID, first.RunID)
 	}
-	blocked, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-2")
+	blocked, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-2", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +532,7 @@ func TestClaimNextJobWaitsForEarlierSessionRunToTerminalize(t *testing.T) {
 	if _, err := completeRunAtCurrentVersion(t, repo, first.RunID, first.AssistantMessageID, "first done", nil); err != nil {
 		t.Fatal(err)
 	}
-	claimedSecond, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-2")
+	claimedSecond, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-2", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,8 +565,8 @@ func TestClaimNextJobRollsBackWhenStartedEventAppendFails(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-1"); err == nil {
-		t.Fatal("ClaimNextJob succeeded, want started event append failure")
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-1", 0, 0, nil, nil); err == nil {
+		t.Fatal("ClaimNextCompatibleJobWithLimit succeeded, want started event append failure")
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
 	if err != nil {
@@ -598,7 +598,7 @@ func TestRequeueClaimedJobIncrementsAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-1")
+	first, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-1", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -608,7 +608,7 @@ func TestRequeueClaimedJobIncrementsAttempt(t *testing.T) {
 	if err := repo.RequeueClaimedJob(ctx, enqueued.JobID, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	second, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-2")
+	second, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-2", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -916,22 +916,22 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{ToolCallID: "tool_1", RunID: enqueued.RunID}, "general_assistant", "mcp-files", "write_file", `{"path":"notes.txt"}`, "args_hash_1"); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "tool_1", "general_assistant", "write_file", `{"path":"notes.txt"}`, "args_hash_1", "2099-01-01T00:00:00Z")
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "tool_1", "general_assistant", "write_file", `{"path":"notes.txt"}`, "args_hash_1", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
 	comment := sql.NullString{String: "Reviewed the exact note update", Valid: true}
-	approved, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approval_token_1", comment, "2026-05-15T00:00:00Z")
+	approved, err := repo.ApproveApprovalWithEvent(ctx, approval.ApprovalID, "approval_token_1", comment, "2026-05-15T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if approved.Status != "approved" || approved.ApprovalToken != "approval_token_1" {
-		t.Fatalf("bad approval record: %+v", approved)
+	if approved.Approval.Status != "approved" || approved.Approval.ApprovalToken != "approval_token_1" {
+		t.Fatalf("bad approval record: %+v", approved.Approval)
 	}
-	if approved.ApprovalComment != comment || approved.DenialReason.Valid {
-		t.Fatalf("approval rationale = comment %#v reason %#v", approved.ApprovalComment, approved.DenialReason)
+	if approved.Approval.ApprovalComment != comment || approved.Approval.DenialReason.Valid {
+		t.Fatalf("approval rationale = comment %#v reason %#v", approved.Approval.ApprovalComment, approved.Approval.DenialReason)
 	}
-	retried, err := repo.ApproveApproval(
+	retried, err := repo.ApproveApprovalWithEvent(
 		ctx,
 		approval.ApprovalID,
 		"replacement_token",
@@ -941,8 +941,8 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retried.ApprovalToken != "approval_token_1" || retried.ApprovalComment != comment {
-		t.Fatalf("approval retry rewrote committed decision: %+v", retried)
+	if retried.Approval.ApprovalToken != "approval_token_1" || retried.Approval.ApprovalComment != comment {
+		t.Fatalf("approval retry rewrote committed decision: %+v", retried.Approval)
 	}
 	var toolCallStatus, toolCallApprovalID string
 	if err := database.QueryRowContext(ctx, `SELECT status, approval_id FROM tool_calls WHERE id = ?`, "tool_1").Scan(&toolCallStatus, &toolCallApprovalID); err != nil {
@@ -979,14 +979,14 @@ func TestApprovalLifecycleRecordsTokenAndUpdatesRun(t *testing.T) {
 			storedReason,
 		)
 	}
-	consumed, err := repo.ConsumeApproval(ctx, approval.ApprovalID, "2026-05-15T00:01:00Z")
+	consumed, err := repo.ConsumeApprovalWithEvent(ctx, approval.ApprovalID, "2026-05-15T00:01:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if consumed.Status != "consumed" {
-		t.Fatalf("approval status after consume = %q", consumed.Status)
+	if consumed.Approval.Status != "consumed" {
+		t.Fatalf("approval status after consume = %q", consumed.Approval.Status)
 	}
-	if _, err := repo.ConsumeApproval(ctx, approval.ApprovalID, "2026-05-15T00:01:01Z"); !errors.Is(err, ErrApprovalAlreadyConsumed) {
+	if _, err := repo.ConsumeApprovalWithEvent(ctx, approval.ApprovalID, "2026-05-15T00:01:01Z"); !errors.Is(err, ErrApprovalAlreadyConsumed) {
 		t.Fatalf("second consume error = %v, want ErrApprovalAlreadyConsumed", err)
 	}
 }
@@ -1095,11 +1095,11 @@ func TestRecordToolCallAfterRejectsApprovedButUnconsumedCompletion(t *testing.T)
 	}, "general_assistant", "files", "files.update", `{}`, "sha256:approved"); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, toolCallID, "general_assistant", "files.update", `{}`, "sha256:approved", "2099-01-01T00:00:00Z")
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, toolCallID, "general_assistant", "files.update", `{}`, "sha256:approved", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ApproveApproval(ctx, approval.ApprovalID, "approved-token", sql.NullString{}, ""); err != nil {
+	if _, err := repo.ApproveApprovalWithEvent(ctx, approval.ApprovalID, "approved-token", sql.NullString{}, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1211,7 +1211,7 @@ func TestApprovalFailsWithoutMatchingToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.CreateApproval(ctx, enqueued.RunID, "missing_tool_call", "general_assistant", "write_file", `{}`, "args_hash_1", "2099-01-01T00:00:00Z"); err == nil {
+	if _, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "missing_tool_call", "general_assistant", "write_file", `{}`, "args_hash_1", "2099-01-01T00:00:00Z"); err == nil {
 		t.Fatal("expected missing tool call error")
 	}
 	var approvalCount int
@@ -1241,14 +1241,14 @@ func TestDenyApprovalDoesNotMutateNonWaitingRun(t *testing.T) {
 	if err := repo.MarkRunRunning(ctx, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "", "general_assistant", "write_file", `{}`, "args_hash_1", "2099-01-01T00:00:00Z")
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "", "general_assistant", "write_file", `{}`, "args_hash_1", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.ExecContext(ctx, `UPDATE agent_runs SET status = 'completed' WHERE id = ?`, enqueued.RunID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, sql.NullString{}, "2026-05-15T00:00:00Z"); err == nil {
+	if _, err := repo.DenyApprovalWithEvent(ctx, approval.ApprovalID, sql.NullString{}, "2026-05-15T00:00:00Z"); err == nil {
 		t.Fatal("expected deny approval to fail for completed run")
 	}
 	run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -1287,16 +1287,16 @@ func TestDenyApprovalAtomicallyTerminalizesToolRunJobAndEvent(t *testing.T) {
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{ToolCallID: "call_denied", RunID: enqueued.RunID}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:args"); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "call_denied", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:args", "2099-01-01T00:00:00Z")
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_denied", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:args", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	reason := sql.NullString{String: "The destination is not the one I intended", Valid: true}
-	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, reason, "2026-05-15T00:00:00Z"); err != nil {
+	if _, err := repo.DenyApprovalWithEvent(ctx, approval.ApprovalID, reason, "2026-05-15T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.DenyApproval(
+	if _, err := repo.DenyApprovalWithEvent(
 		ctx,
 		approval.ApprovalID,
 		sql.NullString{String: "replacement reason", Valid: true},
@@ -1364,18 +1364,18 @@ func TestDenyApprovalTerminalizesRunWhenToolCallAlreadyFailed(t *testing.T) {
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{ToolCallID: "call_already_failed", RunID: enqueued.RunID}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:args"); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "call_already_failed", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:args", "2099-01-01T00:00:00Z")
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_already_failed", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:args", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.RecordToolCallAfter(ctx, ToolCallAfterRecord{
+	if _, _, err := repo.RecordToolCallAfterWithEvent(ctx, ToolCallAfterRecord{
 		ToolCallID: "call_already_failed", RunID: enqueued.RunID, ServerName: "files", ToolName: "files.update",
 		Status: "failed", ErrorCode: "approval_wait_failed", ErrorMessage: "approval polling timed out",
-	}); err != nil {
+	}, "tool.call.failed", `{"status":"failed"}`); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := repo.DenyApproval(ctx, approval.ApprovalID, sql.NullString{}, "2026-05-15T00:00:00Z"); err != nil {
+	if _, err := repo.DenyApprovalWithEvent(ctx, approval.ApprovalID, sql.NullString{}, "2026-05-15T00:00:00Z"); err != nil {
 		t.Fatalf("DenyApproval after failed tool call: %v", err)
 	}
 	var approvalStatus, toolCallStatus, runStatus, jobStatus string
@@ -1438,7 +1438,7 @@ func TestRuntimeFailureTerminalizesPendingApprovalBeforeLateResolution(t *testin
 			if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{ToolCallID: toolCallID, RunID: enqueued.RunID}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:args"); err != nil {
 				t.Fatal(err)
 			}
-			approval, err := repo.CreateApproval(ctx, enqueued.RunID, toolCallID, "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:args", "2099-01-01T00:00:00Z")
+			approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, toolCallID, "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:args", "2099-01-01T00:00:00Z")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1541,9 +1541,9 @@ func corruptActiveSameSessionRuns(t *testing.T) (*Repository, EnqueueUserMessage
 	if err != nil {
 		t.Fatalf("enqueue second: %v", err)
 	}
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-corrupt")
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-corrupt", 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	if claimed.RunID != first.RunID {
 		t.Fatalf("first claim run = %q, want %q", claimed.RunID, first.RunID)
@@ -1581,9 +1581,9 @@ func TestCorruptActiveRunCannotBeTransitionedOrLeapfrogged(t *testing.T) {
 		ctx := context.Background()
 		repo, _, second := corruptActiveSameSessionRuns(t)
 
-		claimed, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-later")
+		claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-later", 0, 0, nil, nil)
 		if err != nil {
-			t.Fatalf("ClaimNextJob: %v", err)
+			t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 		}
 		if claimed.JobID != "" {
 			t.Fatalf("claimed %+v while an earlier active run in the same session was unprogressable", claimed)

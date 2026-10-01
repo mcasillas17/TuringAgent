@@ -152,12 +152,12 @@ func newRun(t *testing.T, repo *repository.Repository, ctx context.Context) (str
 	// pending job when several are — either way, silently handing back a run
 	// this helper did not just make running would fail some later gate for a
 	// reason unrelated to what the test is about.
-	job, err := repo.ClaimNextJob(ctx, "general_assistant", "memory-test-worker")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "memory-test-worker", 0, 0, nil, nil)
 	if err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 	if job.RunID != enqueued.RunID {
-		t.Fatalf("ClaimNextJob claimed %q, want the run just enqueued (%q)", job.RunID, enqueued.RunID)
+		t.Fatalf("ClaimNextCompatibleJobWithLimit claimed %q, want the run just enqueued (%q)", job.RunID, enqueued.RunID)
 	}
 	return enqueued.RunID, session.SessionID
 }

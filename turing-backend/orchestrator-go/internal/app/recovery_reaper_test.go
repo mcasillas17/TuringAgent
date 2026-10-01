@@ -28,7 +28,7 @@ func TestAppRestartRecoversUnexpiredDeliveredAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := first.Repository.ClaimNextJobWithLimit(context.Background(), "general_assistant", "worker-before-restart", 1, time.Hour)
+	claimed, err := first.Repository.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-before-restart", 1, time.Hour, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestAppRestartRecoversUnexpiredDeliveredAssignment(t *testing.T) {
 	if run.Status != "queued" || run.ExecutionActive {
 		t.Fatalf("restart left delivered assignment %+v, want queued inactive run", run)
 	}
-	reclaimed, err := restarted.Repository.ClaimNextJobWithLimit(context.Background(), "general_assistant", "worker-after-restart", 1, time.Hour)
+	reclaimed, err := restarted.Repository.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-after-restart", 1, time.Hour, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestAppReaperRecoversUnownedExpiredAssignmentAndStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := application.Repository.ClaimNextJobWithLimit(context.Background(), "general_assistant", "worker-gone", 1, time.Millisecond); err != nil {
+	if _, err := application.Repository.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-gone", 1, time.Millisecond, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

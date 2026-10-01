@@ -118,7 +118,7 @@ func approvalWaitingRun(t *testing.T, repo *Repository, title string, worker str
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repo.ClaimNextJob(ctx, "general_assistant", worker)
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", worker, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func approvalWaitingRun(t *testing.T, repo *Repository, title string, worker str
 	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, toolCallID, "general_assistant",
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, toolCallID, "general_assistant",
 		"files.update", `{"path":"note.txt"}`, "sha256:test", expiresAt)
 	if err != nil {
 		t.Fatal(err)
@@ -228,10 +228,10 @@ func TestReconciledPendingApprovalProjectsPolicyDeniedCategory(t *testing.T) {
 	enqueued, approval, claimed := approvalWaitingRun(t, repo, "Reconciled approval projection", "worker-lost-decision",
 		"call_reconcile_projection", "model_reconcile_projection", "2099-01-01T00:00:00Z")
 
-	reconciliation, err := repo.ReconcileAssignment(ctx, Assignment{
+	reconciliation, err := repo.ReconcileAssignmentWithLimit(ctx, Assignment{
 		JobID: claimed.JobID, RunID: claimed.RunID, WorkerID: "worker-lost-decision",
 		AttemptID: claimed.AssignmentAttemptID,
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestStaleApprovedAuthorizationProjectsExpiredCategory(t *testing.T) {
 		t.Fatal("claimed job id is empty")
 	}
 
-	events, err := repo.RecoverStaleAssignments(ctx, cutoff)
+	events, err := repo.recoverStaleAssignments(ctx, cutoff)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestRequestedAndApprovedApprovalEventsCarryNoFailureCategory(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-nonfailure"); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-nonfailure", 0, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.RecordToolCallBefore(ctx, ToolCallRecord{
@@ -346,9 +346,8 @@ func TestRequestedAndApprovedApprovalEventsCarryNoFailureCategory(t *testing.T) 
 	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
 		t.Fatal(err)
 	}
-	// CreateApprovalWithEvent rather than CreateApproval: approval.requested is
-	// the event a client sees first, and it is the one most likely to be
-	// assumed harmless and left unasserted.
+	// approval.requested is the event a client sees first, and it is the one
+	// most likely to be assumed harmless and left unasserted.
 	approval, requested, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "call_nonfailure_projection",
 		"general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z")
 	if err != nil {
@@ -478,7 +477,7 @@ func TestApprovalFailureCategoryIsReadOffTheServerChosenEventType(t *testing.T) 
 }
 
 // An approval need not be attached to a tool call: tool_call_id is nullable and
-// CreateApproval stores NULL for an empty one. The migration drops identity
+// CreateApprovalWithEvent stores NULL for an empty one. The migration drops identity
 // keys it finds empty rather than publishing a blank, so a live writer that
 // emitted "toolCallId": "" would produce an event a client could tell apart
 // from the rewritten one on the very key it joins on.
@@ -497,10 +496,10 @@ func TestApprovalFailureOmitsAnAbsentToolCallIDRatherThanPublishingBlank(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-detached"); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-detached", 0, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := repo.CreateApproval(ctx, enqueued.RunID, "", "general_assistant",
+	approval, _, err := repo.CreateApprovalWithEvent(ctx, enqueued.RunID, "", "general_assistant",
 		"files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)

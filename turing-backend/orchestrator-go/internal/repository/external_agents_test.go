@@ -617,7 +617,7 @@ func TestClaimNextJobCarriesTheRoutedAgent(t *testing.T) {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	job, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-1")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-1", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -650,7 +650,7 @@ func TestARequeuedRoutedJobIsStillRoutedOnItsNextAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	first, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-1")
+	first, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-1", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
@@ -668,7 +668,7 @@ func TestARequeuedRoutedJobIsStillRoutedOnItsNextAttempt(t *testing.T) {
 		t.Fatal("run was not requeued, so this test proves nothing about attempt two")
 	}
 
-	retried, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-2")
+	retried, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-2", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("second claim: %v", err)
 	}
@@ -721,7 +721,7 @@ func TestDeletingASessionRemovesItsRouting(t *testing.T) {
 		t.Fatalf("route: %v", err)
 	}
 
-	if err := repo.DeleteSessionForTests(ctx, session.SessionID); err != nil {
+	if err := deleteSession(ctx, repo, session.SessionID); err != nil {
 		t.Fatalf("delete session: %v", err)
 	}
 

@@ -11,7 +11,6 @@ import 'package:turing_flutter_app/models/tool_descriptor.dart';
 import 'package:turing_flutter_app/models/turing_event.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 
-import '../support/no_audit_api.dart';
 import '../support/no_mcp_registry_api.dart';
 import '../support/no_memory_api.dart';
 import '../support/no_skills_api.dart';
@@ -873,7 +872,6 @@ class _ConnectCall {
 /// behaves like the real one rather than a stub that always says yes.
 class _IntegrationsApi extends TuringApi
     with
-        NoAuditApi,
         NoMcpRegistryApi,
         NoMemoryApi,
         NoSkillsApi,
@@ -1081,9 +1079,6 @@ class _IntegrationsApi extends TuringApi
   Future<List<AgentDescriptor>> listAgents() async => const [];
 
   @override
-  Future<Map<String, dynamic>> getConfig() async => const {};
-
-  @override
   Future<Map<String, dynamic>> createSession({String? title}) async => const {};
 
   @override
@@ -1129,12 +1124,6 @@ class _IntegrationsApi extends TuringApi
     required String content,
     String modelProvider = 'ollama',
     String? idempotencyKey,
-  }) async => const {};
-
-  @override
-  Future<Map<String, dynamic>> approveApproval(
-    String approvalId, {
-    String? comment,
   }) async => const {};
 
   @override

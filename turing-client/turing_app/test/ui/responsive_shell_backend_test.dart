@@ -16,7 +16,6 @@ import 'package:turing_flutter_app/networking/auth_storage.dart';
 import 'package:turing_flutter_app/networking/event_source.dart';
 import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 
-import '../support/no_audit_api.dart';
 import '../support/no_mcp_registry_api.dart';
 import '../support/no_memory_api.dart';
 import '../support/no_external_agents_api.dart';
@@ -353,7 +352,6 @@ void main() {
 
 class _FakeApiClient extends TuringApi
     with
-        NoAuditApi,
         NoMcpRegistryApi,
         NoMemoryApi,
         NoSkillsApi,
@@ -363,14 +361,6 @@ class _FakeApiClient extends TuringApi
         NoRemoteEgressApi,
         NoSessionLifecycleApi,
         NoTelemetryApi {
-  @override
-  Future<Map<String, dynamic>> approveApproval(
-    String approvalId, {
-    String? comment,
-  }) async {
-    return {'approvalId': approvalId, 'status': 'approved'};
-  }
-
   @override
   Future<Map<String, dynamic>> createSession({String? title}) async {
     return {'sessionId': 'sess_1', 'createdAt': '2026-05-10T00:00:00.000Z'};
@@ -382,13 +372,6 @@ class _FakeApiClient extends TuringApi
     String? reason,
   }) async {
     return {'approvalId': approvalId, 'status': 'denied'};
-  }
-
-  @override
-  Future<Map<String, dynamic>> getConfig() async {
-    return {
-      'enabledProviders': ['ollama'],
-    };
   }
 
   final List<String> deletedSessionIds = [];

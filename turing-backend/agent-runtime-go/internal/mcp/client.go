@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/safejson"
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/mcpwire"
 )
 

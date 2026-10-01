@@ -72,7 +72,7 @@ func TestAppendPendingRunNoticeSkipsClaimedWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-conditional-notice"); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-conditional-notice", 0, 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 

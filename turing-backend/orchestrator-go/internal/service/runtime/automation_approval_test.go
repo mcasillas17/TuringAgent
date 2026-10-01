@@ -162,10 +162,10 @@ func TestAnAllowlistedToolIsApprovedWithoutAnyoneWatching(t *testing.T) {
 	}
 	// And it is still the runtime's job to consume it — the pre-approval did
 	// not skip a step, it answered one.
-	if _, err := h.repo.ConsumeApproval(context.Background(), approval.ApprovalID, ""); err != nil {
+	if _, err := h.repo.ConsumeApprovalWithEvent(context.Background(), approval.ApprovalID, ""); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
-	if _, err := h.repo.ConsumeApproval(context.Background(), approval.ApprovalID, ""); err == nil {
+	if _, err := h.repo.ConsumeApprovalWithEvent(context.Background(), approval.ApprovalID, ""); err == nil {
 		t.Fatal("the pre-approved token was consumable twice")
 	}
 }
@@ -262,7 +262,7 @@ func TestAToolOutsideTheAllowlistFailsTheRunInsteadOfWaiting(t *testing.T) {
 	}
 
 	// No approval was created, so nothing can sit pending waiting to expire.
-	if _, err := h.repo.GetPendingApprovalForRun(context.Background(), fire.RunID); err == nil {
+	if _, err := h.repo.GetApprovalByToolCall(context.Background(), fire.RunID, "call_blocked"); err == nil {
 		t.Fatal("a pending approval was left waiting for a person who is not there")
 	}
 

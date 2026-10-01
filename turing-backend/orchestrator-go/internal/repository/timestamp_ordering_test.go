@@ -213,7 +213,7 @@ func TestRecoverStaleAssignmentsOrdersLegacyFractionPrefixesChronologically(t *t
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-fractional", 1, time.Hour); err != nil {
+			if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-fractional", 1, time.Hour, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := database.ExecContext(ctx, `
@@ -227,7 +227,7 @@ func TestRecoverStaleAssignmentsOrdersLegacyFractionPrefixesChronologically(t *t
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := repo.RecoverStaleAssignments(ctx, cutoff); err != nil {
+			if _, err := repo.recoverStaleAssignments(ctx, cutoff); err != nil {
 				t.Fatal(err)
 			}
 			run, err := repo.GetRun(ctx, enqueued.RunID)
@@ -259,7 +259,7 @@ func TestTerminalRunOrdersLegacyDependentTimestampsChronologically(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-legacy", 1, time.Hour); err != nil {
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-legacy", 1, time.Hour, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -279,7 +279,7 @@ func TestTerminalRunOrdersLegacyDependentTimestampsChronologically(t *testing.T)
 		}, "general_assistant", "files", "files.update", `{}`, "sha256:test"); err != nil {
 			t.Fatal(err)
 		}
-		approval, err := repo.CreateApproval(
+		approval, _, err := repo.CreateApprovalWithEvent(
 			ctx, enqueued.RunID, item.toolCallID, "general_assistant", "files.update",
 			`{}`, "sha256:test", "2099-01-01T00:00:00Z",
 		)

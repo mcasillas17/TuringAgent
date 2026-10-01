@@ -24,8 +24,6 @@ type provider struct {
 	secretLabel       string
 	secretHelp        string
 	accountLabel      string
-	requiresEndpoint  bool
-	endpointLabel     string
 	grants            []string
 }
 
@@ -128,8 +126,6 @@ func (p provider) descriptor() *turingv1.ProviderDescriptor {
 		SecretLabel:       p.secretLabel,
 		SecretHelp:        p.secretHelp,
 		AccountLabel:      p.accountLabel,
-		RequiresEndpoint:  p.requiresEndpoint,
-		EndpointLabel:     p.endpointLabel,
 		Grants:            append([]string(nil), p.grants...),
 	}
 }

@@ -235,7 +235,7 @@ func TestEnqueueFreezesEnabledSkillBodyAndReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestEnqueueIndexesEnabledWithheldSkillWithoutItsContent(t *testing.T) {
 	}
 	grantRepositoryCapability(t, repo, "writing/tone", "files.update")
 
-	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestClaimNextJobReadsLegacyNameInstructionsPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +342,7 @@ func TestUnreadableUnrelatedSubtreeDoesNotBlockEnqueue(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	job, err := repo.ClaimNextJob(context.Background(), "general_assistant", "worker")
+	job, err := repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

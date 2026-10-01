@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository/repotest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -35,7 +36,7 @@ func TestMemoryReadRefusesABeliefWhoseEvidenceWasWithdrawn(t *testing.T) {
 		t.Fatal("the belief was not readable before its evidence was withdrawn")
 	}
 
-	if err := repo.DeleteSessionForTests(ctx, grounding); err != nil {
+	if err := repotest.DeleteSession(ctx, repo, grounding); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if _, err := service.ListMemoryState(ctx, &turingv1.ListMemoryStateRequest{}); err != nil {

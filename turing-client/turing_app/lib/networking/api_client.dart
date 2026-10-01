@@ -2,7 +2,6 @@ import 'dart:async';
 
 import '../models/agent_descriptor.dart';
 import '../models/approval.dart';
-import '../models/audit.dart';
 import '../models/external_agent.dart';
 import '../models/integration.dart';
 import '../models/automation.dart';
@@ -21,11 +20,7 @@ import '../models/tool_descriptor.dart';
 import '../models/turing_event.dart';
 
 abstract class TuringApi implements RemoteEgressApi {
-  Future<Map<String, dynamic>> getConfig();
-
   Future<Map<String, dynamic>> createSession({String? title});
-
-  Future<List<Session>> listSessions({int limit = 50, String? after});
 
   Future<SessionPage> listSessionPage({
     int limit = 50,
@@ -127,11 +122,6 @@ abstract class TuringApi implements RemoteEgressApi {
       message: 'This client cannot send remote egress consent',
     );
   }
-
-  Future<Map<String, dynamic>> approveApproval(
-    String approvalId, {
-    String? comment,
-  });
 
   Future<ApprovalDetails> getApprovalDetails(
     String approvalId, {
@@ -258,7 +248,6 @@ abstract class TuringApi implements RemoteEgressApi {
 
   /// Every SKILL.md discovered under the backend's skills directory.
   Future<List<Skill>> listSkills();
-  Future<Skill> getSkill({required String skillId});
 
   /// Enabling a skill does not implicitly approve any capability.
   Future<Skill> setSkillEnabled({
@@ -500,27 +489,6 @@ abstract class TuringApi implements RemoteEgressApi {
   /// The backend REFUSES a window it cannot answer rather than narrowing it,
   /// so the returned window always describes the returned numbers.
   Future<TelemetrySummary> getTelemetrySummary({required int windowDays});
-
-  /// An authenticated, local-only read of the audit log the backend already
-  /// keeps. Every row is redacted server-side before it ever reaches this
-  /// client: the response never carries raw tool arguments, result
-  /// summaries, credentials, approval tokens, or other secrets, only the
-  /// typed fields the server's own per-action allowlist chose to disclose.
-  ///
-  /// [correlationId] and [action] are exact-match filters. [createdAtStart]
-  /// is an inclusive lower bound and [createdAtEnd] an exclusive upper bound
-  /// on [AuditEntry.createdAt]; both are sent in UTC. [order] controls
-  /// whether the newest or oldest matching entry comes first, [limit] bounds
-  /// the page size, and [cursor] resumes from a previous [AuditPage].
-  Future<AuditPage> listAuditEntries({
-    String? correlationId,
-    String? action,
-    DateTime? createdAtStart,
-    DateTime? createdAtEnd,
-    AuditOrder order = AuditOrder.descending,
-    int limit = 50,
-    String? cursor,
-  });
 }
 
 abstract interface class RemoteEgressApi {

@@ -28,7 +28,6 @@ import 'package:turing_flutter_app/networking/event_source.dart';
 import 'package:turing_flutter_app/ui/shell/responsive_shell.dart';
 import 'package:turing_flutter_app/ui/shell/shell_destination.dart';
 
-import '../support/no_audit_api.dart';
 import '../support/no_integrations_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_telemetry_api.dart';
@@ -2358,12 +2357,7 @@ Future<void> _pumpShell(
 }
 
 class _FakeApi extends TuringApi
-    with
-        NoAuditApi,
-        NoIntegrationsApi,
-        NoAutomationsApi,
-        NoTelemetryApi,
-        NoSkillsApi {
+    with NoIntegrationsApi, NoAutomationsApi, NoTelemetryApi, NoSkillsApi {
   List<Session> sessions = [
     Session(
       sessionId: 'sess_existing',
@@ -2407,7 +2401,6 @@ class _FakeApi extends TuringApi
 
   int listSessionsCalls = 0;
 
-  @override
   Future<List<Session>> listSessions({int limit = 50, String? after}) async {
     listSessionsCalls++;
     final error = sessionsError;
@@ -2772,17 +2765,6 @@ class _FakeApi extends TuringApi
     required String query,
     int limit = 50,
   }) async => const [];
-
-  @override
-  Future<Map<String, dynamic>> getConfig() async => {
-    'enabledProviders': ['ollama'],
-  };
-
-  @override
-  Future<Map<String, dynamic>> approveApproval(
-    String approvalId, {
-    String? comment,
-  }) async => {'approvalId': approvalId, 'status': 'approved'};
 
   @override
   Future<Map<String, dynamic>> denyApproval(

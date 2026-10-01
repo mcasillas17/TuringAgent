@@ -1473,7 +1473,7 @@ type cancellingApprovalCreator struct {
 }
 
 func (c cancellingApprovalCreator) CreateApprovalForTool(ctx context.Context, runID string, toolCallID string, agentID string, toolName string, _ map[string]any) (string, error) {
-	approval, err := c.repo.CreateApproval(ctx, runID, toolCallID, agentID, toolName, `{}`, "sha256:cancelled", "2099-01-01T00:00:00Z")
+	approval, _, err := c.repo.CreateApprovalWithEvent(ctx, runID, toolCallID, agentID, toolName, `{}`, "sha256:cancelled", "2099-01-01T00:00:00Z")
 	if err != nil {
 		return "", err
 	}
@@ -3542,7 +3542,7 @@ func TestRunFailedPublishesDependentLifecycleEventsInOrder(t *testing.T) {
 	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.repo.CreateApproval(context.Background(), enqueued.RunID, "call_run_failed", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z"); err != nil {
+	if _, _, err := h.repo.CreateApprovalWithEvent(context.Background(), enqueued.RunID, "call_run_failed", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	ch, unsubscribe := h.bus.Subscribe(enqueued.SessionID)

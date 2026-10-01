@@ -70,7 +70,7 @@ func testPublicCancelLosingApprovalReady(t *testing.T, scenario string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.Repository.ApproveApproval(ctx, approval.ApprovalID, "approved-unconsumed-token", sql.NullString{}, ""); err != nil {
+	if _, err := app.Repository.ApproveApprovalWithEvent(ctx, approval.ApprovalID, "approved-unconsumed-token", sql.NullString{}, ""); err != nil {
 		t.Fatal(err)
 	}
 	waiting, err := app.Repository.GetRunState(ctx, stopping.RunID)
@@ -82,7 +82,7 @@ func testPublicCancelLosingApprovalReady(t *testing.T, scenario string) {
 		ExpectedStateVersion: waiting.StateVersion,
 	}
 	if scenario == "consumed" {
-		if _, err := app.Repository.ConsumeApproval(ctx, approval.ApprovalID, ""); err != nil {
+		if _, err := app.Repository.ConsumeApprovalWithEvent(ctx, approval.ApprovalID, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -141,7 +141,7 @@ func testPublicCancelLosingApprovalReady(t *testing.T, scenario string) {
 	if err != nil || approvalAfter.Status != wantStatus || approvalAfter.ApprovalToken != wantToken {
 		t.Fatalf("approval authorization/provenance changed: %+v, %v", approvalAfter, err)
 	}
-	if _, err := app.Repository.ConsumeApproval(ctx, approval.ApprovalID, ""); err == nil {
+	if _, err := app.Repository.ConsumeApprovalWithEvent(ctx, approval.ApprovalID, ""); err == nil {
 		t.Fatal("cancelled authorization could be consumed")
 	}
 	if err := worker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_RunCancelledAck{RunCancelledAck: &turingv1.RuntimeCancelledAck{

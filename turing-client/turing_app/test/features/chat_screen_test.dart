@@ -29,7 +29,6 @@ import 'package:turing_flutter_app/networking/event_source.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/tool_descriptor.dart';
 
-import '../support/no_audit_api.dart';
 import '../support/approval_details.dart';
 import '../support/no_external_agents_api.dart';
 import '../support/no_integrations_api.dart';
@@ -11237,7 +11236,7 @@ void main() {
         isNull,
         reason:
             'the stream `onError` path of the real '
-            'TuringGrpcApi.approveApproval rejects with a GrpcError, not a '
+            'TuringGrpcApi.approveReviewedApproval rejects with a GrpcError, not a '
             'TuringApiException — `on Exception` must cover this '
             'rejection type too, since GrpcError also implements '
             'Exception',
@@ -12241,7 +12240,6 @@ class _CancelApi extends _FakeApiClient {
 
 class _FakeApiClient extends TuringApi
     with
-        NoAuditApi,
         NoSkillsApi,
         NoExternalAgentsApi,
         NoIntegrationsApi,
@@ -12279,19 +12277,19 @@ class _FakeApiClient extends TuringApi
   /// explicitly.
   Completer<TuringEventPage>? eventsGate;
 
-  /// Queued `approveApproval` rejections, one per call, consumed in order —
-  /// mirrors [sendMessageErrors]. Models the real `TuringGrpcApi` rejecting
+  /// Queued `approveReviewedApproval` rejections, one per call, consumed in
+  /// order — mirrors [sendMessageErrors]. Models the real `TuringGrpcApi` rejecting
   /// the decision RPC outright (a `GrpcError` from the underlying call, or a
   /// [TuringApiException] the client maps it to).
   final List<Object> approveApprovalErrors = [];
 
-  /// How many times `approveApproval` has been invoked — mirrors
+  /// How many times `approveReviewedApproval` has been invoked — mirrors
   /// [sendMessageCallCount].
   int approveApprovalCallCount = 0;
 
-  /// When set, `approveApproval` returns this completer's future instead of
-  /// consuming [approveApprovalErrors] or resolving immediately — mirrors
-  /// [sendMessagePending].
+  /// When set, `approveReviewedApproval` returns this completer's future
+  /// instead of consuming [approveApprovalErrors] or resolving immediately —
+  /// mirrors [sendMessagePending].
   Completer<Map<String, dynamic>>? approveApprovalPending;
   Completer<ApprovalDetails>? approvalDetailsGate;
   Exception? approvalDetailsError;
@@ -12318,22 +12316,16 @@ class _FakeApiClient extends TuringApi
     String? comment,
   }) {
     lastReviewedApproval = details;
-    return approveApproval(details.approvalId, comment: comment);
-  }
-
-
-  @override
-  Future<Map<String, dynamic>> approveApproval(
-    String approvalId, {
-    String? comment,
-  }) {
     approveApprovalCallCount++;
     final pending = approveApprovalPending;
     if (pending != null) return pending.future;
     if (approveApprovalErrors.isNotEmpty) {
       return Future.error(approveApprovalErrors.removeAt(0));
     }
-    return Future.value({'approvalId': approvalId, 'status': 'approved'});
+    return Future.value({
+      'approvalId': details.approvalId,
+      'status': 'approved',
+    });
   }
 
   @override
@@ -12373,13 +12365,6 @@ class _FakeApiClient extends TuringApi
 
   @override
   Future<List<AgentDescriptor>> listAgents() async => const [];
-
-  @override
-  Future<Map<String, dynamic>> getConfig() async {
-    return {
-      'enabledProviders': ['ollama'],
-    };
-  }
 
   @override
   Future<SessionDeletionReceipt> deleteSession({

@@ -222,8 +222,8 @@ func TestDeleteSessionDispatchesCleanersOnlyForTheArtifactCleanupPendingGate(t *
 	}); err != nil {
 		t.Fatalf("EnqueueUserMessage: %v", err)
 	}
-	if _, err := repo.ClaimNextJob(ctx, "general_assistant", "worker-gate"); err != nil {
-		t.Fatalf("ClaimNextJob: %v", err)
+	if _, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-gate", 0, 0, nil, nil); err != nil {
+		t.Fatalf("ClaimNextCompatibleJobWithLimit: %v", err)
 	}
 
 	response, err := server.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID})
@@ -1009,7 +1009,7 @@ func (p *finalizeOnlyPurger) PurgeSessionVaultArtifacts(ctx context.Context, ses
 	if !broken {
 		return p.repo.PurgeSessionVaultArtifacts(ctx, sessionID)
 	}
-	pending, err := p.repo.PendingSessionVaultArtifacts(ctx, sessionID)
+	pending, err := p.repo.SessionVaultArtifacts(ctx, sessionID)
 	if err != nil {
 		return 0, err
 	}

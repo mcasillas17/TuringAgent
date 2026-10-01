@@ -243,7 +243,7 @@ func TestOrphanRecoveryPublishesRetryNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := h.repo.ClaimNextJob(ctx, "general_assistant", "worker-orphaned")
+	claimed, err := h.repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-orphaned", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

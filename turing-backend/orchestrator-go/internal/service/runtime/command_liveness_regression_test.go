@@ -216,7 +216,7 @@ func TestSendCommandSerializesConcurrentStreamSends(t *testing.T) {
 func TestRecoveryReclaimsAssignmentWithoutTimelyWorkerHeartbeat(t *testing.T) {
 	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: time.Second})
 	enqueued := h.enqueueRun(t, "stale heartbeat")
-	claimed, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-stale-heartbeat")
+	claimed, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-stale-heartbeat", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestRecoveryReclaimsAssignmentAfterSameIDWorkerReconnects(t *testing.T) {
 	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: time.Second})
 	enqueued := h.enqueueRun(t, "same worker ID reconnect")
 	const workerID = "worker-reconnected"
-	claimed, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", workerID)
+	claimed, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", workerID, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestHeartbeatRevivalDispatchesQueuedWorkToIdleWorker(t *testing.T) {
 func TestHeartbeatReconcilesAssignmentThatDatabaseCannotRenew(t *testing.T) {
 	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: time.Minute})
 	enqueued := h.enqueueRun(t, "terminalized approval heartbeat")
-	claimed, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-terminal-heartbeat")
+	claimed, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-terminal-heartbeat", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestHeartbeatReconcilesAssignmentThatDatabaseCannotRenew(t *testing.T) {
 	}, "general_assistant", "files", "files.update", `{"path":"note.txt"}`, "sha256:test"); err != nil {
 		t.Fatal(err)
 	}
-	approval, err := h.repo.CreateApproval(context.Background(), enqueued.RunID, "call_terminal_heartbeat", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z")
+	approval, _, err := h.repo.CreateApprovalWithEvent(context.Background(), enqueued.RunID, "call_terminal_heartbeat", "general_assistant", "files.update", `{"path":"note.txt"}`, "sha256:test", "2099-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +686,7 @@ func TestConnectWorkerRequeuesAssignmentsWhenCapabilityPersistenceFailsBeforeAcc
 func TestSendCommandRevalidatesCapabilitiesBeforeAssignmentDelivery(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "delivery capability fence")
-	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-delivery-fence")
+	job, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-delivery-fence", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -740,7 +740,7 @@ func TestSendCommandRevalidatesCapabilitiesBeforeAssignmentDelivery(t *testing.T
 func TestSendCommandCapabilityFenceDispatchesAfterRoutingNoticeFailure(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "delivery notice failure")
-	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-delivery-notice")
+	job, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-delivery-notice", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -817,7 +817,7 @@ func TestSendCommandCapabilityFenceDispatchesAfterRoutingNoticeFailure(t *testin
 func TestSendCommandRevalidatesWorkerLeaseBeforeAssignmentDelivery(t *testing.T) {
 	h := newHarnessWithDispatch(t, DispatchConfig{LeaseDuration: 20 * time.Millisecond})
 	enqueued := h.enqueueRun(t, "delivery lease fence")
-	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-delivery-lease")
+	job, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-delivery-lease", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -870,7 +870,7 @@ func TestSendCommandRevalidatesWorkerLeaseBeforeAssignmentDelivery(t *testing.T)
 func TestSendCommandDropsRepositoryFencedAssignmentWithoutDisconnectingWorker(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "repository delivery fence")
-	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-repository-fence")
+	job, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-repository-fence", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -930,7 +930,7 @@ func TestSendCommandDropsRepositoryFencedAssignmentWithoutDisconnectingWorker(t 
 func TestSendCommandRequeuesConfirmedUnsentAssignmentWithoutChargingAttempt(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "confirmed unsent assignment")
-	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-unsent")
+	job, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-unsent", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -986,7 +986,7 @@ func TestSendCommandRequeuesConfirmedUnsentAssignmentWithoutChargingAttempt(t *t
 func TestSendCommandIgnoresConcurrentAbortFence(t *testing.T) {
 	h := newHarness(t)
 	enqueued := h.enqueueRun(t, "concurrent capability abort")
-	job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-concurrent-abort")
+	job, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-concurrent-abort", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1059,7 +1059,7 @@ func TestSendCommandIgnoresConcurrentCancellationFence(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			h := newHarness(t)
 			enqueued := h.enqueueRun(t, "concurrent cancellation fence")
-			job, err := h.repo.ClaimNextJob(context.Background(), "general_assistant", "worker-cancel-fence")
+			job, err := h.repo.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-cancel-fence", 0, 0, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

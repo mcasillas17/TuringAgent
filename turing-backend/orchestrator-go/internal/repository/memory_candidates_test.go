@@ -258,7 +258,7 @@ func TestMemoryCandidatesCascadeWithTheirSession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateMemoryCandidate: %v", err)
 	}
-	if err := repo.DeleteSessionForTests(ctx(), sessionID); err != nil {
+	if err := deleteSession(ctx(), repo, sessionID); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	var candidates int
@@ -299,46 +299,21 @@ func TestMemoryCandidatesAreNeverSearchable(t *testing.T) {
 	}
 }
 
-// There is deliberately no generic transition. A caller that could name the
-// state a candidate moves to could mark one promoted or rejected while its file
-// is still sitting in the inbox and its row still claims to be a live proposal
-// — a decision the user never sees, on a claim they never reviewed. The two
-// decisions that consume a candidate go through PromoteMemoryCandidate,
-// ApplyMemoryProfileCandidate and RejectMemoryCandidate, each of which moves
-// the file first; withdrawal is the one move that keeps the row, and it is its
-// own method.
-func TestWithdrawMemoryCandidateIsTheOnlyTransitionAndIsAuditedExactlyOnce(t *testing.T) {
-	repo, _, database := newMemoryTestRepo(t)
-	sessionID := newMemoryTestSession(t, repo)
-	candidate := pendingBeliefCandidate(t, repo, sessionID)
-
-	withdrawn, err := repo.WithdrawMemoryCandidate(ctx(), candidate.CandidateID)
+// withdrawCandidate puts a pending candidate into the withdrawn state. No
+// production path writes it any more (a deleted session cascades its
+// candidates away), but rows in that state are still read and reconciled.
+func withdrawCandidate(t *testing.T, repo *Repository, candidateID string) {
+	t.Helper()
+	decidedAt := now()
+	result, err := repo.db.ExecContext(ctx(), `
+		UPDATE memory_candidates SET state = ?, decided_at = ?, updated_at = ?
+		WHERE id = ? AND state = ?
+	`, MemoryCandidateStateWithdrawn, decidedAt, decidedAt, candidateID, MemoryCandidateStatePending)
 	if err != nil {
-		t.Fatalf("WithdrawMemoryCandidate: %v", err)
+		t.Fatalf("withdraw candidate: %v", err)
 	}
-	if withdrawn.State != MemoryCandidateStateWithdrawn || withdrawn.DecidedAt == "" {
-		t.Fatalf("withdrawn candidate is not decided: %+v", withdrawn)
-	}
-
-	// Withdrawal is terminal. A second attempt changes no row, so it must
-	// refuse — and must not leave a second audit row saying a decision was
-	// taken when nothing moved.
-	for attempt := 0; attempt < 2; attempt++ {
-		if _, err := repo.WithdrawMemoryCandidate(ctx(), candidate.CandidateID); !errors.Is(err, ErrMemoryCandidateInvalidTransition) {
-			t.Fatalf("second withdrawal error = %v, want ErrMemoryCandidateInvalidTransition", err)
-		}
-	}
-	var audits int
-	if err := database.QueryRowContext(ctx(), `
-		SELECT COUNT(*) FROM audit_logs WHERE target = ?
-	`, candidate.CandidateID).Scan(&audits); err != nil {
-		t.Fatalf("count decision audits: %v", err)
-	}
-	if audits != 1 {
-		t.Fatalf("decision audit rows = %d, want exactly the one decision that changed a row", audits)
-	}
-	if _, err := repo.WithdrawMemoryCandidate(ctx(), "memcand_missing"); !errors.Is(err, ErrMemoryCandidateNotFound) {
-		t.Fatalf("withdrawing an unknown candidate error = %v, want ErrMemoryCandidateNotFound", err)
+	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
+		t.Fatalf("withdraw candidate changed %d rows (%v), want 1", changed, err)
 	}
 }
 
@@ -475,7 +450,7 @@ func TestCreateMemoryCandidateRemovesTheFileWhenTheSessionVanishesMidWrite(t *te
 	sessionID := newMemoryTestSession(t, repo)
 
 	repo.memoryCandidateWriteBarrier = func() error {
-		return repo.DeleteSessionForTests(ctx(), sessionID)
+		return deleteSession(ctx(), repo, sessionID)
 	}
 	_, err := repo.CreateMemoryCandidate(ctx(), CreateMemoryCandidateInput{
 		SessionID: sessionID,

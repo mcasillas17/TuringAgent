@@ -20,7 +20,7 @@ func TestRenewAssignmentsExtendsOnlyMatchingAttemptLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := repo.ClaimNextJobWithLimit(ctx, "general_assistant", "worker-heartbeat", 1, time.Second)
+	job, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-heartbeat", 1, time.Second, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

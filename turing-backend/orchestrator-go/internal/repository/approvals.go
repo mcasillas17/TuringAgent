@@ -58,53 +58,6 @@ type ApprovalTerminalization struct {
 	Changed        bool
 }
 
-func (r *Repository) CreateApproval(ctx context.Context, runID string, toolCallID string, agentID string, toolName string, argsJSON string, argsHash string, expiresAt string) (ApprovalRecord, error) {
-	createdAt := now()
-	record := ApprovalRecord{
-		ApprovalID: ids.New("appr"),
-		RunID:      runID,
-		ToolCallID: toolCallID,
-		AgentID:    agentID,
-		ToolName:   toolName,
-		ArgsJSON:   argsJSON,
-		ArgsHash:   argsHash,
-		Status:     "pending",
-		ExpiresAt:  expiresAt,
-	}
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return ApprovalRecord{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var nullableToolCallID any
-	if toolCallID != "" {
-		nullableToolCallID = toolCallID
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO approvals (id, run_id, tool_call_id, agent_id, tool_name, args_json, args_hash, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`, record.ApprovalID, runID, nullableToolCallID, agentID, toolName, argsJSON, argsHash, expiresAt, createdAt); err != nil {
-		return ApprovalRecord{}, err
-	}
-	if toolCallID != "" {
-		result, err := tx.ExecContext(ctx, `UPDATE tool_calls SET approval_id = ?, status = 'approval_required' WHERE id = ? AND run_id = ?`, record.ApprovalID, toolCallID, runID)
-		if err != nil {
-			return ApprovalRecord{}, err
-		}
-		if err := expectOneRow(result, "tool call not found"); err != nil {
-			return ApprovalRecord{}, err
-		}
-	}
-	if _, err := awaitApprovalTransitionTx(ctx, tx, runID, record.ApprovalID); err != nil {
-		return ApprovalRecord{}, err
-	}
-	record, err = approvalByID(ctx, tx, record.ApprovalID)
-	if err != nil {
-		return ApprovalRecord{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return ApprovalRecord{}, err
-	}
-	return record, nil
-}
-
 func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, toolCallID string, agentID string, toolName string, argsJSON string, argsHash string, expiresAt string) (ApprovalRecord, Event, error) {
 	createdAt := now()
 	record := ApprovalRecord{
@@ -291,20 +244,6 @@ func (r *Repository) GetApprovalByToolCall(ctx context.Context, runID string, to
 	return approvalByID(ctx, r.db, approvalID)
 }
 
-func (r *Repository) GetPendingApprovalForRun(ctx context.Context, runID string) (ApprovalRecord, error) {
-	var approvalID string
-	query := `SELECT id FROM approvals WHERE run_id = ? AND status = 'pending' ORDER BY ` + sqliteTimestampNanos("created_at") + ` DESC, id DESC LIMIT 1`
-	if err := r.db.QueryRowContext(ctx, query, runID).Scan(&approvalID); err != nil {
-		return ApprovalRecord{}, err
-	}
-	return approvalByID(ctx, r.db, approvalID)
-}
-
-func (r *Repository) ApproveApproval(ctx context.Context, approvalID string, approvalToken string, approvalComment sql.NullString, decidedAt string) (ApprovalRecord, error) {
-	transition, err := r.ApproveApprovalWithEvent(ctx, approvalID, approvalToken, approvalComment, decidedAt)
-	return transition.Approval, err
-}
-
 func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID string, approvalToken string, approvalComment sql.NullString, decidedAt string, previewHashes ...string) (ApprovalTerminalization, error) {
 	if decidedAt == "" {
 		decidedAt = now()
@@ -388,16 +327,6 @@ func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID st
 		return ApprovalTerminalization{}, err
 	}
 	return ApprovalTerminalization{Approval: record, ApprovalEvent: event, Changed: true}, nil
-}
-
-func (r *Repository) ExpireApproval(ctx context.Context, approvalID string, decidedAt string) (ApprovalRecord, error) {
-	transition, err := r.ExpireApprovalWithEvent(ctx, approvalID, decidedAt)
-	return transition.Approval, err
-}
-
-func (r *Repository) DenyApproval(ctx context.Context, approvalID string, denialReason sql.NullString, decidedAt string) (ApprovalRecord, error) {
-	transition, err := r.DenyApprovalWithEvent(ctx, approvalID, denialReason, decidedAt)
-	return transition.Approval, err
 }
 
 func (r *Repository) ExpireApprovalWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
@@ -646,11 +575,6 @@ func isTerminalToolCallStatus(status string) bool {
 	default:
 		return false
 	}
-}
-
-func (r *Repository) ConsumeApproval(ctx context.Context, approvalID string, consumedAt string) (ApprovalRecord, error) {
-	transition, err := r.ConsumeApprovalWithEvent(ctx, approvalID, consumedAt)
-	return transition.Approval, err
 }
 
 func (r *Repository) ConsumeApprovalWithEvent(ctx context.Context, approvalID string, consumedAt string) (ApprovalTerminalization, error) {

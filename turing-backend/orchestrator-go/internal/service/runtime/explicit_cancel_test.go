@@ -14,7 +14,7 @@ func explicitCancelledWorker(t *testing.T) (*harness, *worker, repository.Enqueu
 	h := newHarness(t)
 	ctx := context.Background()
 	run := h.enqueueRun(t, "durable explicit stop")
-	job, err := h.repo.ClaimNextJob(ctx, "general_assistant", "worker-explicit")
+	job, err := h.repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-explicit", 0, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
