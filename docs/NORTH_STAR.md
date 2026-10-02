@@ -2,11 +2,8 @@
 
 **Status:** Canonical product direction and implementation backlog.
 
-**Inspected baseline:** `main` at `c75ffc44`, inspected 2026-09-05.
-
-At that baseline DOC-001's guard was not implemented. This revision introduces
-the guard and documentation corrections; this baseline record does not assert
-a subsequent merge to `main`.
+**Inspected baseline:** `main` at `fcaf6062`, inspected 2026-10-02. Seven of
+the first ten tasks below have shipped; PROV-001, SKL-001 and SEC-001 remain.
 
 **Supersedes:** `docs/VISION.md` and
 `docs/architecture/2026-08-18-personal-agent-audit.md` as active roadmap
@@ -475,13 +472,12 @@ gates are satisfied.
 
 ### 1. DOC-001 - Canonical truth and status guard
 
-- **Implementation introduced by this revision:** Active setup/status
-  guidance is corrected; `tools/docs` checks the explicit inventories in this
-  file and the Flutter README against named implementation evidence. Isolated
-  fixtures cover false shipped/pending claims and missing or changed evidence.
-  [Guard maintenance](../tools/docs/README.md) defines bounded assurance and
-  probe limits. The inspected mainline baseline above predates the DOC-001
-  guard; DOC-001 does not change application behavior.
+- **Implementation status:** Shipped on `main` in #123 (`b3e3e352`). Active
+  setup/status guidance is corrected; `tools/docs` checks the explicit
+  inventories in this file and the Flutter README against named implementation
+  evidence. Isolated fixtures cover false shipped/pending claims and missing or
+  changed evidence. [Guard maintenance](../tools/docs/README.md) defines bounded
+  assurance and probe limits. DOC-001 does not change application behavior.
 - **Outcome:** Product documentation cannot silently drift from merged reality.
 - **Scope:** Make this file canonical; mark old roadmap documents historical;
   correct current status, integration labels, remote-model naming, mobile
@@ -523,14 +519,13 @@ gates are satisfied.
 
 ### 3. TUR-010 - No-worker and queue-timeout truth
 
-- **Implementation introduced by this revision:** A queued run's durable state
-  records whether any live worker can serve its route, and two configurable
-  bounds — a no-worker timeout and an overall queue-age ceiling accumulated
-  across requeues — end a run that waits past them as `failed` or `cancelled`
-  under `TURING_QUEUE_TIMEOUT_POLICY`. Pausing is explicitly not offered.
-  [Bounded queue waiting](architecture/queue-wait.md) defines the semantics,
-  configuration and limits. The inspected mainline baseline above predates this
-  work; this record does not assert a subsequent merge to `main`.
+- **Implementation status:** Shipped on `main` in #124 (`7a67d9cd`). A queued
+  run's durable state records whether any live worker can serve its route, and
+  two configurable bounds — a no-worker timeout and an overall queue-age ceiling
+  accumulated across requeues — end a run that waits past them as `failed` or
+  `cancelled` under `TURING_QUEUE_TIMEOUT_POLICY`. Pausing is explicitly not
+  offered. [Bounded queue waiting](architecture/queue-wait.md) defines the
+  semantics, configuration and limits.
 - **Outcome:** A queued run cannot wait indefinitely without explanation.
 - **Scope:** Persist queue age and worker availability notices; define
   configurable pause/terminal policy; render durable state in Flutter.
@@ -543,16 +538,15 @@ gates are satisfied.
 
 ### 4. TUR-021 - Inspectable approval previews
 
-- **Implementation introduced by this revision:** Authenticated structured
-  details and complete bounded file diffs are bound to the stored approval,
-  canonical arguments and actual session/run-scoped target. Approval and the
-  protected write revalidate file preconditions; the desktop client handles
-  loading, retry, explicit refresh, expiry and terminal reconciliation.
-  [Inspectable approval previews](architecture/approval-previews.md) defines
-  the 64 KiB before/after ceiling, conservative redaction, non-file policy,
-  retention, older-client refusal and filesystem assumptions. The inspected
-  mainline baseline predates this work; this record does not assert a
-  subsequent merge to `main`.
+- **Implementation status:** Shipped on `main` in #125 (`501246a8`).
+  Authenticated structured details and complete bounded file diffs are bound to
+  the stored approval, canonical arguments and actual session/run-scoped target.
+  Approval and the protected write revalidate file preconditions; the desktop
+  client handles loading, retry, explicit refresh, expiry and terminal
+  reconciliation. [Inspectable approval
+  previews](architecture/approval-previews.md) defines the 64 KiB before/after
+  ceiling, conservative redaction, non-file policy, retention, older-client
+  refusal and filesystem assumptions.
 - **Outcome:** The user can see exactly what a mutation will change.
 - **Scope:** Add structured approval details, bounded before/after file diffs,
   redaction, content hashes, and Flutter review UX.
@@ -565,14 +559,15 @@ gates are satisfied.
 
 ### 5. MEM-003 - Deterministic recall evaluation
 
-- **Implementation introduced by this revision:** A versioned 21-case synthetic
-  corpus runs real FTS5 repository/RPC search, existing runtime recall and actual
-  budgeted provider-request admission offline. Per-case baseline thresholds and
-  independent privacy/deletion/framing gates run in the existing root CI race
-  suite. [Evaluation guide](../turing-backend/recall/eval/README.md) defines
-  labels, formulas, limitations, reproducible reports and deliberate baseline
-  updates. This does not change production ranking or evaluate model answers;
-  MEM-004, MEM-016 and EVAL-001 remain separate work.
+- **Implementation status:** Shipped on `main` in #129 (`50fd4e3e`). A versioned
+  21-case synthetic corpus runs real FTS5 repository/RPC search, existing
+  runtime recall and actual budgeted provider-request admission offline.
+  Per-case baseline thresholds and independent privacy/deletion/framing gates
+  run in the existing root CI race suite. [Evaluation
+  guide](../turing-backend/recall/eval/README.md) defines labels, formulas,
+  limitations, reproducible reports and deliberate baseline updates. This does
+  not change production ranking or evaluate model answers; MEM-004, MEM-016 and
+  EVAL-001 remain separate work.
 - **Outcome:** Retrieval and memory changes are selected by evidence.
 - **Scope:** Checked-in fixtures for exact identifiers, paraphrases, updates,
   temporal questions, multi-session synthesis, CJK, injection, deletion, and
@@ -584,10 +579,11 @@ gates are satisfied.
   regression thresholds fail CI; expected lexical failures remain visible.
 - **Dependencies:** MEM-002 (shipped).
 
-### 6. CON-001 - Bounded MCP tool lifecycle conformance (shipped)
+### 6. CON-001 - Bounded MCP tool lifecycle conformance
 
-- **Status:** Shipped. The selected revision, transport profile, negotiated
-  capabilities and deliberate non-scope are documented in
+- **Implementation status:** Shipped on `main` in #131 (`6ffe90bc`). The
+  selected revision, transport profile, negotiated capabilities and deliberate
+  non-scope are documented in
   [MCP security and integration](mcp-security-and-integration.md#mcp-lifecycle-conformance);
   the guarded `mcp-lifecycle` row above owns the status claim.
 - **Outcome:** Turing interoperates honestly with standard MCP tool clients and
@@ -620,14 +616,14 @@ gates are satisfied.
 
 ### 7. CXL-001 - Explicit cancel intent
 
-- **Implementation introduced by this revision:** Authenticated `CancelRun`
-  persists explicit user intent and a replayable result using the canonical
-  transition. `GetRunCancellation` and Flutter Stop/Check status distinguish
-  acceptance from worker shutdown or recovery. Matching-attempt execution
-  fences survive lost delivery and restart; late reports cannot revive the run.
-  [Durable run outcomes](architecture/run-outcomes.md#explicit-cancellation)
-  defines retry, upgrade, and no-rollback semantics. This records the
-  implementation in this revision, not a subsequent merge to `main`.
+- **Implementation status:** Shipped on `main` in #130 (`54eb9374`).
+  Authenticated `CancelRun` persists explicit user intent and a replayable
+  result using the canonical transition. `GetRunCancellation` and Flutter
+  Stop/Check status distinguish acceptance from worker shutdown or recovery.
+  Matching-attempt execution fences survive lost delivery and restart; late
+  reports cannot revive the run. [Durable run
+  outcomes](architecture/run-outcomes.md#explicit-cancellation) defines retry,
+  upgrade, and no-rollback semantics.
 - **Outcome:** A user can durably request cancellation instead of relying on a
   dropped transport.
 - **Scope:** Public cancel RPC, idempotent request identity, run/version fencing,
@@ -1335,8 +1331,8 @@ This is a dependency-aware recommendation, not a second immutable queue:
 
 1. Finish resilience: TUR-023, TUR-011, TUR-024, TUR-014, TUR-025,
    TUR-012, AUD-001, EVT-001.
-2. Establish whole-run evidence with EVAL-001 as soon as TUR-010, TUR-021,
-   and MEM-003 are complete.
+2. Establish whole-run evidence with EVAL-001; its TUR-010, TUR-021 and
+   MEM-003 prerequisites have shipped.
 3. Build measurable learning: MEM-004, MEM-016, MEM-008, MEM-017,
    MEM-009, then MEM-010/MEM-011 and MEM-012/MEM-015.
 4. Establish concurrency evidence and provider metadata: AGT-000 and PROV-002.
