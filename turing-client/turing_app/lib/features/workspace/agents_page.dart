@@ -4,6 +4,7 @@ import '../../constants/app_colors.dart';
 import '../../models/agent_descriptor.dart';
 import '../../models/external_agent.dart';
 import '../../networking/api_client.dart';
+import 'team_section.dart';
 import 'workspace_pages.dart';
 
 /// Where a conversation can be sent, and what that costs in privacy.
@@ -103,82 +104,107 @@ class _AgentsPageState extends State<AgentsPage> {
           'Who answers your messages. Turing runs on this machine and is the '
           'default. You can also add an assistant that does not — Claude, '
           'ChatGPT, Gemini, Grok — and send individual conversations to it.',
-      child: FutureBuilder<_AgentsView>(
-        future: _view,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const WorkspaceLoading();
-          }
-          if (snapshot.hasError) {
-            return WorkspaceNotice(
-              icon: Icons.error_outline,
-              title: 'Could not reach the backend',
-              body: '${snapshot.error}',
-              onRetry: _reload,
-              tone: AppColors.danger,
-            );
-          }
-          final view =
-              snapshot.data ?? const _AgentsView(local: [], external: []);
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (final agent in view.local)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _LocalAgentCard(
-                    displayName: agent.displayName,
-                    palette: palette,
-                  ),
-                ),
-              const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilledButton.icon(
-                  onPressed: () => _edit(),
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('New agent'),
-                ),
-              ),
-              const SizedBox(height: 18),
-              if (view.external.isEmpty)
-                WorkspaceNotice(
-                  icon: Icons.cloud_off_outlined,
-                  title: 'No conversation leaves this machine',
-                  body:
-                      'You have not added an assistant that runs somewhere '
-                      'else. Add one and you can send a chosen conversation to '
-                      'it — every message in that conversation, and everything '
-                      'the agent reads with your tools, goes to that company. '
-                      'Conversations you do not route stay here.',
-                )
-              else ...[
-                WorkspaceNotice(
-                  icon: Icons.cloud_upload_outlined,
-                  title: 'These receive whatever you send them',
-                  body:
-                      'A conversation routed to one of these sends its whole '
-                      'transcript there, along with the results of any tool it '
-                      'runs on your files. Nothing is routed automatically — '
-                      'you pick a destination per conversation, and the bar '
-                      'above the messages says which one it is.',
-                  tone: AppColors.warning,
-                ),
-                const SizedBox(height: 12),
-                for (final agent in view.external)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _ExternalAgentCard(
-                      agent: agent,
-                      palette: palette,
-                      onEdit: () => _edit(existing: agent),
-                      onDelete: () => _delete(agent),
+      // The team sits outside both builders: reloading the agents after an
+      // edit must not rebuild it, which would read it again and drop a change
+      // still in flight.
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FutureBuilder<_AgentsView>(
+            future: _view,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const WorkspaceLoading();
+              }
+              if (snapshot.hasError) {
+                return WorkspaceNotice(
+                  icon: Icons.error_outline,
+                  title: 'Could not reach the backend',
+                  body: '${snapshot.error}',
+                  onRetry: _reload,
+                  tone: AppColors.danger,
+                );
+              }
+              final local = snapshot.data?.local ?? const <AgentDescriptor>[];
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final agent in local)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _LocalAgentCard(
+                        displayName: agent.displayName,
+                        palette: palette,
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 24),
+          TeamSection(apiClient: widget.apiClient),
+          FutureBuilder<_AgentsView>(
+            future: _view,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done ||
+                  snapshot.hasError) {
+                return const SizedBox.shrink();
+              }
+              final external =
+                  snapshot.data?.external ?? const <ExternalAgent>[];
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 24),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.icon(
+                      onPressed: () => _edit(),
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('New agent'),
                     ),
                   ),
-              ],
-            ],
-          );
-        },
+                  const SizedBox(height: 18),
+                  if (external.isEmpty)
+                    const WorkspaceNotice(
+                      icon: Icons.cloud_off_outlined,
+                      title: 'No conversation leaves this machine',
+                      body:
+                          'You have not added an assistant that runs somewhere '
+                          'else. Add one and you can send a chosen conversation to '
+                          'it — every message in that conversation, and everything '
+                          'the agent reads with your tools, goes to that company. '
+                          'Conversations you do not route stay here.',
+                    )
+                  else ...[
+                    const WorkspaceNotice(
+                      icon: Icons.cloud_upload_outlined,
+                      title: 'These receive whatever you send them',
+                      body:
+                          'A conversation routed to one of these sends its whole '
+                          'transcript there, along with the results of any tool it '
+                          'runs on your files. Nothing is routed automatically — '
+                          'you pick a destination per conversation, and the bar '
+                          'above the messages says which one it is.',
+                      tone: AppColors.warning,
+                    ),
+                    const SizedBox(height: 12),
+                    for (final agent in external)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _ExternalAgentCard(
+                          agent: agent,
+                          palette: palette,
+                          onEdit: () => _edit(existing: agent),
+                          onDelete: () => _delete(agent),
+                        ),
+                      ),
+                  ],
+                ],
+              );
+            },
+          ),
+        ],
       ),
     );
   }

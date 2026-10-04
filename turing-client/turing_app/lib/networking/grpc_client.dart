@@ -25,9 +25,12 @@ import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/sessions.pbgrpc.dart' as sessiongrpc;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import '../generated/turing/v1/skills.pbgrpc.dart' as skillgrpc;
+import '../generated/turing/v1/team.pb.dart' as teampb;
+import '../generated/turing/v1/team.pbgrpc.dart' as teamgrpc;
 import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
 import '../generated/turing/v1/telemetry.pbgrpc.dart' as telemetrygrpc;
 import '../models/agent_descriptor.dart';
+import '../models/agent_profile.dart';
 import '../models/approval.dart';
 import '../models/automation.dart';
 import '../models/external_agent.dart';
@@ -117,6 +120,7 @@ class TuringGrpcApi
       ),
     );
     _skills = skillgrpc.SkillServiceClient(_channel, options: options);
+    _team = teamgrpc.TeamServiceClient(_channel, options: options);
     _externalAgents = agentgrpc.ExternalAgentServiceClient(
       _channel,
       options: options,
@@ -146,6 +150,7 @@ class TuringGrpcApi
   late final chatgrpc.ChatServiceClient _chat;
   late final approvalgrpc.ApprovalServiceClient _approvals;
   late final skillgrpc.SkillServiceClient _skills;
+  late final teamgrpc.TeamServiceClient _team;
   late final agentgrpc.ExternalAgentServiceClient _externalAgents;
   late final integrationgrpc.IntegrationServiceClient _integrations;
   late final automationgrpc.AutomationServiceClient _automations;
@@ -1031,7 +1036,7 @@ class TuringGrpcApi
 
   @override
   Future<MemoryState> listMemoryState() {
-    return _memoryCall(() async {
+    return _statusCall('memory', () async {
       final response = await _memory.listMemoryState(
         memorypb.ListMemoryStateRequest(),
       );
@@ -1041,7 +1046,7 @@ class TuringGrpcApi
 
   @override
   Future<MemorySettings> setMemoryEnabled({required bool enabled}) {
-    return _memoryCall(() async {
+    return _statusCall('memory', () async {
       // No tier is named: this client only ever toggles memory as a whole, and
       // the server refuses a per-tier toggle it cannot honour.
       final response = await _memory.setMemoryEnabled(
@@ -1056,7 +1061,7 @@ class TuringGrpcApi
     required String candidateId,
     required String expectedCandidateHash,
   }) {
-    return _memoryCall(() async {
+    return _statusCall('memory', () async {
       final response = await _memory.promoteMemoryCandidate(
         memorypb.PromoteMemoryCandidateRequest(
           candidateId: candidateId,
@@ -1073,7 +1078,7 @@ class TuringGrpcApi
     String expectedCandidateHash = '',
     String reason = '',
   }) {
-    return _memoryCall(() async {
+    return _statusCall('memory', () async {
       final response = await _memory.rejectMemoryCandidate(
         memorypb.RejectMemoryCandidateRequest(
           candidateId: candidateId,
@@ -1092,7 +1097,7 @@ class TuringGrpcApi
     required String expectedContentHash,
     String expectedCandidateHash = '',
   }) {
-    return _memoryCall(() async {
+    return _statusCall('memory', () async {
       final response = await _memory.applyMemoryProfile(
         memorypb.ApplyMemoryProfileRequest(
           candidateId: candidateId,
@@ -1113,7 +1118,7 @@ class TuringGrpcApi
     required String content,
     required String expectedContentHash,
   }) {
-    return _memoryCall(() async {
+    return _statusCall('memory', () async {
       final response = await _memory.saveMemoryPersona(
         memorypb.SaveMemoryPersonaRequest(
           content: content,
@@ -1129,7 +1134,7 @@ class TuringGrpcApi
     required String content,
     required String expectedContentHash,
   }) {
-    return _memoryCall(() async {
+    return _statusCall('memory', () async {
       final response = await _memory.saveMemoryProfile(
         memorypb.SaveMemoryProfileRequest(
           content: content,
@@ -1141,19 +1146,25 @@ class TuringGrpcApi
   }
 
   /// Turns a transport failure into something the page can render without
-  /// knowing what gRPC is, keeping the server's message verbatim.
-  static Future<T> _memoryCall<T>(Future<T> Function() request) async {
+  /// knowing what gRPC is, keeping the server's message verbatim. [area]
+  /// names the fallback code and message, such as `memory_error`.
+  static Future<T> _statusCall<T>(
+    String area,
+    Future<T> Function() request,
+  ) async {
     try {
       return await request();
     } on grpc.GrpcError catch (error) {
       throw TuringApiException(
-        code: _memoryErrorCode(error.code),
-        message: error.message ?? 'the memory request failed',
+        code: _statusCode(error.code, fallback: '${area}_error'),
+        message: error.message ?? 'the $area request failed',
       );
     }
   }
 
-  static String _memoryErrorCode(int code) {
+  /// The status names the memory and team pages both branch on; anything
+  /// else is reported as [fallback].
+  static String _statusCode(int code, {required String fallback}) {
     switch (code) {
       case grpc.StatusCode.invalidArgument:
         return 'invalid_argument';
@@ -1170,7 +1181,7 @@ class TuringGrpcApi
       case grpc.StatusCode.unavailable:
         return 'unavailable';
       default:
-        return 'memory_error';
+        return fallback;
     }
   }
 
@@ -1199,6 +1210,48 @@ class TuringGrpcApi
       ),
     );
     return GrpcMappers.skillToModel(response);
+  }
+
+  @override
+  Future<List<AgentProfile>> listAgentProfiles() {
+    return _statusCall('team', () async {
+      final response = await _team.listAgentProfiles(
+        teampb.ListAgentProfilesRequest(),
+      );
+      return response.profiles.map(GrpcMappers.agentProfileToModel).toList();
+    });
+  }
+
+  @override
+  Future<AgentProfile> setAgentProfileEnabled({
+    required String profileId,
+    required bool enabled,
+  }) {
+    return _statusCall('team', () async {
+      final response = await _team.setAgentProfileEnabled(
+        teampb.SetAgentProfileEnabledRequest(
+          profileId: profileId,
+          enabled: enabled,
+        ),
+      );
+      return GrpcMappers.agentProfileToModel(response);
+    });
+  }
+
+  @override
+  Future<AgentProfile> grantAgentProfile({
+    required String profileId,
+    required String revision,
+  }) {
+    return _statusCall('team', () async {
+      final response = await _team.grantAgentProfile(
+        teampb.GrantAgentProfileRequest(
+          profileId: profileId,
+          revision: revision,
+        ),
+      );
+      return GrpcMappers.agentProfileToModel(response);
+    });
   }
 
   @override

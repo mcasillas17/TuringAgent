@@ -4,7 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/workspace/agents_page.dart';
 import 'package:turing_flutter_app/features/workspace/session_agent_bar.dart';
+import 'package:turing_flutter_app/features/workspace/team_section.dart';
+import 'package:turing_flutter_app/features/workspace/workspace_pages.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
+import 'package:turing_flutter_app/models/agent_profile.dart';
 import 'package:turing_flutter_app/models/external_agent.dart';
 import 'package:turing_flutter_app/models/message.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
@@ -18,6 +21,7 @@ import '../support/no_skills_api.dart';
 import '../support/no_integrations_api.dart';
 import '../support/no_session_lifecycle_api.dart';
 import '../support/no_automations_api.dart';
+import '../support/no_team_api.dart';
 import '../support/no_telemetry_api.dart';
 
 void main() {
@@ -168,7 +172,7 @@ void main() {
       final api = _AgentApi()..agents.add(_claude());
       await _pumpAgents(tester, api);
 
-      await tester.tap(find.byTooltip('Remove agent'));
+      await _tapVisible(tester, find.byTooltip('Remove agent'));
       await tester.pumpAndSettle();
 
       expect(
@@ -187,7 +191,7 @@ void main() {
       final api = _AgentApi()..agents.add(_claude());
       await _pumpAgents(tester, api);
 
-      await tester.tap(find.byTooltip('Remove agent'));
+      await _tapVisible(tester, find.byTooltip('Remove agent'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
@@ -216,7 +220,7 @@ void main() {
         );
       await _pumpAgents(tester, api);
 
-      await tester.tap(find.byTooltip('Edit agent'));
+      await _tapVisible(tester, find.byTooltip('Edit agent'));
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull);
@@ -235,7 +239,7 @@ void main() {
       final api = _AgentApi()..agents.add(_claude());
       await _pumpAgents(tester, api);
 
-      await tester.tap(find.byTooltip('Edit agent'));
+      await _tapVisible(tester, find.byTooltip('Edit agent'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).at(2), 'claude-opus-4-5');
       await tester.tap(find.text('Save'));
@@ -503,7 +507,677 @@ void main() {
           expect(tester.takeException(), isNull);
         },
       );
+
+      testWidgets('a tall name keeps the grant buttons in reach at '
+          '${size.width}x${size.height}', (tester) async {
+        // Valid: under 120 characters, but sixty lines tall.
+        final name = List.filled(60, 'A').join('\n');
+        await _pumpAgents(
+          tester,
+          _TeamAgentApi([_profile('research', name: name)]),
+          size: size,
+        );
+
+        await _toggle(tester, 'research');
+
+        expect(tester.takeException(), isNull);
+        for (final label in ['Cancel', 'Grant and turn on']) {
+          final button = tester.getRect(find.text(label));
+          expect(
+            button.bottom <= size.height && button.top >= 0,
+            isTrue,
+            reason: '$label is off screen at $button',
+          );
+        }
+      });
+
+      testWidgets(
+        'a long emoji leaves the switch in reach at ${size.width}x${size.height}',
+        (tester) async {
+          // Sixteen characters is the most the loader accepts.
+          await _pumpAgents(
+            tester,
+            _TeamAgentApi([
+              _profile(
+                'research',
+                name: 'Research',
+                emoji: '🔬📚🧪🧠🗂📝🔎💡📌🔬📚🧪🧠🗂📝🔎',
+              ),
+            ]),
+            size: size,
+          );
+
+          expect(tester.takeException(), isNull);
+          final toggle = find.descendant(
+            of: _card('research'),
+            matching: find.byType(Switch),
+          );
+          final card = tester.getRect(_card('research'));
+          final switchRect = tester.getRect(toggle);
+          expect(card.contains(switchRect.center), isTrue);
+          expect(_switchOf(tester, 'research').onChanged, isNotNull);
+        },
+      );
+
+      testWidgets(
+        'every team status fits its card at ${size.width}x${size.height}',
+        (tester) async {
+          await _pumpAgents(
+            tester,
+            _TeamAgentApi([
+              _profile(
+                'research',
+                name: 'Research',
+                emoji: '🔬',
+                enabled: true,
+                grantedRevision: 'an-older-revision',
+              ),
+              _profile('broken', name: 'Broken', parseError: 'bad yaml'),
+              _profile(
+                'inbox',
+                name: 'Inbox',
+                emoji: '📨',
+                granted: true,
+                enabled: true,
+                unavailable: const ['requires gmail.*'],
+              ),
+            ]),
+            size: size,
+          );
+
+          expect(tester.takeException(), isNull);
+          expect(
+            _chipOf('research', 'Changed since you granted it'),
+            findsOneWidget,
+          );
+          expect(_switchOf(tester, 'research').onChanged, isNotNull);
+        },
+      );
+
+      testWidgets(
+        'the grant review does not overflow at ${size.width}x${size.height}',
+        (tester) async {
+          await _pumpAgents(
+            tester,
+            _TeamAgentApi([_profile('research', name: 'Research')]),
+            size: size,
+          );
+
+          await _toggle(tester, 'research');
+
+          expect(find.byType(AgentProfileGrantSheet), findsOneWidget);
+          expect(tester.takeException(), isNull);
+        },
+      );
     }
+  });
+
+  group('Turing\'s team', () {
+    testWidgets('lists each specialist with what it is and where it stands', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile('dev', name: 'Dev', emoji: '💻', granted: true, enabled: true),
+        _profile('inbox', name: 'Inbox', emoji: '📨'),
+        _profile('research', name: 'Research', emoji: '🔬', enabled: true),
+      ]);
+      await _pumpAgents(tester, api);
+
+      expect(find.text('Turing\'s team'), findsOneWidget);
+      expect(find.text('💻'), findsOneWidget);
+      expect(find.text('Dev'), findsOneWidget);
+      expect(_chipOf('dev', 'Active'), findsOneWidget);
+      expect(_chipOf('inbox', 'Off'), findsOneWidget);
+      expect(_chipOf('research', 'Needs your grant'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: _card('dev'),
+          matching: find.text('Tools: files/files.read'),
+        ),
+        findsOneWidget,
+      );
+      // The page must not suggest the team already takes part in chats.
+      expect(
+        find.textContaining('Delegation is not switched on'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('unless you already granted them'),
+        findsOneWidget,
+        reason: 'turning a granted profile on again does not ask',
+      );
+    });
+
+    testWidgets('turning one on shows exactly what the grant covers', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile(
+          'research',
+          name: 'Research',
+          emoji: '🔬',
+          model: 'qwen2.5:14b',
+          resolvedModel: '',
+          memory: AgentProfileMemoryAccess.propose,
+          tools: const ['files.*', 'memory.*', 'web.*'],
+          resolvedTools: const ['files/files.read', 'memory/memory.search'],
+          excluded: const [
+            AgentProfileToolExclusion(
+              tool: 'files/files.write',
+              reason: 'changes files',
+            ),
+          ],
+          skills: const ['research/*'],
+          maxToolCalls: 12,
+          requires: const ['web.search'],
+        ),
+      ]);
+      await _pumpAgents(tester, api);
+
+      await _toggle(tester, 'research');
+
+      expect(find.text('Grant 🔬 Research?'), findsOneWidget);
+      final sheet = find.byType(AgentProfileGrantSheet);
+      String body() => tester
+          .widgetList<SelectableText>(
+            find.descendant(of: sheet, matching: find.byType(SelectableText)),
+          )
+          .map((text) => text.data)
+          .join('\n');
+      expect(body(), contains('qwen2.5:14b (no worker serves it right now)'));
+      // Only memory.search resolves, so the level is shown as a ceiling and
+      // the tools it actually gets carry the detail.
+      expect(
+        body(),
+        contains(
+          'Up to reading and proposing notes (each proposal still asks you); '
+          'what it gets is under Tools it would get now',
+        ),
+      );
+      expect(body(), isNot(contains('Can read your memory')));
+      expect(body(), contains('files.*, memory.*, web.*'));
+      expect(body(), contains('files/files.read'));
+      expect(body(), contains('files/files.write (changes files)'));
+      expect(body(), contains('research/*'));
+      expect(
+        find.descendant(of: sheet, matching: find.text('Tools it requires')),
+        findsOneWidget,
+      );
+      expect(body(), contains('web.search'));
+      expect(body(), contains('Asks for up to 12'));
+      expect(
+        find.descendant(
+          of: sheet,
+          matching: find.textContaining('revision 0123456789ab of'),
+        ),
+        findsOneWidget,
+        reason: 'the sheet names the revision the grant is bound to',
+      );
+      expect(api.grants, isEmpty, reason: 'nothing is sent before confirming');
+    });
+
+    testWidgets('a granted profile that cannot run yet says why', (
+      tester,
+    ) async {
+      const reason = 'requires gmail.* but no connected tool matches it';
+      final api = _TeamAgentApi([
+        _profile(
+          'inbox',
+          name: 'Inbox',
+          tools: const ['gmail.*'],
+          resolvedTools: const [],
+          requires: const ['gmail.*'],
+          unavailable: const [reason],
+        ),
+      ]);
+      await _pumpAgents(tester, api);
+
+      await _toggle(tester, 'inbox');
+      final sheet = find.byType(AgentProfileGrantSheet);
+      expect(
+        find.descendant(of: sheet, matching: find.text('Not available yet')),
+        findsOneWidget,
+        reason: 'the review says before the grant that it will not run',
+      );
+      expect(
+        find.descendant(of: sheet, matching: find.text(reason)),
+        findsOneWidget,
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Grant and turn on'));
+      await tester.pumpAndSettle();
+
+      expect(api.grants, [('inbox', _revision)]);
+      expect(_chipOf('inbox', 'Unavailable'), findsOneWidget);
+      expect(_chipOf('inbox', 'Active'), findsNothing);
+      expect(
+        find.descendant(of: _card('inbox'), matching: find.text('• $reason')),
+        findsOneWidget,
+      );
+    });
+
+    // Spec 6.3: a declared egressing tool stays listed as withheld on the
+    // card, not only in the sheet that is no longer shown once it is granted.
+    testWidgets('an active profile still lists the tools it is denied', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile(
+          'dev',
+          name: 'Dev',
+          granted: true,
+          enabled: true,
+          tools: const ['files.*', 'github.*'],
+          resolvedTools: const ['files/files.read'],
+          excluded: const [
+            AgentProfileToolExclusion(
+              tool: 'integrations/github.get_issue',
+              reason: 'declared, needs per-delegation consent',
+            ),
+          ],
+        ),
+      ]);
+      await _pumpAgents(tester, api);
+
+      expect(_chipOf('dev', 'Active'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: _card('dev'),
+          matching: find.textContaining(
+            'integrations/github.get_issue (declared, needs per-delegation '
+            'consent)',
+          ),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    // The memory level is a ceiling on memory tools the profile lists, not a
+    // grant of its own, so a profile listing none is not told it can read.
+    testWidgets('a memory level with no memory tool says it gives nothing', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile(
+          'inbox',
+          name: 'Inbox',
+          memory: AgentProfileMemoryAccess.read,
+          tools: const ['gmail.*'],
+          resolvedTools: const [],
+          requires: const ['gmail.*'],
+        ),
+      ]);
+      await _pumpAgents(tester, api);
+
+      await _toggle(tester, 'inbox');
+      final sheet = find.byType(AgentProfileGrantSheet);
+      expect(
+        find.descendant(of: sheet, matching: find.textContaining('Can search')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: sheet,
+          matching: find.text(
+            'Up to search and read, but none of its tools reach your memory '
+            'now',
+          ),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('confirming grants the reviewed revision and turns it on', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile('research', name: 'Research', emoji: '🔬'),
+      ]);
+      await _pumpAgents(tester, api);
+
+      await _toggle(tester, 'research');
+      await tester.tap(find.text('Grant and turn on'));
+      await tester.pumpAndSettle();
+
+      expect(api.grants, [('research', _revision)]);
+      expect(api.enables, [('research', true)]);
+      expect(_chipOf('research', 'Active'), findsOneWidget);
+    });
+
+    testWidgets('cancelling the review changes nothing', (tester) async {
+      final api = _TeamAgentApi([_profile('inbox', name: 'Inbox')]);
+      await _pumpAgents(tester, api);
+
+      await _toggle(tester, 'inbox');
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(api.grants, isEmpty);
+      expect(api.enables, isEmpty);
+      expect(_chipOf('inbox', 'Off'), findsOneWidget);
+      expect(_switchOf(tester, 'inbox').value, isFalse);
+    });
+
+    // The file changed between listing and confirming. The backend refuses the
+    // stale revision, so the app must not go on to turn the profile on.
+    testWidgets('a grant for an edited file is refused and nothing turns on', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([_profile('inbox', name: 'Inbox')]);
+      await _pumpAgents(tester, api);
+
+      await _toggle(tester, 'inbox');
+      api.editFile('inbox', 'fedcba9876543210');
+      await tester.tap(find.text('Grant and turn on'));
+      await tester.pumpAndSettle();
+
+      expect(api.grants, isEmpty);
+      expect(api.enables, isEmpty);
+      expect(
+        find.textContaining('changed while you were reviewing it'),
+        findsOneWidget,
+      );
+      expect(api.listCalls, 2, reason: 'the new revision is read back');
+      expect(_switchOf(tester, 'inbox').value, isFalse);
+    });
+
+    testWidgets('a profile already granted turns on without asking again', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([_profile('dev', name: 'Dev', granted: true)]);
+      await _pumpAgents(tester, api);
+
+      await _toggle(tester, 'dev');
+
+      expect(find.byType(AgentProfileGrantSheet), findsNothing);
+      expect(api.grants, isEmpty);
+      expect(api.enables, [('dev', true)]);
+      expect(_chipOf('dev', 'Active'), findsOneWidget);
+    });
+
+    testWidgets('turning one off sends that and keeps the grant', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile('dev', name: 'Dev', granted: true, enabled: true),
+      ]);
+      await _pumpAgents(tester, api);
+
+      await _toggle(tester, 'dev');
+
+      expect(api.enables, [('dev', false)]);
+      expect(api.grants, isEmpty);
+      expect(_chipOf('dev', 'Off'), findsOneWidget);
+    });
+
+    testWidgets('an edited file that was on asks for review, not a toggle', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile(
+          'dev',
+          name: 'Dev',
+          enabled: true,
+          grantedRevision: 'aaaaaaaaaaaaaaaa',
+        ),
+      ]);
+      await _pumpAgents(tester, api);
+
+      expect(_chipOf('dev', 'Changed since you granted it'), findsOneWidget);
+      await tester.ensureVisible(find.text('Review and grant'));
+      await tester.tap(find.text('Review and grant'));
+      await tester.pumpAndSettle();
+      // Already on, so the action is a grant alone.
+      await tester.tap(find.widgetWithText(FilledButton, 'Grant'));
+      await tester.pumpAndSettle();
+
+      expect(api.grants, [('dev', _revision)]);
+      expect(api.enables, isEmpty);
+      expect(_chipOf('dev', 'Active'), findsOneWidget);
+    });
+
+    testWidgets('a file that cannot be read says why and cannot be turned on', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile('broken', parseError: 'line 3: tools must be a list'),
+        _profile(
+          'was-on',
+          enabled: true,
+          parseError: 'line 1: missing front matter',
+        ),
+      ]);
+      await _pumpAgents(tester, api);
+
+      expect(_chipOf('broken', 'Cannot be read'), findsOneWidget);
+      expect(
+        find.text(
+          'team/broken/AGENT.md could not be read: '
+          'line 3: tools must be a list',
+        ),
+        findsOneWidget,
+      );
+      expect(_switchOf(tester, 'broken').onChanged, isNull);
+      // One that broke while on can still be switched off.
+      expect(_switchOf(tester, 'was-on').onChanged, isNotNull);
+      await _toggle(tester, 'was-on');
+      expect(api.enables, [('was-on', false)]);
+    });
+
+    testWidgets('a refused enable after a grant says so and shows the result', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([_profile('inbox', name: 'Inbox')])
+        ..enableError = const TuringApiException(
+          code: 'failed_precondition',
+          message: 'team/inbox/AGENT.md does not parse',
+        );
+      await _pumpAgents(tester, api);
+
+      await _toggle(tester, 'inbox');
+      await tester.tap(find.text('Grant and turn on'));
+      await tester.pumpAndSettle();
+
+      expect(api.grants, [('inbox', _revision)]);
+      expect(
+        find.text(
+          'Inbox cannot be turned on: team/inbox/AGENT.md does not parse',
+        ),
+        findsOneWidget,
+      );
+      // The grant landed before the enable failed; the reload shows that.
+      expect(api.listCalls, 2);
+      expect(_switchOf(tester, 'inbox').value, isFalse);
+    });
+
+    testWidgets('a team the backend cannot read leaves the agents in place', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi(const [])
+        ..teamError = const TuringApiException(
+          code: 'unavailable',
+          message: 'team folder unreadable',
+        )
+        ..agents.add(_claude());
+      await _pumpAgents(tester, api);
+
+      expect(find.text('Could not load your team'), findsOneWidget);
+      expect(find.text('team folder unreadable'), findsOneWidget);
+      expect(find.text('Claude'), findsOneWidget);
+
+      api.teamError = null;
+      api.profiles.add(_profile('dev', name: 'Dev'));
+      await tester.tap(
+        find.descendant(
+          of: find.ancestor(
+            of: find.text('Could not load your team'),
+            matching: find.byType(WorkspaceNotice),
+          ),
+          matching: find.text('Try again'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Could not load your team'), findsNothing);
+      expect(_card('dev'), findsOneWidget);
+    });
+
+    testWidgets('agents the backend cannot list leave the team in place', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([_profile('dev', name: 'Dev')])
+        ..listError = const _Offline();
+      await _pumpAgents(tester, api);
+
+      expect(find.text('Could not reach the backend'), findsOneWidget);
+      expect(_card('dev'), findsOneWidget);
+    });
+
+    // A list read before a change lands after it would put the old state
+    // back on screen, so the section runs one request at a time.
+    testWidgets('a refresh in flight holds every toggle and review', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile('dev', name: 'Dev', granted: true, enabled: true),
+        _profile('research', name: 'Research', enabled: true),
+      ]);
+      await _pumpAgents(tester, api);
+
+      final held = api.holdList = Completer<void>();
+      await _tapVisible(tester, _teamRefresh());
+
+      expect(_switchOf(tester, 'dev').onChanged, isNull);
+      expect(_switchOf(tester, 'research').onChanged, isNull);
+      expect(_reviewOf(tester, 'research').onPressed, isNull);
+
+      held.complete();
+      await tester.pumpAndSettle();
+      expect(_switchOf(tester, 'dev').onChanged, isNotNull);
+      expect(_reviewOf(tester, 'research').onPressed, isNotNull);
+    });
+
+    testWidgets('a change in flight holds the refresh and the other toggles', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile('dev', name: 'Dev', granted: true, enabled: true),
+        _profile('research', name: 'Research', granted: true, enabled: true),
+      ]);
+      await _pumpAgents(tester, api);
+
+      final held = api.holdEnable = Completer<void>();
+      await _toggle(tester, 'dev');
+
+      expect(tester.widget<IconButton>(_teamRefresh()).onPressed, isNull);
+      expect(_switchOf(tester, 'research').onChanged, isNull);
+
+      held.complete();
+      await tester.pumpAndSettle();
+      expect(api.enables, [('dev', false)]);
+      expect(_chipOf('dev', 'Off'), findsOneWidget);
+      expect(tester.widget<IconButton>(_teamRefresh()).onPressed, isNotNull);
+      expect(_switchOf(tester, 'research').onChanged, isNotNull);
+    });
+
+    // The team loads on its own, so reloading the external agents must
+    // neither read it again nor throw away a change that is still in flight.
+    testWidgets('changing the external agents leaves the team alone', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile('dev', name: 'Dev', granted: true, enabled: true),
+      ])..agents.add(_claude());
+      await _pumpAgents(tester, api);
+      expect(api.listCalls, 1);
+
+      final held = api.holdEnable = Completer<void>();
+      await _toggle(tester, 'dev');
+      await _tapVisible(tester, find.byTooltip('Remove agent'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove'));
+      await tester.pumpAndSettle();
+      expect(api.deleted, ['agent_1']);
+
+      held.complete();
+      await tester.pumpAndSettle();
+      expect(api.listCalls, 1, reason: 'the team was read again');
+      expect(_chipOf('dev', 'Off'), findsOneWidget);
+    });
+
+    testWidgets('a profile deleted after the list says so and drops out', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile('dev', name: 'Dev', granted: true, enabled: true),
+        _profile('research', name: 'Research'),
+      ]);
+      await _pumpAgents(tester, api);
+      api.profiles.removeWhere((p) => p.profileId == 'dev');
+
+      await _toggle(tester, 'dev');
+
+      expect(
+        find.text('team/dev/AGENT.md is gone. The list has been refreshed.'),
+        findsOneWidget,
+      );
+      expect(api.listCalls, 2);
+      expect(_card('dev'), findsNothing);
+      expect(_card('research'), findsOneWidget);
+    });
+
+    testWidgets('each switch is named for the specialist it controls', (
+      tester,
+    ) async {
+      final semantics = tester.ensureSemantics();
+      final api = _TeamAgentApi([
+        _profile('dev', name: 'Dev', granted: true, enabled: true),
+        _profile('research', name: 'Research'),
+      ]);
+      await _pumpAgents(tester, api);
+
+      expect(
+        tester.getSemantics(
+          find.descendant(of: _card('dev'), matching: find.byType(Switch)),
+        ),
+        matchesSemantics(
+          label: 'Use Dev',
+          hasToggledState: true,
+          isToggled: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          isFocusable: true,
+          hasTapAction: true,
+          hasFocusAction: true,
+        ),
+      );
+      expect(
+        tester.getSemantics(
+          find.descendant(of: _card('research'), matching: find.byType(Switch)),
+        ),
+        matchesSemantics(
+          label: 'Use Research',
+          hasToggledState: true,
+          isToggled: false,
+          hasEnabledState: true,
+          isEnabled: true,
+          isFocusable: true,
+          hasTapAction: true,
+          hasFocusAction: true,
+        ),
+      );
+      semantics.dispose();
+    });
+
+    testWidgets('an empty team says how to add one', (tester) async {
+      await _pumpAgents(tester, _TeamAgentApi(const []));
+
+      expect(find.text('No specialists yet'), findsOneWidget);
+      expect(find.textContaining('team/ with an AGENT.md'), findsOneWidget);
+      expect(find.textContaining('scripts/team-templates/'), findsOneWidget);
+      expect(
+        find.textContaining('with the setting and grant it had'),
+        findsOneWidget,
+      );
+    });
   });
 }
 
@@ -521,14 +1195,17 @@ ExternalAgent _claude({
   credentialAvailable: credentialAvailable,
 );
 
-/// Scrolls the button into view first: below the breakpoint the page is a
-/// scroll view, and tapping a widget that is off screen silently misses.
-Future<void> _openEditor(WidgetTester tester) async {
-  await tester.ensureVisible(find.text('New agent'));
+/// Scrolls the target into view first: the page is a scroll view, and
+/// tapping a widget that is off screen silently misses.
+Future<void> _tapVisible(WidgetTester tester, Finder target) async {
+  await tester.ensureVisible(target);
   await tester.pumpAndSettle();
-  await tester.tap(find.text('New agent'));
+  await tester.tap(target);
   await tester.pumpAndSettle();
 }
+
+Future<void> _openEditor(WidgetTester tester) =>
+    _tapVisible(tester, find.text('New agent'));
 
 Future<void> _pumpAgents(
   WidgetTester tester,
@@ -576,6 +1253,7 @@ class _AgentApi extends TuringApi
         NoIntegrationsApi,
         NoSessionLifecycleApi,
         NoAutomationsApi,
+        NoTeamApi,
         NoTelemetryApi {
   final List<ExternalAgent> agents = [];
   final Map<String, String> routes = {};
@@ -768,4 +1446,206 @@ class _AgentApi extends TuringApi
     String approvalId, {
     String? reason,
   }) async => {'approvalId': approvalId, 'status': 'denied'};
+}
+
+const _revision = '0123456789abcdef';
+
+AgentProfile _profile(
+  String id, {
+  String name = '',
+  String emoji = '',
+  bool enabled = false,
+  bool granted = false,
+  String? grantedRevision,
+  String model = '',
+  String resolvedModel = 'qwen2.5:7b',
+  AgentProfileMemoryAccess memory = AgentProfileMemoryAccess.none,
+  List<String> tools = const ['files.read'],
+  List<String> resolvedTools = const ['files/files.read'],
+  List<AgentProfileToolExclusion> excluded = const [],
+  List<String> skills = const [],
+  int maxToolCalls = 0,
+  String parseError = '',
+  String revision = _revision,
+  List<String> requires = const [],
+  List<String> unavailable = const [],
+}) => _TeamAgentApi.withState(
+  AgentProfile(
+    profileId: id,
+    name: name,
+    emoji: emoji,
+    description: name.isEmpty ? '' : '$name helps.',
+    version: '1',
+    model: model,
+    resolvedModel: resolvedModel,
+    tools: tools,
+    skills: skills,
+    memory: memory,
+    requires: requires,
+    maxToolCalls: maxToolCalls,
+    revision: revision,
+    enabled: enabled,
+    grantedRevision: grantedRevision ?? (granted ? revision : ''),
+    state: AgentProfileState.unknown,
+    resolvedTools: resolvedTools,
+    unavailableReasons: unavailable,
+    excludedTools: excluded,
+    parseError: parseError,
+  ),
+);
+
+Finder _card(String id) => find.byKey(ValueKey('team-profile-$id'));
+
+Finder _chipOf(String id, String label) =>
+    find.descendant(of: _card(id), matching: find.text(label));
+
+Switch _switchOf(WidgetTester tester, String id) => tester.widget<Switch>(
+  find.descendant(of: _card(id), matching: find.byType(Switch)),
+);
+
+Finder _teamRefresh() => find.ancestor(
+  of: find.byTooltip('Read the team folder again'),
+  matching: find.byType(IconButton),
+);
+
+ButtonStyleButton _reviewOf(WidgetTester tester, String id) =>
+    tester.widget<ButtonStyleButton>(
+      find.descendant(
+        of: _card(id),
+        matching: find.byWidgetPredicate((w) => w is ButtonStyleButton),
+      ),
+    );
+
+Future<void> _toggle(WidgetTester tester, String id) async {
+  final toggle = find.descendant(of: _card(id), matching: find.byType(Switch));
+  await tester.ensureVisible(toggle);
+  await tester.tap(toggle);
+  await tester.pumpAndSettle();
+}
+
+/// The team half of the in-memory backend. It keeps the backend's rules that
+/// the page depends on: a grant names a revision and is refused when the file
+/// moved on or does not parse, and the state is recomputed from the file and
+/// the user's decisions after every change.
+class _TeamAgentApi extends _AgentApi {
+  _TeamAgentApi(List<AgentProfile> profiles) : profiles = [...profiles];
+
+  final List<AgentProfile> profiles;
+  final List<(String, String)> grants = [];
+  final List<(String, bool)> enables = [];
+  Object? teamError;
+  Object? enableError;
+  int listCalls = 0;
+
+  /// While set, the next list or enable waits for it to complete.
+  Completer<void>? holdList;
+  Completer<void>? holdEnable;
+
+  static AgentProfile withState(
+    AgentProfile p, {
+    String? revision,
+    bool? enabled,
+    String? grantedRevision,
+  }) {
+    final rev = revision ?? p.revision;
+    final on = enabled ?? p.enabled;
+    final grant = grantedRevision ?? p.grantedRevision;
+    final AgentProfileState state;
+    if (p.parseError.isNotEmpty) {
+      state = AgentProfileState.parseError;
+    } else if (!on) {
+      state = AgentProfileState.disabled;
+    } else if (grant != rev) {
+      state = AgentProfileState.needsGrant;
+    } else if (p.unavailableReasons.isNotEmpty) {
+      state = AgentProfileState.unavailable;
+    } else {
+      state = AgentProfileState.active;
+    }
+    return AgentProfile(
+      profileId: p.profileId,
+      name: p.name,
+      emoji: p.emoji,
+      description: p.description,
+      version: p.version,
+      model: p.model,
+      resolvedModel: p.resolvedModel,
+      tools: p.tools,
+      skills: p.skills,
+      memory: p.memory,
+      requires: p.requires,
+      maxToolCalls: p.maxToolCalls,
+      revision: rev,
+      enabled: on,
+      grantedRevision: grant,
+      state: state,
+      resolvedTools: p.resolvedTools,
+      unavailableReasons: p.unavailableReasons,
+      excludedTools: p.excludedTools,
+      parseError: p.parseError,
+    );
+  }
+
+  int _indexOf(String id) {
+    final index = profiles.indexWhere((p) => p.profileId == id);
+    if (index < 0) {
+      throw TuringApiException(code: 'not_found', message: '$id not found');
+    }
+    return index;
+  }
+
+  void editFile(String id, String revision) {
+    final index = _indexOf(id);
+    profiles[index] = withState(profiles[index], revision: revision);
+  }
+
+  @override
+  Future<List<AgentProfile>> listAgentProfiles() async {
+    listCalls++;
+    final hold = holdList;
+    holdList = null;
+    if (hold != null) await hold.future;
+    final error = teamError;
+    if (error != null) throw error;
+    return List.unmodifiable(profiles);
+  }
+
+  @override
+  Future<AgentProfile> grantAgentProfile({
+    required String profileId,
+    required String revision,
+  }) async {
+    final index = _indexOf(profileId);
+    final current = profiles[index];
+    if (current.parseError.isNotEmpty || current.revision != revision) {
+      throw const TuringApiException(
+        code: 'failed_precondition',
+        message: 'stale revision',
+      );
+    }
+    grants.add((profileId, revision));
+    return profiles[index] = withState(current, grantedRevision: revision);
+  }
+
+  @override
+  Future<AgentProfile> setAgentProfileEnabled({
+    required String profileId,
+    required bool enabled,
+  }) async {
+    final hold = holdEnable;
+    holdEnable = null;
+    if (hold != null) await hold.future;
+    final error = enableError;
+    if (error != null) throw error;
+    final index = _indexOf(profileId);
+    final current = profiles[index];
+    if (enabled && current.parseError.isNotEmpty) {
+      throw const TuringApiException(
+        code: 'failed_precondition',
+        message: 'does not parse',
+      );
+    }
+    enables.add((profileId, enabled));
+    return profiles[index] = withState(current, enabled: enabled);
+  }
 }

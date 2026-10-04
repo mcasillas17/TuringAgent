@@ -654,6 +654,7 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 		"turing.v1.AutomationService",
 		"turing.v1.TelemetryService",
 		"turing.v1.MemoryService",
+		"turing.v1.TeamService",
 	} {
 		if _, ok := publicServices[name]; !ok {
 			t.Fatalf("public server missing %s", name)
@@ -689,6 +690,11 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 	// need to grow to include it.
 	if _, ok := internalServices["turing.v1.TelemetryService"]; ok {
 		t.Fatal("internal server should not expose telemetry to the runtime")
+	}
+	// Enabling and granting a specialist are the user's decisions; the
+	// runtime must never be able to make them.
+	if _, ok := internalServices["turing.v1.TeamService"]; ok {
+		t.Fatal("internal server should not expose team management to the runtime")
 	}
 }
 
@@ -1296,5 +1302,47 @@ func TestMemoryServiceFacetAndRuntimeIdentityWiring(t *testing.T) {
 	state, err := publicClient.ListMemoryState(publicCtx, &turingv1.ListMemoryStateRequest{})
 	if err != nil || !state.GetSettings().GetEnabled() {
 		t.Fatalf("public state = %+v err=%v, want memory enabled by default", state.GetSettings(), err)
+	}
+}
+
+// The team service reads the configured TEAM_ROOT and answers the client key,
+// while the runtime's internal server has no route to it at all.
+func TestTeamServiceListsProfilesFromTheConfiguredRoot(t *testing.T) {
+	teamRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(teamRoot, "research"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profile := "---\nname: Research\ndescription: Looks things up\n---\nYou research.\n"
+	if err := os.WriteFile(filepath.Join(teamRoot, "research", "AGENT.md"), []byte(profile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app, err := New(config.Config{
+		ClientAPIKey: "client",
+		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
+		ApprovalJWTSecret: "approval-secret",
+		DatabasePath:      t.TempDir() + "/turing.db",
+		OllamaModel:       "llama3.2",
+		TeamRoot:          teamRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Stop)
+
+	client := turingv1.NewTeamServiceClient(newBufconnClient(t, app.PublicServer))
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer client")
+	response, err := client.ListAgentProfiles(ctx, &turingv1.ListAgentProfilesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.GetProfiles()) != 1 || response.GetProfiles()[0].GetProfileId() != "research" ||
+		response.GetProfiles()[0].GetState() != turingv1.AgentProfileState_AGENT_PROFILE_STATE_DISABLED {
+		t.Fatalf("profiles = %+v", response.GetProfiles())
+	}
+
+	internal := turingv1.NewTeamServiceClient(newBufconnClient(t, app.InternalServer))
+	internalCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer internal")
+	if _, err := internal.ListAgentProfiles(internalCtx, &turingv1.ListAgentProfilesRequest{}); err == nil {
+		t.Fatal("the internal server answered a team request")
 	}
 }

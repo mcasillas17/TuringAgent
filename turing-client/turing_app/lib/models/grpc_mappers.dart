@@ -15,9 +15,11 @@ import '../generated/turing/v1/integrations.pb.dart' as integrationpb;
 import '../generated/turing/v1/memory.pb.dart' as memorypb;
 import '../generated/turing/v1/sessions.pb.dart' as sessionpb;
 import '../generated/turing/v1/skills.pb.dart' as skillpb;
+import '../generated/turing/v1/team.pb.dart' as teampb;
 import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
 import '../utils/protobuf_enum.dart';
 import 'agent_descriptor.dart' as model_agent;
+import 'agent_profile.dart' as model_agent_profile;
 import 'approval.dart' as model_approval;
 import 'external_agent.dart' as model_external_agent;
 import 'integration.dart' as model_integration;
@@ -266,6 +268,90 @@ class GrpcMappers {
       parseError: skill.parseError,
       folderPath: skill.folderPath,
     );
+  }
+
+  static model_agent_profile.AgentProfile agentProfileToModel(
+    teampb.AgentProfile profile,
+  ) {
+    return model_agent_profile.AgentProfile(
+      profileId: profile.profileId,
+      name: profile.name,
+      emoji: profile.emoji,
+      description: profile.description,
+      version: profile.version,
+      model: profile.model,
+      resolvedModel: profile.resolvedModel,
+      tools: List.unmodifiable(profile.tools),
+      skills: List.unmodifiable(profile.skills),
+      memory: _agentProfileMemoryToModel(
+        decodeClosedEnum(
+          message: profile,
+          fieldNumber: 10,
+          readValue: () => profile.memory,
+          unknownValue: teampb
+              .AgentProfileMemoryAccess
+              .AGENT_PROFILE_MEMORY_ACCESS_UNSPECIFIED,
+        ),
+      ),
+      requires: List.unmodifiable(profile.requires),
+      maxToolCalls: profile.maxToolCalls,
+      revision: profile.revision,
+      enabled: profile.enabled,
+      grantedRevision: profile.grantedRevision,
+      state: _agentProfileStateToModel(
+        decodeClosedEnum(
+          message: profile,
+          fieldNumber: 16,
+          readValue: () => profile.state,
+          unknownValue:
+              teampb.AgentProfileState.AGENT_PROFILE_STATE_UNSPECIFIED,
+        ),
+      ),
+      resolvedTools: List.unmodifiable(profile.resolvedTools),
+      unavailableReasons: List.unmodifiable(profile.unavailableReasons),
+      excludedTools: List.unmodifiable(
+        profile.excludedTools.map(
+          (exclusion) => model_agent_profile.AgentProfileToolExclusion(
+            tool: exclusion.tool,
+            reason: exclusion.reason,
+          ),
+        ),
+      ),
+      parseError: profile.parseError,
+    );
+  }
+
+  static model_agent_profile.AgentProfileState _agentProfileStateToModel(
+    teampb.AgentProfileState state,
+  ) {
+    switch (state) {
+      case teampb.AgentProfileState.AGENT_PROFILE_STATE_ACTIVE:
+        return model_agent_profile.AgentProfileState.active;
+      case teampb.AgentProfileState.AGENT_PROFILE_STATE_DISABLED:
+        return model_agent_profile.AgentProfileState.disabled;
+      case teampb.AgentProfileState.AGENT_PROFILE_STATE_NEEDS_GRANT:
+        return model_agent_profile.AgentProfileState.needsGrant;
+      case teampb.AgentProfileState.AGENT_PROFILE_STATE_UNAVAILABLE:
+        return model_agent_profile.AgentProfileState.unavailable;
+      case teampb.AgentProfileState.AGENT_PROFILE_STATE_PARSE_ERROR:
+        return model_agent_profile.AgentProfileState.parseError;
+      default:
+        return model_agent_profile.AgentProfileState.unknown;
+    }
+  }
+
+  static model_agent_profile.AgentProfileMemoryAccess
+  _agentProfileMemoryToModel(teampb.AgentProfileMemoryAccess memory) {
+    switch (memory) {
+      case teampb.AgentProfileMemoryAccess.AGENT_PROFILE_MEMORY_ACCESS_NONE:
+        return model_agent_profile.AgentProfileMemoryAccess.none;
+      case teampb.AgentProfileMemoryAccess.AGENT_PROFILE_MEMORY_ACCESS_READ:
+        return model_agent_profile.AgentProfileMemoryAccess.read;
+      case teampb.AgentProfileMemoryAccess.AGENT_PROFILE_MEMORY_ACCESS_PROPOSE:
+        return model_agent_profile.AgentProfileMemoryAccess.propose;
+      default:
+        return model_agent_profile.AgentProfileMemoryAccess.unknown;
+    }
   }
 
   static model_integration.IntegrationConnection connectionToModel(

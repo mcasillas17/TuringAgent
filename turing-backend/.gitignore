@@ -5,6 +5,9 @@
 !**/.env.example
 .runtime/
 data/turing.db*
+# Written by init.sh after it seeds team/. Committed, it would stop every
+# fresh clone from being seeded.
+data/team-seeded
 sandbox/*
 !sandbox/.gitkeep
 skills/*
@@ -14,6 +17,10 @@ skills/*
 # never accepted. Only the empty directory is tracked.
 memory/*
 !memory/.gitkeep
+# Specialist profiles are the user's to write; init.sh seeds the defaults from
+# scripts/team-templates. Only the empty directory is tracked.
+team/*
+!team/.gitkeep
 mcp/*
 !mcp/.gitkeep
 !mcp/mcp.json.example

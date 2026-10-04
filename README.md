@@ -2,7 +2,7 @@
 
 TuringAgent is a local-first AI orchestration platform for running a private assistant stack on your own machine. It pairs a Flutter client with a Go gRPC backend that owns chat sessions, model routing, streaming events, tool execution, approvals, and audit state.
 
-The project is designed for local development first: secrets stay in your local `.env`, data is stored under `turing-backend/data/`, file tools are constrained to `turing-backend/sandbox/`, and the memory vault — the persona, profile, beliefs and proposals Turing keeps as plain Markdown you can open in Obsidian — lives under `turing-backend/memory/`, which is ignored by git except for its `.gitkeep`.
+The project is designed for local development first: secrets stay in your local `.env`, data is stored under `turing-backend/data/`, file tools are constrained to `turing-backend/sandbox/`, and the memory vault — the persona, profile, beliefs and proposals Turing keeps as plain Markdown you can open in Obsidian — lives under `turing-backend/memory/`, which is ignored by git except for its `.gitkeep`. The specialists Turing will be able to hand work to are files too, one `turing-backend/team/<id>/AGENT.md` each, also ignored by git except for its `.gitkeep`.
 
 ## What it does
 
@@ -32,7 +32,9 @@ The project is designed for local development first: secrets stay in your local 
 Current capability status and future work are separated in the
 [canonical roadmap](docs/NORTH_STAR.md#current-status). The Flutter shell has
 backend-connected Chats, Skills, Memory, Integrations, MCPs, Automations,
-Agents and Telemetry surfaces. Agents manages model endpoint records;
+Agents and Telemetry surfaces. Agents manages model endpoint records and
+Turing's team of specialist profiles (enablement and revision-bound grants;
+delegation is not switched on);
 [integration and routing limits](docs/NORTH_STAR.md#guarded-capability-inventory)
 distinguish credential storage, functional tools, inference and delegation.
 
@@ -73,6 +75,71 @@ fails to load. Audit records remain. Local cleanup does not revoke a token or
 app password at its vendor or destroy copies elsewhere; revoke it at the
 vendor separately when needed.
 
+## Turing's team
+
+Turing is the orchestrator agent. The specialists it will hand work to are
+profiles, one Markdown file each at `turing-backend/team/<id>/AGENT.md`: front
+matter names the model, tool patterns (the tool name without its server:
+`files.read`, not `files/files.read`), skills, memory access
+(`none`, `read` or `propose`), the tools it `requires`, and an optional
+`max_tool_calls`; the body is its instructions. The file starts with `---`
+front matter in which `name` and `description` are required, `emoji` and
+`version` are display-only, and an unknown key is an error. The folder name is
+the profile's ID: a lowercase letter, then lowercase letters, digits or hyphens,
+2–32 characters in all, and `turing` is reserved. The templates are the
+reference format to copy. A fresh install gets three, from
+`turing-backend/scripts/team-templates/`:
+
+- 💻 **Dev** — `files.*`, `system.*` and `github.*`. GitHub calls leave the
+  machine, so `github.*` is declared but withheld until per-delegation consent
+  ships; once GitHub is connected, its card lists those tools under Withheld.
+- 📨 **Inbox** — `gmail.*` only, and it requires it. No Gmail tools exist yet:
+  its card says why from the start, and once you turn it on and grant it, it
+  shows Unavailable.
+- 🔬 **Research** — memory search and read, `files.*`, skills and the time,
+  and asks for up to 12 tool calls per task (the worker's own per-run limit
+  still applies).
+
+`init.sh` copies them only on the first install, into a `team/` that has no
+profiles yet, and leaves a `data/team-seeded` receipt beside the database. It
+never rewrites an edited profile or brings back one you deleted — not even
+after you delete them all — because your grants for them are still in the
+database. To bring one back, copy its folder from `scripts/team-templates/`
+into `team/`; it returns with the on/off setting and grant it had. If that grant
+matches the template, no new review is asked for, so a profile that was on can
+be Active again at once; otherwise it needs a new grant first. Dev and Research
+require nothing, so on and granted they are Active whenever a worker serves
+their model; Inbox requires `gmail.*`, so its card lists that tool, and on and
+granted it shows Unavailable until it resolves. Turning it off keeps the
+grant, so turning it on again does not ask.
+
+To forget one profile's setting and grant, stop the stack, back up
+`data/turing.db`, and run
+`DELETE FROM agent_profile_settings WHERE profile_id = '<id>';` in a SQLite
+client. `data/` is the whole database — every conversation, approval, audit
+entry and connection — so deleting it is a full reset (`scripts/reset.sh`), not
+a way to forget grants. A reset leaves `team/` as it is: `init.sh` seeds again
+only into an empty `team/`, and only when the receipt is gone. Deleting only the
+receipt reseeds an empty `team/` with the database kept, so each default returns
+with the setting and grant it had.
+
+**Agents → Turing's team** lists every profile with its state: Active, Off,
+Needs your grant, Unavailable (with the reasons) or Cannot be read (with the
+parse error). Turning one on first shows what the grant covers — the model,
+memory access, the tool patterns it asks for and those it requires, the tools
+it would receive now and those it would not, its skills and its tool-call
+limit — and the grant is
+bound to that revision of what the file asks for. Change its model, tools,
+skills, memory access, `requires` or `max_tool_calls` and the profile needs your
+grant again; editing its name, emoji, description or instructions does not. A
+grant sent for a revision that has since changed is refused and nothing is
+recorded. A pattern that is only `*` is rejected, and a folder
+without an `AGENT.md` is not a profile.
+
+This build stores profiles, enablement and grants only. **Delegation is not
+switched on**: no conversation reaches a specialist yet, and nothing about a
+run changes. See the [orchestrator and team design](docs/superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md).
+
 ## Requirements
 
 - Docker and Docker Compose
@@ -99,7 +166,8 @@ cd TuringAgent/turing-backend
 
 `init.sh` rejects root execution, creates `turing-backend/.env`, generates local
 bearer tokens, records the current non-root UID/GID for bind-mounted storage,
-creates `data/`, `skills/`, `mcp/`, a real (non-symlink) `sandbox/`, and the
+creates `data/`, `skills/`, `mcp/`, `team/` (seeding Dev, Inbox and Research
+on the first install only), a real (non-symlink) `sandbox/`, and the
 memory vault `memory/` with its `inbox/` and `beliefs/` folders and an active
 starter `persona.md`, pinned into every run exactly as written (written only
 when that file is absent — an existing `persona.md` or `profile.md` is
@@ -130,12 +198,13 @@ do not widen the host publication or add a public tunnel as a shortcut.
 Use the repository scripts rather than invoking this Compose file directly.
 `scripts/compose.sh` validates and injects the current non-root host UID/GID;
 this prevents stale `.env` values or exported `HOST_UID`/`HOST_GID` variables
-from selecting the identity used for the data, skills, memory, and sandbox bind
-mounts, and it refuses to launch when one of those host directories is a
+from selecting the identity used for the data, skills, memory, team, and sandbox
+bind mounts, and it refuses to launch when one of those host directories is a
 symlink, is missing, or is not mode 0700. All backend services otherwise run
 with read-only roots, no Linux capabilities, and `no-new-privileges`; only
 `/app/data`, `/skills`, `/memory`, and `/sandbox` are writable, and `/memory` is
-mounted into the orchestrator alone.
+mounted into the orchestrator alone. `/team` is mounted into the orchestrator
+alone as well, read-only: profiles are edited on the host, never by Turing.
 
 `/memory` is a path inside that container, so the Memory page does not show it.
 `scripts/init.sh` writes the host directory the vault is bound from into `.env`

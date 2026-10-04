@@ -93,6 +93,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// client can name a folder the user can actually open. No file
 		// operation and no confinement check ever reads it.
 		"MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:-}",
+		"TEAM_ROOT: /team",
 		// The orchestrator never calls OpenAI or mcp-files through its normal
 		// bearer: it only reports
 		// through GetConfig whether each is configured, so it holds a
@@ -153,6 +154,9 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// on the user's own machine, and only the service that answers "where
 		// is my memory?" has any reason to hold it.
 		"MEMORY_DISPLAY_ROOT:",
+		// Specialist profiles are read by the orchestrator alone; the runtime
+		// never reads team/ off disk.
+		"TEAM_ROOT:",
 	)
 
 	system := composeServiceBlock(t, compose, "turing-mcp-system")
@@ -207,6 +211,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// under either name.
 		"MEMORY_ROOT:",
 		"MEMORY_DISPLAY_ROOT:",
+		"TEAM_ROOT:",
 		// mcp-files may only consume approvals; it must never hold the
 		// runtime's credential, or a compromised mcp-files could claim jobs
 		// and read conversation history through RuntimeService/SessionService.
@@ -232,6 +237,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"SKILLS_ROOT",
 			"MEMORY_ROOT",
 			"MEMORY_DISPLAY_ROOT",
+			"TEAM_ROOT",
 			"MCP_CONFIG_ROOT",
 			"OLLAMA_MODEL",
 			"OLLAMA_CONTEXT_WINDOW_TOKENS",
@@ -484,7 +490,7 @@ func TestEveryComposeServiceUsesLeastPrivilegeRuntime(t *testing.T) {
 	policies := map[string]composeRuntimePolicy{
 		"turing-orchestrator": {
 			user:     "${HOST_UID:?Use scripts/compose.sh to launch}:${HOST_GID:?Use scripts/compose.sh to launch}",
-			volumes:  []string{"../data:/app/data", "../skills:/skills", "../mcp:/mcp:ro", "../memory:/memory"},
+			volumes:  []string{"../data:/app/data", "../skills:/skills", "../mcp:/mcp:ro", "../memory:/memory", "../team:/team:ro"},
 			tmpfs:    []string{"/dev/shm:ro,nosuid,nodev,noexec,size=64k"},
 			ports:    []string{"127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:${ORCHESTRATOR_PUBLIC_PORT:-3000}"},
 			expose:   []string{"3001"},
@@ -859,6 +865,7 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 		"**/data.worktree-backup-*",
 		"turing-backend/skills",
 		"turing-backend/memory",
+		"turing-backend/team",
 		"**/sandbox",
 		"**/node_modules",
 		"**/.dart_tool",
@@ -874,7 +881,7 @@ func TestRepositoryDockerignoreExcludesSensitiveAndGeneratedContent(t *testing.T
 			t.Errorf(".dockerignore missing %q", pattern)
 		}
 	}
-	for _, overbroad := range []string{"**/skills", "**/memory", "memory"} {
+	for _, overbroad := range []string{"**/skills", "**/memory", "memory", "**/team", "team"} {
 		if lines[overbroad] {
 			t.Errorf(".dockerignore uses overbroad runtime-state pattern %q", overbroad)
 		}

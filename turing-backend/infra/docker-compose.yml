@@ -33,6 +33,10 @@ services:
       ORCHESTRATOR_INTERNAL_PORT: ${ORCHESTRATOR_INTERNAL_PORT:-3001}
       DATABASE_PATH: ${DATABASE_PATH:-/app/data/turing.db}
       SKILLS_ROOT: /skills
+      # Specialist profiles, mounted read-only below. Set explicitly for the
+      # same reason MEMORY_ROOT is: the bind target and the path the
+      # orchestrator opens are one decision in one file.
+      TEAM_ROOT: /team
       # The memory vault, mounted read/write below. Set explicitly rather than
       # left to the binary's default so the bind target and the path the
       # orchestrator opens are one decision in one file.
@@ -93,6 +97,11 @@ services:
       # is written in place. The orchestrator is the only service that mounts
       # it, and scripts/compose.sh validates the host directory first.
       - ../memory:/memory
+      # Read-only: a profile grants a specialist its tools, memory and model,
+      # so no tool and no process in the stack may write one — only the
+      # user's editor. Only the orchestrator mounts it; the runtime never
+      # reads it. scripts/compose.sh validates the host directory.
+      - ../team:/team:ro
     networks:
       - net-system
       - net-files

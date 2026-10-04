@@ -40,42 +40,31 @@ validate_sandbox_bind_source() {
   fi
 }
 
-validate_skills_bind_source() {
-  local skills_path="$PWD/skills"
-  if [[ -L "$skills_path" ]]; then
-    printf 'Compose launch failed: skills must be a real directory, not a symlink.\n' >&2
+# A private bind source: a real directory under the backend, owned and fully
+# accessible by the host user, and closed to everyone else. init.sh creates a
+# missing one and fixes the mode of an accessible one, so only those two
+# refusals point at it; it refuses the others too.
+validate_private_bind_source() {
+  local name="$1"
+  local path="$PWD/$name"
+  if [[ -L "$path" ]]; then
+    printf 'Compose launch failed: %s must be a real directory, not a symlink.\n' "$name" >&2
     return 1
   fi
-  if [[ ! -d "$skills_path" ]]; then
-    printf 'Compose launch failed: skills must be a real directory.\n' >&2
+  if [[ ! -e "$path" ]]; then
+    printf 'Compose launch failed: %s must be a real directory; run ./scripts/init.sh.\n' "$name" >&2
     return 1
   fi
-  if [[ ! -O "$skills_path" || ! -r "$skills_path" || ! -w "$skills_path" || ! -x "$skills_path" ]]; then
-    printf 'Compose launch failed: skills is not owned, readable, writable, and traversable by the host user.\n' >&2
+  if [[ ! -d "$path" ]]; then
+    printf 'Compose launch failed: %s must be a real directory.\n' "$name" >&2
     return 1
   fi
-  if [[ "$(path_mode "$skills_path")" != "700" ]]; then
-    printf 'Compose launch failed: skills must have mode 0700.\n' >&2
+  if [[ ! -O "$path" || ! -r "$path" || ! -w "$path" || ! -x "$path" ]]; then
+    printf 'Compose launch failed: %s is not owned, readable, writable, and traversable by the host user.\n' "$name" >&2
     return 1
   fi
-}
-
-validate_memory_bind_source() {
-  local memory_path="$PWD/memory"
-  if [[ -L "$memory_path" ]]; then
-    printf 'Compose launch failed: memory must be a real directory, not a symlink.\n' >&2
-    return 1
-  fi
-  if [[ ! -d "$memory_path" ]]; then
-    printf 'Compose launch failed: memory must be a real directory.\n' >&2
-    return 1
-  fi
-  if [[ ! -O "$memory_path" || ! -r "$memory_path" || ! -w "$memory_path" || ! -x "$memory_path" ]]; then
-    printf 'Compose launch failed: memory is not owned, readable, writable, and traversable by the host user.\n' >&2
-    return 1
-  fi
-  if [[ "$(path_mode "$memory_path")" != "700" ]]; then
-    printf 'Compose launch failed: memory must have mode 0700.\n' >&2
+  if [[ "$(path_mode "$path")" != "700" ]]; then
+    printf 'Compose launch failed: %s must have mode 0700; run ./scripts/init.sh.\n' "$name" >&2
     return 1
   fi
 }
@@ -402,8 +391,9 @@ if [[ -f .env ]]; then
   if ! is_recovery_command "$@"; then
     validate_memory_display_root
     validate_sandbox_bind_source
-    validate_skills_bind_source
-    validate_memory_bind_source
+    validate_private_bind_source skills
+    validate_private_bind_source memory
+    validate_private_bind_source team
     validate_mcp_bind_source
     validate_data_bind_source
     exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \

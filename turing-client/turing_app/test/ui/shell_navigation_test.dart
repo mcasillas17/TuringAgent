@@ -32,6 +32,7 @@ import '../support/no_integrations_api.dart';
 import '../support/no_automations_api.dart';
 import '../support/no_telemetry_api.dart';
 import '../support/no_skills_api.dart';
+import '../support/no_team_api.dart';
 
 /// Wide enough to keep the sidebar beside the conversation.
 const Size _desktop = Size(1400, 900);
@@ -2357,7 +2358,12 @@ Future<void> _pumpShell(
 }
 
 class _FakeApi extends TuringApi
-    with NoIntegrationsApi, NoAutomationsApi, NoTelemetryApi, NoSkillsApi {
+    with
+        NoIntegrationsApi,
+        NoAutomationsApi,
+        NoTelemetryApi,
+        NoSkillsApi,
+        NoTeamApi {
   List<Session> sessions = [
     Session(
       sessionId: 'sess_existing',

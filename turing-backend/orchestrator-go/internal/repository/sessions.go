@@ -16,11 +16,14 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runcorrelation"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/skillfiles"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/teamfiles"
 )
 
 type Repository struct {
 	db         *db.DB
 	skillStore *skillfiles.Store
+	// teamStore holds the specialist profiles. Nil means an empty team.
+	teamStore *teamfiles.Store
 	// memoryVault is the user's note vault. It is nil until SetMemoryVault
 	// attaches one, and every memory method refuses rather than pretending
 	// there is nothing to remember.

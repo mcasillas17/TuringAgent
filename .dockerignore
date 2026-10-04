@@ -25,6 +25,9 @@ turing-backend/skills
 # would also hide agent-runtime-go/internal/memory and
 # orchestrator-go/internal/service/memory, which the images are built from.
 turing-backend/memory
+# Specialist profiles, scoped the same way: **/team would hide
+# orchestrator-go/internal/service/team, which the image is built from.
+turing-backend/team
 turing-backend/mcp
 **/sandbox
 

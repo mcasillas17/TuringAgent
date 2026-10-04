@@ -148,7 +148,11 @@ authorization: Bearer <api-key>
   `SessionAgentBar` selects, reads and clears its route through
   `ExternalAgentService`; model execution stays in the runtime. Vendor labels
   do not select native Anthropic/Gemini adapters or delegate to a user's
-  existing Claude/Copilot/Gemini/ChatGPT session.
+  existing Claude/Copilot/Gemini/ChatGPT session. Its **Turing's team**
+  section lists the specialist profiles under `team/` through `TeamService`,
+  with each one's state, and turns them on and off; turning one on asks for a
+  grant bound to its current revision unless that revision is already granted
+  (turning it off keeps the grant). Delegation is not switched on.
 - **Telemetry** shows backend local usage aggregates, not a user-facing audit log.
 
 The destination list is defined in `ShellDestination`; `ResponsiveShell`
