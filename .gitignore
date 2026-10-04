@@ -173,6 +173,7 @@ Desktop.ini
 turing-backend/.runtime/
 data/turing.db*
 turing-backend/data/turing.db*
+turing-backend/data/team-seeded
 .claude/worktrees/
 
 # ==========================

@@ -65,6 +65,9 @@ type Config struct {
 	InternalPort   int
 	DatabasePath   string
 	SkillsRoot     string
+	// TeamRoot holds one folder per specialist profile, each with an
+	// AGENT.md. It is read-only to the orchestrator; the user edits it.
+	TeamRoot string
 	// MemoryRoot is the folder the orchestrator opens, and the only path any
 	// file operation, confinement check or refusal is ever about.
 	// A root that does not exist is not fatal: memory reports itself
@@ -393,6 +396,10 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if !filepath.IsAbs(skillsRoot) || filepath.Clean(skillsRoot) != skillsRoot {
 		return Config{}, fmt.Errorf("SKILLS_ROOT must be a clean absolute path")
 	}
+	teamRoot := stringValue("TEAM_ROOT", "/team")
+	if !filepath.IsAbs(teamRoot) || filepath.Clean(teamRoot) != teamRoot {
+		return Config{}, fmt.Errorf("TEAM_ROOT must be a clean absolute path")
+	}
 	memoryRoot := stringValue("MEMORY_ROOT", "/memory")
 	if !filepath.IsAbs(memoryRoot) || filepath.Clean(memoryRoot) != memoryRoot {
 		return Config{}, fmt.Errorf("MEMORY_ROOT must be a clean absolute path")
@@ -422,6 +429,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		InternalPort:              internalPort,
 		DatabasePath:              stringValue("DATABASE_PATH", "/app/data/turing.db"),
 		SkillsRoot:                skillsRoot,
+		TeamRoot:                  teamRoot,
 		MemoryRoot:                memoryRoot,
 		MemoryDisplayRoot:         memoryDisplayRoot,
 		MCPConfigRoot:             mcpConfigRoot,

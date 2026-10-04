@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package turing.v1;
+
+option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
+
+// Where a specialist profile stands. Exactly one applies, checked in this
+// order: a file that does not parse, a profile the user has not enabled, one
+// whose current declaration the user has not granted, one that cannot run as
+// declared now (its model is not served by a live worker, or a required tool
+// does not resolve), and finally ACTIVE: enabled, granted at the current
+// revision and resolvable. ACTIVE claims nothing about delegation.
+enum AgentProfileState {
+  AGENT_PROFILE_STATE_UNSPECIFIED = 0;
+  AGENT_PROFILE_STATE_ACTIVE = 1;
+  AGENT_PROFILE_STATE_DISABLED = 2;
+  AGENT_PROFILE_STATE_NEEDS_GRANT = 3;
+  AGENT_PROFILE_STATE_UNAVAILABLE = 4;
+  AGENT_PROFILE_STATE_PARSE_ERROR = 5;
+}
+
+// How much of the memory vault a specialist's runs may touch.
+enum AgentProfileMemoryAccess {
+  AGENT_PROFILE_MEMORY_ACCESS_UNSPECIFIED = 0;
+  AGENT_PROFILE_MEMORY_ACCESS_NONE = 1;
+  // memory.search and memory.read.
+  AGENT_PROFILE_MEMORY_ACCESS_READ = 2;
+  // Also memory.remember, which still needs an approval per call.
+  AGENT_PROFILE_MEMORY_ACCESS_PROPOSE = 3;
+}
+
+// A registered tool the profile's patterns match that its runs would still
+// not receive, and why.
+message AgentProfileToolExclusion {
+  // Qualified as server/tool.
+  string tool = 1;
+  string reason = 2;
+}
+
+// A team/{id}/AGENT.md file and the user's decisions about it. Everything but
+// enabled and granted_revision is read from disk on every call.
+message AgentProfile {
+  string profile_id = 1;
+  string name = 2;
+  string emoji = 3;
+  string description = 4;
+  string version = 5;
+  // The declared local model. Empty means Turing's default model.
+  string model = 6;
+  // The model a delegated run would use now. Empty when no worker serves one.
+  string resolved_model = 7;
+  // The declared tool patterns.
+  repeated string tools = 8;
+  // The declared skill patterns.
+  repeated string skills = 9;
+  AgentProfileMemoryAccess memory = 10;
+  // Tool patterns that must resolve for the profile to be available.
+  repeated string requires = 11;
+  // The declared limit. Zero means the worker's own per-run limit.
+  int32 max_tool_calls = 12;
+  // Hash of the authority fields. A grant is bound to it.
+  string revision = 13;
+  bool enabled = 14;
+  // The revision the user granted, or empty.
+  string granted_revision = 15;
+  AgentProfileState state = 16;
+  // The tools a delegated run would receive now, qualified as server/tool.
+  repeated string resolved_tools = 17;
+  // Why the profile cannot be active even when enabled and granted.
+  repeated string unavailable_reasons = 18;
+  repeated AgentProfileToolExclusion excluded_tools = 19;
+  string parse_error = 20;
+}
+
+message ListAgentProfilesRequest {}
+
+message ListAgentProfilesResponse {
+  repeated AgentProfile profiles = 1;
+}
+
+message SetAgentProfileEnabledRequest {
+  string profile_id = 1;
+  bool enabled = 2;
+}
+
+message GrantAgentProfileRequest {
+  string profile_id = 1;
+  // The revision the user reviewed. It is refused once an authority field
+  // (model, tools, skills, memory, requires, max_tool_calls) has changed since;
+  // edits to the instructions or display fields keep the revision.
+  string revision = 2;
+}
+
+service TeamService {
+  rpc ListAgentProfiles(ListAgentProfilesRequest) returns (ListAgentProfilesResponse);
+  rpc SetAgentProfileEnabled(SetAgentProfileEnabledRequest) returns (AgentProfile);
+  rpc GrantAgentProfile(GrantAgentProfileRequest) returns (AgentProfile);
+}

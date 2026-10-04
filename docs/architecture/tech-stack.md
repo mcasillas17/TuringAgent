@@ -122,9 +122,10 @@ Compose uses explicit `environment:` blocks instead of `env_file:` so services r
 
 Every service has an explicit non-root runtime identity, a read-only root
 filesystem, `cap_drop: ALL`, and `no-new-privileges`. Only the orchestrator's
-`/app/data`, `/skills` and `/memory` plus `mcp-files`' `/sandbox` are writable. Each
-service replaces Docker's default writable `/dev/shm` with a 64 KiB read-only
-tmpfs.
+`/app/data`, `/skills` and `/memory` plus `mcp-files`' `/sandbox` are writable. The
+orchestrator alone also mounts the specialist profiles at `/team`, read-only.
+Each service replaces Docker's default writable `/dev/shm` with a 64 KiB
+read-only tmpfs.
 
 ## Model providers
 
@@ -166,7 +167,8 @@ A provider completion with finish reason `length` emits a durable `agent.run.ste
 
 The Flutter client sends the selected provider with each message. The backend owns provider routing, context admission, and model execution.
 
-The Agents page manages endpoint records. `SessionAgentBar` reads/sets/clears
+The Agents page manages endpoint records and Turing's team of specialist
+profiles (enablement and revision-bound grants; delegation is not switched on). `SessionAgentBar` reads/sets/clears
 the conversation route through `ExternalAgentService`, and the runtime's
 resolver performs inference using the OpenAI-compatible transport.
 Vendor names are descriptive labels, not native Anthropic/Gemini
@@ -245,14 +247,17 @@ survives, but the withdrawn content does not. See
 - `turing-backend/mcp/` (configuration directory)
 - `turing-backend/memory/`, including `inbox/`, `beliefs/` and a starter
   `persona.md` only when absent; an existing persona/profile is never replaced
+- `turing-backend/team/`, seeded with Dev, Inbox and Research from
+  `scripts/team-templates/` on the first install only: never into a `team/`
+  that holds profiles, and never again once `data/team-seeded` exists
 
 Initialization must run as the non-root host owner. It rejects symlinked data,
-sandbox, skills, memory and MCP configuration roots, symlinked pinned vault
+sandbox, skills, memory, team and MCP configuration roots, symlinked pinned vault
 documents, and inaccessible legacy sandbox entries rather than recursively
 changing ownership or permissions. Compose must be launched through
 `turing-backend/scripts/compose.sh` (direct invocation is unsupported because
 exported variables override `.env`). The wrapper validates data, sandbox,
-skills, memory and MCP configuration bind sources, plus any existing SQLite
+skills, memory, team and MCP configuration bind sources, plus any existing SQLite
 file modes, before launch. Initialization secures existing SQLite files; it
 does not create the database. Do not commit generated secrets, local
 databases, vault content or sandbox files.

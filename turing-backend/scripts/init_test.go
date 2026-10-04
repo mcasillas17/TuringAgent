@@ -823,6 +823,7 @@ type initResult struct {
 	sandbox  string
 	skills   string
 	memory   string
+	team     string
 	data     string
 	env      string
 	envErr   error
@@ -901,6 +902,7 @@ func executeInitIn(t *testing.T, root string, uid, gid, identityConfig string, c
 	if err := os.WriteFile(scriptPath, script, 0700); err != nil {
 		t.Fatal(err)
 	}
+	copyTeamTemplates(t, filepath.Join(scriptsDir, teamTemplatesDirectory))
 	env := "TURING_CLIENT_API_KEY=client\n" +
 		"MCP_SYSTEM_TOKEN_GENERAL=system\n" +
 		"MCP_FILES_TOKEN_GENERAL=files\n" +
@@ -940,6 +942,7 @@ func executeInitIn(t *testing.T, root string, uid, gid, identityConfig string, c
 		sandbox:  filepath.Join(root, "sandbox"),
 		skills:   filepath.Join(root, "skills"),
 		memory:   filepath.Join(root, "memory"),
+		team:     filepath.Join(root, "team"),
 		data:     filepath.Join(root, "data"),
 		env:      string(updated),
 		envErr:   err,

@@ -218,6 +218,118 @@ func TestComposeLaunchRejectsUnsafeSkillsBindSource(t *testing.T) {
 	}
 }
 
+// Specialist profiles carry authority — which tools, memory and model a child
+// may use — so only the user's editor may write them. The mount is read-only,
+// it reaches the orchestrator alone, and TEAM_ROOT names the bind target in the
+// same file.
+func TestComposeMountsTheTeamReadOnlyIntoTheOrchestrator(t *testing.T) {
+	content, err := os.ReadFile("../infra/docker-compose.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(content)
+	for _, want := range []string{"TEAM_ROOT: /team", "- ../team:/team:ro"} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("docker-compose.yml is missing %q", want)
+		}
+	}
+	if strings.Count(compose, "../team:") != 1 {
+		t.Fatal("team/ must be mounted into exactly one service")
+	}
+}
+
+// Docker resolves a symlinked team/ before the loader's own walk can refuse
+// it, so the host directory is validated here, the same way skills/ is.
+func TestComposeLaunchRejectsUnsafeTeamBindSource(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(*testing.T, string)
+		wantOutput string
+		// Only a missing team/ or a wrong mode is something init.sh repairs.
+		wantInitHint bool
+	}{
+		{
+			name: "missing",
+			setup: func(t *testing.T, root string) {
+				if err := os.Remove(filepath.Join(root, "team")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput:   "team must be a real directory",
+			wantInitHint: true,
+		},
+		{
+			name: "symlink",
+			setup: func(t *testing.T, root string) {
+				team := filepath.Join(root, "team")
+				if err := os.Remove(team); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(root, "outside-team")
+				if err := os.Mkdir(target, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, team); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "team must be a real directory, not a symlink",
+		},
+		{
+			name: "not a directory",
+			setup: func(t *testing.T, root string) {
+				team := filepath.Join(root, "team")
+				if err := os.Remove(team); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(team, []byte("not a directory"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "team must be a real directory",
+		},
+		{
+			name: "not writable",
+			setup: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "team"), 0500); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput: "team is not owned, readable, writable, and traversable",
+		},
+		{
+			name: "not mode 0700",
+			setup: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "team"), 0755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutput:   "team must have mode 0700",
+			wantInitHint: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := executeComposeWithSetup(t, true, "501", "20", "501", "20", test.setup, "up")
+			if result.err == nil {
+				t.Fatalf("compose.sh accepted an unsafe team directory; docker log:\n%s", result.dockerLog)
+			}
+			if !strings.Contains(result.output, test.wantOutput) {
+				t.Fatalf("failure did not explain the unsafe team directory:\n%s", result.output)
+			}
+			// team/ is new: a checkout pulled onto an existing install has it
+			// at the umask's mode and unseeded, which init.sh repairs. It is
+			// not offered where init.sh would refuse in turn.
+			if got := strings.Contains(result.output, "run ./scripts/init.sh"); got != test.wantInitHint {
+				t.Fatalf("init.sh hint shown = %v, want %v:\n%s", got, test.wantInitHint, result.output)
+			}
+			if result.dockerLog != "" {
+				t.Fatalf("docker was called before the team rejection:\n%s", result.dockerLog)
+			}
+		})
+	}
+}
+
 func TestComposeLaunchAllowsRecoveryDownWithoutEnvFile(t *testing.T) {
 	result := executeComposeWithEnv(t, false, "501", "20", "0", "999", "down", "--remove-orphans")
 	if result.err != nil {
@@ -619,6 +731,9 @@ func executeComposeWithSetupIn(
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(root, "memory"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "team"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if setup != nil {

@@ -29,8 +29,10 @@ import (
 	runtimesvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/runtime"
 	sessionsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/sessions"
 	skillsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/skills"
+	teamsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/team"
 	telemetrysvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/telemetry"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/skillfiles"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/teamfiles"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 )
@@ -100,6 +102,11 @@ func New(cfg config.Config) (*App, error) {
 
 	repo := repository.New(database)
 	repo.SetSkillStore(skillfiles.New(skillsRoot))
+	teamRoot := cfg.TeamRoot
+	if teamRoot == "" {
+		teamRoot = "/team"
+	}
+	repo.SetTeamStore(teamfiles.New(teamRoot))
 	if err := repo.ReconcileSkills(context.Background()); err != nil {
 		_ = database.Close()
 		return nil, fmt.Errorf("reconcile skills: %w", err)
@@ -366,6 +373,9 @@ func New(cfg config.Config) (*App, error) {
 	// Public only, for the same reason: the runtime is handed the destination
 	// on the job it claims and never asks for it.
 	turingv1.RegisterExternalAgentServiceServer(publicServer, agentService)
+	// Public only: enabling and granting a specialist are the user's
+	// decisions, and the runtime has nothing to ask about the team.
+	turingv1.RegisterTeamServiceServer(publicServer, teamsvc.New(repo, runtimeService, cfg.OllamaModel))
 	// The public facet manages connections; the internal facet can only list
 	// and dispatch tools. Neither facet ever returns a sealed credential.
 	turingv1.RegisterIntegrationServiceServer(publicServer, integrationsvc.NewPublicServer(integrationService))

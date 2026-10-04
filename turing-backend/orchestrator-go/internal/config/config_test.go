@@ -391,6 +391,31 @@ func TestLoadFromMapDefaultsAndOverridesSkillsRoot(t *testing.T) {
 	}
 }
 
+func TestLoadFromMapDefaultsAndOverridesTeamRoot(t *testing.T) {
+	cfg, err := LoadFromMap(requiredEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TeamRoot != "/team" {
+		t.Fatalf("TeamRoot = %q, want /team", cfg.TeamRoot)
+	}
+	env := requiredEnv()
+	env["TEAM_ROOT"] = "/tmp/test-team"
+	cfg, err = LoadFromMap(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TeamRoot != "/tmp/test-team" {
+		t.Fatalf("TeamRoot = %q", cfg.TeamRoot)
+	}
+	for _, invalid := range []string{"relative/team", "/tmp/../team", "/tmp/team/"} {
+		env["TEAM_ROOT"] = invalid
+		if _, err := LoadFromMap(env); err == nil {
+			t.Fatalf("TEAM_ROOT %q was accepted", invalid)
+		}
+	}
+}
+
 // A key that is present but the wrong shape fails at startup, not while
 // somebody is pasting a token into the connect dialog.
 func TestLoadFromMapRejectsAMalformedIntegrationKey(t *testing.T) {

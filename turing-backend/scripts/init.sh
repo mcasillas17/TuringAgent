@@ -10,6 +10,13 @@ MEMORY_PROFILE_NAME="profile.md"
 MEMORY_INBOX_NAME="inbox"
 MEMORY_BELIEFS_NAME="beliefs"
 
+# The default specialists a fresh install gets, by profile ID. Each is copied
+# from the tracked template of the same name, so the orchestrator's TEAM_ROOT
+# and the checkout describe the same profiles.
+TEAM_SEED_PROFILES=(dev inbox research)
+TEAM_TEMPLATES_PATH="scripts/team-templates"
+TEAM_SEED_RECEIPT_NAME="team-seeded"
+
 generate_secret() {
   openssl rand -hex 32
 }
@@ -308,6 +315,114 @@ provision_memory() {
   fi
 }
 
+write_team_seed_receipt() {
+  if ! (
+    umask 077
+    printf '%s\n' \
+      'init.sh will not seed Dev, Inbox or Research into team/ for the database' \
+      'in this directory, even into an empty team/: it seeded them already, or' \
+      'found profiles there first. Delete this file to have the next init.sh' \
+      'seed an empty team/ again. With this' \
+      'database kept, each default comes back with the on/off setting and grant' \
+      'it had, and one whose grant matches the template is not reviewed again.' \
+      'data/ is the whole database, every conversation included: deleting it' \
+      'is a full reset, not a way to forget grants. To forget one profile,' \
+      'stop the stack and delete its row from agent_profile_settings.' >"$1"
+  ); then
+    printf 'Initialization failed: could not write data/%s.\n' "$TEAM_SEED_RECEIPT_NAME" >&2
+    return 1
+  fi
+}
+
+# Runs after provision_data, which has already refused a symlinked or foreign
+# data/: the receipt is written there.
+provision_team() {
+  local team_path="$PWD/team"
+  local templates_path="$PWD/$TEAM_TEMPLATES_PATH"
+  local receipt_path="$PWD/data/$TEAM_SEED_RECEIPT_NAME"
+  local entry
+  local id
+
+  if ! provision_private_directory "$team_path" team; then
+    return 1
+  fi
+  # Seeding is a first-install act. A rerun never rewrites an edited profile
+  # and never brings back one the user deleted, even after the user has deleted
+  # them all: a deleted specialist's enablement and grant survive in the
+  # database, so the same file reappearing would make it active again without
+  # anyone deciding that. The receipt therefore lives beside the database, and
+  # a team/ that already holds a profile earns one without being seeded. A
+  # profile is what the loader reports: a folder holding AGENT.md, a folder
+  # it cannot look inside, or a symlink it refuses by name. Hidden entries,
+  # stray files and folders with no AGENT.md are not profiles.
+  if [[ -e "$receipt_path" || -L "$receipt_path" ]]; then
+    return 0
+  fi
+  for entry in "$team_path"/*; do
+    if [[ -L "$entry" ]] ||
+      [[ -d "$entry" && (! -x "$entry" || -e "$entry/AGENT.md" || -L "$entry/AGENT.md") ]]; then
+      write_team_seed_receipt "$receipt_path"
+      return
+    fi
+  done
+  # Every template is checked before any is copied, so a broken checkout seeds
+  # nothing rather than a partial team the next run would then leave alone. A
+  # symlink anywhere on the way would copy something that is not the
+  # checkout's into team/ as a specialist.
+  if [[ -L "$templates_path" ]]; then
+    printf 'Initialization failed: %s must not be a symlink.\n' "$TEAM_TEMPLATES_PATH" >&2
+    return 1
+  fi
+  for id in "${TEAM_SEED_PROFILES[@]}"; do
+    if [[ -L "$templates_path/$id" ]]; then
+      printf 'Initialization failed: %s/%s must not be a symlink.\n' "$TEAM_TEMPLATES_PATH" "$id" >&2
+      return 1
+    fi
+    if [[ -L "$templates_path/$id/AGENT.md" || ! -f "$templates_path/$id/AGENT.md" ]]; then
+      printf 'Initialization failed: missing team template %s/%s/AGENT.md.\n' \
+        "$TEAM_TEMPLATES_PATH" "$id" >&2
+      return 1
+    fi
+  done
+  # A copy can still fail partway, or a folder that is not a profile may sit
+  # where a template goes. Every folder this run created is its own and is
+  # removed again, and nothing else is touched: the next run then seeds all
+  # of the team, rather than finding a partial one it would leave alone.
+  local created=()
+  for id in "${TEAM_SEED_PROFILES[@]}"; do
+    if [[ -e "$team_path/$id" || -L "$team_path/$id" ]]; then
+      printf 'Initialization failed: team/%s is in the way: it is not a profile (no AGENT.md); move it aside or add an AGENT.md, then run ./scripts/init.sh again.\n' "$id" >&2
+      remove_seeded_profiles "$team_path" ${created[@]+"${created[@]}"}
+      return 1
+    fi
+    if ! mkdir -m 0700 -- "$team_path/$id"; then
+      printf 'Initialization failed: could not seed team/%s.\n' "$id" >&2
+      remove_seeded_profiles "$team_path" ${created[@]+"${created[@]}"}
+      return 1
+    fi
+    created+=("$id")
+    if ! (
+      umask 077
+      cp -- "$templates_path/$id/AGENT.md" "$team_path/$id/AGENT.md" &&
+        chmod 0600 "$team_path/$id/AGENT.md"
+    ); then
+      printf 'Initialization failed: could not seed team/%s.\n' "$id" >&2
+      remove_seeded_profiles "$team_path" ${created[@]+"${created[@]}"}
+      return 1
+    fi
+  done
+  write_team_seed_receipt "$receipt_path"
+}
+
+remove_seeded_profiles() {
+  local team_path="$1"
+  local id
+  shift
+  for id in "$@"; do
+    rm -rf -- "${team_path:?}/$id"
+  done
+}
+
 # A pinned document is never rewritten here — it is the user's text, and
 # persona.md is the one file whose contents reach a prompt unframed. A symlink
 # is refused rather than secured: unlike a mode, a link is not something
@@ -591,6 +706,7 @@ ensure_var TURING_INTEGRATION_KEY "$(generate_secret)"
 configure_host_identity "$current_uid" "$current_gid"
 configure_memory_display_root
 provision_data
+provision_team
 rm -f .env.bak
 
 client_key="$(grep '^TURING_CLIENT_API_KEY=' .env | cut -d= -f2-)"

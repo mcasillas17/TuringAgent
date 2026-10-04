@@ -446,7 +446,7 @@ func TestTheConformanceSDKNeverEntersAShippedBinary(t *testing.T) {
 // runtimeDataDirectory reports whether path is one of the backend's
 // runtime-writable roots, whose contents are gitignored and never compiled.
 func runtimeDataDirectory(path string) bool {
-	for _, data := range []string{"sandbox", "data", "skills", "memory", "mcp"} {
+	for _, data := range []string{"sandbox", "data", "skills", "memory", "mcp", "team"} {
 		if path == filepath.Join("..", "..", "turing-backend", data) {
 			return true
 		}

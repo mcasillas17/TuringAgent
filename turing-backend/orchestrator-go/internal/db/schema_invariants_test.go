@@ -117,6 +117,11 @@ var currentSchemaTablePolicies = []schemaTablePolicy{
 		rationale: "Capability grants are user-managed consent records with explicit revocation.",
 	},
 	{
+		table:     "agent_profile_settings",
+		kind:      schemaTableIndependent,
+		rationale: "Specialist enablement and declaration grants are user-managed consent records with their own lifecycle.",
+	},
+	{
 		table:     "legacy_skill_export_recovery",
 		kind:      schemaTableIndependent,
 		presence:  schemaTableOptional,

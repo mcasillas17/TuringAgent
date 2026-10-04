@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../models/agent_descriptor.dart';
+import '../models/agent_profile.dart';
 import '../models/approval.dart';
 import '../models/external_agent.dart';
 import '../models/integration.dart';
@@ -260,6 +261,44 @@ abstract class TuringApi implements RemoteEgressApi {
     required String capability,
     required bool granted,
   });
+
+  /// Every `team/<id>/AGENT.md` the backend found, resolved against the tools,
+  /// models and policy it has now.
+  ///
+  /// Defaults to refusing rather than to an empty team: a client that cannot
+  /// ask has not learned that there are no specialists.
+  Future<List<AgentProfile>> listAgentProfiles() {
+    throw const TuringApiException(
+      code: 'team_unsupported',
+      message: 'This client cannot read the team',
+    );
+  }
+
+  /// Enabling does not grant anything; a profile becomes active only once the
+  /// user also grants its current revision.
+  Future<AgentProfile> setAgentProfileEnabled({
+    required String profileId,
+    required bool enabled,
+  }) {
+    throw const TuringApiException(
+      code: 'team_unsupported',
+      message: 'This client cannot change the team',
+    );
+  }
+
+  /// Grants exactly [revision], the one the user reviewed. The backend refuses
+  /// it with `failed_precondition` once an authority field (model, tools,
+  /// skills, memory, requires, max_tool_calls) changed since; instruction and
+  /// display edits keep the revision.
+  Future<AgentProfile> grantAgentProfile({
+    required String profileId,
+    required String revision,
+  }) {
+    throw const TuringApiException(
+      code: 'team_unsupported',
+      message: 'This client cannot change the team',
+    );
+  }
 
   /// The whole vault as the backend sees it: the toggle, the tier rows, the
   /// two pinned documents, accepted beliefs, and everything sitting in the
