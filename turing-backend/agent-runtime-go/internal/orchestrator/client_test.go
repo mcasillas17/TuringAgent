@@ -172,8 +172,9 @@ func TestFetchMessagesRequestsCausalHistoryBeforeCurrentUserMessage(t *testing.T
 	if err != nil {
 		t.Fatalf("FetchMessages returned error: %v", err)
 	}
+	// A role-system row that is not a join's results never reaches a model
+	// (team protocol 1), so the stored "instructions" are omitted.
 	want := []llm.ChatMessage{
-		{MessageID: "msg_system", Role: "system", Content: "instructions"},
 		{MessageID: "msg_older_user", Role: "user", Content: "repeat me"},
 		{MessageID: "msg_older_empty_assistant", Role: "assistant", Content: ""},
 	}

@@ -2879,6 +2879,17 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "tool args are not valid JSON")
 	}
+	// A job that enforces its frozen set is held to it here, before the policy,
+	// from the job the orchestrator persisted rather than anything the worker
+	// reports. That covers safe built-in reads too, so no tool relies on the
+	// runtime's own filter alone.
+	selection, err := s.repo.RunToolSelection(ctx, run.RunID)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "read run tool selection failed")
+	}
+	if !selection.Allows(beaconServerName(beacon) + "/" + beacon.ToolName) {
+		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "tool_not_selected")
+	}
 	if workerID != "" && !s.workerHasTool(workerID, owner, beaconServerName(beacon), beacon.ToolName) {
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "unknown_tool")
 	}
@@ -3553,6 +3564,23 @@ func mapJob(job repository.Job) *turingv1.AgentJob {
 		PinnedPersona:                  toProtoPinnedPersona(job.PinnedPersona),
 		PinnedProfile:                  toProtoPinnedProfile(job.PinnedProfile),
 		MemorySnapshotFingerprint:      job.MemorySnapshotFingerprint,
+		AgentProfile:                   toProtoAgentProfile(job.AgentProfile),
+		EnforceSelectedTools:           job.EnforceSelectedTools,
+		SkipAutomaticRecall:            job.SkipAutomaticRecall,
+	}
+}
+
+func toProtoAgentProfile(snapshot *repository.AgentProfileSnapshot) *turingv1.AgentProfileSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	return &turingv1.AgentProfileSnapshot{
+		ProfileId:    snapshot.ProfileID,
+		Revision:     snapshot.Revision,
+		DisplayName:  snapshot.DisplayName,
+		Emoji:        snapshot.Emoji,
+		Instructions: snapshot.Instructions,
+		MaxToolCalls: int32(snapshot.MaxToolCalls),
 	}
 }
 

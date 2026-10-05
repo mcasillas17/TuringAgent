@@ -516,6 +516,7 @@ func TestRuntimeApprovalResumeProtoContractUsesApprovedAllocations(t *testing.T)
 		"skills": 13, "external_agent": 14, "required_context_tokens": 15, "minimum_worker_max_concurrent_runs": 16,
 		"egress_decision": 17, "selected_tools": 18, "expected_state_version": 19, "assignment_attempt_id": 20,
 		"pinned_persona": 21, "pinned_profile": 22, "memory_snapshot_fingerprint": 23,
+		"agent_profile": 24, "enforce_selected_tools": 25, "skip_automatic_recall": 26,
 	})
 	assertProtoFieldMembers(t, runtime.Messages().ByName("RuntimeRunCompleted"), map[protoreflect.Name]protoreflect.FieldNumber{
 		"run_id": 1, "assistant_message_id": 2, "content": 3, "usage": 4, "token_usage": 5, "expected_state_version": 6,
@@ -1049,6 +1050,19 @@ func TestPinnedMemorySnapshotRuntimeContract(t *testing.T) {
 	assertProtoFieldMembers(t, profile, map[protoreflect.Name]protoreflect.FieldNumber{
 		"profile_id": 1, "body": 2, "content_hash": 3, "withheld": 4,
 	})
+}
+
+// The specialist-job contract a worker honors at team protocol 1.
+func TestSpecialistJobRuntimeContract(t *testing.T) {
+	file := turingv1.File_turing_v1_runtime_proto
+	job := file.Messages().ByName("AgentJob")
+	assertProtoField(t, job, "agent_profile", 24, protoreflect.MessageKind, false, "turing.v1.AgentProfileSnapshot")
+	assertProtoField(t, job, "enforce_selected_tools", 25, protoreflect.BoolKind, false, "")
+	assertProtoField(t, job, "skip_automatic_recall", 26, protoreflect.BoolKind, false, "")
+	assertProtoFieldMembers(t, file.Messages().ByName("AgentProfileSnapshot"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"profile_id": 1, "revision": 2, "display_name": 3, "emoji": 4, "instructions": 5, "max_tool_calls": 6,
+	})
+	assertProtoField(t, file.Messages().ByName("WorkerCapabilities"), "team_protocol_version", 8, protoreflect.Int32Kind, false, "")
 }
 
 func TestMCPRegistryProtoContract(t *testing.T) {

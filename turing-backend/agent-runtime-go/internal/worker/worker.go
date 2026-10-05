@@ -57,6 +57,10 @@ type Options struct {
 	// RemoteEgressDecisionVersion is opt-in: only an executor that validates a
 	// frozen RunEgressDecision before provider I/O may advertise it.
 	RemoteEgressDecisionVersion int32
+	// TeamProtocolVersion is opt-in the same way: only an executor that honors
+	// the specialist-job contract may advertise it (see
+	// WorkerCapabilities.team_protocol_version).
+	TeamProtocolVersion int32
 	// SupportsExternalAgents mirrors the coarse legacy wire field. Exact
 	// routing authorization comes only from ExternalAgentCredentialRefs.
 	SupportsExternalAgents bool
@@ -675,6 +679,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			SupportsExternalAgents:      w.options.SupportsExternalAgents || len(w.options.ExternalAgentCredentialRefs) > 0,
 			ExternalAgentCredentialRefs: cloneCredentialRefs(w.options.ExternalAgentCredentialRefs),
 			RemoteEgressDecisionVersion: w.options.RemoteEgressDecisionVersion,
+			TeamProtocolVersion:         w.options.TeamProtocolVersion,
 		}
 	}
 	if err := w.send(streamCtx, stream, &turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: ready}}, nil); err != nil {
@@ -938,6 +943,7 @@ func (w *Worker) refreshMCPRegistry(
 					SupportsExternalAgents:      w.options.SupportsExternalAgents || len(w.options.ExternalAgentCredentialRefs) > 0,
 					ExternalAgentCredentialRefs: cloneCredentialRefs(w.options.ExternalAgentCredentialRefs),
 					RemoteEgressDecisionVersion: w.options.RemoteEgressDecisionVersion,
+					TeamProtocolVersion:         w.options.TeamProtocolVersion,
 				},
 			},
 		},

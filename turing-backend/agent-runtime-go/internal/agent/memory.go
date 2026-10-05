@@ -88,7 +88,16 @@ func runtimeMemoryProfileApplicable(job *turingv1.AgentJob) bool {
 // A withheld tier contributes nothing. Withheld and empty are different facts —
 // the tier was off or unreadable, versus the user wrote nothing — and neither
 // of them is something to tell a model about.
+//
+// A specialist's job carries its profile, whose body takes the persona's place
+// at system role. Neither the persona nor the user's profile is ever sent with
+// it, even if one is pinned: Turing owns the user's identity and voice, and the
+// specialist is not Turing. A child's job is to carry both withheld (spec
+// §6.3); this is the runtime refusing to rely on that.
 func pinnedMemoryMessages(job *turingv1.AgentJob) ([]llm.ChatMessage, error) {
+	if job.GetAgentProfile() != nil {
+		return agentProfileMessages(job), nil
+	}
 	messages := make([]llm.ChatMessage, 0, 2)
 	if persona := job.GetPinnedPersona(); persona != nil && !persona.GetWithheld() {
 		if body := persona.GetBody(); strings.TrimSpace(body) != "" {
@@ -110,6 +119,16 @@ func pinnedMemoryMessages(job *turingv1.AgentJob) ([]llm.ChatMessage, error) {
 	return messages, nil
 }
 
+// agentProfileMessages is a specialist's instructions as its one system
+// message, or nothing for an ordinary job or a profile without instructions.
+func agentProfileMessages(job *turingv1.AgentJob) []llm.ChatMessage {
+	instructions := job.GetAgentProfile().GetInstructions()
+	if strings.TrimSpace(instructions) == "" {
+		return nil
+	}
+	return []llm.ChatMessage{{Role: "system", Content: instructions}}
+}
+
 // buildMemoryMessagesWithinContext admits the pinned memory only if the whole of
 // it fits alongside what this turn already has to carry.
 //
@@ -117,6 +136,11 @@ func pinnedMemoryMessages(job *turingv1.AgentJob) ([]llm.ChatMessage, error) {
 // complete instruction while being a fragment of it, and a profile without its
 // frame would read as an instruction. So when it does not fit, it is omitted as
 // a unit and the caller says so out loud.
+//
+// A specialist's instructions are the exception: without them the run would be
+// a different agent. They are admitted unconditionally and are mandatory for
+// the budget, which compacts tool results and trims history first and fails the
+// run on the context budget only if they still do not fit.
 func buildMemoryMessagesWithinContext(
 	provider llm.Provider,
 	model string,
@@ -132,6 +156,9 @@ func buildMemoryMessagesWithinContext(
 	}
 	if len(memoryMessages) == 0 {
 		return nil, false, nil
+	}
+	if job.GetAgentProfile() != nil {
+		return memoryMessages, false, nil
 	}
 	// The estimate has to cover the same mandatory set the budget will enforce,
 	// which is the live-required tools plus whatever the skill index made

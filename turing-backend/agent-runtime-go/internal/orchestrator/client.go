@@ -9,6 +9,7 @@ import (
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/memory"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -85,15 +86,13 @@ func (c *Client) FetchMessages(ctx context.Context, sessionID string, beforeMess
 	messages := messagesBeforeAnchor(resp.GetMessages(), beforeMessageID)
 	out := make([]llm.ChatMessage, 0, len(messages))
 	for _, message := range messages {
-		role, ok := chatRole(message.GetRole())
-		if !ok {
-			continue
+		mapped, ok, err := historyMessage(message)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, llm.ChatMessage{
-			MessageID: message.GetMessageId(),
-			Role:      role,
-			Content:   message.GetContent(),
-		})
+		if ok {
+			out = append(out, mapped)
+		}
 	}
 	if len(out) > historyLimit {
 		out = out[len(out)-historyLimit:]
@@ -259,6 +258,29 @@ func (c *Client) withAuth(ctx context.Context) context.Context {
 		return ctx
 	}
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.token)
+}
+
+// historyMessage maps one stored message into model history. Role-system rows
+// are written only by the orchestrator, and they never reach a model as system
+// text: a join's results become a freshly framed user-role message, and any
+// other — a stop notice, or a type this worker does not know — is omitted, so
+// an unrecognized row fails closed. That mapping is part of team protocol 1.
+func historyMessage(message *turingv1.Message) (llm.ChatMessage, bool, error) {
+	if message.GetRole() == turingv1.MessageRole_MESSAGE_ROLE_SYSTEM {
+		if message.GetContentType() != backendegress.DelegationResultsContentType {
+			return llm.ChatMessage{}, false, nil
+		}
+		framed, err := backendegress.FrameRetrievedContent(backendegress.DelegationResultsFraming(), []byte(message.GetContent()))
+		if err != nil {
+			return llm.ChatMessage{}, false, fmt.Errorf("frame delegation results: %w", err)
+		}
+		return llm.ChatMessage{MessageID: message.GetMessageId(), Role: "user", Content: framed}, true, nil
+	}
+	role, ok := chatRole(message.GetRole())
+	if !ok {
+		return llm.ChatMessage{}, false, nil
+	}
+	return llm.ChatMessage{MessageID: message.GetMessageId(), Role: role, Content: message.GetContent()}, true, nil
 }
 
 func chatRole(role turingv1.MessageRole) (string, bool) {

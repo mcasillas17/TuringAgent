@@ -46,6 +46,15 @@ func (s *Server) CallTool(ctx context.Context, input CallInput) (map[string]any,
 		// belongs to the orchestrator's team pseudo-server now.
 		return nil, errors.New("MCP server named `team` is withdrawn; register it under another name")
 	}
+	// A job that enforces its frozen set may use nothing outside it, so the
+	// call ends before an approval is spent or the server is reached.
+	selection, err := s.repo.RunToolSelection(ctx, input.RunID)
+	if err != nil {
+		return nil, errors.New("read run tool selection")
+	}
+	if !selection.Allows(server.Name + "/" + input.ToolName) {
+		return nil, errors.New("MCP tool is not selected for this run")
+	}
 	if server.Tier == repository.MCPServerTierBundled {
 		return nil, errors.New("bundled MCP calls stay on their cooperating server path")
 	}
