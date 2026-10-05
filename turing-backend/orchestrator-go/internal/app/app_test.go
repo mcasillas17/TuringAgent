@@ -691,10 +691,12 @@ func TestAppRegistersPublicAndInternalServices(t *testing.T) {
 	if _, ok := internalServices["turing.v1.TelemetryService"]; ok {
 		t.Fatal("internal server should not expose telemetry to the runtime")
 	}
-	// Enabling and granting a specialist are the user's decisions; the
-	// runtime must never be able to make them.
-	if _, ok := internalServices["turing.v1.TeamService"]; ok {
-		t.Fatal("internal server should not expose team management to the runtime")
+	// TeamService is split like memory: the runtime needs the team tool
+	// facet, while enabling and granting a specialist stay the user's — the
+	// internal facet and the runtime identity both refuse them
+	// (TestTeamServiceFacetAndRuntimeIdentityWiring).
+	if _, ok := internalServices["turing.v1.TeamService"]; !ok {
+		t.Fatal("internal server missing the team tool facet")
 	}
 }
 

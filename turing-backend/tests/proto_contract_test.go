@@ -1065,6 +1065,33 @@ func TestSpecialistJobRuntimeContract(t *testing.T) {
 	assertProtoField(t, file.Messages().ByName("WorkerCapabilities"), "team_protocol_version", 8, protoreflect.Int32Kind, false, "")
 }
 
+// The team tool a run is offered is read over the internal TeamService
+// facet, by a method name the runtime identity grants on its own.
+func TestTeamToolsProtoContract(t *testing.T) {
+	file := turingv1.File_turing_v1_team_proto
+	method := file.Services().ByName("TeamService").Methods().ByName("ListTeamTools")
+	if method == nil {
+		t.Fatal("TeamService.ListTeamTools is missing")
+	}
+	if method.Input().FullName() != "turing.v1.ListTeamToolsRequest" || method.Output().FullName() != "turing.v1.ListTeamToolsResponse" {
+		t.Fatalf("ListTeamTools = %s -> %s", method.Input().FullName(), method.Output().FullName())
+	}
+	if turingv1.TeamService_ListTeamTools_FullMethodName != "/turing.v1.TeamService/ListTeamTools" {
+		t.Fatalf("full method name = %q", turingv1.TeamService_ListTeamTools_FullMethodName)
+	}
+	assertProtoFieldMembers(t, file.Messages().ByName("ListTeamToolsRequest"), map[protoreflect.Name]protoreflect.FieldNumber{"run_id": 1})
+	assertProtoField(t, file.Messages().ByName("ListTeamToolsResponse"), "tools", 1, protoreflect.MessageKind, true, "turing.v1.TeamToolDescriptor")
+	descriptor := file.Messages().ByName("TeamToolDescriptor")
+	assertProtoField(t, descriptor, "tool_name", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, descriptor, "policy", 2, protoreflect.EnumKind, false, "")
+	assertProtoField(t, descriptor, "schema", 3, protoreflect.MessageKind, false, "google.protobuf.Struct")
+	assertProtoField(t, descriptor, "enabled", 4, protoreflect.BoolKind, false, "")
+	assertProtoField(t, descriptor, "description", 5, protoreflect.StringKind, false, "")
+	assertProtoFieldMembers(t, descriptor, map[protoreflect.Name]protoreflect.FieldNumber{
+		"tool_name": 1, "policy": 2, "schema": 3, "enabled": 4, "description": 5,
+	})
+}
+
 func TestMCPRegistryProtoContract(t *testing.T) {
 	file := turingv1.File_turing_v1_mcp_proto
 	server := file.Messages().ByName("McpServerDescriptor")

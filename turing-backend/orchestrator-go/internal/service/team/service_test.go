@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"errors"
 	"google.golang.org/protobuf/proto"
 	"os"
 	"path/filepath"
@@ -18,36 +19,36 @@ import (
 )
 
 type fakeRoutes struct {
-	// models is what live workers advertise for the Ollama provider.
+	// models is what live team-protocol workers advertise for the Ollama
+	// provider.
 	models []string
+	// older is what only workers older than the team protocol advertise.
+	// They are advertised first, so a default chosen without the minimum
+	// lands on one.
+	older []string
 	// tools is, per model, what EgressToolNames returns for that route.
 	tools  map[string][]string
 	routes []repository.RoutingRequirements
-	// defaultCalls counts RoutableDefaultModel lookups.
-	defaultCalls int
+	// validated is every route ValidateRouting was asked about.
+	validated []repository.RoutingRequirements
 }
 
 func (f *fakeRoutes) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.ModelCapability {
 	out := map[turingv1.ModelProvider][]*turingv1.ModelCapability{}
-	for _, model := range f.models {
+	for _, model := range slices.Concat(f.older, f.models) {
 		out[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA] = append(out[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA],
 			&turingv1.ModelCapability{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: model})
 	}
 	return out
 }
 
-func (f *fakeRoutes) RoutableDefaultModel(provider, configured string) string {
-	f.defaultCalls++
-	if provider != "ollama" {
-		return ""
+func (f *fakeRoutes) ValidateRouting(_ context.Context, route repository.RoutingRequirements) error {
+	f.validated = append(f.validated, route)
+	if slices.Contains(f.models, route.Model) ||
+		(route.MinimumTeamProtocolVersion == 0 && slices.Contains(f.older, route.Model)) {
+		return nil
 	}
-	if slices.Contains(f.models, configured) {
-		return configured
-	}
-	if len(f.models) > 0 {
-		return f.models[0]
-	}
-	return ""
+	return errors.New("no connected worker supports the requested route")
 }
 
 func (f *fakeRoutes) EgressToolNames(route repository.RoutingRequirements) []string {
@@ -84,7 +85,7 @@ func newHarness(t *testing.T) *harness {
 	root := t.TempDir()
 	repo.SetTeamStore(teamfiles.New(root))
 	routes := &fakeRoutes{models: []string{defaultModel}, tools: map[string][]string{defaultModel: builtinTools}}
-	h := &harness{repo: repo, root: root, routes: routes, server: New(repo, routes, defaultModel)}
+	h := &harness{repo: repo, root: root, routes: routes, server: New(repo, routes, defaultModel, true)}
 	h.registerTools(t,
 		repository.DiscoveredTool{ServerName: "files", ToolName: "files.read", SchemaJSON: `{}`, Policy: "safe"},
 		repository.DiscoveredTool{ServerName: "files", ToolName: "files.write", SchemaJSON: `{}`, Policy: "approval_required"},
@@ -537,7 +538,7 @@ func TestAnUnservedModelIsUnavailable(t *testing.T) {
 
 	research := h.profile(t, "research")
 	wantState(t, research, turingv1.AgentProfileState_AGENT_PROFILE_STATE_UNAVAILABLE)
-	wantReason(t, research, "llama3.1:8b", "not served by any worker")
+	wantReason(t, research, "llama3.1:8b", "not served by any team-protocol worker")
 	if research.GetResolvedModel() != "" || research.GetModel() != "llama3.1:8b" {
 		t.Fatalf("model = %q, resolved = %q", research.GetModel(), research.GetResolvedModel())
 	}
@@ -586,17 +587,57 @@ func TestNoLiveWorkerMakesEveryProfileUnavailable(t *testing.T) {
 
 	research := h.profile(t, "research")
 	wantState(t, research, turingv1.AgentProfileState_AGENT_PROFILE_STATE_UNAVAILABLE)
-	wantReason(t, research, "no live worker")
+	wantReason(t, research, "no team-protocol worker serves a local model")
 	wantOnlyTheModelReason(t, research)
+}
+
+// A child runs only on a team-protocol worker, so a model only older workers
+// serve is no model for one: the profile is unavailable and off the roster.
+func TestAModelOnlyAnOlderWorkerServesIsNoModelForAChild(t *testing.T) {
+	h := newHarness(t)
+	h.routes.older = []string{"llama3.1:8b"}
+	h.routes.tools["llama3.1:8b"] = builtinTools
+	h.write(t, "research", researchFrontmatter+"model: llama3.1:8b\n")
+	h.activate(t, "research")
+
+	research := h.profile(t, "research")
+	wantState(t, research, turingv1.AgentProfileState_AGENT_PROFILE_STATE_UNAVAILABLE)
+	wantReason(t, research, "llama3.1:8b", "not served by any team-protocol worker")
+	wantOnlyTheModelReason(t, research)
+	if roster, err := h.server.Roster(context.Background()); err != nil || len(roster) != 0 {
+		t.Fatalf("roster = %+v, %v; want empty", roster, err)
+	}
+}
+
+// A profile that names no model runs on the configured default only while a
+// team-protocol worker serves it, and otherwise on a model one does.
+func TestTheDefaultModelIsOneATeamProtocolWorkerServes(t *testing.T) {
+	h := newHarness(t)
+	h.routes.older = []string{defaultModel}
+	h.routes.models = []string{"llama3.2"}
+	h.routes.tools["llama3.2"] = builtinTools
+	h.write(t, "research", researchFrontmatter)
+	h.activate(t, "research")
+
+	research := h.profile(t, "research")
+	wantState(t, research, turingv1.AgentProfileState_AGENT_PROFILE_STATE_ACTIVE)
+	if research.GetResolvedModel() != "llama3.2" {
+		t.Fatalf("resolved model = %q, want the team-protocol worker's llama3.2", research.GetResolvedModel())
+	}
+
+	h.routes.models = nil
+	research = h.profile(t, "research")
+	wantState(t, research, turingv1.AgentProfileState_AGENT_PROFILE_STATE_UNAVAILABLE)
+	wantReason(t, research, "no team-protocol worker serves a local model")
 }
 
 func TestANilRoutesSourceMeansNoWorker(t *testing.T) {
 	h := newHarness(t)
-	h.server = New(h.repo, nil, defaultModel)
+	h.server = New(h.repo, nil, defaultModel, true)
 	h.write(t, "research", researchFrontmatter)
 	h.activate(t, "research")
 
-	wantReason(t, h.profile(t, "research"), "no live worker")
+	wantReason(t, h.profile(t, "research"), "no team-protocol worker")
 }
 
 // A team folder or database the service cannot read is reported as a fixed
@@ -737,20 +778,20 @@ func TestABinaryFrontmatterValueDoesNotBreakTheList(t *testing.T) {
 }
 
 // Every profile in one list is resolved against the same worker snapshot, so
-// the default model is looked up once, not once per profile.
-func TestOneListResolvesTheDefaultModelOnce(t *testing.T) {
+// each model's child route is checked once, not once per profile.
+func TestOneListResolvesTheModelsOnce(t *testing.T) {
 	h := newHarness(t)
 	for _, id := range []string{"dev", "inbox", "research"} {
 		h.write(t, id, "name: P\ndescription: d\ntools: [files.read]\n")
 	}
-	h.routes.defaultCalls = 0
+	h.routes.validated = nil
 
 	response, err := h.server.ListAgentProfiles(context.Background(), &turingv1.ListAgentProfilesRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(response.GetProfiles()) != 3 || h.routes.defaultCalls != 1 {
-		t.Fatalf("profiles = %d, default lookups = %d; want 3 and 1", len(response.GetProfiles()), h.routes.defaultCalls)
+	if len(response.GetProfiles()) != 3 || len(h.routes.validated) != 1 {
+		t.Fatalf("profiles = %d, model checks = %d; want 3 and 1", len(response.GetProfiles()), len(h.routes.validated))
 	}
 	for _, profile := range response.GetProfiles() {
 		if profile.GetResolvedModel() != defaultModel {

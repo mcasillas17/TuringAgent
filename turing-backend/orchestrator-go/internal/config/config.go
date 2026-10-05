@@ -140,6 +140,10 @@ type Config struct {
 	// QueueTimeoutPolicy is what happens when either bound is reached: "fail"
 	// (the default) or "cancel". Both are terminal; pausing is not offered.
 	QueueTimeoutPolicy string
+	// AgentTeamEnabled lets Turing delegate to specialist profiles. Off, no
+	// run is given a roster, so delegation never reaches a model; profile
+	// management stays usable either way.
+	AgentTeamEnabled bool
 }
 
 func Load() (Config, error) {
@@ -255,6 +259,10 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	// capability fallback used. The actual key lives only in the agent
 	// runtime, which is the only process that ever calls OpenAI.
 	openAIEnabled, err := boolValue("OPENAI_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	agentTeamEnabled, err := boolValue("TURING_AGENT_TEAM_ENABLED", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -438,6 +446,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		OpenAIBaseURL:             openAIBaseURL,
 		FilesMCPEnabled:           filesMCPEnabled,
 		OpenAIEnabled:             openAIEnabled,
+		AgentTeamEnabled:          agentTeamEnabled,
 		OpenAIModel:               stringValue("OPENAI_MODEL", "gpt-4o-mini"),
 		OpenAIContextWindowTokens: openAIContextWindowTokens,
 		AgentCredentialNames:      AgentCredentialNames(agentAPIKeys),

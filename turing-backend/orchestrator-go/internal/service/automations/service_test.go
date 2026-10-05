@@ -334,3 +334,16 @@ func TestAutomationsRefuseMemoryToolsOnTheAllowlist(t *testing.T) {
 		t.Fatalf("update error = %v, want FailedPrecondition", err)
 	}
 }
+
+// The team tool gets its own refusal, distinct from memory's and the
+// integrations', so a client can say which rule it hit.
+func TestAutomationsRefuseTeamToolsOnTheAllowlist(t *testing.T) {
+	server, _, ctx := newTestServer(t)
+	_, err := server.CreateAutomation(ctx, &turingv1.CreateAutomationRequest{
+		Name: "Delegate nightly", Prompt: "Summarise the sandbox.", Schedule: everyFiveMinutes(),
+		AllowedTools: []*turingv1.AutomationTool{{ServerName: "team", ToolName: "team.delegate"}},
+	})
+	if status.Code(err) != codes.FailedPrecondition || status.Convert(err).Message() != "team tools are not available to automations" {
+		t.Fatalf("create error = %v, want FailedPrecondition with the team-specific sentence", err)
+	}
+}

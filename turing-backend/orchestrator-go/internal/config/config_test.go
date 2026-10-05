@@ -330,6 +330,34 @@ func TestLoadFromMapParsesOptionalOpenAIEnabled(t *testing.T) {
 	}
 }
 
+// Delegation stays off unless the install turns it on, and a value that is
+// not an explicit boolean fails startup rather than guessing either way.
+func TestLoadFromMapParsesAgentTeamEnabled(t *testing.T) {
+	cfg, err := LoadFromMap(requiredEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentTeamEnabled {
+		t.Fatal("AgentTeamEnabled defaulted to true with TURING_AGENT_TEAM_ENABLED unset")
+	}
+
+	env := requiredEnv()
+	env["TURING_AGENT_TEAM_ENABLED"] = "true"
+	cfg, err = LoadFromMap(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AgentTeamEnabled {
+		t.Fatal("AgentTeamEnabled = false, want true")
+	}
+
+	env = requiredEnv()
+	env["TURING_AGENT_TEAM_ENABLED"] = "yes"
+	if _, err := LoadFromMap(env); err == nil || !strings.Contains(err.Error(), "TURING_AGENT_TEAM_ENABLED") {
+		t.Fatalf("LoadFromMap(yes) error = %v, want one naming TURING_AGENT_TEAM_ENABLED", err)
+	}
+}
+
 // The orchestrator's Config type must never carry OPENAI_API_KEY or
 // MCP_SYSTEM_TOKEN_GENERAL/MCP_FILES_TOKEN_GENERAL: those secrets belong only
 // to the processes that actually call OpenAI or the MCP servers. Setting them

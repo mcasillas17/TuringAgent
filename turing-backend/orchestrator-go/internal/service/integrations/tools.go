@@ -100,19 +100,8 @@ func (s *Server) ListIntegrationTools(ctx context.Context, _ *turingv1.ListInteg
 		}
 		response.Tools = append(response.Tools, &turingv1.IntegrationToolDescriptor{
 			ToolName: tool.name, Description: tool.description + ". Available connections: " + strings.Join(pairs, ", "), Schema: schema,
-			ReadOnly: toolpolicy.ToolReadOnly("integrations", tool.name), Policy: integrationPolicyProto(policy),
+			ReadOnly: toolpolicy.ToolReadOnly("integrations", tool.name), Policy: toolpolicy.ProtoFor(policy),
 		})
 	}
 	return response, nil
-}
-
-func integrationPolicyProto(policy string) turingv1.ToolPolicy {
-	switch policy {
-	case "safe":
-		return turingv1.ToolPolicy_TOOL_POLICY_SAFE
-	case "disabled":
-		return turingv1.ToolPolicy_TOOL_POLICY_DISABLED
-	default:
-		return turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED
-	}
 }

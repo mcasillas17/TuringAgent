@@ -330,6 +330,7 @@ func New(cfg config.Config) (*App, error) {
 			turingv1.IntegrationService_CallIntegrationTool_FullMethodName,
 			turingv1.MemoryService_ListMemoryTools_FullMethodName,
 			turingv1.MemoryService_CallMemoryTool_FullMethodName,
+			turingv1.TeamService_ListTeamTools_FullMethodName,
 		),
 		auth.NewServiceIdentity("approval-consumer", cfg.ApprovalConsumerToken,
 			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
@@ -373,9 +374,15 @@ func New(cfg config.Config) (*App, error) {
 	// Public only, for the same reason: the runtime is handed the destination
 	// on the job it claims and never asks for it.
 	turingv1.RegisterExternalAgentServiceServer(publicServer, agentService)
-	// Public only: enabling and granting a specialist are the user's
-	// decisions, and the runtime has nothing to ask about the team.
-	turingv1.RegisterTeamServiceServer(publicServer, teamsvc.New(repo, runtimeService, cfg.OllamaModel))
+	// Split like memory: enabling and granting a specialist are the user's
+	// decisions, while the team tool a run is offered is the runtime's to
+	// read. Neither facet can do the other's half.
+	teamService := teamsvc.New(repo, runtimeService, cfg.OllamaModel, cfg.AgentTeamEnabled)
+	// Off, no run is offered the team, and a send pays nothing to find out.
+	if cfg.AgentTeamEnabled {
+		chatService.SetTeamRoster(teamService)
+	}
+	turingv1.RegisterTeamServiceServer(publicServer, teamsvc.NewPublicServer(teamService))
 	// The public facet manages connections; the internal facet can only list
 	// and dispatch tools. Neither facet ever returns a sealed credential.
 	turingv1.RegisterIntegrationServiceServer(publicServer, integrationsvc.NewPublicServer(integrationService))
@@ -404,6 +411,7 @@ func New(cfg config.Config) (*App, error) {
 	turingv1.RegisterMcpRegistryServiceServer(internalServer, mcpregistrysvc.NewInternalServer(mcpRegistryService))
 	turingv1.RegisterIntegrationServiceServer(internalServer, integrationsvc.NewInternalServer(integrationService))
 	turingv1.RegisterMemoryServiceServer(internalServer, memorysvc.NewInternalServer(memoryService))
+	turingv1.RegisterTeamServiceServer(internalServer, teamsvc.NewInternalServer(teamService))
 
 	application := &App{
 		PublicServer:          publicServer,

@@ -416,8 +416,11 @@ void main() {
       // only fail at Save.
       expect(find.text('memory.remember'), findsNothing);
       expect(find.text('github.list_issues'), findsNothing);
+      expect(find.text('team.delegate'), findsNothing);
       expect(
-        find.textContaining('integrations and memory tools are not available'),
+        find.textContaining(
+          'integrations, memory tools and team delegation are not available',
+        ),
         findsOneWidget,
       );
     });
@@ -975,6 +978,12 @@ class _FakeApi
       ToolDescriptor(
         serverName: 'integrations',
         toolName: 'github.list_issues',
+        policy: ToolPolicy.approvalRequired,
+      ),
+      // An unattended run never delegates, so the team tool is refused too.
+      ToolDescriptor(
+        serverName: 'team',
+        toolName: 'team.delegate',
         policy: ToolPolicy.approvalRequired,
       ),
     ];

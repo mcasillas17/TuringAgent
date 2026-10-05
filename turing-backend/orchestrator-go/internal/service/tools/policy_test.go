@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 )
 
 func TestGetPolicyUsesStoredPolicyBeforeSeedFallback(t *testing.T) {
@@ -76,4 +78,20 @@ func (s stubPolicyLookup) GetToolPolicy(context.Context, string, string) (string
 
 func (s stubPolicyLookup) ToolRegistryInitialized(context.Context) (bool, error) {
 	return s.initialized, s.err
+}
+
+// A descriptor reports safe and disabled as they are; everything else, an
+// unknown or empty policy included, as needing approval.
+func TestProtoForFailsClosed(t *testing.T) {
+	for policy, want := range map[string]turingv1.ToolPolicy{
+		"safe":              turingv1.ToolPolicy_TOOL_POLICY_SAFE,
+		"disabled":          turingv1.ToolPolicy_TOOL_POLICY_DISABLED,
+		"approval_required": turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
+		"":                  turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
+		"unknown":           turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
+	} {
+		if got := ProtoFor(policy); got != want {
+			t.Fatalf("ProtoFor(%q) = %v, want %v", policy, got, want)
+		}
+	}
 }

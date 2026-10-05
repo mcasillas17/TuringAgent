@@ -199,3 +199,69 @@ final $typed_data.Uint8List grantAgentProfileRequestDescriptor =
     $convert.base64Decode(
         'ChhHcmFudEFnZW50UHJvZmlsZVJlcXVlc3QSHQoKcHJvZmlsZV9pZBgBIAEoCVIJcHJvZmlsZU'
         'lkEhoKCHJldmlzaW9uGAIgASgJUghyZXZpc2lvbg==');
+
+@$core.Deprecated('Use teamToolDescriptorDescriptor instead')
+const TeamToolDescriptor$json = {
+  '1': 'TeamToolDescriptor',
+  '2': [
+    {'1': 'tool_name', '3': 1, '4': 1, '5': 9, '10': 'toolName'},
+    {
+      '1': 'policy',
+      '3': 2,
+      '4': 1,
+      '5': 14,
+      '6': '.turing.v1.ToolPolicy',
+      '10': 'policy'
+    },
+    {
+      '1': 'schema',
+      '3': 3,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Struct',
+      '10': 'schema'
+    },
+    {'1': 'enabled', '3': 4, '4': 1, '5': 8, '10': 'enabled'},
+    {'1': 'description', '3': 5, '4': 1, '5': 9, '10': 'description'},
+  ],
+};
+
+/// Descriptor for `TeamToolDescriptor`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List teamToolDescriptorDescriptor = $convert.base64Decode(
+    'ChJUZWFtVG9vbERlc2NyaXB0b3ISGwoJdG9vbF9uYW1lGAEgASgJUgh0b29sTmFtZRItCgZwb2'
+    'xpY3kYAiABKA4yFS50dXJpbmcudjEuVG9vbFBvbGljeVIGcG9saWN5Ei8KBnNjaGVtYRgDIAEo'
+    'CzIXLmdvb2dsZS5wcm90b2J1Zi5TdHJ1Y3RSBnNjaGVtYRIYCgdlbmFibGVkGAQgASgIUgdlbm'
+    'FibGVkEiAKC2Rlc2NyaXB0aW9uGAUgASgJUgtkZXNjcmlwdGlvbg==');
+
+@$core.Deprecated('Use listTeamToolsRequestDescriptor instead')
+const ListTeamToolsRequest$json = {
+  '1': 'ListTeamToolsRequest',
+  '2': [
+    {'1': 'run_id', '3': 1, '4': 1, '5': 9, '10': 'runId'},
+  ],
+};
+
+/// Descriptor for `ListTeamToolsRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List listTeamToolsRequestDescriptor =
+    $convert.base64Decode(
+        'ChRMaXN0VGVhbVRvb2xzUmVxdWVzdBIVCgZydW5faWQYASABKAlSBXJ1bklk');
+
+@$core.Deprecated('Use listTeamToolsResponseDescriptor instead')
+const ListTeamToolsResponse$json = {
+  '1': 'ListTeamToolsResponse',
+  '2': [
+    {
+      '1': 'tools',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.TeamToolDescriptor',
+      '10': 'tools'
+    },
+  ],
+};
+
+/// Descriptor for `ListTeamToolsResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List listTeamToolsResponseDescriptor = $convert.base64Decode(
+    'ChVMaXN0VGVhbVRvb2xzUmVzcG9uc2USMwoFdG9vbHMYASADKAsyHS50dXJpbmcudjEuVGVhbV'
+    'Rvb2xEZXNjcmlwdG9yUgV0b29scw==');

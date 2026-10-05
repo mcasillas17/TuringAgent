@@ -133,6 +133,11 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 	if withdrawalState.Kind != "chat" {
 		return nil, mapSessionError(ctx, repository.ErrDelegationSessionReadOnly)
 	}
+	// The same team the send will be offered, so the set disclosed here is the
+	// set the send re-derives.
+	if input.TeamRoster, err = s.teamRosterFor(ctx, input); err != nil {
+		return nil, err
+	}
 	resolved, err := s.resolveEgressContext(ctx, input)
 	if err != nil {
 		return nil, err
@@ -538,7 +543,15 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 		}
 	}
 	if source, ok := s.runtime.(egressToolSource); ok {
-		resolved.SelectedTools = source.EgressToolNames(route)
+		offeredTeam := len(input.TeamRoster) > 0
+		if input.EgressDecision != nil {
+			// A consented send picks the set the consent covered. Reading
+			// the team again here could flip the choice and refuse a send
+			// the user agreed to; the repository drops a roster the frozen
+			// set cannot use.
+			offeredTeam = slices.Contains(input.EgressDecision.SelectedTools, repository.TeamDelegateTool)
+		}
+		resolved.SelectedTools = egressSelection(source, route, offeredTeam)
 	} else if source, ok := s.runtime.(liveToolSource); ok {
 		resolved.SelectedTools = source.LiveToolNames()
 	}
@@ -679,6 +692,26 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 	slices.Sort(resolved.DataCategories)
 	resolved.DataCategories = slices.Compact(resolved.DataCategories)
 	return resolved, nil
+}
+
+// egressSelection is the tool set a run's decision freezes: the tools every
+// live worker on the route has. A parent offered the team asks the
+// team-protocol workers first, since one older worker serving the same model
+// would strip team.delegate from the intersection. Only those that can carry
+// the decision count: the set is used only when one is issued, and a worker
+// too old to validate it could otherwise lend the set a tool no executor of
+// the run has. If even they do not name team.delegate, the set is today's,
+// and the parent cannot delegate.
+func egressSelection(source egressToolSource, route repository.RoutingRequirements, offeredTeam bool) []string {
+	if offeredTeam {
+		teamRoute := route
+		teamRoute.MinimumTeamProtocolVersion = 1
+		teamRoute.RemoteEgressDecision = true
+		if tools := source.EgressToolNames(teamRoute); slices.Contains(tools, repository.TeamDelegateTool) {
+			return tools
+		}
+	}
+	return source.EgressToolNames(route)
 }
 
 func egressRequestDigest(input repository.EnqueueUserMessageInput) (string, error) {

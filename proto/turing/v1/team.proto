@@ -4,6 +4,9 @@ package turing.v1;
 
 option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
 
+import "google/protobuf/struct.proto";
+import "turing/v1/common.proto";
+
 // Where a specialist profile stands. Exactly one applies, checked in this
 // order: a file that does not parse, a profile the user has not enabled, one
 // whose current declaration the user has not granted, one that cannot run as
@@ -91,8 +94,32 @@ message GrantAgentProfileRequest {
   string revision = 2;
 }
 
+// The team tool as one run is offered it, rendered from the roster frozen
+// onto that run's job when it was enqueued, never from the live profiles.
+message TeamToolDescriptor {
+  string tool_name = 1;
+  ToolPolicy policy = 2;
+  google.protobuf.Struct schema = 3;
+  bool enabled = 4;
+  string description = 5;
+}
+
+// Internal: the runtime asks for the run it is executing. A run that was not
+// offered the team, or any run while the team is off, gets no tools.
+message ListTeamToolsRequest {
+  string run_id = 1;
+}
+
+message ListTeamToolsResponse {
+  repeated TeamToolDescriptor tools = 1;
+}
+
+// Like MemoryService, one service with two facets split by method name: the
+// public facet manages profiles, and the internal facet, which only the
+// runtime identity reaches, serves the team tool.
 service TeamService {
   rpc ListAgentProfiles(ListAgentProfilesRequest) returns (ListAgentProfilesResponse);
   rpc SetAgentProfileEnabled(SetAgentProfileEnabledRequest) returns (AgentProfile);
   rpc GrantAgentProfile(GrantAgentProfileRequest) returns (AgentProfile);
+  rpc ListTeamTools(ListTeamToolsRequest) returns (ListTeamToolsResponse);
 }

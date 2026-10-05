@@ -27,19 +27,23 @@ const (
 // runtime server satisfies it; a nil Routes means no worker is live.
 type Routes interface {
 	ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.ModelCapability
-	RoutableDefaultModel(provider, configured string) string
+	ValidateRouting(ctx context.Context, route repository.RoutingRequirements) error
 	EgressToolNames(route repository.RoutingRequirements) []string
 }
 
+// Server is the team service behind both facets. It is not itself a
+// TeamServiceServer, so only PublicServer or InternalServer can be registered.
 type Server struct {
-	turingv1.UnimplementedTeamServiceServer
 	repo         *repository.Repository
 	routes       Routes
 	defaultModel string
+	// enabled is TURING_AGENT_TEAM_ENABLED. Off, no run is offered the team;
+	// the profiles themselves stay manageable.
+	enabled bool
 }
 
-func New(repo *repository.Repository, routes Routes, defaultModel string) *Server {
-	return &Server{repo: repo, routes: routes, defaultModel: defaultModel}
+func New(repo *repository.Repository, routes Routes, defaultModel string, enabled bool) *Server {
+	return &Server{repo: repo, routes: routes, defaultModel: defaultModel, enabled: enabled}
 }
 
 func (s *Server) ListAgentProfiles(ctx context.Context, _ *turingv1.ListAgentProfilesRequest) (*turingv1.ListAgentProfilesResponse, error) {
@@ -116,7 +120,7 @@ func statusError(err error) error {
 type resolver struct {
 	routes Routes
 	// defaultModel is the model a profile that names none runs on now, or
-	// empty when no live worker serves a local model.
+	// empty when no team-protocol worker serves a local model.
 	defaultModel string
 	// collision is why delegation is off for every profile, or "".
 	collision  string
@@ -142,12 +146,33 @@ func (s *Server) newResolver(ctx context.Context) (*resolver, error) {
 		routeTools: map[string]map[string]bool{},
 	}
 	if s.routes != nil {
+		// A child runs only on a team-protocol worker, so a model only older
+		// workers serve is no model for one, and the default falls to a
+		// model one of them does serve.
+		var served []string
 		for _, capability := range s.routes.ProviderCapabilities()[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA] {
-			r.models[capability.GetModel()] = true
+			if model := capability.GetModel(); s.routes.ValidateRouting(ctx, childRoute(model)) == nil {
+				r.models[model] = true
+				served = append(served, model)
+			}
 		}
-		r.defaultModel = s.routes.RoutableDefaultModel(childProvider, s.defaultModel)
+		switch {
+		case r.models[s.defaultModel]:
+			r.defaultModel = s.defaultModel
+		case len(served) > 0:
+			r.defaultModel = served[0]
+		}
 	}
 	return r, nil
+}
+
+// childRoute is the route a delegated run on model takes: only workers that
+// honor the specialist-job contract can claim it.
+func childRoute(model string) repository.RoutingRequirements {
+	return repository.RoutingRequirements{
+		AgentID: childAgentID, ModelProvider: childProvider, Model: model,
+		MinimumTeamProtocolVersion: 1,
+	}
 }
 
 // model returns the model a delegated run would use now, or a reason why
@@ -157,16 +182,17 @@ func (r *resolver) model(declared string) (string, string) {
 		if r.models[declared] {
 			return declared, ""
 		}
-		return "", fmt.Sprintf("model `%s` is not served by any worker", declared)
+		return "", fmt.Sprintf("model `%s` is not served by any team-protocol worker", declared)
 	}
 	if r.defaultModel != "" {
 		return r.defaultModel, ""
 	}
-	return "", "no live worker serves a local model"
+	return "", "no team-protocol worker serves a local model"
 }
 
 // toolsOn returns the qualified tools every live worker on the model's route
-// can run.
+// can run. The route is a child's, so only workers that honor the
+// specialist-job contract count: an older one could never claim the child.
 func (r *resolver) toolsOn(model string) map[string]bool {
 	if model == "" || r.routes == nil {
 		return nil
@@ -175,9 +201,7 @@ func (r *resolver) toolsOn(model string) map[string]bool {
 		return tools
 	}
 	tools := map[string]bool{}
-	for _, name := range r.routes.EgressToolNames(repository.RoutingRequirements{
-		AgentID: childAgentID, ModelProvider: childProvider, Model: model,
-	}) {
+	for _, name := range r.routes.EgressToolNames(childRoute(model)) {
 		tools[name] = true
 	}
 	r.routeTools[model] = tools
