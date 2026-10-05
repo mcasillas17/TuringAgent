@@ -162,7 +162,24 @@ type Job struct {
 	// runtime re-derives it from the snapshot it was handed and refuses a
 	// mismatch before it speaks to a provider.
 	MemorySnapshotFingerprint string
-	StartedEvent              Event
+	// AgentProfile, EnforceSelectedTools and SkipAutomaticRecall are the
+	// specialist-job contract (team protocol 1). All three are absent on every
+	// ordinary turn, which decodes to nil and false.
+	AgentProfile         *AgentProfileSnapshot
+	EnforceSelectedTools bool
+	SkipAutomaticRecall  bool
+	StartedEvent         Event
+}
+
+// AgentProfileSnapshot is the specialist a delegated job runs as, frozen when
+// the delegation was created so a later profile edit cannot rewrite it.
+type AgentProfileSnapshot struct {
+	ProfileID    string `json:"profileId"`
+	Revision     string `json:"revision"`
+	DisplayName  string `json:"displayName"`
+	Emoji        string `json:"emoji"`
+	Instructions string `json:"instructions"`
+	MaxToolCalls int    `json:"maxToolCalls"`
 }
 
 // PinnedPersonaSnapshot and PinnedProfileSnapshot are the frozen halves of one
@@ -197,6 +214,9 @@ type queuedJobPayload struct {
 	PinnedPersona              *PinnedPersonaSnapshot `json:"pinnedPersona"`
 	PinnedProfile              *PinnedProfileSnapshot `json:"pinnedProfile"`
 	MemorySnapshotFingerprint  string                 `json:"memorySnapshotFingerprint"`
+	AgentProfile               *AgentProfileSnapshot  `json:"agentProfile"`
+	EnforceSelectedTools       bool                   `json:"enforceSelectedTools"`
+	SkipAutomaticRecall        bool                   `json:"skipAutomaticRecall"`
 }
 
 type Assignment struct {
@@ -1400,6 +1420,9 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 		candidate.PinnedPersona = payload.PinnedPersona
 		candidate.PinnedProfile = payload.PinnedProfile
 		candidate.MemorySnapshotFingerprint = payload.MemorySnapshotFingerprint
+		candidate.AgentProfile = payload.AgentProfile
+		candidate.EnforceSelectedTools = payload.EnforceSelectedTools
+		candidate.SkipAutomaticRecall = payload.SkipAutomaticRecall
 		externalAgentCredentialRef := ""
 		if candidate.ExternalAgent != nil {
 			externalAgentCredentialRef = candidate.ExternalAgent.CredentialRef

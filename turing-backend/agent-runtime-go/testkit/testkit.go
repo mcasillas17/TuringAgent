@@ -37,6 +37,10 @@ type WorkerConfig struct {
 	MCPFilesToken               string
 	DiscoveredTools             []*turingv1.DiscoveredTool
 	RemoteEgressDecisionVersion int32
+	// TeamProtocolVersion is what RunWorkerWithExecutor advertises; a custom
+	// executor opts in only if it honors the contract. RunWorker's own
+	// GeneralAssistant always advertises agent.TeamProtocolVersion.
+	TeamProtocolVersion int32
 }
 
 type WorkerExecutor interface {
@@ -89,16 +93,24 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		},
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
-	runtimeWorker := worker.New(worker.Options{
+	runtimeWorker := worker.New(generalAssistantWorkerOptions(cfg, executor.AdvertisedTools), runtimeClientAdapter{client: client}, executor)
+	return runtimeWorker.Run(ctx)
+}
+
+// generalAssistantWorkerOptions advertises what the production worker does:
+// GeneralAssistant validates egress decisions and honors the specialist-job
+// contract.
+func generalAssistantWorkerOptions(cfg WorkerConfig, discoverTools func(context.Context) ([]*turingv1.DiscoveredTool, error)) worker.Options {
+	return worker.Options{
 		WorkerID:                    cfg.WorkerID,
 		AgentID:                     turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
 		MaxConcurrentRuns:           cfg.MaxConcurrentRuns,
 		DisconnectCleanupTimeout:    cfg.totalToolTimeout(),
 		Models:                      cfg.models(),
 		RemoteEgressDecisionVersion: int32(backendegress.DecisionVersion),
-		DiscoverTools:               executor.AdvertisedTools,
-	}, runtimeClientAdapter{client: client}, executor)
-	return runtimeWorker.Run(ctx)
+		TeamProtocolVersion:         agent.TeamProtocolVersion,
+		DiscoverTools:               discoverTools,
+	}
 }
 
 func (cfg WorkerConfig) contextWindowTokens() int {
@@ -123,7 +135,14 @@ func RunWorkerWithExecutor(ctx context.Context, cfg WorkerConfig, executor Worke
 			return cfg.DiscoveredTools, nil
 		}
 	}
-	runtimeWorker := worker.New(worker.Options{
+	runtimeWorker := worker.New(executorWorkerOptions(cfg, discoverTools), runtimeClientAdapter{client: client}, executor)
+	return runtimeWorker.Run(ctx)
+}
+
+// executorWorkerOptions advertises only the versions a custom executor's
+// config opts into.
+func executorWorkerOptions(cfg WorkerConfig, discoverTools func(context.Context) ([]*turingv1.DiscoveredTool, error)) worker.Options {
+	return worker.Options{
 		WorkerID:                    cfg.WorkerID,
 		AgentID:                     turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
 		MaxConcurrentRuns:           cfg.MaxConcurrentRuns,
@@ -131,8 +150,8 @@ func RunWorkerWithExecutor(ctx context.Context, cfg WorkerConfig, executor Worke
 		Models:                      cfg.models(),
 		DiscoverTools:               discoverTools,
 		RemoteEgressDecisionVersion: cfg.RemoteEgressDecisionVersion,
-	}, runtimeClientAdapter{client: client}, executor)
-	return runtimeWorker.Run(ctx)
+		TeamProtocolVersion:         cfg.TeamProtocolVersion,
+	}
 }
 
 func (cfg WorkerConfig) modelTimeout() time.Duration {

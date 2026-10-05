@@ -118,7 +118,15 @@ func run() error {
 		cfg.OpenAIMaxOutputTokens,
 		http.DefaultClient,
 	))
-	runtimeWorker := worker.New(worker.Options{
+	runtimeWorker := worker.New(workerOptions(cfg, executor.AdvertisedTools), runtimeClientAdapter{client: client}, executor)
+	return serve(ctx, runtimeWorker)
+}
+
+// workerOptions is what this process advertises. Its executor is
+// GeneralAssistant, which validates egress decisions and honors the
+// specialist-job contract, so both versions are claimed.
+func workerOptions(cfg config.Config, discoverTools func(context.Context) ([]*turingv1.DiscoveredTool, error)) worker.Options {
+	return worker.Options{
 		WorkerID:                    cfg.WorkerID,
 		AgentID:                     turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
 		MaxConcurrentRuns:           cfg.MaxConcurrentRuns,
@@ -128,9 +136,9 @@ func run() error {
 		ExternalAgentCredentialRefs: agentCredentialRefs(cfg.AgentAPIKeys),
 		SupportsExternalAgents:      len(cfg.AgentAPIKeys) > 0,
 		RemoteEgressDecisionVersion: int32(backendegress.DecisionVersion),
-		DiscoverTools:               executor.AdvertisedTools,
-	}, runtimeClientAdapter{client: client}, executor)
-	return serve(ctx, runtimeWorker)
+		TeamProtocolVersion:         agent.TeamProtocolVersion,
+		DiscoverTools:               discoverTools,
+	}
 }
 
 func agentCredentialRefs(keys map[string]string) []string {

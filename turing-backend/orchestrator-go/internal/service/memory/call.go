@@ -46,13 +46,15 @@ var (
 //	everything after this is an answer about that run; then whether anybody is
 //	in front of it, because memory is never touched on an unattended run and a
 //	tool the user marked safe would otherwise sail past an allowlist it never
-//	reaches; then whether there is a vault to answer from at all; then the
-//	toggle, so an off switch refuses every tool whatever the registry says;
-//	then the run's frozen egress decision, because a decision-bearing run may
-//	only use the tools its consent named; then the policy; then dispatch
-//	liveness, because everything before it can go stale while an approval
-//	waits — the decision among it, so it is re-checked there; then the
-//	arguments.
+//	reaches; then the run's frozen tool selection, because a job that enforces
+//	its set may use nothing outside it, so the call ends before it can learn
+//	anything about the vault; then whether there is a vault to answer from at
+//	all; then the toggle, so an off switch refuses every tool whatever the
+//	registry says; then the run's frozen egress decision, because a
+//	decision-bearing run may only use the tools its consent named; then the
+//	policy; then dispatch liveness, because everything before it can go stale
+//	while an approval waits — the decision among it, so it is re-checked
+//	there; then the arguments.
 //
 // Nothing here reads a session id, a path or a scope from the caller. The run
 // names itself and everything else is resolved from the orchestrator's own
@@ -69,6 +71,14 @@ func (s *Server) CallMemoryTool(ctx context.Context, req *turingv1.CallMemoryToo
 	run, err := s.authorizeRun(ctx, req.GetRunId())
 	if err != nil {
 		return nil, err
+	}
+
+	selection, err := s.repo.RunToolSelection(ctx, req.GetRunId())
+	if err != nil {
+		return nil, status.Error(codes.Internal, "read run tool selection failed")
+	}
+	if !selection.Allows(ServerName + "/" + tool.name) {
+		return nil, status.Error(codes.PermissionDenied, "memory tool is not selected for this run")
 	}
 
 	if s.vault == nil {

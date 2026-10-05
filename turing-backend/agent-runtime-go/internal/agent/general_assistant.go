@@ -210,8 +210,22 @@ func (a *GeneralAssistant) AdvertisedTools(ctx context.Context) ([]*turingv1.Dis
 	return out, nil
 }
 
+// toolCallLimit is the runtime's per-run cap, lowered — never raised — by a
+// specialist profile's own max_tool_calls.
+func (a *GeneralAssistant) toolCallLimit(job *turingv1.AgentJob) int {
+	limit := a.maxToolCallsPerRun
+	if profileLimit := int(job.GetAgentProfile().GetMaxToolCalls()); profileLimit > 0 && profileLimit < limit {
+		limit = profileLimit
+	}
+	return limit
+}
+
+// toolDefinitionsForJob offers the frozen set to a job that has one — a job
+// carrying an egress decision, or one that enforces its set — and the whole
+// registry otherwise. A frozen empty set offers nothing. Dispatch refuses any
+// call to a tool not offered here before a beacon is posted.
 func toolDefinitionsForJob(registry *ToolRegistry, job *turingv1.AgentJob) ([]llm.ToolDefinition, error) {
-	if job.GetEgressDecision() != nil {
+	if job.GetEgressDecision() != nil || job.GetEnforceSelectedTools() {
 		return registry.DefinitionsFor(job.GetSelectedTools())
 	}
 	return registry.Definitions(), nil
@@ -275,6 +289,10 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 		return emitRunFailed(emit, job, "egress_decision_invalid", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_POLICY, retryClass(false))
 	}
 	recallForContext := a.prepareRecallForRun(ctx, job)
+	// A specialist's instructions and an enforcing job's tools are mandatory,
+	// so the optional skill index is sized against them, never ahead of them.
+	mandatoryMessages := agentProfileMessages(job)
+	mandatoryToolNames := withEnforcedToolNames(job, toolDefinitions, nil)
 	var content strings.Builder
 	var tokens runTokenAccumulator
 	toolCallCount := 0
@@ -296,11 +314,13 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			job.GetUserText(),
 			liveMessages,
 			toolDefinitions,
+			mandatoryMessages,
+			mandatoryToolNames,
 		)
 		if err != nil {
 			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
 		}
-		requiredToolNames := requiredSkillToolNames(skillIndexIncluded)
+		requiredToolNames := withEnforcedToolNames(job, toolDefinitions, requiredSkillToolNames(skillIndexIncluded))
 		memoryMessages, memoryOmitted, err := buildMemoryMessagesWithinContext(
 			provider,
 			job.GetModel(),
@@ -489,7 +509,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				retryClass(false),
 			)
 		}
-		if toolCallCount+len(calls) > a.maxToolCallsPerRun {
+		if toolCallCount+len(calls) > a.toolCallLimit(job) {
 			return emitRunFailed(emit, job, "tool_call_limit_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_GUARD, retryClass(false))
 		}
 		toolCallCount += len(calls)
@@ -519,10 +539,13 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 				job.GetUserText(),
 				prospectiveLive,
 				toolDefinitions,
+				mandatoryMessages,
+				mandatoryToolNames,
 			)
 		if err != nil {
 			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
 		}
+		prospectiveRequiredToolNames := withEnforcedToolNames(job, toolDefinitions, requiredSkillToolNames(prospectiveSkillIndexIncluded))
 		prospectiveMemoryMessages, prospectiveMemoryOmitted, err := buildMemoryMessagesWithinContext(
 			provider,
 			job.GetModel(),
@@ -530,7 +553,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			prospectiveSkillMessages,
 			prospectiveLive,
 			toolDefinitions,
-			requiredSkillToolNames(prospectiveSkillIndexIncluded),
+			prospectiveRequiredToolNames,
 		)
 		if err != nil {
 			return emitRunFailed(emit, job, "context_budget_exceeded", turingv1.FailureOrigin_FAILURE_ORIGIN_CONTEXT_ASSEMBLY, retryClass(false))
@@ -541,7 +564,7 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 			history:           historyMessages,
 			recall:            recallMessage,
 			live:              prospectiveLive,
-			requiredToolNames: requiredSkillToolNames(prospectiveSkillIndexIncluded),
+			requiredToolNames: prospectiveRequiredToolNames,
 			excludedOptionalToolNames: excludedOptionalSkillToolNames(
 				prospectiveSkillIndexIncluded,
 				prospectiveSkillIndexOmitted,
@@ -599,6 +622,8 @@ func buildSkillMessagesWithinContext(
 	userText string,
 	liveMessages []llm.ChatMessage,
 	toolDefinitions []llm.ToolDefinition,
+	mandatoryMessages []llm.ChatMessage,
+	mandatoryToolNames map[string]struct{},
 ) ([]llm.ChatMessage, bool, bool, error) {
 	var required []llm.ChatMessage
 	if legacy, ok := legacySkillsMessage(skills); ok {
@@ -615,15 +640,17 @@ func buildSkillMessagesWithinContext(
 	}
 	liveRequiredToolNames := liveToolNames(liveMessages)
 	fits := func(messages []llm.ChatMessage, indexIncluded bool) (bool, error) {
-		requestMessages := make([]llm.ChatMessage, 0, len(messages)+len(liveMessages))
+		requestMessages := make([]llm.ChatMessage, 0, len(mandatoryMessages)+len(messages)+len(liveMessages))
+		requestMessages = append(requestMessages, mandatoryMessages...)
 		requestMessages = append(requestMessages, messages...)
 		requestMessages = append(requestMessages, liveMessages...)
-		requiredTools := make([]llm.ToolDefinition, 0, len(liveRequiredToolNames)+2)
+		requiredTools := make([]llm.ToolDefinition, 0, len(liveRequiredToolNames)+len(mandatoryToolNames)+2)
 		for _, definition := range toolDefinitions {
 			_, liveRequired := liveRequiredToolNames[definition.Name]
+			_, mandatory := mandatoryToolNames[definition.Name]
 			skillRequired := indexIncluded &&
 				(definition.Name == skillsListToolName || definition.Name == skillViewToolName)
-			if liveRequired || skillRequired {
+			if liveRequired || mandatory || skillRequired {
 				requiredTools = append(requiredTools, definition)
 			}
 		}
@@ -685,6 +712,23 @@ func requiredSkillToolNames(skillIndexIncluded bool) map[string]struct{} {
 		skillsListToolName: {},
 		skillViewToolName:  {},
 	}
+}
+
+// withEnforcedToolNames makes every offered definition of an enforcing job
+// mandatory for the context budget, so its frozen set is offered whole or the
+// run fails on the budget — never quietly narrowed to the tools that fit.
+func withEnforcedToolNames(job *turingv1.AgentJob, definitions []llm.ToolDefinition, required map[string]struct{}) map[string]struct{} {
+	if !job.GetEnforceSelectedTools() || len(definitions) == 0 {
+		return required
+	}
+	merged := make(map[string]struct{}, len(required)+len(definitions))
+	for name := range required {
+		merged[name] = struct{}{}
+	}
+	for _, definition := range definitions {
+		merged[definition.Name] = struct{}{}
+	}
+	return merged
 }
 
 func excludedOptionalSkillToolNames(skillIndexIncluded bool, skillIndexOmitted bool) map[string]struct{} {
@@ -793,11 +837,15 @@ func (a *GeneralAssistant) buildBudgetedContextWithRecall(
 	return final, recallMessage, err
 }
 
+// prepareRecallForRun returns nil for a job that must not recall: an external
+// agent's, and a specialist's or continuation's, which skip it because recall
+// searches every conversation the user has. A specialist never recalls even
+// if its job omits the flag, the same way it never gets the persona.
 func (a *GeneralAssistant) prepareRecallForRun(
 	ctx context.Context,
 	job *turingv1.AgentJob,
 ) func(context.Context, []llm.ChatMessage) (llm.ChatMessage, bool) {
-	if a.recall == nil || job.GetExternalAgent() != nil {
+	if a.recall == nil || job.GetExternalAgent() != nil || job.GetSkipAutomaticRecall() || job.GetAgentProfile() != nil {
 		return nil
 	}
 	return a.recall.PrepareRecall(ctx, job.GetSessionId(), job.GetUserText())
@@ -1273,7 +1321,10 @@ func completeRun(emit func(*turingv1.RuntimeUpdate) error, job *turingv1.AgentJo
 }
 
 func (a *GeneralAssistant) tryDebugTool(ctx context.Context, job *turingv1.AgentJob, trimmed string, emit func(*turingv1.RuntimeUpdate) error) (bool, error) {
-	if a.tools == nil || a.tools.Runner == nil {
+	// The shortcut calls the runner directly, past the offered definitions and
+	// the context budget, so a specialist's or an enforcing job's text is only
+	// ever a message to the model.
+	if a.tools == nil || a.tools.Runner == nil || job.GetAgentProfile() != nil || job.GetEnforceSelectedTools() {
 		return false, nil
 	}
 	var client ToolLister

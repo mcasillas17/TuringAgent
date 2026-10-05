@@ -27,6 +27,15 @@ func (s *Server) CallIntegrationTool(ctx context.Context, req *turingv1.CallInte
 	if err := s.validateIntegrationDecision(ctx, req.GetRunId(), connectionID, req.GetToolName(), "not covered by the run egress decision"); err != nil {
 		return nil, err
 	}
+	// A job that enforces its frozen set may use nothing outside it, even a
+	// tool its egress decision covers.
+	selection, err := s.repo.RunToolSelection(ctx, req.GetRunId())
+	if err != nil {
+		return nil, status.Error(codes.Internal, "read run tool selection failed")
+	}
+	if !selection.Allows("integrations/" + req.GetToolName()) {
+		return nil, status.Error(codes.PermissionDenied, "integration tool is not selected for this run")
+	}
 	policy, found, err := s.repo.PseudoServerToolPolicy(ctx, "integrations", req.GetToolName())
 	if err != nil {
 		return nil, status.Error(codes.Internal, "read integration tool policy failed")

@@ -128,6 +128,15 @@ func (s *Server) CreateApprovalForTool(ctx context.Context, runID string, toolCa
 	if runID == "" || toolCallID == "" || agentID == "" || toolName == "" {
 		return "", status.Error(codes.InvalidArgument, "approval tool context is required")
 	}
+	// Checked before an existing approval is returned too: a run that enforces
+	// its frozen set holds no approval for a tool outside it.
+	allowed, err := s.repo.RunAllowsToolCall(ctx, runID, toolCallID, toolName)
+	if err != nil {
+		return "", status.Error(codes.Internal, "read run tool selection failed")
+	}
+	if !allowed {
+		return "", status.Error(codes.PermissionDenied, "tool is not selected for this run")
+	}
 	if existing, err := s.repo.GetApprovalByToolCall(ctx, runID, toolCallID); err == nil {
 		return existing.ApprovalID, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {

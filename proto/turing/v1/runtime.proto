@@ -92,6 +92,27 @@ message AgentJob {
   // Binds this job to the memory snapshot the egress decision was granted
   // against. Internal to the run protocol; never surfaced to a client.
   string memory_snapshot_fingerprint = 23;
+  // The specialist this job runs as. Its instructions replace the persona at
+  // system role, and its max_tool_calls caps the run's tool calls. Absent on
+  // every job that is not a delegated specialist's.
+  AgentProfileSnapshot agent_profile = 24;
+  // Offer the model exactly selected_tools and dispatch nothing else, even
+  // without an egress decision. An empty set means no tools, never the full
+  // registry. The orchestrator enforces the same set from the job it persisted.
+  bool enforce_selected_tools = 25;
+  // Do not recall other conversations into this run's context.
+  bool skip_automatic_recall = 26;
+}
+
+// A specialist profile as it read when its delegation was created. revision
+// is the grant it ran under; instructions is the profile body.
+message AgentProfileSnapshot {
+  string profile_id = 1;
+  string revision = 2;
+  string display_name = 3;
+  string emoji = 4;
+  string instructions = 5;
+  int32 max_tool_calls = 6;
 }
 
 message PinnedPersonaSnapshot {
@@ -167,7 +188,8 @@ message WorkerCapabilities {
   // I/O. Zero means it predates explicit remote-egress enforcement.
   int32 remote_egress_decision_version = 7;
   // Highest agent-team protocol version this worker honors. Version 1 means
-  // it honors the delegation fields of AgentJob, frames a role-system
+  // it honors AgentJob's agent_profile, enforce_selected_tools and
+  // skip_automatic_recall (fields 24 to 26), frames a role-system
   // delegation_results message as a user-role message, and omits every other
   // role-system message from model history. Zero means it predates the team;
   // the orchestrator never lets such a worker claim a job whose payload

@@ -122,10 +122,54 @@ and advisory notice failure at the delivery fence is logged without blocking red
 ## Team protocol version
 
 `WorkerCapabilities.team_protocol_version` is the highest agent-team protocol
-a worker honors. Version 1 means it honors the delegation fields of `AgentJob`,
-frames a role-system `delegation_results` message as a user-role message, and
-omits every other role-system message from model history. Zero is a worker
-that predates the team. Today's runtime advertises 0.
+a worker honors. Zero is a worker that predates the team. Today's runtime
+advertises 1 (`agent.TeamProtocolVersion`), opt-in through the worker's
+`TeamProtocolVersion` option the same way `RemoteEgressDecisionVersion` is.
+Version 1 is the specialist-job contract:
+
+- `AgentJob.agent_profile` (field 24) is the specialist the job runs as. Its
+  `instructions` are the system-role instruction **in place of** the persona.
+  Neither the persona nor the user's pinned profile is ever sent with it, even
+  when pinned: a child's job is to carry both withheld (spec §6.3), and the
+  runtime drops them regardless. Unlike pinned memory the instructions are
+  never omitted when the context is tight: they are mandatory for the context
+  budget, which sizes the optional skill index around them (cutting it, with
+  the usual disclosure), compacts tool results and trims history first, and a
+  specialist whose instructions still do not fit fails with
+  `context_budget_exceeded`. Its `max_tool_calls`, when set, lowers the run's
+  tool-call limit below `TURING_MAX_TOOL_CALLS_PER_RUN` and never raises it.
+- `AgentJob.enforce_selected_tools` (field 25) makes `selected_tools` binding
+  without an egress decision. The model is offered exactly those tools; an
+  empty set is no tools, never the full registry. The whole set is mandatory
+  for the context budget the same way, so it is offered whole or the run fails
+  with `context_budget_exceeded`, never quietly narrowed; a set naming a tool
+  the worker cannot offer fails with `egress_decision_invalid` before any
+  request, as a frozen egress set does. A call to anything else,
+  built-in reads included, is refused before a beacon is posted, and the
+  `/tool` debug shortcut is not available to a specialist or enforcing job.
+- `AgentJob.skip_automatic_recall` (field 26) skips cross-conversation recall.
+  A job with an `agent_profile` never recalls either way, so a specialist
+  cannot be shown the user's other conversations by a producer that forgot
+  the flag.
+- History replay maps role-system rows, which only the orchestrator writes: a
+  `delegation_results` message becomes a user-role message framed afresh as
+  `DELEGATION_RESULTS` data (`egress.DelegationResultsFraming`), under its own
+  64 KiB frame ceiling rather than the 16 KiB retrieval default, and cut
+  visibly on a UTF-8 boundary past it. Any other role-system message is
+  omitted, so an unrecognized one fails closed rather than reaching a model as
+  system text.
+
+The orchestrator does not rely on the worker for enforcement. It persists the
+fields in the job payload (`agentProfile`, `enforceSelectedTools`,
+`skipAutomaticRecall`, beside `selectedTools`; all absent on an ordinary turn)
+and reads the selection back from that payload by run, never from a beacon or a
+request (`repository.RunToolSelection`, served by the `idx_jobs_run` index
+from migration 0025). For a job that enforces its set, the
+BEFORE-beacon handler denies any tool outside it with reason
+`tool_not_selected`, ahead of the worker-capability check and the policy, so a
+safe built-in read is covered too. The memory, integration and registered-MCP
+call paths refuse an out-of-set tool before any approval is spent or anything
+is dispatched, and no approval is created for one.
 
 A job that needs a team-protocol worker carries `minimumTeamProtocolVersion` in
 its payload; the key is absent, and reads as 0, on every other job. The minimum
@@ -144,9 +188,9 @@ is enforced at the claim, not only at enqueue:
 - `ListPendingRoutingWorkPage` copies the minimum, so TUR-010 reports such a
   job as unroutable rather than routable.
 
-No job sets the key yet; the [orchestrator and team
+No job sets the key or the contract fields yet; the [orchestrator and team
 design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
-(sections 6.4 and 7.3) names the jobs that will.
+(sections 6.3, 6.4, 7.3 and 7.5) names the jobs that will.
 
 ## Run ownership and version fencing
 

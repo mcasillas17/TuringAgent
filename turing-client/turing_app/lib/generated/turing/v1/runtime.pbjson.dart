@@ -205,6 +205,28 @@ const AgentJob$json = {
       '5': 9,
       '10': 'memorySnapshotFingerprint'
     },
+    {
+      '1': 'agent_profile',
+      '3': 24,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.AgentProfileSnapshot',
+      '10': 'agentProfile'
+    },
+    {
+      '1': 'enforce_selected_tools',
+      '3': 25,
+      '4': 1,
+      '5': 8,
+      '10': 'enforceSelectedTools'
+    },
+    {
+      '1': 'skip_automatic_recall',
+      '3': 26,
+      '4': 1,
+      '5': 8,
+      '10': 'skipAutomaticRecall'
+    },
   ],
 };
 
@@ -230,7 +252,30 @@ final $typed_data.Uint8List agentJobDescriptor = $convert.base64Decode(
     '5lZFBlcnNvbmFTbmFwc2hvdFINcGlubmVkUGVyc29uYRJHCg5waW5uZWRfcHJvZmlsZRgWIAEo'
     'CzIgLnR1cmluZy52MS5QaW5uZWRQcm9maWxlU25hcHNob3RSDXBpbm5lZFByb2ZpbGUSPgobbW'
     'Vtb3J5X3NuYXBzaG90X2ZpbmdlcnByaW50GBcgASgJUhltZW1vcnlTbmFwc2hvdEZpbmdlcnBy'
-    'aW50');
+    'aW50EkQKDWFnZW50X3Byb2ZpbGUYGCABKAsyHy50dXJpbmcudjEuQWdlbnRQcm9maWxlU25hcH'
+    'Nob3RSDGFnZW50UHJvZmlsZRI0ChZlbmZvcmNlX3NlbGVjdGVkX3Rvb2xzGBkgASgIUhRlbmZv'
+    'cmNlU2VsZWN0ZWRUb29scxIyChVza2lwX2F1dG9tYXRpY19yZWNhbGwYGiABKAhSE3NraXBBdX'
+    'RvbWF0aWNSZWNhbGw=');
+
+@$core.Deprecated('Use agentProfileSnapshotDescriptor instead')
+const AgentProfileSnapshot$json = {
+  '1': 'AgentProfileSnapshot',
+  '2': [
+    {'1': 'profile_id', '3': 1, '4': 1, '5': 9, '10': 'profileId'},
+    {'1': 'revision', '3': 2, '4': 1, '5': 9, '10': 'revision'},
+    {'1': 'display_name', '3': 3, '4': 1, '5': 9, '10': 'displayName'},
+    {'1': 'emoji', '3': 4, '4': 1, '5': 9, '10': 'emoji'},
+    {'1': 'instructions', '3': 5, '4': 1, '5': 9, '10': 'instructions'},
+    {'1': 'max_tool_calls', '3': 6, '4': 1, '5': 5, '10': 'maxToolCalls'},
+  ],
+};
+
+/// Descriptor for `AgentProfileSnapshot`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List agentProfileSnapshotDescriptor = $convert.base64Decode(
+    'ChRBZ2VudFByb2ZpbGVTbmFwc2hvdBIdCgpwcm9maWxlX2lkGAEgASgJUglwcm9maWxlSWQSGg'
+    'oIcmV2aXNpb24YAiABKAlSCHJldmlzaW9uEiEKDGRpc3BsYXlfbmFtZRgDIAEoCVILZGlzcGxh'
+    'eU5hbWUSFAoFZW1vamkYBCABKAlSBWVtb2ppEiIKDGluc3RydWN0aW9ucxgFIAEoCVIMaW5zdH'
+    'J1Y3Rpb25zEiQKDm1heF90b29sX2NhbGxzGAYgASgFUgxtYXhUb29sQ2FsbHM=');
 
 @$core.Deprecated('Use pinnedPersonaSnapshotDescriptor instead')
 const PinnedPersonaSnapshot$json = {

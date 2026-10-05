@@ -50,6 +50,9 @@ class AgentJob extends $pb.GeneratedMessage {
     PinnedPersonaSnapshot? pinnedPersona,
     PinnedProfileSnapshot? pinnedProfile,
     $core.String? memorySnapshotFingerprint,
+    AgentProfileSnapshot? agentProfile,
+    $core.bool? enforceSelectedTools,
+    $core.bool? skipAutomaticRecall,
   }) {
     final result = AgentJob._();
     if (jobId != null) result.jobId = jobId;
@@ -81,6 +84,11 @@ class AgentJob extends $pb.GeneratedMessage {
     if (pinnedProfile != null) result.pinnedProfile = pinnedProfile;
     if (memorySnapshotFingerprint != null)
       result.memorySnapshotFingerprint = memorySnapshotFingerprint;
+    if (agentProfile != null) result.agentProfile = agentProfile;
+    if (enforceSelectedTools != null)
+      result.enforceSelectedTools = enforceSelectedTools;
+    if (skipAutomaticRecall != null)
+      result.skipAutomaticRecall = skipAutomaticRecall;
     return result;
   }
 
@@ -127,6 +135,10 @@ class AgentJob extends $pb.GeneratedMessage {
     ..aOM<PinnedProfileSnapshot>(22, _omitFieldNames ? '' : 'pinnedProfile',
         subBuilder: PinnedProfileSnapshot.$_createMessage)
     ..aOS(23, _omitFieldNames ? '' : 'memorySnapshotFingerprint')
+    ..aOM<AgentProfileSnapshot>(24, _omitFieldNames ? '' : 'agentProfile',
+        subBuilder: AgentProfileSnapshot.$_createMessage)
+    ..aOB(25, _omitFieldNames ? '' : 'enforceSelectedTools')
+    ..aOB(26, _omitFieldNames ? '' : 'skipAutomaticRecall')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -365,6 +377,162 @@ class AgentJob extends $pb.GeneratedMessage {
   $core.bool hasMemorySnapshotFingerprint() => $_has(22);
   @$pb.TagNumber(23)
   void clearMemorySnapshotFingerprint() => $_clearField(23);
+
+  /// The specialist this job runs as. Its instructions replace the persona at
+  /// system role, and its max_tool_calls caps the run's tool calls. Absent on
+  /// every job that is not a delegated specialist's.
+  @$pb.TagNumber(24)
+  AgentProfileSnapshot get agentProfile => $_getN(23);
+  @$pb.TagNumber(24)
+  set agentProfile(AgentProfileSnapshot value) => $_setField(24, value);
+  @$pb.TagNumber(24)
+  $core.bool hasAgentProfile() => $_has(23);
+  @$pb.TagNumber(24)
+  void clearAgentProfile() => $_clearField(24);
+  @$pb.TagNumber(24)
+  AgentProfileSnapshot ensureAgentProfile() => $_ensure(23);
+
+  /// Offer the model exactly selected_tools and dispatch nothing else, even
+  /// without an egress decision. An empty set means no tools, never the full
+  /// registry. The orchestrator enforces the same set from the job it persisted.
+  @$pb.TagNumber(25)
+  $core.bool get enforceSelectedTools => $_getBF(24);
+  @$pb.TagNumber(25)
+  set enforceSelectedTools($core.bool value) => $_setBool(24, value);
+  @$pb.TagNumber(25)
+  $core.bool hasEnforceSelectedTools() => $_has(24);
+  @$pb.TagNumber(25)
+  void clearEnforceSelectedTools() => $_clearField(25);
+
+  /// Do not recall other conversations into this run's context.
+  @$pb.TagNumber(26)
+  $core.bool get skipAutomaticRecall => $_getBF(25);
+  @$pb.TagNumber(26)
+  set skipAutomaticRecall($core.bool value) => $_setBool(25, value);
+  @$pb.TagNumber(26)
+  $core.bool hasSkipAutomaticRecall() => $_has(25);
+  @$pb.TagNumber(26)
+  void clearSkipAutomaticRecall() => $_clearField(26);
+}
+
+/// A specialist profile as it read when its delegation was created. revision
+/// is the grant it ran under; instructions is the profile body.
+class AgentProfileSnapshot extends $pb.GeneratedMessage {
+  factory AgentProfileSnapshot({
+    $core.String? profileId,
+    $core.String? revision,
+    $core.String? displayName,
+    $core.String? emoji,
+    $core.String? instructions,
+    $core.int? maxToolCalls,
+  }) {
+    final result = AgentProfileSnapshot._();
+    if (profileId != null) result.profileId = profileId;
+    if (revision != null) result.revision = revision;
+    if (displayName != null) result.displayName = displayName;
+    if (emoji != null) result.emoji = emoji;
+    if (instructions != null) result.instructions = instructions;
+    if (maxToolCalls != null) result.maxToolCalls = maxToolCalls;
+    return result;
+  }
+
+  AgentProfileSnapshot._();
+
+  factory AgentProfileSnapshot.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      AgentProfileSnapshot()..mergeFromBuffer(data, registry);
+  factory AgentProfileSnapshot.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      AgentProfileSnapshot()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'AgentProfileSnapshot',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: AgentProfileSnapshot.$_createMessage)
+    ..aOS(1, _omitFieldNames ? '' : 'profileId')
+    ..aOS(2, _omitFieldNames ? '' : 'revision')
+    ..aOS(3, _omitFieldNames ? '' : 'displayName')
+    ..aOS(4, _omitFieldNames ? '' : 'emoji')
+    ..aOS(5, _omitFieldNames ? '' : 'instructions')
+    ..aI(6, _omitFieldNames ? '' : 'maxToolCalls')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  AgentProfileSnapshot clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  AgentProfileSnapshot copyWith(void Function(AgentProfileSnapshot) updates) =>
+      super.copyWith((message) => updates(message as AgentProfileSnapshot))
+          as AgentProfileSnapshot;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use AgentProfileSnapshot() / AgentProfileSnapshot.new instead')
+  static AgentProfileSnapshot create() => AgentProfileSnapshot._();
+  static $pb.GeneratedMessage $_createMessage() => AgentProfileSnapshot._();
+  @$core.override
+  AgentProfileSnapshot createEmptyInstance() => AgentProfileSnapshot._();
+  @$core.pragma('dart2js:noInline')
+  static AgentProfileSnapshot getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<AgentProfileSnapshot>(
+          AgentProfileSnapshot.$_createMessage);
+  static AgentProfileSnapshot? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get profileId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set profileId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasProfileId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearProfileId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get revision => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set revision($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRevision() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRevision() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get displayName => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set displayName($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasDisplayName() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearDisplayName() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get emoji => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set emoji($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasEmoji() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearEmoji() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get instructions => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set instructions($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasInstructions() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearInstructions() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.int get maxToolCalls => $_getIZ(5);
+  @$pb.TagNumber(6)
+  set maxToolCalls($core.int value) => $_setSignedInt32(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasMaxToolCalls() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearMaxToolCalls() => $_clearField(6);
 }
 
 class PinnedPersonaSnapshot extends $pb.GeneratedMessage {
@@ -1024,7 +1192,8 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
   void clearRemoteEgressDecisionVersion() => $_clearField(7);
 
   /// Highest agent-team protocol version this worker honors. Version 1 means
-  /// it honors the delegation fields of AgentJob, frames a role-system
+  /// it honors AgentJob's agent_profile, enforce_selected_tools and
+  /// skip_automatic_recall (fields 24 to 26), frames a role-system
   /// delegation_results message as a user-role message, and omits every other
   /// role-system message from model history. Zero means it predates the team;
   /// the orchestrator never lets such a worker claim a job whose payload
