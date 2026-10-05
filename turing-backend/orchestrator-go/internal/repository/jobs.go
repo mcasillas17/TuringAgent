@@ -69,6 +69,9 @@ type RoutingRequirements struct {
 	// Ollama run calling a remote tool sends the user's tool arguments off
 	// the machine exactly as a remote model sends their message.
 	RemoteEgressDecision bool
+	// MinimumTeamProtocolVersion is the lowest agent-team protocol a worker
+	// must speak to run the job. Zero is every worker.
+	MinimumTeamProtocolVersion int
 }
 
 type RoutingModelCapability struct {
@@ -83,6 +86,7 @@ type WorkerRoutingCapabilities struct {
 	MaxConcurrentRuns           int
 	ExternalAgentCredentialRefs []string
 	RemoteEgressDecisionVersion int
+	TeamProtocolVersion         int
 }
 
 type PendingRoutingWork struct {
@@ -135,6 +139,7 @@ type Job struct {
 	RequestedTools                 []string
 	RequiredContextTokens          int
 	MinimumWorkerMaxConcurrentRuns int
+	MinimumTeamProtocolVersion     int
 	Attempt                        int
 	AssignmentAttemptID            string
 	// ExpectedStateVersion is the run's version at the moment this claim
@@ -179,17 +184,19 @@ type PinnedProfileSnapshot struct {
 }
 
 type queuedJobPayload struct {
-	UserText                       string                 `json:"userText"`
-	RequestedTools                 []string               `json:"requestedTools"`
-	RequiredContextTokens          int                    `json:"requiredContextTokens"`
-	MinimumWorkerMaxConcurrentRuns int                    `json:"minimumWorkerMaxConcurrentRuns"`
-	Skills                         []SkillSnapshot        `json:"skills"`
-	ExternalAgent                  *ExternalAgentTarget   `json:"externalAgent"`
-	EgressDecision                 *RunEgressDecision     `json:"egressDecision"`
-	SelectedTools                  []string               `json:"selectedTools"`
-	PinnedPersona                  *PinnedPersonaSnapshot `json:"pinnedPersona"`
-	PinnedProfile                  *PinnedProfileSnapshot `json:"pinnedProfile"`
-	MemorySnapshotFingerprint      string                 `json:"memorySnapshotFingerprint"`
+	UserText                       string   `json:"userText"`
+	RequestedTools                 []string `json:"requestedTools"`
+	RequiredContextTokens          int      `json:"requiredContextTokens"`
+	MinimumWorkerMaxConcurrentRuns int      `json:"minimumWorkerMaxConcurrentRuns"`
+	// Absent on every job that needs no team-protocol worker, which reads as 0.
+	MinimumTeamProtocolVersion int                    `json:"minimumTeamProtocolVersion,omitempty"`
+	Skills                     []SkillSnapshot        `json:"skills"`
+	ExternalAgent              *ExternalAgentTarget   `json:"externalAgent"`
+	EgressDecision             *RunEgressDecision     `json:"egressDecision"`
+	SelectedTools              []string               `json:"selectedTools"`
+	PinnedPersona              *PinnedPersonaSnapshot `json:"pinnedPersona"`
+	PinnedProfile              *PinnedProfileSnapshot `json:"pinnedProfile"`
+	MemorySnapshotFingerprint  string                 `json:"memorySnapshotFingerprint"`
 }
 
 type Assignment struct {
@@ -781,7 +788,7 @@ func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMe
 	}
 	defer func() { _ = tx.Rollback() }()
 	input = normalizeEnqueueUserMessageInput(input)
-	if err := requireActiveSessionTx(ctx, tx, input.SessionID); err != nil {
+	if err := requireChatSessionTx(ctx, tx, input.SessionID); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	fingerprint := ""
@@ -897,7 +904,7 @@ func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMes
 // lose a run or fire the same one twice.
 func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
 	input = normalizeEnqueueUserMessageInput(input)
-	if err := requireActiveSessionTx(ctx, tx, input.SessionID); err != nil {
+	if err := requireChatSessionTx(ctx, tx, input.SessionID); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	// Resolve the effective destination before writing anything. A conversation
@@ -1377,6 +1384,7 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 		candidate.RequestedTools = payload.RequestedTools
 		candidate.RequiredContextTokens = payload.RequiredContextTokens
 		candidate.MinimumWorkerMaxConcurrentRuns = payload.MinimumWorkerMaxConcurrentRuns
+		candidate.MinimumTeamProtocolVersion = payload.MinimumTeamProtocolVersion
 		// Absent for jobs enqueued before skills existed, which decodes to nil —
 		// the same as a conversation with none attached.
 		candidate.Skills = payload.Skills
@@ -1407,6 +1415,7 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 			ExternalAgent:                  candidate.ExternalAgent != nil,
 			ExternalAgentCredentialRef:     externalAgentCredentialRef,
 			RemoteEgressDecision:           candidate.EgressDecision != nil,
+			MinimumTeamProtocolVersion:     candidate.MinimumTeamProtocolVersion,
 		}) {
 			continue
 		}
@@ -1525,8 +1534,12 @@ func claimRoutingFilterSQL(capabilities *WorkerRoutingCapabilities) (string, []a
 		AND MAX(
 			COALESCE(CAST(json_extract(j.payload_json, '$.minimumWorkerMaxConcurrentRuns') AS INTEGER), 0),
 			1
-		) <= ?`
-	args = append(args, capabilities.MaxConcurrentRuns)
+		) <= ?
+		AND COALESCE(CAST(json_extract(j.payload_json, '$.minimumTeamProtocolVersion') AS INTEGER), 0) <= ?`
+	// The team version is gated here rather than by the tool set: a child or
+	// continuation can hold no tools at all, and an empty set matches every
+	// model-compatible worker.
+	args = append(args, capabilities.MaxConcurrentRuns, capabilities.TeamProtocolVersion)
 	if !egressAware {
 		// Every job carrying a decision, not only the ones whose *model* is
 		// remote. A local model calling a remote MCP server or an integration
@@ -1634,6 +1647,7 @@ func (r *Repository) ListPendingRoutingWorkPage(
 			item.Requirements.ExternalAgentCredentialRef = payload.ExternalAgent.CredentialRef
 		}
 		item.Requirements.RemoteEgressDecision = payload.EgressDecision != nil
+		item.Requirements.MinimumTeamProtocolVersion = payload.MinimumTeamProtocolVersion
 		work = append(work, item)
 	}
 	if err := rows.Err(); err != nil {

@@ -21,6 +21,12 @@ var ErrSessionNotFound = errors.New("session not found")
 // lookup or retry the operation against the same logical session.
 var ErrSessionDeleting = errors.New("session deletion is in progress")
 
+// ErrDelegationSessionReadOnly refuses a public mutation of a hidden child
+// session. A child changes only through its delegation, its own run, and its
+// parent's deletion lifecycle; the client may read it, cancel its run and
+// decide its approvals.
+var ErrDelegationSessionReadOnly = errors.New("delegation sessions are read-only")
+
 // SessionDeletionReceipt is the content-free progress record for one
 // idempotent session withdrawal. It intentionally contains no session title,
 // message, path, tool arguments, result, or external error text.
@@ -148,6 +154,18 @@ func (r *Repository) BeginSessionDeletion(ctx context.Context, sessionID string)
 		return SessionDeletionReceipt{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	// The public delete refuses a child session before anything else,
+	// including a retry of an existing receipt: a child is deleted only by its
+	// parent's deletion lifecycle.
+	var kind string
+	err = tx.QueryRowContext(ctx, `SELECT kind FROM sessions WHERE id = ?`, sessionID).Scan(&kind)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return SessionDeletionReceipt{}, err
+	}
+	if err == nil && kind != "chat" {
+		return SessionDeletionReceipt{}, ErrDelegationSessionReadOnly
+	}
 
 	var receipt SessionDeletionReceipt
 	err = tx.QueryRowContext(ctx, `

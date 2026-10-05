@@ -166,6 +166,13 @@ message WorkerCapabilities {
   // Highest run-egress decision version this worker enforces before provider
   // I/O. Zero means it predates explicit remote-egress enforcement.
   int32 remote_egress_decision_version = 7;
+  // Highest agent-team protocol version this worker honors. Version 1 means
+  // it honors the delegation fields of AgentJob, frames a role-system
+  // delegation_results message as a user-role message, and omits every other
+  // role-system message from model history. Zero means it predates the team;
+  // the orchestrator never lets such a worker claim a job whose payload
+  // requires a higher version.
+  int32 team_protocol_version = 8;
 }
 
 enum ToolDiscoveryStatus {

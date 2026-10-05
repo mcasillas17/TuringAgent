@@ -496,9 +496,10 @@ func TestARequiresPatternOutsideTheDeclaredToolsIsUnavailable(t *testing.T) {
 	wantReason(t, clock, "system.time", "not in the profile's tools")
 }
 
-// Spec 6.3 subtracts team.* tools, not a server's name: before PR 2 claims
-// the name, a local server called team is an ordinary server.
-func TestAToolOnAServerNamedTeamIsAnOrdinaryTool(t *testing.T) {
+// A server named exactly team would have its rows captured by the team
+// pseudo-tool, so it turns delegation off rather than serving as an ordinary
+// server: even a profile that needs only its tool is unavailable.
+func TestAServerNamedTeamTurnsDelegationOffInsteadOfServing(t *testing.T) {
 	h := newHarness(t)
 	h.importServer(t, repository.ImportedMCPServer{
 		Name: "team", URL: "http://team:9000/mcp", Tier: repository.MCPServerTierLocalContainer,
@@ -508,9 +509,9 @@ func TestAToolOnAServerNamedTeamIsAnOrdinaryTool(t *testing.T) {
 	h.activate(t, "dev")
 
 	dev := h.profile(t, "dev")
-	wantState(t, dev, turingv1.AgentProfileState_AGENT_PROFILE_STATE_ACTIVE)
-	if !slices.Contains(dev.GetResolvedTools(), "team/lookup") {
-		t.Fatalf("resolved = %q (excluded %+v)", dev.GetResolvedTools(), dev.GetExcludedTools())
+	wantState(t, dev, turingv1.AgentProfileState_AGENT_PROFILE_STATE_UNAVAILABLE)
+	if reasons := dev.GetUnavailableReasons(); len(reasons) == 0 || reasons[0] != repository.TeamServerCollisionReason {
+		t.Fatalf("reasons = %q, want the team-server collision first", reasons)
 	}
 }
 
@@ -756,4 +757,58 @@ func TestOneListResolvesTheDefaultModelOnce(t *testing.T) {
 			t.Fatalf("%s resolved %q, want %q", profile.GetProfileId(), profile.GetResolvedModel(), defaultModel)
 		}
 	}
+}
+
+// A user server named team in any case, or a third-party team.* tool, turns
+// delegation off. The usual state precedence still holds, so a profile that
+// is off, ungranted or unreadable keeps that state, but every profile that
+// can be resolved lists the collision first, and the one that would be
+// active is unavailable. Each returns to its own state once the name is free.
+func TestEveryProfileExplainsATeamNameCollision(t *testing.T) {
+	h := newHarness(t)
+	h.write(t, "broken", "name: Broken\n")
+	h.write(t, "off", researchFrontmatter)
+	h.write(t, "ungranted", researchFrontmatter)
+	h.write(t, "research", researchFrontmatter)
+	ctx := context.Background()
+	if _, err := h.server.SetAgentProfileEnabled(ctx, &turingv1.SetAgentProfileEnabledRequest{ProfileId: "ungranted", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	h.activate(t, "research")
+	wantState(t, h.profile(t, "research"), turingv1.AgentProfileState_AGENT_PROFILE_STATE_ACTIVE)
+
+	wantStates := func(reason string, research turingv1.AgentProfileState) {
+		t.Helper()
+		for id, state := range map[string]turingv1.AgentProfileState{
+			"off":       turingv1.AgentProfileState_AGENT_PROFILE_STATE_DISABLED,
+			"ungranted": turingv1.AgentProfileState_AGENT_PROFILE_STATE_NEEDS_GRANT,
+			"research":  research,
+		} {
+			profile := h.profile(t, id)
+			wantState(t, profile, state)
+			reasons := profile.GetUnavailableReasons()
+			if reason == "" && len(reasons) != 0 {
+				t.Fatalf("%s reasons = %q, want none", id, reasons)
+			}
+			if reason != "" && (len(reasons) == 0 || reasons[0] != reason) {
+				t.Fatalf("%s reasons = %q, want %q first", id, reasons, reason)
+			}
+		}
+		wantState(t, h.profile(t, "broken"), turingv1.AgentProfileState_AGENT_PROFILE_STATE_PARSE_ERROR)
+	}
+
+	serverID := h.importServer(t, repository.ImportedMCPServer{
+		Name: "Team", URL: "http://team.example.test/mcp", Tier: repository.MCPServerTierLocalContainer,
+	}, true, "lookup")
+	wantStates(repository.TeamServerCollisionReason, turingv1.AgentProfileState_AGENT_PROFILE_STATE_UNAVAILABLE)
+
+	if _, err := h.repo.DeleteMCPServer(ctx, serverID); err != nil {
+		t.Fatal(err)
+	}
+	wantStates("", turingv1.AgentProfileState_AGENT_PROFILE_STATE_ACTIVE)
+
+	h.importServer(t, repository.ImportedMCPServer{
+		Name: "vendor", URL: "http://vendor.example.test/mcp", Tier: repository.MCPServerTierLocalContainer,
+	}, true, "team.delegate")
+	wantStates(repository.TeamToolCollisionReason("vendor", "team.delegate"), turingv1.AgentProfileState_AGENT_PROFILE_STATE_UNAVAILABLE)
 }

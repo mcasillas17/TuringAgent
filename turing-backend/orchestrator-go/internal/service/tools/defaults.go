@@ -38,9 +38,14 @@ var seedPolicies = map[policyKey]Policy{
 // conversation, exactly as it found it. memory.remember is deliberately absent,
 // so it falls to the unknown default and stops to ask — writing a proposal into
 // the user's vault is a change to what Turing believes about them.
+//
+// Delegating is safe for the same reason: it causes no side effect by itself.
+// The specialist's tools are already narrowed to its grant, its own writes
+// stop for their own approvals, and every delegation is visible.
 var pseudoSeedPolicies = map[policyKey]Policy{
 	{serverName: "memory", toolName: "memory.search"}: PolicySafe,
 	{serverName: "memory", toolName: "memory.read"}:   PolicySafe,
+	{serverName: "team", toolName: "team.delegate"}:   PolicySafe,
 }
 
 // DefaultPolicyFor assigns an orchestrator-owned policy to a tool when it is
@@ -71,6 +76,11 @@ func BundledServerForTool(toolName string) (string, bool) {
 		return "integrations", true
 	case strings.HasPrefix(toolName, "memory."):
 		return "memory", true
+	// Case-insensitive, like the orchestrator's team-name collision check: a
+	// third-party Team.Delegate would sit beside team.delegate as surely as a
+	// lowercase one.
+	case strings.HasPrefix(strings.ToLower(toolName), "team."):
+		return "team", true
 	}
 
 	for key := range seedPolicies {

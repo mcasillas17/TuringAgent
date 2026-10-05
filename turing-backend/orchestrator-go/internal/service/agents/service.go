@@ -144,6 +144,8 @@ func agentError(err error, fallback string) error {
 		return status.Error(codes.NotFound, "conversation not found")
 	case errors.Is(err, repository.ErrSessionDeleting):
 		return status.Error(codes.FailedPrecondition, "session deletion is in progress")
+	case errors.Is(err, repository.ErrDelegationSessionReadOnly):
+		return status.Error(codes.FailedPrecondition, repository.ErrDelegationSessionReadOnly.Error())
 	case errors.Is(err, repository.ErrExternalAgentNameTaken):
 		return status.Error(codes.AlreadyExists, "an agent with that name already exists")
 	case errors.Is(err, repository.ErrExternalAgentNameEmpty):

@@ -115,6 +115,9 @@ type assignment struct {
 	// same-attempt refresh can carry the committed version forward without
 	// rebuilding a partial job the worker would have to guess at.
 	job *turingv1.AgentJob
+	// minimumTeamProtocolVersion is the claimed job's team minimum. AgentJob
+	// does not carry it, so the delivery fence reads it from here.
+	minimumTeamProtocolVersion int
 }
 
 // workerCommand is one command queued for a worker, plus whether it is a
@@ -686,7 +689,19 @@ func (s *Server) filterRegisteredWorkerTools(
 ) (*registeredWorkerCapabilities, []repository.DiscoveredTool, error) {
 	filteredCapabilities := cloneRegisteredWorkerCapabilities(capabilities)
 	filtered := make([]repository.DiscoveredTool, 0, len(discovered))
+	// While a user name collides with the team namespace, every team-named
+	// tool is withdrawn before the pseudo or registered branch is chosen: the
+	// team pseudo-tool would capture a user server named team, and a user
+	// server named Team would keep serving beside the reserved name.
+	teamCollision, err := s.repo.TeamNameCollision(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 	for _, tool := range discovered {
+		if teamCollision != "" && repository.IsTeamServerName(tool.ServerName) {
+			delete(filteredCapabilities.tools, tool.ServerName+"/"+tool.ToolName)
+			continue
+		}
 		var available bool
 		var err error
 		if repository.IsPseudoServerName(tool.ServerName) {
@@ -1263,12 +1278,14 @@ func (s *Server) sendCommand(ctx context.Context, stream turingv1.RuntimeService
 	ownsRegistration := s.workers[workerID] == connectedWorker
 	s.mu.Unlock()
 	now := time.Now().UTC()
+	route := routingRequirementsForAgentJob(assigned)
+	route.MinimumTeamProtocolVersion = currentAssignment.minimumTeamProtocolVersion
 	connectedWorker.mu.Lock()
 	supported := ownsRegistration &&
 		!connectedWorker.closed &&
 		!connectedWorker.lastHeartbeat.IsZero() &&
 		now.Before(connectedWorker.lastHeartbeat.Add(s.dispatch.LeaseDuration)) &&
-		workerCapabilitiesSupportRoute(connectedWorker.capabilities, routingRequirementsForAgentJob(assigned))
+		workerCapabilitiesSupportRoute(connectedWorker.capabilities, route)
 	connectedWorker.mu.Unlock()
 	if !supported {
 		_ = connectedWorker.releaseRun(assigned.RunId)
@@ -1611,8 +1628,8 @@ func (s *Server) dispatchToWorker(
 		worker.mu.Unlock()
 		return false, true, false, nil
 	}
-	assignedJob := mapJob(job)
-	claimedAssignment := assignment{jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID, job: assignedJob}
+	claimedAssignment := assignmentForClaim(job)
+	assignedJob := claimedAssignment.job
 	if worker.closed ||
 		worker.lastHeartbeat.IsZero() ||
 		!time.Now().UTC().Before(worker.lastHeartbeat.Add(s.dispatch.LeaseDuration)) ||
@@ -1634,6 +1651,14 @@ func (s *Server) dispatchToWorker(
 		delete(worker.assignments, job.RunID)
 		worker.mu.Unlock()
 		return false, false, false, errors.Join(ctx.Err(), s.releaseClaimedAssignment(claimedAssignment))
+	}
+}
+
+// assignmentForClaim is the orchestrator's record of one claimed job.
+func assignmentForClaim(job repository.Job) assignment {
+	return assignment{
+		jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID, job: mapJob(job),
+		minimumTeamProtocolVersion: job.MinimumTeamProtocolVersion,
 	}
 }
 
@@ -1661,6 +1686,7 @@ func repositoryRoutingCapabilities(capabilities *registeredWorkerCapabilities) *
 		Models: models, Tools: tools, MaxConcurrentRuns: capabilities.maxConcurrentRuns,
 		ExternalAgentCredentialRefs: credentialRefs,
 		RemoteEgressDecisionVersion: capabilities.remoteEgressDecisionVersion,
+		TeamProtocolVersion:         capabilities.teamProtocolVersion,
 	}
 }
 
@@ -1679,6 +1705,7 @@ func routingRequirementsForJob(job repository.Job) repository.RoutingRequirement
 		MinimumWorkerMaxConcurrentRuns: job.MinimumWorkerMaxConcurrentRuns,
 		ExternalAgent:                  job.ExternalAgent != nil,
 		ExternalAgentCredentialRef:     externalAgentCredentialRef,
+		MinimumTeamProtocolVersion:     job.MinimumTeamProtocolVersion,
 	}
 }
 

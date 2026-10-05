@@ -118,9 +118,11 @@ type resolver struct {
 	// defaultModel is the model a profile that names none runs on now, or
 	// empty when no live worker serves a local model.
 	defaultModel string
-	catalog      []repository.ToolCatalogEntry
-	models       map[string]bool
-	routeTools   map[string]map[string]bool
+	// collision is why delegation is off for every profile, or "".
+	collision  string
+	catalog    []repository.ToolCatalogEntry
+	models     map[string]bool
+	routeTools map[string]map[string]bool
 }
 
 func (s *Server) newResolver(ctx context.Context) (*resolver, error) {
@@ -128,8 +130,13 @@ func (s *Server) newResolver(ctx context.Context) (*resolver, error) {
 	if err != nil {
 		return nil, err
 	}
+	collision, err := s.repo.TeamNameCollision(ctx)
+	if err != nil {
+		return nil, err
+	}
 	r := &resolver{
 		routes:     s.routes,
+		collision:  collision,
 		catalog:    catalog,
 		models:     map[string]bool{},
 		routeTools: map[string]map[string]bool{},
@@ -202,6 +209,9 @@ func (r *resolver) resolve(profile repository.AgentProfile) *turingv1.AgentProfi
 	}
 
 	var reasons []string
+	if r.collision != "" {
+		reasons = append(reasons, r.collision)
+	}
 	model, modelReason := r.model(profile.Model)
 	out.ResolvedModel = model
 	if modelReason != "" {

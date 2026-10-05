@@ -119,6 +119,35 @@ post-claim fence restarts the worker scan so a compatible worker that appeared o
 idle during the claim can receive the run. Concurrent abort/recovery fences are benign,
 and advisory notice failure at the delivery fence is logged without blocking redispatch.
 
+## Team protocol version
+
+`WorkerCapabilities.team_protocol_version` is the highest agent-team protocol
+a worker honors. Version 1 means it honors the delegation fields of `AgentJob`,
+frames a role-system `delegation_results` message as a user-role message, and
+omits every other role-system message from model history. Zero is a worker
+that predates the team. Today's runtime advertises 0.
+
+A job that needs a team-protocol worker carries `minimumTeamProtocolVersion` in
+its payload; the key is absent, and reads as 0, on every other job. The minimum
+is enforced at the claim, not only at enqueue:
+
+- `claimRoutingFilterSQL` keeps a row only while its minimum is at most the
+  claiming worker's version, so an older worker skips it and still claims
+  unrelated work. The tool set cannot stand in for this, because an empty
+  selected set matches every model-compatible worker.
+- The post-claim re-check and the delivery fence compare the claimed job's
+  minimum with the worker's current snapshot. `AgentJob` does not carry the
+  minimum, so the orchestrator keeps it on the assignment.
+- `ValidateRouting` fails with `RoutingUnavailableDetail{kind: PROVIDER,
+  requested: "team protocol v1"}` while no live worker meets it, and
+  `EgressToolNames` intersects only the workers that do.
+- `ListPendingRoutingWorkPage` copies the minimum, so TUR-010 reports such a
+  job as unroutable rather than routable.
+
+No job sets the key yet; the [orchestrator and team
+design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
+(sections 6.4 and 7.3) names the jobs that will.
+
 ## Run ownership and version fencing
 
 Each delivered `AgentJob` includes the run's `expected_state_version` and durable
