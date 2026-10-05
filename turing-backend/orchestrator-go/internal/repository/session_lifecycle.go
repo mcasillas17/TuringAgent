@@ -68,7 +68,7 @@ func (r *Repository) mutateSession(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := requireActiveSessionTx(ctx, tx, sessionID); err != nil {
+	if err := requireChatSessionTx(ctx, tx, sessionID); err != nil {
 		return SessionMutationResult{}, err
 	}
 	current, err := getSessionTx(ctx, tx, sessionID)

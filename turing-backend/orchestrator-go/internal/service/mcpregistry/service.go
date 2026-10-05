@@ -485,9 +485,9 @@ func (s *Server) UpdateToolPolicyByName(ctx context.Context, req *turingv1.Updat
 	// notify/audit already documents, so a read/descriptor failure below
 	// can never leave an already-persisted policy change unannounced or
 	// unaudited. This is the one compatibility RPC that also reaches the
-	// orchestrator-owned pseudo-servers ("skills"/"integrations", neither
-	// of which has an mcp_servers row an id could be read from — see
-	// SetToolPolicyByName's own name-only WHERE clause), so target is
+	// orchestrator-owned pseudo-servers ("skills", "integrations", "memory"
+	// and "team", none of which has an mcp_servers row an id could be read
+	// from — see SetToolPolicyByName's own name-only WHERE clause), so target is
 	// this request's own server_name, never an id: unlike
 	// UpdateMcpToolPolicy, this RPC is addressed by name alone end to end
 	// and never reads the mcp_servers row at all, even for a real,
@@ -534,14 +534,15 @@ var managedPseudoServerNames = map[string]struct{}{
 	"skills":       {},
 	"integrations": {},
 	"memory":       {},
+	"team":         {},
 }
 
 func (s *Server) ListPseudoServerTools(ctx context.Context, req *turingv1.ListPseudoServerToolsRequest) (*turingv1.ListPseudoServerToolsResponse, error) {
 	if req == nil {
-		return nil, status.Error(codes.InvalidArgument, "server_name must be skills, integrations, or memory")
+		return nil, status.Error(codes.InvalidArgument, "server_name must be skills, integrations, memory, or team")
 	}
 	if _, managed := managedPseudoServerNames[req.GetServerName()]; !managed {
-		return nil, status.Error(codes.InvalidArgument, "server_name must be skills, integrations, or memory")
+		return nil, status.Error(codes.InvalidArgument, "server_name must be skills, integrations, memory, or team")
 	}
 	tools, err := s.repo.ListPseudoServerTools(ctx, req.GetServerName())
 	if err != nil {
@@ -1339,10 +1340,24 @@ func buildServerDescriptor(server repository.MCPServerRecord, tools []repository
 		Tier:            tierToProto(server.Tier),
 		Enabled:         server.Enabled,
 		Liveness:        livenessToProto(server.Status),
-		StatusMessage:   server.StatusError,
+		StatusMessage:   serverStatusMessage(server, tools),
 		SandboxConfined: server.Tier == repository.MCPServerTierBundled,
 		Tools:           descriptors,
 	}, nil
+}
+
+// serverStatusMessage puts a team-name collision ahead of the health error on
+// the server that causes it, so the MCP settings say why delegation is off.
+func serverStatusMessage(server repository.MCPServerRecord, tools []repository.MCPServerTool) string {
+	if repository.IsTeamServerName(server.Name) {
+		return repository.TeamServerCollisionReason
+	}
+	for _, tool := range tools {
+		if tool.Present && strings.HasPrefix(strings.ToLower(tool.Name), "team.") {
+			return repository.TeamToolCollisionReason(server.Name, tool.Name)
+		}
+	}
+	return server.StatusError
 }
 
 func toolDescriptor(tool repository.MCPServerTool) (*turingv1.McpToolDescriptor, error) {

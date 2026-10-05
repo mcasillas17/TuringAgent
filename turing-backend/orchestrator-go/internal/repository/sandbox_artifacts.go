@@ -112,6 +112,9 @@ func SessionOwnedSandboxPrefix(sessionID string) string {
 type SessionWithdrawalState struct {
 	Active             bool
 	DeletionGeneration int64
+	// Kind is "chat" or "delegation". Approvals and capabilities still apply
+	// to a delegation session; only the public mutations refuse it.
+	Kind string
 }
 
 // SessionWithdrawalState reports whether a session is still accepting work.
@@ -125,10 +128,10 @@ func (r *Repository) SessionWithdrawalState(ctx context.Context, sessionID strin
 		SELECT s.deletion_state, COALESCE(
 			(SELECT lifecycle_version FROM session_deletions WHERE session_id = s.id),
 			0
-		)
+		), s.kind
 		FROM sessions s
 		WHERE s.id = ?
-	`, sessionID).Scan(&deletionState, &state.DeletionGeneration)
+	`, sessionID).Scan(&deletionState, &state.DeletionGeneration, &state.Kind)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SessionWithdrawalState{}, ErrSessionNotFound
 	}

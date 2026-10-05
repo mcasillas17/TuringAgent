@@ -130,6 +130,9 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 	if !withdrawalState.Active {
 		return nil, mapSessionError(ctx, repository.ErrSessionDeleting)
 	}
+	if withdrawalState.Kind != "chat" {
+		return nil, mapSessionError(ctx, repository.ErrDelegationSessionReadOnly)
+	}
 	resolved, err := s.resolveEgressContext(ctx, input)
 	if err != nil {
 		return nil, err

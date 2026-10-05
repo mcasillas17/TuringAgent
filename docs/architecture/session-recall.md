@@ -155,9 +155,9 @@ guessed hit, and never puts message, snippet, or query text in an error or log.
 ### Visibility, storage, and egress
 
 Because both projections share the same predicate, hits and legacy messages
-agree on lifecycle: messages in `active` and `archived` sessions remain
-visible, while sessions that are `deleting` or already deleted are excluded
-from both. Scope, exclusion, the limit domain, and literal-phrase handling are
+agree on lifecycle: messages in `active` and `archived` chat sessions remain
+visible, while sessions that are `deleting` or already deleted, and hidden
+`delegation` sessions, are excluded from both. Scope, exclusion, the limit domain, and literal-phrase handling are
 unchanged: a limit of 1–100 is used as given, while a limit that is `<= 0` or
 `> 100` is not an error and falls back to 20. A query with no FTS5 token is
 still a successful empty response.

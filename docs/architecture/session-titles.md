@@ -106,9 +106,11 @@ New sessions record provenance at creation, so a new explicit `New chat` is
 distinguishable from old placeholder data.
 
 At startup, before gRPC servers accept subscriptions, the orchestrator scans
-only sessions whose origin is `unset`. It derives each title from that session's
-first usable stored user message using the same function as the live path,
-skipping empty or whitespace-only turns, and marks the result `derived`. The
+only chat sessions whose origin is `unset`; this pass leaves a hidden delegation
+session (see [session lifecycle](session-lifecycle.md#delegation-sessions))
+untitled. It derives each title from that session's first usable stored user
+message using the same function as the live path, skipping empty or
+whitespace-only turns, and marks the result `derived`. The
 pass is idempotent, leaves explicitly named and never-started sessions alone,
 and emits no live event because no subscriber can exist yet. Startup fails if
 this compatibility pass cannot complete rather than serving a partially

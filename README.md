@@ -109,7 +109,7 @@ into `team/`; it returns with the on/off setting and grant it had. If that grant
 matches the template, no new review is asked for, so a profile that was on can
 be Active again at once; otherwise it needs a new grant first. Dev and Research
 require nothing, so on and granted they are Active whenever a worker serves
-their model; Inbox requires `gmail.*`, so its card lists that tool, and on and
+their model and nothing else claims the name `team` (below); Inbox requires `gmail.*`, so its card lists that tool, and on and
 granted it shows Unavailable until it resolves. Turning it off keeps the
 grant, so turning it on again does not ask.
 
@@ -138,7 +138,18 @@ without an `AGENT.md` is not a profile.
 
 This build stores profiles, enablement and grants only. **Delegation is not
 switched on**: no conversation reaches a specialist yet, and nothing about a
-run changes. See the [orchestrator and team design](docs/superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md).
+run changes.
+
+The name `team` belongs to Turing's delegation tool, `team.delegate`. Registering
+or importing an MCP server named `team` (in any letter case) is refused, and so
+is a third-party tool whose name starts with `team.`. An install that registered
+one earlier keeps it, but while it exists no profile can be Active: every
+profile that can be read lists the reason first (one that would otherwise be
+Active is Unavailable), a profile that cannot be read still shows only its
+parse error, and the MCP settings show the same reason on that server: "Delegation is off: an MCP server named `team` exists. Remove it and
+register it under another name." or "Delegation is off: `<server>` provides a
+tool named `<tool>`." A server named `team` also stops being offered or called.
+Remove it, or that tool, and the next worker registration restores the name. See the [orchestrator and team design](docs/superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md).
 
 ## Requirements
 

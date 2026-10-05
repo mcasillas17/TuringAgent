@@ -881,8 +881,15 @@ type WorkerCapabilities struct {
 	// Highest run-egress decision version this worker enforces before provider
 	// I/O. Zero means it predates explicit remote-egress enforcement.
 	RemoteEgressDecisionVersion int32 `protobuf:"varint,7,opt,name=remote_egress_decision_version,json=remoteEgressDecisionVersion,proto3" json:"remote_egress_decision_version,omitempty"`
-	unknownFields               protoimpl.UnknownFields
-	sizeCache                   protoimpl.SizeCache
+	// Highest agent-team protocol version this worker honors. Version 1 means
+	// it honors the delegation fields of AgentJob, frames a role-system
+	// delegation_results message as a user-role message, and omits every other
+	// role-system message from model history. Zero means it predates the team;
+	// the orchestrator never lets such a worker claim a job whose payload
+	// requires a higher version.
+	TeamProtocolVersion int32 `protobuf:"varint,8,opt,name=team_protocol_version,json=teamProtocolVersion,proto3" json:"team_protocol_version,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *WorkerCapabilities) Reset() {
@@ -960,6 +967,13 @@ func (x *WorkerCapabilities) GetExternalAgentCredentialRefs() []string {
 func (x *WorkerCapabilities) GetRemoteEgressDecisionVersion() int32 {
 	if x != nil {
 		return x.RemoteEgressDecisionVersion
+	}
+	return 0
+}
+
+func (x *WorkerCapabilities) GetTeamProtocolVersion() int32 {
+	if x != nil {
+		return x.TeamProtocolVersion
 	}
 	return 0
 }
@@ -2325,7 +2339,7 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\vserver_name\x18\x01 \x01(\tR\n" +
 	"serverName\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12/\n" +
-	"\x06schema\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06schema\"\x9e\x03\n" +
+	"\x06schema\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06schema\"\xd2\x03\n" +
 	"\x12WorkerCapabilities\x122\n" +
 	"\x06models\x18\x01 \x03(\v2\x1a.turing.v1.ModelCapabilityR\x06models\x12/\n" +
 	"\tagent_ids\x18\x02 \x03(\x0e2\x12.turing.v1.AgentIdR\bagentIds\x12/\n" +
@@ -2333,7 +2347,8 @@ const file_turing_v1_runtime_proto_rawDesc = "" +
 	"\x13max_concurrent_runs\x18\x04 \x01(\x05R\x11maxConcurrentRuns\x128\n" +
 	"\x18supports_external_agents\x18\x05 \x01(\bR\x16supportsExternalAgents\x12C\n" +
 	"\x1eexternal_agent_credential_refs\x18\x06 \x03(\tR\x1bexternalAgentCredentialRefs\x12C\n" +
-	"\x1eremote_egress_decision_version\x18\a \x01(\x05R\x1bremoteEgressDecisionVersion\"\x81\x03\n" +
+	"\x1eremote_egress_decision_version\x18\a \x01(\x05R\x1bremoteEgressDecisionVersion\x122\n" +
+	"\x15team_protocol_version\x18\b \x01(\x05R\x13teamProtocolVersion\"\x81\x03\n" +
 	"\x12RuntimeWorkerReady\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12-\n" +
 	"\bagent_id\x18\x02 \x01(\x0e2\x12.turing.v1.AgentIdR\aagentId\x12.\n" +

@@ -103,7 +103,7 @@ func (r *Repository) ListLatestSessionUpdatedEvents(ctx context.Context, limit i
 		WITH page AS (
 			SELECT id, updated_at
 			FROM sessions
-			WHERE deletion_state = 'active'
+			WHERE deletion_state = 'active' AND kind = 'chat'
 			ORDER BY ` + sqliteTimestampNanos("updated_at") + ` DESC, id DESC
 			LIMIT ?
 		),

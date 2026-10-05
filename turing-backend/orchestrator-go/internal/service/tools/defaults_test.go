@@ -62,3 +62,22 @@ func TestMemoryToolPolicySeedsArrive(t *testing.T) {
 		t.Fatal("memory.remember is pinned as a bundled approval tool; its policy is the user's to set")
 	}
 }
+
+// team.delegate causes no side effect by itself, so it is seeded safe, and the
+// whole team. namespace belongs to the orchestrator: a third-party tool named
+// team.anything is a collision, not a new tool.
+func TestTeamDelegateSeedsSafeAndTheTeamNamespaceIsReserved(t *testing.T) {
+	if got := DefaultPolicyFor("team", "team.delegate"); got != PolicySafe {
+		t.Fatalf("DefaultPolicyFor(team, team.delegate) = %q, want safe", got)
+	}
+	// Case-insensitive like the collision check: a newly registered
+	// Team.Delegate would otherwise create the collision this reserves against.
+	for _, tool := range []string{"team.delegate", "team.other", "Team.Delegate", "TEAM.other"} {
+		if owner, bundled := BundledServerForTool(tool); !bundled || owner != "team" {
+			t.Fatalf("BundledServerForTool(%s) = %q,%v, want team,true", tool, owner, bundled)
+		}
+	}
+	if _, bundled := BundledServerForTool("teammate.lookup"); bundled {
+		t.Fatal("a tool merely starting with the letters team was reserved")
+	}
+}

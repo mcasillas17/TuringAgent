@@ -40,6 +40,7 @@ type registeredWorkerCapabilities struct {
 	externalAgentCredentialRefs map[string]struct{}
 	maxConcurrentRuns           int
 	remoteEgressDecisionVersion int
+	teamProtocolVersion         int
 }
 
 func cloneRegisteredWorkerCapabilities(input *registeredWorkerCapabilities) *registeredWorkerCapabilities {
@@ -53,6 +54,7 @@ func cloneRegisteredWorkerCapabilities(input *registeredWorkerCapabilities) *reg
 		externalAgentCredentialRefs: make(map[string]struct{}, len(input.externalAgentCredentialRefs)),
 		maxConcurrentRuns:           input.maxConcurrentRuns,
 		remoteEgressDecisionVersion: input.remoteEgressDecisionVersion,
+		teamProtocolVersion:         input.teamProtocolVersion,
 	}
 	for value := range input.agentIDs {
 		cloned.agentIDs[value] = struct{}{}
@@ -150,6 +152,7 @@ func decodeWorkerCapabilities(snapshot *turingv1.WorkerCapabilities) (*registere
 		externalAgentCredentialRefs: credentialRefs,
 		maxConcurrentRuns:           int(snapshot.GetMaxConcurrentRuns()),
 		remoteEgressDecisionVersion: int(snapshot.GetRemoteEgressDecisionVersion()),
+		teamProtocolVersion:         int(snapshot.GetTeamProtocolVersion()),
 	}, discovered, nil
 }
 
@@ -289,6 +292,9 @@ func workerCapabilitiesSupportRoute(capabilities *registeredWorkerCapabilities, 
 	}
 	if routeNeedsEgressAwareWorker(route) &&
 		capabilities.remoteEgressDecisionVersion < repository.RunEgressDecisionVersion {
+		return false
+	}
+	if capabilities.teamProtocolVersion < route.MinimumTeamProtocolVersion {
 		return false
 	}
 	if _, ok := capabilities.agentIDs[route.AgentID]; !ok {
@@ -463,6 +469,9 @@ func (s *Server) EgressToolNames(route repository.RoutingRequirements) []string 
 			capabilities.remoteEgressDecisionVersion < repository.RunEgressDecisionVersion {
 			return false
 		}
+		if capabilities.teamProtocolVersion < route.MinimumTeamProtocolVersion {
+			return false
+		}
 		if route.ExternalAgent {
 			if _, ok := capabilities.externalAgentCredentialRefs[route.ExternalAgentCredentialRef]; !ok {
 				return false
@@ -623,6 +632,7 @@ func (s *Server) refreshPendingCapabilityState(
 					"requiredTools":                  append([]string(nil), item.Requirements.RequestedTools...),
 					"requiredContextTokens":          item.Requirements.RequiredContextTokens,
 					"minimumWorkerMaxConcurrentRuns": item.Requirements.MinimumWorkerMaxConcurrentRuns,
+					"minimumTeamProtocolVersion":     item.Requirements.MinimumTeamProtocolVersion,
 					"externalAgent":                  item.Requirements.ExternalAgent,
 					"unavailableCapability":          detail.GetKind().String(),
 					"requested":                      detail.GetRequested(),
@@ -874,6 +884,7 @@ func routingRequirementsFingerprint(route repository.RoutingRequirements) string
 		strconv.Itoa(route.MinimumWorkerMaxConcurrentRuns),
 		strconv.FormatBool(route.ExternalAgent),
 		route.ExternalAgentCredentialRef,
+		strconv.Itoa(route.MinimumTeamProtocolVersion),
 	}, "\x00")
 }
 
@@ -918,6 +929,18 @@ func (s *Server) ValidateRouting(ctx context.Context, route repository.RoutingRe
 			return routingUnavailable(
 				turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_PROVIDER,
 				fmt.Sprintf("remote egress decision v%d", repository.RunEgressDecisionVersion),
+				nil,
+			)
+		}
+	}
+	if route.MinimumTeamProtocolVersion > 0 {
+		candidates = filterRoutingCandidates(candidates, func(capabilities *registeredWorkerCapabilities) bool {
+			return capabilities.teamProtocolVersion >= route.MinimumTeamProtocolVersion
+		})
+		if len(candidates) == 0 {
+			return routingUnavailable(
+				turingv1.RoutingRequirementKind_ROUTING_REQUIREMENT_KIND_PROVIDER,
+				fmt.Sprintf("team protocol v%d", route.MinimumTeamProtocolVersion),
 				nil,
 			)
 		}

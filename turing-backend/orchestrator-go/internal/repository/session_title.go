@@ -70,7 +70,7 @@ func (r *Repository) BackfillSessionTitles(ctx context.Context) (int, error) {
 		FROM sessions s
 		LEFT JOIN messages m
 			ON m.session_id = s.id AND m.role = 'user'
-		WHERE s.title_origin = 'unset'
+		WHERE s.title_origin = 'unset' AND s.kind = 'chat'
 		ORDER BY s.id, m.sequence
 	`)
 	if err != nil {

@@ -413,6 +413,13 @@ const WorkerCapabilities$json = {
       '5': 5,
       '10': 'remoteEgressDecisionVersion'
     },
+    {
+      '1': 'team_protocol_version',
+      '3': 8,
+      '4': 1,
+      '5': 5,
+      '10': 'teamProtocolVersion'
+    },
   ],
 };
 
@@ -425,7 +432,8 @@ final $typed_data.Uint8List workerCapabilitiesDescriptor = $convert.base64Decode
     'c3VwcG9ydHNfZXh0ZXJuYWxfYWdlbnRzGAUgASgIUhZzdXBwb3J0c0V4dGVybmFsQWdlbnRzEk'
     'MKHmV4dGVybmFsX2FnZW50X2NyZWRlbnRpYWxfcmVmcxgGIAMoCVIbZXh0ZXJuYWxBZ2VudENy'
     'ZWRlbnRpYWxSZWZzEkMKHnJlbW90ZV9lZ3Jlc3NfZGVjaXNpb25fdmVyc2lvbhgHIAEoBVIbcm'
-    'Vtb3RlRWdyZXNzRGVjaXNpb25WZXJzaW9u');
+    'Vtb3RlRWdyZXNzRGVjaXNpb25WZXJzaW9uEjIKFXRlYW1fcHJvdG9jb2xfdmVyc2lvbhgIIAEo'
+    'BVITdGVhbVByb3RvY29sVmVyc2lvbg==');
 
 @$core.Deprecated('Use runtimeWorkerReadyDescriptor instead')
 const RuntimeWorkerReady$json = {

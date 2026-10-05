@@ -463,6 +463,19 @@ echoes the entry's own name. This is the one place a raw rejected key
 could otherwise have reached the in-memory report, `mcp_import_issues`,
 the `ReimportMcpJson`/`ListMcpServers` RPC responses, and the Flutter UI.
 
+The name `team` and the `team.` tool namespace belong to the orchestrator's
+`team` pseudo-server, which serves `team.delegate`. Registration and import
+refuse a server named `team` in any letter case, and import and discovery
+refuse a third-party tool whose name starts with `team.` in any case. An
+install that registered either one earlier keeps the row, but while it exists
+the orchestrator withdraws every tool on a server named `team` (in any case) —
+the `team` pseudo-tool and such a user server's tools alike — from worker
+capabilities, writes no team pseudo-tool row, refuses `CallTool` on a server
+named `team`, and makes no specialist profile Active. A third-party `team.*`
+tool on another server keeps working as that server's tool. `ListMcpServers`
+reports the reason as that server's status message, and removing the server
+or tool restores the name at the next worker registration.
+
 Deleting a server writes a local import tombstone, so an unchanged
 `mcp.json` cannot silently recreate it on the next reimport; the file path
 keeps refusing a tombstoned name. An explicit in-app Register of that same
@@ -664,14 +677,14 @@ all audited; the audit payload and any status text never carry a token. A
 tool policy change is audited identically regardless of which of the two RPCs
 committed it — `UpdateMcpToolPolicy` (id-addressed, for a real, registered
 server) or `UpdateToolPolicyByName` (name-addressed, the compatibility path
-that also reaches the orchestrator-owned "skills"/"integrations"
-pseudo-servers, neither of which has an `mcp_servers` row an id could be read
-from) — both write the same `mcp.server.tool_policy_changed` action with the
-same server-name/tool-name/policy payload shape, immediately after the policy
-mutation commits and before either RPC's own fallible descriptor-mapping step,
-so a read/descriptor failure afterward can never leave an already-persisted
-policy change unaudited. The audit *target* (the row identifier the audit
-API returns alongside the action) still differs between the two — the real
+that also reaches the orchestrator-owned pseudo-servers — "skills",
+"integrations", "memory" and "team", none of which has an `mcp_servers` row an
+id could be read from) — both write the same `mcp.server.tool_policy_changed`
+action with the same server-name/tool-name/policy payload shape, immediately
+after the policy mutation commits and before either RPC's own fallible
+descriptor-mapping step, so a read/descriptor failure afterward can never
+leave an already-persisted policy change unaudited. The audit *target* (the
+row identifier the audit API returns alongside the action) still differs between the two — the real
 server id for `UpdateMcpToolPolicy`, the request's own server name for
 `UpdateToolPolicyByName`, since a pseudo-server has no id to use — only the
 action and payload are identical. Each of these actions is also readable back
@@ -995,8 +1008,8 @@ this binding without deleting the tool-call history of a run that already
 called it — and a `NULL` binding (whether from that deletion, or from a
 legacy `tool_calls` row that predates this column) fails closed: it can only
 ever match a caller-supplied id that is itself empty, the permanent state of
-the two orchestrator-owned pseudo-servers ("skills", "integrations", neither
-of which is ever backed by a real `mcp_servers` row).
+the orchestrator-owned pseudo-servers ("skills", "integrations", "memory" and
+"team", none of which is ever backed by a real `mcp_servers` row).
 
 Migration `0018_mcp_approval_identity.sql` adds `mcp_server_id` as a nullable
 column and an index — nothing else. It deliberately carries no backfill: every

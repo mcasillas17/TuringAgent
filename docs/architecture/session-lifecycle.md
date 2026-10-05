@@ -66,6 +66,20 @@ Permanent deletion is a separate lifecycle with its own centralized gates and
 cleanup. Archive must never expose a deleting/deleted session or weaken those
 rules.
 
+## Delegation sessions
+
+A session has a `kind`: `chat`, which is every conversation the user talks in,
+or `delegation`, a hidden session a specialist runs in. Listing, message search
+and automatic recall, the title backfill and the session-update snapshot read
+chats only. On a delegation session the public mutations — `SendMessage`,
+`PrepareRemoteEgress`, rename, archive, restore, delete, and setting or
+clearing the session's external agent — fail with `FailedPrecondition`
+("delegation sessions are read-only") and write nothing. Reading it, cancelling
+its run and deciding its approvals still work. No code creates a delegation
+session yet; the [orchestrator and team
+design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
+describes how delegation will.
+
 ## Flutter behavior
 
 The Flutter sidebar loads the active list a page at a time and preserves the

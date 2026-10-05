@@ -127,6 +127,9 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	if !withdrawalState.Active {
 		return mapSessionError(ctx, repository.ErrSessionDeleting)
 	}
+	if withdrawalState.Kind != "chat" {
+		return mapSessionError(ctx, repository.ErrDelegationSessionReadOnly)
+	}
 	ch, unsubscribe := s.bus.Subscribe(req.SessionId)
 	defer unsubscribe()
 	input := repository.EnqueueUserMessageInput{
@@ -415,6 +418,9 @@ func mapSessionError(ctx context.Context, err error) error {
 	if errors.Is(err, repository.ErrSessionDeleting) {
 		return status.Error(codes.FailedPrecondition, "session deletion is in progress")
 	}
+	if errors.Is(err, repository.ErrDelegationSessionReadOnly) {
+		return status.Error(codes.FailedPrecondition, repository.ErrDelegationSessionReadOnly.Error())
+	}
 	if errors.Is(err, sql.ErrNoRows) ||
 		errors.Is(err, repository.ErrSessionNotFound) {
 		return status.Error(codes.NotFound, "session not found")
@@ -450,6 +456,9 @@ func mapEnqueueError(ctx context.Context, err error) error {
 	}
 	if errors.Is(err, repository.ErrSessionDeleting) {
 		return status.Error(codes.FailedPrecondition, "session deletion is in progress")
+	}
+	if errors.Is(err, repository.ErrDelegationSessionReadOnly) {
+		return status.Error(codes.FailedPrecondition, repository.ErrDelegationSessionReadOnly.Error())
 	}
 	if status.Code(err) == codes.FailedPrecondition {
 		return err

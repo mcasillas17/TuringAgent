@@ -25,6 +25,7 @@ func TestAgentErrorMapsEachFailureToItsCode(t *testing.T) {
 	}{
 		{"missing agent", repository.ErrExternalAgentNotFound, codes.NotFound},
 		{"missing session", repository.ErrSessionNotFound, codes.NotFound},
+		{"delegation session", repository.ErrDelegationSessionReadOnly, codes.FailedPrecondition},
 		{"duplicate name", repository.ErrExternalAgentNameTaken, codes.AlreadyExists},
 		{"empty name", repository.ErrExternalAgentNameEmpty, codes.InvalidArgument},
 		{"name too long", repository.ErrExternalAgentNameTooLong, codes.InvalidArgument},

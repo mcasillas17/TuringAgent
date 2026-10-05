@@ -41,6 +41,11 @@ func (s *Server) CallTool(ctx context.Context, input CallInput) (map[string]any,
 	if err != nil {
 		return nil, err
 	}
+	if repository.IsTeamServerName(server.Name) {
+		// Its row survives the upgrade, but its tools are withdrawn: the name
+		// belongs to the orchestrator's team pseudo-server now.
+		return nil, errors.New("MCP server named `team` is withdrawn; register it under another name")
+	}
 	if server.Tier == repository.MCPServerTierBundled {
 		return nil, errors.New("bundled MCP calls stay on their cooperating server path")
 	}

@@ -909,6 +909,7 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
     $core.bool? supportsExternalAgents,
     $core.Iterable<$core.String>? externalAgentCredentialRefs,
     $core.int? remoteEgressDecisionVersion,
+    $core.int? teamProtocolVersion,
   }) {
     final result = WorkerCapabilities._();
     if (models != null) result.models.addAll(models);
@@ -921,6 +922,8 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
       result.externalAgentCredentialRefs.addAll(externalAgentCredentialRefs);
     if (remoteEgressDecisionVersion != null)
       result.remoteEgressDecisionVersion = remoteEgressDecisionVersion;
+    if (teamProtocolVersion != null)
+      result.teamProtocolVersion = teamProtocolVersion;
     return result;
   }
 
@@ -949,6 +952,7 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
     ..aOB(5, _omitFieldNames ? '' : 'supportsExternalAgents')
     ..pPS(6, _omitFieldNames ? '' : 'externalAgentCredentialRefs')
     ..aI(7, _omitFieldNames ? '' : 'remoteEgressDecisionVersion')
+    ..aI(8, _omitFieldNames ? '' : 'teamProtocolVersion')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1018,6 +1022,21 @@ class WorkerCapabilities extends $pb.GeneratedMessage {
   $core.bool hasRemoteEgressDecisionVersion() => $_has(6);
   @$pb.TagNumber(7)
   void clearRemoteEgressDecisionVersion() => $_clearField(7);
+
+  /// Highest agent-team protocol version this worker honors. Version 1 means
+  /// it honors the delegation fields of AgentJob, frames a role-system
+  /// delegation_results message as a user-role message, and omits every other
+  /// role-system message from model history. Zero means it predates the team;
+  /// the orchestrator never lets such a worker claim a job whose payload
+  /// requires a higher version.
+  @$pb.TagNumber(8)
+  $core.int get teamProtocolVersion => $_getIZ(7);
+  @$pb.TagNumber(8)
+  set teamProtocolVersion($core.int value) => $_setSignedInt32(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasTeamProtocolVersion() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearTeamProtocolVersion() => $_clearField(8);
 }
 
 class RuntimeWorkerReady extends $pb.GeneratedMessage {

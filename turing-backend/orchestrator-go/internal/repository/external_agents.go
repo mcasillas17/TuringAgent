@@ -322,7 +322,7 @@ func (r *Repository) SetSessionAgent(ctx context.Context, sessionID string, agen
 		return ExternalAgent{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := requireActiveSessionTx(ctx, tx, sessionID); err != nil {
+	if err := requireChatSessionTx(ctx, tx, sessionID); err != nil {
 		return ExternalAgent{}, err
 	}
 
@@ -414,7 +414,7 @@ func (r *Repository) ClearSessionAgent(ctx context.Context, sessionID string) er
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := requireActiveSessionTx(ctx, tx, sessionID); err != nil {
+	if err := requireChatSessionTx(ctx, tx, sessionID); err != nil {
 		return err
 	}
 

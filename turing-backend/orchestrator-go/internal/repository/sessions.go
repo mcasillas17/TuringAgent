@@ -429,13 +429,13 @@ func listSessionsQuery(input ListSessionsInput) (string, []any, error) {
 		query = `
 			SELECT id, title, title_origin, status, created_at, updated_at
 			FROM sessions INDEXED BY idx_sessions_status_updated
-			WHERE deletion_state = 'active' AND status = ?`
+			WHERE deletion_state = 'active' AND kind = 'chat' AND status = ?`
 		args = append(args, string(input.Filter))
 	case SessionListAll:
 		query = `
 			SELECT id, title, title_origin, status, created_at, updated_at
 			FROM sessions INDEXED BY idx_sessions_updated
-			WHERE deletion_state = 'active'`
+			WHERE deletion_state = 'active' AND kind = 'chat'`
 	default:
 		return "", nil, ErrInvalidSessionFilter
 	}
@@ -491,6 +491,28 @@ func validateSession(session Session) error {
 	}
 	if _, err := persisttime.ParseCanonical(session.UpdatedAt); err != nil {
 		return ErrInvalidSessionTimestamp
+	}
+	return nil
+}
+
+// requireChatSessionTx is requireActiveSessionTx for the public paths that
+// mutate a session or enqueue work. It also refuses a hidden delegation
+// session, which changes only through its delegation, its own run, and its
+// parent's deletion lifecycle.
+func requireChatSessionTx(ctx context.Context, q rowQuerier, sessionID string) error {
+	var deletionState, kind string
+	err := q.QueryRowContext(ctx, `SELECT deletion_state, kind FROM sessions WHERE id = ?`, sessionID).Scan(&deletionState, &kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSessionNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if deletionState != "active" {
+		return ErrSessionDeleting
+	}
+	if kind != "chat" {
+		return ErrDelegationSessionReadOnly
 	}
 	return nil
 }
@@ -582,6 +604,8 @@ func searchMessagesPredicate(input searchMessagesInput) (string, []any, bool) {
 	// The status predicate is redundant with today's schema CHECK and is stated
 	// anyway: a future lifecycle status must decide explicitly whether its
 	// conversations are searchable instead of becoming searchable by default.
+	// Only chats are searched. Automatic recall runs through this predicate,
+	// so a specialist's delegation session never comes back as a snippet.
 	predicate := `
 		FROM messages_fts
 		JOIN messages m ON m.rowid = messages_fts.rowid
@@ -589,6 +613,7 @@ func searchMessagesPredicate(input searchMessagesInput) (string, []any, bool) {
 		  ON s.id = m.session_id
 		 AND s.deletion_state = 'active'
 		 AND s.status IN ('active', 'archived')
+		 AND s.kind = 'chat'
 		WHERE messages_fts MATCH ?`
 	args := []any{fts5Phrase(query)}
 	if input.sessionID != "" {

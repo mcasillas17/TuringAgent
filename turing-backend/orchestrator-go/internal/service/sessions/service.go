@@ -250,6 +250,8 @@ func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionR
 		switch {
 		case errors.Is(err, repository.ErrSessionNotFound):
 			return nil, status.Error(codes.NotFound, "session not found")
+		case errors.Is(err, repository.ErrDelegationSessionReadOnly):
+			return nil, status.Error(codes.FailedPrecondition, repository.ErrDelegationSessionReadOnly.Error())
 		default:
 			return nil, status.Error(codes.Internal, "delete session failed")
 		}

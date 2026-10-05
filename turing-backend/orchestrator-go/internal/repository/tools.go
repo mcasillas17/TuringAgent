@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
@@ -24,16 +26,70 @@ type DiscoveredTool struct {
 //
 // The list lives here because three different layers ask the same question —
 // the upsert that writes the rows, the capability filter that decides what a
-// worker may see, and the trigger in schema/0019_memory_vault.sql that
-// refuses everything else with a NULL server. A name added to one and not the
+// worker may see, and the trigger last restated in
+// schema/0024_delegation_groundwork.sql that refuses everything else with a
+// NULL server. A name added to one and not the
 // others is a tool that registers and then vanishes.
 func IsPseudoServerName(serverName string) bool {
 	switch serverName {
-	case "skills", "integrations", "memory":
+	case "skills", "integrations", "memory", "team":
 		return true
 	default:
 		return false
 	}
+}
+
+// TeamServerCollisionReason is shown while a user MCP server is named team in
+// any letter case. Registration and import refuse the name, but an install
+// that registered it earlier keeps the row.
+const TeamServerCollisionReason = "Delegation is off: an MCP server named `team` exists. Remove it and register it under another name."
+
+// TeamToolCollisionReason is shown while a third-party server provides a
+// present tool named team.*, which would sit beside team.delegate under the
+// same name.
+func TeamToolCollisionReason(serverName, toolName string) string {
+	return fmt.Sprintf("Delegation is off: `%s` provides a tool named `%s`.", serverName, toolName)
+}
+
+// IsTeamServerName reports whether a server name is team in any letter case.
+// IsPseudoServerName matches exact case only, so a user server named Team
+// would otherwise pass as an ordinary server beside the reserved name.
+func IsTeamServerName(serverName string) bool {
+	return strings.EqualFold(serverName, "team")
+}
+
+// TeamNameCollision returns why delegation is off because a user-registered
+// name collides with the orchestrator's team namespace, or "" when nothing
+// collides. While it is non-empty no team-named tool is registered,
+// advertised or called, and no specialist is offered.
+func (r *Repository) TeamNameCollision(ctx context.Context) (string, error) {
+	return teamNameCollision(ctx, r.db)
+}
+
+func teamNameCollision(ctx context.Context, q rowQuerier) (string, error) {
+	var serverNamedTeam bool
+	if err := q.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM mcp_servers WHERE lower(name) = 'team')
+	`).Scan(&serverNamedTeam); err != nil {
+		return "", err
+	}
+	if serverNamedTeam {
+		return TeamServerCollisionReason, nil
+	}
+	var serverName, toolName string
+	err := q.QueryRowContext(ctx, `
+		SELECT server_name, tool_name FROM tools
+		WHERE present = 1 AND server_name <> 'team' AND lower(substr(tool_name, 1, 5)) = 'team.'
+		ORDER BY server_name, tool_name
+		LIMIT 1
+	`).Scan(&serverName, &toolName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return TeamToolCollisionReason(serverName, toolName), nil
 }
 
 // UpsertTools replaces the enabled tool snapshot while retaining rows for
@@ -45,6 +101,13 @@ func (r *Repository) UpsertTools(ctx context.Context, tools []DiscoveredTool) er
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Checked inside the transaction: a collision that appears while workers
+	// register must not let the pseudo upsert below capture a user server's
+	// rows by setting their mcp_server_id to NULL.
+	teamCollision, err := teamNameCollision(ctx, tx)
+	if err != nil {
+		return err
+	}
 	discoveredAt := now()
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE tools
@@ -65,6 +128,9 @@ func (r *Repository) UpsertTools(ctx context.Context, tools []DiscoveredTool) er
 		return err
 	}
 	for _, tool := range tools {
+		if teamCollision != "" && IsTeamServerName(tool.ServerName) {
+			continue
+		}
 		if IsPseudoServerName(tool.ServerName) {
 			_, err := tx.ExecContext(ctx, `
 				INSERT INTO tools (
