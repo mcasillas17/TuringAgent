@@ -382,6 +382,7 @@ func New(cfg config.Config) (*App, error) {
 	teamService.SetApprovalEnforcer(approvalService)
 	teamService.SetEventPublisher(eventBus)
 	teamService.SetMaxDelegationsPerRun(cfg.MaxDelegationsPerRun)
+	teamService.SetDelegationResultMaxBytes(cfg.DelegationResultMaxBytes)
 	// Off, no run is offered the team, and a send pays nothing to find out.
 	if cfg.AgentTeamEnabled {
 		chatService.SetTeamRoster(teamService)

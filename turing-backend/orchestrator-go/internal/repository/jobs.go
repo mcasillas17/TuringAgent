@@ -50,8 +50,11 @@ type EnqueueUserMessageInput struct {
 	EgressDecision                 *PendingEgressDecision
 	// TeamRoster is the team this run is offered, built by the service for an
 	// attended local Turing run. Empty for every other run.
-	TeamRoster      []TeamRosterEntry
-	ValidateRouting func(context.Context, RoutingRequirements) error
+	TeamRoster []TeamRosterEntry
+	// TeamContinuation is what the run's continuation may use if it delegates.
+	// It is frozen only beside a roster that is kept.
+	TeamContinuation TeamContinuation
+	ValidateRouting  func(context.Context, RoutingRequirements) error
 }
 
 type RoutingRequirements struct {
@@ -944,6 +947,16 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
+	// A conversation that has delegated replays its specialists' results in
+	// every later turn, and an older worker would replay them as system text,
+	// so every later turn needs a team-protocol worker, roster or not.
+	delegated, err := sessionHasDelegationsTx(ctx, tx, input.SessionID)
+	if err != nil {
+		return EnqueueUserMessageResult{}, err
+	}
+	if delegated {
+		resolvedRoute.requirements.MinimumTeamProtocolVersion = 1
+	}
 	// A roster binds the job to a team-protocol worker: an older one would run
 	// the parent without the team, so enqueue checks the route the claim will
 	// enforce.
@@ -953,7 +966,7 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	}
 	if input.ValidateRouting != nil {
 		err := input.ValidateRouting(ctx, resolvedRoute.requirements)
-		if err != nil && len(teamRoster) > 0 {
+		if err != nil && len(teamRoster) > 0 && !delegated {
 			// The team is optional. If the last team-protocol worker left
 			// after the roster check, the turn runs as it would have
 			// without the team rather than being refused for its minimum.
@@ -1163,9 +1176,12 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	}
 	// Absent rather than empty on every other run, so a job that is not
 	// offered the team is byte-for-byte the job it always was.
+	if minimum := resolvedRoute.requirements.MinimumTeamProtocolVersion; minimum > 0 {
+		payload["minimumTeamProtocolVersion"] = minimum
+	}
 	if len(teamRoster) > 0 {
 		payload["teamRoster"] = teamRoster
-		payload["minimumTeamProtocolVersion"] = resolvedRoute.requirements.MinimumTeamProtocolVersion
+		payload["teamContinuation"] = frozenTeamContinuation(input.TeamContinuation, egressDecision != nil, selectedTools)
 	}
 	jobPayload, err := json.Marshal(payload)
 	if err != nil {

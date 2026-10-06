@@ -21,11 +21,21 @@ type fakeTeam struct {
 	roster []repository.TeamRosterEntry
 	err    error
 	calls  int
+	// continuation is what Continuation answers, and continuationErr its
+	// failure; continuationRoutes records every route it was asked about.
+	continuation       repository.TeamContinuation
+	continuationErr    error
+	continuationRoutes []repository.RoutingRequirements
 }
 
 func (f *fakeTeam) Roster(context.Context) ([]repository.TeamRosterEntry, error) {
 	f.calls++
 	return f.roster, f.err
+}
+
+func (f *fakeTeam) Continuation(_ context.Context, route repository.RoutingRequirements) (repository.TeamContinuation, error) {
+	f.continuationRoutes = append(f.continuationRoutes, route)
+	return f.continuation, f.continuationErr
 }
 
 var teamDelegateDescriptor = &turingv1.DiscoveredTool{ServerName: "team", ToolName: "team.delegate", Schema: &structpb.Struct{}}
@@ -107,6 +117,41 @@ func TestALocalTuringTurnIsOfferedTheTeam(t *testing.T) {
 	wantRunRoster(t, h, runID, chatTestRoster)
 }
 
+// What the turn's continuation may use is frozen with its team, read for the
+// same team-protocol route the roster was checked on.
+func TestALocalTuringTurnFreezesItsContinuationWithTheTeam(t *testing.T) {
+	h := newHarness(t)
+	connectTeamWorker(t, h, "team-worker", 1)
+	continuation := repository.TeamContinuation{Tools: []string{"system/system.time"}, ResultMaxBytes: 4096}
+	team := &fakeTeam{roster: chatTestRoster, continuation: continuation}
+	h.service.SetTeamRoster(team)
+
+	runID := sendForRun(t, h, localTuringRequest(h.createSession(t)))
+	frozen, err := h.repo.RunTeamContinuation(context.Background(), runID)
+	if err != nil || !reflect.DeepEqual(frozen, continuation) {
+		t.Fatalf("frozen continuation = %+v, %v; want %+v", frozen, err, continuation)
+	}
+	if len(team.continuationRoutes) == 0 {
+		t.Fatal("the continuation was never asked for")
+	}
+	for _, route := range team.continuationRoutes {
+		if route.MinimumTeamProtocolVersion != 1 || route.Model != "llama3.2" || route.ModelProvider != "ollama" {
+			t.Fatalf("continuation route = %+v, want the turn's route at team protocol 1", route)
+		}
+	}
+}
+
+// A team whose continuation cannot be worked out is not offered: delegating
+// would leave the results nowhere to go.
+func TestATeamWithoutAContinuationIsNotOffered(t *testing.T) {
+	h := newHarness(t)
+	connectTeamWorker(t, h, "team-worker", 1)
+	h.service.SetTeamRoster(&fakeTeam{roster: chatTestRoster, continuationErr: errors.New("tool catalog unreadable")})
+
+	runID := sendForRun(t, h, localTuringRequest(h.createSession(t)))
+	wantRunRoster(t, h, runID, nil)
+}
+
 // Only a worker that honors the team protocol can run a parent with the
 // team, so without one the team is not even read.
 func TestATurnWithoutATeamProtocolWorkerIsNotOfferedTheTeam(t *testing.T) {
@@ -175,7 +220,7 @@ func TestTheTeamIsOfferedOnlyWhereARunCanDelegate(t *testing.T) {
 			h.service.SetTeamRoster(test.source)
 			input := base
 			test.mutate(&input)
-			roster, err := h.service.teamRosterFor(context.Background(), input)
+			roster, _, err := h.service.teamRosterFor(context.Background(), input)
 			if err != nil {
 				t.Fatal(err)
 			}

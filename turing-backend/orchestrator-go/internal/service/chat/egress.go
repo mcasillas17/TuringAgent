@@ -135,7 +135,7 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 	}
 	// The same team the send will be offered, so the set disclosed here is the
 	// set the send re-derives.
-	if input.TeamRoster, err = s.teamRosterFor(ctx, input); err != nil {
+	if input.TeamRoster, input.TeamContinuation, err = s.teamRosterFor(ctx, input); err != nil {
 		return nil, err
 	}
 	resolved, err := s.resolveEgressContext(ctx, input)
@@ -529,6 +529,13 @@ func (s *Server) resolveEgressContext(ctx context.Context, input repository.Enqu
 		RequiredContextTokens:          input.RequiredContextTokens,
 		MinimumWorkerMaxConcurrentRuns: input.MinimumWorkerMaxConcurrentRuns,
 		ExternalAgent:                  routed, ExternalAgentCredentialRef: externalCredentialRef,
+	}
+	// Every later turn in a conversation that delegated needs a
+	// team-protocol worker, so only those workers' tools can be frozen for it.
+	if delegated, err := s.repo.SessionHasDelegations(ctx, input.SessionID); err != nil {
+		return nil, mapSessionError(ctx, err)
+	} else if delegated {
+		route.MinimumTeamProtocolVersion = 1
 	}
 	// A first pass, on what is known before anything has looked at where the
 	// frozen tools go. It is worth making early — an unknown model or a tool no
