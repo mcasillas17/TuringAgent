@@ -26,6 +26,7 @@ type Client struct {
 	mcp          turingv1.McpRegistryServiceClient
 	integrations turingv1.IntegrationServiceClient
 	memory       turingv1.MemoryServiceClient
+	team         turingv1.TeamServiceClient
 }
 
 const defaultApprovalWaitTimeout = 71 * time.Second
@@ -59,6 +60,7 @@ func New(conn *grpc.ClientConn, token string) *Client {
 		mcp:          turingv1.NewMcpRegistryServiceClient(conn),
 		integrations: turingv1.NewIntegrationServiceClient(conn),
 		memory:       turingv1.NewMemoryServiceClient(conn),
+		team:         turingv1.NewTeamServiceClient(conn),
 	}
 }
 
@@ -251,6 +253,17 @@ func (c *Client) ListMemoryTools(ctx context.Context) (*turingv1.ListMemoryTools
 
 func (c *Client) CallMemoryTool(ctx context.Context, request *turingv1.CallMemoryToolRequest) (*turingv1.CallMemoryToolResponse, error) {
 	return c.memory.CallMemoryTool(c.withAuth(ctx), request)
+}
+
+// ListTeamTools and CallTeamTool are the team service's internal facet: the
+// team tool one run was offered when it was enqueued, and a delegation through
+// it. The identity layer refuses every profile method on this connection.
+func (c *Client) ListTeamTools(ctx context.Context, runID string) (*turingv1.ListTeamToolsResponse, error) {
+	return c.team.ListTeamTools(c.withAuth(ctx), &turingv1.ListTeamToolsRequest{RunId: runID})
+}
+
+func (c *Client) CallTeamTool(ctx context.Context, request *turingv1.CallTeamToolRequest) (*turingv1.CallTeamToolResponse, error) {
+	return c.team.CallTeamTool(c.withAuth(ctx), request)
 }
 
 func (c *Client) withAuth(ctx context.Context) context.Context {

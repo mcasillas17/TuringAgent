@@ -17,18 +17,23 @@ import (
 )
 
 type WorkerConfig struct {
-	Conn                        *grpc.ClientConn
-	RuntimeToken                string
-	WorkerID                    string
-	MaxConcurrentRuns           int
-	MaxToolCallsPerRun          int
-	ModelTimeout                time.Duration
-	ToolTimeout                 time.Duration
-	ApprovalTimeout             time.Duration
-	TotalToolTimeout            time.Duration
-	OpenAIBaseURL               string
-	OpenAIAPIKey                string
-	OpenAIModel                 string
+	Conn               *grpc.ClientConn
+	RuntimeToken       string
+	WorkerID           string
+	MaxConcurrentRuns  int
+	MaxToolCallsPerRun int
+	ModelTimeout       time.Duration
+	ToolTimeout        time.Duration
+	ApprovalTimeout    time.Duration
+	TotalToolTimeout   time.Duration
+	OpenAIBaseURL      string
+	OpenAIAPIKey       string
+	OpenAIModel        string
+	// OllamaBaseURL, when set, adds a local Ollama provider serving
+	// OllamaModel (default llama3.2), which a test needs for anything only a
+	// local route gets, such as Turing's team.
+	OllamaBaseURL               string
+	OllamaModel                 string
 	ContextWindowTokens         int
 	MaxOutputTokens             int
 	MCPSystemBaseURL            string
@@ -62,6 +67,13 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 	providers := map[turingv1.ModelProvider]llm.Provider{
 		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE: openAIProvider,
 	}
+	if cfg.OllamaBaseURL != "" {
+		ollamaProvider, err := llm.NewOllamaWithLimits(cfg.OllamaBaseURL, http.DefaultClient, cfg.contextWindowTokens(), cfg.maxOutputTokens())
+		if err != nil {
+			return err
+		}
+		providers[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA] = ollamaProvider
+	}
 
 	toolRunner := &tools.Runner{
 		WaitApproval: func(ctx context.Context, approvalID string) (string, error) {
@@ -70,8 +82,6 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		ApprovalWaitTimeout: cfg.approvalTimeout(),
 	}
 	toolset := &agent.GeneralAssistantTools{
-		SystemMCP:          mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
-		FilesMCP:           mcp.NewClient(cfg.MCPFilesBaseURL, cfg.MCPFilesToken, http.DefaultClient),
 		Runner:             toolRunner,
 		MaxToolCallsPerRun: cfg.MaxToolCallsPerRun,
 		ModelTimeout:       cfg.modelTimeout(),
@@ -91,6 +101,15 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		IntegrationTools: func(context.Context) (agent.ToolLister, error) {
 			return mcp.NewIntegrationClient(client), nil
 		},
+		Team: client,
+	}
+	// A test without an MCP server leaves it out rather than discovering
+	// tools from a server that is not there.
+	if cfg.MCPSystemBaseURL != "" {
+		toolset.SystemMCP = mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient)
+	}
+	if cfg.MCPFilesBaseURL != "" {
+		toolset.FilesMCP = mcp.NewClient(cfg.MCPFilesBaseURL, cfg.MCPFilesToken, http.DefaultClient)
 	}
 	executor := agent.NewGeneralAssistant(providers, client, toolset)
 	runtimeWorker := worker.New(generalAssistantWorkerOptions(cfg, executor.AdvertisedTools), runtimeClientAdapter{client: client}, executor)
@@ -187,11 +206,23 @@ func (cfg WorkerConfig) models() []*turingv1.ModelCapability {
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
-	return []*turingv1.ModelCapability{{
+	models := []*turingv1.ModelCapability{{
 		Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE,
 		Model:            model,
 		MaxContextTokens: int32(cfg.contextWindowTokens()),
 	}}
+	if cfg.OllamaBaseURL != "" {
+		ollamaModel := cfg.OllamaModel
+		if ollamaModel == "" {
+			ollamaModel = "llama3.2"
+		}
+		models = append(models, &turingv1.ModelCapability{
+			Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
+			Model:            ollamaModel,
+			MaxContextTokens: int32(cfg.contextWindowTokens()),
+		})
+	}
+	return models
 }
 
 type runtimeClientAdapter struct{ client *orchestrator.Client }

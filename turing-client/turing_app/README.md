@@ -152,7 +152,8 @@ authorization: Bearer <api-key>
   section lists the specialist profiles under `team/` through `TeamService`,
   with each one's state, and turns them on and off; turning one on asks for a
   grant bound to its current revision unless that revision is already granted
-  (turning it off keeps the grant). Delegation is not switched on.
+  (turning it off keeps the grant). Delegation is off by default and shows
+  no cards yet.
 - **Telemetry** shows backend local usage aggregates, not a user-facing audit log.
 
 The destination list is defined in `ShellDestination`; `ResponsiveShell`

@@ -34,7 +34,7 @@ Current capability status and future work are separated in the
 backend-connected Chats, Skills, Memory, Integrations, MCPs, Automations,
 Agents and Telemetry surfaces. Agents manages model endpoint records and
 Turing's team of specialist profiles (enablement and revision-bound grants;
-delegation is not switched on);
+delegation is off by default and does not report back yet);
 [integration and routing limits](docs/NORTH_STAR.md#guarded-capability-inventory)
 distinguish credential storage, functional tools, inference and delegation.
 
@@ -137,12 +137,17 @@ grant sent for a revision that has since changed is refused and nothing is
 recorded. A pattern that is only `*` is rejected, and a folder
 without an `AGENT.md` is not a profile.
 
-**Delegation is not switched on**: no conversation reaches a specialist yet.
-`TURING_AGENT_TEAM_ENABLED` (in `.env`, default `false`) prepares for it: when
-`true`, each Turing turn on a local model that a team-protocol worker can serve
-records the Active team, and only such a worker takes that turn. Leave it
-`false` until delegation lands; profiles can be turned on and granted either
-way.
+**Delegation is off by default, and does not report back yet.** With
+`TURING_AGENT_TEAM_ENABLED=true` (in `.env`, default `false`), each Turing turn
+on a local model that a team-protocol worker can serve records the Active team,
+only such a worker takes that turn, and Turing is offered `team.delegate`. A
+call to it queues the specialist's task in a hidden conversation that the
+specialist then works on. The tool is safe by default. The app has no control
+for its policy yet; `McpRegistryService.UpdateToolPolicyByName` (server `team`)
+can make it require approval or disable it.
+Nothing brings the specialist's result back to Turing yet, and the app shows
+no delegation cards, so leave the flag `false` until that lands; profiles can be
+turned on and granted either way.
 
 The name `team` belongs to Turing's delegation tool, `team.delegate`. Registering
 or importing an MCP server named `team` (in any letter case) is refused, and so

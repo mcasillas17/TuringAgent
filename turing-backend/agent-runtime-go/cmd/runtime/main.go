@@ -76,7 +76,26 @@ func run() error {
 		// orchestrator to accept the resume it permits.
 		ApprovalWaitTimeout: cfg.ApprovalTimeout,
 	}
-	toolset := &agent.GeneralAssistantTools{
+	toolset := generalAssistantTools(cfg, client, toolRunner)
+	executor := agent.NewGeneralAssistant(providers, client, toolset)
+	// The only place a third-party API key exists at runtime. It is read from
+	// this process's environment and used to build a per-job client; nothing
+	// puts it back on a job, an event, or a response.
+	executor.SetExternalAgentProvider(agent.NewExternalAgentProviderFunc(
+		cfg.AgentAPIKeys,
+		cfg.OpenAIContextWindowTokens,
+		cfg.OpenAIMaxOutputTokens,
+		http.DefaultClient,
+	))
+	runtimeWorker := worker.New(workerOptions(cfg, executor.AdvertisedTools), runtimeClientAdapter{client: client}, executor)
+	return serve(ctx, runtimeWorker)
+}
+
+// generalAssistantTools is what GeneralAssistant runs with: the bundled and
+// registered MCP servers, integrations, memory and the team, each over the
+// orchestrator connection where the orchestrator enforces it.
+func generalAssistantTools(cfg config.Config, client *orchestrator.Client, toolRunner *tools.Runner) *agent.GeneralAssistantTools {
+	return &agent.GeneralAssistantTools{
 		SystemMCP: mcp.NewClient(cfg.MCPSystemBaseURL, cfg.MCPSystemToken, http.DefaultClient),
 		// The orchestrator client is the Searcher: recall queries SearchMessages
 		// across the user's earlier sessions. NewRecaller rather than a struct
@@ -107,19 +126,10 @@ func run() error {
 		MemoryTools: func(context.Context) (agent.ToolLister, error) {
 			return mcp.NewMemoryClient(client), nil
 		},
+		// Turing is offered the team tool its run was given, and delegates
+		// through the same internal connection.
+		Team: client,
 	}
-	executor := agent.NewGeneralAssistant(providers, client, toolset)
-	// The only place a third-party API key exists at runtime. It is read from
-	// this process's environment and used to build a per-job client; nothing
-	// puts it back on a job, an event, or a response.
-	executor.SetExternalAgentProvider(agent.NewExternalAgentProviderFunc(
-		cfg.AgentAPIKeys,
-		cfg.OpenAIContextWindowTokens,
-		cfg.OpenAIMaxOutputTokens,
-		http.DefaultClient,
-	))
-	runtimeWorker := worker.New(workerOptions(cfg, executor.AdvertisedTools), runtimeClientAdapter{client: client}, executor)
-	return serve(ctx, runtimeWorker)
 }
 
 // workerOptions is what this process advertises. Its executor is
