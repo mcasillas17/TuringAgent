@@ -903,10 +903,11 @@ class _AutomationSkills extends StatelessWidget {
 }
 
 /// The pseudo-servers whose tools the orchestrator refuses to automations
-/// unconditionally — integration calls are egress nobody attends, and memory
-/// is never touched on an unattended run. Offering either here would be a
-/// tick that can only fail at Save.
-const _serversUnavailableToAutomations = {'integrations', 'memory'};
+/// unconditionally — integration calls are egress nobody attends, memory is
+/// never touched on an unattended run, and nobody is there to see what a
+/// specialist was asked to do. Offering any here would be a tick that can only
+/// fail at Save.
+const _serversUnavailableToAutomations = {'integrations', 'memory', 'team'};
 
 /// The tools that would otherwise stop and ask, with a tick against each.
 ///
@@ -931,8 +932,8 @@ class _AllowlistPicker extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'Connected-account integrations and memory tools are not '
-          'available to automations.',
+          'Connected-account integrations, memory tools and team delegation '
+          'are not available to automations.',
           style: TextStyle(fontSize: 12.5, color: palette.textMuted),
         ),
         const SizedBox(height: 8),
@@ -957,7 +958,7 @@ class _AllowlistPicker extends StatelessWidget {
                 style: TextStyle(fontSize: 12.5, color: AppColors.danger),
               );
             }
-            // Memory and integration tools are refused to automations
+            // Memory, integration and team tools are refused to automations
             // unconditionally on the server (the sentence above says so), so
             // offering one here would be a tick that can only fail at Save. A
             // stale entry from an older allowlist still shows below, because a

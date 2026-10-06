@@ -1,6 +1,10 @@
 package tools
 
-import "context"
+import (
+	"context"
+
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+)
 
 type Policy string
 
@@ -9,6 +13,20 @@ const (
 	PolicyApprovalRequired Policy = "approval_required"
 	PolicyDisabled         Policy = "disabled"
 )
+
+// ProtoFor is a stored policy as a tool descriptor reports it. Anything that
+// is not safe or disabled is reported as needing approval, the fail-closed
+// reading.
+func ProtoFor(policy string) turingv1.ToolPolicy {
+	switch Policy(policy) {
+	case PolicySafe:
+		return turingv1.ToolPolicy_TOOL_POLICY_SAFE
+	case PolicyDisabled:
+		return turingv1.ToolPolicy_TOOL_POLICY_DISABLED
+	default:
+		return turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED
+	}
+}
 
 type PolicyLookup interface {
 	GetToolPolicy(ctx context.Context, serverName string, toolName string) (policy string, enabled bool, found bool, err error)

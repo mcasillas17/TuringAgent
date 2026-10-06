@@ -181,22 +181,11 @@ func (s *Server) ListMemoryTools(ctx context.Context, _ *turingv1.ListMemoryTool
 		}
 		response.Tools = append(response.Tools, &turingv1.MemoryToolDescriptor{
 			ToolName:    tool.name,
-			Policy:      memoryPolicyProto(policy),
+			Policy:      toolpolicy.ProtoFor(policy),
 			Schema:      schema,
 			Enabled:     true,
 			Description: tool.description,
 		})
 	}
 	return response, nil
-}
-
-func memoryPolicyProto(policy string) turingv1.ToolPolicy {
-	switch policy {
-	case "safe":
-		return turingv1.ToolPolicy_TOOL_POLICY_SAFE
-	case "disabled":
-		return turingv1.ToolPolicy_TOOL_POLICY_DISABLED
-	default:
-		return turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED
-	}
 }

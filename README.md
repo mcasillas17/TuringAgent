@@ -108,8 +108,9 @@ database. To bring one back, copy its folder from `scripts/team-templates/`
 into `team/`; it returns with the on/off setting and grant it had. If that grant
 matches the template, no new review is asked for, so a profile that was on can
 be Active again at once; otherwise it needs a new grant first. Dev and Research
-require nothing, so on and granted they are Active whenever a worker serves
-their model and nothing else claims the name `team` (below); Inbox requires `gmail.*`, so its card lists that tool, and on and
+require nothing, so on and granted they are Active whenever a worker that
+speaks the team protocol serves their model and nothing else claims the name
+`team` (below); Inbox requires `gmail.*`, so its card lists that tool, and on and
 granted it shows Unavailable until it resolves. Turning it off keeps the
 grant, so turning it on again does not ask.
 
@@ -136,9 +137,12 @@ grant sent for a revision that has since changed is refused and nothing is
 recorded. A pattern that is only `*` is rejected, and a folder
 without an `AGENT.md` is not a profile.
 
-This build stores profiles, enablement and grants only. **Delegation is not
-switched on**: no conversation reaches a specialist yet, and nothing about a
-run changes.
+**Delegation is not switched on**: no conversation reaches a specialist yet.
+`TURING_AGENT_TEAM_ENABLED` (in `.env`, default `false`) prepares for it: when
+`true`, each Turing turn on a local model that a team-protocol worker can serve
+records the Active team, and only such a worker takes that turn. Leave it
+`false` until delegation lands; profiles can be turned on and granted either
+way.
 
 The name `team` belongs to Turing's delegation tool, `team.delegate`. Registering
 or importing an MCP server named `team` (in any letter case) is refused, and so

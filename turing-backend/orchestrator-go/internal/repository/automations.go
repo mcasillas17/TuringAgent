@@ -41,6 +41,10 @@ var (
 	// the memory service refuses the dispatch itself as well, because a tool
 	// the user has marked safe never reaches an allowlist at all.
 	ErrAutomationMemoryToolUnsupported = errors.New("memory tools are not available to automations")
+	// ErrAutomationTeamToolUnsupported refuses an allowlist entry for a team
+	// tool. Delegation is offered only to attended runs: nobody is present on
+	// an unattended one to see what a specialist was asked to do.
+	ErrAutomationTeamToolUnsupported = errors.New("team tools are not available to automations")
 )
 
 // AutomationTool names a tool by the same (server, tool) pair the
@@ -193,6 +197,9 @@ func normalizeAllowedTools(tools []AutomationTool) ([]AutomationTool, error) {
 		}
 		if tool.ServerName == "memory" {
 			return nil, ErrAutomationMemoryToolUnsupported
+		}
+		if tool.ServerName == "team" {
+			return nil, ErrAutomationTeamToolUnsupported
 		}
 		if _, duplicate := seen[tool]; duplicate {
 			continue

@@ -48,7 +48,10 @@ type EnqueueUserMessageInput struct {
 	RequiredContextTokens          int
 	MinimumWorkerMaxConcurrentRuns int
 	EgressDecision                 *PendingEgressDecision
-	ValidateRouting                func(context.Context, RoutingRequirements) error
+	// TeamRoster is the team this run is offered, built by the service for an
+	// attended local Turing run. Empty for every other run.
+	TeamRoster      []TeamRosterEntry
+	ValidateRouting func(context.Context, RoutingRequirements) error
 }
 
 type RoutingRequirements struct {
@@ -871,12 +874,15 @@ type resolvedEnqueueRoute struct {
 	externalAgentHost sql.NullString
 }
 
-func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (resolvedEnqueueRoute, error) {
+// EnqueueRoutingRequirements is the route a message asks for before any
+// external-agent routing of its conversation is applied: the route the
+// enqueue validates, so a caller that checks it first asks the same question.
+func EnqueueRoutingRequirements(input EnqueueUserMessageInput) RoutingRequirements {
 	model := input.Model
 	if input.ExecutionModel != "" {
 		model = input.ExecutionModel
 	}
-	resolved := resolvedEnqueueRoute{requirements: RoutingRequirements{
+	return RoutingRequirements{
 		AgentID:                        input.AgentID,
 		ModelProvider:                  input.ModelProvider,
 		Model:                          model,
@@ -889,7 +895,11 @@ func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMes
 		// this message actually has, and a caller that supplied a decision is
 		// asking for a worker that can validate one whatever shape it takes.
 		RemoteEgressDecision: input.EgressDecision != nil,
-	}}
+	}
+}
+
+func resolveEnqueueRouteTx(ctx context.Context, tx *sql.Tx, input EnqueueUserMessageInput) (resolvedEnqueueRoute, error) {
+	resolved := resolvedEnqueueRoute{requirements: EnqueueRoutingRequirements(input)}
 	routedAgent, routed, err := sessionExternalAgentTx(ctx, tx, input.SessionID)
 	if err != nil {
 		return resolvedEnqueueRoute{}, err
@@ -934,8 +944,25 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
+	// A roster binds the job to a team-protocol worker: an older one would run
+	// the parent without the team, so enqueue checks the route the claim will
+	// enforce.
+	teamRoster := teamRosterForRoute(input, resolvedRoute.requirements)
+	if len(teamRoster) > 0 {
+		resolvedRoute.requirements.MinimumTeamProtocolVersion = 1
+	}
 	if input.ValidateRouting != nil {
 		err := input.ValidateRouting(ctx, resolvedRoute.requirements)
+		if err != nil && len(teamRoster) > 0 {
+			// The team is optional. If the last team-protocol worker left
+			// after the roster check, the turn runs as it would have
+			// without the team rather than being refused for its minimum.
+			plain := resolvedRoute.requirements
+			plain.MinimumTeamProtocolVersion = 0
+			if err = input.ValidateRouting(ctx, plain); err == nil {
+				teamRoster, resolvedRoute.requirements = nil, plain
+			}
+		}
 		if err != nil {
 			return EnqueueUserMessageResult{}, err
 		}
@@ -1130,7 +1157,7 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	if egressDecision != nil && memoryFingerprint != egressDecision.MemorySnapshotFingerprint {
 		return EnqueueUserMessageResult{}, ErrEgressMemorySnapshotChanged
 	}
-	jobPayload, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"userText":                       input.Content,
 		"sessionId":                      input.SessionID,
 		"userMessageId":                  userMessageID,
@@ -1151,7 +1178,14 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 		"pinnedPersona":             pinnedPersonaSnapshot(memoryPreimage),
 		"pinnedProfile":             pinnedProfileSnapshot(memoryPreimage),
 		"memorySnapshotFingerprint": memoryFingerprint,
-	})
+	}
+	// Absent rather than empty on every other run, so a job that is not
+	// offered the team is byte-for-byte the job it always was.
+	if len(teamRoster) > 0 {
+		payload["teamRoster"] = teamRoster
+		payload["minimumTeamProtocolVersion"] = resolvedRoute.requirements.MinimumTeamProtocolVersion
+	}
+	jobPayload, err := json.Marshal(payload)
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}

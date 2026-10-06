@@ -22,15 +22,21 @@ const (
 	TeamService_ListAgentProfiles_FullMethodName      = "/turing.v1.TeamService/ListAgentProfiles"
 	TeamService_SetAgentProfileEnabled_FullMethodName = "/turing.v1.TeamService/SetAgentProfileEnabled"
 	TeamService_GrantAgentProfile_FullMethodName      = "/turing.v1.TeamService/GrantAgentProfile"
+	TeamService_ListTeamTools_FullMethodName          = "/turing.v1.TeamService/ListTeamTools"
 )
 
 // TeamServiceClient is the client API for TeamService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Like MemoryService, one service with two facets split by method name: the
+// public facet manages profiles, and the internal facet, which only the
+// runtime identity reaches, serves the team tool.
 type TeamServiceClient interface {
 	ListAgentProfiles(ctx context.Context, in *ListAgentProfilesRequest, opts ...grpc.CallOption) (*ListAgentProfilesResponse, error)
 	SetAgentProfileEnabled(ctx context.Context, in *SetAgentProfileEnabledRequest, opts ...grpc.CallOption) (*AgentProfile, error)
 	GrantAgentProfile(ctx context.Context, in *GrantAgentProfileRequest, opts ...grpc.CallOption) (*AgentProfile, error)
+	ListTeamTools(ctx context.Context, in *ListTeamToolsRequest, opts ...grpc.CallOption) (*ListTeamToolsResponse, error)
 }
 
 type teamServiceClient struct {
@@ -71,13 +77,28 @@ func (c *teamServiceClient) GrantAgentProfile(ctx context.Context, in *GrantAgen
 	return out, nil
 }
 
+func (c *teamServiceClient) ListTeamTools(ctx context.Context, in *ListTeamToolsRequest, opts ...grpc.CallOption) (*ListTeamToolsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTeamToolsResponse)
+	err := c.cc.Invoke(ctx, TeamService_ListTeamTools_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TeamServiceServer is the server API for TeamService service.
 // All implementations must embed UnimplementedTeamServiceServer
 // for forward compatibility.
+//
+// Like MemoryService, one service with two facets split by method name: the
+// public facet manages profiles, and the internal facet, which only the
+// runtime identity reaches, serves the team tool.
 type TeamServiceServer interface {
 	ListAgentProfiles(context.Context, *ListAgentProfilesRequest) (*ListAgentProfilesResponse, error)
 	SetAgentProfileEnabled(context.Context, *SetAgentProfileEnabledRequest) (*AgentProfile, error)
 	GrantAgentProfile(context.Context, *GrantAgentProfileRequest) (*AgentProfile, error)
+	ListTeamTools(context.Context, *ListTeamToolsRequest) (*ListTeamToolsResponse, error)
 	mustEmbedUnimplementedTeamServiceServer()
 }
 
@@ -96,6 +117,9 @@ func (UnimplementedTeamServiceServer) SetAgentProfileEnabled(context.Context, *S
 }
 func (UnimplementedTeamServiceServer) GrantAgentProfile(context.Context, *GrantAgentProfileRequest) (*AgentProfile, error) {
 	return nil, status.Error(codes.Unimplemented, "method GrantAgentProfile not implemented")
+}
+func (UnimplementedTeamServiceServer) ListTeamTools(context.Context, *ListTeamToolsRequest) (*ListTeamToolsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTeamTools not implemented")
 }
 func (UnimplementedTeamServiceServer) mustEmbedUnimplementedTeamServiceServer() {}
 func (UnimplementedTeamServiceServer) testEmbeddedByValue()                     {}
@@ -172,6 +196,24 @@ func _TeamService_GrantAgentProfile_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TeamService_ListTeamTools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTeamToolsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TeamServiceServer).ListTeamTools(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TeamService_ListTeamTools_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TeamServiceServer).ListTeamTools(ctx, req.(*ListTeamToolsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TeamService_ServiceDesc is the grpc.ServiceDesc for TeamService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -190,6 +232,10 @@ var TeamService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GrantAgentProfile",
 			Handler:    _TeamService_GrantAgentProfile_Handler,
+		},
+		{
+			MethodName: "ListTeamTools",
+			Handler:    _TeamService_ListTeamTools_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -188,7 +188,29 @@ is enforced at the claim, not only at enqueue:
 - `ListPendingRoutingWorkPage` copies the minimum, so TUR-010 reports such a
   job as unroutable rather than routable.
 
-No job sets the key or the contract fields yet; the [orchestrator and team
+**The parent's roster.** With `TURING_AGENT_TEAM_ENABLED=true`, an attended
+Turing turn on a local model is enqueued with the active specialists frozen into
+its payload as `teamRoster` (the spec's `team_roster`, spelled like every other
+payload key). It is built only while a team-protocol worker can serve the
+turn's whole route (model, requested tools, context and capacity), and it
+carries `minimumTeamProtocolVersion: 1` beside it, because an older worker would
+run the parent without the team. When such a turn's tools are frozen by an
+egress decision, the resolver first intersects the tools of the team-protocol
+workers that can carry the decision, so one older worker cannot strip
+`team/team.delegate` from the set; a consented send repeats the choice its
+consent covered rather than reading the team again. A frozen set that still
+lacks it means the turn carries no roster and no key, and so does a turn whose
+last team-protocol worker left between the roster check and the enqueue: the
+team is optional, so the turn is enqueued as it would have been without it.
+The persisted roster, not the frozen tool set, decides whether a run may
+delegate: a consented send keeps `team/team.delegate` in the set it was
+consented with even when the team could not be read at send time, and such a
+run is offered no team tool. The internal `TeamService.ListTeamTools` renders a run's
+frozen roster, never the live profiles, as the `team.delegate` schema; no
+runtime calls it until the later PR that offers the tool.
+
+No job sets the specialist-job contract fields yet, and nothing offers or
+dispatches `team.delegate` yet. The [orchestrator and team
 design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
 (sections 6.3, 6.4, 7.3 and 7.5) names the jobs that will.
 

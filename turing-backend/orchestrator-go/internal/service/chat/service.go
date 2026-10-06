@@ -42,6 +42,7 @@ type Server struct {
 	now                         func() time.Time
 	nonce                       func() (string, error)
 	integrationEndpointResolver func(context.Context, []string) ([]repository.IntegrationEndpointEgress, error)
+	team                        teamRosterSource
 }
 
 type runtimeDispatcher interface {
@@ -148,6 +149,9 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	}
 	if s.runtime != nil {
 		input.ValidateRouting = s.runtime.ValidateRouting
+	}
+	if input.TeamRoster, err = s.teamRosterFor(ctx, input); err != nil {
+		return err
 	}
 	replayed, foundReplay, err := s.applyRemoteEgress(ctx, req, &input)
 	if err != nil {

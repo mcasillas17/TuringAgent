@@ -20,6 +20,9 @@ import 'team.pb.dart' as $0;
 
 export 'team.pb.dart';
 
+/// Like MemoryService, one service with two facets split by method name: the
+/// public facet manages profiles, and the internal facet, which only the
+/// runtime identity reaches, serves the team tool.
 @$pb.GrpcServiceName('turing.v1.TeamService')
 class TeamServiceClient extends $grpc.Client {
   /// The hostname for this service.
@@ -54,6 +57,13 @@ class TeamServiceClient extends $grpc.Client {
     return $createUnaryCall(_$grantAgentProfile, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.ListTeamToolsResponse> listTeamTools(
+    $0.ListTeamToolsRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$listTeamTools, request, options: options);
+  }
+
   // method descriptors
 
   static final _$listAgentProfiles = $grpc.ClientMethod<
@@ -71,6 +81,11 @@ class TeamServiceClient extends $grpc.Client {
           '/turing.v1.TeamService/GrantAgentProfile',
           ($0.GrantAgentProfileRequest value) => value.writeToBuffer(),
           $0.AgentProfile.fromBuffer);
+  static final _$listTeamTools =
+      $grpc.ClientMethod<$0.ListTeamToolsRequest, $0.ListTeamToolsResponse>(
+          '/turing.v1.TeamService/ListTeamTools',
+          ($0.ListTeamToolsRequest value) => value.writeToBuffer(),
+          $0.ListTeamToolsResponse.fromBuffer);
 }
 
 @$pb.GrpcServiceName('turing.v1.TeamService')
@@ -105,6 +120,15 @@ abstract class TeamServiceBase extends $grpc.Service {
             ($core.List<$core.int> value) =>
                 $0.GrantAgentProfileRequest.fromBuffer(value),
             ($0.AgentProfile value) => value.writeToBuffer()));
+    $addMethod(
+        $grpc.ServiceMethod<$0.ListTeamToolsRequest, $0.ListTeamToolsResponse>(
+            'ListTeamTools',
+            listTeamTools_Pre,
+            false,
+            false,
+            ($core.List<$core.int> value) =>
+                $0.ListTeamToolsRequest.fromBuffer(value),
+            ($0.ListTeamToolsResponse value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.ListAgentProfilesResponse> listAgentProfiles_Pre(
@@ -132,4 +156,13 @@ abstract class TeamServiceBase extends $grpc.Service {
 
   $async.Future<$0.AgentProfile> grantAgentProfile(
       $grpc.ServiceCall call, $0.GrantAgentProfileRequest request);
+
+  $async.Future<$0.ListTeamToolsResponse> listTeamTools_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.ListTeamToolsRequest> $request) async {
+    return listTeamTools($call, await $request);
+  }
+
+  $async.Future<$0.ListTeamToolsResponse> listTeamTools(
+      $grpc.ServiceCall call, $0.ListTeamToolsRequest request);
 }

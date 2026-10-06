@@ -13,7 +13,9 @@
 import 'dart:core' as $core;
 
 import 'package:protobuf/protobuf.dart' as $pb;
+import 'package:protobuf/well_known_types/google/protobuf/struct.pb.dart' as $1;
 
+import 'common.pbenum.dart' as $2;
 import 'team.pbenum.dart';
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
@@ -609,6 +611,231 @@ class GrantAgentProfileRequest extends $pb.GeneratedMessage {
   $core.bool hasRevision() => $_has(1);
   @$pb.TagNumber(2)
   void clearRevision() => $_clearField(2);
+}
+
+/// The team tool as one run is offered it, rendered from the roster frozen
+/// onto that run's job when it was enqueued, never from the live profiles.
+class TeamToolDescriptor extends $pb.GeneratedMessage {
+  factory TeamToolDescriptor({
+    $core.String? toolName,
+    $2.ToolPolicy? policy,
+    $1.Struct? schema,
+    $core.bool? enabled,
+    $core.String? description,
+  }) {
+    final result = TeamToolDescriptor._();
+    if (toolName != null) result.toolName = toolName;
+    if (policy != null) result.policy = policy;
+    if (schema != null) result.schema = schema;
+    if (enabled != null) result.enabled = enabled;
+    if (description != null) result.description = description;
+    return result;
+  }
+
+  TeamToolDescriptor._();
+
+  factory TeamToolDescriptor.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      TeamToolDescriptor()..mergeFromBuffer(data, registry);
+  factory TeamToolDescriptor.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      TeamToolDescriptor()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'TeamToolDescriptor',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: TeamToolDescriptor.$_createMessage)
+    ..aOS(1, _omitFieldNames ? '' : 'toolName')
+    ..aE<$2.ToolPolicy>(2, _omitFieldNames ? '' : 'policy',
+        enumValues: $2.ToolPolicy.values)
+    ..aOM<$1.Struct>(3, _omitFieldNames ? '' : 'schema',
+        subBuilder: $1.Struct.$_createMessage)
+    ..aOB(4, _omitFieldNames ? '' : 'enabled')
+    ..aOS(5, _omitFieldNames ? '' : 'description')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  TeamToolDescriptor clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  TeamToolDescriptor copyWith(void Function(TeamToolDescriptor) updates) =>
+      super.copyWith((message) => updates(message as TeamToolDescriptor))
+          as TeamToolDescriptor;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use TeamToolDescriptor() / TeamToolDescriptor.new instead')
+  static TeamToolDescriptor create() => TeamToolDescriptor._();
+  static $pb.GeneratedMessage $_createMessage() => TeamToolDescriptor._();
+  @$core.override
+  TeamToolDescriptor createEmptyInstance() => TeamToolDescriptor._();
+  @$core.pragma('dart2js:noInline')
+  static TeamToolDescriptor getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<TeamToolDescriptor>(
+          TeamToolDescriptor.$_createMessage);
+  static TeamToolDescriptor? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get toolName => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set toolName($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasToolName() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearToolName() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $2.ToolPolicy get policy => $_getN(1);
+  @$pb.TagNumber(2)
+  set policy($2.ToolPolicy value) => $_setField(2, value);
+  @$pb.TagNumber(2)
+  $core.bool hasPolicy() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearPolicy() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $1.Struct get schema => $_getN(2);
+  @$pb.TagNumber(3)
+  set schema($1.Struct value) => $_setField(3, value);
+  @$pb.TagNumber(3)
+  $core.bool hasSchema() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearSchema() => $_clearField(3);
+  @$pb.TagNumber(3)
+  $1.Struct ensureSchema() => $_ensure(2);
+
+  @$pb.TagNumber(4)
+  $core.bool get enabled => $_getBF(3);
+  @$pb.TagNumber(4)
+  set enabled($core.bool value) => $_setBool(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasEnabled() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearEnabled() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get description => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set description($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasDescription() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearDescription() => $_clearField(5);
+}
+
+/// Internal: the runtime asks for the run it is executing. A run that was not
+/// offered the team, or any run while the team is off, gets no tools.
+class ListTeamToolsRequest extends $pb.GeneratedMessage {
+  factory ListTeamToolsRequest({
+    $core.String? runId,
+  }) {
+    final result = ListTeamToolsRequest._();
+    if (runId != null) result.runId = runId;
+    return result;
+  }
+
+  ListTeamToolsRequest._();
+
+  factory ListTeamToolsRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      ListTeamToolsRequest()..mergeFromBuffer(data, registry);
+  factory ListTeamToolsRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      ListTeamToolsRequest()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ListTeamToolsRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: ListTeamToolsRequest.$_createMessage)
+    ..aOS(1, _omitFieldNames ? '' : 'runId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListTeamToolsRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListTeamToolsRequest copyWith(void Function(ListTeamToolsRequest) updates) =>
+      super.copyWith((message) => updates(message as ListTeamToolsRequest))
+          as ListTeamToolsRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListTeamToolsRequest() / ListTeamToolsRequest.new instead')
+  static ListTeamToolsRequest create() => ListTeamToolsRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ListTeamToolsRequest._();
+  @$core.override
+  ListTeamToolsRequest createEmptyInstance() => ListTeamToolsRequest._();
+  @$core.pragma('dart2js:noInline')
+  static ListTeamToolsRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ListTeamToolsRequest>(
+          ListTeamToolsRequest.$_createMessage);
+  static ListTeamToolsRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get runId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set runId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasRunId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearRunId() => $_clearField(1);
+}
+
+class ListTeamToolsResponse extends $pb.GeneratedMessage {
+  factory ListTeamToolsResponse({
+    $core.Iterable<TeamToolDescriptor>? tools,
+  }) {
+    final result = ListTeamToolsResponse._();
+    if (tools != null) result.tools.addAll(tools);
+    return result;
+  }
+
+  ListTeamToolsResponse._();
+
+  factory ListTeamToolsResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      ListTeamToolsResponse()..mergeFromBuffer(data, registry);
+  factory ListTeamToolsResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      ListTeamToolsResponse()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ListTeamToolsResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: ListTeamToolsResponse.$_createMessage)
+    ..pPM<TeamToolDescriptor>(1, _omitFieldNames ? '' : 'tools',
+        subBuilder: TeamToolDescriptor.$_createMessage)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListTeamToolsResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListTeamToolsResponse copyWith(
+          void Function(ListTeamToolsResponse) updates) =>
+      super.copyWith((message) => updates(message as ListTeamToolsResponse))
+          as ListTeamToolsResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListTeamToolsResponse() / ListTeamToolsResponse.new instead')
+  static ListTeamToolsResponse create() => ListTeamToolsResponse._();
+  static $pb.GeneratedMessage $_createMessage() => ListTeamToolsResponse._();
+  @$core.override
+  ListTeamToolsResponse createEmptyInstance() => ListTeamToolsResponse._();
+  @$core.pragma('dart2js:noInline')
+  static ListTeamToolsResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ListTeamToolsResponse>(
+          ListTeamToolsResponse.$_createMessage);
+  static ListTeamToolsResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $pb.PbList<TeamToolDescriptor> get tools => $_getList(0);
 }
 
 const $core.bool _omitFieldNames =

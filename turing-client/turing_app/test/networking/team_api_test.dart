@@ -179,4 +179,13 @@ class _TeamService extends teamgrpc.TeamServiceBase {
       grantedRevision: request.revision,
     );
   }
+
+  // The internal facet. A public client must never reach it, and this fake
+  // refuses it the way the real server's public facet does.
+  @override
+  Future<teampb.ListTeamToolsResponse> listTeamTools(
+    grpc.ServiceCall call,
+    teampb.ListTeamToolsRequest request,
+  ) async =>
+      throw grpc.GrpcError.permissionDenied('team tool discovery is internal');
 }

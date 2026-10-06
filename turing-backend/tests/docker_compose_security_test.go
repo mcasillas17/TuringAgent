@@ -258,6 +258,9 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"TURING_MAX_CONCURRENT_RUNS_GENERAL",
 			"TURING_MAX_TOOL_CALLS_PER_RUN",
 			"TURING_APPROVAL_TIMEOUT_MS",
+			// Delegation is the orchestrator's decision alone: it builds the
+			// roster and creates every child, so no worker needs the flag.
+			"TURING_AGENT_TEAM_ENABLED",
 		},
 		"turing-agent-runtime-general": {
 			"TURING_RUNTIME_TOKEN",

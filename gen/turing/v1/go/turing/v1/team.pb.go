@@ -9,6 +9,7 @@ package turingv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	structpb "google.golang.org/protobuf/types/known/structpb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -590,11 +591,179 @@ func (x *GrantAgentProfileRequest) GetRevision() string {
 	return ""
 }
 
+// The team tool as one run is offered it, rendered from the roster frozen
+// onto that run's job when it was enqueued, never from the live profiles.
+type TeamToolDescriptor struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ToolName      string                 `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	Policy        ToolPolicy             `protobuf:"varint,2,opt,name=policy,proto3,enum=turing.v1.ToolPolicy" json:"policy,omitempty"`
+	Schema        *structpb.Struct       `protobuf:"bytes,3,opt,name=schema,proto3" json:"schema,omitempty"`
+	Enabled       bool                   `protobuf:"varint,4,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	Description   string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TeamToolDescriptor) Reset() {
+	*x = TeamToolDescriptor{}
+	mi := &file_turing_v1_team_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TeamToolDescriptor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TeamToolDescriptor) ProtoMessage() {}
+
+func (x *TeamToolDescriptor) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_team_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TeamToolDescriptor.ProtoReflect.Descriptor instead.
+func (*TeamToolDescriptor) Descriptor() ([]byte, []int) {
+	return file_turing_v1_team_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *TeamToolDescriptor) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *TeamToolDescriptor) GetPolicy() ToolPolicy {
+	if x != nil {
+		return x.Policy
+	}
+	return ToolPolicy_TOOL_POLICY_UNSPECIFIED
+}
+
+func (x *TeamToolDescriptor) GetSchema() *structpb.Struct {
+	if x != nil {
+		return x.Schema
+	}
+	return nil
+}
+
+func (x *TeamToolDescriptor) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *TeamToolDescriptor) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+// Internal: the runtime asks for the run it is executing. A run that was not
+// offered the team, or any run while the team is off, gets no tools.
+type ListTeamToolsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTeamToolsRequest) Reset() {
+	*x = ListTeamToolsRequest{}
+	mi := &file_turing_v1_team_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTeamToolsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTeamToolsRequest) ProtoMessage() {}
+
+func (x *ListTeamToolsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_team_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTeamToolsRequest.ProtoReflect.Descriptor instead.
+func (*ListTeamToolsRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_team_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ListTeamToolsRequest) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+type ListTeamToolsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tools         []*TeamToolDescriptor  `protobuf:"bytes,1,rep,name=tools,proto3" json:"tools,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListTeamToolsResponse) Reset() {
+	*x = ListTeamToolsResponse{}
+	mi := &file_turing_v1_team_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListTeamToolsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListTeamToolsResponse) ProtoMessage() {}
+
+func (x *ListTeamToolsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_team_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListTeamToolsResponse.ProtoReflect.Descriptor instead.
+func (*ListTeamToolsResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_team_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ListTeamToolsResponse) GetTools() []*TeamToolDescriptor {
+	if x != nil {
+		return x.Tools
+	}
+	return nil
+}
+
 var File_turing_v1_team_proto protoreflect.FileDescriptor
 
 const file_turing_v1_team_proto_rawDesc = "" +
 	"\n" +
-	"\x14turing/v1/team.proto\x12\tturing.v1\"G\n" +
+	"\x14turing/v1/team.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\"G\n" +
 	"\x19AgentProfileToolExclusion\x12\x12\n" +
 	"\x04tool\x18\x01 \x01(\tR\x04tool\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xd8\x05\n" +
@@ -632,7 +801,17 @@ const file_turing_v1_team_proto_rawDesc = "" +
 	"\x18GrantAgentProfileRequest\x12\x1d\n" +
 	"\n" +
 	"profile_id\x18\x01 \x01(\tR\tprofileId\x12\x1a\n" +
-	"\brevision\x18\x02 \x01(\tR\brevision*\xe9\x01\n" +
+	"\brevision\x18\x02 \x01(\tR\brevision\"\xcd\x01\n" +
+	"\x12TeamToolDescriptor\x12\x1b\n" +
+	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12-\n" +
+	"\x06policy\x18\x02 \x01(\x0e2\x15.turing.v1.ToolPolicyR\x06policy\x12/\n" +
+	"\x06schema\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06schema\x12\x18\n" +
+	"\aenabled\x18\x04 \x01(\bR\aenabled\x12 \n" +
+	"\vdescription\x18\x05 \x01(\tR\vdescription\"-\n" +
+	"\x14ListTeamToolsRequest\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\"L\n" +
+	"\x15ListTeamToolsResponse\x123\n" +
+	"\x05tools\x18\x01 \x03(\v2\x1d.turing.v1.TeamToolDescriptorR\x05tools*\xe9\x01\n" +
 	"\x11AgentProfileState\x12#\n" +
 	"\x1fAGENT_PROFILE_STATE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aAGENT_PROFILE_STATE_ACTIVE\x10\x01\x12 \n" +
@@ -644,11 +823,12 @@ const file_turing_v1_team_proto_rawDesc = "" +
 	"'AGENT_PROFILE_MEMORY_ACCESS_UNSPECIFIED\x10\x00\x12$\n" +
 	" AGENT_PROFILE_MEMORY_ACCESS_NONE\x10\x01\x12$\n" +
 	" AGENT_PROFILE_MEMORY_ACCESS_READ\x10\x02\x12'\n" +
-	"#AGENT_PROFILE_MEMORY_ACCESS_PROPOSE\x10\x032\x9d\x02\n" +
+	"#AGENT_PROFILE_MEMORY_ACCESS_PROPOSE\x10\x032\xf1\x02\n" +
 	"\vTeamService\x12^\n" +
 	"\x11ListAgentProfiles\x12#.turing.v1.ListAgentProfilesRequest\x1a$.turing.v1.ListAgentProfilesResponse\x12[\n" +
 	"\x16SetAgentProfileEnabled\x12(.turing.v1.SetAgentProfileEnabledRequest\x1a\x17.turing.v1.AgentProfile\x12Q\n" +
-	"\x11GrantAgentProfile\x12#.turing.v1.GrantAgentProfileRequest\x1a\x17.turing.v1.AgentProfileB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
+	"\x11GrantAgentProfile\x12#.turing.v1.GrantAgentProfileRequest\x1a\x17.turing.v1.AgentProfile\x12R\n" +
+	"\rListTeamTools\x12\x1f.turing.v1.ListTeamToolsRequest\x1a .turing.v1.ListTeamToolsResponseB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
 var (
 	file_turing_v1_team_proto_rawDescOnce sync.Once
@@ -663,7 +843,7 @@ func file_turing_v1_team_proto_rawDescGZIP() []byte {
 }
 
 var file_turing_v1_team_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_turing_v1_team_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_turing_v1_team_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_turing_v1_team_proto_goTypes = []any{
 	(AgentProfileState)(0),                // 0: turing.v1.AgentProfileState
 	(AgentProfileMemoryAccess)(0),         // 1: turing.v1.AgentProfileMemoryAccess
@@ -673,23 +853,33 @@ var file_turing_v1_team_proto_goTypes = []any{
 	(*ListAgentProfilesResponse)(nil),     // 5: turing.v1.ListAgentProfilesResponse
 	(*SetAgentProfileEnabledRequest)(nil), // 6: turing.v1.SetAgentProfileEnabledRequest
 	(*GrantAgentProfileRequest)(nil),      // 7: turing.v1.GrantAgentProfileRequest
+	(*TeamToolDescriptor)(nil),            // 8: turing.v1.TeamToolDescriptor
+	(*ListTeamToolsRequest)(nil),          // 9: turing.v1.ListTeamToolsRequest
+	(*ListTeamToolsResponse)(nil),         // 10: turing.v1.ListTeamToolsResponse
+	(ToolPolicy)(0),                       // 11: turing.v1.ToolPolicy
+	(*structpb.Struct)(nil),               // 12: google.protobuf.Struct
 }
 var file_turing_v1_team_proto_depIdxs = []int32{
-	1, // 0: turing.v1.AgentProfile.memory:type_name -> turing.v1.AgentProfileMemoryAccess
-	0, // 1: turing.v1.AgentProfile.state:type_name -> turing.v1.AgentProfileState
-	2, // 2: turing.v1.AgentProfile.excluded_tools:type_name -> turing.v1.AgentProfileToolExclusion
-	3, // 3: turing.v1.ListAgentProfilesResponse.profiles:type_name -> turing.v1.AgentProfile
-	4, // 4: turing.v1.TeamService.ListAgentProfiles:input_type -> turing.v1.ListAgentProfilesRequest
-	6, // 5: turing.v1.TeamService.SetAgentProfileEnabled:input_type -> turing.v1.SetAgentProfileEnabledRequest
-	7, // 6: turing.v1.TeamService.GrantAgentProfile:input_type -> turing.v1.GrantAgentProfileRequest
-	5, // 7: turing.v1.TeamService.ListAgentProfiles:output_type -> turing.v1.ListAgentProfilesResponse
-	3, // 8: turing.v1.TeamService.SetAgentProfileEnabled:output_type -> turing.v1.AgentProfile
-	3, // 9: turing.v1.TeamService.GrantAgentProfile:output_type -> turing.v1.AgentProfile
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	1,  // 0: turing.v1.AgentProfile.memory:type_name -> turing.v1.AgentProfileMemoryAccess
+	0,  // 1: turing.v1.AgentProfile.state:type_name -> turing.v1.AgentProfileState
+	2,  // 2: turing.v1.AgentProfile.excluded_tools:type_name -> turing.v1.AgentProfileToolExclusion
+	3,  // 3: turing.v1.ListAgentProfilesResponse.profiles:type_name -> turing.v1.AgentProfile
+	11, // 4: turing.v1.TeamToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
+	12, // 5: turing.v1.TeamToolDescriptor.schema:type_name -> google.protobuf.Struct
+	8,  // 6: turing.v1.ListTeamToolsResponse.tools:type_name -> turing.v1.TeamToolDescriptor
+	4,  // 7: turing.v1.TeamService.ListAgentProfiles:input_type -> turing.v1.ListAgentProfilesRequest
+	6,  // 8: turing.v1.TeamService.SetAgentProfileEnabled:input_type -> turing.v1.SetAgentProfileEnabledRequest
+	7,  // 9: turing.v1.TeamService.GrantAgentProfile:input_type -> turing.v1.GrantAgentProfileRequest
+	9,  // 10: turing.v1.TeamService.ListTeamTools:input_type -> turing.v1.ListTeamToolsRequest
+	5,  // 11: turing.v1.TeamService.ListAgentProfiles:output_type -> turing.v1.ListAgentProfilesResponse
+	3,  // 12: turing.v1.TeamService.SetAgentProfileEnabled:output_type -> turing.v1.AgentProfile
+	3,  // 13: turing.v1.TeamService.GrantAgentProfile:output_type -> turing.v1.AgentProfile
+	10, // 14: turing.v1.TeamService.ListTeamTools:output_type -> turing.v1.ListTeamToolsResponse
+	11, // [11:15] is the sub-list for method output_type
+	7,  // [7:11] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_team_proto_init() }
@@ -697,13 +887,14 @@ func file_turing_v1_team_proto_init() {
 	if File_turing_v1_team_proto != nil {
 		return
 	}
+	file_turing_v1_common_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_team_proto_rawDesc), len(file_turing_v1_team_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   6,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
