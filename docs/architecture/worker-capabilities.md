@@ -241,10 +241,37 @@ tool runner like any other — a `team/team.delegate` beacon, the policy and, wh
 it requires one, the user's approval — and is dispatched to `CallTeamTool` with
 the job's assignment attempt and the model's tool-call ID, only when that run's
 own tools included it; anywhere else it is an unknown tool, refused before a
-beacon. Nothing joins a specialist's result back into Turing's conversation
-yet; the [orchestrator and team
-design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
-(section 7.5) describes the slice that will.
+beacon.
+
+**The join and the continuation.** Once the parent run has completed and
+every task it delegated has finished, the transaction that finishes the last
+of them, child or parent, joins them: it writes a role-system
+`delegation_results` message into the parent's conversation, unframed, with
+each task in the order it was asked for, who did it, how it ended, and its
+result cut visibly on a UTF-8 boundary to `TURING_DELEGATION_RESULT_MAX_BYTES`;
+it marks the delegations joined and appends one `delegation.finished` each; and
+each result is also cut to what the parent's actual number of tasks leaves
+room for in the 64 KiB frame, so a delegation limit raised by a restart can
+never make the frame cut the whole; and it queues the continuation, a run with
+`continues_run_id` naming the parent
+(unique, so there is never a second) on the parent's route, anchored on the
+join. Its job is the contract above with Turing speaking: `userText` is the
+results framed as `DELEGATION_RESULTS`, `enforceSelectedTools` and
+`skipAutomaticRecall` are set, `minimumTeamProtocolVersion` is 1, it carries no
+egress decision and no roster, so it cannot delegate, and it pins the parent's
+persona, profile and skills. Its tools were frozen onto the parent's job as
+`teamContinuation` beside the roster: the tools of the parent's route on
+team-protocol workers, less the team, egressing tools and disabled ones, and
+only those the parent's frozen set held. Every later turn in a conversation
+that has delegated carries `minimumTeamProtocolVersion: 1`, roster or not,
+because its history holds the results and an older worker would replay them
+as system text; such a turn is refused rather than handed to one, and a
+consented one freezes only the team-protocol workers' tools. Nothing is joined
+while the parent's
+conversation is being deleted, or when the parent failed or was cancelled; in
+that case its tasks still run to their end today, and the [orchestrator and
+team design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
+(section 7.5) describes the slice that will cancel them.
 
 ## Run ownership and version fencing
 

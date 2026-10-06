@@ -37,6 +37,13 @@ enum TuringEventType {
   // payload names the delegation, the child run and session, and the
   // specialist; its summary is written by the orchestrator, never a model.
   TURING_EVENT_TYPE_DELEGATION_STARTED = 24;
+  // 25 is reserved for DELEGATION_UPDATED, a child's state changes.
+  // On the parent's stream, once per delegation, when the run's tasks are
+  // joined back into its conversation. The payload names the delegation, the
+  // child run and session, the specialist, its terminal state and the
+  // continuation that answers from the results; its summary is written by the
+  // orchestrator, never a model.
+  TURING_EVENT_TYPE_DELEGATION_FINISHED = 26;
 }
 
 message TuringEvent {

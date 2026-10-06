@@ -38,6 +38,68 @@ func wantNoRosterKeys(t *testing.T, keys map[string]json.RawMessage) {
 	if _, ok := keys["minimumTeamProtocolVersion"]; ok {
 		t.Fatalf("payload carries minimumTeamProtocolVersion %s, want none", keys["minimumTeamProtocolVersion"])
 	}
+	if _, ok := keys["teamContinuation"]; ok {
+		t.Fatalf("payload carries teamContinuation %s, want none", keys["teamContinuation"])
+	}
+}
+
+// testContinuation includes a memory tool, so a continuation's memory
+// fingerprint differs from its parent's, which selected none.
+var testContinuation = TeamContinuation{
+	Tools: []string{"files/files.read", "memory/memory.search", "system/system.time"}, ResultMaxBytes: 4096,
+}
+
+// What a parent's continuation may use is frozen with the parent's roster,
+// so the join, inside whichever transaction finishes the last task, reads
+// nothing but the database.
+func TestAContinuationIsFrozenWithTheRoster(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "Delegating")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "prep me", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2", TeamRoster: testRoster, TeamContinuation: testContinuation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted TeamContinuation
+	keys := jobPayloadKeys(t, ctx, repo, enqueued.JobID)
+	if err := json.Unmarshal(keys["teamContinuation"], &persisted); err != nil || !reflect.DeepEqual(persisted, testContinuation) {
+		t.Fatalf("teamContinuation = %s (%v), want %+v", keys["teamContinuation"], err, testContinuation)
+	}
+}
+
+// A continuation never gains a tool its parent lacked: when a decision froze
+// the parent's tools, the continuation's are cut to that set.
+func TestAContinuationKeepsOnlyToolsItsParentsFrozenSetHolds(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	session, err := repo.CreateSession(ctx, "Delegating")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := localModelRemoteToolDecision(t)
+	decision.SelectedTools = append(slices.Clone(decision.SelectedTools), TeamDelegateTool)
+	frozen := decision.SelectedTools[0]
+	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "hi", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: decision.Model,
+		EgressDecision: decision, SelectedTools: decision.SelectedTools,
+		TeamRoster:       testRoster,
+		TeamContinuation: TeamContinuation{Tools: []string{frozen, "system/system.time"}, ResultMaxBytes: 4096},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted TeamContinuation
+	if err := json.Unmarshal(jobPayloadKeys(t, ctx, repo, enqueued.JobID)["teamContinuation"], &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(persisted.Tools, []string{frozen}) || persisted.ResultMaxBytes != 4096 {
+		t.Fatalf("teamContinuation = %+v, want only %s, the one the frozen set holds", persisted, frozen)
+	}
 }
 
 // A roster is frozen onto the job together with the minimum that keeps an
@@ -102,7 +164,7 @@ func TestARosterIsDroppedWhenNoTeamProtocolWorkerIsLeft(t *testing.T) {
 	var validated []RoutingRequirements
 	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID: session.SessionID, Content: "prep me", AgentID: "general_assistant",
-		ModelProvider: "ollama", Model: "llama3.2", TeamRoster: testRoster,
+		ModelProvider: "ollama", Model: "llama3.2", TeamRoster: testRoster, TeamContinuation: testContinuation,
 		ValidateRouting: func(_ context.Context, route RoutingRequirements) error {
 			validated = append(validated, route)
 			if route.MinimumTeamProtocolVersion > 0 {
@@ -204,6 +266,7 @@ func TestARosterIsDroppedWhereTheRunCannotDelegate(t *testing.T) {
 			}
 			input := test.input(t, repo, ctx, session.SessionID)
 			input.TeamRoster = testRoster
+			input.TeamContinuation = testContinuation
 			enqueued, err := repo.EnqueueUserMessage(ctx, input)
 			if err != nil {
 				t.Fatal(err)

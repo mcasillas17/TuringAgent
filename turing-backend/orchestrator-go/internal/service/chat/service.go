@@ -150,7 +150,7 @@ func (s *Server) SendMessage(req *turingv1.SendMessageRequest, stream turingv1.C
 	if s.runtime != nil {
 		input.ValidateRouting = s.runtime.ValidateRouting
 	}
-	if input.TeamRoster, err = s.teamRosterFor(ctx, input); err != nil {
+	if input.TeamRoster, input.TeamContinuation, err = s.teamRosterFor(ctx, input); err != nil {
 		return err
 	}
 	replayed, foundReplay, err := s.applyRemoteEgress(ctx, req, &input)

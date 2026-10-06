@@ -379,6 +379,59 @@ func TestLoadFromMapParsesMaxDelegationsPerRun(t *testing.T) {
 	}
 }
 
+func TestLoadFromMapParsesDelegationResultMaxBytes(t *testing.T) {
+	cfg, err := LoadFromMap(requiredEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DelegationResultMaxBytes != 8192 {
+		t.Fatalf("DelegationResultMaxBytes = %d, want the default 8192", cfg.DelegationResultMaxBytes)
+	}
+	env := requiredEnv()
+	env["TURING_DELEGATION_RESULT_MAX_BYTES"] = "4096"
+	if cfg, err = LoadFromMap(env); err != nil || cfg.DelegationResultMaxBytes != 4096 {
+		t.Fatalf("DelegationResultMaxBytes = %d, %v; want 4096", cfg.DelegationResultMaxBytes, err)
+	}
+	for _, invalid := range []string{"0", "-1", "eight"} {
+		env["TURING_DELEGATION_RESULT_MAX_BYTES"] = invalid
+		if _, err := LoadFromMap(env); err == nil || !strings.Contains(err.Error(), "TURING_DELEGATION_RESULT_MAX_BYTES") {
+			t.Fatalf("LoadFromMap(%q) error = %v, want one naming TURING_DELEGATION_RESULT_MAX_BYTES", invalid, err)
+		}
+	}
+}
+
+// Every specialist's result, cut to its cap, has to fit in the one frame a
+// join is shown to a model in, so that the per-result cut is the only cut. A
+// product that would not fit is refused rather than cut silently.
+func TestLoadFromMapRefusesDelegationResultsThatCannotFitOneFrame(t *testing.T) {
+	for _, test := range []struct {
+		maxDelegations, resultMaxBytes string
+		fits                           bool
+	}{
+		{"3", "8192", true},
+		{"7", "8192", true}, // 7 × 9 KiB + 1 KiB is exactly 64 KiB
+		{"8", "8192", false},
+		{"3", "20000", true},
+		{"3", "21000", false},
+		// Values that would overflow a naive product are refused, not wrapped
+		// into a pass.
+		{"3", "9223372036854775807", false},
+		{"9223372036854775807", "1", false},
+	} {
+		env := requiredEnv()
+		env["TURING_MAX_DELEGATIONS_PER_RUN"] = test.maxDelegations
+		env["TURING_DELEGATION_RESULT_MAX_BYTES"] = test.resultMaxBytes
+		_, err := LoadFromMap(env)
+		if test.fits && err != nil {
+			t.Fatalf("%s × %s: %v, want it accepted", test.maxDelegations, test.resultMaxBytes, err)
+		}
+		if !test.fits && (err == nil || !strings.Contains(err.Error(), "TURING_DELEGATION_RESULT_MAX_BYTES") ||
+			!strings.Contains(err.Error(), "TURING_MAX_DELEGATIONS_PER_RUN")) {
+			t.Fatalf("%s × %s: err = %v, want a refusal naming both settings", test.maxDelegations, test.resultMaxBytes, err)
+		}
+	}
+}
+
 // The orchestrator's Config type must never carry OPENAI_API_KEY or
 // MCP_SYSTEM_TOKEN_GENERAL/MCP_FILES_TOKEN_GENERAL: those secrets belong only
 // to the processes that actually call OpenAI or the MCP servers. Setting them

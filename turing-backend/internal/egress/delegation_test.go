@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -44,5 +45,32 @@ func TestABriefWithoutContextHasOnlyItsTask(t *testing.T) {
 	}
 	if !strings.Contains(brief, "Task:\nGather the notes\nEND ") || strings.Contains(brief, "Context:") {
 		t.Fatalf("brief = %q, want the task alone", brief)
+	}
+}
+
+// The budget is the most each of count results may keep for all of them to
+// fit one join frame, and DelegationResultsFit is exactly that bound, with no
+// arithmetic that a huge setting could overflow into a pass.
+func TestDelegationResultsFitIsTheBudgetAndCannotOverflow(t *testing.T) {
+	for count := 1; count <= 70; count++ {
+		budget := DelegationResultBudget(count)
+		fits := count*(budget+DelegationResultHeaderBytes)+DelegationResultsIntroBytes <= DelegationResultsFrameMaxBytes
+		over := count*(budget+1+DelegationResultHeaderBytes)+DelegationResultsIntroBytes > DelegationResultsFrameMaxBytes
+		if budget >= 1 && (!fits || !over) {
+			t.Fatalf("budget(%d) = %d is not the largest that fits", count, budget)
+		}
+		if DelegationResultsFit(count, budget) != (budget >= 1) || DelegationResultsFit(count, budget+1) {
+			t.Fatalf("fit(%d, %d) disagrees with the budget", count, budget)
+		}
+	}
+	for _, test := range []struct{ count, cap int }{
+		{3, math.MaxInt}, {math.MaxInt, 1}, {math.MaxInt, math.MaxInt}, {0, 8192}, {3, 0}, {-1, 8192},
+	} {
+		if DelegationResultsFit(test.count, test.cap) {
+			t.Fatalf("DelegationResultsFit(%d, %d) = true, want false", test.count, test.cap)
+		}
+	}
+	if DelegationResultBudget(0) > 0 || DelegationResultBudget(math.MaxInt) > 0 {
+		t.Fatal("a budget for no results, or for more than can fit, must be empty")
 	}
 }

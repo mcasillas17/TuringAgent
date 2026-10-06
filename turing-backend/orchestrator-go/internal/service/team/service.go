@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/teamfiles"
 	"google.golang.org/grpc/codes"
@@ -49,10 +50,15 @@ type Server struct {
 	events EventPublisher
 	// maxDelegationsPerRun is TURING_MAX_DELEGATIONS_PER_RUN.
 	maxDelegationsPerRun int
+	// delegationResultMaxBytes is TURING_DELEGATION_RESULT_MAX_BYTES.
+	delegationResultMaxBytes int
 }
 
 func New(repo *repository.Repository, routes Routes, defaultModel string, enabled bool) *Server {
-	return &Server{repo: repo, routes: routes, defaultModel: defaultModel, enabled: enabled}
+	return &Server{
+		repo: repo, routes: routes, defaultModel: defaultModel, enabled: enabled,
+		delegationResultMaxBytes: backendegress.DefaultDelegationResultMaxBytes,
+	}
 }
 
 func (s *Server) ListAgentProfiles(ctx context.Context, _ *turingv1.ListAgentProfilesRequest) (*turingv1.ListAgentProfilesResponse, error) {
