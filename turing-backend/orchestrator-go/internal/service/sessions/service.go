@@ -124,18 +124,36 @@ func (s *Server) SetMemoryReconcileCompletion(completion repository.SessionDelet
 // ResumePendingDeletions retries durable non-completed receipts. It is safe to
 // call repeatedly: each receipt uses the same lifecycle version and only a
 // completed receipt can publish the terminal event.
+//
+// It starts from parents. A child's receipt is driven by its parent's
+// withdrawal, which never completes before the child's does, so a child
+// receipt has an unfinished parent; one found without one is finished on its
+// own.
 func (s *Server) ResumePendingDeletions(ctx context.Context) error {
-	sessionIDs, err := s.repo.PendingSessionDeletionIDs(ctx)
+	pending, err := s.repo.PendingSessionDeletions(ctx)
 	if err != nil {
 		return err
 	}
+	unfinished := make(map[string]bool, len(pending))
+	for _, deletion := range pending {
+		unfinished[deletion.SessionID] = true
+	}
 	var resumeErr error
-	for _, sessionID := range sessionIDs {
-		if _, err := s.DeleteSession(ctx, &turingv1.DeleteSessionRequest{SessionId: sessionID}); err != nil {
-			if status.Code(err) == codes.NotFound {
+	for _, deletion := range pending {
+		var withdrawErr error
+		switch {
+		case deletion.ParentSessionID == "":
+			_, withdrawErr = s.withdrawSessionTree(ctx, deletion.SessionID)
+		case !unfinished[deletion.ParentSessionID]:
+			_, withdrawErr = s.withdrawChildSession(ctx, deletion.SessionID)
+		default:
+			continue
+		}
+		if withdrawErr != nil {
+			if status.Code(withdrawErr) == codes.NotFound {
 				continue
 			}
-			resumeErr = errors.Join(resumeErr, err)
+			resumeErr = errors.Join(resumeErr, withdrawErr)
 		}
 	}
 	return resumeErr
@@ -245,27 +263,82 @@ func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionR
 	if req == nil || !validSessionID(req.SessionId) {
 		return nil, status.Error(codes.InvalidArgument, "session_id is invalid")
 	}
-	receipt, err := s.repo.BeginSessionDeletion(ctx, req.SessionId)
+	receipt, err := s.withdrawSessionTree(ctx, req.SessionId)
 	if err != nil {
+		return nil, err
+	}
+	return &turingv1.DeleteSessionResponse{
+		SessionId: req.SessionId,
+		Deletion:  mapSessionDeletionReceipt(receipt),
+	}, nil
+}
+
+// withdrawSessionTree withdraws a chat session and every delegation session
+// under it. The parent's begin closes its set of children, because delegation
+// creation refuses a parent that is no longer active. Each child then gets the
+// whole single-session withdrawal under its own receipt. The rest of the
+// parent's always runs: while a child is unfinished, its advance records
+// child_deletion_pending and stops there, so the parent's cleaners and its row
+// wait for a retry. With no children this is exactly the single-session
+// withdrawal.
+func (s *Server) withdrawSessionTree(ctx context.Context, sessionID string) (repository.SessionDeletionReceipt, error) {
+	if err := s.beginWithdrawal(ctx, sessionID, false); err != nil {
+		return repository.SessionDeletionReceipt{}, err
+	}
+	children, err := s.repo.DelegationChildSessionIDs(ctx, sessionID)
+	if err != nil {
+		return repository.SessionDeletionReceipt{}, status.Error(codes.Internal, "delete session failed")
+	}
+	for _, child := range children {
+		if _, err := s.withdrawChildSession(ctx, child); err != nil {
+			log.Printf("withdrawing delegation session %s of %s failed: %v", child, sessionID, err)
+		}
+	}
+	return s.finishWithdrawal(ctx, sessionID)
+}
+
+// withdrawChildSession is the whole single-session withdrawal of one
+// delegation session, through the begin the public delete refuses it.
+func (s *Server) withdrawChildSession(ctx context.Context, sessionID string) (repository.SessionDeletionReceipt, error) {
+	if err := s.beginWithdrawal(ctx, sessionID, true); err != nil {
+		return repository.SessionDeletionReceipt{}, err
+	}
+	return s.finishWithdrawal(ctx, sessionID)
+}
+
+// beginWithdrawal makes the session unavailable, cancels its runs, and asks
+// the runtime to stop them.
+func (s *Server) beginWithdrawal(ctx context.Context, sessionID string, child bool) error {
+	begin := s.repo.BeginSessionDeletion
+	if child {
+		begin = s.repo.BeginDelegationSessionDeletion
+	}
+	if _, err := begin(ctx, sessionID); err != nil {
 		switch {
 		case errors.Is(err, repository.ErrSessionNotFound):
-			return nil, status.Error(codes.NotFound, "session not found")
-		case errors.Is(err, repository.ErrDelegationSessionReadOnly):
-			return nil, status.Error(codes.FailedPrecondition, repository.ErrDelegationSessionReadOnly.Error())
+			return status.Error(codes.NotFound, "session not found")
+		case errors.Is(err, repository.ErrDelegationSessionReadOnly), errors.Is(err, repository.ErrNotADelegationSession):
+			return status.Error(codes.FailedPrecondition, err.Error())
 		default:
-			return nil, status.Error(codes.Internal, "delete session failed")
+			return status.Error(codes.Internal, "delete session failed")
 		}
 	}
 	if canceler, ok := s.capabilities.(sessionDeletionCanceler); ok {
-		canceler.CancelSessionRuns(ctx, req.SessionId, "session_deleting")
+		canceler.CancelSessionRuns(ctx, sessionID, "session_deleting")
 	}
-	receipt, err = s.repo.AdvanceSessionDeletion(ctx, req.SessionId, s.deletionCompletion())
+	return nil
+}
+
+// finishWithdrawal advances a begun withdrawal: it runs the cleaners when the
+// receipt waits on them, and publishes session.deleted once it completes.
+func (s *Server) finishWithdrawal(ctx context.Context, sessionID string) (repository.SessionDeletionReceipt, error) {
+	receipt, err := s.repo.AdvanceSessionDeletion(ctx, sessionID, s.deletionCompletion())
 	if err != nil {
 		switch {
 		case errors.Is(err, repository.ErrSessionNotFound):
-			return nil, status.Error(codes.NotFound, "session not found")
+			return repository.SessionDeletionReceipt{}, status.Error(codes.NotFound, "session not found")
 		default:
-			return nil, status.Error(codes.Internal, "delete session failed")
+			return repository.SessionDeletionReceipt{}, status.Error(codes.Internal, "delete session failed")
 		}
 	}
 	// Exactly this literal, and nothing else, dispatches the cleaners. Every
@@ -279,23 +352,20 @@ func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionR
 		if outcome.failed() {
 			current, err := s.recordArtifactCleanupFailure(ctx, receipt.SessionID, outcome)
 			if err != nil {
-				return nil, err
+				return repository.SessionDeletionReceipt{}, err
 			}
 			receipt = current
 		} else {
-			receipt, err = s.repo.AdvanceSessionDeletion(ctx, req.SessionId, s.deletionCompletion())
+			receipt, err = s.repo.AdvanceSessionDeletion(ctx, sessionID, s.deletionCompletion())
 			if err != nil {
-				return nil, status.Error(codes.Internal, "delete session failed")
+				return repository.SessionDeletionReceipt{}, status.Error(codes.Internal, "delete session failed")
 			}
 		}
 	}
 	if receipt.State == "completed" {
 		s.publishSessionDeleted(receipt)
 	}
-	return &turingv1.DeleteSessionResponse{
-		SessionId: req.SessionId,
-		Deletion:  mapSessionDeletionReceipt(receipt),
-	}, nil
+	return receipt, nil
 }
 
 // deletionCompletion hands the withdrawal the on-disk work it owes after the

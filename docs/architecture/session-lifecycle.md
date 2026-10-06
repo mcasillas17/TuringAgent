@@ -75,10 +75,24 @@ chats only. On a delegation session the public mutations — `SendMessage`,
 `PrepareRemoteEgress`, rename, archive, restore, delete, and setting or
 clearing the session's external agent — fail with `FailedPrecondition`
 ("delegation sessions are read-only") and write nothing. Reading it, cancelling
-its run and deciding its approvals still work. No code creates a delegation
-session yet; the [orchestrator and team
+its run and deciding its approvals still work. `TeamService.CallTeamTool`
+creates one, with `parent_session_id` naming the conversation that delegated;
+no runtime calls it yet.
+
+Deleting a conversation withdraws each of its delegation sessions first, under
+the child's own deletion receipt: its runs are cancelled, its own artifact
+cleaners run, and its stream ends with its own `session.deleted`. The child's
+receipt names the parent, so a child whose row is already gone is still found
+and finished. Once the conversation's own executions have quiesced, while any
+child is unfinished, the conversation's receipt is `failed_external` with the
+retryable code `child_deletion_pending`; before that it reports its own
+`quiescing` or `execution_unreconciled` state. Either way, neither its cleaners
+nor its row's deletion run until every child is withdrawn.
+`ListSessionDeletionReceipts` lists the
+conversation's receipt and never a child's, and the background reconciler
+resumes from the conversation. The [orchestrator and team
 design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
-describes how delegation will.
+describes the rest of delegation.
 
 ## Flutter behavior
 
