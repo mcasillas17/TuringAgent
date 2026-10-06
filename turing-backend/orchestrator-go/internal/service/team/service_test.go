@@ -2,7 +2,6 @@ package team
 
 import (
 	"context"
-	"errors"
 	"google.golang.org/protobuf/proto"
 	"os"
 	"path/filepath"
@@ -31,6 +30,17 @@ type fakeRoutes struct {
 	routes []repository.RoutingRequirements
 	// validated is every route ValidateRouting was asked about.
 	validated []repository.RoutingRequirements
+	// refuseTools refuses every route that asks for tools, as when no one
+	// worker serves a child's whole set.
+	refuseTools bool
+	// dispatched and refreshed count the runtime nudges after a queue.
+	dispatched, refreshed int
+}
+
+func (f *fakeRoutes) DispatchPending(context.Context) error { f.dispatched++; return nil }
+func (f *fakeRoutes) RefreshPendingRoutingState(context.Context, string) error {
+	f.refreshed++
+	return nil
 }
 
 func (f *fakeRoutes) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.ModelCapability {
@@ -44,11 +54,14 @@ func (f *fakeRoutes) ProviderCapabilities() map[turingv1.ModelProvider][]*turing
 
 func (f *fakeRoutes) ValidateRouting(_ context.Context, route repository.RoutingRequirements) error {
 	f.validated = append(f.validated, route)
+	if f.refuseTools && len(route.RequestedTools) > 0 {
+		return status.Error(codes.FailedPrecondition, "no connected worker supports the requested tools")
+	}
 	if slices.Contains(f.models, route.Model) ||
 		(route.MinimumTeamProtocolVersion == 0 && slices.Contains(f.older, route.Model)) {
 		return nil
 	}
-	return errors.New("no connected worker supports the requested route")
+	return status.Error(codes.FailedPrecondition, "no connected worker supports the requested route")
 }
 
 func (f *fakeRoutes) EgressToolNames(route repository.RoutingRequirements) []string {
@@ -86,6 +99,7 @@ func newHarness(t *testing.T) *harness {
 	repo.SetTeamStore(teamfiles.New(root))
 	routes := &fakeRoutes{models: []string{defaultModel}, tools: map[string][]string{defaultModel: builtinTools}}
 	h := &harness{repo: repo, root: root, routes: routes, server: New(repo, routes, defaultModel, true)}
+	h.server.SetMaxDelegationsPerRun(3)
 	h.registerTools(t,
 		repository.DiscoveredTool{ServerName: "files", ToolName: "files.read", SchemaJSON: `{}`, Policy: "safe"},
 		repository.DiscoveredTool{ServerName: "files", ToolName: "files.write", SchemaJSON: `{}`, Policy: "approval_required"},

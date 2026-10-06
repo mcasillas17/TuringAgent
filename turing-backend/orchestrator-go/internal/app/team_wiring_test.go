@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
@@ -28,11 +29,12 @@ func newTeamTestApp(t *testing.T, enabled bool) *App {
 	app, err := New(config.Config{
 		ClientAPIKey: "client",
 		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
-		ApprovalJWTSecret: "approval-secret",
-		DatabasePath:      t.TempDir() + "/turing.db",
-		OllamaModel:       "llama3.2",
-		TeamRoot:          teamRoot,
-		AgentTeamEnabled:  enabled,
+		ApprovalJWTSecret:    "approval-secret",
+		DatabasePath:         t.TempDir() + "/turing.db",
+		OllamaModel:          "llama3.2",
+		TeamRoot:             teamRoot,
+		AgentTeamEnabled:     enabled,
+		MaxDelegationsPerRun: 3,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +61,12 @@ func TestTeamServiceFacetAndRuntimeIdentityWiring(t *testing.T) {
 	if _, err := internal.ListAgentProfiles(internalCtx, &turingv1.ListAgentProfilesRequest{}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("internal ListAgentProfiles error = %v, want PermissionDenied", err)
 	}
+	if _, err := public.CallTeamTool(publicCtx, &turingv1.CallTeamToolRequest{RunId: "run_missing"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("public CallTeamTool error = %v, want PermissionDenied", err)
+	}
+	if _, err := internal.CallTeamTool(internalCtx, &turingv1.CallTeamToolRequest{RunId: "run_missing"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("internal CallTeamTool error = %v, want InvalidArgument from the service", err)
+	}
 }
 
 // With the team on, a local Turing turn served by a team-protocol worker is
@@ -81,9 +89,12 @@ func TestALocalTurnIsOfferedTheTeamOnlyWhileItIsOn(t *testing.T) {
 			if err := worker.Send(&turingv1.RuntimeUpdate{Update: &turingv1.RuntimeUpdate_WorkerReady{WorkerReady: &turingv1.RuntimeWorkerReady{
 				WorkerId: "team-worker", RegistrationId: "registration-team-worker",
 				Capabilities: &turingv1.WorkerCapabilities{
-					Models:              []*turingv1.ModelCapability{{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2", MaxContextTokens: 8192}},
-					AgentIds:            []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
-					Tools:               []*turingv1.DiscoveredTool{{ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{}}},
+					Models:   []*turingv1.ModelCapability{{Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2", MaxContextTokens: 8192}},
+					AgentIds: []turingv1.AgentId{turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT},
+					Tools: []*turingv1.DiscoveredTool{
+						{ServerName: "system", ToolName: "system.time", Schema: &structpb.Struct{}},
+						{ServerName: "team", ToolName: "team.delegate", Schema: &structpb.Struct{}},
+					},
 					MaxConcurrentRuns:   1,
 					TeamProtocolVersion: 1,
 				},
@@ -140,6 +151,36 @@ func TestALocalTurnIsOfferedTheTeamOnlyWhileItIsOn(t *testing.T) {
 			agent := tools.GetTools()[0].GetSchema().AsMap()["properties"].(map[string]any)["agent"].(map[string]any)
 			if enum, _ := agent["enum"].([]any); !slices.Equal(enum, []any{"research"}) {
 				t.Fatalf("agent enum = %v, want the active specialist", agent["enum"])
+			}
+
+			// The worker holding the run delegates through the internal facet,
+			// and the specialist's hidden conversation opens with the brief.
+			assigned := recvRuntimeCommand(t, worker, func(command *turingv1.RuntimeCommand) bool { return command.GetRunAssigned() != nil })
+			args, err := structpb.NewStruct(map[string]any{"agent": "research", "task": "Gather the notes"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			delegated, err := turingv1.NewTeamServiceClient(internalConn).CallTeamTool(internalCtx, &turingv1.CallTeamToolRequest{
+				RunId: queued.GetRunQueued().GetRunId(), AssignmentAttemptId: assigned.GetRunAssigned().GetAssignmentAttemptId(),
+				ToolCallId: "call_1", ToolName: "team.delegate", Args: args,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if delegated.GetResult().AsMap()["agent"] != "research" || delegated.GetResult().AsMap()["state"] != "queued" {
+				t.Fatalf("delegation = %v", delegated.GetResult().AsMap())
+			}
+			delegation, found, err := app.Repository.DelegationForToolCall(context.Background(), queued.GetRunQueued().GetRunId(), "call_1")
+			if err != nil || !found {
+				t.Fatalf("delegation = %+v, %v, %v", delegation, found, err)
+			}
+			messages, err := turingv1.NewSessionServiceClient(publicConn).ListMessages(publicCtx,
+				&turingv1.ListMessagesRequest{SessionId: delegation.ChildSessionID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(messages.GetMessages()) == 0 || !strings.Contains(messages.GetMessages()[0].GetContent(), "Task:\nGather the notes") {
+				t.Fatalf("child transcript = %+v, want the brief first", messages.GetMessages())
 			}
 		})
 	}

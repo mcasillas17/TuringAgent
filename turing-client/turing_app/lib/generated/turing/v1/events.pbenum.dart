@@ -86,6 +86,13 @@ class TuringEventType extends $pb.ProtobufEnum {
       TuringEventType._(23,
           _omitEnumNames ? '' : 'TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED');
 
+  /// On the parent's stream, once, when a Turing run delegates a task. The
+  /// payload names the delegation, the child run and session, and the
+  /// specialist; its summary is written by the orchestrator, never a model.
+  static const TuringEventType TURING_EVENT_TYPE_DELEGATION_STARTED =
+      TuringEventType._(
+          24, _omitEnumNames ? '' : 'TURING_EVENT_TYPE_DELEGATION_STARTED');
+
   static const $core.List<TuringEventType> values = <TuringEventType>[
     TURING_EVENT_TYPE_UNSPECIFIED,
     TURING_EVENT_TYPE_MESSAGE_STARTED,
@@ -111,10 +118,11 @@ class TuringEventType extends $pb.ProtobufEnum {
     TURING_EVENT_TYPE_SESSION_UPDATED,
     TURING_EVENT_TYPE_SESSION_DELETED,
     TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED,
+    TURING_EVENT_TYPE_DELEGATION_STARTED,
   ];
 
   static final $core.List<TuringEventType?> _byValue =
-      $pb.ProtobufEnum.$_initByValueList(values, 23);
+      $pb.ProtobufEnum.$_initByValueList(values, 24);
   static TuringEventType? valueOf($core.int value) =>
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 

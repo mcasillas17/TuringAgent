@@ -209,10 +209,25 @@ run is offered no team tool. The internal `TeamService.ListTeamTools` renders a 
 frozen roster, never the live profiles, as the `team.delegate` schema; no
 runtime calls it until the later PR that offers the tool.
 
-No job sets the specialist-job contract fields yet, and nothing offers or
-dispatches `team.delegate` yet. The [orchestrator and team
+**The child job.** The internal `TeamService.CallTeamTool` is the one writer
+of the specialist-job contract. For a running Turing run whose current
+assignment attempt makes the call, and whose roster names the specialist at its
+current revision, it creates in one transaction a hidden `delegation` session,
+its first message (the brief: role `user`, content type `delegation_brief`,
+Turing's task and context framed as `DELEGATION_BRIEF`), a queued job anchored on
+that brief, a `delegations` row and `DELEGATION_STARTED` on the parent's
+stream, and then asks the runtime to dispatch it.
+The job's `userText` is the stored brief; it carries `agentProfile`,
+`enforceSelectedTools` and `skipAutomaticRecall`, the profile's resolved tools as
+both `selectedTools` and `requestedTools`, the profile's enabled and granted
+skills, the pinned persona and profile withheld, no egress decision, and
+`minimumTeamProtocolVersion: 1`, so only a team-protocol worker claims it. The
+call checks the child's whole route with `ValidateRouting` first, so a child no
+worker could claim is never queued. A retried tool call returns the delegation
+it created. No runtime calls `CallTeamTool` yet, and nothing offers or
+dispatches `team.delegate`; the [orchestrator and team
 design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
-(sections 6.3, 6.4, 7.3 and 7.5) names the jobs that will.
+(sections 7.3 to 7.5) describes the slices that will.
 
 ## Run ownership and version fencing
 

@@ -732,6 +732,14 @@ func canonicalArgs(args map[string]any) (string, string, error) {
 	return string(data), "sha256:" + fmt.Sprintf("%x", hash[:]), nil
 }
 
+// ArgumentsHash is the hash an approval is bound to. A caller that records a
+// tool call's arguments for later comparison uses it so the two can never
+// disagree about what "the same arguments" means.
+func ArgumentsHash(args map[string]any) (string, error) {
+	_, hash, err := canonicalArgs(args)
+	return hash, err
+}
+
 func expired(expiresAt string) bool {
 	deadline, err := time.Parse(time.RFC3339Nano, expiresAt)
 	if err != nil {

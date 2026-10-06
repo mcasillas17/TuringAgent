@@ -211,6 +211,12 @@ func TestTheTeamFacetsSplitByMethod(t *testing.T) {
 	if _, err := public.ListTeamTools(ctx, &turingv1.ListTeamToolsRequest{RunId: runID}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("public ListTeamTools error = %v, want PermissionDenied", err)
 	}
+	if _, err := public.CallTeamTool(ctx, &turingv1.CallTeamToolRequest{RunId: runID}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("public CallTeamTool error = %v, want PermissionDenied", err)
+	}
+	if _, err := internal.CallTeamTool(ctx, &turingv1.CallTeamToolRequest{RunId: runID}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("internal CallTeamTool error = %v, want the service's InvalidArgument", err)
+	}
 	if _, err := public.ListAgentProfiles(ctx, &turingv1.ListAgentProfilesRequest{}); err != nil {
 		t.Fatalf("public ListAgentProfiles: %v", err)
 	}

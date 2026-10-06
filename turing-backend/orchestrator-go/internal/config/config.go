@@ -144,6 +144,8 @@ type Config struct {
 	// run is given a roster, so delegation never reaches a model; profile
 	// management stays usable either way.
 	AgentTeamEnabled bool
+	// MaxDelegationsPerRun is how many tasks one Turing run may delegate.
+	MaxDelegationsPerRun int
 }
 
 func Load() (Config, error) {
@@ -352,6 +354,10 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	maxDelegations, err := positiveIntValue("TURING_MAX_DELEGATIONS_PER_RUN", 3)
+	if err != nil {
+		return Config{}, err
+	}
 	approvalTTL, err := intValue("TURING_APPROVAL_TIMEOUT_MS", 65000)
 	if err != nil {
 		return Config{}, err
@@ -460,6 +466,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		QueueMaxWaitMS:            queueMaxWait,
 		QueueNoWorkerTimeoutMS:    queueNoWorkerTimeout,
 		QueueTimeoutPolicy:        queueTimeoutPolicy,
+		MaxDelegationsPerRun:      maxDelegations,
 	}, nil
 }
 

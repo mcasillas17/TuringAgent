@@ -265,3 +265,57 @@ const ListTeamToolsResponse$json = {
 final $typed_data.Uint8List listTeamToolsResponseDescriptor = $convert.base64Decode(
     'ChVMaXN0VGVhbVRvb2xzUmVzcG9uc2USMwoFdG9vbHMYASADKAsyHS50dXJpbmcudjEuVGVhbV'
     'Rvb2xEZXNjcmlwdG9yUgV0b29scw==');
+
+@$core.Deprecated('Use callTeamToolRequestDescriptor instead')
+const CallTeamToolRequest$json = {
+  '1': 'CallTeamToolRequest',
+  '2': [
+    {'1': 'run_id', '3': 1, '4': 1, '5': 9, '10': 'runId'},
+    {
+      '1': 'assignment_attempt_id',
+      '3': 2,
+      '4': 1,
+      '5': 9,
+      '10': 'assignmentAttemptId'
+    },
+    {'1': 'approval_id', '3': 3, '4': 1, '5': 9, '10': 'approvalId'},
+    {'1': 'tool_call_id', '3': 4, '4': 1, '5': 9, '10': 'toolCallId'},
+    {'1': 'tool_name', '3': 5, '4': 1, '5': 9, '10': 'toolName'},
+    {
+      '1': 'args',
+      '3': 6,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Struct',
+      '10': 'args'
+    },
+  ],
+};
+
+/// Descriptor for `CallTeamToolRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List callTeamToolRequestDescriptor = $convert.base64Decode(
+    'ChNDYWxsVGVhbVRvb2xSZXF1ZXN0EhUKBnJ1bl9pZBgBIAEoCVIFcnVuSWQSMgoVYXNzaWdubW'
+    'VudF9hdHRlbXB0X2lkGAIgASgJUhNhc3NpZ25tZW50QXR0ZW1wdElkEh8KC2FwcHJvdmFsX2lk'
+    'GAMgASgJUgphcHByb3ZhbElkEiAKDHRvb2xfY2FsbF9pZBgEIAEoCVIKdG9vbENhbGxJZBIbCg'
+    'l0b29sX25hbWUYBSABKAlSCHRvb2xOYW1lEisKBGFyZ3MYBiABKAsyFy5nb29nbGUucHJvdG9i'
+    'dWYuU3RydWN0UgRhcmdz');
+
+@$core.Deprecated('Use callTeamToolResponseDescriptor instead')
+const CallTeamToolResponse$json = {
+  '1': 'CallTeamToolResponse',
+  '2': [
+    {
+      '1': 'result',
+      '3': 1,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Struct',
+      '10': 'result'
+    },
+  ],
+};
+
+/// Descriptor for `CallTeamToolResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List callTeamToolResponseDescriptor = $convert.base64Decode(
+    'ChRDYWxsVGVhbVRvb2xSZXNwb25zZRIvCgZyZXN1bHQYASABKAsyFy5nb29nbGUucHJvdG9idW'
+    'YuU3RydWN0UgZyZXN1bHQ=');

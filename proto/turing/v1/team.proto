@@ -114,6 +114,28 @@ message ListTeamToolsResponse {
   repeated TeamToolDescriptor tools = 1;
 }
 
+// Internal: the runtime asks, for the run it is executing, to delegate one
+// task. The run names itself and the assignment it holds; everything else is
+// resolved from the orchestrator's own tables and the run's frozen roster.
+message CallTeamToolRequest {
+  string run_id = 1;
+  // Must be the run's current assignment attempt: a fenced or reassigned
+  // worker cannot create a delegation.
+  string assignment_attempt_id = 2;
+  // The decided approval, when the team.delegate policy requires one.
+  string approval_id = 3;
+  // The model's tool call. A retry with the same ID and arguments returns the
+  // delegation it already created.
+  string tool_call_id = 4;
+  string tool_name = 5;
+  google.protobuf.Struct args = 6;
+}
+
+// The result the model sees: {delegation_id, agent, state}.
+message CallTeamToolResponse {
+  google.protobuf.Struct result = 1;
+}
+
 // Like MemoryService, one service with two facets split by method name: the
 // public facet manages profiles, and the internal facet, which only the
 // runtime identity reaches, serves the team tool.
@@ -122,4 +144,5 @@ service TeamService {
   rpc SetAgentProfileEnabled(SetAgentProfileEnabledRequest) returns (AgentProfile);
   rpc GrantAgentProfile(GrantAgentProfileRequest) returns (AgentProfile);
   rpc ListTeamTools(ListTeamToolsRequest) returns (ListTeamToolsResponse);
+  rpc CallTeamTool(CallTeamToolRequest) returns (CallTeamToolResponse);
 }

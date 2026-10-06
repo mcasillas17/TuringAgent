@@ -87,6 +87,7 @@ services:
       # The specialist team for Turing; off until you turn it on. Delegation
       # itself lands in a later release.
       TURING_AGENT_TEAM_ENABLED: ${TURING_AGENT_TEAM_ENABLED:-false}
+      TURING_MAX_DELEGATIONS_PER_RUN: ${TURING_MAX_DELEGATIONS_PER_RUN:-3}
       TURING_APPROVAL_TIMEOUT_MS: ${TURING_APPROVAL_TIMEOUT_MS:-65000}
     ports:
       - "127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT:-3000}:${ORCHESTRATOR_PUBLIC_PORT:-3000}"

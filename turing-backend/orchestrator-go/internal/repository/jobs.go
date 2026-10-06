@@ -1002,25 +1002,7 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	runID := ids.New("run")
 	jobID := ids.New("job")
 	traceID := ids.New("trace")
-	var next int64
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM messages WHERE session_id = ?`, input.SessionID).Scan(&next); err != nil {
-		return EnqueueUserMessageResult{}, err
-	}
-	var latestCreatedAt string
-	latestQuery := `SELECT created_at FROM messages WHERE session_id = ? ORDER BY ` + sqliteTimestampNanos("created_at") + ` DESC, id DESC LIMIT 1`
-	err = tx.QueryRowContext(ctx, latestQuery, input.SessionID).Scan(&latestCreatedAt)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return EnqueueUserMessageResult{}, err
-	}
-	var timestampAnchors []time.Time
-	if latestCreatedAt != "" {
-		latest, parseErr := time.Parse(time.RFC3339Nano, latestCreatedAt)
-		if parseErr != nil {
-			return EnqueueUserMessageResult{}, parseErr
-		}
-		timestampAnchors = append(timestampAnchors, latest)
-	}
-	created, err = nextSessionActivityTimeTx(ctx, tx, input.SessionID, created, timestampAnchors...)
+	next, created, err := nextMessageSlotTx(ctx, tx, input.SessionID, created)
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
