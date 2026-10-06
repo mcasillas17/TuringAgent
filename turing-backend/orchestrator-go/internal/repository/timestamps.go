@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -53,6 +54,35 @@ func nextSessionActivityTime(
 		}
 	}
 	return candidate, nil
+}
+
+// nextMessageSlotTx returns the sequence and creation time for the next
+// message pair at the end of a session. The time is after both the session's
+// activity time and its latest message, so ordering by either stays stable.
+func nextMessageSlotTx(ctx context.Context, tx *sql.Tx, sessionID string, candidate time.Time) (int64, time.Time, error) {
+	var next int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence), 0) + 1 FROM messages WHERE session_id = ?`, sessionID).Scan(&next); err != nil {
+		return 0, time.Time{}, err
+	}
+	var latestCreatedAt string
+	err := tx.QueryRowContext(ctx, `SELECT created_at FROM messages WHERE session_id = ? ORDER BY `+
+		sqliteTimestampNanos("created_at")+` DESC, id DESC LIMIT 1`, sessionID).Scan(&latestCreatedAt)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, time.Time{}, err
+	}
+	var anchors []time.Time
+	if latestCreatedAt != "" {
+		latest, parseErr := time.Parse(time.RFC3339Nano, latestCreatedAt)
+		if parseErr != nil {
+			return 0, time.Time{}, parseErr
+		}
+		anchors = append(anchors, latest)
+	}
+	created, err := nextSessionActivityTimeTx(ctx, tx, sessionID, candidate, anchors...)
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	return next, created, nil
 }
 
 func sqliteTimestampNanos(column string) string {

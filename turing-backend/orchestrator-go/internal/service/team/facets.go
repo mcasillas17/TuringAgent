@@ -16,7 +16,8 @@ type PublicServer struct {
 }
 
 // InternalServer is what the runtime talks to: the team tool of the run it
-// is executing. It can never read, enable or grant a profile.
+// is executing, and delegating through it. It can never read, enable or grant
+// a profile.
 type InternalServer struct {
 	turingv1.UnimplementedTeamServiceServer
 	service *Server
@@ -37,6 +38,9 @@ func (s *PublicServer) GrantAgentProfile(ctx context.Context, req *turingv1.Gran
 func (*PublicServer) ListTeamTools(context.Context, *turingv1.ListTeamToolsRequest) (*turingv1.ListTeamToolsResponse, error) {
 	return nil, status.Error(codes.PermissionDenied, "team tool discovery is internal")
 }
+func (*PublicServer) CallTeamTool(context.Context, *turingv1.CallTeamToolRequest) (*turingv1.CallTeamToolResponse, error) {
+	return nil, status.Error(codes.PermissionDenied, "team tool dispatch is internal")
+}
 
 // teamManagementDenied answers every profile decision the runtime asks for:
 // enabling and granting a specialist are the user's, and holding the
@@ -56,4 +60,7 @@ func (*InternalServer) GrantAgentProfile(context.Context, *turingv1.GrantAgentPr
 }
 func (s *InternalServer) ListTeamTools(ctx context.Context, req *turingv1.ListTeamToolsRequest) (*turingv1.ListTeamToolsResponse, error) {
 	return s.service.ListTeamTools(ctx, req)
+}
+func (s *InternalServer) CallTeamTool(ctx context.Context, req *turingv1.CallTeamToolRequest) (*turingv1.CallTeamToolResponse, error) {
+	return s.service.CallTeamTool(ctx, req)
 }

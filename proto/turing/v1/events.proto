@@ -33,6 +33,10 @@ enum TuringEventType {
   TURING_EVENT_TYPE_SESSION_UPDATED = 21;
   TURING_EVENT_TYPE_SESSION_DELETED = 22;
   TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED = 23;
+  // On the parent's stream, once, when a Turing run delegates a task. The
+  // payload names the delegation, the child run and session, and the
+  // specialist; its summary is written by the orchestrator, never a model.
+  TURING_EVENT_TYPE_DELEGATION_STARTED = 24;
 }
 
 message TuringEvent {

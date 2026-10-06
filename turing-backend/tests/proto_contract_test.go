@@ -597,6 +597,7 @@ func TestRunStateChangedReservesEventTypeTwentyThree(t *testing.T) {
 		"TURING_EVENT_TYPE_SYSTEM":                  20,
 		"TURING_EVENT_TYPE_SESSION_UPDATED":         21,
 		"TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED": 23,
+		"TURING_EVENT_TYPE_DELEGATION_STARTED":      24,
 	}
 	for name, number := range required {
 		value := enum.Values().ByName(name)
@@ -1090,6 +1091,33 @@ func TestTeamToolsProtoContract(t *testing.T) {
 	assertProtoFieldMembers(t, descriptor, map[protoreflect.Name]protoreflect.FieldNumber{
 		"tool_name": 1, "policy": 2, "schema": 3, "enabled": 4, "description": 5,
 	})
+}
+
+func TestCallTeamToolProtoContract(t *testing.T) {
+	file := turingv1.File_turing_v1_team_proto
+	method := file.Services().ByName("TeamService").Methods().ByName("CallTeamTool")
+	if method == nil {
+		t.Fatal("TeamService.CallTeamTool is missing")
+	}
+	if method.Input().FullName() != "turing.v1.CallTeamToolRequest" || method.Output().FullName() != "turing.v1.CallTeamToolResponse" {
+		t.Fatalf("CallTeamTool = %s -> %s", method.Input().FullName(), method.Output().FullName())
+	}
+	if turingv1.TeamService_CallTeamTool_FullMethodName != "/turing.v1.TeamService/CallTeamTool" {
+		t.Fatalf("full method name = %q", turingv1.TeamService_CallTeamTool_FullMethodName)
+	}
+	request := file.Messages().ByName("CallTeamToolRequest")
+	for name, number := range map[protoreflect.Name]protoreflect.FieldNumber{
+		"run_id": 1, "assignment_attempt_id": 2, "approval_id": 3, "tool_call_id": 4, "tool_name": 5,
+	} {
+		assertProtoField(t, request, name, number, protoreflect.StringKind, false, "")
+	}
+	assertProtoField(t, request, "args", 6, protoreflect.MessageKind, false, "google.protobuf.Struct")
+	assertProtoFieldMembers(t, request, map[protoreflect.Name]protoreflect.FieldNumber{
+		"run_id": 1, "assignment_attempt_id": 2, "approval_id": 3, "tool_call_id": 4, "tool_name": 5, "args": 6,
+	})
+	response := file.Messages().ByName("CallTeamToolResponse")
+	assertProtoField(t, response, "result", 1, protoreflect.MessageKind, false, "google.protobuf.Struct")
+	assertProtoFieldMembers(t, response, map[protoreflect.Name]protoreflect.FieldNumber{"result": 1})
 }
 
 func TestMCPRegistryProtoContract(t *testing.T) {

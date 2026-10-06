@@ -59,6 +59,9 @@ var runStateNonCarrierEventTypes = []string{
 	"system",
 	"session.updated",
 	"session.deleted",
+	// Reports a child run on the parent's stream; it never carries the
+	// parent run's state.
+	"delegation.started",
 	"an.unknown.type.this.build.never.wrote",
 }
 

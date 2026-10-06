@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	toolpolicy "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/tools"
 	"google.golang.org/grpc/codes"
@@ -19,8 +20,8 @@ const (
 	serverName       = "team"
 	delegateToolName = "team.delegate"
 	// The brief is all a specialist sees, so its two parts are bounded.
-	maxTaskBytes    = 4 * 1024
-	maxContextBytes = 8 * 1024
+	maxTaskBytes    = backendegress.DelegationBriefMaxTaskBytes
+	maxContextBytes = backendegress.DelegationBriefMaxContextBytes
 	// maxLength counts characters, so the byte budget travels in the same
 	// vendor keyword memory's tools use, and each description names the unit.
 	schemaMaxBytesKeyword = "x-turing-maxBytes"

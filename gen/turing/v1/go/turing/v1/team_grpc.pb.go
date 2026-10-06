@@ -23,6 +23,7 @@ const (
 	TeamService_SetAgentProfileEnabled_FullMethodName = "/turing.v1.TeamService/SetAgentProfileEnabled"
 	TeamService_GrantAgentProfile_FullMethodName      = "/turing.v1.TeamService/GrantAgentProfile"
 	TeamService_ListTeamTools_FullMethodName          = "/turing.v1.TeamService/ListTeamTools"
+	TeamService_CallTeamTool_FullMethodName           = "/turing.v1.TeamService/CallTeamTool"
 )
 
 // TeamServiceClient is the client API for TeamService service.
@@ -37,6 +38,7 @@ type TeamServiceClient interface {
 	SetAgentProfileEnabled(ctx context.Context, in *SetAgentProfileEnabledRequest, opts ...grpc.CallOption) (*AgentProfile, error)
 	GrantAgentProfile(ctx context.Context, in *GrantAgentProfileRequest, opts ...grpc.CallOption) (*AgentProfile, error)
 	ListTeamTools(ctx context.Context, in *ListTeamToolsRequest, opts ...grpc.CallOption) (*ListTeamToolsResponse, error)
+	CallTeamTool(ctx context.Context, in *CallTeamToolRequest, opts ...grpc.CallOption) (*CallTeamToolResponse, error)
 }
 
 type teamServiceClient struct {
@@ -87,6 +89,16 @@ func (c *teamServiceClient) ListTeamTools(ctx context.Context, in *ListTeamTools
 	return out, nil
 }
 
+func (c *teamServiceClient) CallTeamTool(ctx context.Context, in *CallTeamToolRequest, opts ...grpc.CallOption) (*CallTeamToolResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CallTeamToolResponse)
+	err := c.cc.Invoke(ctx, TeamService_CallTeamTool_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TeamServiceServer is the server API for TeamService service.
 // All implementations must embed UnimplementedTeamServiceServer
 // for forward compatibility.
@@ -99,6 +111,7 @@ type TeamServiceServer interface {
 	SetAgentProfileEnabled(context.Context, *SetAgentProfileEnabledRequest) (*AgentProfile, error)
 	GrantAgentProfile(context.Context, *GrantAgentProfileRequest) (*AgentProfile, error)
 	ListTeamTools(context.Context, *ListTeamToolsRequest) (*ListTeamToolsResponse, error)
+	CallTeamTool(context.Context, *CallTeamToolRequest) (*CallTeamToolResponse, error)
 	mustEmbedUnimplementedTeamServiceServer()
 }
 
@@ -120,6 +133,9 @@ func (UnimplementedTeamServiceServer) GrantAgentProfile(context.Context, *GrantA
 }
 func (UnimplementedTeamServiceServer) ListTeamTools(context.Context, *ListTeamToolsRequest) (*ListTeamToolsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListTeamTools not implemented")
+}
+func (UnimplementedTeamServiceServer) CallTeamTool(context.Context, *CallTeamToolRequest) (*CallTeamToolResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CallTeamTool not implemented")
 }
 func (UnimplementedTeamServiceServer) mustEmbedUnimplementedTeamServiceServer() {}
 func (UnimplementedTeamServiceServer) testEmbeddedByValue()                     {}
@@ -214,6 +230,24 @@ func _TeamService_ListTeamTools_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TeamService_CallTeamTool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CallTeamToolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TeamServiceServer).CallTeamTool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TeamService_CallTeamTool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TeamServiceServer).CallTeamTool(ctx, req.(*CallTeamToolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TeamService_ServiceDesc is the grpc.ServiceDesc for TeamService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -236,6 +270,10 @@ var TeamService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListTeamTools",
 			Handler:    _TeamService_ListTeamTools_Handler,
+		},
+		{
+			MethodName: "CallTeamTool",
+			Handler:    _TeamService_CallTeamTool_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

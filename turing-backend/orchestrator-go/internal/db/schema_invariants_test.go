@@ -147,6 +147,8 @@ var currentSchemaTablePolicies = []schemaTablePolicy{
 	{table: "automation_runs", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
 	{table: "send_message_idempotency", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
 	{table: "run_egress_decisions", kind: schemaTableCascadeOwned, sourceTable: "agent_runs"},
+	// A delegation lives and dies with the conversation it was made from.
+	{table: "delegations", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
 	{table: "sandbox_artifacts", kind: schemaTableCascadeOwned, sourceTable: "sessions"},
 	// Unreviewed model claims about the user. They are conversation-derived
 	// and nothing has accepted them, so they live and die with the session

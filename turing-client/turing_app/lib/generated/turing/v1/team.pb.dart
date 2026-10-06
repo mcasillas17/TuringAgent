@@ -838,6 +838,198 @@ class ListTeamToolsResponse extends $pb.GeneratedMessage {
   $pb.PbList<TeamToolDescriptor> get tools => $_getList(0);
 }
 
+/// Internal: the runtime asks, for the run it is executing, to delegate one
+/// task. The run names itself and the assignment it holds; everything else is
+/// resolved from the orchestrator's own tables and the run's frozen roster.
+class CallTeamToolRequest extends $pb.GeneratedMessage {
+  factory CallTeamToolRequest({
+    $core.String? runId,
+    $core.String? assignmentAttemptId,
+    $core.String? approvalId,
+    $core.String? toolCallId,
+    $core.String? toolName,
+    $1.Struct? args,
+  }) {
+    final result = CallTeamToolRequest._();
+    if (runId != null) result.runId = runId;
+    if (assignmentAttemptId != null)
+      result.assignmentAttemptId = assignmentAttemptId;
+    if (approvalId != null) result.approvalId = approvalId;
+    if (toolCallId != null) result.toolCallId = toolCallId;
+    if (toolName != null) result.toolName = toolName;
+    if (args != null) result.args = args;
+    return result;
+  }
+
+  CallTeamToolRequest._();
+
+  factory CallTeamToolRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      CallTeamToolRequest()..mergeFromBuffer(data, registry);
+  factory CallTeamToolRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      CallTeamToolRequest()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'CallTeamToolRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: CallTeamToolRequest.$_createMessage)
+    ..aOS(1, _omitFieldNames ? '' : 'runId')
+    ..aOS(2, _omitFieldNames ? '' : 'assignmentAttemptId')
+    ..aOS(3, _omitFieldNames ? '' : 'approvalId')
+    ..aOS(4, _omitFieldNames ? '' : 'toolCallId')
+    ..aOS(5, _omitFieldNames ? '' : 'toolName')
+    ..aOM<$1.Struct>(6, _omitFieldNames ? '' : 'args',
+        subBuilder: $1.Struct.$_createMessage)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CallTeamToolRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CallTeamToolRequest copyWith(void Function(CallTeamToolRequest) updates) =>
+      super.copyWith((message) => updates(message as CallTeamToolRequest))
+          as CallTeamToolRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core
+      .Deprecated('Use CallTeamToolRequest() / CallTeamToolRequest.new instead')
+  static CallTeamToolRequest create() => CallTeamToolRequest._();
+  static $pb.GeneratedMessage $_createMessage() => CallTeamToolRequest._();
+  @$core.override
+  CallTeamToolRequest createEmptyInstance() => CallTeamToolRequest._();
+  @$core.pragma('dart2js:noInline')
+  static CallTeamToolRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<CallTeamToolRequest>(
+          CallTeamToolRequest.$_createMessage);
+  static CallTeamToolRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get runId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set runId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasRunId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearRunId() => $_clearField(1);
+
+  /// Must be the run's current assignment attempt: a fenced or reassigned
+  /// worker cannot create a delegation.
+  @$pb.TagNumber(2)
+  $core.String get assignmentAttemptId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set assignmentAttemptId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasAssignmentAttemptId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearAssignmentAttemptId() => $_clearField(2);
+
+  /// The decided approval, when the team.delegate policy requires one.
+  @$pb.TagNumber(3)
+  $core.String get approvalId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set approvalId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasApprovalId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearApprovalId() => $_clearField(3);
+
+  /// The model's tool call. A retry with the same ID and arguments returns the
+  /// delegation it already created.
+  @$pb.TagNumber(4)
+  $core.String get toolCallId => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set toolCallId($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasToolCallId() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearToolCallId() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get toolName => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set toolName($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasToolName() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearToolName() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $1.Struct get args => $_getN(5);
+  @$pb.TagNumber(6)
+  set args($1.Struct value) => $_setField(6, value);
+  @$pb.TagNumber(6)
+  $core.bool hasArgs() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearArgs() => $_clearField(6);
+  @$pb.TagNumber(6)
+  $1.Struct ensureArgs() => $_ensure(5);
+}
+
+/// The result the model sees: {delegation_id, agent, state}.
+class CallTeamToolResponse extends $pb.GeneratedMessage {
+  factory CallTeamToolResponse({
+    $1.Struct? result,
+  }) {
+    final result$ = CallTeamToolResponse._();
+    if (result != null) result$.result = result;
+    return result$;
+  }
+
+  CallTeamToolResponse._();
+
+  factory CallTeamToolResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      CallTeamToolResponse()..mergeFromBuffer(data, registry);
+  factory CallTeamToolResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      CallTeamToolResponse()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'CallTeamToolResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: CallTeamToolResponse.$_createMessage)
+    ..aOM<$1.Struct>(1, _omitFieldNames ? '' : 'result',
+        subBuilder: $1.Struct.$_createMessage)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CallTeamToolResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CallTeamToolResponse copyWith(void Function(CallTeamToolResponse) updates) =>
+      super.copyWith((message) => updates(message as CallTeamToolResponse))
+          as CallTeamToolResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use CallTeamToolResponse() / CallTeamToolResponse.new instead')
+  static CallTeamToolResponse create() => CallTeamToolResponse._();
+  static $pb.GeneratedMessage $_createMessage() => CallTeamToolResponse._();
+  @$core.override
+  CallTeamToolResponse createEmptyInstance() => CallTeamToolResponse._();
+  @$core.pragma('dart2js:noInline')
+  static CallTeamToolResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<CallTeamToolResponse>(
+          CallTeamToolResponse.$_createMessage);
+  static CallTeamToolResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $1.Struct get result => $_getN(0);
+  @$pb.TagNumber(1)
+  set result($1.Struct value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasResult() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearResult() => $_clearField(1);
+  @$pb.TagNumber(1)
+  $1.Struct ensureResult() => $_ensure(0);
+}
+
 const $core.bool _omitFieldNames =
     $core.bool.fromEnvironment('protobuf.omit_field_names');
 const $core.bool _omitMessageNames =

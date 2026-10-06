@@ -358,6 +358,27 @@ func TestLoadFromMapParsesAgentTeamEnabled(t *testing.T) {
 	}
 }
 
+func TestLoadFromMapParsesMaxDelegationsPerRun(t *testing.T) {
+	cfg, err := LoadFromMap(requiredEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxDelegationsPerRun != 3 {
+		t.Fatalf("MaxDelegationsPerRun = %d, want the default 3", cfg.MaxDelegationsPerRun)
+	}
+	env := requiredEnv()
+	env["TURING_MAX_DELEGATIONS_PER_RUN"] = "5"
+	if cfg, err = LoadFromMap(env); err != nil || cfg.MaxDelegationsPerRun != 5 {
+		t.Fatalf("MaxDelegationsPerRun = %d, %v; want 5", cfg.MaxDelegationsPerRun, err)
+	}
+	for _, invalid := range []string{"0", "-1", "three"} {
+		env["TURING_MAX_DELEGATIONS_PER_RUN"] = invalid
+		if _, err := LoadFromMap(env); err == nil || !strings.Contains(err.Error(), "TURING_MAX_DELEGATIONS_PER_RUN") {
+			t.Fatalf("LoadFromMap(%q) error = %v, want one naming TURING_MAX_DELEGATIONS_PER_RUN", invalid, err)
+		}
+	}
+}
+
 // The orchestrator's Config type must never carry OPENAI_API_KEY or
 // MCP_SYSTEM_TOKEN_GENERAL/MCP_FILES_TOKEN_GENERAL: those secrets belong only
 // to the processes that actually call OpenAI or the MCP servers. Setting them

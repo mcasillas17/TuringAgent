@@ -331,6 +331,7 @@ func New(cfg config.Config) (*App, error) {
 			turingv1.MemoryService_ListMemoryTools_FullMethodName,
 			turingv1.MemoryService_CallMemoryTool_FullMethodName,
 			turingv1.TeamService_ListTeamTools_FullMethodName,
+			turingv1.TeamService_CallTeamTool_FullMethodName,
 		),
 		auth.NewServiceIdentity("approval-consumer", cfg.ApprovalConsumerToken,
 			turingv1.ApprovalService_ConsumeApproval_FullMethodName,
@@ -378,6 +379,9 @@ func New(cfg config.Config) (*App, error) {
 	// decisions, while the team tool a run is offered is the runtime's to
 	// read. Neither facet can do the other's half.
 	teamService := teamsvc.New(repo, runtimeService, cfg.OllamaModel, cfg.AgentTeamEnabled)
+	teamService.SetApprovalEnforcer(approvalService)
+	teamService.SetEventPublisher(eventBus)
+	teamService.SetMaxDelegationsPerRun(cfg.MaxDelegationsPerRun)
 	// Off, no run is offered the team, and a send pays nothing to find out.
 	if cfg.AgentTeamEnabled {
 		chatService.SetTeamRoster(teamService)

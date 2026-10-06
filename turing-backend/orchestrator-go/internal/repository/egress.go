@@ -525,7 +525,7 @@ func (r *Repository) IntegrationEndpointsForTools(ctx context.Context, selectedT
 }
 
 func (r *Repository) IntegrationDispatchActive(ctx context.Context, runID, toolName, expectedPolicy string) (bool, error) {
-	return r.pseudoServerDispatchActive(ctx, "integrations", runID, toolName, expectedPolicy)
+	return pseudoServerDispatchActive(ctx, r.db, "integrations", runID, toolName, expectedPolicy)
 }
 
 func cloneIntegrationEndpoints(input []IntegrationEndpointEgress) []IntegrationEndpointEgress {

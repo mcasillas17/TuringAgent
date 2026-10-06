@@ -1,6 +1,6 @@
 // Package team serves the specialist profiles under team/ and the user's
-// decisions about them. It only reports what a delegated run would receive;
-// nothing here starts a run.
+// decisions about them, renders the team tool a Turing run is offered, and
+// queues the specialist's run when that run delegates a task.
 package team
 
 import (
@@ -23,12 +23,15 @@ const (
 	childProvider = "ollama"
 )
 
-// Routes is the slice of the runtime that knows which workers are live. The
-// runtime server satisfies it; a nil Routes means no worker is live.
+// Routes is the slice of the runtime the team needs: which workers are live,
+// and telling them about a child it queued. The runtime server satisfies it;
+// a nil Routes means no worker is live.
 type Routes interface {
 	ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.ModelCapability
 	ValidateRouting(ctx context.Context, route repository.RoutingRequirements) error
 	EgressToolNames(route repository.RoutingRequirements) []string
+	DispatchPending(context.Context) error
+	RefreshPendingRoutingState(context.Context, string) error
 }
 
 // Server is the team service behind both facets. It is not itself a
@@ -40,6 +43,12 @@ type Server struct {
 	// enabled is TURING_AGENT_TEAM_ENABLED. Off, no run is offered the team;
 	// the profiles themselves stay manageable.
 	enabled bool
+	// approvals consumes the approval an approval-gated delegation needs.
+	approvals ApprovalEnforcer
+	// events publishes a delegation's events after it commits.
+	events EventPublisher
+	// maxDelegationsPerRun is TURING_MAX_DELEGATIONS_PER_RUN.
+	maxDelegationsPerRun int
 }
 
 func New(repo *repository.Repository, routes Routes, defaultModel string, enabled bool) *Server {
@@ -251,7 +260,7 @@ func (r *resolver) resolve(profile repository.AgentProfile) *turingv1.AgentProfi
 	noRoute := modelReason != ""
 	var resolved, waiting []string
 	for _, entry := range r.catalog {
-		if !matchesAny(profile.Tools, entry.ToolName) {
+		if !teamfiles.MatchAny(profile.Tools, entry.ToolName) {
 			continue
 		}
 		qualified := entry.ServerName + "/" + entry.ToolName
@@ -343,7 +352,7 @@ func (r *resolver) requirementReason(pattern string, declared, satisfied []strin
 			}
 			continue
 		}
-		if !matchesAny(declared, entry.ToolName) {
+		if !teamfiles.MatchAny(declared, entry.ToolName) {
 			undeclared = true
 		}
 	}
@@ -355,15 +364,6 @@ func (r *resolver) requirementReason(pattern string, declared, satisfied []strin
 	default:
 		return fmt.Sprintf("needs `%s` — not connected or registered", pattern)
 	}
-}
-
-func matchesAny(patterns []string, tool string) bool {
-	for _, pattern := range patterns {
-		if teamfiles.MatchPattern(pattern, tool) {
-			return true
-		}
-	}
-	return false
 }
 
 func toolPart(qualified string) string {

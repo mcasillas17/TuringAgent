@@ -296,6 +296,16 @@ func MatchPattern(pattern, name string) bool {
 	return pattern == name
 }
 
+// MatchAny reports whether name matches any of patterns.
+func MatchAny(patterns []string, name string) bool {
+	for _, pattern := range patterns {
+		if MatchPattern(pattern, name) {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizePatterns(field string, values []string) ([]string, error) {
 	patterns := make([]string, 0, len(values))
 	for _, value := range values {

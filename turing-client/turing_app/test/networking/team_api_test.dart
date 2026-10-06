@@ -188,4 +188,11 @@ class _TeamService extends teamgrpc.TeamServiceBase {
     teampb.ListTeamToolsRequest request,
   ) async =>
       throw grpc.GrpcError.permissionDenied('team tool discovery is internal');
+
+  @override
+  Future<teampb.CallTeamToolResponse> callTeamTool(
+    grpc.ServiceCall call,
+    teampb.CallTeamToolRequest request,
+  ) async =>
+      throw grpc.GrpcError.permissionDenied('team tool dispatch is internal');
 }

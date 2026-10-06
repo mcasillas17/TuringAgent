@@ -258,12 +258,12 @@ func (r *Repository) PseudoServerToolPolicy(ctx context.Context, serverName, too
 // is not being deleted. A run cancelled after the BEFORE beacon — or during an
 // approval wait — fails this, so a stopped run never touches the vault.
 func (r *Repository) MemoryDispatchActive(ctx context.Context, runID, toolName, expectedPolicy string) (bool, error) {
-	return r.pseudoServerDispatchActive(ctx, "memory", runID, toolName, expectedPolicy)
+	return pseudoServerDispatchActive(ctx, r.db, "memory", runID, toolName, expectedPolicy)
 }
 
-func (r *Repository) pseudoServerDispatchActive(ctx context.Context, serverName, runID, toolName, expectedPolicy string) (bool, error) {
+func pseudoServerDispatchActive(ctx context.Context, q rowQuerier, serverName, runID, toolName, expectedPolicy string) (bool, error) {
 	var active bool
-	err := r.db.QueryRowContext(ctx, `
+	err := q.QueryRowContext(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM tools tool
 			JOIN agent_runs run ON run.id = ?

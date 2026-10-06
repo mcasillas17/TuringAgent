@@ -64,6 +64,13 @@ class TeamServiceClient extends $grpc.Client {
     return $createUnaryCall(_$listTeamTools, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.CallTeamToolResponse> callTeamTool(
+    $0.CallTeamToolRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$callTeamTool, request, options: options);
+  }
+
   // method descriptors
 
   static final _$listAgentProfiles = $grpc.ClientMethod<
@@ -86,6 +93,11 @@ class TeamServiceClient extends $grpc.Client {
           '/turing.v1.TeamService/ListTeamTools',
           ($0.ListTeamToolsRequest value) => value.writeToBuffer(),
           $0.ListTeamToolsResponse.fromBuffer);
+  static final _$callTeamTool =
+      $grpc.ClientMethod<$0.CallTeamToolRequest, $0.CallTeamToolResponse>(
+          '/turing.v1.TeamService/CallTeamTool',
+          ($0.CallTeamToolRequest value) => value.writeToBuffer(),
+          $0.CallTeamToolResponse.fromBuffer);
 }
 
 @$pb.GrpcServiceName('turing.v1.TeamService')
@@ -129,6 +141,15 @@ abstract class TeamServiceBase extends $grpc.Service {
             ($core.List<$core.int> value) =>
                 $0.ListTeamToolsRequest.fromBuffer(value),
             ($0.ListTeamToolsResponse value) => value.writeToBuffer()));
+    $addMethod(
+        $grpc.ServiceMethod<$0.CallTeamToolRequest, $0.CallTeamToolResponse>(
+            'CallTeamTool',
+            callTeamTool_Pre,
+            false,
+            false,
+            ($core.List<$core.int> value) =>
+                $0.CallTeamToolRequest.fromBuffer(value),
+            ($0.CallTeamToolResponse value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.ListAgentProfilesResponse> listAgentProfiles_Pre(
@@ -165,4 +186,13 @@ abstract class TeamServiceBase extends $grpc.Service {
 
   $async.Future<$0.ListTeamToolsResponse> listTeamTools(
       $grpc.ServiceCall call, $0.ListTeamToolsRequest request);
+
+  $async.Future<$0.CallTeamToolResponse> callTeamTool_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.CallTeamToolRequest> $request) async {
+    return callTeamTool($call, await $request);
+  }
+
+  $async.Future<$0.CallTeamToolResponse> callTeamTool(
+      $grpc.ServiceCall call, $0.CallTeamToolRequest request);
 }
