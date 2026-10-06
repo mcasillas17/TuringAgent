@@ -76,8 +76,8 @@ chats only. On a delegation session the public mutations — `SendMessage`,
 clearing the session's external agent — fail with `FailedPrecondition`
 ("delegation sessions are read-only") and write nothing. Reading it, cancelling
 its run and deciding its approvals still work. `TeamService.CallTeamTool`
-creates one, with `parent_session_id` naming the conversation that delegated;
-no runtime calls it yet.
+creates one, with `parent_session_id` naming the conversation that delegated,
+when Turing calls `team.delegate` with `TURING_AGENT_TEAM_ENABLED` on.
 
 Deleting a conversation withdraws each of its delegation sessions first, under
 the child's own deletion receipt: its runs are cancelled, its own artifact

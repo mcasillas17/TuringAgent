@@ -15,6 +15,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/mcp"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/internal/safejson"
@@ -55,6 +56,11 @@ type GeneralAssistantTools struct {
 	// answers with an empty list when memory is off, and the registry rebuild it
 	// publishes takes the tools away without a restart.
 	MemoryTools func(context.Context) (ToolLister, error)
+	// Team is the orchestrator's internal team facet. A run is offered the
+	// team tool it was given when it was enqueued, asked for per run and never
+	// cached, and a team.delegate call is dispatched through it. Nil means
+	// this worker cannot delegate and advertises no team tool.
+	Team mcp.TeamRPC
 }
 
 const (
@@ -195,7 +201,14 @@ func (a *GeneralAssistant) AdvertisedTools(ctx context.Context) ([]*turingv1.Dis
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*turingv1.DiscoveredTool, 0, len(discovered))
+	out := make([]*turingv1.DiscoveredTool, 0, len(discovered)+1)
+	if a.tools != nil && a.tools.Team != nil {
+		team, err := advertisedTeamTool()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, team)
+	}
 	for _, tool := range discovered {
 		schema, err := structpb.NewStruct(tool.Schema)
 		if err != nil {
@@ -223,10 +236,11 @@ func (a *GeneralAssistant) toolCallLimit(job *turingv1.AgentJob) int {
 // toolDefinitionsForJob offers the frozen set to a job that has one — a job
 // carrying an egress decision, or one that enforces its set — and the whole
 // registry otherwise. A frozen empty set offers nothing. Dispatch refuses any
-// call to a tool not offered here before a beacon is posted.
+// call to a tool not offered here before a beacon is posted. The team tool is
+// not the registry's; teamDefinition offers it.
 func toolDefinitionsForJob(registry *ToolRegistry, job *turingv1.AgentJob) ([]llm.ToolDefinition, error) {
 	if job.GetEgressDecision() != nil || job.GetEnforceSelectedTools() {
-		return registry.DefinitionsFor(job.GetSelectedTools())
+		return registry.DefinitionsFor(withoutTeamTool(job.GetSelectedTools()))
 	}
 	return registry.Definitions(), nil
 }
@@ -287,6 +301,9 @@ func (a *GeneralAssistant) Execute(ctx context.Context, job *turingv1.AgentJob, 
 	toolDefinitions, err := toolDefinitionsForJob(registry, job)
 	if err != nil {
 		return emitRunFailed(emit, job, "egress_decision_invalid", turingv1.FailureOrigin_FAILURE_ORIGIN_TOOL_POLICY, retryClass(false))
+	}
+	if team, offered := a.teamDefinition(ctx, job, registry); offered {
+		toolDefinitions = append(toolDefinitions, team)
 	}
 	recallForContext := a.prepareRecallForRun(ctx, job)
 	// A specialist's instructions and an enforcing job's tools are mandatory,
@@ -1008,6 +1025,14 @@ func (a *GeneralAssistant) executeToolCall(
 		return toolCallOutcome{}, err
 	}
 	entry, found := registry.Lookup(call.Name)
+	if !found && call.Name == teamDelegateName && a.tools != nil && a.tools.Team != nil {
+		// Only a run whose own definitions include the team tool gets past
+		// the check below; every other team.delegate is an unknown tool.
+		entry, found = ToolEntry{
+			ServerName: teamServerName,
+			Client:     mcp.NewTeamCallClient(a.tools.Team, job.GetAssignmentAttemptId(), call.ID),
+		}, true
+	}
 	if !found || !toolDefinitionAvailable(availableDefinitions, call.Name) {
 		if err := emitAssistantToolCallFailed(emit, job, call); err != nil {
 			return toolCallOutcome{}, err

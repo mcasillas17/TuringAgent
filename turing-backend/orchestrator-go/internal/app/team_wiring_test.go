@@ -18,11 +18,15 @@ import (
 
 func newTeamTestApp(t *testing.T, enabled bool) *App {
 	t.Helper()
+	return newTeamTestAppWithProfile(t, enabled, "---\nname: Research\ndescription: Looks things up\ntools: [system.time]\nmemory: none\n---\nYou research.\n")
+}
+
+func newTeamTestAppWithProfile(t *testing.T, enabled bool, profile string) *App {
+	t.Helper()
 	teamRoot := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(teamRoot, "research"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	profile := "---\nname: Research\ndescription: Looks things up\ntools: [system.time]\nmemory: none\n---\nYou research.\n"
 	if err := os.WriteFile(filepath.Join(teamRoot, "research", "AGENT.md"), []byte(profile), 0o600); err != nil {
 		t.Fatal(err)
 	}

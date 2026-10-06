@@ -168,7 +168,7 @@ A provider completion with finish reason `length` emits a durable `agent.run.ste
 The Flutter client sends the selected provider with each message. The backend owns provider routing, context admission, and model execution.
 
 The Agents page manages endpoint records and Turing's team of specialist
-profiles (enablement and revision-bound grants; delegation is not switched on). `SessionAgentBar` reads/sets/clears
+profiles (enablement and revision-bound grants; delegation is off by default and does not report back yet). `SessionAgentBar` reads/sets/clears
 the conversation route through `ExternalAgentService`, and the runtime's
 resolver performs inference using the OpenAI-compatible transport.
 Vendor names are descriptive labels, not native Anthropic/Gemini

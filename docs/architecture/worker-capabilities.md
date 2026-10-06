@@ -206,8 +206,7 @@ The persisted roster, not the frozen tool set, decides whether a run may
 delegate: a consented send keeps `team/team.delegate` in the set it was
 consented with even when the team could not be read at send time, and such a
 run is offered no team tool. The internal `TeamService.ListTeamTools` renders a run's
-frozen roster, never the live profiles, as the `team.delegate` schema; no
-runtime calls it until the later PR that offers the tool.
+frozen roster, never the live profiles, as the `team.delegate` schema.
 
 **The child job.** The internal `TeamService.CallTeamTool` is the one writer
 of the specialist-job contract. For a running Turing run whose current
@@ -224,10 +223,28 @@ skills, the pinned persona and profile withheld, no egress decision, and
 `minimumTeamProtocolVersion: 1`, so only a team-protocol worker claims it. The
 call checks the child's whole route with `ValidateRouting` first, so a child no
 worker could claim is never queued. A retried tool call returns the delegation
-it created. No runtime calls `CallTeamTool` yet, and nothing offers or
-dispatches `team.delegate`; the [orchestrator and team
+it created.
+
+**How the runtime offers it.** A worker built with the team client
+(`GeneralAssistantTools.Team`) advertises `team/team.delegate` from a constant,
+so the orchestrator accepts its beacon and the name can enter a frozen set; the
+team is never in the cached tool registry, because its schema belongs to one
+run. A frozen set is resolved with `team/team.delegate` set aside, so naming it
+never makes the set unavailable, and the job's `selected_tools` is not changed.
+Then, per run and never cached, the runtime asks `ListTeamTools(run_id)` when
+the job has no frozen set or its set names `team/team.delegate`, and appends an
+enabled, non-disabled `team.delegate` to the tools it offers. Children and
+continuations, whose sets never name it, are offered nothing; so is a run whose
+registry already holds a tool named `team.delegate`, and a run whose listing
+fails or outlasts the tool timeout, because the team is optional. A `team.delegate` call goes through the
+tool runner like any other — a `team/team.delegate` beacon, the policy and, when
+it requires one, the user's approval — and is dispatched to `CallTeamTool` with
+the job's assignment attempt and the model's tool-call ID, only when that run's
+own tools included it; anywhere else it is an unknown tool, refused before a
+beacon. Nothing joins a specialist's result back into Turing's conversation
+yet; the [orchestrator and team
 design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
-(sections 7.3 to 7.5) describes the slices that will.
+(section 7.5) describes the slice that will.
 
 ## Run ownership and version fencing
 

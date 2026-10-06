@@ -1342,6 +1342,9 @@ func TestDiscoveredToolsAppearInListTools(t *testing.T) {
 		"skills/skill_view":     turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
 		"skills/skills_list":    turingv1.ToolPolicy_TOOL_POLICY_APPROVAL_REQUIRED,
 		"system/system.time":    turingv1.ToolPolicy_TOOL_POLICY_SAFE,
+		// The harness's own runtime worker is built with the team client, so it
+		// advertises the delegation tool, listed at its safe seed.
+		"team/team.delegate": turingv1.ToolPolicy_TOOL_POLICY_SAFE,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("ListTools = %+v, want exactly %+v", got, want)
