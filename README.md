@@ -426,6 +426,10 @@ were withdrawn; `in_progress` and `failed_external` are retryable, non-success
 states that keep the conversation hidden. The only retained artifact policy is
 `retain_legacy_unowned` for sandbox-root files created before provenance was
 available; its count is recorded without claiming those bytes were withdrawn.
+A conversation's delegated specialist sessions are withdrawn first, each under
+its own receipt. The conversation's receipt is the only one listed; once its own
+runs have quiesced it stays retryable with `child_deletion_pending` until those
+children finish.
 
 This is **logical withdrawal**, not a forensic storage-erasure promise.
 SQLite WAL, freed pages, filesystem snapshots, SSD wear leveling and separately

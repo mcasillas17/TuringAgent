@@ -27,6 +27,10 @@ var ErrSessionDeleting = errors.New("session deletion is in progress")
 // decide its approvals.
 var ErrDelegationSessionReadOnly = errors.New("delegation sessions are read-only")
 
+// ErrNotADelegationSession refuses a child withdrawal of a chat session. Only
+// a parent's deletion withdraws a child, and it never asks for a chat.
+var ErrNotADelegationSession = errors.New("not a delegation session")
+
 // SessionDeletionReceipt is the content-free progress record for one
 // idempotent session withdrawal. It intentionally contains no session title,
 // message, path, tool arguments, result, or external error text.
@@ -83,6 +87,11 @@ const (
 	// SessionDeletionMemoryReconcileFailed names a withdrawal whose rows are
 	// gone but whose on-disk completion could not be written.
 	SessionDeletionMemoryReconcileFailed = "memory_reconcile_failed"
+	// SessionDeletionChildPending names a parent whose delegation sessions
+	// are not all withdrawn yet. It is deliberately not the artifact class:
+	// the cleaners dispatch only on that literal, and keyed on the parent's
+	// ID they would never reach a child's files.
+	SessionDeletionChildPending = "child_deletion_pending"
 )
 
 // SessionDeletionCompletion is the on-disk work a withdrawal must finish before
@@ -143,6 +152,17 @@ const scrubSessionAuditPayloadsSQL = `
 // any cleaner or vault reconcile runs, because holding it across a filesystem
 // walk is how a withdrawal and a pass wedge against each other.
 func (r *Repository) BeginSessionDeletion(ctx context.Context, sessionID string) (SessionDeletionReceipt, error) {
+	return r.beginSessionDeletion(ctx, sessionID, "chat")
+}
+
+// BeginDelegationSessionDeletion is the same begin for a parent's child
+// session, which the public begin refuses. Its receipt names the parent, so
+// the parent's deletion can find it again once the child's row is gone.
+func (r *Repository) BeginDelegationSessionDeletion(ctx context.Context, sessionID string) (SessionDeletionReceipt, error) {
+	return r.beginSessionDeletion(ctx, sessionID, "delegation")
+}
+
+func (r *Repository) beginSessionDeletion(ctx context.Context, sessionID, wantKind string) (SessionDeletionReceipt, error) {
 	unlockSession, err := lockSessionDecision(ctx, sessionID)
 	if err != nil {
 		return SessionDeletionReceipt{}, err
@@ -157,14 +177,23 @@ func (r *Repository) BeginSessionDeletion(ctx context.Context, sessionID string)
 
 	// The public delete refuses a child session before anything else,
 	// including a retry of an existing receipt: a child is deleted only by its
-	// parent's deletion lifecycle.
-	var kind string
-	err = tx.QueryRowContext(ctx, `SELECT kind FROM sessions WHERE id = ?`, sessionID).Scan(&kind)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	// parent's deletion lifecycle, which in turn never withdraws a chat as a
+	// child. Once the row is gone the receipt says which it was: a child's
+	// names its parent.
+	var kind sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(
+			(SELECT kind FROM sessions WHERE id = ?),
+			(SELECT CASE WHEN parent_session_id IS NULL THEN 'chat' ELSE 'delegation' END
+				FROM session_deletions WHERE session_id = ?))
+	`, sessionID, sessionID).Scan(&kind); err != nil {
 		return SessionDeletionReceipt{}, err
 	}
-	if err == nil && kind != "chat" {
-		return SessionDeletionReceipt{}, ErrDelegationSessionReadOnly
+	if kind.Valid && kind.String != wantKind {
+		if wantKind == "chat" {
+			return SessionDeletionReceipt{}, ErrDelegationSessionReadOnly
+		}
+		return SessionDeletionReceipt{}, ErrNotADelegationSession
 	}
 
 	var receipt SessionDeletionReceipt
@@ -247,8 +276,8 @@ func (r *Repository) BeginSessionDeletion(ctx context.Context, sessionID string)
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO session_deletions (
 			session_id, lifecycle_version, state, quiesce_deadline_at, terminal_sequence,
-			retryable, run_count, message_count
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			retryable, run_count, message_count, parent_session_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT parent_session_id FROM sessions WHERE id = ?))
 	`,
 		receipt.SessionID,
 		receipt.LifecycleVersion,
@@ -258,6 +287,7 @@ func (r *Repository) BeginSessionDeletion(ctx context.Context, sessionID string)
 		receipt.Retryable,
 		receipt.RunCount,
 		receipt.MessageCount,
+		sessionID,
 	); err != nil {
 		return SessionDeletionReceipt{}, err
 	}
@@ -391,6 +421,35 @@ func (r *Repository) AdvanceSessionDeletion(ctx context.Context, sessionID strin
 			SET state = ?, retryable = 1
 			WHERE session_id = ?
 		`, receipt.State, sessionID); err != nil {
+			return SessionDeletionReceipt{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return SessionDeletionReceipt{}, err
+		}
+		return receipt, nil
+	}
+	// A parent waits for its delegation sessions: one whose row is still here,
+	// or whose receipt is not completed after its row is gone. Its own
+	// artifacts and its row come after them, so the row's cascade never takes
+	// a child out from under a worker or past its own cleaners. This is the
+	// same set DelegationChildSessionIDs hands the coordinator; the two must
+	// agree, or a parent waits on a child nobody withdraws.
+	var pendingChildren int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT (SELECT COUNT(*) FROM sessions WHERE parent_session_id = ?) +
+			(SELECT COUNT(*) FROM session_deletions WHERE parent_session_id = ? AND state <> 'completed')
+	`, sessionID, sessionID).Scan(&pendingChildren); err != nil {
+		return SessionDeletionReceipt{}, err
+	}
+	if pendingChildren > 0 {
+		receipt.State = "failed_external"
+		receipt.Retryable = true
+		receipt.ErrorCode = SessionDeletionChildPending
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE session_deletions
+			SET state = ?, retryable = 1, error_code = ?
+			WHERE session_id = ?
+		`, receipt.State, receipt.ErrorCode, sessionID); err != nil {
 			return SessionDeletionReceipt{}, err
 		}
 		if err := tx.Commit(); err != nil {
@@ -856,15 +915,78 @@ func (r *Repository) PendingSessionDeletionIDs(ctx context.Context) ([]string, e
 	return sessionIDs, rows.Err()
 }
 
+// PendingSessionDeletion is an unfinished withdrawal and the parent session it
+// belongs to, if it withdraws a delegation session.
+type PendingSessionDeletion struct {
+	SessionID       string
+	ParentSessionID string
+}
+
+// PendingSessionDeletions returns every unfinished receipt with its parent,
+// so a reconciler can drive a child through its parent's deletion.
+func (r *Repository) PendingSessionDeletions(ctx context.Context) ([]PendingSessionDeletion, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT session_id, COALESCE(parent_session_id, '')
+		FROM session_deletions
+		WHERE state <> 'completed'
+		ORDER BY session_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var pending []PendingSessionDeletion
+	for rows.Next() {
+		var deletion PendingSessionDeletion
+		if err := rows.Scan(&deletion.SessionID, &deletion.ParentSessionID); err != nil {
+			return nil, err
+		}
+		pending = append(pending, deletion)
+	}
+	return pending, rows.Err()
+}
+
+// DelegationChildSessionIDs returns the delegation sessions a parent's
+// deletion must withdraw: every child row in id order, then every child whose
+// row is already gone and whose receipt is not completed. It is the set
+// AdvanceSessionDeletion's child gate waits on; the two must agree.
+func (r *Repository) DelegationChildSessionIDs(ctx context.Context, parentSessionID string) ([]string, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id FROM (
+			SELECT id, 0 AS gone FROM sessions WHERE parent_session_id = ?
+			UNION
+			SELECT d.session_id, 1 FROM session_deletions d
+			WHERE d.parent_session_id = ? AND d.state <> 'completed'
+				AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = d.session_id)
+		)
+		ORDER BY gone, id
+	`, parentSessionID, parentSessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var children []string
+	for rows.Next() {
+		var child string
+		if err := rows.Scan(&child); err != nil {
+			return nil, err
+		}
+		children = append(children, child)
+	}
+	return children, rows.Err()
+}
+
 // PendingSessionDeletionReceipts exposes only content-free retry state for
 // client recovery. It intentionally does not join sessions, messages, events,
-// or artifact paths.
+// or artifact paths. A child's receipt is left out: the client shows the one
+// pending deletion it asked for, the parent's, which carries
+// child_deletion_pending while a child is still being withdrawn.
 func (r *Repository) PendingSessionDeletionReceipts(ctx context.Context) ([]SessionDeletionReceipt, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT session_id, lifecycle_version, state, terminal_sequence, retryable,
 			COALESCE(error_code, ''), run_count, message_count, retained_legacy_artifact_count
 		FROM session_deletions
-		WHERE state <> 'completed'
+		WHERE state <> 'completed' AND parent_session_id IS NULL
 		ORDER BY session_id
 	`)
 	if err != nil {
