@@ -146,6 +146,9 @@ type Config struct {
 	AgentTeamEnabled bool
 	// MaxDelegationsPerRun is how many tasks one Turing run may delegate.
 	MaxDelegationsPerRun int
+	// DelegationResultMaxBytes is how much of one specialist's result its join
+	// carries back to Turing; the rest is cut, visibly.
+	DelegationResultMaxBytes int
 }
 
 func Load() (Config, error) {
@@ -358,6 +361,15 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	delegationResultMaxBytes, err := positiveIntValue("TURING_DELEGATION_RESULT_MAX_BYTES", egress.DefaultDelegationResultMaxBytes)
+	if err != nil {
+		return Config{}, err
+	}
+	if !egress.DelegationResultsFit(maxDelegations, delegationResultMaxBytes) {
+		return Config{}, fmt.Errorf(
+			"TURING_MAX_DELEGATIONS_PER_RUN × (TURING_DELEGATION_RESULT_MAX_BYTES + %d) + %d must be at most %d, so every result fits the one frame a join is shown in",
+			egress.DelegationResultHeaderBytes, egress.DelegationResultsIntroBytes, egress.DelegationResultsFrameMaxBytes)
+	}
 	approvalTTL, err := intValue("TURING_APPROVAL_TIMEOUT_MS", 65000)
 	if err != nil {
 		return Config{}, err
@@ -467,6 +479,7 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		QueueNoWorkerTimeoutMS:    queueNoWorkerTimeout,
 		QueueTimeoutPolicy:        queueTimeoutPolicy,
 		MaxDelegationsPerRun:      maxDelegations,
+		DelegationResultMaxBytes:  delegationResultMaxBytes,
 	}, nil
 }
 

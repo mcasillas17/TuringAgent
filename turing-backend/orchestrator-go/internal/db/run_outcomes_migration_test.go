@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -1319,13 +1320,14 @@ func TestRunOutcomeMigrationPreservesEveryExistingRunColumnAndForeignKey(t *test
 		}
 	}
 	sort.Strings(added)
-	// 0020 appends TUR-010's queue-wait columns after this migration runs, so
-	// the harness that applies every embedded migration sees them here too.
-	// They are listed rather than filtered out: this assertion exists to make
-	// any new agent_runs column a deliberate edit, and filtering would let the
-	// next one in unnoticed.
+	// 0020 appends TUR-010's queue-wait columns after this migration runs, and
+	// 0028 the continuation link, so the harness that applies every embedded
+	// migration sees them here too. They are listed rather than filtered out:
+	// this assertion exists to make any new agent_runs column a deliberate
+	// edit, and filtering would let the next one in unnoticed.
 	wantAdded := []string{
 		"assistant_content_sha256",
+		"continues_run_id",
 		"outcome_reason",
 		"queue_unroutable_since_ns",
 		"queue_wait_reason",
@@ -1337,8 +1339,12 @@ func TestRunOutcomeMigrationPreservesEveryExistingRunColumnAndForeignKey(t *test
 	if !reflect.DeepEqual(added, wantAdded) {
 		t.Fatalf("added agent_runs columns = %v, want %v", added, wantAdded)
 	}
-	if got := tableForeignKeys(t, ctx, database, "agent_runs"); !reflect.DeepEqual(got, beforeKeys) {
-		t.Fatalf("agent_runs foreign keys = %v, want preserved %v", got, beforeKeys)
+	// 0028's continuation link is the one key added since; every key that
+	// existed before is preserved exactly.
+	wantKeys := append(slices.Clone(beforeKeys), "continues_run_id->agent_runs.id delete=CASCADE update=NO ACTION")
+	sort.Strings(wantKeys)
+	if got := tableForeignKeys(t, ctx, database, "agent_runs"); !reflect.DeepEqual(got, wantKeys) {
+		t.Fatalf("agent_runs foreign keys = %v, want %v", got, wantKeys)
 	}
 	afterIndexes := tableIndexes(t, ctx, database, "agent_runs")
 	for _, name := range beforeIndexes {

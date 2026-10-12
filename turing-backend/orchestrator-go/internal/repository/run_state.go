@@ -139,6 +139,12 @@ type RunTransitionResult struct {
 	State     RunState
 	Events    []Event
 	Duplicate bool
+	// ContinuationRunID is the continuation a terminal transition queued when
+	// it finished the last of a run's delegated tasks, and Joined the join's
+	// events, which are also the last of Events. The caller publishes them and
+	// should dispatch the continuation.
+	ContinuationRunID string
+	Joined            []Event
 }
 
 // allowedOutcomeReasons is the normative lifecycle/reason matrix. A nonterminal
@@ -765,7 +771,19 @@ func applyRunTransitionTx(
 	if err != nil {
 		return RunTransitionResult{}, err
 	}
-	return RunTransitionResult{State: committed, Events: append(events, event)}, nil
+	transitioned := RunTransitionResult{State: committed, Events: append(events, event)}
+	if isTerminalLifecycle(transition.to) {
+		// Every terminal writer comes through here, so a run that finishes
+		// the last task its parent delegated, or a parent whose tasks are
+		// already done, is joined in the transaction that finished it.
+		continuation, joined, err := maybeJoinTx(ctx, tx, transition.runID)
+		if err != nil {
+			return RunTransitionResult{}, err
+		}
+		transitioned.ContinuationRunID, transitioned.Joined = continuation, joined
+		transitioned.Events = append(transitioned.Events, joined...)
+	}
+	return transitioned, nil
 }
 
 // transitionEventType is the single canonical projection a transition appends.

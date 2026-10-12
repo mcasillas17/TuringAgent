@@ -598,6 +598,7 @@ func TestRunStateChangedReservesEventTypeTwentyThree(t *testing.T) {
 		"TURING_EVENT_TYPE_SESSION_UPDATED":         21,
 		"TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED": 23,
 		"TURING_EVENT_TYPE_DELEGATION_STARTED":      24,
+		"TURING_EVENT_TYPE_DELEGATION_FINISHED":     26,
 	}
 	for name, number := range required {
 		value := enum.Values().ByName(name)

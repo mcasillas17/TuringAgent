@@ -55,7 +55,11 @@ type ApprovalTerminalization struct {
 	ApprovalEvent  Event
 	ToolEvent      Event
 	RunFailedEvent Event
-	Changed        bool
+	// JoinEvents and ContinuationRunID are the join the run's failure
+	// triggered when it was a delegated task's last to finish.
+	JoinEvents        []Event
+	ContinuationRunID string
+	Changed           bool
 }
 
 func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, toolCallID string, agentID string, toolName string, argsJSON string, argsHash string, expiresAt string) (ApprovalRecord, Event, error) {
@@ -494,6 +498,8 @@ func (r *Repository) terminalizeApproval(
 		}
 	}
 	var event Event
+	var joinEvents []Event
+	var continuation string
 	if !lateRuntimeFailure {
 		// Recovering is a legal source here: a run fenced out of waiting
 		// approval still holds the pending approval, and leaving it
@@ -522,11 +528,15 @@ func (r *Repository) terminalizeApproval(
 				event = appended
 			}
 		}
+		joinEvents, continuation = terminal.Joined, terminal.ContinuationRunID
 	}
 	if err := tx.Commit(); err != nil {
 		return ApprovalTerminalization{}, err
 	}
-	return ApprovalTerminalization{Approval: record, ApprovalEvent: approvalEvent, ToolEvent: toolEvent, RunFailedEvent: event, Changed: true}, nil
+	return ApprovalTerminalization{
+		Approval: record, ApprovalEvent: approvalEvent, ToolEvent: toolEvent, RunFailedEvent: event,
+		JoinEvents: joinEvents, ContinuationRunID: continuation, Changed: true,
+	}, nil
 }
 
 func approvalExpiredAtDecision(expiresAt string, decidedAt string) bool {

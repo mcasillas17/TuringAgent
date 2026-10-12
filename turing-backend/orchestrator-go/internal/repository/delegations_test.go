@@ -44,7 +44,7 @@ func newDelegationFixture(t *testing.T) delegationFixture {
 	}
 	parent, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
 		SessionID: session.SessionID, Content: "prep me", AgentID: "general_assistant",
-		ModelProvider: "ollama", Model: "llama3.2", TeamRoster: testRoster,
+		ModelProvider: "ollama", Model: "llama3.2", TeamRoster: testRoster, TeamContinuation: testContinuation,
 	})
 	if err != nil {
 		t.Fatal(err)

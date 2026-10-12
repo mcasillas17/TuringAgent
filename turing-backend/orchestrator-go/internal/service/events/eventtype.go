@@ -46,6 +46,7 @@ var eventTypes = map[string]turingv1.TuringEventType{
 	"session.updated":         turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_UPDATED,
 	"session.deleted":         turingv1.TuringEventType_TURING_EVENT_TYPE_SESSION_DELETED,
 	"delegation.started":      turingv1.TuringEventType_TURING_EVENT_TYPE_DELEGATION_STARTED,
+	"delegation.finished":     turingv1.TuringEventType_TURING_EVENT_TYPE_DELEGATION_FINISHED,
 }
 
 // canonicalByFoldedType indexes the same table by the spelling-insensitive form

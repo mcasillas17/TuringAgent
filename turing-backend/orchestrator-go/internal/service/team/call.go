@@ -32,6 +32,7 @@ type EventPublisher interface {
 func (s *Server) SetApprovalEnforcer(enforcer ApprovalEnforcer) { s.approvals = enforcer }
 func (s *Server) SetEventPublisher(publisher EventPublisher)    { s.events = publisher }
 func (s *Server) SetMaxDelegationsPerRun(limit int)             { s.maxDelegationsPerRun = limit }
+func (s *Server) SetDelegationResultMaxBytes(limit int)         { s.delegationResultMaxBytes = limit }
 
 // CallTeamTool delegates one task for the run executing it.
 //

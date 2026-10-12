@@ -30,6 +30,7 @@ type Server struct {
 	bus            *events.Bus
 	audit          *audit.Server
 	notifier       Notifier
+	dispatcher     Dispatcher
 	jwtSecret      string
 	approvalTTL    time.Duration
 	previewBaseURL string
@@ -47,6 +48,13 @@ type InternalServer struct {
 
 type Notifier interface {
 	NotifyApprovalUpdated(ctx context.Context, runID string, approvalID string, status string, approvalToken string) error
+}
+
+// Dispatcher hands queued work to free workers. A decision that ends a
+// delegated task can queue its parent's continuation, which no worker has
+// ever held, so nothing else would dispatch it.
+type Dispatcher interface {
+	DispatchPending(context.Context) error
 }
 
 const (
@@ -122,6 +130,24 @@ func (s *InternalServer) CheckSessionCapability(ctx context.Context, req *turing
 
 func (s *Server) SetNotifier(notifier Notifier) {
 	s.notifier = notifier
+}
+
+func (s *Server) SetDispatcher(dispatcher Dispatcher) {
+	s.dispatcher = dispatcher
+}
+
+// publishJoin publishes a join an approval decision triggered and dispatches
+// the continuation it queued.
+func (s *Server) publishJoin(ctx context.Context, transition repository.ApprovalTerminalization) {
+	for _, event := range transition.JoinEvents {
+		s.publishEvent(event)
+	}
+	if transition.ContinuationRunID == "" || s.dispatcher == nil {
+		return
+	}
+	if err := s.dispatcher.DispatchPending(context.WithoutCancel(ctx)); err != nil {
+		log.Printf("approvals: dispatch continuation %s: %v", transition.ContinuationRunID, err)
+	}
 }
 
 func (s *Server) CreateApprovalForTool(ctx context.Context, runID string, toolCallID string, agentID string, toolName string, args map[string]any) (string, error) {
@@ -278,6 +304,7 @@ func (s *Server) DenyApproval(ctx context.Context, req *turingv1.DenyApprovalReq
 	if transition.RunFailedEvent.EventID != "" {
 		s.publishEvent(transition.RunFailedEvent)
 	}
+	s.publishJoin(ctx, transition)
 	if denied.Status == "expired" {
 		s.finishPostCommit(denied, "system", "approval.expired", "expired", "")
 		return nil, status.Error(codes.FailedPrecondition, "approval expired")
@@ -365,6 +392,7 @@ func (s *Server) expireApproval(ctx context.Context, approvalID string) (reposit
 	if transition.RunFailedEvent.EventID != "" {
 		s.publishEvent(transition.RunFailedEvent)
 	}
+	s.publishJoin(ctx, transition)
 	s.finishPostCommit(expiredApproval, "system", "approval.expired", "expired", "")
 	return expiredApproval, nil
 }
@@ -598,6 +626,7 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 		if transition.RunFailedEvent.EventID != "" {
 			s.publishEvent(transition.RunFailedEvent)
 		}
+		s.publishJoin(ctx, transition)
 		s.finishPostCommit(expiredApproval, "system", "approval.expired", "expired", "")
 		return nil, status.Error(codes.FailedPrecondition, "approval expired")
 	}
@@ -702,6 +731,7 @@ func (s *Server) ConsumeApprovalForThirdParty(
 		if transition.RunFailedEvent.EventID != "" {
 			s.publishEvent(transition.RunFailedEvent)
 		}
+		s.publishJoin(ctx, transition)
 		s.finishPostCommit(transition.Approval, "system", "approval.expired", "expired", "")
 		return status.Error(codes.FailedPrecondition, "approval expired")
 	}

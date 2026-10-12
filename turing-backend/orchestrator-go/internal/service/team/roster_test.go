@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -92,5 +93,57 @@ func TestTheRosterIsEmptyOnATeamNameCollision(t *testing.T) {
 	roster, err := h.server.Roster(context.Background())
 	if err != nil || len(roster) != 0 {
 		t.Fatalf("roster = %+v, %v; want none during a collision", roster, err)
+	}
+}
+
+// A continuation answers for Turing from its specialists' results, with the
+// tools of its parent's route on team-protocol workers, but never the team
+// again, never a tool that leaves the machine, and never one a policy or a
+// disabled server turned off.
+func TestAContinuationGetsItsRoutesToolsLessTheTeamEgressAndDisabled(t *testing.T) {
+	h := newHarness(t)
+	h.server.SetDelegationResultMaxBytes(4096)
+	h.registerRemoteServer(t, "Remote", "remote.lookup")
+	local := h.importServer(t, repository.ImportedMCPServer{
+		Name: "vendor", URL: "http://vendor:9000/mcp", Tier: repository.MCPServerTierLocalContainer,
+	}, true, "vendor.lookup")
+	if err := h.repo.SetMCPServerEnabled(context.Background(), local, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.repo.SetToolPolicyByName(context.Background(), "system", "system.time", "disabled"); err != nil {
+		t.Fatal(err)
+	}
+	h.routes.tools[defaultModel] = append(slices.Clone(builtinTools),
+		"integrations/github.get_issue", "Remote/remote.lookup", "vendor/vendor.lookup", repository.TeamDelegateTool)
+	route := repository.RoutingRequirements{
+		AgentID: "general_assistant", ModelProvider: "ollama", Model: defaultModel, MinimumTeamProtocolVersion: 1,
+	}
+
+	continuation, err := h.server.Continuation(context.Background(), route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"files/files.read", "files/files.write",
+		"memory/memory.read", "memory/memory.remember", "memory/memory.search",
+		"skills/skill_view", "skills/skills_list",
+	}
+	if !slices.Equal(continuation.Tools, want) || continuation.ResultMaxBytes != 4096 {
+		t.Fatalf("continuation = %+v, want tools %v and the configured cap", continuation, want)
+	}
+	if got := h.routes.routes[len(h.routes.routes)-1]; !reflect.DeepEqual(got, route) {
+		t.Fatalf("route tools read for %+v, want the parent's route %+v", got, route)
+	}
+}
+
+// With no worker on the route there are no tools: the continuation answers
+// from the results alone, rather than waiting on a tool nobody serves.
+func TestAContinuationOnAnUnservedRouteGetsNoTools(t *testing.T) {
+	h := newHarness(t)
+	continuation, err := h.server.Continuation(context.Background(), repository.RoutingRequirements{
+		AgentID: "general_assistant", ModelProvider: "ollama", Model: "unserved", MinimumTeamProtocolVersion: 1,
+	})
+	if err != nil || len(continuation.Tools) != 0 {
+		t.Fatalf("continuation = %+v, %v; want no tools", continuation, err)
 	}
 }

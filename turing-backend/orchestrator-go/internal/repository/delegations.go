@@ -338,7 +338,10 @@ type queuedRun struct {
 	runID, sessionID     string
 	anchor               sessionAnchor
 	modelProvider, model string
-	payload              map[string]any
+	// continuesRunID names the run a continuation answers for; empty for
+	// every other run.
+	continuesRunID string
+	payload        map[string]any
 }
 
 // insertQueuedRunTx writes a queued general-assistant run anchored on its
@@ -352,11 +355,11 @@ func insertQueuedRunTx(ctx context.Context, tx *sql.Tx, run queuedRun) (Event, e
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO agent_runs (id, session_id, user_message_id, assistant_message_id, agent_id, trace_id, status,
 			model_provider, model_name, created_at, state_version, state_updated_at, outcome_reason,
-			assistant_content_sha256, queued_since_ns)
-		VALUES (?, ?, ?, ?, 'general_assistant', ?, 'queued', ?, ?, ?, 1, ?, 'none', ?, ?)`,
+			assistant_content_sha256, queued_since_ns, continues_run_id)
+		VALUES (?, ?, ?, ?, 'general_assistant', ?, 'queued', ?, ?, ?, 1, ?, 'none', ?, ?, ?)`,
 		run.runID, run.sessionID, run.anchor.MessageID, run.anchor.PlaceholderID, traceID,
 		run.modelProvider, run.model, run.anchor.CreatedAt, run.anchor.CreatedAt,
-		emptyAssistantContentSHA256, createdAtNanos.UnixNano()); err != nil {
+		emptyAssistantContentSHA256, createdAtNanos.UnixNano(), nullableText(run.continuesRunID)); err != nil {
 		return Event{}, err
 	}
 	queuedRow, err := readRunRow(ctx, tx, run.runID)

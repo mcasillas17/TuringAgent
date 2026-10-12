@@ -43,6 +43,67 @@ func teamRosterForRoute(input EnqueueUserMessageInput, route RoutingRequirements
 	return input.TeamRoster
 }
 
+// TeamContinuation is what a run's continuation may use, frozen onto the run
+// beside its roster so the join, inside whichever transaction finishes the
+// last task, reads nothing but the database.
+type TeamContinuation struct {
+	// Tools are the continuation's selected tools: the tools of the run's
+	// route on team-protocol workers, less the team, egressing tools and
+	// disabled ones.
+	Tools []string `json:"tools"`
+	// ResultMaxBytes is how much of each specialist's result the join keeps.
+	ResultMaxBytes int `json:"resultMaxBytes"`
+}
+
+// frozenTeamContinuation is the continuation frozen onto a run that keeps its
+// roster. A continuation never gains a tool its parent lacked, so a parent
+// whose tools a decision froze keeps only the continuation tools that set
+// holds.
+func frozenTeamContinuation(continuation TeamContinuation, frozen bool, selectedTools []string) TeamContinuation {
+	tools := make([]string, 0, len(continuation.Tools))
+	for _, tool := range continuation.Tools {
+		if !frozen || slices.Contains(selectedTools, tool) {
+			tools = append(tools, tool)
+		}
+	}
+	continuation.Tools = tools
+	return continuation
+}
+
+// SessionHasDelegations reports whether a conversation has delegated a task.
+// Every later turn in one needs a team-protocol worker.
+func (r *Repository) SessionHasDelegations(ctx context.Context, sessionID string) (bool, error) {
+	return sessionHasDelegationsTx(ctx, r.db, sessionID)
+}
+
+func sessionHasDelegationsTx(ctx context.Context, q rowQuerier, sessionID string) (bool, error) {
+	var delegated bool
+	err := q.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM delegations WHERE parent_session_id = ?)`, sessionID).Scan(&delegated)
+	return delegated, err
+}
+
+// RunTeamContinuation reads the continuation frozen onto the run's job: the
+// zero value for a run that was not offered the team.
+func (r *Repository) RunTeamContinuation(ctx context.Context, runID string) (TeamContinuation, error) {
+	return runTeamContinuation(ctx, r.db, runID)
+}
+
+func runTeamContinuation(ctx context.Context, q rowQuerier, runID string) (TeamContinuation, error) {
+	var raw sql.NullString
+	if err := q.QueryRowContext(ctx,
+		`SELECT json_extract(payload_json, '$.teamContinuation') FROM jobs WHERE run_id = ?`, runID,
+	).Scan(&raw); err != nil {
+		return TeamContinuation{}, err
+	}
+	var continuation TeamContinuation
+	if !raw.Valid {
+		return continuation, nil
+	}
+	err := json.Unmarshal([]byte(raw.String), &continuation)
+	return continuation, err
+}
+
 // RunTeamRoster reads the roster frozen onto the run's job, never the live
 // profiles. It is empty for a run that was not offered the team, and
 // sql.ErrNoRows when the run has no job.

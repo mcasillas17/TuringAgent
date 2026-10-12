@@ -276,6 +276,9 @@ func NewWithConfig(repo *repository.Repository, bus *events.Bus, dispatch Dispat
 	if setter, ok := approvals.(interface{ SetNotifier(approvalsvc.Notifier) }); ok {
 		setter.SetNotifier(server)
 	}
+	if setter, ok := approvals.(interface{ SetDispatcher(approvalsvc.Dispatcher) }); ok {
+		setter.SetDispatcher(server)
+	}
 	return server
 }
 
@@ -1385,6 +1388,9 @@ func (s *Server) terminalizeApprovalDeliveryFailure(_ context.Context, approvalI
 		}
 		if transition.RunFailedEvent.EventID != "" {
 			s.publishEvent(transition.RunFailedEvent)
+		}
+		for _, event := range transition.JoinEvents {
+			s.publishEvent(event)
 		}
 	}
 	return nil

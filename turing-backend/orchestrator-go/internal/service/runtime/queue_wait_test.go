@@ -417,7 +417,7 @@ func TestQueueExpiryLosesTheRaceToAnAssignment(t *testing.T) {
 		RunID: assigned.GetRunId(),
 		Clock: repository.QueueWaitClock{WaitedNanos: (48 * time.Hour).Nanoseconds()},
 	}
-	expired, err := h.service.expireOverdueQueuedRun(context.Background(), stale, runoutcome.QueueWaitNoCompatibleWorker)
+	expired, _, err := h.service.expireOverdueQueuedRun(context.Background(), stale, runoutcome.QueueWaitNoCompatibleWorker)
 	if err != nil {
 		t.Fatalf("expireOverdueQueuedRun: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestQueueExpiryLeavesACancelledRunAlone(t *testing.T) {
 		RunID: enqueued.RunID,
 		Clock: repository.QueueWaitClock{WaitedNanos: (48 * time.Hour).Nanoseconds()},
 	}
-	expired, err := h.service.expireOverdueQueuedRun(context.Background(), stale, runoutcome.QueueWaitNoCompatibleWorker)
+	expired, _, err := h.service.expireOverdueQueuedRun(context.Background(), stale, runoutcome.QueueWaitNoCompatibleWorker)
 	if err != nil {
 		t.Fatalf("expireOverdueQueuedRun: %v", err)
 	}

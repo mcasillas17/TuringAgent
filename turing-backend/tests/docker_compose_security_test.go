@@ -262,6 +262,7 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			// roster and creates every child, so no worker needs the flag.
 			"TURING_AGENT_TEAM_ENABLED",
 			"TURING_MAX_DELEGATIONS_PER_RUN",
+			"TURING_DELEGATION_RESULT_MAX_BYTES",
 		},
 		"turing-agent-runtime-general": {
 			"TURING_RUNTIME_TOKEN",

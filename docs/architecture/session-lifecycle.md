@@ -90,8 +90,10 @@ retryable code `child_deletion_pending`; before that it reports its own
 nor its row's deletion run until every child is withdrawn.
 `ListSessionDeletionReceipts` lists the
 conversation's receipt and never a child's, and the background reconciler
-resumes from the conversation. The [orchestrator and team
-design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
+resumes from the conversation. A task that finishes while its conversation is
+being deleted joins nothing: no results message, no continuation and no
+`delegation.finished`, so a deletion never gains new work. The [orchestrator
+and team design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
 describes the rest of delegation.
 
 ## Flutter behavior
