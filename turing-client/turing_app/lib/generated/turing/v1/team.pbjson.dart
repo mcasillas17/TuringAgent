@@ -319,3 +319,110 @@ const CallTeamToolResponse$json = {
 final $typed_data.Uint8List callTeamToolResponseDescriptor = $convert.base64Decode(
     'ChRDYWxsVGVhbVRvb2xSZXNwb25zZRIvCgZyZXN1bHQYASABKAsyFy5nb29nbGUucHJvdG9idW'
     'YuU3RydWN0UgZyZXN1bHQ=');
+
+@$core.Deprecated('Use delegationDescriptor instead')
+const Delegation$json = {
+  '1': 'Delegation',
+  '2': [
+    {'1': 'delegation_id', '3': 1, '4': 1, '5': 9, '10': 'delegationId'},
+    {'1': 'parent_session_id', '3': 2, '4': 1, '5': 9, '10': 'parentSessionId'},
+    {'1': 'parent_run_id', '3': 3, '4': 1, '5': 9, '10': 'parentRunId'},
+    {'1': 'child_session_id', '3': 4, '4': 1, '5': 9, '10': 'childSessionId'},
+    {'1': 'child_run_id', '3': 5, '4': 1, '5': 9, '10': 'childRunId'},
+    {'1': 'profile_id', '3': 6, '4': 1, '5': 9, '10': 'profileId'},
+    {'1': 'display_name', '3': 7, '4': 1, '5': 9, '10': 'displayName'},
+    {'1': 'emoji', '3': 8, '4': 1, '5': 9, '10': 'emoji'},
+    {'1': 'task', '3': 9, '4': 1, '5': 9, '10': 'task'},
+    {'1': 'state', '3': 10, '4': 1, '5': 9, '10': 'state'},
+    {'1': 'approval_id', '3': 11, '4': 1, '5': 9, '10': 'approvalId'},
+    {'1': 'error_code', '3': 12, '4': 1, '5': 9, '10': 'errorCode'},
+    {'1': 'joined', '3': 13, '4': 1, '5': 8, '10': 'joined'},
+    {
+      '1': 'continuation_run_id',
+      '3': 14,
+      '4': 1,
+      '5': 9,
+      '10': 'continuationRunId'
+    },
+    {
+      '1': 'created_at',
+      '3': 15,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Timestamp',
+      '10': 'createdAt'
+    },
+    {
+      '1': 'finished_at',
+      '3': 16,
+      '4': 1,
+      '5': 11,
+      '6': '.google.protobuf.Timestamp',
+      '10': 'finishedAt'
+    },
+    {'1': 'summary', '3': 17, '4': 1, '5': 9, '10': 'summary'},
+  ],
+};
+
+/// Descriptor for `Delegation`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List delegationDescriptor = $convert.base64Decode(
+    'CgpEZWxlZ2F0aW9uEiMKDWRlbGVnYXRpb25faWQYASABKAlSDGRlbGVnYXRpb25JZBIqChFwYX'
+    'JlbnRfc2Vzc2lvbl9pZBgCIAEoCVIPcGFyZW50U2Vzc2lvbklkEiIKDXBhcmVudF9ydW5faWQY'
+    'AyABKAlSC3BhcmVudFJ1bklkEigKEGNoaWxkX3Nlc3Npb25faWQYBCABKAlSDmNoaWxkU2Vzc2'
+    'lvbklkEiAKDGNoaWxkX3J1bl9pZBgFIAEoCVIKY2hpbGRSdW5JZBIdCgpwcm9maWxlX2lkGAYg'
+    'ASgJUglwcm9maWxlSWQSIQoMZGlzcGxheV9uYW1lGAcgASgJUgtkaXNwbGF5TmFtZRIUCgVlbW'
+    '9qaRgIIAEoCVIFZW1vamkSEgoEdGFzaxgJIAEoCVIEdGFzaxIUCgVzdGF0ZRgKIAEoCVIFc3Rh'
+    'dGUSHwoLYXBwcm92YWxfaWQYCyABKAlSCmFwcHJvdmFsSWQSHQoKZXJyb3JfY29kZRgMIAEoCV'
+    'IJZXJyb3JDb2RlEhYKBmpvaW5lZBgNIAEoCFIGam9pbmVkEi4KE2NvbnRpbnVhdGlvbl9ydW5f'
+    'aWQYDiABKAlSEWNvbnRpbnVhdGlvblJ1bklkEjkKCmNyZWF0ZWRfYXQYDyABKAsyGi5nb29nbG'
+    'UucHJvdG9idWYuVGltZXN0YW1wUgljcmVhdGVkQXQSOwoLZmluaXNoZWRfYXQYECABKAsyGi5n'
+    'b29nbGUucHJvdG9idWYuVGltZXN0YW1wUgpmaW5pc2hlZEF0EhgKB3N1bW1hcnkYESABKAlSB3'
+    'N1bW1hcnk=');
+
+@$core.Deprecated('Use listDelegationsRequestDescriptor instead')
+const ListDelegationsRequest$json = {
+  '1': 'ListDelegationsRequest',
+  '2': [
+    {'1': 'parent_session_id', '3': 1, '4': 1, '5': 9, '10': 'parentSessionId'},
+  ],
+};
+
+/// Descriptor for `ListDelegationsRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List listDelegationsRequestDescriptor =
+    $convert.base64Decode(
+        'ChZMaXN0RGVsZWdhdGlvbnNSZXF1ZXN0EioKEXBhcmVudF9zZXNzaW9uX2lkGAEgASgJUg9wYX'
+        'JlbnRTZXNzaW9uSWQ=');
+
+@$core.Deprecated('Use listDelegationsResponseDescriptor instead')
+const ListDelegationsResponse$json = {
+  '1': 'ListDelegationsResponse',
+  '2': [
+    {
+      '1': 'delegations',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.turing.v1.Delegation',
+      '10': 'delegations'
+    },
+  ],
+};
+
+/// Descriptor for `ListDelegationsResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List listDelegationsResponseDescriptor =
+    $convert.base64Decode(
+        'ChdMaXN0RGVsZWdhdGlvbnNSZXNwb25zZRI3CgtkZWxlZ2F0aW9ucxgBIAMoCzIVLnR1cmluZy'
+        '52MS5EZWxlZ2F0aW9uUgtkZWxlZ2F0aW9ucw==');
+
+@$core.Deprecated('Use getDelegationRequestDescriptor instead')
+const GetDelegationRequest$json = {
+  '1': 'GetDelegationRequest',
+  '2': [
+    {'1': 'delegation_id', '3': 1, '4': 1, '5': 9, '10': 'delegationId'},
+  ],
+};
+
+/// Descriptor for `GetDelegationRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List getDelegationRequestDescriptor = $convert.base64Decode(
+    'ChRHZXREZWxlZ2F0aW9uUmVxdWVzdBIjCg1kZWxlZ2F0aW9uX2lkGAEgASgJUgxkZWxlZ2F0aW'
+    '9uSWQ=');

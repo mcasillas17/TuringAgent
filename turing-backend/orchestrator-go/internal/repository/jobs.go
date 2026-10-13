@@ -175,6 +175,9 @@ type Job struct {
 	EnforceSelectedTools bool
 	SkipAutomaticRecall  bool
 	StartedEvent         Event
+	// DelegationEvents are what starting a delegated task reported on its
+	// parent's stream.
+	DelegationEvents []Event
 }
 
 // AgentProfileSnapshot is the specialist a delegated job runs as, frozen when
@@ -416,6 +419,9 @@ const RetriesExhaustedCode = "retries_exhausted"
 type RetryDecision struct {
 	Requeued bool
 	Events   []Event
+	// StoppedTasks are the delegated runs the failure stopped; see
+	// RunTransitionResult.StoppedTasks.
+	StoppedTasks []string
 }
 
 // RetryableRunFailureInput is one report that a run failed in a way another
@@ -612,7 +618,7 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, input Retrya
 	if err := tx.Commit(); err != nil {
 		return RetryDecision{}, err
 	}
-	return RetryDecision{Events: events}, nil
+	return RetryDecision{Events: events, StoppedTasks: terminal.StoppedTasks}, nil
 }
 
 // inProgressRetryJobTx reads the in-progress job a retryable failure is about.
@@ -1536,12 +1542,13 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 	// still pending. The claim query and the job update rule that out today, so
 	// this is a guard rather than a handled case — but indexing an empty slice
 	// would turn a future inconsistency into a panic instead of a conflict.
-	if started.Duplicate || len(started.Events) != 1 {
+	if started.Duplicate || len(started.Events) != 1+len(started.Delegation) {
 		return Job{}, errors.New("run is not queued")
 	}
 	job.AssignmentAttemptID = assignmentAttemptID
 	job.ExpectedStateVersion = started.State.StateVersion
 	job.StartedEvent = started.Events[0]
+	job.DelegationEvents = started.Delegation
 	if err := tx.Commit(); err != nil {
 		return Job{}, err
 	}

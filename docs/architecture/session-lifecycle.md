@@ -92,7 +92,10 @@ nor its row's deletion run until every child is withdrawn.
 conversation's receipt and never a child's, and the background reconciler
 resumes from the conversation. A task that finishes while its conversation is
 being deleted joins nothing: no results message, no continuation and no
-`delegation.finished`, so a deletion never gains new work. The [orchestrator
+`delegation.finished`, so a deletion never gains new work. Deleting a
+conversation whose turn is still running stops that turn's tasks in the same
+transaction that cancels the turn, and, because the conversation takes no new
+message or event, writes no notice and no `delegation.updated`. The [orchestrator
 and team design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
 describes the rest of delegation.
 

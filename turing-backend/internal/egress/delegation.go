@@ -51,6 +51,11 @@ func DelegationResultsFraming() Framing {
 	}
 }
 
+// DelegationNoticeContentType marks a notice: a role-system message, written by
+// the orchestrator, telling the user whose delegated work was stopped. It is
+// for the user alone and never reaches a model.
+const DelegationNoticeContentType = "delegation_notice"
+
 // DelegationBriefContentType marks a brief: the user-role message a delegated
 // run is anchored on, written by the orchestrator from Turing's tool call.
 const DelegationBriefContentType = "delegation_brief"

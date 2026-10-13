@@ -139,12 +139,19 @@ type RunTransitionResult struct {
 	State     RunState
 	Events    []Event
 	Duplicate bool
+	// Delegation is every event the delegation machinery appended for this
+	// transition, in any session: a task's delegation.updated on its parent's
+	// stream, the tasks a failed or cancelled run stopped, and a join. They are
+	// also the last of Events; a caller that publishes only some of Events
+	// publishes these.
+	Delegation []Event
+	// StoppedTasks are the delegated runs a failed or cancelled run stopped. A
+	// worker may still be executing one, so the caller tells it.
+	StoppedTasks []string
 	// ContinuationRunID is the continuation a terminal transition queued when
-	// it finished the last of a run's delegated tasks, and Joined the join's
-	// events, which are also the last of Events. The caller publishes them and
-	// should dispatch the continuation.
+	// it finished the last of a run's delegated tasks. The caller should
+	// dispatch it.
 	ContinuationRunID string
-	Joined            []Event
 }
 
 // allowedOutcomeReasons is the normative lifecycle/reason matrix. A nonterminal
@@ -772,17 +779,33 @@ func applyRunTransitionTx(
 		return RunTransitionResult{}, err
 	}
 	transitioned := RunTransitionResult{State: committed, Events: append(events, event)}
+	// Every writer comes through here, so a delegated task reports each change
+	// of state, a run that fails or is cancelled stops the tasks it started,
+	// and a run that finishes the last task its parent delegated, or a parent
+	// whose tasks are already done, is joined — all in the transaction that
+	// changed it.
+	updated, err := delegationUpdatedTx(ctx, tx, transition.runID, row.lifecycle, transition.to, transitionAt)
+	if err != nil {
+		return RunTransitionResult{}, err
+	}
+	transitioned.Delegation = updated
+	if transition.to == lifecycleFailed || transition.to == lifecycleCancelled {
+		stopped, stopping, err := stopDelegatedTasksTx(ctx, tx, transition.runID)
+		if err != nil {
+			return RunTransitionResult{}, err
+		}
+		transitioned.StoppedTasks = stopped
+		transitioned.Delegation = append(transitioned.Delegation, stopping...)
+	}
 	if isTerminalLifecycle(transition.to) {
-		// Every terminal writer comes through here, so a run that finishes
-		// the last task its parent delegated, or a parent whose tasks are
-		// already done, is joined in the transaction that finished it.
 		continuation, joined, err := maybeJoinTx(ctx, tx, transition.runID)
 		if err != nil {
 			return RunTransitionResult{}, err
 		}
-		transitioned.ContinuationRunID, transitioned.Joined = continuation, joined
-		transitioned.Events = append(transitioned.Events, joined...)
+		transitioned.ContinuationRunID = continuation
+		transitioned.Delegation = append(transitioned.Delegation, joined...)
 	}
+	transitioned.Events = append(transitioned.Events, transitioned.Delegation...)
 	return transitioned, nil
 }
 

@@ -33,6 +33,11 @@ func (s *Server) CancelRun(ctx context.Context, req *turingv1.CancelRunRequest) 
 	if result.Accepted && s.runtime != nil {
 		notifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 		s.runtime.CancelRun(notifyCtx, req.RunId, runoutcome.CodeUserCancelled)
+		// The tasks this turn delegated were stopped with it; their workers
+		// let them go now rather than at the recovery loop's next pass.
+		for _, runID := range result.StoppedTasks {
+			s.runtime.CancelRun(notifyCtx, runID, runoutcome.CodeParentRunEnded)
+		}
 		cancel()
 	}
 	current, err := s.repo.ReadRunCancellation(ctx, req.SessionId, req.RunId)

@@ -148,8 +148,9 @@ can make it require approval or disable it.
 When the turn and every task it delegated have finished, the results are added
 to the conversation and Turing answers from them in a follow-up reply. Each
 result is cut to `TURING_DELEGATION_RESULT_MAX_BYTES` (default 8192), and the
-cut is marked. The app shows the results as a plain message, with no delegation
-cards yet, and a turn that fails does not yet stop the tasks it started.
+cut is marked. A turn that fails or that you cancel stops the tasks it started,
+and a note in the conversation says whose work was stopped. The app shows the
+results and that note as plain messages, with no delegation cards yet.
 Profiles can be turned on and granted either way.
 
 The name `team` belongs to Turing's delegation tool, `team.delegate`. Registering

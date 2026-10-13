@@ -54,7 +54,13 @@ const (
 	// payload names the delegation, the child run and session, and the
 	// specialist; its summary is written by the orchestrator, never a model.
 	TuringEventType_TURING_EVENT_TYPE_DELEGATION_STARTED TuringEventType = 24
-	// 25 is reserved for DELEGATION_UPDATED, a child's state changes.
+	// On the parent's stream, whenever what a delegated task's card shows
+	// changes: queued, working (recovering is shown as working), waiting for
+	// an approval (naming it in approvalId), and how it ended. The payload is
+	// DELEGATION_STARTED's with the new state; its summary is written by the
+	// orchestrator, never a model. Nothing is appended once the parent's
+	// conversation is being deleted.
+	TuringEventType_TURING_EVENT_TYPE_DELEGATION_UPDATED TuringEventType = 25
 	// On the parent's stream, once per delegation, when the run's tasks are
 	// joined back into its conversation. The payload names the delegation, the
 	// child run and session, the specialist, its terminal state and the
@@ -91,6 +97,7 @@ var (
 		22: "TURING_EVENT_TYPE_SESSION_DELETED",
 		23: "TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED",
 		24: "TURING_EVENT_TYPE_DELEGATION_STARTED",
+		25: "TURING_EVENT_TYPE_DELEGATION_UPDATED",
 		26: "TURING_EVENT_TYPE_DELEGATION_FINISHED",
 	}
 	TuringEventType_value = map[string]int32{
@@ -119,6 +126,7 @@ var (
 		"TURING_EVENT_TYPE_SESSION_DELETED":         22,
 		"TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED": 23,
 		"TURING_EVENT_TYPE_DELEGATION_STARTED":      24,
+		"TURING_EVENT_TYPE_DELEGATION_UPDATED":      25,
 		"TURING_EVENT_TYPE_DELEGATION_FINISHED":     26,
 	}
 )
@@ -505,7 +513,7 @@ const file_turing_v1_events_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12%\n" +
 	"\x0eafter_sequence\x18\x02 \x01(\x03R\rafterSequence\" \n" +
-	"\x1eSubscribeSessionUpdatesRequest*\x9a\b\n" +
+	"\x1eSubscribeSessionUpdatesRequest*\xc4\b\n" +
 	"\x0fTuringEventType\x12!\n" +
 	"\x1dTURING_EVENT_TYPE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!TURING_EVENT_TYPE_MESSAGE_STARTED\x10\x01\x12#\n" +
@@ -532,7 +540,8 @@ const file_turing_v1_events_proto_rawDesc = "" +
 	"!TURING_EVENT_TYPE_SESSION_UPDATED\x10\x15\x12%\n" +
 	"!TURING_EVENT_TYPE_SESSION_DELETED\x10\x16\x12-\n" +
 	")TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED\x10\x17\x12(\n" +
-	"$TURING_EVENT_TYPE_DELEGATION_STARTED\x10\x18\x12)\n" +
+	"$TURING_EVENT_TYPE_DELEGATION_STARTED\x10\x18\x12(\n" +
+	"$TURING_EVENT_TYPE_DELEGATION_UPDATED\x10\x19\x12)\n" +
 	"%TURING_EVENT_TYPE_DELEGATION_FINISHED\x10\x1a2\x97\x02\n" +
 	"\fEventService\x12I\n" +
 	"\n" +

@@ -14,8 +14,10 @@ import 'dart:core' as $core;
 
 import 'package:protobuf/protobuf.dart' as $pb;
 import 'package:protobuf/well_known_types/google/protobuf/struct.pb.dart' as $1;
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
+    as $2;
 
-import 'common.pbenum.dart' as $2;
+import 'common.pbenum.dart' as $3;
 import 'team.pbenum.dart';
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
@@ -618,7 +620,7 @@ class GrantAgentProfileRequest extends $pb.GeneratedMessage {
 class TeamToolDescriptor extends $pb.GeneratedMessage {
   factory TeamToolDescriptor({
     $core.String? toolName,
-    $2.ToolPolicy? policy,
+    $3.ToolPolicy? policy,
     $1.Struct? schema,
     $core.bool? enabled,
     $core.String? description,
@@ -646,8 +648,8 @@ class TeamToolDescriptor extends $pb.GeneratedMessage {
       package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
       createEmptyInstance: TeamToolDescriptor.$_createMessage)
     ..aOS(1, _omitFieldNames ? '' : 'toolName')
-    ..aE<$2.ToolPolicy>(2, _omitFieldNames ? '' : 'policy',
-        enumValues: $2.ToolPolicy.values)
+    ..aE<$3.ToolPolicy>(2, _omitFieldNames ? '' : 'policy',
+        enumValues: $3.ToolPolicy.values)
     ..aOM<$1.Struct>(3, _omitFieldNames ? '' : 'schema',
         subBuilder: $1.Struct.$_createMessage)
     ..aOB(4, _omitFieldNames ? '' : 'enabled')
@@ -686,9 +688,9 @@ class TeamToolDescriptor extends $pb.GeneratedMessage {
   void clearToolName() => $_clearField(1);
 
   @$pb.TagNumber(2)
-  $2.ToolPolicy get policy => $_getN(1);
+  $3.ToolPolicy get policy => $_getN(1);
   @$pb.TagNumber(2)
-  set policy($2.ToolPolicy value) => $_setField(2, value);
+  set policy($3.ToolPolicy value) => $_setField(2, value);
   @$pb.TagNumber(2)
   $core.bool hasPolicy() => $_has(1);
   @$pb.TagNumber(2)
@@ -1028,6 +1030,449 @@ class CallTeamToolResponse extends $pb.GeneratedMessage {
   void clearResult() => $_clearField(1);
   @$pb.TagNumber(1)
   $1.Struct ensureResult() => $_ensure(0);
+}
+
+/// A task a Turing turn delegated to a specialist, as its card shows it.
+class Delegation extends $pb.GeneratedMessage {
+  factory Delegation({
+    $core.String? delegationId,
+    $core.String? parentSessionId,
+    $core.String? parentRunId,
+    $core.String? childSessionId,
+    $core.String? childRunId,
+    $core.String? profileId,
+    $core.String? displayName,
+    $core.String? emoji,
+    $core.String? task,
+    $core.String? state,
+    $core.String? approvalId,
+    $core.String? errorCode,
+    $core.bool? joined,
+    $core.String? continuationRunId,
+    $2.Timestamp? createdAt,
+    $2.Timestamp? finishedAt,
+    $core.String? summary,
+  }) {
+    final result = Delegation._();
+    if (delegationId != null) result.delegationId = delegationId;
+    if (parentSessionId != null) result.parentSessionId = parentSessionId;
+    if (parentRunId != null) result.parentRunId = parentRunId;
+    if (childSessionId != null) result.childSessionId = childSessionId;
+    if (childRunId != null) result.childRunId = childRunId;
+    if (profileId != null) result.profileId = profileId;
+    if (displayName != null) result.displayName = displayName;
+    if (emoji != null) result.emoji = emoji;
+    if (task != null) result.task = task;
+    if (state != null) result.state = state;
+    if (approvalId != null) result.approvalId = approvalId;
+    if (errorCode != null) result.errorCode = errorCode;
+    if (joined != null) result.joined = joined;
+    if (continuationRunId != null) result.continuationRunId = continuationRunId;
+    if (createdAt != null) result.createdAt = createdAt;
+    if (finishedAt != null) result.finishedAt = finishedAt;
+    if (summary != null) result.summary = summary;
+    return result;
+  }
+
+  Delegation._();
+
+  factory Delegation.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      Delegation()..mergeFromBuffer(data, registry);
+  factory Delegation.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      Delegation()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'Delegation',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: Delegation.$_createMessage)
+    ..aOS(1, _omitFieldNames ? '' : 'delegationId')
+    ..aOS(2, _omitFieldNames ? '' : 'parentSessionId')
+    ..aOS(3, _omitFieldNames ? '' : 'parentRunId')
+    ..aOS(4, _omitFieldNames ? '' : 'childSessionId')
+    ..aOS(5, _omitFieldNames ? '' : 'childRunId')
+    ..aOS(6, _omitFieldNames ? '' : 'profileId')
+    ..aOS(7, _omitFieldNames ? '' : 'displayName')
+    ..aOS(8, _omitFieldNames ? '' : 'emoji')
+    ..aOS(9, _omitFieldNames ? '' : 'task')
+    ..aOS(10, _omitFieldNames ? '' : 'state')
+    ..aOS(11, _omitFieldNames ? '' : 'approvalId')
+    ..aOS(12, _omitFieldNames ? '' : 'errorCode')
+    ..aOB(13, _omitFieldNames ? '' : 'joined')
+    ..aOS(14, _omitFieldNames ? '' : 'continuationRunId')
+    ..aOM<$2.Timestamp>(15, _omitFieldNames ? '' : 'createdAt',
+        subBuilder: $2.Timestamp.$_createMessage)
+    ..aOM<$2.Timestamp>(16, _omitFieldNames ? '' : 'finishedAt',
+        subBuilder: $2.Timestamp.$_createMessage)
+    ..aOS(17, _omitFieldNames ? '' : 'summary')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  Delegation clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  Delegation copyWith(void Function(Delegation) updates) =>
+      super.copyWith((message) => updates(message as Delegation)) as Delegation;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use Delegation() / Delegation.new instead')
+  static Delegation create() => Delegation._();
+  static $pb.GeneratedMessage $_createMessage() => Delegation._();
+  @$core.override
+  Delegation createEmptyInstance() => Delegation._();
+  @$core.pragma('dart2js:noInline')
+  static Delegation getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<Delegation>(Delegation.$_createMessage);
+  static Delegation? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get delegationId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set delegationId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasDelegationId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearDelegationId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get parentSessionId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set parentSessionId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasParentSessionId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearParentSessionId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get parentRunId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set parentRunId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasParentRunId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearParentRunId() => $_clearField(3);
+
+  /// The specialist's own hidden session and run. Its transcript is read with
+  /// SessionService.ListMessages, and its run is cancelled with
+  /// ChatService.CancelRun.
+  @$pb.TagNumber(4)
+  $core.String get childSessionId => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set childSessionId($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasChildSessionId() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearChildSessionId() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get childRunId => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set childRunId($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasChildRunId() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearChildRunId() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get profileId => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set profileId($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasProfileId() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearProfileId() => $_clearField(6);
+
+  /// As the specialist was when the task was given, not as its profile reads
+  /// now.
+  @$pb.TagNumber(7)
+  $core.String get displayName => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set displayName($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasDisplayName() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearDisplayName() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.String get emoji => $_getSZ(7);
+  @$pb.TagNumber(8)
+  set emoji($core.String value) => $_setString(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasEmoji() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearEmoji() => $_clearField(8);
+
+  /// What Turing asked for, as the model wrote it. Empty for a delegation
+  /// made before it was recorded.
+  @$pb.TagNumber(9)
+  $core.String get task => $_getSZ(8);
+  @$pb.TagNumber(9)
+  set task($core.String value) => $_setString(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasTask() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearTask() => $_clearField(9);
+
+  /// The task's run status: queued, running (recovering is shown as running),
+  /// waiting_approval, completed, failed or cancelled.
+  @$pb.TagNumber(10)
+  $core.String get state => $_getSZ(9);
+  @$pb.TagNumber(10)
+  set state($core.String value) => $_setString(9, value);
+  @$pb.TagNumber(10)
+  $core.bool hasState() => $_has(9);
+  @$pb.TagNumber(10)
+  void clearState() => $_clearField(10);
+
+  /// The approval the task is waiting on, while it waits.
+  @$pb.TagNumber(11)
+  $core.String get approvalId => $_getSZ(10);
+  @$pb.TagNumber(11)
+  set approvalId($core.String value) => $_setString(10, value);
+  @$pb.TagNumber(11)
+  $core.bool hasApprovalId() => $_has(10);
+  @$pb.TagNumber(11)
+  void clearApprovalId() => $_clearField(11);
+
+  /// How a failed or cancelled task ended: the failure's or cancellation's
+  /// code. parent_run_ended is a task stopped because its turn ended first.
+  @$pb.TagNumber(12)
+  $core.String get errorCode => $_getSZ(11);
+  @$pb.TagNumber(12)
+  set errorCode($core.String value) => $_setString(11, value);
+  @$pb.TagNumber(12)
+  $core.bool hasErrorCode() => $_has(11);
+  @$pb.TagNumber(12)
+  void clearErrorCode() => $_clearField(12);
+
+  /// Whether the task's result went back to its conversation, and the run
+  /// that answered from it.
+  @$pb.TagNumber(13)
+  $core.bool get joined => $_getBF(12);
+  @$pb.TagNumber(13)
+  set joined($core.bool value) => $_setBool(12, value);
+  @$pb.TagNumber(13)
+  $core.bool hasJoined() => $_has(12);
+  @$pb.TagNumber(13)
+  void clearJoined() => $_clearField(13);
+
+  @$pb.TagNumber(14)
+  $core.String get continuationRunId => $_getSZ(13);
+  @$pb.TagNumber(14)
+  set continuationRunId($core.String value) => $_setString(13, value);
+  @$pb.TagNumber(14)
+  $core.bool hasContinuationRunId() => $_has(13);
+  @$pb.TagNumber(14)
+  void clearContinuationRunId() => $_clearField(14);
+
+  @$pb.TagNumber(15)
+  $2.Timestamp get createdAt => $_getN(14);
+  @$pb.TagNumber(15)
+  set createdAt($2.Timestamp value) => $_setField(15, value);
+  @$pb.TagNumber(15)
+  $core.bool hasCreatedAt() => $_has(14);
+  @$pb.TagNumber(15)
+  void clearCreatedAt() => $_clearField(15);
+  @$pb.TagNumber(15)
+  $2.Timestamp ensureCreatedAt() => $_ensure(14);
+
+  /// Absent while the task has not finished.
+  @$pb.TagNumber(16)
+  $2.Timestamp get finishedAt => $_getN(15);
+  @$pb.TagNumber(16)
+  set finishedAt($2.Timestamp value) => $_setField(16, value);
+  @$pb.TagNumber(16)
+  $core.bool hasFinishedAt() => $_has(15);
+  @$pb.TagNumber(16)
+  void clearFinishedAt() => $_clearField(16);
+  @$pb.TagNumber(16)
+  $2.Timestamp ensureFinishedAt() => $_ensure(15);
+
+  /// One line in the orchestrator's words, never a model's.
+  @$pb.TagNumber(17)
+  $core.String get summary => $_getSZ(16);
+  @$pb.TagNumber(17)
+  set summary($core.String value) => $_setString(16, value);
+  @$pb.TagNumber(17)
+  $core.bool hasSummary() => $_has(16);
+  @$pb.TagNumber(17)
+  void clearSummary() => $_clearField(17);
+}
+
+class ListDelegationsRequest extends $pb.GeneratedMessage {
+  factory ListDelegationsRequest({
+    $core.String? parentSessionId,
+  }) {
+    final result = ListDelegationsRequest._();
+    if (parentSessionId != null) result.parentSessionId = parentSessionId;
+    return result;
+  }
+
+  ListDelegationsRequest._();
+
+  factory ListDelegationsRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      ListDelegationsRequest()..mergeFromBuffer(data, registry);
+  factory ListDelegationsRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      ListDelegationsRequest()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ListDelegationsRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: ListDelegationsRequest.$_createMessage)
+    ..aOS(1, _omitFieldNames ? '' : 'parentSessionId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListDelegationsRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListDelegationsRequest copyWith(
+          void Function(ListDelegationsRequest) updates) =>
+      super.copyWith((message) => updates(message as ListDelegationsRequest))
+          as ListDelegationsRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListDelegationsRequest() / ListDelegationsRequest.new instead')
+  static ListDelegationsRequest create() => ListDelegationsRequest._();
+  static $pb.GeneratedMessage $_createMessage() => ListDelegationsRequest._();
+  @$core.override
+  ListDelegationsRequest createEmptyInstance() => ListDelegationsRequest._();
+  @$core.pragma('dart2js:noInline')
+  static ListDelegationsRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ListDelegationsRequest>(
+          ListDelegationsRequest.$_createMessage);
+  static ListDelegationsRequest? _defaultInstance;
+
+  /// A conversation; a specialist's own session has no delegations.
+  @$pb.TagNumber(1)
+  $core.String get parentSessionId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set parentSessionId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasParentSessionId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearParentSessionId() => $_clearField(1);
+}
+
+/// In the order the tasks were asked for.
+class ListDelegationsResponse extends $pb.GeneratedMessage {
+  factory ListDelegationsResponse({
+    $core.Iterable<Delegation>? delegations,
+  }) {
+    final result = ListDelegationsResponse._();
+    if (delegations != null) result.delegations.addAll(delegations);
+    return result;
+  }
+
+  ListDelegationsResponse._();
+
+  factory ListDelegationsResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      ListDelegationsResponse()..mergeFromBuffer(data, registry);
+  factory ListDelegationsResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      ListDelegationsResponse()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ListDelegationsResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: ListDelegationsResponse.$_createMessage)
+    ..pPM<Delegation>(1, _omitFieldNames ? '' : 'delegations',
+        subBuilder: Delegation.$_createMessage)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListDelegationsResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ListDelegationsResponse copyWith(
+          void Function(ListDelegationsResponse) updates) =>
+      super.copyWith((message) => updates(message as ListDelegationsResponse))
+          as ListDelegationsResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use ListDelegationsResponse() / ListDelegationsResponse.new instead')
+  static ListDelegationsResponse create() => ListDelegationsResponse._();
+  static $pb.GeneratedMessage $_createMessage() => ListDelegationsResponse._();
+  @$core.override
+  ListDelegationsResponse createEmptyInstance() => ListDelegationsResponse._();
+  @$core.pragma('dart2js:noInline')
+  static ListDelegationsResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ListDelegationsResponse>(
+          ListDelegationsResponse.$_createMessage);
+  static ListDelegationsResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $pb.PbList<Delegation> get delegations => $_getList(0);
+}
+
+class GetDelegationRequest extends $pb.GeneratedMessage {
+  factory GetDelegationRequest({
+    $core.String? delegationId,
+  }) {
+    final result = GetDelegationRequest._();
+    if (delegationId != null) result.delegationId = delegationId;
+    return result;
+  }
+
+  GetDelegationRequest._();
+
+  factory GetDelegationRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      GetDelegationRequest()..mergeFromBuffer(data, registry);
+  factory GetDelegationRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      GetDelegationRequest()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'GetDelegationRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: GetDelegationRequest.$_createMessage)
+    ..aOS(1, _omitFieldNames ? '' : 'delegationId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetDelegationRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetDelegationRequest copyWith(void Function(GetDelegationRequest) updates) =>
+      super.copyWith((message) => updates(message as GetDelegationRequest))
+          as GetDelegationRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetDelegationRequest() / GetDelegationRequest.new instead')
+  static GetDelegationRequest create() => GetDelegationRequest._();
+  static $pb.GeneratedMessage $_createMessage() => GetDelegationRequest._();
+  @$core.override
+  GetDelegationRequest createEmptyInstance() => GetDelegationRequest._();
+  @$core.pragma('dart2js:noInline')
+  static GetDelegationRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<GetDelegationRequest>(
+          GetDelegationRequest.$_createMessage);
+  static GetDelegationRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get delegationId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set delegationId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasDelegationId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearDelegationId() => $_clearField(1);
 }
 
 const $core.bool _omitFieldNames =

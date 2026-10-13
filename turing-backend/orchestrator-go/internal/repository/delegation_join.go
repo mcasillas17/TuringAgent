@@ -11,7 +11,6 @@ import (
 
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
-	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 // joinedDelegation is one finished task as its join reports it.
@@ -124,7 +123,7 @@ func maybeJoinTx(ctx context.Context, tx *sql.Tx, runID string) (string, []Event
 			"displayName":       delegation.displayName,
 			"emoji":             delegation.emoji,
 			"state":             delegation.state,
-			"summary":           delegation.displayName + " " + delegation.outcome(),
+			"summary":           specialistName(delegation.emoji, delegation.displayName) + " " + delegation.outcome(),
 			"continuationRunId": continuationRunID,
 		})
 		if err != nil {
@@ -216,16 +215,7 @@ func (d joinedDelegation) code() string {
 
 // outcome is how a task ended, in the orchestrator's words.
 func (d joinedDelegation) outcome() string {
-	switch {
-	case d.state == lifecycleCompleted:
-		return "completed"
-	case d.state == lifecycleCancelled && d.outcomeReason == string(runoutcome.ReasonUserCancelled):
-		return "was cancelled by you"
-	case d.state == lifecycleCancelled:
-		return "was cancelled (" + d.code() + ")"
-	default:
-		return "failed (" + d.code() + ")"
-	}
+	return delegationStatePhrase(d.state, d.outcomeReason, d.code())
 }
 
 // delegationResultsContent is a join's stored, unframed content: each task in

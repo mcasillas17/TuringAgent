@@ -53,3 +53,26 @@ func TestDelegationJoinMigrationLeavesExistingRunsUncontinued(t *testing.T) {
 		t.Fatalf("pre-upgrade runs continuing nothing = %d, want 1", got)
 	}
 }
+
+// A delegation records the task it was asked to do, so a card rebuilt after a
+// restart says what the specialist is working on. Delegations made before the
+// column existed read empty.
+func TestDelegationTaskMigrationLeavesExistingDelegationsEmpty(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0029_delegation_task.sql")
+	parentRun := seedDelegationRun(t, ctx, database, "sess_parent", "", "chat")
+	childRun := seedDelegationRun(t, ctx, database, "sess_child", "sess_parent", "delegation")
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO delegations (id, parent_session_id, parent_run_id, parent_tool_call_id, child_session_id, child_run_id,
+			profile_id, profile_revision, args_hash, created_at)
+		VALUES ('dlg_before', 'sess_parent', ?, 'call_1', 'sess_child', ?, 'research', 'rev-1', 'sha256:x',
+			'2026-10-05T00:00:00.000000000Z')`, parentRun, childRun); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(t, ctx, database, `SELECT COUNT(*) FROM delegations WHERE id = 'dlg_before' AND task = ''`); got != 1 {
+		t.Fatalf("pre-upgrade delegations with an empty task = %d, want 1", got)
+	}
+}
