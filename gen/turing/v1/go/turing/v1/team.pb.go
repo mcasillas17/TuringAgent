@@ -10,6 +10,7 @@ import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	structpb "google.golang.org/protobuf/types/known/structpb"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -896,11 +897,334 @@ func (x *CallTeamToolResponse) GetResult() *structpb.Struct {
 	return nil
 }
 
+// A task a Turing turn delegated to a specialist, as its card shows it.
+type Delegation struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	DelegationId    string                 `protobuf:"bytes,1,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`
+	ParentSessionId string                 `protobuf:"bytes,2,opt,name=parent_session_id,json=parentSessionId,proto3" json:"parent_session_id,omitempty"`
+	ParentRunId     string                 `protobuf:"bytes,3,opt,name=parent_run_id,json=parentRunId,proto3" json:"parent_run_id,omitempty"`
+	// The specialist's own hidden session and run. Its transcript is read with
+	// SessionService.ListMessages, and its run is cancelled with
+	// ChatService.CancelRun.
+	ChildSessionId string `protobuf:"bytes,4,opt,name=child_session_id,json=childSessionId,proto3" json:"child_session_id,omitempty"`
+	ChildRunId     string `protobuf:"bytes,5,opt,name=child_run_id,json=childRunId,proto3" json:"child_run_id,omitempty"`
+	ProfileId      string `protobuf:"bytes,6,opt,name=profile_id,json=profileId,proto3" json:"profile_id,omitempty"`
+	// As the specialist was when the task was given, not as its profile reads
+	// now.
+	DisplayName string `protobuf:"bytes,7,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Emoji       string `protobuf:"bytes,8,opt,name=emoji,proto3" json:"emoji,omitempty"`
+	// What Turing asked for, as the model wrote it. Empty for a delegation
+	// made before it was recorded.
+	Task string `protobuf:"bytes,9,opt,name=task,proto3" json:"task,omitempty"`
+	// The task's run status: queued, running (recovering is shown as running),
+	// waiting_approval, completed, failed or cancelled.
+	State string `protobuf:"bytes,10,opt,name=state,proto3" json:"state,omitempty"`
+	// The approval the task is waiting on, while it waits.
+	ApprovalId string `protobuf:"bytes,11,opt,name=approval_id,json=approvalId,proto3" json:"approval_id,omitempty"`
+	// How a failed or cancelled task ended: the failure's or cancellation's
+	// code. parent_run_ended is a task stopped because its turn ended first.
+	ErrorCode string `protobuf:"bytes,12,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	// Whether the task's result went back to its conversation, and the run
+	// that answered from it.
+	Joined            bool                   `protobuf:"varint,13,opt,name=joined,proto3" json:"joined,omitempty"`
+	ContinuationRunId string                 `protobuf:"bytes,14,opt,name=continuation_run_id,json=continuationRunId,proto3" json:"continuation_run_id,omitempty"`
+	CreatedAt         *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Absent while the task has not finished.
+	FinishedAt *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	// One line in the orchestrator's words, never a model's.
+	Summary       string `protobuf:"bytes,17,opt,name=summary,proto3" json:"summary,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Delegation) Reset() {
+	*x = Delegation{}
+	mi := &file_turing_v1_team_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Delegation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Delegation) ProtoMessage() {}
+
+func (x *Delegation) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_team_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Delegation.ProtoReflect.Descriptor instead.
+func (*Delegation) Descriptor() ([]byte, []int) {
+	return file_turing_v1_team_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *Delegation) GetDelegationId() string {
+	if x != nil {
+		return x.DelegationId
+	}
+	return ""
+}
+
+func (x *Delegation) GetParentSessionId() string {
+	if x != nil {
+		return x.ParentSessionId
+	}
+	return ""
+}
+
+func (x *Delegation) GetParentRunId() string {
+	if x != nil {
+		return x.ParentRunId
+	}
+	return ""
+}
+
+func (x *Delegation) GetChildSessionId() string {
+	if x != nil {
+		return x.ChildSessionId
+	}
+	return ""
+}
+
+func (x *Delegation) GetChildRunId() string {
+	if x != nil {
+		return x.ChildRunId
+	}
+	return ""
+}
+
+func (x *Delegation) GetProfileId() string {
+	if x != nil {
+		return x.ProfileId
+	}
+	return ""
+}
+
+func (x *Delegation) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *Delegation) GetEmoji() string {
+	if x != nil {
+		return x.Emoji
+	}
+	return ""
+}
+
+func (x *Delegation) GetTask() string {
+	if x != nil {
+		return x.Task
+	}
+	return ""
+}
+
+func (x *Delegation) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *Delegation) GetApprovalId() string {
+	if x != nil {
+		return x.ApprovalId
+	}
+	return ""
+}
+
+func (x *Delegation) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *Delegation) GetJoined() bool {
+	if x != nil {
+		return x.Joined
+	}
+	return false
+}
+
+func (x *Delegation) GetContinuationRunId() string {
+	if x != nil {
+		return x.ContinuationRunId
+	}
+	return ""
+}
+
+func (x *Delegation) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *Delegation) GetFinishedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FinishedAt
+	}
+	return nil
+}
+
+func (x *Delegation) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+type ListDelegationsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// A conversation; a specialist's own session has no delegations.
+	ParentSessionId string `protobuf:"bytes,1,opt,name=parent_session_id,json=parentSessionId,proto3" json:"parent_session_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ListDelegationsRequest) Reset() {
+	*x = ListDelegationsRequest{}
+	mi := &file_turing_v1_team_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListDelegationsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListDelegationsRequest) ProtoMessage() {}
+
+func (x *ListDelegationsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_team_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListDelegationsRequest.ProtoReflect.Descriptor instead.
+func (*ListDelegationsRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_team_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ListDelegationsRequest) GetParentSessionId() string {
+	if x != nil {
+		return x.ParentSessionId
+	}
+	return ""
+}
+
+// In the order the tasks were asked for.
+type ListDelegationsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Delegations   []*Delegation          `protobuf:"bytes,1,rep,name=delegations,proto3" json:"delegations,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListDelegationsResponse) Reset() {
+	*x = ListDelegationsResponse{}
+	mi := &file_turing_v1_team_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListDelegationsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListDelegationsResponse) ProtoMessage() {}
+
+func (x *ListDelegationsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_team_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListDelegationsResponse.ProtoReflect.Descriptor instead.
+func (*ListDelegationsResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_team_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ListDelegationsResponse) GetDelegations() []*Delegation {
+	if x != nil {
+		return x.Delegations
+	}
+	return nil
+}
+
+type GetDelegationRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DelegationId  string                 `protobuf:"bytes,1,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetDelegationRequest) Reset() {
+	*x = GetDelegationRequest{}
+	mi := &file_turing_v1_team_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetDelegationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetDelegationRequest) ProtoMessage() {}
+
+func (x *GetDelegationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_team_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetDelegationRequest.ProtoReflect.Descriptor instead.
+func (*GetDelegationRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_team_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *GetDelegationRequest) GetDelegationId() string {
+	if x != nil {
+		return x.DelegationId
+	}
+	return ""
+}
+
 var File_turing_v1_team_proto protoreflect.FileDescriptor
 
 const file_turing_v1_team_proto_rawDesc = "" +
 	"\n" +
-	"\x14turing/v1/team.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16turing/v1/common.proto\"G\n" +
+	"\x14turing/v1/team.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16turing/v1/common.proto\"G\n" +
 	"\x19AgentProfileToolExclusion\x12\x12\n" +
 	"\x04tool\x18\x01 \x01(\tR\x04tool\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xd8\x05\n" +
@@ -959,7 +1283,39 @@ const file_turing_v1_team_proto_rawDesc = "" +
 	"\ttool_name\x18\x05 \x01(\tR\btoolName\x12+\n" +
 	"\x04args\x18\x06 \x01(\v2\x17.google.protobuf.StructR\x04args\"G\n" +
 	"\x14CallTeamToolResponse\x12/\n" +
-	"\x06result\x18\x01 \x01(\v2\x17.google.protobuf.StructR\x06result*\xe9\x01\n" +
+	"\x06result\x18\x01 \x01(\v2\x17.google.protobuf.StructR\x06result\"\xe9\x04\n" +
+	"\n" +
+	"Delegation\x12#\n" +
+	"\rdelegation_id\x18\x01 \x01(\tR\fdelegationId\x12*\n" +
+	"\x11parent_session_id\x18\x02 \x01(\tR\x0fparentSessionId\x12\"\n" +
+	"\rparent_run_id\x18\x03 \x01(\tR\vparentRunId\x12(\n" +
+	"\x10child_session_id\x18\x04 \x01(\tR\x0echildSessionId\x12 \n" +
+	"\fchild_run_id\x18\x05 \x01(\tR\n" +
+	"childRunId\x12\x1d\n" +
+	"\n" +
+	"profile_id\x18\x06 \x01(\tR\tprofileId\x12!\n" +
+	"\fdisplay_name\x18\a \x01(\tR\vdisplayName\x12\x14\n" +
+	"\x05emoji\x18\b \x01(\tR\x05emoji\x12\x12\n" +
+	"\x04task\x18\t \x01(\tR\x04task\x12\x14\n" +
+	"\x05state\x18\n" +
+	" \x01(\tR\x05state\x12\x1f\n" +
+	"\vapproval_id\x18\v \x01(\tR\n" +
+	"approvalId\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\f \x01(\tR\terrorCode\x12\x16\n" +
+	"\x06joined\x18\r \x01(\bR\x06joined\x12.\n" +
+	"\x13continuation_run_id\x18\x0e \x01(\tR\x11continuationRunId\x129\n" +
+	"\n" +
+	"created_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12;\n" +
+	"\vfinished_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"finishedAt\x12\x18\n" +
+	"\asummary\x18\x11 \x01(\tR\asummary\"D\n" +
+	"\x16ListDelegationsRequest\x12*\n" +
+	"\x11parent_session_id\x18\x01 \x01(\tR\x0fparentSessionId\"R\n" +
+	"\x17ListDelegationsResponse\x127\n" +
+	"\vdelegations\x18\x01 \x03(\v2\x15.turing.v1.DelegationR\vdelegations\";\n" +
+	"\x14GetDelegationRequest\x12#\n" +
+	"\rdelegation_id\x18\x01 \x01(\tR\fdelegationId*\xe9\x01\n" +
 	"\x11AgentProfileState\x12#\n" +
 	"\x1fAGENT_PROFILE_STATE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aAGENT_PROFILE_STATE_ACTIVE\x10\x01\x12 \n" +
@@ -971,13 +1327,15 @@ const file_turing_v1_team_proto_rawDesc = "" +
 	"'AGENT_PROFILE_MEMORY_ACCESS_UNSPECIFIED\x10\x00\x12$\n" +
 	" AGENT_PROFILE_MEMORY_ACCESS_NONE\x10\x01\x12$\n" +
 	" AGENT_PROFILE_MEMORY_ACCESS_READ\x10\x02\x12'\n" +
-	"#AGENT_PROFILE_MEMORY_ACCESS_PROPOSE\x10\x032\xc2\x03\n" +
+	"#AGENT_PROFILE_MEMORY_ACCESS_PROPOSE\x10\x032\xe5\x04\n" +
 	"\vTeamService\x12^\n" +
 	"\x11ListAgentProfiles\x12#.turing.v1.ListAgentProfilesRequest\x1a$.turing.v1.ListAgentProfilesResponse\x12[\n" +
 	"\x16SetAgentProfileEnabled\x12(.turing.v1.SetAgentProfileEnabledRequest\x1a\x17.turing.v1.AgentProfile\x12Q\n" +
 	"\x11GrantAgentProfile\x12#.turing.v1.GrantAgentProfileRequest\x1a\x17.turing.v1.AgentProfile\x12R\n" +
 	"\rListTeamTools\x12\x1f.turing.v1.ListTeamToolsRequest\x1a .turing.v1.ListTeamToolsResponse\x12O\n" +
-	"\fCallTeamTool\x12\x1e.turing.v1.CallTeamToolRequest\x1a\x1f.turing.v1.CallTeamToolResponseB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
+	"\fCallTeamTool\x12\x1e.turing.v1.CallTeamToolRequest\x1a\x1f.turing.v1.CallTeamToolResponse\x12X\n" +
+	"\x0fListDelegations\x12!.turing.v1.ListDelegationsRequest\x1a\".turing.v1.ListDelegationsResponse\x12G\n" +
+	"\rGetDelegation\x12\x1f.turing.v1.GetDelegationRequest\x1a\x15.turing.v1.DelegationB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
 var (
 	file_turing_v1_team_proto_rawDescOnce sync.Once
@@ -992,7 +1350,7 @@ func file_turing_v1_team_proto_rawDescGZIP() []byte {
 }
 
 var file_turing_v1_team_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_turing_v1_team_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_turing_v1_team_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_turing_v1_team_proto_goTypes = []any{
 	(AgentProfileState)(0),                // 0: turing.v1.AgentProfileState
 	(AgentProfileMemoryAccess)(0),         // 1: turing.v1.AgentProfileMemoryAccess
@@ -1007,34 +1365,46 @@ var file_turing_v1_team_proto_goTypes = []any{
 	(*ListTeamToolsResponse)(nil),         // 10: turing.v1.ListTeamToolsResponse
 	(*CallTeamToolRequest)(nil),           // 11: turing.v1.CallTeamToolRequest
 	(*CallTeamToolResponse)(nil),          // 12: turing.v1.CallTeamToolResponse
-	(ToolPolicy)(0),                       // 13: turing.v1.ToolPolicy
-	(*structpb.Struct)(nil),               // 14: google.protobuf.Struct
+	(*Delegation)(nil),                    // 13: turing.v1.Delegation
+	(*ListDelegationsRequest)(nil),        // 14: turing.v1.ListDelegationsRequest
+	(*ListDelegationsResponse)(nil),       // 15: turing.v1.ListDelegationsResponse
+	(*GetDelegationRequest)(nil),          // 16: turing.v1.GetDelegationRequest
+	(ToolPolicy)(0),                       // 17: turing.v1.ToolPolicy
+	(*structpb.Struct)(nil),               // 18: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),         // 19: google.protobuf.Timestamp
 }
 var file_turing_v1_team_proto_depIdxs = []int32{
 	1,  // 0: turing.v1.AgentProfile.memory:type_name -> turing.v1.AgentProfileMemoryAccess
 	0,  // 1: turing.v1.AgentProfile.state:type_name -> turing.v1.AgentProfileState
 	2,  // 2: turing.v1.AgentProfile.excluded_tools:type_name -> turing.v1.AgentProfileToolExclusion
 	3,  // 3: turing.v1.ListAgentProfilesResponse.profiles:type_name -> turing.v1.AgentProfile
-	13, // 4: turing.v1.TeamToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
-	14, // 5: turing.v1.TeamToolDescriptor.schema:type_name -> google.protobuf.Struct
+	17, // 4: turing.v1.TeamToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
+	18, // 5: turing.v1.TeamToolDescriptor.schema:type_name -> google.protobuf.Struct
 	8,  // 6: turing.v1.ListTeamToolsResponse.tools:type_name -> turing.v1.TeamToolDescriptor
-	14, // 7: turing.v1.CallTeamToolRequest.args:type_name -> google.protobuf.Struct
-	14, // 8: turing.v1.CallTeamToolResponse.result:type_name -> google.protobuf.Struct
-	4,  // 9: turing.v1.TeamService.ListAgentProfiles:input_type -> turing.v1.ListAgentProfilesRequest
-	6,  // 10: turing.v1.TeamService.SetAgentProfileEnabled:input_type -> turing.v1.SetAgentProfileEnabledRequest
-	7,  // 11: turing.v1.TeamService.GrantAgentProfile:input_type -> turing.v1.GrantAgentProfileRequest
-	9,  // 12: turing.v1.TeamService.ListTeamTools:input_type -> turing.v1.ListTeamToolsRequest
-	11, // 13: turing.v1.TeamService.CallTeamTool:input_type -> turing.v1.CallTeamToolRequest
-	5,  // 14: turing.v1.TeamService.ListAgentProfiles:output_type -> turing.v1.ListAgentProfilesResponse
-	3,  // 15: turing.v1.TeamService.SetAgentProfileEnabled:output_type -> turing.v1.AgentProfile
-	3,  // 16: turing.v1.TeamService.GrantAgentProfile:output_type -> turing.v1.AgentProfile
-	10, // 17: turing.v1.TeamService.ListTeamTools:output_type -> turing.v1.ListTeamToolsResponse
-	12, // 18: turing.v1.TeamService.CallTeamTool:output_type -> turing.v1.CallTeamToolResponse
-	14, // [14:19] is the sub-list for method output_type
-	9,  // [9:14] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	18, // 7: turing.v1.CallTeamToolRequest.args:type_name -> google.protobuf.Struct
+	18, // 8: turing.v1.CallTeamToolResponse.result:type_name -> google.protobuf.Struct
+	19, // 9: turing.v1.Delegation.created_at:type_name -> google.protobuf.Timestamp
+	19, // 10: turing.v1.Delegation.finished_at:type_name -> google.protobuf.Timestamp
+	13, // 11: turing.v1.ListDelegationsResponse.delegations:type_name -> turing.v1.Delegation
+	4,  // 12: turing.v1.TeamService.ListAgentProfiles:input_type -> turing.v1.ListAgentProfilesRequest
+	6,  // 13: turing.v1.TeamService.SetAgentProfileEnabled:input_type -> turing.v1.SetAgentProfileEnabledRequest
+	7,  // 14: turing.v1.TeamService.GrantAgentProfile:input_type -> turing.v1.GrantAgentProfileRequest
+	9,  // 15: turing.v1.TeamService.ListTeamTools:input_type -> turing.v1.ListTeamToolsRequest
+	11, // 16: turing.v1.TeamService.CallTeamTool:input_type -> turing.v1.CallTeamToolRequest
+	14, // 17: turing.v1.TeamService.ListDelegations:input_type -> turing.v1.ListDelegationsRequest
+	16, // 18: turing.v1.TeamService.GetDelegation:input_type -> turing.v1.GetDelegationRequest
+	5,  // 19: turing.v1.TeamService.ListAgentProfiles:output_type -> turing.v1.ListAgentProfilesResponse
+	3,  // 20: turing.v1.TeamService.SetAgentProfileEnabled:output_type -> turing.v1.AgentProfile
+	3,  // 21: turing.v1.TeamService.GrantAgentProfile:output_type -> turing.v1.AgentProfile
+	10, // 22: turing.v1.TeamService.ListTeamTools:output_type -> turing.v1.ListTeamToolsResponse
+	12, // 23: turing.v1.TeamService.CallTeamTool:output_type -> turing.v1.CallTeamToolResponse
+	15, // 24: turing.v1.TeamService.ListDelegations:output_type -> turing.v1.ListDelegationsResponse
+	13, // 25: turing.v1.TeamService.GetDelegation:output_type -> turing.v1.Delegation
+	19, // [19:26] is the sub-list for method output_type
+	12, // [12:19] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_team_proto_init() }
@@ -1049,7 +1419,7 @@ func file_turing_v1_team_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_team_proto_rawDesc), len(file_turing_v1_team_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   11,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

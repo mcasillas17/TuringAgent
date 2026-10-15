@@ -555,12 +555,14 @@ func (s *Server) refreshPendingCapabilityState(
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, pendingRoutingRefreshTimeout)
 	defer cancel()
-	continued, err := s.refreshPendingCapabilityStateLocked(ctx, cause, workerID, publishLosses, publishRestorations)
-	if continued {
+	followUp, err := s.refreshPendingCapabilityStateLocked(ctx, cause, workerID, publishLosses, publishRestorations)
+	// Telling a worker and dispatching can both refresh this state in turn, so
+	// they wait until the lock is released.
+	s.stopDelegatedTasks(followUp.stopped)
+	if followUp.continued {
 		// An expired task was the last its parent delegated, so the sweep
 		// queued that parent's continuation. Nothing else dispatches for a run
-		// no worker ever held. Dispatching can refresh this state in turn, so
-		// it waits until the lock is released.
+		// no worker ever held.
 		if dispatchErr := s.DispatchPending(ctx); dispatchErr != nil {
 			err = errors.Join(err, fmt.Errorf("dispatch continuation after queue expiry: %w", dispatchErr))
 		}
@@ -568,15 +570,28 @@ func (s *Server) refreshPendingCapabilityState(
 	return err
 }
 
+// queueExpiryFollowUp is what the sweep's expiries leave for after it: a
+// continuation one of them queued, and the delegated tasks an expired turn
+// stopped, whose workers have to be told.
+type queueExpiryFollowUp struct {
+	continued bool
+	stopped   []string
+}
+
+func (f *queueExpiryFollowUp) add(other queueExpiryFollowUp) {
+	f.continued = f.continued || other.continued
+	f.stopped = append(f.stopped, other.stopped...)
+}
+
 // refreshPendingCapabilityStateLocked is the pass itself, under
-// availabilityMu. It reports whether an expiry queued a continuation.
+// availabilityMu. It reports what its expiries left to do.
 func (s *Server) refreshPendingCapabilityStateLocked(
 	ctx context.Context,
 	cause string,
 	workerID string,
 	publishLosses bool,
 	publishRestorations bool,
-) (continued bool, err error) {
+) (followUp queueExpiryFollowUp, err error) {
 	s.availabilityMu.Lock()
 	defer s.availabilityMu.Unlock()
 
@@ -586,7 +601,7 @@ func (s *Server) refreshPendingCapabilityStateLocked(
 	for {
 		work, nextCursor, err := s.repo.ListPendingRoutingWorkPage(ctx, cursor, pendingRoutingPageSize)
 		if err != nil {
-			return continued, err
+			return followUp, err
 		}
 		for _, item := range work {
 			if _, tracked := s.unavailablePending[item.RunID]; tracked {
@@ -597,11 +612,11 @@ func (s *Server) refreshPendingCapabilityStateLocked(
 			observed := runoutcome.QueueWaitNone
 			if routingErr != nil {
 				if err := ctx.Err(); err != nil {
-					return continued, err
+					return followUp, err
 				}
 				detail = routingDetail(routingErr)
 				if detail == nil {
-					return continued, routingErr
+					return followUp, routingErr
 				}
 				observed = runoutcome.QueueWaitNoCompatibleWorker
 			}
@@ -613,11 +628,11 @@ func (s *Server) refreshPendingCapabilityStateLocked(
 			// measured from. Leaving it behind on a pass that happens not to
 			// publish would let a restored queue keep telling a user, days
 			// later, that nothing can run it.
-			expired, continuation, err := s.applyQueueWaitPolicy(ctx, item, observed)
+			expired, expiry, err := s.applyQueueWaitPolicy(ctx, item, observed)
 			if err != nil {
-				return continued, err
+				return followUp, err
 			}
-			continued = continued || continuation
+			followUp.add(expiry)
 			if expired {
 				// The run is terminal: it is neither pending work with a
 				// deadline nor a candidate for a loss or restoration notice.
@@ -663,7 +678,7 @@ func (s *Server) refreshPendingCapabilityStateLocked(
 				},
 			)
 			if err != nil {
-				return continued, err
+				return followUp, err
 			}
 			if !appended {
 				delete(nextUnavailable, item.RunID)
@@ -703,7 +718,7 @@ func (s *Server) refreshPendingCapabilityStateLocked(
 				},
 			)
 			if err != nil {
-				return continued, err
+				return followUp, err
 			}
 			if appended {
 				s.publishEvent(event)
@@ -724,7 +739,7 @@ func (s *Server) refreshPendingCapabilityStateLocked(
 		}
 	}
 	s.unavailablePending = nextUnavailable
-	return continued, nil
+	return followUp, nil
 }
 
 // queueWaitNow reads the clock the queue-wait sweep measures against.
@@ -750,23 +765,23 @@ func (s *Server) applyQueueWaitPolicy(
 	ctx context.Context,
 	item repository.PendingRoutingWork,
 	observed runoutcome.QueueWaitReason,
-) (expired bool, continued bool, err error) {
+) (expired bool, followUp queueExpiryFollowUp, err error) {
 	if err := s.recordQueueWaitObservation(ctx, item, observed); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return false, false, ctxErr
+			return false, queueExpiryFollowUp{}, ctxErr
 		}
 		log.Printf("record queue wait observation: %v", err)
-		return false, false, nil
+		return false, queueExpiryFollowUp{}, nil
 	}
-	expired, continued, err = s.expireOverdueQueuedRun(ctx, item, observed)
+	expired, followUp, err = s.expireOverdueQueuedRun(ctx, item, observed)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return false, false, ctxErr
+			return false, queueExpiryFollowUp{}, ctxErr
 		}
 		log.Printf("apply queue wait bound: %v", err)
-		return false, false, nil
+		return false, queueExpiryFollowUp{}, nil
 	}
-	return expired, continued, nil
+	return expired, followUp, nil
 }
 
 // recordQueueWaitObservation persists what the scan just saw about one queued
@@ -809,8 +824,7 @@ func (s *Server) recordQueueWaitObservation(
 }
 
 // expireOverdueQueuedRun applies the configured bound to one queued run and
-// reports whether it terminalized, and whether that queued its parent's
-// continuation.
+// reports whether it terminalized, and what that left to do after the sweep.
 //
 // The no-worker bound is checked first because it is the more specific answer:
 // when both have run out, "nothing could run this" tells a user something they
@@ -824,7 +838,7 @@ func (s *Server) expireOverdueQueuedRun(
 	ctx context.Context,
 	item repository.PendingRoutingWork,
 	observed runoutcome.QueueWaitReason,
-) (bool, bool, error) {
+) (bool, queueExpiryFollowUp, error) {
 	policy := s.dispatch.QueueWait
 	nowNanos := s.queueWaitNow().UnixNano()
 	code := ""
@@ -836,7 +850,7 @@ func (s *Server) expireOverdueQueuedRun(
 	case policy.MaxWait > 0 && item.Clock.TotalWaitedNanos(nowNanos) >= policy.MaxWait.Nanoseconds():
 		code = runoutcome.CodeQueueWaitExpired
 	default:
-		return false, false, nil
+		return false, queueExpiryFollowUp{}, nil
 	}
 	timeoutPolicy := policy.Policy
 	if timeoutPolicy == "" {
@@ -857,14 +871,14 @@ func (s *Server) expireOverdueQueuedRun(
 			errors.Is(err, repository.ErrRunNotCancellable) ||
 			errors.Is(err, repository.ErrRunTransitionConflict) ||
 			errors.Is(err, sql.ErrNoRows) {
-			return false, false, nil
+			return false, queueExpiryFollowUp{}, nil
 		}
-		return false, false, err
+		return false, queueExpiryFollowUp{}, err
 	}
 	for _, event := range result.Events {
 		s.publishEvent(event)
 	}
-	return true, result.ContinuationRunID != "", nil
+	return true, queueExpiryFollowUp{continued: result.ContinuationRunID != "", stopped: result.StoppedTasks}, nil
 }
 
 func routingDetail(err error) *turingv1.RoutingUnavailableDetail {

@@ -305,7 +305,7 @@ func TestAbandonedCancellationNeverClaimsUserIntent(t *testing.T) {
 	// enforces still stands — a user-cancelled constructor may only appear
 	// alongside an explicit typed cancel-intent RPC.
 	constructors := exportedFunctionsReturning(t, "Cancellation")
-	want := []string{"AbandonedCancellation", "QueueTimeoutCancellation", "UserCancellation"}
+	want := []string{"AbandonedCancellation", "ParentEndedCancellation", "QueueTimeoutCancellation", "UserCancellation"}
 	if !reflect.DeepEqual(constructors, want) {
 		t.Fatalf("exported cancellation constructors = %v, want %v", constructors, want)
 	}
@@ -321,6 +321,17 @@ func TestAbandonedCancellationNeverClaimsUserIntent(t *testing.T) {
 	}
 	if _, err := QueueTimeoutCancellation("client_cancelled"); !errors.Is(err, ErrUnsupportedQueueOutcome) {
 		t.Fatalf("a non-queue code built a queue cancellation: %v", err)
+	}
+}
+
+// A delegated task stopped because the turn that asked for it failed or was
+// cancelled was given up on by the orchestrator. That is abandonment, even
+// when the user cancelled the turn: they did not cancel this task.
+func TestParentEndedCancellationIsTheOrchestratorGivingUp(t *testing.T) {
+	cancellation := ParentEndedCancellation()
+	if cancellation.Reason() != ReasonAbandoned || cancellation.Origin() != OriginOrchestratorInternal ||
+		cancellation.Code() != CodeParentRunEnded || CodeParentRunEnded != "parent_run_ended" {
+		t.Fatalf("parent-ended cancellation = %v/%v/%q", cancellation.Origin(), cancellation.Reason(), cancellation.Code())
 	}
 }
 

@@ -60,7 +60,7 @@ func newDelegationFixture(t *testing.T) delegationFixture {
 func (f delegationFixture) input(toolCallID string) CreateDelegationInput {
 	return CreateDelegationInput{
 		ParentRunID: f.parent.RunID, AssignmentAttemptID: f.attempt, ToolCallID: toolCallID,
-		ArgsHash: "sha256:" + toolCallID, Policy: "safe", MaxPerRun: 3,
+		ArgsHash: "sha256:" + toolCallID, Policy: "safe", MaxPerRun: 4,
 		Profile: AgentProfileSnapshot{
 			ProfileID: "research", Revision: "rev-1", DisplayName: "Research", Emoji: "🔬",
 			Instructions: "You are Research.", MaxToolCalls: 12,

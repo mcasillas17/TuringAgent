@@ -206,7 +206,7 @@ func TestAJoinWaitsForTheParentAndEveryChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	if finished["delegationId"] != first.ID || finished["state"] != "completed" || finished["continuationRunId"] != continuation ||
-		finished["childRunId"] != first.ChildRunID || finished["displayName"] != "Research" || finished["summary"] == "" {
+		finished["childRunId"] != first.ChildRunID || finished["displayName"] != "Research" || finished["summary"] != "🔬 Research completed" {
 		t.Fatalf("delegation.finished = %+v, want the first delegation, completed", finished)
 	}
 }
@@ -235,14 +235,15 @@ func TestARunThatNeverDelegatedIsNotJoined(t *testing.T) {
 	f.wantNoJoin(t)
 }
 
-// Only a completed parent is joined. A failed one leaves its children's
-// results where they are.
+// Only a completed parent is joined. A failed one stops its unfinished
+// tasks instead, and a task that had already finished is left where it is.
 func TestAParentThatDidNotCompleteIsNotJoined(t *testing.T) {
 	f := newDelegationFixture(t)
-	child := f.delegate(t, "call_1")
+	finished, unfinished := f.delegate(t, "call_1"), f.delegate(t, "call_2")
+	f.startChild(t, finished)
+	f.complete(t, finished.ChildRunID, "Nobody will read this.")
 	f.fail(t, f.parent.RunID, runoutcome.NormalizeFailure(runoutcome.OriginExternalProvider, "model_error", runoutcome.RetryClassNever))
-	f.startChild(t, child)
-	f.complete(t, child.ChildRunID, "Nobody will read this.")
+	f.wantStopped(t, unfinished)
 	f.wantNoJoin(t)
 }
 
@@ -478,8 +479,8 @@ func TestADeniedChildApprovalReturnsItsJoin(t *testing.T) {
 	if continuation == "" || denied.ContinuationRunID != continuation {
 		t.Fatalf("denial continuation = %q, stored %q; want the join's", denied.ContinuationRunID, continuation)
 	}
-	if types := eventTypes(denied.JoinEvents); !slices.Equal(types, []string{"delegation.finished", "agent.run.queued"}) {
-		t.Fatalf("join events = %v, want the delegation finished and the continuation queued", types)
+	if types := eventTypes(denied.DelegationEvents); !slices.Equal(types, []string{"delegation.updated", "delegation.finished", "agent.run.queued"}) {
+		t.Fatalf("delegation events = %v, want the task's failure, the delegation finished and the continuation queued", types)
 	}
 }
 

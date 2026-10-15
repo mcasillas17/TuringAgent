@@ -195,4 +195,19 @@ class _TeamService extends teamgrpc.TeamServiceBase {
     teampb.CallTeamToolRequest request,
   ) async =>
       throw grpc.GrpcError.permissionDenied('team tool dispatch is internal');
+
+  // The app does not read delegations yet.
+  @override
+  Future<teampb.ListDelegationsResponse> listDelegations(
+    grpc.ServiceCall call,
+    teampb.ListDelegationsRequest request,
+  ) async =>
+      throw grpc.GrpcError.unimplemented('not used by these tests');
+
+  @override
+  Future<teampb.Delegation> getDelegation(
+    grpc.ServiceCall call,
+    teampb.GetDelegationRequest request,
+  ) async =>
+      throw grpc.GrpcError.unimplemented('not used by these tests');
 }

@@ -25,6 +25,9 @@ type CancelUserRunResult struct {
 	RunCancellation
 	Accepted bool
 	Events   []Event
+	// StoppedTasks are the delegated runs cancelling this one stopped; see
+	// RunTransitionResult.StoppedTasks.
+	StoppedTasks []string
 }
 
 // ReadRunCancellation checks withdrawal and exact session ownership in the same
@@ -102,6 +105,7 @@ func (r *Repository) CancelUserRun(ctx context.Context, sessionID, runID, key st
 				return CancelUserRunResult{}, err
 			}
 			result.Accepted, result.State, result.Events = true, transition.State, transition.Events
+			result.StoppedTasks = transition.StoppedTasks
 			if err := recordAuditTx(ctx, tx, runID, "client", "", "run.cancel", runID, ""); err != nil {
 				return CancelUserRunResult{}, err
 			}
@@ -124,21 +128,24 @@ func (r *Repository) CancelUserRun(ctx context.Context, sessionID, runID, key st
 	return result, nil
 }
 
-// ApprovalResumeLostToUserCancellation recognizes a previously authorized
-// Ready without granting permission to resume. Cancellation has erased the
-// unconsumed token, so the canonical event history supplies the decision and
-// pre-cancellation state; current rows still fence worker and attempt identity.
-func (r *Repository) ApprovalResumeLostToUserCancellation(ctx context.Context, input ResumeApprovedRunInput) (bool, error) {
+// ApprovalResumeLostToCancellation recognizes a previously authorized Ready
+// that lost to a committed stop, without granting permission to resume, and
+// returns the stop's code to redeliver: the user's cancellation, or a task
+// stopped because its turn ended. It returns "" for anything else. The stop
+// has erased the unconsumed token, so the canonical event history supplies
+// the decision and pre-cancellation state; current rows still fence worker and
+// attempt identity.
+func (r *Repository) ApprovalResumeLostToCancellation(ctx context.Context, input ResumeApprovedRunInput) (string, error) {
 	if input.RunID == "" || input.ApprovalID == "" || input.WorkerID == "" ||
 		input.AssignmentAttemptID == "" || input.ExpectedStateVersion < 1 {
-		return false, nil
+		return "", nil
 	}
-	var matches bool
+	var outcomeReason string
 	err := r.db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM agent_runs r JOIN approvals a ON a.run_id = r.id
+		SELECT r.outcome_reason FROM agent_runs r JOIN approvals a ON a.run_id = r.id
 			WHERE r.id = ? AND a.id = ? AND r.worker_id = ? AND r.execution_attempt_id = ?
-				AND r.status = 'cancelled' AND r.outcome_reason = ? AND r.execution_active = 1
+				AND r.status = 'cancelled' AND r.execution_active = 1
+				AND (r.outcome_reason = ? OR COALESCE(r.cancellation_reason, '') = ?)
 				AND (
 					a.status = 'consumed' OR (
 						a.status = 'expired' AND EXISTS (
@@ -165,8 +172,19 @@ func (r *Repository) ApprovalResumeLostToUserCancellation(ctx context.Context, i
 								AND r.state_version - 2 = ?)
 						)
 				)
-		)`, input.RunID, input.ApprovalID, input.WorkerID, input.AssignmentAttemptID,
-		string(runoutcome.ReasonUserCancelled), approvalIdentityPayloadPath, approvalIdentityPayloadPath,
-		runStateVersionPayloadPath, input.ExpectedStateVersion, approvalIdentityPayloadPath, input.ExpectedStateVersion).Scan(&matches)
-	return matches, err
+		`, input.RunID, input.ApprovalID, input.WorkerID, input.AssignmentAttemptID,
+		string(runoutcome.ReasonUserCancelled), runoutcome.CodeParentRunEnded,
+		approvalIdentityPayloadPath, approvalIdentityPayloadPath,
+		runStateVersionPayloadPath, input.ExpectedStateVersion, approvalIdentityPayloadPath, input.ExpectedStateVersion,
+	).Scan(&outcomeReason)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case err != nil:
+		return "", err
+	case outcomeReason == string(runoutcome.ReasonUserCancelled):
+		return runoutcome.CodeUserCancelled, nil
+	default:
+		return runoutcome.CodeParentRunEnded, nil
+	}
 }

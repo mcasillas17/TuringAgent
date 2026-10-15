@@ -276,8 +276,8 @@ func NewWithConfig(repo *repository.Repository, bus *events.Bus, dispatch Dispat
 	if setter, ok := approvals.(interface{ SetNotifier(approvalsvc.Notifier) }); ok {
 		setter.SetNotifier(server)
 	}
-	if setter, ok := approvals.(interface{ SetDispatcher(approvalsvc.Dispatcher) }); ok {
-		setter.SetDispatcher(server)
+	if setter, ok := approvals.(interface{ SetRunControl(approvalsvc.RunControl) }); ok {
+		setter.SetRunControl(server)
 	}
 	return server
 }
@@ -472,17 +472,17 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 					return
 				}
 				accepted, resumeErr := s.resumeApprovedRun(ctx, resumeReady, ready.WorkerId, connectedWorker)
-				cancelled := false
+				stopCode := ""
 				if status.Code(resumeErr) == codes.FailedPrecondition &&
 					s.ownershipProven(ready.WorkerId, connectedWorker, resumeReady.GetRunId(), resumeReady.GetAssignmentAttemptId()) {
 					var checkErr error
-					cancelled, checkErr = s.repo.ApprovalResumeLostToUserCancellation(ctx, repository.ResumeApprovedRunInput{
+					stopCode, checkErr = s.repo.ApprovalResumeLostToCancellation(ctx, repository.ResumeApprovedRunInput{
 						RunID: resumeReady.GetRunId(), ApprovalID: resumeReady.GetApprovalId(),
 						WorkerID: ready.WorkerId, AssignmentAttemptID: resumeReady.GetAssignmentAttemptId(),
 						ExpectedStateVersion: resumeReady.GetExpectedStateVersion(),
 					})
 					if checkErr != nil {
-						cancelled = false
+						stopCode = ""
 						resumeErr = checkErr
 					}
 				}
@@ -491,8 +491,8 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 				// the sender, so holding it across a send would order the two
 				// the other way round.
 				release()
-				if cancelled {
-					s.CancelRun(ctx, resumeReady.GetRunId(), runoutcome.CodeUserCancelled)
+				if stopCode != "" {
+					s.CancelRun(ctx, resumeReady.GetRunId(), stopCode)
 					continue
 				}
 				if resumeErr != nil {
@@ -579,6 +579,8 @@ func (s *Server) ConnectWorker(stream turingv1.RuntimeService_ConnectWorkerServe
 	}
 }
 
+// WaitForWorkerStreams waits for every worker stream, and every stop still
+// being sent to a stopped task's worker, to finish.
 func (s *Server) WaitForWorkerStreams() {
 	s.workerStreams.Wait()
 }
@@ -1389,11 +1391,35 @@ func (s *Server) terminalizeApprovalDeliveryFailure(_ context.Context, approvalI
 		if transition.RunFailedEvent.EventID != "" {
 			s.publishEvent(transition.RunFailedEvent)
 		}
-		for _, event := range transition.JoinEvents {
+		for _, event := range transition.DelegationEvents {
 			s.publishEvent(event)
 		}
+		s.stopDelegatedTasks(transition.StoppedTasks)
 	}
 	return nil
+}
+
+// stopDelegatedTasks tells the workers executing delegated tasks that a failed
+// or cancelled turn stopped. The rows are already cancelled; this only asks a
+// worker still running one to let go. The recovery loop repeats it for a live
+// assignment that missed it.
+//
+// The sends run on their own goroutine, so no caller waits on a worker. Its
+// callers include worker updates and beacons, which hold their worker's update
+// lock, and the command loop itself; a task often shares its turn's worker,
+// and only that command loop drains a full buffer, after taking the same lock.
+// Shutdown waits for them through workerStreams, ahead of closing the database.
+func (s *Server) stopDelegatedTasks(runIDs []string) {
+	if len(runIDs) == 0 {
+		return
+	}
+	s.workerStreams.Add(1)
+	go func() {
+		defer s.workerStreams.Done()
+		for _, runID := range runIDs {
+			s.CancelRun(context.Background(), runID, runoutcome.CodeParentRunEnded)
+		}
+	}()
 }
 
 func (s *Server) requeueAssignments(assignments []assignment) error {
@@ -1489,6 +1515,9 @@ func (s *Server) RecoverOrphanedAssignments(ctx context.Context) error {
 			}
 			if run.Status == "cancelled" && run.OutcomeReason == string(runoutcome.ReasonUserCancelled) {
 				s.CancelRun(recoveryCtx, candidate.RunID, runoutcome.CodeUserCancelled)
+			}
+			if run.Status == "cancelled" && run.CancellationReason == runoutcome.CodeParentRunEnded {
+				s.CancelRun(recoveryCtx, candidate.RunID, runoutcome.CodeParentRunEnded)
 			}
 			continue
 		}
@@ -1652,6 +1681,9 @@ func (s *Server) dispatchToWorker(
 	case worker.commands <- workerCommand{command: &turingv1.RuntimeCommand{Command: &turingv1.RuntimeCommand_RunAssigned{RunAssigned: assignedJob}}}:
 		worker.mu.Unlock()
 		s.publishEvent(job.StartedEvent)
+		for _, event := range job.DelegationEvents {
+			s.publishEvent(event)
+		}
 		return true, false, false, nil
 	case <-ctx.Done():
 		delete(worker.assignments, job.RunID)
@@ -2367,14 +2399,16 @@ func (s *Server) handleRunCancelledAck(ctx context.Context, ack *turingv1.Runtim
 // convention matchesPreTerminalVersion applies to terminal reports. Nothing
 // further back belongs to this attempt, and nothing ahead exists.
 //
-// Zero is protobuf absence, not attempt identity. For explicit cancellation it
-// can prove exit only on a durably identified first attempt: after retry it
-// cannot distinguish the predecessor from the current executor. Other terminal
-// paths retain their legacy absence rule. The lineage is read with the run so
+// Zero is protobuf absence, not attempt identity. For explicit cancellation,
+// and a task stopped because its turn ended, it can prove exit only on a
+// durably identified first attempt: after retry it cannot distinguish the
+// predecessor from the current executor. Other terminal paths retain their
+// legacy absence rule. The lineage is read with the run so
 // both normal reconciliation and the handler-local cancellation race enforce
 // the same rule, without relying on an in-memory assignment's current label.
 func acknowledgedVersionMatches(observed int64, run repository.Run) bool {
-	if observed == 0 && run.Status == "cancelled" && run.OutcomeReason == string(runoutcome.ReasonUserCancelled) {
+	if observed == 0 && run.Status == "cancelled" &&
+		(run.OutcomeReason == string(runoutcome.ReasonUserCancelled) || run.CancellationReason == runoutcome.CodeParentRunEnded) {
 		return run.ExecutionAttemptNumber == 1
 	}
 	return observed == 0 || observed == run.StateVersion || observed == run.StateVersion-1
@@ -2706,6 +2740,7 @@ func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRu
 		for _, event := range decision.Events {
 			s.publishEvent(event)
 		}
+		s.stopDelegatedTasks(decision.StoppedTasks)
 		// Every retryable failure is requeued, but only an assignment rejection
 		// may skip the dispatch that follows. See workerBusyFailureCode.
 		return decision.Requeued && failure.Code() == workerBusyFailureCode, nil
@@ -2734,6 +2769,7 @@ func (s *Server) handleRunFailed(ctx context.Context, failed *turingv1.RuntimeRu
 	for _, event := range result.Events {
 		s.publishEvent(event)
 	}
+	s.stopDelegatedTasks(result.StoppedTasks)
 	return false, nil
 }
 
@@ -3127,6 +3163,7 @@ func (s *Server) terminalizePostCommitApprovalFailure(_ context.Context, runID s
 		for _, event := range result.Events {
 			s.publishEvent(event)
 		}
+		s.stopDelegatedTasks(result.StoppedTasks)
 		return nil
 	}
 	if err != nil {

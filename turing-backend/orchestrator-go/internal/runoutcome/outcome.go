@@ -98,6 +98,9 @@ const (
 	// satisfied the run's frozen route for longer than the configured
 	// no-worker timeout.
 	CodeQueueNoCompatibleWorker = "queue_no_compatible_worker"
+	// CodeParentRunEnded is a delegated task stopped because the turn that
+	// asked for it failed or was cancelled before it finished.
+	CodeParentRunEnded = "parent_run_ended"
 )
 
 // QueueWaitReason is the closed vocabulary persisted in
@@ -244,6 +247,14 @@ func AbandonedCancellation() Cancellation {
 // UserCancellation is reserved for the explicit, authenticated cancel RPC.
 func UserCancellation() Cancellation {
 	return Cancellation{origin: OriginClientLifecycle, code: CodeUserCancelled, reason: ReasonUserCancelled}
+}
+
+// ParentEndedCancellation stops a delegated task whose parent turn failed or
+// was cancelled. The orchestrator gives up on the task's behalf, so its reason
+// is abandoned, not user_cancelled, even when the user cancelled the turn:
+// they did not cancel this task.
+func ParentEndedCancellation() Cancellation {
+	return Cancellation{origin: OriginOrchestratorInternal, code: CodeParentRunEnded, reason: ReasonAbandoned}
 }
 
 // QueueTimeoutCancellation is the cancellation half of TUR-010's configurable

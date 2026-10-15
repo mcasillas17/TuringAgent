@@ -21,8 +21,8 @@ import 'team.pb.dart' as $0;
 export 'team.pb.dart';
 
 /// Like MemoryService, one service with two facets split by method name: the
-/// public facet manages profiles, and the internal facet, which only the
-/// runtime identity reaches, serves the team tool.
+/// public facet manages profiles and reads delegations, and the internal facet,
+/// which only the runtime identity reaches, serves the team tool.
 @$pb.GrpcServiceName('turing.v1.TeamService')
 class TeamServiceClient extends $grpc.Client {
   /// The hostname for this service.
@@ -71,6 +71,23 @@ class TeamServiceClient extends $grpc.Client {
     return $createUnaryCall(_$callTeamTool, request, options: options);
   }
 
+  /// Every task a conversation delegated. NotFound for a conversation that
+  /// does not exist, is being deleted, or is a specialist's own.
+  $grpc.ResponseFuture<$0.ListDelegationsResponse> listDelegations(
+    $0.ListDelegationsRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$listDelegations, request, options: options);
+  }
+
+  /// One delegation. NotFound once its conversation is being deleted.
+  $grpc.ResponseFuture<$0.Delegation> getDelegation(
+    $0.GetDelegationRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$getDelegation, request, options: options);
+  }
+
   // method descriptors
 
   static final _$listAgentProfiles = $grpc.ClientMethod<
@@ -98,6 +115,16 @@ class TeamServiceClient extends $grpc.Client {
           '/turing.v1.TeamService/CallTeamTool',
           ($0.CallTeamToolRequest value) => value.writeToBuffer(),
           $0.CallTeamToolResponse.fromBuffer);
+  static final _$listDelegations =
+      $grpc.ClientMethod<$0.ListDelegationsRequest, $0.ListDelegationsResponse>(
+          '/turing.v1.TeamService/ListDelegations',
+          ($0.ListDelegationsRequest value) => value.writeToBuffer(),
+          $0.ListDelegationsResponse.fromBuffer);
+  static final _$getDelegation =
+      $grpc.ClientMethod<$0.GetDelegationRequest, $0.Delegation>(
+          '/turing.v1.TeamService/GetDelegation',
+          ($0.GetDelegationRequest value) => value.writeToBuffer(),
+          $0.Delegation.fromBuffer);
 }
 
 @$pb.GrpcServiceName('turing.v1.TeamService')
@@ -150,6 +177,23 @@ abstract class TeamServiceBase extends $grpc.Service {
             ($core.List<$core.int> value) =>
                 $0.CallTeamToolRequest.fromBuffer(value),
             ($0.CallTeamToolResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.ListDelegationsRequest,
+            $0.ListDelegationsResponse>(
+        'ListDelegations',
+        listDelegations_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.ListDelegationsRequest.fromBuffer(value),
+        ($0.ListDelegationsResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.GetDelegationRequest, $0.Delegation>(
+        'GetDelegation',
+        getDelegation_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.GetDelegationRequest.fromBuffer(value),
+        ($0.Delegation value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.ListAgentProfilesResponse> listAgentProfiles_Pre(
@@ -195,4 +239,21 @@ abstract class TeamServiceBase extends $grpc.Service {
 
   $async.Future<$0.CallTeamToolResponse> callTeamTool(
       $grpc.ServiceCall call, $0.CallTeamToolRequest request);
+
+  $async.Future<$0.ListDelegationsResponse> listDelegations_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.ListDelegationsRequest> $request) async {
+    return listDelegations($call, await $request);
+  }
+
+  $async.Future<$0.ListDelegationsResponse> listDelegations(
+      $grpc.ServiceCall call, $0.ListDelegationsRequest request);
+
+  $async.Future<$0.Delegation> getDelegation_Pre($grpc.ServiceCall $call,
+      $async.Future<$0.GetDelegationRequest> $request) async {
+    return getDelegation($call, await $request);
+  }
+
+  $async.Future<$0.Delegation> getDelegation(
+      $grpc.ServiceCall call, $0.GetDelegationRequest request);
 }
