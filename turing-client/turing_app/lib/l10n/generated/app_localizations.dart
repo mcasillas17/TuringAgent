@@ -100,6 +100,12 @@ abstract class AppLocalizations {
   /// **'Approval requested: {tool}'**
   String approvalRequested(String tool);
 
+  /// No description provided for @approvalRequestedBy.
+  ///
+  /// In en, this message translates to:
+  /// **'{requester} wants to use {tool}'**
+  String approvalRequestedBy(String requester, String tool);
+
   /// No description provided for @approvalLoading.
   ///
   /// In en, this message translates to:

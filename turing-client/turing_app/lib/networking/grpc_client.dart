@@ -31,6 +31,7 @@ import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
 import '../generated/turing/v1/telemetry.pbgrpc.dart' as telemetrygrpc;
 import '../models/agent_descriptor.dart';
 import '../models/agent_profile.dart';
+import '../models/delegation.dart';
 import '../models/approval.dart';
 import '../models/automation.dart';
 import '../models/external_agent.dart';
@@ -1219,6 +1220,18 @@ class TuringGrpcApi
         teampb.ListAgentProfilesRequest(),
       );
       return response.profiles.map(GrpcMappers.agentProfileToModel).toList();
+    });
+  }
+
+  @override
+  Future<List<Delegation>> listDelegations({required String parentSessionId}) {
+    return _statusCall('team', () async {
+      // Chat startup waits on this read, like history.
+      final response = await _team.listDelegations(
+        teampb.ListDelegationsRequest(parentSessionId: parentSessionId),
+        options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+      );
+      return response.delegations.map(GrpcMappers.delegationToModel).toList();
     });
   }
 

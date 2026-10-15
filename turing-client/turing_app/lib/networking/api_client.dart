@@ -2,6 +2,7 @@ import 'dart:async';
 
 import '../models/agent_descriptor.dart';
 import '../models/agent_profile.dart';
+import '../models/delegation.dart';
 import '../models/approval.dart';
 import '../models/external_agent.dart';
 import '../models/integration.dart';
@@ -271,6 +272,16 @@ abstract class TuringApi implements RemoteEgressApi {
     throw const TuringApiException(
       code: 'team_unsupported',
       message: 'This client cannot read the team',
+    );
+  }
+
+  /// Every task a conversation delegated, in the order they were asked for,
+  /// as their cards show them. Defaults to refusing: a client that cannot ask
+  /// has not learned that nothing was delegated.
+  Future<List<Delegation>> listDelegations({required String parentSessionId}) {
+    throw const TuringApiException(
+      code: 'team_unsupported',
+      message: 'This client cannot read delegations',
     );
   }
 
