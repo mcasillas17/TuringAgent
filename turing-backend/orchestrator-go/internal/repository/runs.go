@@ -47,6 +47,8 @@ type Run struct {
 	StateVersion  int64
 	OutcomeReason string
 	ContentSHA256 string
+	// CancellationReason is the code a cancelled run was cancelled with.
+	CancellationReason string
 }
 
 // HasDisplayableContent reports whether this run's assistant message would
@@ -156,7 +158,7 @@ func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
 				LIMIT 1
 			), ''),
 			r.execution_active, COALESCE(r.worker_id, ''), COALESCE(r.execution_attempt_id, ''), r.execution_state,
-			r.state_version, r.outcome_reason, r.assistant_content_sha256,
+			r.state_version, r.outcome_reason, r.assistant_content_sha256, COALESCE(r.cancellation_reason, ''),
 			(SELECT CASE WHEN COUNT(*) = 1 THEN MAX(j.attempt) ELSE 0 END
 				FROM jobs j
 				WHERE j.run_id = r.id AND j.assignment_attempt_id = r.execution_attempt_id)
@@ -179,6 +181,7 @@ func (r *Repository) GetRun(ctx context.Context, runID string) (Run, error) {
 		&run.StateVersion,
 		&run.OutcomeReason,
 		&run.ContentSHA256,
+		&run.CancellationReason,
 		&run.ExecutionAttemptNumber,
 	)
 	return run, err

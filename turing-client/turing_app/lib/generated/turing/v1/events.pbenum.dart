@@ -93,7 +93,16 @@ class TuringEventType extends $pb.ProtobufEnum {
       TuringEventType._(
           24, _omitEnumNames ? '' : 'TURING_EVENT_TYPE_DELEGATION_STARTED');
 
-  /// 25 is reserved for DELEGATION_UPDATED, a child's state changes.
+  /// On the parent's stream, whenever what a delegated task's card shows
+  /// changes: queued, working (recovering is shown as working), waiting for
+  /// an approval (naming it in approvalId), and how it ended. The payload is
+  /// DELEGATION_STARTED's with the new state; its summary is written by the
+  /// orchestrator, never a model. Nothing is appended once the parent's
+  /// conversation is being deleted.
+  static const TuringEventType TURING_EVENT_TYPE_DELEGATION_UPDATED =
+      TuringEventType._(
+          25, _omitEnumNames ? '' : 'TURING_EVENT_TYPE_DELEGATION_UPDATED');
+
   /// On the parent's stream, once per delegation, when the run's tasks are
   /// joined back into its conversation. The payload names the delegation, the
   /// child run and session, the specialist, its terminal state and the
@@ -129,6 +138,7 @@ class TuringEventType extends $pb.ProtobufEnum {
     TURING_EVENT_TYPE_SESSION_DELETED,
     TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED,
     TURING_EVENT_TYPE_DELEGATION_STARTED,
+    TURING_EVENT_TYPE_DELEGATION_UPDATED,
     TURING_EVENT_TYPE_DELEGATION_FINISHED,
   ];
 

@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 func TestCancelledApprovalResumeRequiresCompleteAuthorizedIdentity(t *testing.T) {
-	for _, change := range []string{"matching", "worker", "run", "approval", "attempt", "old-version", "future-version", "absent-version", "pending", "missing-expiry-proof", "wrong-duplicate-approval", "forged-waiting-event"} {
+	for _, change := range []string{"matching", "stopped-task", "abandoned", "worker", "run", "approval", "attempt", "old-version", "future-version", "absent-version", "pending", "missing-expiry-proof", "wrong-duplicate-approval", "forged-waiting-event"} {
 		t.Run(change, func(t *testing.T) {
 			repo := New(openTestDB(t))
 			ctx := context.Background()
@@ -38,8 +40,27 @@ func TestCancelledApprovalResumeRequiresCompleteAuthorizedIdentity(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := repo.CancelUserRun(ctx, run.SessionID, run.RunID, "cancel"); err != nil {
-				t.Fatal(err)
+			switch change {
+			case "stopped-task", "abandoned":
+				// A turn ending stops its task with a cancellation of its own;
+				// anything else that abandons a run is not a committed stop.
+				cancellation := runoutcome.ParentEndedCancellation()
+				if change == "abandoned" {
+					cancellation = runoutcome.AbandonedCancellation()
+				}
+				state, err := repo.GetRunState(ctx, run.RunID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := repo.CancelRunCanonical(ctx, CancelRunInput{
+					RunID: run.RunID, ExpectedStateVersion: state.StateVersion, Cancellation: cancellation,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				if _, err := repo.CancelUserRun(ctx, run.SessionID, run.RunID, "cancel"); err != nil {
+					t.Fatal(err)
+				}
 			}
 			switch change {
 			case "worker":
@@ -68,9 +89,10 @@ func TestCancelledApprovalResumeRequiresCompleteAuthorizedIdentity(t *testing.T)
 			}
 			before := fixture.state(t)
 			events := countRunEvents(t, repo, run.RunID)
-			matched, err := repo.ApprovalResumeLostToUserCancellation(ctx, input)
-			if err != nil || matched != (change == "matching") {
-				t.Fatalf("match(%s)=%v, %v", change, matched, err)
+			code, err := repo.ApprovalResumeLostToCancellation(ctx, input)
+			want := map[string]string{"matching": runoutcome.CodeUserCancelled, "stopped-task": runoutcome.CodeParentRunEnded}[change]
+			if err != nil || code != want {
+				t.Fatalf("match(%s) = %q, %v; want %q", change, code, err, want)
 			}
 			if after := fixture.state(t); after != before {
 				t.Fatalf("classification changed state: %+v -> %+v", before, after)

@@ -71,6 +71,17 @@ func TestTeamServiceFacetAndRuntimeIdentityWiring(t *testing.T) {
 	if _, err := internal.CallTeamTool(internalCtx, &turingv1.CallTeamToolRequest{RunId: "run_missing"}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("internal CallTeamTool error = %v, want InvalidArgument from the service", err)
 	}
+	// Delegations are the user's to read: the client reaches the service, the
+	// runtime identity is refused.
+	if _, err := public.ListDelegations(publicCtx, &turingv1.ListDelegationsRequest{ParentSessionId: "sess_missing"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("public ListDelegations error = %v, want NotFound from the service", err)
+	}
+	if _, err := public.GetDelegation(publicCtx, &turingv1.GetDelegationRequest{DelegationId: "dlg_missing"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("public GetDelegation error = %v, want NotFound from the service", err)
+	}
+	if _, err := internal.ListDelegations(internalCtx, &turingv1.ListDelegationsRequest{ParentSessionId: "sess_missing"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("internal ListDelegations error = %v, want PermissionDenied", err)
+	}
 }
 
 // With the team on, a local Turing turn served by a team-protocol worker is

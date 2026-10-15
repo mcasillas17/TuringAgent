@@ -8,6 +8,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -15,6 +16,25 @@ import (
 // completed, run by a worker this test drives through the repository. The
 // task asks for a tool no connected worker serves, so it stays queued.
 func seedDelegatedParent(t *testing.T, h *harness) (string, repository.EnqueueUserMessageResult, repository.Delegation) {
+	t.Helper()
+	sessionID, parent, delegation := seedDelegatingParent(t, h, "system/system.unserved")
+	state, err := h.repo.GetRunState(context.Background(), parent.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.repo.CompleteRunCanonical(context.Background(), repository.CompleteRunInput{
+		RunID: parent.RunID, AssistantMessageID: parent.AssistantMessageID, Content: "Asked Research.",
+		ExpectedStateVersion: state.StateVersion,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return sessionID, parent, delegation
+}
+
+// seedDelegatingParent is a Turing turn, still running on a worker this test
+// drives through the repository, that has delegated one task asking for
+// childTool.
+func seedDelegatingParent(t *testing.T, h *harness, childTool string) (string, repository.EnqueueUserMessageResult, repository.Delegation) {
 	t.Helper()
 	ctx := context.Background()
 	if err := h.repo.UpsertTools(ctx, []repository.DiscoveredTool{
@@ -50,23 +70,40 @@ func seedDelegatedParent(t *testing.T, h *harness) (string, repository.EnqueueUs
 		Profile: repository.AgentProfileSnapshot{
 			ProfileID: "research", Revision: "rev-1", DisplayName: "Research", Emoji: "🔬", Instructions: "You are Research.",
 		},
-		ModelProvider: "ollama", Model: "llama3.2", SelectedTools: []string{"system/system.unserved"},
+		ModelProvider: "ollama", Model: "llama3.2", SelectedTools: []string{childTool},
 		Brief: "BEGIN TURING_RETRIEVED_DELEGATION_BRIEF_x\nTask:\nGather the notes\nEND TURING_RETRIEVED_DELEGATION_BRIEF_x",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := h.repo.GetRunState(ctx, parent.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.repo.CompleteRunCanonical(ctx, repository.CompleteRunInput{
-		RunID: parent.RunID, AssistantMessageID: parent.AssistantMessageID, Content: "Asked Research.",
-		ExpectedStateVersion: state.StateVersion,
-	}); err != nil {
-		t.Fatal(err)
-	}
 	return sessionID, parent, created.Delegation
+}
+
+// The user cancelling a turn stops the tasks it started, and the worker
+// running one of them is told to let it go at once.
+func TestCancellingATurnTellsItsTasksWorker(t *testing.T) {
+	h := newHarness(t)
+	sessionID, parent, delegation := seedDelegatingParent(t, h, "system/system.time")
+	worker := connectTeamWorker(t, h, "team-worker", 1)
+	assigned := recvRuntimeCommand(t, worker, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil
+	}).GetRunAssigned()
+	if assigned.GetRunId() != delegation.ChildRunID {
+		t.Fatalf("assigned %s, want the task %s", assigned.GetRunId(), delegation.ChildRunID)
+	}
+
+	response, err := h.chatClient.CancelRun(h.clientContext(), &turingv1.CancelRunRequest{
+		SessionId: sessionID, RunId: parent.RunID, IdempotencyKey: "cancel-parent",
+	})
+	if err != nil || response.GetResult() != turingv1.CancelRunResult_CANCEL_RUN_RESULT_ACCEPTED {
+		t.Fatalf("cancel = %+v, %v; want accepted", response, err)
+	}
+	cancelled := recvRuntimeCommand(t, worker, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunCancelled() != nil
+	}).GetRunCancelled()
+	if cancelled.GetRunId() != delegation.ChildRunID || cancelled.GetReason() != runoutcome.CodeParentRunEnded {
+		t.Fatalf("cancelled = %+v, want the task stopped because its turn ended", cancelled)
+	}
 }
 
 // Cancelling a task nobody had started involves no worker. Releasing the

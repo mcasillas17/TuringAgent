@@ -121,17 +121,19 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var runStatus, executionState, executionAttemptID, sessionID, traceID, outcomeReason string
+	var runStatus, executionState, executionAttemptID, sessionID, traceID, outcomeReason, cancellationCode string
 	var workerID sql.NullString
 	var leaseExpiresAtNanos sql.NullInt64
 	var active int
 	err = tx.QueryRowContext(ctx, `
 		SELECT status, execution_state, COALESCE(execution_attempt_id, ''), worker_id, execution_active, session_id, trace_id, outcome_reason,
+			COALESCE(cancellation_reason, ''),
 			COALESCE(execution_lease_expires_at_ns, `+sqliteTimestampNanos("execution_lease_expires_at")+`)
 		FROM agent_runs
 		WHERE id = ?
 	`, assignment.RunID).Scan(
-		&runStatus, &executionState, &executionAttemptID, &workerID, &active, &sessionID, &traceID, &outcomeReason, &leaseExpiresAtNanos,
+		&runStatus, &executionState, &executionAttemptID, &workerID, &active, &sessionID, &traceID, &outcomeReason,
+		&cancellationCode, &leaseExpiresAtNanos,
 	)
 	if err != nil {
 		return AssignmentReconciliation{}, err
@@ -142,13 +144,16 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 	if assignment.WorkerID != "" && (!workerID.Valid || workerID.String != assignment.WorkerID) {
 		return AssignmentReconciliation{Fenced: true}, tx.Commit()
 	}
-	if liveWorker && active == 1 && runStatus == lifecycleCancelled && outcomeReason == string(runoutcome.ReasonUserCancelled) {
+	// A stop the worker is told about — the user's cancellation, or a task
+	// stopped because its turn ended — is over only once the worker lets go.
+	committedStop := runStatus == lifecycleCancelled &&
+		(outcomeReason == string(runoutcome.ReasonUserCancelled) || cancellationCode == runoutcome.CodeParentRunEnded)
+	if liveWorker && active == 1 && committedStop {
 		return AssignmentReconciliation{AwaitingExit: true}, tx.Commit()
 	}
 	// Restart or a lost stream does not prove a delivered stop has exited.
 	// Preserve the existing lease fence until the recovery cutoff reaches it.
-	if staleRecovery && active == 1 && runStatus == lifecycleCancelled &&
-		outcomeReason == string(runoutcome.ReasonUserCancelled) && executionState != "pending_send" {
+	if staleRecovery && active == 1 && committedStop && executionState != "pending_send" {
 		recoveryTime := time.Now().UTC()
 		if cutoff != nil {
 			recoveryTime = *cutoff

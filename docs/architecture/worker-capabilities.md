@@ -267,11 +267,41 @@ that has delegated carries `minimumTeamProtocolVersion: 1`, roster or not,
 because its history holds the results and an older worker would replay them
 as system text; such a turn is refused rather than handed to one, and a
 consented one freezes only the team-protocol workers' tools. Nothing is joined
-while the parent's
-conversation is being deleted, or when the parent failed or was cancelled; in
-that case its tasks still run to their end today, and the [orchestrator and
-team design](../superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)
-(section 7.5) describes the slice that will cancel them.
+while the parent's conversation is being deleted.
+
+**A turn that fails or is cancelled stops its tasks.** In the transaction that
+fails or cancels a run, every task it delegated that has not finished is
+cancelled as the orchestrator giving up on it: reason `abandoned`, code
+`parent_run_ended`, never `user_cancelled`, even when the user cancelled the
+turn. While the conversation is active, one role-system `delegation_notice`
+message there names whose work was stopped; it is for the user alone, and
+history replay omits it like every role-system message other than a join.
+Nothing is joined, so there is no continuation and no `delegation.finished`.
+The worker running a stopped task is told at once on the paths that report a
+run's end — a cancel, a worker's failure report, its retries running out, an
+approval decision or an approval that could not be delivered, a queue expiry —
+and the stop is held exactly like a user's cancellation: a heartbeat does not
+release the task's execution, nor does an exit report naming no version once the
+task has been retried, a `Ready` that races the stop loses without the
+worker being disconnected and is answered with the stop, and the recovery loop
+tells the worker again while it still holds the task. A completed task is left
+as it was.
+
+**What the user sees.** Every change in what a task's card would show is a
+`delegation.updated` (`TURING_EVENT_TYPE_DELEGATION_UPDATED = 25`) on the
+parent's stream, appended in the transaction that made it: queued, working
+(recovering is shown as working, so losing and regaining a worker reports
+nothing), waiting for an approval (naming it in `approvalId`, and naming the
+newer one when a task already waiting asks for another; once that approval is
+approved the task still shows waiting, naming the next pending approval or none,
+until its worker resumes), and how it ended, each with a one-line summary written by the orchestrator. None is
+appended once the parent's conversation is being deleted. The public
+`TeamService.ListDelegations(parent_session_id)` and `GetDelegation` read the
+same view back, in the order the tasks were asked for: the specialist as the
+task froze it, the task as the model wrote it (`delegations.task`, migration
+0029), the state, the approval it waits on, how it ended, whether it was joined
+and the continuation that answered. The internal facet refuses both. The app
+does not read them yet; its cards are the next slice.
 
 ## Run ownership and version fencing
 

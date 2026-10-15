@@ -55,14 +55,30 @@ type ApprovalTerminalization struct {
 	ApprovalEvent  Event
 	ToolEvent      Event
 	RunFailedEvent Event
-	// JoinEvents and ContinuationRunID are the join the run's failure
-	// triggered when it was a delegated task's last to finish.
-	JoinEvents        []Event
+	// DelegationEvents, StoppedTasks and ContinuationRunID are what the run's
+	// failure did to delegation: a task reporting it failed, a turn stopping
+	// the tasks it started, or a join when it was a task's last to finish.
+	DelegationEvents  []Event
+	StoppedTasks      []string
 	ContinuationRunID string
 	Changed           bool
 }
 
+// CreateApprovalWithEvent is CreateApprovalWithEvents for a caller that wants
+// only the approval.requested event.
 func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, toolCallID string, agentID string, toolName string, argsJSON string, argsHash string, expiresAt string) (ApprovalRecord, Event, error) {
+	record, events, err := r.CreateApprovalWithEvents(ctx, runID, toolCallID, agentID, toolName, argsJSON, argsHash, expiresAt)
+	if err != nil || len(events) == 0 {
+		return record, Event{}, err
+	}
+	return record, events[0], nil
+}
+
+// CreateApprovalWithEvents records an approval and moves its run to waiting.
+// The first event is approval.requested; any after it are the delegation
+// update a waiting task reports on its parent's stream. An approval that
+// already existed returns no events.
+func (r *Repository) CreateApprovalWithEvents(ctx context.Context, runID string, toolCallID string, agentID string, toolName string, argsJSON string, argsHash string, expiresAt string) (ApprovalRecord, []Event, error) {
 	createdAt := now()
 	record := ApprovalRecord{
 		ApprovalID: ids.New("appr"),
@@ -77,7 +93,7 @@ func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, 
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return ApprovalRecord{}, Event{}, err
+		return ApprovalRecord{}, nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	var nullableToolCallID any
@@ -86,57 +102,57 @@ func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, 
 	}
 	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO approvals (id, run_id, tool_call_id, agent_id, tool_name, args_json, args_hash, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`, record.ApprovalID, runID, nullableToolCallID, agentID, toolName, argsJSON, argsHash, expiresAt, createdAt)
 	if err != nil {
-		return ApprovalRecord{}, Event{}, err
+		return ApprovalRecord{}, nil, err
 	}
 	inserted, err := result.RowsAffected()
 	if err != nil {
-		return ApprovalRecord{}, Event{}, err
+		return ApprovalRecord{}, nil, err
 	}
 	if inserted == 0 {
 		var existingID string
 		if err := tx.QueryRowContext(ctx, `SELECT id FROM approvals WHERE run_id = ? AND tool_call_id = ?`, runID, toolCallID).Scan(&existingID); err != nil {
-			return ApprovalRecord{}, Event{}, err
+			return ApprovalRecord{}, nil, err
 		}
 		existing, err := approvalByID(ctx, tx, existingID)
 		if err != nil {
-			return ApprovalRecord{}, Event{}, err
+			return ApprovalRecord{}, nil, err
 		}
 		if existing.AgentID != agentID || existing.ToolName != toolName || existing.ArgsHash != argsHash {
-			return ApprovalRecord{}, Event{}, errors.New("approval tool context conflicts with existing approval")
+			return ApprovalRecord{}, nil, errors.New("approval tool context conflicts with existing approval")
 		}
 		if err := tx.Commit(); err != nil {
-			return ApprovalRecord{}, Event{}, err
+			return ApprovalRecord{}, nil, err
 		}
-		return existing, Event{}, nil
+		return existing, nil, nil
 	}
 	if toolCallID != "" {
 		result, err = tx.ExecContext(ctx, `UPDATE tool_calls SET approval_id = ?, status = 'approval_required' WHERE id = ? AND run_id = ?`, record.ApprovalID, toolCallID, runID)
 		if err != nil {
-			return ApprovalRecord{}, Event{}, err
+			return ApprovalRecord{}, nil, err
 		}
 		if err := expectOneRow(result, "tool call not found"); err != nil {
-			return ApprovalRecord{}, Event{}, err
+			return ApprovalRecord{}, nil, err
 		}
 	}
 	record, err = approvalByID(ctx, tx, record.ApprovalID)
 	if err != nil {
-		return ApprovalRecord{}, Event{}, err
+		return ApprovalRecord{}, nil, err
 	}
 	// approval.requested IS the lifecycle event for running -> waiting approval,
 	// so it carries the resulting state instead of a second state-changed event
 	// landing beside it.
 	var requestTraceID string
 	if err := tx.QueryRowContext(ctx, `SELECT trace_id FROM agent_runs WHERE id = ?`, runID).Scan(&requestTraceID); err != nil {
-		return ApprovalRecord{}, Event{}, err
+		return ApprovalRecord{}, nil, err
 	}
 	requestPayload, err := approvalLifecyclePayloadTx(ctx, tx, record, requestTraceID, "approval.requested")
 	if err != nil {
-		return ApprovalRecord{}, Event{}, err
+		return ApprovalRecord{}, nil, err
 	}
 	transition, err := awaitApprovalTransitionTx(ctx, tx, runID, record.ApprovalID,
 		requestPayload)
 	if err != nil {
-		return ApprovalRecord{}, Event{}, err
+		return ApprovalRecord{}, nil, err
 	}
 	var event Event
 	if len(transition.Events) > 0 {
@@ -149,13 +165,19 @@ func (r *Repository) CreateApprovalWithEvent(ctx context.Context, runID string, 
 		// approval.requested with a state projection and another without.
 		event, err = appendApprovalRunStateEventTx(ctx, tx, record, "approval.requested", transition.State, createdAt)
 		if err != nil {
-			return ApprovalRecord{}, Event{}, err
+			return ApprovalRecord{}, nil, err
 		}
+		// A task's card shows its newest pending approval, so it changed.
+		reported, err := reportDelegationTx(ctx, tx, runID, createdAt)
+		if err != nil {
+			return ApprovalRecord{}, nil, err
+		}
+		transition.Delegation = append(transition.Delegation, reported...)
 	}
 	if err := tx.Commit(); err != nil {
-		return ApprovalRecord{}, Event{}, err
+		return ApprovalRecord{}, nil, err
 	}
-	return record, event, nil
+	return record, append([]Event{event}, transition.Delegation...), nil
 }
 
 // awaitApprovalTransitionTx commits running -> waiting approval.
@@ -327,10 +349,18 @@ func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID st
 	if err != nil {
 		return ApprovalTerminalization{}, err
 	}
+	// A waiting task's card names its newest pending approval, so deciding
+	// that one changed it, though the task waits on until its worker resumes.
+	var delegation []Event
+	if row.lifecycle == lifecycleWaitingApproval {
+		if delegation, err = reportDelegationTx(ctx, tx, record.RunID, decidedAt); err != nil {
+			return ApprovalTerminalization{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return ApprovalTerminalization{}, err
 	}
-	return ApprovalTerminalization{Approval: record, ApprovalEvent: event, Changed: true}, nil
+	return ApprovalTerminalization{Approval: record, ApprovalEvent: event, Changed: true, DelegationEvents: delegation}, nil
 }
 
 func (r *Repository) ExpireApprovalWithEvent(ctx context.Context, approvalID string, decidedAt string) (ApprovalTerminalization, error) {
@@ -498,7 +528,8 @@ func (r *Repository) terminalizeApproval(
 		}
 	}
 	var event Event
-	var joinEvents []Event
+	var delegationEvents []Event
+	var stopped []string
 	var continuation string
 	if !lateRuntimeFailure {
 		// Recovering is a legal source here: a run fenced out of waiting
@@ -528,14 +559,14 @@ func (r *Repository) terminalizeApproval(
 				event = appended
 			}
 		}
-		joinEvents, continuation = terminal.Joined, terminal.ContinuationRunID
+		delegationEvents, stopped, continuation = terminal.Delegation, terminal.StoppedTasks, terminal.ContinuationRunID
 	}
 	if err := tx.Commit(); err != nil {
 		return ApprovalTerminalization{}, err
 	}
 	return ApprovalTerminalization{
 		Approval: record, ApprovalEvent: approvalEvent, ToolEvent: toolEvent, RunFailedEvent: event,
-		JoinEvents: joinEvents, ContinuationRunID: continuation, Changed: true,
+		DelegationEvents: delegationEvents, StoppedTasks: stopped, ContinuationRunID: continuation, Changed: true,
 	}, nil
 }
 

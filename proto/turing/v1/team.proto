@@ -5,6 +5,7 @@ package turing.v1;
 option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
 
 import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
 import "turing/v1/common.proto";
 
 // Where a specialist profile stands. Exactly one applies, checked in this
@@ -136,13 +137,69 @@ message CallTeamToolResponse {
   google.protobuf.Struct result = 1;
 }
 
+// A task a Turing turn delegated to a specialist, as its card shows it.
+message Delegation {
+  string delegation_id = 1;
+  string parent_session_id = 2;
+  string parent_run_id = 3;
+  // The specialist's own hidden session and run. Its transcript is read with
+  // SessionService.ListMessages, and its run is cancelled with
+  // ChatService.CancelRun.
+  string child_session_id = 4;
+  string child_run_id = 5;
+  string profile_id = 6;
+  // As the specialist was when the task was given, not as its profile reads
+  // now.
+  string display_name = 7;
+  string emoji = 8;
+  // What Turing asked for, as the model wrote it. Empty for a delegation
+  // made before it was recorded.
+  string task = 9;
+  // The task's run status: queued, running (recovering is shown as running),
+  // waiting_approval, completed, failed or cancelled.
+  string state = 10;
+  // The approval the task is waiting on, while it waits.
+  string approval_id = 11;
+  // How a failed or cancelled task ended: the failure's or cancellation's
+  // code. parent_run_ended is a task stopped because its turn ended first.
+  string error_code = 12;
+  // Whether the task's result went back to its conversation, and the run
+  // that answered from it.
+  bool joined = 13;
+  string continuation_run_id = 14;
+  google.protobuf.Timestamp created_at = 15;
+  // Absent while the task has not finished.
+  google.protobuf.Timestamp finished_at = 16;
+  // One line in the orchestrator's words, never a model's.
+  string summary = 17;
+}
+
+message ListDelegationsRequest {
+  // A conversation; a specialist's own session has no delegations.
+  string parent_session_id = 1;
+}
+
+// In the order the tasks were asked for.
+message ListDelegationsResponse {
+  repeated Delegation delegations = 1;
+}
+
+message GetDelegationRequest {
+  string delegation_id = 1;
+}
+
 // Like MemoryService, one service with two facets split by method name: the
-// public facet manages profiles, and the internal facet, which only the
-// runtime identity reaches, serves the team tool.
+// public facet manages profiles and reads delegations, and the internal facet,
+// which only the runtime identity reaches, serves the team tool.
 service TeamService {
   rpc ListAgentProfiles(ListAgentProfilesRequest) returns (ListAgentProfilesResponse);
   rpc SetAgentProfileEnabled(SetAgentProfileEnabledRequest) returns (AgentProfile);
   rpc GrantAgentProfile(GrantAgentProfileRequest) returns (AgentProfile);
   rpc ListTeamTools(ListTeamToolsRequest) returns (ListTeamToolsResponse);
   rpc CallTeamTool(CallTeamToolRequest) returns (CallTeamToolResponse);
+  // Every task a conversation delegated. NotFound for a conversation that
+  // does not exist, is being deleted, or is a specialist's own.
+  rpc ListDelegations(ListDelegationsRequest) returns (ListDelegationsResponse);
+  // One delegation. NotFound once its conversation is being deleted.
+  rpc GetDelegation(GetDelegationRequest) returns (Delegation);
 }

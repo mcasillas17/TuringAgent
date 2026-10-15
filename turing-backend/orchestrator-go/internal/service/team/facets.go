@@ -8,8 +8,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// PublicServer is what a client talks to: list, enable and grant profiles.
-// It can never discover the team tool a run is offered.
+// PublicServer is what a client talks to: list, enable and grant profiles,
+// and read what was delegated. It can never discover the team tool a run is
+// offered.
 type PublicServer struct {
 	turingv1.UnimplementedTeamServiceServer
 	service *Server
@@ -35,6 +36,12 @@ func (s *PublicServer) SetAgentProfileEnabled(ctx context.Context, req *turingv1
 func (s *PublicServer) GrantAgentProfile(ctx context.Context, req *turingv1.GrantAgentProfileRequest) (*turingv1.AgentProfile, error) {
 	return s.service.GrantAgentProfile(ctx, req)
 }
+func (s *PublicServer) ListDelegations(ctx context.Context, req *turingv1.ListDelegationsRequest) (*turingv1.ListDelegationsResponse, error) {
+	return s.service.ListDelegations(ctx, req)
+}
+func (s *PublicServer) GetDelegation(ctx context.Context, req *turingv1.GetDelegationRequest) (*turingv1.Delegation, error) {
+	return s.service.GetDelegation(ctx, req)
+}
 func (*PublicServer) ListTeamTools(context.Context, *turingv1.ListTeamToolsRequest) (*turingv1.ListTeamToolsResponse, error) {
 	return nil, status.Error(codes.PermissionDenied, "team tool discovery is internal")
 }
@@ -56,6 +63,12 @@ func (*InternalServer) SetAgentProfileEnabled(context.Context, *turingv1.SetAgen
 	return nil, teamManagementDenied()
 }
 func (*InternalServer) GrantAgentProfile(context.Context, *turingv1.GrantAgentProfileRequest) (*turingv1.AgentProfile, error) {
+	return nil, teamManagementDenied()
+}
+func (*InternalServer) ListDelegations(context.Context, *turingv1.ListDelegationsRequest) (*turingv1.ListDelegationsResponse, error) {
+	return nil, teamManagementDenied()
+}
+func (*InternalServer) GetDelegation(context.Context, *turingv1.GetDelegationRequest) (*turingv1.Delegation, error) {
 	return nil, teamManagementDenied()
 }
 func (s *InternalServer) ListTeamTools(ctx context.Context, req *turingv1.ListTeamToolsRequest) (*turingv1.ListTeamToolsResponse, error) {

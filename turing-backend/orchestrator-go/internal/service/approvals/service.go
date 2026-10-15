@@ -18,6 +18,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/approvalpreview"
 	"github.com/mcasillas17/TuringAgent/turing-backend/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/audit"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	"google.golang.org/grpc/codes"
@@ -30,7 +31,7 @@ type Server struct {
 	bus            *events.Bus
 	audit          *audit.Server
 	notifier       Notifier
-	dispatcher     Dispatcher
+	runControl     RunControl
 	jwtSecret      string
 	approvalTTL    time.Duration
 	previewBaseURL string
@@ -50,11 +51,14 @@ type Notifier interface {
 	NotifyApprovalUpdated(ctx context.Context, runID string, approvalID string, status string, approvalToken string) error
 }
 
-// Dispatcher hands queued work to free workers. A decision that ends a
-// delegated task can queue its parent's continuation, which no worker has
-// ever held, so nothing else would dispatch it.
-type Dispatcher interface {
+// RunControl is the part of the runtime an approval decision's consequences
+// need. A decision that ends a delegated task can queue its parent's
+// continuation, which no worker has ever held, so nothing else would dispatch
+// it; and one that fails a turn stops the tasks it started, which their
+// workers have to be told.
+type RunControl interface {
 	DispatchPending(context.Context) error
+	CancelRun(ctx context.Context, runID string, reason string)
 }
 
 const (
@@ -132,20 +136,27 @@ func (s *Server) SetNotifier(notifier Notifier) {
 	s.notifier = notifier
 }
 
-func (s *Server) SetDispatcher(dispatcher Dispatcher) {
-	s.dispatcher = dispatcher
+func (s *Server) SetRunControl(runControl RunControl) {
+	s.runControl = runControl
 }
 
-// publishJoin publishes a join an approval decision triggered and dispatches
-// the continuation it queued.
-func (s *Server) publishJoin(ctx context.Context, transition repository.ApprovalTerminalization) {
-	for _, event := range transition.JoinEvents {
+// publishDelegation publishes what an approval decision did to delegation,
+// tells the workers of any tasks it stopped, and dispatches a continuation it
+// queued.
+func (s *Server) publishDelegation(ctx context.Context, transition repository.ApprovalTerminalization) {
+	for _, event := range transition.DelegationEvents {
 		s.publishEvent(event)
 	}
-	if transition.ContinuationRunID == "" || s.dispatcher == nil {
+	if s.runControl == nil {
 		return
 	}
-	if err := s.dispatcher.DispatchPending(context.WithoutCancel(ctx)); err != nil {
+	for _, runID := range transition.StoppedTasks {
+		s.runControl.CancelRun(context.WithoutCancel(ctx), runID, runoutcome.CodeParentRunEnded)
+	}
+	if transition.ContinuationRunID == "" {
+		return
+	}
+	if err := s.runControl.DispatchPending(context.WithoutCancel(ctx)); err != nil {
 		log.Printf("approvals: dispatch continuation %s: %v", transition.ContinuationRunID, err)
 	}
 }
@@ -172,12 +183,14 @@ func (s *Server) CreateApprovalForTool(ctx context.Context, runID string, toolCa
 	if err != nil {
 		return "", status.Error(codes.InvalidArgument, "tool args are not valid JSON")
 	}
-	approval, event, err := s.repo.CreateApprovalWithEvent(ctx, runID, toolCallID, agentID, toolName, argsJSON, argsHash, repository.FormatTimestamp(approvalExpiry(time.Now(), s.approvalTTL)))
+	approval, events, err := s.repo.CreateApprovalWithEvents(ctx, runID, toolCallID, agentID, toolName, argsJSON, argsHash, repository.FormatTimestamp(approvalExpiry(time.Now(), s.approvalTTL)))
 	if err != nil {
 		return "", err
 	}
-	if event.EventID != "" {
-		s.publishEvent(event)
+	if len(events) > 0 {
+		for _, event := range events {
+			s.publishEvent(event)
+		}
 		_, _ = s.audit.RecordForExistingRun(ctx, approval.RunID, "runtime", "", "approval.requested", approval.ApprovalID, map[string]any{"toolName": approval.ToolName})
 	}
 	return approval.ApprovalID, nil
@@ -272,6 +285,9 @@ func (s *Server) runChangedApprovalPostCommitEffects(transition repository.Appro
 	if transition.ApprovalEvent.EventID != "" {
 		s.publishEvent(transition.ApprovalEvent)
 	}
+	for _, event := range transition.DelegationEvents {
+		s.publishEvent(event)
+	}
 	s.finishPostCommit(approved, "client", "approval.approved", "approved", approved.ApprovalToken)
 }
 
@@ -304,7 +320,7 @@ func (s *Server) DenyApproval(ctx context.Context, req *turingv1.DenyApprovalReq
 	if transition.RunFailedEvent.EventID != "" {
 		s.publishEvent(transition.RunFailedEvent)
 	}
-	s.publishJoin(ctx, transition)
+	s.publishDelegation(ctx, transition)
 	if denied.Status == "expired" {
 		s.finishPostCommit(denied, "system", "approval.expired", "expired", "")
 		return nil, status.Error(codes.FailedPrecondition, "approval expired")
@@ -392,7 +408,7 @@ func (s *Server) expireApproval(ctx context.Context, approvalID string) (reposit
 	if transition.RunFailedEvent.EventID != "" {
 		s.publishEvent(transition.RunFailedEvent)
 	}
-	s.publishJoin(ctx, transition)
+	s.publishDelegation(ctx, transition)
 	s.finishPostCommit(expiredApproval, "system", "approval.expired", "expired", "")
 	return expiredApproval, nil
 }
@@ -626,7 +642,7 @@ func (s *Server) ConsumeApproval(ctx context.Context, req *turingv1.ConsumeAppro
 		if transition.RunFailedEvent.EventID != "" {
 			s.publishEvent(transition.RunFailedEvent)
 		}
-		s.publishJoin(ctx, transition)
+		s.publishDelegation(ctx, transition)
 		s.finishPostCommit(expiredApproval, "system", "approval.expired", "expired", "")
 		return nil, status.Error(codes.FailedPrecondition, "approval expired")
 	}
@@ -731,7 +747,7 @@ func (s *Server) ConsumeApprovalForThirdParty(
 		if transition.RunFailedEvent.EventID != "" {
 			s.publishEvent(transition.RunFailedEvent)
 		}
-		s.publishJoin(ctx, transition)
+		s.publishDelegation(ctx, transition)
 		s.finishPostCommit(transition.Approval, "system", "approval.expired", "expired", "")
 		return status.Error(codes.FailedPrecondition, "approval expired")
 	}

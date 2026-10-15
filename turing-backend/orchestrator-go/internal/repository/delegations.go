@@ -120,6 +120,8 @@ type CreateDelegationInput struct {
 	SelectedTools []string
 	// Brief is the framed task: the child's first message and its live turn.
 	Brief string
+	// Task is the task as the model wrote it, kept for the delegation's card.
+	Task string
 }
 
 type CreateDelegationResult struct {
@@ -263,10 +265,10 @@ func (r *Repository) CreateDelegation(ctx context.Context, input CreateDelegatio
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO delegations (
 			id, parent_session_id, parent_run_id, parent_tool_call_id, child_session_id, child_run_id,
-			profile_id, profile_revision, args_hash, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			profile_id, profile_revision, args_hash, created_at, task
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		delegation.ID, parentSessionID, input.ParentRunID, input.ToolCallID, delegation.ChildSessionID,
-		delegation.ChildRunID, profile.ProfileID, profile.Revision, input.ArgsHash, anchor.CreatedAt); err != nil {
+		delegation.ChildRunID, profile.ProfileID, profile.Revision, input.ArgsHash, anchor.CreatedAt, input.Task); err != nil {
 		return CreateDelegationResult{}, err
 	}
 	startedPayload, err := json.Marshal(map[string]any{

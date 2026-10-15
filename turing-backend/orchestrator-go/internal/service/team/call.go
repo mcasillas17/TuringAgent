@@ -222,6 +222,7 @@ func (s *Server) admitDelegation(ctx context.Context, runID string, args map[str
 		Model:         resolved.GetResolvedModel(),
 		SelectedTools: tools,
 		Brief:         brief,
+		Task:          task,
 	}, nil
 }
 
