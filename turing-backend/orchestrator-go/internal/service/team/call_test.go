@@ -50,8 +50,14 @@ type delegating struct {
 
 func (h *harness) delegatingRun(t *testing.T, policy string) delegating {
 	t.Helper()
+	return h.delegatingRunAs(t, policy, researchFrontmatter)
+}
+
+// delegatingRunAs is delegatingRun with Research declared by frontmatter.
+func (h *harness) delegatingRunAs(t *testing.T, policy, frontmatter string) delegating {
+	t.Helper()
 	ctx := context.Background()
-	h.write(t, "research", researchFrontmatter)
+	h.write(t, "research", frontmatter)
 	h.activate(t, "research")
 	h.addTool(t, repository.DiscoveredTool{ServerName: "team", ToolName: "team.delegate", SchemaJSON: `{}`, Policy: policy})
 	roster, err := h.server.Roster(ctx)
@@ -174,6 +180,36 @@ func TestCallTeamToolDelegatesToARosterSpecialist(t *testing.T) {
 
 // The arguments are exactly agent, task and an optional context, each within
 // its bytes; anything else is refused and creates nothing.
+// A specialist that may use a tool that leaves the machine gets a task that
+// waits for the user's consent, and declining ends it only when the
+// specialist requires the tool.
+func TestCallTeamToolHoldsATaskForConsent(t *testing.T) {
+	for _, required := range []bool{false, true} {
+		t.Run(map[bool]string{false: "optional", true: "required"}[required], func(t *testing.T) {
+			h := newHarness(t)
+			h.routes.tools[defaultModel] = append(slices.Clone(builtinTools), "integrations/github.get_issue")
+			frontmatter := strings.Replace(researchFrontmatter, "system.time]", "system.time, github.get_issue]", 1)
+			if required {
+				frontmatter += "requires: [github.*]\n"
+			}
+			d := h.delegatingRunAs(t, "safe", frontmatter)
+			response, err := h.delegate(d, "call_1", "", researchTask)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id, _ := response.GetResult().AsMap()["delegation_id"].(string)
+			record, err := h.repo.GetDelegation(context.Background(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if record.State != repository.DelegationWaitingConsent || record.EgressRequired != required ||
+				!slices.Equal(record.EgressTools, []string{"integrations/github.get_issue"}) {
+				t.Fatalf("delegation = %+v, want it waiting for consent to the GitHub tool", record)
+			}
+		})
+	}
+}
+
 func TestCallTeamToolChecksItsArguments(t *testing.T) {
 	h := newHarness(t)
 	d := h.delegatingRun(t, "safe")

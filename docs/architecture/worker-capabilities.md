@@ -224,7 +224,10 @@ skills, the pinned persona and profile withheld, no egress decision, and
 `minimumTeamProtocolVersion: 1`, so only a team-protocol worker claims it. The
 call checks the child's whole route with `ValidateRouting` first, so a child no
 worker could claim is never queued. A retried tool call returns the delegation
-it created.
+it created. A specialist whose tools include some that leave the machine gets
+its local tools in that job and waits, unclaimable, for the user to allow or
+decline the rest for that task; allowing adds them and a decision bound to the
+child run (see [remote-egress-policy.md](remote-egress-policy.md#a-specialists-task)).
 
 **How the runtime offers it.** A worker built with the team client
 (`GeneralAssistantTools.Team`) advertises `team/team.delegate` from a constant,
@@ -326,6 +329,14 @@ may send no further update while it waits. The join
 renders as a collapsed "Results from the team" row and a notice as a status
 line, each in the page's order even when the answer from the results streamed
 in before the resync that brought them returned, and the continuation's answer carries a chip naming who helped.
+A task waiting for consent names the tools it wants on its card. **Allow…**
+reads its disclosure with `PrepareDelegationEgress` and shows the send's consent
+dialog, naming the specialist, and records an allowed one with
+`DecideDelegationEgress`; **Run without** (or **Decline (stops the task)** when
+the specialist requires the tools) records none. One decision per card is open
+at a time, a deleted conversation offers neither, and the card takes the
+orchestrator's answer at once, unless an update already moved the task on. A refusal the orchestrator explains, such as tools that
+changed since they were shown, is reported in its words.
 
 ## Run ownership and version fencing
 

@@ -120,6 +120,7 @@ const AgentProfile$json = {
       '10': 'excludedTools'
     },
     {'1': 'parse_error', '3': 20, '4': 1, '5': 9, '10': 'parseError'},
+    {'1': 'consent_tools', '3': 21, '4': 3, '5': 9, '10': 'consentTools'},
   ],
 };
 
@@ -138,7 +139,7 @@ final $typed_data.Uint8List agentProfileDescriptor = $convert.base64Decode(
     'DXJlc29sdmVkVG9vbHMSLwoTdW5hdmFpbGFibGVfcmVhc29ucxgSIAMoCVISdW5hdmFpbGFibG'
     'VSZWFzb25zEksKDmV4Y2x1ZGVkX3Rvb2xzGBMgAygLMiQudHVyaW5nLnYxLkFnZW50UHJvZmls'
     'ZVRvb2xFeGNsdXNpb25SDWV4Y2x1ZGVkVG9vbHMSHwoLcGFyc2VfZXJyb3IYFCABKAlSCnBhcn'
-    'NlRXJyb3I=');
+    'NlRXJyb3ISIwoNY29uc2VudF90b29scxgVIAMoCVIMY29uc2VudFRvb2xz');
 
 @$core.Deprecated('Use listAgentProfilesRequestDescriptor instead')
 const ListAgentProfilesRequest$json = {
@@ -361,6 +362,9 @@ const Delegation$json = {
       '10': 'finishedAt'
     },
     {'1': 'summary', '3': 17, '4': 1, '5': 9, '10': 'summary'},
+    {'1': 'egress_tools', '3': 18, '4': 3, '5': 9, '10': 'egressTools'},
+    {'1': 'egress_consent', '3': 19, '4': 1, '5': 9, '10': 'egressConsent'},
+    {'1': 'egress_required', '3': 20, '4': 1, '5': 8, '10': 'egressRequired'},
   ],
 };
 
@@ -377,7 +381,9 @@ final $typed_data.Uint8List delegationDescriptor = $convert.base64Decode(
     'aWQYDiABKAlSEWNvbnRpbnVhdGlvblJ1bklkEjkKCmNyZWF0ZWRfYXQYDyABKAsyGi5nb29nbG'
     'UucHJvdG9idWYuVGltZXN0YW1wUgljcmVhdGVkQXQSOwoLZmluaXNoZWRfYXQYECABKAsyGi5n'
     'b29nbGUucHJvdG9idWYuVGltZXN0YW1wUgpmaW5pc2hlZEF0EhgKB3N1bW1hcnkYESABKAlSB3'
-    'N1bW1hcnk=');
+    'N1bW1hcnkSIQoMZWdyZXNzX3Rvb2xzGBIgAygJUgtlZ3Jlc3NUb29scxIlCg5lZ3Jlc3NfY29u'
+    'c2VudBgTIAEoCVINZWdyZXNzQ29uc2VudBInCg9lZ3Jlc3NfcmVxdWlyZWQYFCABKAhSDmVncm'
+    'Vzc1JlcXVpcmVk');
 
 @$core.Deprecated('Use listDelegationsRequestDescriptor instead')
 const ListDelegationsRequest$json = {
@@ -426,3 +432,61 @@ const GetDelegationRequest$json = {
 final $typed_data.Uint8List getDelegationRequestDescriptor = $convert.base64Decode(
     'ChRHZXREZWxlZ2F0aW9uUmVxdWVzdBIjCg1kZWxlZ2F0aW9uX2lkGAEgASgJUgxkZWxlZ2F0aW'
     '9uSWQ=');
+
+@$core.Deprecated('Use prepareDelegationEgressRequestDescriptor instead')
+const PrepareDelegationEgressRequest$json = {
+  '1': 'PrepareDelegationEgressRequest',
+  '2': [
+    {'1': 'delegation_id', '3': 1, '4': 1, '5': 9, '10': 'delegationId'},
+  ],
+};
+
+/// Descriptor for `PrepareDelegationEgressRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List prepareDelegationEgressRequestDescriptor =
+    $convert.base64Decode(
+        'Ch5QcmVwYXJlRGVsZWdhdGlvbkVncmVzc1JlcXVlc3QSIwoNZGVsZWdhdGlvbl9pZBgBIAEoCV'
+        'IMZGVsZWdhdGlvbklk');
+
+@$core.Deprecated('Use prepareDelegationEgressResponseDescriptor instead')
+const PrepareDelegationEgressResponse$json = {
+  '1': 'PrepareDelegationEgressResponse',
+  '2': [
+    {
+      '1': 'disclosure',
+      '3': 1,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RemoteEgressDisclosure',
+      '10': 'disclosure'
+    },
+  ],
+};
+
+/// Descriptor for `PrepareDelegationEgressResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List prepareDelegationEgressResponseDescriptor =
+    $convert.base64Decode(
+        'Ch9QcmVwYXJlRGVsZWdhdGlvbkVncmVzc1Jlc3BvbnNlEkEKCmRpc2Nsb3N1cmUYASABKAsyIS'
+        '50dXJpbmcudjEuUmVtb3RlRWdyZXNzRGlzY2xvc3VyZVIKZGlzY2xvc3VyZQ==');
+
+@$core.Deprecated('Use decideDelegationEgressRequestDescriptor instead')
+const DecideDelegationEgressRequest$json = {
+  '1': 'DecideDelegationEgressRequest',
+  '2': [
+    {'1': 'delegation_id', '3': 1, '4': 1, '5': 9, '10': 'delegationId'},
+    {
+      '1': 'consent',
+      '3': 2,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.RemoteEgressConsent',
+      '10': 'consent'
+    },
+  ],
+};
+
+/// Descriptor for `DecideDelegationEgressRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List decideDelegationEgressRequestDescriptor =
+    $convert.base64Decode(
+        'Ch1EZWNpZGVEZWxlZ2F0aW9uRWdyZXNzUmVxdWVzdBIjCg1kZWxlZ2F0aW9uX2lkGAEgASgJUg'
+        'xkZWxlZ2F0aW9uSWQSOAoHY29uc2VudBgCIAEoCzIeLnR1cmluZy52MS5SZW1vdGVFZ3Jlc3ND'
+        'b25zZW50Ugdjb25zZW50');

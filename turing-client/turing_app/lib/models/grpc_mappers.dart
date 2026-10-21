@@ -286,6 +286,9 @@ class GrpcMappers {
       approvalId: delegation.approvalId,
       summary: delegation.summary,
       continuationRunId: delegation.continuationRunId,
+      egressTools: List.unmodifiable(delegation.egressTools),
+      egressConsent: delegation.egressConsent,
+      egressRequired: delegation.egressRequired,
     );
   }
 
@@ -327,6 +330,7 @@ class GrpcMappers {
         ),
       ),
       resolvedTools: List.unmodifiable(profile.resolvedTools),
+      consentTools: List.unmodifiable(profile.consentTools),
       unavailableReasons: List.unmodifiable(profile.unavailableReasons),
       excludedTools: List.unmodifiable(
         profile.excludedTools.map(

@@ -1080,6 +1080,16 @@ its own consent, never the parent's:
 - The parent's decision is never copied, and the continuation still carries
   none.
 
+**As built (PR 4).** Consent is per delegation (question 6). The hold is a
+condition of the claim query on `delegations.egress_consent = 'pending'`, so
+the waiting task is still a queued run bounded by `TURING_QUEUE_MAX_WAIT_MS`.
+The decision names the task's whole frozen set, local tools included, because
+the runtime requires a decision to name a run's frozen set exactly; only the
+egressing tools have destinations in it. "Required" means a `requires` pattern
+met only by the egressing tools, and declining one cancels the task with
+`egress_consent_declined`. The details are in
+`docs/architecture/remote-egress-policy.md`.
+
 Open question 6 asks whether consent is per delegation or per profile per
 session.
 
@@ -1087,16 +1097,16 @@ session.
 
 | Risk | Control |
 | --- | --- |
-| **Privilege inheritance**: a child gains the parent's tools, egress, memory or approvals. | The child's tools are computed from its granted profile, not copied from the parent (6.3). `enforce_selected_tools` makes the runtime offer and dispatch only the frozen set, built-ins included. The orchestrator's beacon handler denies every out-of-set call, safe built-in reads included, and its memory, integration, remote MCP, team and approval paths refuse them too. Phase 1 children get no egressing tools. A child gets no persona or profile and no egress decision. Its memory access is the profile's `memory` mode only. Its approvals are separate records bound to the child's run, never reused. |
+| **Privilege inheritance**: a child gains the parent's tools, egress, memory or approvals. | The child's tools are computed from its granted profile, not copied from the parent (6.3). `enforce_selected_tools` makes the runtime offer and dispatch only the frozen set, built-ins included. The orchestrator's beacon handler denies every out-of-set call, safe built-in reads included, and its memory, integration, remote MCP, team and approval paths refuse them too. Phase 1 children get no egressing tools; from PR 4 a child gets them only through its own egress decision, recorded when the user allows them for that task (7.8), never the parent's. A child gets no persona or profile. Its memory access is the profile's `memory` mode only. Its approvals are separate records bound to the child's run, never reused. |
 | **Cross-session recall leak**: automatic recall puts the user's private messages from other sessions into a specialist's context. | Child and continuation jobs set `skip_automatic_recall`. Memory reaches a specialist only through the policy-checked `memory.search` tool, and only when its profile says `memory: read`. |
 | **Prompt injection through results**: a child that read hostile content steers Turing. | Results reach Turing only through the join, framed as untrusted data with provenance. They are **never replayed as system text**: `FetchMessages` maps the join to a freshly framed user-role message in every later turn and after reopening. They cannot authorize tools: every tool call the continuation makes still needs its own policy and approval. The continuation has no `team.delegate`, no egressing tools and no automatic recall. |
-| **Lethal trifecta**: private data, untrusted content and an exfiltration path. | Delegation requires a local model route. Children and continuations carry no egressing tools and no egress decision, so no tool or model egress can carry results out. A parent's GitHub consent is never inherited (section 7.8). Inbox, which combines private data with untrusted mail, is permanently local-only until MEM-017. Any exfiltration-capable tool is a mutation behind an approval. |
+| **Lethal trifecta**: private data, untrusted content and an exfiltration path. | Delegation requires a local model route. Continuations carry no egressing tools and no egress decision, and a child carries them only after the user allows them for that task, with a decision bound to the child's run, so no tool or model egress can carry results out without that consent. A parent's GitHub consent is never inherited (section 7.8). Inbox, which combines private data with untrusted mail, is permanently local-only until MEM-017. Any exfiltration-capable tool is a mutation behind an approval. |
 | **Unattended escalation**: an automation spawns children that count as attended runs. | Delegation is refused when the parent has an automation run grant. Children exist only below attended runs. Lifting this needs its own design. |
 | **Profile tampering**: a model or tool rewrites a profile to widen its own authority. | `/team` is mounted read-only into the orchestrator service only. No tool targets it, and the runtime never sees the path. Authority fields are revision-bound, so any edit, even by the user, needs a new grant. |
 | **Profile body as a system-role channel.** | It is user-authored, from a read-only mount, and was explicitly enabled. That is the same trust as `persona.md`. Tool policy and approvals are enforced by the orchestrator service, not by the prompt. |
 | **Brief as a provenance confusion.** | The brief is stored as role `user` with `content_type='delegation_brief'`. The client renders it as "Brief from 🧠 Turing", never as the user's words. Recall and search never index child sessions (section 11). |
 | **Stale worker spawning children.** | `CallTeamTool` carries `assignment_attempt_id`. It must equal the run's current attempt **and** the run must still be live-owned: `running`, `execution_active = 1`, and its job `in_progress` under that attempt. The check is repeated inside the creation transaction (section 7.3, steps 1 and 5). An attempt match alone would admit a worker whose run was already fenced to `recovering`. |
-| **Public writes into a child session.** | A child session's ID is visible to the client, and today's session guard, `requireActiveSessionTx` (`repository/sessions.go:494-507`), checks only `deletion_state`. PR 2 adds `requireChatSessionTx`, which refuses `kind = 'delegation'` with `FailedPrecondition`, to every public RPC that mutates a session or enqueues work: `ChatService.SendMessage` and `PrepareRemoteEgress`; `SessionService.RenameSession`, `ArchiveSession`, `RestoreSession` and `DeleteSession`; and `ExternalAgentService.SetSessionAgent` and `ClearSessionAgent` (`agents.proto:106-107`). On a child session the client may only read it (`GetSession`, `ListMessages`), cancel its run, and decide its approvals. A child session is deleted only by the parent's deletion lifecycle, an internal path that bypasses the guard. |
+| **Public writes into a child session.** | A child session's ID is visible to the client, and today's session guard, `requireActiveSessionTx` (`repository/sessions.go:494-507`), checks only `deletion_state`. PR 2 adds `requireChatSessionTx`, which refuses `kind = 'delegation'` with `FailedPrecondition`, to every public RPC that mutates a session or enqueues work: `ChatService.SendMessage` and `PrepareRemoteEgress`; `SessionService.RenameSession`, `ArchiveSession`, `RestoreSession` and `DeleteSession`; and `ExternalAgentService.SetSessionAgent` and `ClearSessionAgent` (`agents.proto:106-107`). On a child session the client may only read it (`GetSession`, `ListMessages`), cancel its run, decide its approvals, and, through `TeamService.PrepareDelegationEgress` and `DecideDelegationEgress` keyed by the delegation, allow or decline its tools that leave the machine (7.8). A child session is deleted only by the parent's deletion lifecycle, an internal path that bypasses the guard. |
 | **Older worker mis-running team jobs.** | Child jobs, continuation jobs, every parent with a non-empty roster, and every later job in a session that has delegations require `WorkerCapabilities.team_protocol_version >= 1`. An older worker would ignore the enforcement and recall flags and a parent's roster, and would replay a join as system text, so it is never offered these jobs; TUR-010 reports an unroutable wait instead. The minimum is persisted as `minimumTeamProtocolVersion` in the job payload and enforced by `claimRoutingFilterSQL` against `WorkerRoutingCapabilities.TeamProtocolVersion` (7.3, step 8). Enqueue-time `ValidateRouting` alone would not stop the claim, and the tool set cannot either, since an empty set matches every worker. |
 | **Hidden delegation.** | Every delegation emits parent-stream events and renders a card. "View work" shows the child transcript read-only. Delegation rows are kept for the parent session's lifetime. |
 | **Resource exhaustion.** | Depth 1, at most 3 children per run, one round per user turn, size caps on briefs and results, and every existing time and tool budget. |
@@ -1776,8 +1786,8 @@ gates only raising `TURING_MAX_CONCURRENT_RUNS_GENERAL` above 1.
    page?
 6. **Granularity of child egress consent** (section 7.8). Should the user
    confirm every delegation that needs egressing tools, or once per profile per
-   session? The current answer is every delegation, which matches per-send
-   consent for Turing today.
+   session? Answered in PR 4: every delegation, which matches per-send consent
+   for Turing.
 7. **Handing artifacts between sessions.** In Phase 1, files stay in the
    session that wrote them, and results cross only as text (section 7.4). A
    specialist that should edit a file Turing drafted, or keep notes Turing can
