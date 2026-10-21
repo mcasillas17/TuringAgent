@@ -5,6 +5,9 @@
 **Inspected baseline:** `main` at `fcaf6062`, inspected 2026-10-02. Seven of
 the first ten tasks below have shipped; PROV-001, SKL-001 and SEC-001 remain.
 
+**MCP protocol review:** Added 2026-10-15 against `main` at `09d3d5dc`.
+The MCPP adoption plan does not change the shipped capability inventory.
+
 **Supersedes:** `docs/VISION.md` and
 `docs/architecture/2026-08-18-personal-agent-audit.md` as active roadmap
 documents. Those paths remain historical pointers; the earlier records are
@@ -429,13 +432,24 @@ Turing will implement a compatibility profile for
 
 ### MCP
 
-Turing first becomes conformant on its existing bounded tool surface:
-initialization, capability negotiation, ping/liveness, paginated tool listing,
-and tool calls. Resources, prompts, sampling, elicitation, OAuth, and stdio are
-not part of the first conformance task.
+CON-001 shipped the bounded **2025-11-25** tool surface: initialization,
+capability negotiation, ping, paginated client-side tool listing and tool
+calls. This is legacy-era interoperability, not support for every current MCP
+feature. The guarded inventory above retains that precise shipped scope.
+
+The current published specification checked on 2026-10-15 is **2026-07-28**.
+Its stateless request model and optional official Tasks extension change how
+clients call tools and wait; the older experimental Tasks API is not a
+compatible substitute. [MCP protocol evolution](#mcp-protocol-evolution) tracks
+the staged migration, with the full [research and adoption
+plan](architecture/mcp-protocol-adoption.md). All MCPP tasks remain pending.
+Modern discovery must preserve legacy peers, and durable external waits must
+preserve Turing's approvals, egress ownership and worker fencing.
 
 Registry discovery is read-only. Namespace verification is not security
 review. Any discovered server is imported disabled and approval-required.
+Resources, prompts, sampling, elicitation, OAuth and stdio are not silently
+enabled by a protocol revision change.
 
 ### Connecting to Claude, Copilot, Gemini, and ChatGPT
 
@@ -467,6 +481,12 @@ The **first ten** below are the only serial near-term queue. The later
 workstreams are thematic, not a competing sequence. After the first ten,
 independent tasks may proceed in parallel when their dependencies and entry
 gates are satisfied.
+
+The MCPP track is independently scoped protocol maintenance and optional
+capability work. Its legacy-hardening and modern-interoperability slices may
+proceed when their own dependencies are met; they do not wait on native model
+providers or mobile work. Long-running task execution remains behind its
+separate lifecycle, visibility and evaluation gates.
 
 ## First ten implementation tasks
 
@@ -1325,6 +1345,155 @@ gates are satisfied.
   create or rewrite memory, skills, or grants on its own.
 - **Dependencies:** MEM-010, MEM-012, SKL-004, and AUD-001.
 
+### Workstream J - MCP protocol evolution
+
+<a id="mcp-protocol-evolution"></a>
+
+**Status:** Planned. No MCPP capability is delivered by this document.
+The [research and adoption plan](architecture/mcp-protocol-adoption.md)
+records current-versus-legacy protocol facts, the four implementation surfaces,
+immutable sources, and failure/authorization contracts. `CON-001` remains
+shipped in its documented 2025-11-25 scope.
+
+#### MCPP-001 - Honest legacy interoperability and diagnostics
+
+- **Outcome:** Unsupported modern peers and task-only tools fail clearly,
+  without unsafe retries or misleading availability.
+- **Scope:** Typed bounded HTTP/JSON-RPC errors, era-aware retry classification,
+  filtering of legacy `execution.taskSupport: required` tools on both client
+  paths, and explicit premature-stream-closure outcomes.
+- **Likely files:** `turing-backend/mcpwire/`, runtime MCP client and tool
+  registry, orchestrator registry client and discovery.
+- **Acceptance:** Modern-only stock-peer, required-task and disconnect
+  fixtures prove clear failure; no peer-controlled error text or credentials
+  enter persisted status; an uncertain approved mutation is never replayed.
+- **Dependencies:** CON-001 (shipped).
+
+#### MCPP-002 - Modern registry client with legacy fallback
+
+- **Outcome:** Third-party modern-only, dual-era and legacy servers interoperate
+  without changing Turing's policy authority.
+- **Scope:** Safe `server/discover` probing, per-request version/capabilities,
+  required HTTP metadata and validated parameter headers, typed results,
+  structured output/schema bounds and cache hints; modern stream-close
+  cancellation versus legacy notifications/session cleanup.
+- **Likely files:** Shared wire helpers, registry client/transport/discovery,
+  tool descriptor contracts and conformance fixtures.
+- **Acceptance:** An explicit stock-peer matrix covers all three peer modes;
+  header/body mismatch and unsupported capabilities are actionable; unknown
+  result types fail closed; negotiation never retries a mutation; queued-run
+  tool snapshots and credential/endpoint boundaries survive cache refresh.
+- **Dependencies:** MCPP-001 and CON-002 (shipped). No PROV-001 dependency.
+
+#### MCPP-003 - Dual-era bundled MCP transport
+
+- **Outcome:** The runtime and bundled servers support the modern core while
+  retaining the current legacy callers.
+- **Scope:** Runtime client reuse of the era-aware wire layer; modern
+  `server/discover`, exact metadata allowlists, headers and result envelopes
+  in both bundled servers. Tasks are not required for short bundled tools.
+- **Likely files:** Runtime MCP client; `mcp-files` and `mcp-system` server
+  lifecycle/dispatch code; shared wire and stock-client tests.
+- **Acceptance:** Modern and legacy stock clients work; approval/provenance
+  identities and Origin rejection remain intact; error-envelope changes
+  preserve uncertain-effect handling; the system binary stays stdlib-only.
+- **Dependencies:** MCPP-002. Not a prerequisite for MCPP-004.
+
+#### MCPP-004 - Bounded consumption of the modern Tasks extension
+
+- **Outcome:** A registered modern tool can return a durable remote task handle
+  instead of forcing one long HTTP response.
+- **Scope:** Explicit opt-in to `io.modelcontextprotocol/tasks`, sealed handle
+  persistence, bounded inline `tasks/get`, cooperative `tasks/cancel`, task
+  expiry and exact result/error mapping. No `tasks/result` or `tasks/list`.
+- **Likely files:** Registry dispatch, repository/schema, cancellation/recovery
+  paths and schema-pinned task-peer fixtures.
+- **Acceptance:** One logical dispatch issues one initial `tools/call`;
+  task status/result validation, TTL, pacing and cancel-completes races are
+  covered; handles never leak; no traffic follows withdrawal. Inline mode
+  keeps its existing worker slot and does not poll orphaned handles after a
+  run has ended without operation-specific authorization.
+- **Dependencies:** MCPP-002 and CXL-001 (shipped).
+
+#### MCPP-005 - Durable external waits without occupied worker slots
+
+- **Outcome:** Long remote tasks survive restarts and release scarce execution
+  slots while Turing retains authoritative lifecycle truth.
+- **Entry gate:** Review a durable operation-custody design before implementation:
+  post-dispatch consent lifetime, exact endpoint/credential binding, allowed
+  poll/cancel methods, deadlines, revocation/deletion fences, cancellation
+  receipts and result retention. Existing active-run dispatch checks cannot
+  simply be bypassed after the dispatch turn completes.
+- **Scope:** Deferred tool receipts, orchestrator-owned polling, version-gated
+  worker acknowledgement and one generalized join across remote tasks and
+  specialist results. Initially attended local-model turns only; no automatic
+  reuse of a parent's consent for a remote-provider continuation.
+- **Likely files:** Repository/schema and lifecycle, orchestrator poller,
+  runtime job/worker contract, generalized result join and events.
+- **Acceptance:** With concurrency one, another turn finishes while a task
+  waits. Mixed tasks and specialists join once across crashes. Cancellation,
+  revocation and deletion stop unauthorized traffic and late writes. Lost
+  creation responses remain uncertain; no mutation is automatically repeated.
+- **Dependencies:** MCPP-004, TUR-010, CXL-001, and the merged team join/lifecycle
+  foundation through #162. MCPP-006 and EVAL-001 are default-enable gates;
+  AGT-000 still gates increased concurrency.
+
+#### MCPP-006 - Reopenable remote-operation UI
+
+- **Outcome:** Waiting, cancellation acknowledgement and unknown remote outcomes
+  remain visible and distinct after reconnect/reopen.
+- **Scope:** Public operation read/cancel contracts, bounded status messages,
+  cards, durable event reconciliation and continuation attribution; reuse
+  team-client components where their contracts fit.
+- **Likely files:** Operation proto/service, Flutter API/mappers/chat/cards,
+  widget and replay fixtures.
+- **Acceptance:** Every task state and cancellation race has live/reopen parity;
+  no opaque remote handle is shown; a completed dispatch turn can still expose
+  a separately cancellable pending operation without rewriting that run.
+- **Dependencies:** MCPP-005 operation APIs and the team-client delivery slice
+  ([design slice 3](superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md#14-delivery-slices),
+  tracked by [#163](https://github.com/mcasillas17/TuringAgent/pull/163), not
+  merged when this review was written). The UI must ship before deferred
+  execution becomes default-on.
+
+#### MCPP-007 - Explicit user input for MCP operations
+
+- **Outcome:** Supported form elicitation can pause an operation for the user
+  without turning model output into consent.
+- **Scope:** Bounded MRTR and task `inputRequests`/`tasks/update`, user-only
+  answers, destination-bound input disclosure, deduplication and audit.
+  First delivery supports non-mutating tools only.
+- **Likely files:** Wire codec, operation/input services, consent contracts
+  and Flutter forms.
+- **Acceptance:** Negotiated MRTR uses a new request ID, unchanged canonical
+  tool arguments and the issued opaque state; lost-response replay remains
+  forbidden. Undeclared input types, model answers, stale keys and excessive
+  rounds fail closed. Sensitive URL-mode flows are not downgraded to forms.
+- **Dependencies:** MCPP-002, MCPP-004, MCPP-006 and TUR-021's approval boundary.
+  EVAL-001 and explicit input-disclosure evidence gate default enablement.
+
+#### MCPP-008 - Optional Tasks for Turing MCP hosts
+
+- **Outcome:** A future scoped MCP host can observe a Turing operation through
+  task handles without becoming its policy authority.
+- **Scope:** Separate host-facing task mapping, ownership, bounded retention
+  and authentication on every task method; not tasks in bundled tool servers.
+- **Acceptance:** Cross-client task access, guessing and stale credentials fail;
+  cancellation never grants rollback or bypasses the Turing lifecycle.
+- **Dependencies:** MCPX-001 and a reviewed server-task mapping. Optional.
+
+#### MCPP-009 - Versioned protocol and extension evidence
+
+- **Outcome:** Future protocol updates are based on pinned facts and behavior,
+  not SDK version numbers or moving draft pages.
+- **Scope:** Release-time core/extension/schema review, immutable fixture
+  provenance and an independent compatibility matrix.
+- **Acceptance:** Each adopted requirement names its revision and evidence;
+  stable extensions are distinguished from experimental/draft material;
+  missing SDK Tasks support is not mistaken for task conformance.
+- **Dependencies:** None. This is a review checklist, not a recurring
+  automation or an automatic protocol/policy upgrade.
+
 ## Priority spine after the first ten
 
 This is a dependency-aware recommendation, not a second immutable queue:
@@ -1344,6 +1513,13 @@ This is a dependency-aware recommendation, not a second immutable queue:
 10. Add executable extensibility: XTOOL-001 before XTOOL-002.
 11. Add webhook channels, account connectors, longevity, and modalities only
     when their gates pass.
+
+Alongside that product sequence, run the bounded MCP maintenance track:
+MCPP-001 then MCPP-002; MCPP-003 and MCPP-004 can follow independently.
+MCPP-005/006 provide the long-wait capacity and UI benefit, behind explicit
+custody and EVAL-001 gates. MCPP-007 follows with user-input support; MCPP-008
+waits for the separate host bridge. Do not bypass those gates to advertise
+the latest protocol revision.
 
 ## Success measures
 
@@ -1380,7 +1556,10 @@ External product and protocol claims were checked against primary sources:
 - [Hermes messaging](https://hermes-agent.nousresearch.com/docs/user-guide/messaging)
 - [Hermes architecture](https://hermes-agent.nousresearch.com/docs/developer-guide/architecture)
 - [Agent Skills specification](https://agentskills.io/specification)
-- [MCP specification](https://modelcontextprotocol.io/specification/2025-11-25)
+- [MCP implemented legacy specification](https://modelcontextprotocol.io/specification/2025-11-25)
+- [MCP current specification](https://modelcontextprotocol.io/specification/2026-07-28)
+- [MCP Tasks extension, pinned specification](https://github.com/modelcontextprotocol/ext-tasks/blob/899c1bbc869567670093face3591b39c28ce3219/specification/2026-07-28/tasks.md)
+- [MCP adoption research and immutable sources](architecture/mcp-protocol-adoption.md#primary-sources)
 - [MCP Registry](https://modelcontextprotocol.io/registry/about)
 - [A2A 1.0 specification](https://a2a-protocol.org/latest/specification/)
 - [Agent Client Protocol](https://agentclientprotocol.com/overview/introduction)
