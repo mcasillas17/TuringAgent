@@ -21,6 +21,7 @@ import '../utils/protobuf_enum.dart';
 import 'agent_descriptor.dart' as model_agent;
 import 'agent_profile.dart' as model_agent_profile;
 import 'approval.dart' as model_approval;
+import 'delegation.dart' as model_delegation;
 import 'external_agent.dart' as model_external_agent;
 import 'integration.dart' as model_integration;
 import 'automation.dart' as model_automation;
@@ -267,6 +268,24 @@ class GrpcMappers {
       enabled: skill.enabled,
       parseError: skill.parseError,
       folderPath: skill.folderPath,
+    );
+  }
+
+  static model_delegation.Delegation delegationToModel(
+    teampb.Delegation delegation,
+  ) {
+    return model_delegation.Delegation(
+      delegationId: delegation.delegationId,
+      parentRunId: delegation.parentRunId,
+      childSessionId: delegation.childSessionId,
+      childRunId: delegation.childRunId,
+      displayName: delegation.displayName,
+      emoji: delegation.emoji,
+      task: delegation.task,
+      state: delegation.state,
+      approvalId: delegation.approvalId,
+      summary: delegation.summary,
+      continuationRunId: delegation.continuationRunId,
     );
   }
 
@@ -545,6 +564,7 @@ class GrpcMappers {
           : null,
       role: messageRoleToString(message.role),
       content: message.content,
+      contentType: message.contentType.isEmpty ? 'text' : message.contentType,
       sequence: message.sequence.toInt(),
       createdAt: _timestampToDateTime(message.createdAt),
     );
@@ -910,6 +930,12 @@ class GrpcMappers {
         return 'agent.run.state_changed';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_SESSION_DELETED:
         return 'session.deleted';
+      case eventpb.TuringEventType.TURING_EVENT_TYPE_DELEGATION_STARTED:
+        return 'delegation.started';
+      case eventpb.TuringEventType.TURING_EVENT_TYPE_DELEGATION_UPDATED:
+        return 'delegation.updated';
+      case eventpb.TuringEventType.TURING_EVENT_TYPE_DELEGATION_FINISHED:
+        return 'delegation.finished';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_UNSPECIFIED:
       default:
         return 'system';

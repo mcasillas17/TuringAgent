@@ -69,6 +69,7 @@ func (f delegationFixture) input(toolCallID string) CreateDelegationInput {
 		Model:         "llama3.2",
 		SelectedTools: []string{"files/files.read", "system/system.time"},
 		Brief:         testBrief,
+		Task:          "Gather the notes",
 	}
 }
 
@@ -210,7 +211,7 @@ func TestCreateDelegationWritesTheChildAndItsBrief(t *testing.T) {
 	for key, want := range map[string]any{
 		"delegationId": delegation.ID, "parentRunId": f.parent.RunID, "childRunId": delegation.ChildRunID,
 		"childSessionId": delegation.ChildSessionID, "profileId": "research", "displayName": "Research",
-		"emoji": "🔬", "state": "queued", "summary": "Asked 🔬 Research",
+		"emoji": "🔬", "state": "queued", "summary": "Asked 🔬 Research", "task": "Gather the notes",
 	} {
 		if startedPayload[key] != want {
 			t.Fatalf("started payload %s = %v, want %v", key, startedPayload[key], want)

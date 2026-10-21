@@ -82,6 +82,46 @@ void main() {
   });
 
   test(
+    'listDelegations asks for one conversation and maps its cards',
+    () async {
+      final service = _TeamService();
+      final api = await connect(service);
+
+      final delegations = await api.listDelegations(parentSessionId: 'sess_1');
+
+      expect(service.delegationRequests.single.parentSessionId, 'sess_1');
+      expect(
+        service.delegationDeadline,
+        isNotNull,
+        reason: 'chat startup waits on this read',
+      );
+      expect(delegations.map((delegation) => delegation.delegationId), [
+        'dlg_1',
+        'dlg_2',
+      ]);
+      expect(delegations.first.specialist, '🔬 Research');
+      expect(delegations.first.task, 'Gather the notes');
+      expect(delegations.last.state, 'waiting_approval');
+      expect(delegations.last.approvalId, 'appr_1');
+    },
+  );
+
+  test('a server without delegations surfaces as a team error code', () async {
+    final api = await connect(_TeamService(listFailure: 12));
+
+    await expectLater(
+      api.listDelegations(parentSessionId: 'sess_1'),
+      throwsA(
+        isA<TuringApiException>().having(
+          (error) => error.code,
+          'code',
+          'unimplemented',
+        ),
+      ),
+    );
+  });
+
+  test(
     'statuses keep their own codes so the page can tell them apart',
     () async {
       final cases = {
@@ -118,6 +158,8 @@ class _TeamService extends teamgrpc.TeamServiceBase {
   final int? listFailure;
   final grants = <teampb.GrantAgentProfileRequest>[];
   final enables = <teampb.SetAgentProfileEnabledRequest>[];
+  final delegationRequests = <teampb.ListDelegationsRequest>[];
+  DateTime? delegationDeadline;
   Map<String, String> metadata = const {};
 
   @override
@@ -196,18 +238,42 @@ class _TeamService extends teamgrpc.TeamServiceBase {
   ) async =>
       throw grpc.GrpcError.permissionDenied('team tool dispatch is internal');
 
-  // The app does not read delegations yet.
   @override
   Future<teampb.ListDelegationsResponse> listDelegations(
     grpc.ServiceCall call,
     teampb.ListDelegationsRequest request,
-  ) async =>
-      throw grpc.GrpcError.unimplemented('not used by these tests');
+  ) async {
+    delegationRequests.add(request);
+    delegationDeadline = call.deadline;
+    final failure = listFailure;
+    if (failure != null) {
+      throw grpc.GrpcError.custom(failure, 'delegations cannot be listed');
+    }
+    return teampb.ListDelegationsResponse(
+      delegations: [
+        teampb.Delegation(
+          delegationId: 'dlg_1',
+          parentRunId: 'run_1',
+          displayName: 'Research',
+          emoji: '🔬',
+          task: 'Gather the notes',
+          state: 'completed',
+        ),
+        teampb.Delegation(
+          delegationId: 'dlg_2',
+          parentRunId: 'run_1',
+          displayName: 'Inbox',
+          emoji: '📨',
+          state: 'waiting_approval',
+          approvalId: 'appr_1',
+        ),
+      ],
+    );
+  }
 
   @override
   Future<teampb.Delegation> getDelegation(
     grpc.ServiceCall call,
     teampb.GetDelegationRequest request,
-  ) async =>
-      throw grpc.GrpcError.unimplemented('not used by these tests');
+  ) async => throw grpc.GrpcError.unimplemented('not used by these tests');
 }

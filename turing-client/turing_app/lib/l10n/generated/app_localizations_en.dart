@@ -14,6 +14,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String approvalRequestedBy(String requester, String tool) {
+    return '$requester wants to use $tool';
+  }
+
+  @override
   String get approvalLoading => 'Loading approval preview';
 
   @override

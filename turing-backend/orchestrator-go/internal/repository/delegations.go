@@ -281,6 +281,7 @@ func (r *Repository) CreateDelegation(ctx context.Context, input CreateDelegatio
 		"emoji":          profile.Emoji,
 		"state":          delegation.State,
 		"summary":        "Asked " + title,
+		"task":           input.Task,
 	})
 	if err != nil {
 		return CreateDelegationResult{}, err
