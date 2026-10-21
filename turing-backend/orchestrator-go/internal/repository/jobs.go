@@ -1226,25 +1226,6 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	// below stays conditional on the run actually reaching the provider.
 	var routingEvents []Event
 	if storedEgressDecision != nil {
-		destinations := make([]string, 0, 1+len(storedEgressDecision.RemoteMCPServers)+len(storedEgressDecision.IntegrationEndpoints))
-		if storedEgressDecision.EndpointHost != "" {
-			destinations = append(destinations, storedEgressDecision.EndpointHost)
-		}
-		for _, remoteMCP := range storedEgressDecision.RemoteMCPServers {
-			if !slices.Contains(destinations, remoteMCP.EndpointHost) {
-				destinations = append(destinations, remoteMCP.EndpointHost)
-			}
-		}
-		for _, integration := range storedEgressDecision.IntegrationEndpoints {
-			if !slices.Contains(destinations, integration.EndpointHost) {
-				destinations = append(destinations, integration.EndpointHost)
-			}
-		}
-		destination := strings.Join(destinations, ", ")
-		displayCategories := make([]string, len(storedEgressDecision.DataCategories))
-		for index, category := range storedEgressDecision.DataCategories {
-			displayCategories[index] = egressCategoryLabel(category)
-		}
 		skillNotice := ""
 		if len(skillSnapshots) > 0 && slices.Contains(storedEgressDecision.DataCategories, "EGRESS_DATA_CATEGORY_SKILL_CONTENT") {
 			visibleCount := min(len(skillSnapshots), maxEgressSkillNamesInNotice)
@@ -1257,33 +1238,64 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 				skillNotice += fmt.Sprintf(" (+%d more)", remaining)
 			}
 		}
-		notice, err := appendRunNoticeTx(ctx, tx, input.SessionID, runID, traceID,
-			"Sending to "+destination+" — disclosed data categories: "+
-				strings.Join(displayCategories, ", ")+skillNotice+
-				". Data leaves your machine if this run reaches a remote destination",
-			map[string]any{
-				"provider":        storedEgressDecision.Provider,
-				"endpoint":        destination,
-				"model":           storedEgressDecision.Model,
-				"dataCategories":  storedEgressDecision.DataCategories,
-				"decisionVersion": storedEgressDecision.Version,
-			}, createdAt)
+		notice, err := recordEgressConsentTx(ctx, tx, input.SessionID, runID, traceID, *storedEgressDecision,
+			"Sending to ", skillNotice, "Data leaves your machine if this run reaches a remote destination", createdAt)
 		if err != nil {
 			return EnqueueUserMessageResult{}, err
 		}
 		routingEvents = append(routingEvents, notice)
-		if err := recordAuditTx(ctx, tx, runID, "client", "", "egress.consent.recorded", runID,
-			auditPayload(map[string]any{
-				"provider":         storedEgressDecision.Provider,
-				"endpointHost":     destination,
-				"dataCategories":   storedEgressDecision.DataCategories,
-				"decisionVersion":  storedEgressDecision.Version,
-				"consentGrantedAt": storedEgressDecision.ConsentGrantedAt,
-			})); err != nil {
-			return EnqueueUserMessageResult{}, err
-		}
 	}
 	return EnqueueUserMessageResult{SessionID: input.SessionID, UserMessageID: userMessageID, AssistantMessageID: assistantMessageID, RunID: runID, JobID: jobID, TraceID: traceID, Status: "queued", SessionUpdatedEvent: sessionUpdatedEvent, QueuedEvent: queuedEvent, RoutingEvents: routingEvents}, nil
+}
+
+// recordEgressConsentTx tells a run's conversation where its data may go and
+// which categories may leave — lead, the destinations, the categories, then
+// detail and outcome — and writes the redacted egress.consent.recorded audit
+// row. A send's decision and a delegated task's are recorded alike.
+func recordEgressConsentTx(ctx context.Context, tx *sql.Tx, sessionID, runID, traceID string, decision RunEgressDecision,
+	lead, detail, outcome, at string) (Event, error) {
+	destinations := make([]string, 0, 1+len(decision.RemoteMCPServers)+len(decision.IntegrationEndpoints))
+	if decision.EndpointHost != "" {
+		destinations = append(destinations, decision.EndpointHost)
+	}
+	for _, remoteMCP := range decision.RemoteMCPServers {
+		if !slices.Contains(destinations, remoteMCP.EndpointHost) {
+			destinations = append(destinations, remoteMCP.EndpointHost)
+		}
+	}
+	for _, integration := range decision.IntegrationEndpoints {
+		if !slices.Contains(destinations, integration.EndpointHost) {
+			destinations = append(destinations, integration.EndpointHost)
+		}
+	}
+	destination := strings.Join(destinations, ", ")
+	categories := make([]string, len(decision.DataCategories))
+	for index, category := range decision.DataCategories {
+		categories[index] = egressCategoryLabel(category)
+	}
+	notice, err := appendRunNoticeTx(ctx, tx, sessionID, runID, traceID,
+		lead+destination+" — disclosed data categories: "+strings.Join(categories, ", ")+detail+". "+outcome,
+		map[string]any{
+			"provider":        decision.Provider,
+			"endpoint":        destination,
+			"model":           decision.Model,
+			"dataCategories":  decision.DataCategories,
+			"decisionVersion": decision.Version,
+		}, at)
+	if err != nil {
+		return Event{}, err
+	}
+	if err := recordAuditTx(ctx, tx, runID, "client", "", "egress.consent.recorded", runID,
+		auditPayload(map[string]any{
+			"provider":         decision.Provider,
+			"endpointHost":     destination,
+			"dataCategories":   decision.DataCategories,
+			"decisionVersion":  decision.Version,
+			"consentGrantedAt": decision.ConsentGrantedAt,
+		})); err != nil {
+		return Event{}, err
+	}
+	return notice, nil
 }
 
 func egressCategoryLabel(category string) string {
@@ -1403,6 +1415,12 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 								AND earlier_job.status NOT IN ('completed', 'failed', 'cancelled')
 						)
 					)
+			)
+			-- A delegated task waiting for the user's consent to tools that
+			-- leave the machine is not run until they decide.
+			AND NOT EXISTS (
+				SELECT 1 FROM delegations held
+				WHERE held.child_run_id = r.id AND held.egress_consent = 'pending'
 			)` + routingFilter + `
 		ORDER BY j.created_at_ns, j.id
 		LIMIT 1

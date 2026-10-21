@@ -57,6 +57,7 @@ class AgentProfile {
     required this.grantedRevision,
     required this.state,
     required this.resolvedTools,
+    this.consentTools = const [],
     required this.unavailableReasons,
     required this.excludedTools,
     required this.parseError,
@@ -95,6 +96,10 @@ class AgentProfile {
 
   /// The tools a delegated run would receive now, qualified as server/tool.
   final List<String> resolvedTools;
+
+  /// Declared tools that leave the machine: a delegated run receives them
+  /// only after the user consents for that one task.
+  final List<String> consentTools;
   final List<String> unavailableReasons;
   final List<AgentProfileToolExclusion> excludedTools;
   final String parseError;

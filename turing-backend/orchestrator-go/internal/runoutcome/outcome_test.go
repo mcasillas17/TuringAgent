@@ -305,7 +305,7 @@ func TestAbandonedCancellationNeverClaimsUserIntent(t *testing.T) {
 	// enforces still stands — a user-cancelled constructor may only appear
 	// alongside an explicit typed cancel-intent RPC.
 	constructors := exportedFunctionsReturning(t, "Cancellation")
-	want := []string{"AbandonedCancellation", "ParentEndedCancellation", "QueueTimeoutCancellation", "UserCancellation"}
+	want := []string{"AbandonedCancellation", "EgressConsentDeclinedCancellation", "ParentEndedCancellation", "QueueTimeoutCancellation", "UserCancellation"}
 	if !reflect.DeepEqual(constructors, want) {
 		t.Fatalf("exported cancellation constructors = %v, want %v", constructors, want)
 	}
@@ -332,6 +332,17 @@ func TestParentEndedCancellationIsTheOrchestratorGivingUp(t *testing.T) {
 	if cancellation.Reason() != ReasonAbandoned || cancellation.Origin() != OriginOrchestratorInternal ||
 		cancellation.Code() != CodeParentRunEnded || CodeParentRunEnded != "parent_run_ended" {
 		t.Fatalf("parent-ended cancellation = %v/%v/%q", cancellation.Origin(), cancellation.Reason(), cancellation.Code())
+	}
+}
+
+// A delegated task that needs tools the user declined to let it use is not
+// run. The user made the choice, through the client; it still claims no
+// user_cancelled, which stays the explicit cancel RPC's alone.
+func TestEgressConsentDeclinedCancellationIsTheUsersChoiceNotACancel(t *testing.T) {
+	cancellation := EgressConsentDeclinedCancellation()
+	if cancellation.Reason() != ReasonAbandoned || cancellation.Origin() != OriginClientLifecycle ||
+		cancellation.Code() != CodeEgressConsentDeclined || CodeEgressConsentDeclined != "egress_consent_declined" {
+		t.Fatalf("declined-consent cancellation = %v/%v/%q", cancellation.Origin(), cancellation.Reason(), cancellation.Code())
 	}
 }
 

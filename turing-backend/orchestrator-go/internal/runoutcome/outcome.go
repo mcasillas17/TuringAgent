@@ -101,6 +101,9 @@ const (
 	// CodeParentRunEnded is a delegated task stopped because the turn that
 	// asked for it failed or was cancelled before it finished.
 	CodeParentRunEnded = "parent_run_ended"
+	// CodeEgressConsentDeclined is a delegated task that was never run because
+	// the user declined the tools that leave the machine which it required.
+	CodeEgressConsentDeclined = "egress_consent_declined"
 )
 
 // QueueWaitReason is the closed vocabulary persisted in
@@ -255,6 +258,14 @@ func UserCancellation() Cancellation {
 // they did not cancel this task.
 func ParentEndedCancellation() Cancellation {
 	return Cancellation{origin: OriginOrchestratorInternal, code: CodeParentRunEnded, reason: ReasonAbandoned}
+}
+
+// EgressConsentDeclinedCancellation ends a delegated task, never run, whose
+// specialist requires tools that leave the machine the user declined to let it
+// use. The user chose, so the origin is the client; the reason is still
+// abandoned, because user_cancelled belongs to the explicit cancel RPC alone.
+func EgressConsentDeclinedCancellation() Cancellation {
+	return Cancellation{origin: OriginClientLifecycle, code: CodeEgressConsentDeclined, reason: ReasonAbandoned}
 }
 
 // QueueTimeoutCancellation is the cancellation half of TUR-010's configurable

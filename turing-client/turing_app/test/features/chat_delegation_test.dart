@@ -11,6 +11,7 @@ import 'package:turing_flutter_app/models/agent_descriptor.dart';
 import 'package:turing_flutter_app/models/approval.dart';
 import 'package:turing_flutter_app/models/delegation.dart';
 import 'package:turing_flutter_app/models/message.dart';
+import 'package:turing_flutter_app/models/remote_egress.dart';
 import 'package:turing_flutter_app/models/run_cancellation.dart';
 import 'package:turing_flutter_app/models/search_hit.dart';
 import 'package:turing_flutter_app/models/session.dart';
@@ -52,7 +53,283 @@ final _turn = [
   ),
 ];
 
+Delegation _waitingForConsent({bool required = false}) => Delegation(
+  delegationId: 'dlg_1',
+  parentRunId: 'run_parent',
+  childSessionId: 'sess_child',
+  childRunId: 'run_child',
+  displayName: 'Research',
+  emoji: '🔬',
+  task: 'Gather the notes',
+  state: 'waiting_consent',
+  summary: '🔬 Research is waiting for your consent',
+  egressTools: const ['integrations/github.get_issue'],
+  egressConsent: 'pending',
+  egressRequired: required,
+);
+
 void main() {
+  testWidgets('a task waiting for consent asks on its card', (tester) async {
+    final api = _DelegationApi()
+      ..history = _turn
+      ..delegations = [_waitingForConsent()];
+    final events = StreamController<TuringEvent>(sync: true);
+    await _pump(tester, api, events);
+
+    expect(
+      find.text('Wants to use: integrations/github.get_issue'),
+      findsOneWidget,
+    );
+    expect(find.text('Allow…'), findsOneWidget);
+    expect(find.text('Run without'), findsOneWidget);
+    expect(find.text('Cancel'), findsOneWidget);
+    await _close(tester, events);
+  });
+
+  testWidgets('Allow shows what may leave and records the consent', (
+    tester,
+  ) async {
+    final api = _DelegationApi()
+      ..history = _turn
+      ..delegations = [_waitingForConsent()];
+    final events = StreamController<TuringEvent>(sync: true);
+    await _pump(tester, api, events);
+
+    await tester.tap(find.text('Allow…'));
+    await tester.pumpAndSettle();
+    expect(api.prepared, ['dlg_1']);
+    expect(
+      find.text('🔬 Research asks to use these tools for this one task.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Allow'));
+    await tester.pumpAndSettle();
+
+    final decision = api.decided.single;
+    expect(decision.delegationId, 'dlg_1');
+    expect(decision.consent?.challenge, 'signed-challenge');
+    expect(decision.consent?.acknowledgedDataCategories, [
+      EgressDataCategory.toolArguments,
+      EgressDataCategory.toolResults,
+    ]);
+    await _close(tester, events);
+  });
+
+  testWidgets('closing the disclosure decides nothing', (tester) async {
+    final api = _DelegationApi()
+      ..history = _turn
+      ..delegations = [_waitingForConsent()];
+    final events = StreamController<TuringEvent>(sync: true);
+    await _pump(tester, api, events);
+
+    await tester.tap(find.text('Allow…'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel').last);
+    await tester.pumpAndSettle();
+
+    expect(api.decided, isEmpty);
+    await _close(tester, events);
+  });
+
+  testWidgets('Run without declines, once while it is open', (tester) async {
+    final pending = Completer<Delegation>();
+    final api = _DelegationApi()
+      ..history = _turn
+      ..decideAnswer = pending.future
+      ..delegations = [_waitingForConsent()];
+    final events = StreamController<TuringEvent>(sync: true);
+    await _pump(tester, api, events);
+
+    TextButton button(String label) =>
+        tester.widget<TextButton>(find.widgetWithText(TextButton, label));
+    // Two presses in one frame, before the card can disable the button.
+    final runWithout = button('Run without').onPressed!;
+    runWithout();
+    runWithout();
+    await tester.pump();
+    expect(button('Run without').onPressed, isNull);
+    expect(button('Allow…').onPressed, isNull);
+    pending.complete(_withState(_research, 'queued'));
+    await tester.pumpAndSettle();
+
+    expect(api.decided, hasLength(1));
+    expect(api.decided.single.consent, isNull);
+    await _close(tester, events);
+  });
+
+  testWidgets('a task that needs its tools says declining stops it', (
+    tester,
+  ) async {
+    final api = _DelegationApi()
+      ..history = _turn
+      ..decideAnswer = Future.value(_withState(_research, 'cancelled'))
+      ..delegations = [_waitingForConsent(required: true)];
+    final events = StreamController<TuringEvent>(sync: true);
+    await _pump(tester, api, events);
+    final reads = api.listMessagesCalls;
+
+    expect(find.text('Run without'), findsNothing);
+    await tester.tap(find.text('Decline (stops the task)'));
+    await tester.pumpAndSettle();
+
+    expect(api.decided.single.consent, isNull);
+    // The task ended, so the join may be in; the screen asks for it.
+    expect(api.listMessagesCalls, greaterThan(reads));
+    await _close(tester, events);
+  });
+
+  testWidgets('a request that cannot be opened is reported', (tester) async {
+    final api = _DelegationApi()
+      ..history = _turn
+      ..prepareError = const TuringApiException(
+        code: 'failed_precondition',
+        message: 'the tools changed',
+      )
+      ..delegations = [_waitingForConsent()];
+    final events = StreamController<TuringEvent>(sync: true);
+    await _pump(tester, api, events);
+
+    await tester.tap(find.text('Allow…'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text("Could not open 🔬 Research's request: the tools changed"),
+      findsOneWidget,
+    );
+    expect(api.decided, isEmpty);
+    await _close(tester, events);
+  });
+
+  testWidgets('a live task waiting for consent asks on its card', (
+    tester,
+  ) async {
+    final api = _DelegationApi()
+      ..history = _turn
+      ..delegations = const [];
+    final events = StreamController<TuringEvent>(sync: true);
+    await _pump(tester, api, events);
+
+    events.add(
+      _delegationEvent('delegation.started', 1, {
+        'state': 'waiting_consent',
+        'summary': 'Asked 🔬 Research',
+        'egressTools': ['integrations/github.get_issue'],
+        'egressConsent': 'pending',
+        'egressRequired': false,
+      }),
+    );
+    await tester.pump();
+    expect(find.text('Allow…'), findsOneWidget);
+
+    events.add(
+      _delegationEvent('delegation.updated', 2, {
+        'state': 'queued',
+        'summary': '🔬 Research is queued',
+        'egressConsent': 'granted',
+      }),
+    );
+    await tester.pump();
+    expect(find.text('Allow…'), findsNothing);
+    expect(find.text('Run without'), findsNothing);
+    expect(find.textContaining('Wants to use'), findsNothing);
+    await _close(tester, events);
+  });
+
+  testWidgets('a decision shows on the card without waiting for its update', (
+    tester,
+  ) async {
+    final api = _DelegationApi()
+      ..history = _turn
+      ..delegations = [_waitingForConsent()];
+    final events = StreamController<TuringEvent>(sync: true);
+    await _pump(tester, api, events);
+
+    await tester.tap(find.text('Run without'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Run without'), findsNothing);
+    expect(find.text('🔬 Research is queued'), findsOneWidget);
+    await _close(tester, events);
+  });
+
+  testWidgets('a decision older than the task\'s update does not undo it', (
+    tester,
+  ) async {
+    final pending = Completer<Delegation>();
+    final api = _DelegationApi()
+      ..history = _turn
+      ..decideAnswer = pending.future
+      ..delegations = [_waitingForConsent()];
+    final events = StreamController<TuringEvent>(sync: true);
+    await _pump(tester, api, events);
+
+    await tester.tap(find.text('Run without'));
+    await tester.pump();
+    events.add(
+      _delegationEvent('delegation.updated', 1, {
+        'state': 'running',
+        'summary': '🔬 Research is working',
+        'egressConsent': 'declined',
+      }),
+    );
+    await tester.pump();
+    pending.complete(_withState(_research, 'queued'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('🔬 Research is working'), findsOneWidget);
+    expect(find.text('🔬 Research is queued'), findsNothing);
+    await _close(tester, events);
+  });
+
+  testWidgets('an unexplained refusal is not echoed', (tester) async {
+    final api = _DelegationApi()
+      ..history = _turn
+      ..decideError = const TuringApiException(
+        code: 'internal',
+        message: 'database is locked',
+      )
+      ..delegations = [_waitingForConsent()];
+    final events = StreamController<TuringEvent>(sync: true);
+    await _pump(tester, api, events);
+
+    await tester.tap(find.text('Run without'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        "Could not record your decision for 🔬 Research's task. Try again.",
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('database is locked'), findsNothing);
+    await _close(tester, events);
+  });
+
+  testWidgets('a deleted conversation asks for no consent', (tester) async {
+    final api = _DelegationApi()
+      ..history = _turn
+      ..delegations = [_waitingForConsent()];
+    final events = StreamController<TuringEvent>(sync: true);
+    await _pump(tester, api, events);
+    expect(find.text('Allow…'), findsOneWidget);
+
+    events.add(
+      TuringEvent(
+        eventId: 'evt_1',
+        sessionId: 'sess_1',
+        traceId: 'trace_1',
+        sequence: 1,
+        type: 'session.deleted',
+        createdAt: DateTime.utc(2026, 10, 1),
+        payload: const {},
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Allow…'), findsNothing);
+    expect(find.text('Run without'), findsNothing);
+    await _close(tester, events);
+  });
+
   testWidgets('reopening rebuilds each card under the turn that asked', (
     tester,
   ) async {
@@ -921,6 +1198,14 @@ class _DelegationApi extends TuringApi
   String detailsSessionId = 'sess_child';
   String detailsRunId = 'run_child';
 
+  final prepared = <String>[];
+  final decided = <({String delegationId, RemoteEgressConsent? consent})>[];
+  Object? prepareError;
+
+  /// When set, `decideDelegationEgress` answers with it once.
+  Future<Delegation>? decideAnswer;
+  Object? decideError;
+
   /// When set, `cancelRun` answers with it once.
   Future<CancelRunReceipt>? cancelAnswer;
 
@@ -996,6 +1281,41 @@ class _DelegationApi extends TuringApi
     String approvalId, {
     String? reason,
   }) async => {'approvalId': approvalId, 'status': 'denied'};
+
+  @override
+  Future<RemoteEgressDisclosure> prepareDelegationEgress({
+    required String delegationId,
+  }) async {
+    prepared.add(delegationId);
+    final error = prepareError;
+    if (error != null) throw error;
+    return RemoteEgressDisclosure(
+      challenge: 'signed-challenge',
+      provider: 'ollama',
+      model: 'llama3.2',
+      endpoint: '',
+      endpointHost: '',
+      dataCategories: const [
+        EgressDataCategory.toolArguments,
+        EgressDataCategory.toolResults,
+      ],
+      expiresAt: DateTime.now().add(const Duration(minutes: 5)),
+      selectedTools: const ['integrations/github.get_issue'],
+    );
+  }
+
+  @override
+  Future<Delegation> decideDelegationEgress({
+    required String delegationId,
+    RemoteEgressConsent? consent,
+  }) {
+    decided.add((delegationId: delegationId, consent: consent));
+    final error = decideError;
+    if (error != null) return Future.error(error);
+    final answer = decideAnswer;
+    decideAnswer = null;
+    return answer ?? Future.value(_withState(_research, 'queued'));
+  }
 
   @override
   Future<CancelRunReceipt> cancelRun({

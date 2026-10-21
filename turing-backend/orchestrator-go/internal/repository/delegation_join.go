@@ -11,6 +11,7 @@ import (
 
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 // joinedDelegation is one finished task as its join reports it.
@@ -19,6 +20,9 @@ type joinedDelegation struct {
 	displayName, emoji                        string
 	state, outcomeReason, errorCode           string
 	cancellationCode, finishedAt, result      string
+	// egressConsent and egressTools are the consent the task asked for, if
+	// any, and the tools it covered.
+	egressConsent, egressToolsJSON string
 }
 
 // maybeJoinTx is the join, run inside the transaction that terminalizes
@@ -178,7 +182,8 @@ func joinedDelegationsTx(ctx context.Context, tx *sql.Tx, parentRunID string) ([
 			COALESCE(json_extract(job.payload_json, '$.agentProfile.displayName'), d.profile_id),
 			COALESCE(json_extract(job.payload_json, '$.agentProfile.emoji'), ''),
 			child.status, child.outcome_reason, COALESCE(child.error_code, ''),
-			COALESCE(child.cancellation_reason, ''), COALESCE(child.finished_at, ''), COALESCE(reply.content, '')
+			COALESCE(child.cancellation_reason, ''), COALESCE(child.finished_at, ''), COALESCE(reply.content, ''),
+			d.egress_consent, d.egress_tools_json
 		FROM delegations d
 		JOIN agent_runs child ON child.id = d.child_run_id
 		LEFT JOIN jobs job ON job.run_id = child.id
@@ -193,7 +198,8 @@ func joinedDelegationsTx(ctx context.Context, tx *sql.Tx, parentRunID string) ([
 	for rows.Next() {
 		var d joinedDelegation
 		if err := rows.Scan(&d.id, &d.childSessionID, &d.childRunID, &d.profileID, &d.displayName, &d.emoji,
-			&d.state, &d.outcomeReason, &d.errorCode, &d.cancellationCode, &d.finishedAt, &d.result); err != nil {
+			&d.state, &d.outcomeReason, &d.errorCode, &d.cancellationCode, &d.finishedAt, &d.result,
+			&d.egressConsent, &d.egressToolsJSON); err != nil {
 			return nil, err
 		}
 		delegations = append(delegations, d)
@@ -213,9 +219,17 @@ func (d joinedDelegation) code() string {
 	return ""
 }
 
-// outcome is how a task ended, in the orchestrator's words.
+// outcome is how a task ended, in the orchestrator's words, and which tools
+// the user declined to let it use. It says nothing of whether the task ran
+// without them: one declined and then cancelled never ran at all.
 func (d joinedDelegation) outcome() string {
-	return delegationStatePhrase(d.state, d.outcomeReason, d.code())
+	outcome := delegationStatePhrase(d.state, d.outcomeReason, d.code())
+	var declined []string
+	if d.egressConsent == egressConsentDeclined && d.code() != runoutcome.CodeEgressConsentDeclined &&
+		json.Unmarshal([]byte(d.egressToolsJSON), &declined) == nil && len(declined) > 0 {
+		outcome += "; you declined its use of " + strings.Join(declined, ", ")
+	}
+	return outcome
 }
 
 // delegationResultsContent is a join's stored, unframed content: each task in

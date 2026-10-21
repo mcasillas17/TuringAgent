@@ -17,7 +17,7 @@ import 'package:protobuf/well_known_types/google/protobuf/struct.pb.dart' as $1;
 import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
     as $2;
 
-import 'common.pbenum.dart' as $3;
+import 'common.pb.dart' as $3;
 import 'team.pbenum.dart';
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
@@ -124,6 +124,7 @@ class AgentProfile extends $pb.GeneratedMessage {
     $core.Iterable<$core.String>? unavailableReasons,
     $core.Iterable<AgentProfileToolExclusion>? excludedTools,
     $core.String? parseError,
+    $core.Iterable<$core.String>? consentTools,
   }) {
     final result = AgentProfile._();
     if (profileId != null) result.profileId = profileId;
@@ -147,6 +148,7 @@ class AgentProfile extends $pb.GeneratedMessage {
       result.unavailableReasons.addAll(unavailableReasons);
     if (excludedTools != null) result.excludedTools.addAll(excludedTools);
     if (parseError != null) result.parseError = parseError;
+    if (consentTools != null) result.consentTools.addAll(consentTools);
     return result;
   }
 
@@ -186,6 +188,7 @@ class AgentProfile extends $pb.GeneratedMessage {
     ..pPM<AgentProfileToolExclusion>(19, _omitFieldNames ? '' : 'excludedTools',
         subBuilder: AgentProfileToolExclusion.$_createMessage)
     ..aOS(20, _omitFieldNames ? '' : 'parseError')
+    ..pPS(21, _omitFieldNames ? '' : 'consentTools')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -363,6 +366,12 @@ class AgentProfile extends $pb.GeneratedMessage {
   $core.bool hasParseError() => $_has(19);
   @$pb.TagNumber(20)
   void clearParseError() => $_clearField(20);
+
+  /// Declared tools that leave the machine (connected-account integrations
+  /// and remote MCP servers), qualified as server/tool. A delegated run
+  /// receives them only after the user consents for that one task.
+  @$pb.TagNumber(21)
+  $pb.PbList<$core.String> get consentTools => $_getList(20);
 }
 
 class ListAgentProfilesRequest extends $pb.GeneratedMessage {
@@ -1052,6 +1061,9 @@ class Delegation extends $pb.GeneratedMessage {
     $2.Timestamp? createdAt,
     $2.Timestamp? finishedAt,
     $core.String? summary,
+    $core.Iterable<$core.String>? egressTools,
+    $core.String? egressConsent,
+    $core.bool? egressRequired,
   }) {
     final result = Delegation._();
     if (delegationId != null) result.delegationId = delegationId;
@@ -1071,6 +1083,9 @@ class Delegation extends $pb.GeneratedMessage {
     if (createdAt != null) result.createdAt = createdAt;
     if (finishedAt != null) result.finishedAt = finishedAt;
     if (summary != null) result.summary = summary;
+    if (egressTools != null) result.egressTools.addAll(egressTools);
+    if (egressConsent != null) result.egressConsent = egressConsent;
+    if (egressRequired != null) result.egressRequired = egressRequired;
     return result;
   }
 
@@ -1106,6 +1121,9 @@ class Delegation extends $pb.GeneratedMessage {
     ..aOM<$2.Timestamp>(16, _omitFieldNames ? '' : 'finishedAt',
         subBuilder: $2.Timestamp.$_createMessage)
     ..aOS(17, _omitFieldNames ? '' : 'summary')
+    ..pPS(18, _omitFieldNames ? '' : 'egressTools')
+    ..aOS(19, _omitFieldNames ? '' : 'egressConsent')
+    ..aOB(20, _omitFieldNames ? '' : 'egressRequired')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -1300,6 +1318,33 @@ class Delegation extends $pb.GeneratedMessage {
   $core.bool hasSummary() => $_has(16);
   @$pb.TagNumber(17)
   void clearSummary() => $_clearField(17);
+
+  /// Tools that leave the machine which the task asked the user's consent
+  /// for, qualified as server/tool, and where that consent stands: pending,
+  /// granted or declined, or empty when the task needed none. While it is
+  /// pending the state is waiting_consent and no worker can take the task.
+  @$pb.TagNumber(18)
+  $pb.PbList<$core.String> get egressTools => $_getList(17);
+
+  @$pb.TagNumber(19)
+  $core.String get egressConsent => $_getSZ(18);
+  @$pb.TagNumber(19)
+  set egressConsent($core.String value) => $_setString(18, value);
+  @$pb.TagNumber(19)
+  $core.bool hasEgressConsent() => $_has(18);
+  @$pb.TagNumber(19)
+  void clearEgressConsent() => $_clearField(19);
+
+  /// Declining ends the task instead of running it without egress_tools,
+  /// because the specialist requires them.
+  @$pb.TagNumber(20)
+  $core.bool get egressRequired => $_getBF(19);
+  @$pb.TagNumber(20)
+  set egressRequired($core.bool value) => $_setBool(19, value);
+  @$pb.TagNumber(20)
+  $core.bool hasEgressRequired() => $_has(19);
+  @$pb.TagNumber(20)
+  void clearEgressRequired() => $_clearField(20);
 }
 
 class ListDelegationsRequest extends $pb.GeneratedMessage {
@@ -1473,6 +1518,219 @@ class GetDelegationRequest extends $pb.GeneratedMessage {
   $core.bool hasDelegationId() => $_has(0);
   @$pb.TagNumber(1)
   void clearDelegationId() => $_clearField(1);
+}
+
+class PrepareDelegationEgressRequest extends $pb.GeneratedMessage {
+  factory PrepareDelegationEgressRequest({
+    $core.String? delegationId,
+  }) {
+    final result = PrepareDelegationEgressRequest._();
+    if (delegationId != null) result.delegationId = delegationId;
+    return result;
+  }
+
+  PrepareDelegationEgressRequest._();
+
+  factory PrepareDelegationEgressRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      PrepareDelegationEgressRequest()..mergeFromBuffer(data, registry);
+  factory PrepareDelegationEgressRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      PrepareDelegationEgressRequest()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'PrepareDelegationEgressRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: PrepareDelegationEgressRequest.$_createMessage)
+    ..aOS(1, _omitFieldNames ? '' : 'delegationId')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PrepareDelegationEgressRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PrepareDelegationEgressRequest copyWith(
+          void Function(PrepareDelegationEgressRequest) updates) =>
+      super.copyWith(
+              (message) => updates(message as PrepareDelegationEgressRequest))
+          as PrepareDelegationEgressRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use PrepareDelegationEgressRequest() / PrepareDelegationEgressRequest.new instead')
+  static PrepareDelegationEgressRequest create() =>
+      PrepareDelegationEgressRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      PrepareDelegationEgressRequest._();
+  @$core.override
+  PrepareDelegationEgressRequest createEmptyInstance() =>
+      PrepareDelegationEgressRequest._();
+  @$core.pragma('dart2js:noInline')
+  static PrepareDelegationEgressRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<PrepareDelegationEgressRequest>(
+          PrepareDelegationEgressRequest.$_createMessage);
+  static PrepareDelegationEgressRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get delegationId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set delegationId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasDelegationId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearDelegationId() => $_clearField(1);
+}
+
+class PrepareDelegationEgressResponse extends $pb.GeneratedMessage {
+  factory PrepareDelegationEgressResponse({
+    $3.RemoteEgressDisclosure? disclosure,
+  }) {
+    final result = PrepareDelegationEgressResponse._();
+    if (disclosure != null) result.disclosure = disclosure;
+    return result;
+  }
+
+  PrepareDelegationEgressResponse._();
+
+  factory PrepareDelegationEgressResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      PrepareDelegationEgressResponse()..mergeFromBuffer(data, registry);
+  factory PrepareDelegationEgressResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      PrepareDelegationEgressResponse()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'PrepareDelegationEgressResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: PrepareDelegationEgressResponse.$_createMessage)
+    ..aOM<$3.RemoteEgressDisclosure>(1, _omitFieldNames ? '' : 'disclosure',
+        subBuilder: $3.RemoteEgressDisclosure.$_createMessage)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PrepareDelegationEgressResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  PrepareDelegationEgressResponse copyWith(
+          void Function(PrepareDelegationEgressResponse) updates) =>
+      super.copyWith(
+              (message) => updates(message as PrepareDelegationEgressResponse))
+          as PrepareDelegationEgressResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use PrepareDelegationEgressResponse() / PrepareDelegationEgressResponse.new instead')
+  static PrepareDelegationEgressResponse create() =>
+      PrepareDelegationEgressResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      PrepareDelegationEgressResponse._();
+  @$core.override
+  PrepareDelegationEgressResponse createEmptyInstance() =>
+      PrepareDelegationEgressResponse._();
+  @$core.pragma('dart2js:noInline')
+  static PrepareDelegationEgressResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<PrepareDelegationEgressResponse>(
+          PrepareDelegationEgressResponse.$_createMessage);
+  static PrepareDelegationEgressResponse? _defaultInstance;
+
+  /// Where the task's tool calls may go and what may leave the machine. Its
+  /// challenge is accepted only by DecideDelegationEgress for this
+  /// delegation, never by ChatService.SendMessage.
+  @$pb.TagNumber(1)
+  $3.RemoteEgressDisclosure get disclosure => $_getN(0);
+  @$pb.TagNumber(1)
+  set disclosure($3.RemoteEgressDisclosure value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasDisclosure() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearDisclosure() => $_clearField(1);
+  @$pb.TagNumber(1)
+  $3.RemoteEgressDisclosure ensureDisclosure() => $_ensure(0);
+}
+
+class DecideDelegationEgressRequest extends $pb.GeneratedMessage {
+  factory DecideDelegationEgressRequest({
+    $core.String? delegationId,
+    $3.RemoteEgressConsent? consent,
+  }) {
+    final result = DecideDelegationEgressRequest._();
+    if (delegationId != null) result.delegationId = delegationId;
+    if (consent != null) result.consent = consent;
+    return result;
+  }
+
+  DecideDelegationEgressRequest._();
+
+  factory DecideDelegationEgressRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      DecideDelegationEgressRequest()..mergeFromBuffer(data, registry);
+  factory DecideDelegationEgressRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      DecideDelegationEgressRequest()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'DecideDelegationEgressRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: DecideDelegationEgressRequest.$_createMessage)
+    ..aOS(1, _omitFieldNames ? '' : 'delegationId')
+    ..aOM<$3.RemoteEgressConsent>(2, _omitFieldNames ? '' : 'consent',
+        subBuilder: $3.RemoteEgressConsent.$_createMessage)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  DecideDelegationEgressRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  DecideDelegationEgressRequest copyWith(
+          void Function(DecideDelegationEgressRequest) updates) =>
+      super.copyWith(
+              (message) => updates(message as DecideDelegationEgressRequest))
+          as DecideDelegationEgressRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use DecideDelegationEgressRequest() / DecideDelegationEgressRequest.new instead')
+  static DecideDelegationEgressRequest create() =>
+      DecideDelegationEgressRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      DecideDelegationEgressRequest._();
+  @$core.override
+  DecideDelegationEgressRequest createEmptyInstance() =>
+      DecideDelegationEgressRequest._();
+  @$core.pragma('dart2js:noInline')
+  static DecideDelegationEgressRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<DecideDelegationEgressRequest>(
+          DecideDelegationEgressRequest.$_createMessage);
+  static DecideDelegationEgressRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get delegationId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set delegationId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasDelegationId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearDelegationId() => $_clearField(1);
+
+  /// Present, and acknowledged, to let the task use the disclosed tools.
+  /// Absent to decline: the task runs without them, or is ended when its
+  /// specialist requires them.
+  @$pb.TagNumber(2)
+  $3.RemoteEgressConsent get consent => $_getN(1);
+  @$pb.TagNumber(2)
+  set consent($3.RemoteEgressConsent value) => $_setField(2, value);
+  @$pb.TagNumber(2)
+  $core.bool hasConsent() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearConsent() => $_clearField(2);
+  @$pb.TagNumber(2)
+  $3.RemoteEgressConsent ensureConsent() => $_ensure(1);
 }
 
 const $core.bool _omitFieldNames =
