@@ -1248,8 +1248,8 @@ class TuringGrpcApi
       options: grpc.CallOptions(timeout: _startupUnaryTimeout),
     );
     for (final provider in response.providers) {
+      // The backend reports a provider enabled exactly when it lists models.
       if (provider.provider != commonpb.ModelProvider.MODEL_PROVIDER_OLLAMA ||
-          !provider.enabled ||
           provider.models.isEmpty) {
         continue;
       }
