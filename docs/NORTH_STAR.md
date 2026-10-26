@@ -761,11 +761,13 @@ separate lifecycle, visibility and evaluation gates.
   scope. Design:
   [host command](superpowers/specs/2026-10-25-turing-host-command-design.md).
 - **Acceptance:** Every `.env` setting a user should change is changed through
-  the command; a refused or unchecked value leaves `.env` unchanged; no image
-  that predates `check-config` is run with an argument; no secret appears on a
-  command line, and the app's key appears only in `connect` and `setup`;
-  nothing in Turing can invoke the command, and the orchestrator gains no
-  Docker control.
+  the command; a value a service's configuration check refuses, or that could
+  not be checked, leaves `.env` unchanged (the generated app key is the one
+  value written without that check); a refusal only a running orchestrator can
+  see is reported on apply, with a restore offered; no image that predates
+  `check-config` is run with an argument; no secret appears on a command line,
+  and the app's key appears only in `connect` and `setup`; nothing in Turing
+  can invoke the command, and the orchestrator gains no Docker control.
 - **Dependencies:** None.
 
 #### OPS-002 - Server settings in the app

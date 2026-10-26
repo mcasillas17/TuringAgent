@@ -152,12 +152,15 @@ decides it.
 | Specialist profiles and skills | `team/<id>/AGENT.md`, `skills/**/SKILL.md` | Files, as today | Forms in the app (OPS-003) |
 
 The deprecated `OLLAMA_*` names that #169 replaced are migrated, not exposed.
-The services read an old name only while the new name is empty, so saving any
-setting follows the same rule:
+Saving any setting follows the services' own fallback, against the candidate
+being saved:
 
-- When the new name is empty or absent and the old name holds a value, the
-  value moves to the new name.
-- In every case the old line is then removed.
+- An old value moves to its new name only where the services would read it:
+  the new name is empty or absent and, for `OLLAMA_BASE_URL`, the engine is
+  `ollama`. The runtime deliberately ignores an old Ollama URL for the
+  `openai` engine, so moving it there would turn a startup refusal into a
+  local route pointing at the wrong server.
+- In every case the old line is then removed, because nothing else reads it.
 
 `turing status` reports any deprecated key that is left.
 
@@ -348,7 +351,10 @@ To keep it, add to ~/.ssh/config:
 **`--rotate-key`:**
 
 1. Generate a new key in the existing format (`tk_` and 64 hex characters).
-2. Save it.
+2. Save it with the locked, atomic writer from section 6.5, skipping
+   `check-config`. The value is generated in a fixed format, and recovering
+   from a lost device must not depend on Docker or on current images, just as
+   `rotate-client-key.sh` needs only the file today.
 3. On confirmation, apply it with `compose.sh up -d`, which recreates the
    orchestrator with the new environment. `docker compose restart` would not
    reload it.
@@ -403,9 +409,11 @@ one of their rules.
   - It prints the first error, which names the key, and exits 0 or 1.
 - **Unknown arguments are refused.** From the same change on, both binaries
   refuse any argument they do not know, instead of ignoring it.
-- **Images say they can check.** Both Dockerfiles gain the label
-  `org.turing.check-config="1"`. The command reads it with
-  `docker image inspect` before every check.
+- **Images say which checks they support.** Both Dockerfiles gain the label
+  `org.turing.checks`, listing the check subcommands the binary knows:
+  `config` from PR 1, and `config,engine` on the runtime from PR 3. The
+  command reads it with `docker image inspect` before every check, and runs
+  a check only when it is listed.
   - An image without the label was built before this change. Its binary would
     ignore `check-config` and start a second orchestrator on the live
     database, which would fence the runs in flight.
@@ -461,6 +469,11 @@ one of their rules.
    - `compose.sh up -d` recreates only the containers whose configuration
      changed, then the command waits for health. The prompt warns that a
      restart stops a reply in progress.
+   - If the user declines, the change takes effect at the next start. When the
+     change sets `TURING_QUEUE_MAX_WAIT_MS` or `TURING_JOB_REAPER_INTERVAL_MS`
+     to 0, the command warns that the next start may refuse it, because only
+     a running orchestrator can see whether a delegated task is waiting for
+     consent.
    - The command keeps the previous bytes until that wait passes. If it
      fails, for example because of a refusal that needs the database or a
      port taken in the meantime, the command offers to restore the previous
@@ -477,10 +490,18 @@ one of their rules.
   `--build` through.
 - **`logs`** runs `compose.sh logs --tail 200` with friendly service names
   (`orchestrator`, `runtime`, `files`, `system`) and `-f` to follow.
-- **`compose.sh` change.** `ps` and `logs` join `down`, `stop`, `rm` and
-  `kill` as subcommands that skip the launch checks. They start nothing, and
-  `status` and `logs` must work on exactly the install whose bind sources are
-  broken.
+- **`compose.sh` change.** `ps` and `logs` become a separate read-only group.
+  They start nothing, and `status` and `logs` must work on exactly the install
+  whose bind sources are broken, so this group:
+  - skips the launch checks;
+  - runs Compose once, with `--env-file .env` when the file exists and
+    without it otherwise;
+  - never retries.
+
+  They do not join the `down`, `stop`, `rm` and `kill` list, because that
+  list also retries a failed command without `.env`. Ctrl-C makes
+  `docker compose logs -f` exit with status 130, which that retry would read
+  as an unreadable `.env`, restarting the stream behind the user's prompt.
 
 `dev.sh` remains the foreground development loop.
 
@@ -515,8 +536,10 @@ Everything else is as written there:
 - `check` running the runtime's `check-engine` subcommand in the runtime
   container. Its four steps are reachable, model present, streaming and tool
   calling, and the probe sends a fixed prompt with no user data.
-  - `check-engine` follows the same rules as `check-config`: the image label
-    is checked first, and unknown arguments are refused.
+  - `check-engine` follows the same rules as `check-config`: it runs only
+    when the image's `org.turing.checks` lists `engine`, so an image built
+    before PR 3 asks for a rebuild rather than failing on an unknown
+    argument; and unknown arguments are refused.
 
 ## 7. Security and trust boundaries
 
@@ -598,10 +621,11 @@ Every new behaviour has a test that fails without it.
     the roots pointing at missing paths, the check passes or fails on
     configuration alone, and creates nothing;
   - an unknown argument is refused;
-  - the Dockerfile label is present (a test reads the Dockerfiles).
-- **Stale images:** with a fake Docker reporting an image with no label, or
-  no image, `config set` runs no `compose run`, saves nothing and names
-  `turing start --build`.
+  - the Dockerfile label lists exactly the subcommands the binary dispatches
+    (a test reads the Dockerfiles and the dispatch table).
+- **Stale images:** with a fake Docker reporting an image with no label, a
+  label not listing the check, or no image, `config set` and `engine check`
+  run no `compose run`, save nothing and name `turing start --build`.
 - **Registry:**
   - every `.env.example` key and every Compose environment key is classified;
   - editable keys are read only by the orchestrator and the runtime;
@@ -620,6 +644,17 @@ Every new behaviour has a test that fails without it.
     test-only dependency) for `$NAME`, `${NAME}`, ` #`, leading and trailing
     spaces, apostrophes, JSON, a value cleared to empty, and a value
     `is_compose_literal_safe` refuses.
+- **`config`:**
+  - a secret value on the command line is refused, for `set` and for the
+    secret-map form;
+  - `--stdin` reads a secret;
+  - `get` refuses a secret;
+  - `show` prints each secret only as `set` or `not set`;
+  - `set` and `unset` of `TURING_AGENT_API_KEYS.<name>` change only that
+    agent's entry, keep the JSON valid, and print no key;
+  - an `OLLAMA_BASE_URL` left from before is moved for the `ollama` engine
+    and dropped for `openai`;
+  - declining apply with a zero queue bound prints the warning.
 - **Validate before writing:**
   - a refusal leaves `.env` byte-identical;
   - an infrastructure failure leaves it byte-identical and says "not
@@ -636,9 +671,12 @@ Every new behaviour has a test that fails without it.
     re-applies;
   - a successful apply recreates the changed services with the new
     environment, through `up -d` rather than `restart`.
-- **`compose.sh`:** `ps` and `logs` succeed with a broken bind source, in the
-  existing fake-Docker harness (`scripts/compose_test.go`). `run` with
-  `check-config` still goes through the launch checks.
+- **`compose.sh`,** in the existing fake-Docker harness
+  (`scripts/compose_test.go`):
+  - `ps` and `logs` succeed with a broken bind source;
+  - a fake Docker exiting 130 on `logs` is called exactly once, with no retry
+    message;
+  - `run` with `check-config` still goes through the launch checks.
 - **Lifecycle and status** run with a fake command runner that records
   `compose.sh` calls and returns fixture output, plus a fake health server.
   The checks cover:
@@ -651,8 +689,8 @@ Every new behaviour has a test that fails without it.
   - over SSH without the owner's exception, no tunnel and the SEC-001 note;
   - with it, the tunnel text from a fixture `SSH_CONNECTION`, including a
     non-22 port;
-  - rotation in the key format, applied through `up -d`, and the declined
-    path.
+  - rotation in the key format, written without `check-config` or Docker,
+    applied through `up -d`, and the declined path.
 - **Root:** running as root is refused before anything is read or written.
 - **`setup`:**
   - scripted answers to every prompt;
@@ -689,7 +727,8 @@ one item.
      `turing config` rather than an editor.
 3. **PR 3: set up for the machine.**
    - `engine detect`, `use` and `check`.
-   - The runtime's `check-engine`.
+   - The runtime's `check-engine`, with `engine` added to its image's
+     `org.turing.checks` label.
    - `setup`.
    - `docs/architecture/local-engines.md`.
    - This closes slice 2 of the engine design.
