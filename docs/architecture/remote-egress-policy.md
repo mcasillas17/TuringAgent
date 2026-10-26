@@ -148,9 +148,13 @@ GitHub connection covers any repository that credential can reach. Because
 enabled integration tools may be called by a local run, connecting an account
 makes every local send ask until those tools are disabled.
 
-Ollama is the local provider identity, so its endpoint is restricted to
-`localhost`, `host.docker.internal`, or a loopback IP literal. Pointing the
-Ollama configuration at a remote host is refused instead of bypassing consent.
+The local provider (`ollama` on the wire, whichever engine serves it: Ollama
+or an OpenAI-compatible server) is restricted to `localhost`,
+`host.docker.internal`, or a loopback IP literal, by `TURING_LOCAL_ENGINE_URL`
+(or the deprecated `OLLAMA_BASE_URL`). Pointing it at another host, including
+a machine on the same network, is refused instead of bypassing consent. The
+OpenAI-compatible local engine never presents a remote endpoint, so a run
+consented to as remote can never resolve to it.
 
 Runs already queued for a remote provider before TUR-003 have no run-owned
 egress decision. Migration 0014 terminalizes them with

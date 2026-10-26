@@ -184,10 +184,16 @@ Remove it, or that tool, and the next worker registration restores the name. See
 - Flutter, on a release bundling Dart 3.10.4 or newer (`turing_app`'s
   pubspec declares `sdk: ^3.10.4`; `flutter pub get` fails below it). CI
   tracks the `stable` channel rather than pinning a version.
-- Ollama running on the host for the default local model path
+- A local inference engine on the host: Ollama for the default path, or any
+  OpenAI-compatible server on the same machine (ds4, llama.cpp's
+  `llama-server`, LM Studio, Lemonade, vLLM) with `TURING_LOCAL_ENGINE=openai`
 - A non-root host account for backend initialization and Compose launches
 
 By default, containers reach Ollama at `http://host.docker.internal:11434`.
+On Linux, `host.docker.internal` is the Docker bridge's gateway, so the
+engine must listen there, not only on `127.0.0.1`; avoid `0.0.0.0` on a
+shared network. The app's model picker shows the local route as
+**Local · <engine>**, and Settings names the engine and model serving it.
 
 ## Install and run
 
@@ -367,10 +373,12 @@ Common values:
 | `TURING_QUEUE_TIMEOUT_POLICY` | What happens when a queue bound is reached: `fail` (default) or `cancel`. Both are final; there is no paused state to resume from |
 | `HOST_UID` / `HOST_GID` | Current canonical non-root host IDs, managed by `init.sh` and overridden safely by `scripts/compose.sh` at launch |
 | `ORCHESTRATOR_GRPC_ADDR` | Internal orchestrator gRPC address, usually `turing-orchestrator:3001` |
-| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model endpoint and default model. The URL must use localhost, `host.docker.internal`, or a loopback IP literal; remote Ollama hosts are refused rather than treated as local |
+| `TURING_LOCAL_ENGINE` | The local route's engine protocol: `ollama` (default) or `openai`, for any OpenAI-compatible server on this machine. Either way a send needs no remote-egress consent; any other value stops startup |
+| `TURING_LOCAL_ENGINE_URL` / `TURING_LOCAL_MODEL` | The engine's address and the local model. The URL must use localhost, `host.docker.internal`, or a loopback IP literal; anything else is refused rather than treated as local. For `ollama` it defaults to `http://host.docker.internal:11434`; for `openai` it is required and is the base the API hangs off, such as `http://host.docker.internal:8000/v1`. Replaces `OLLAMA_BASE_URL` / `OLLAMA_MODEL`, which still work while the new key is empty and are logged as deprecated |
+| `TURING_LOCAL_ENGINE_API_KEY` / `TURING_LOCAL_ENGINE_LABEL` | A bearer value for a server that wants one (`openai` only; refused for `ollama`), and the engine's display name, such as `ds4` (default `Ollama` or `OpenAI-compatible`; 1–64 printable bytes). The label is shown in the app and never routed on |
 | `OLLAMA_KEEP_ALIVE` | How long Ollama holds the model in memory after a reply (default `2m`). Accepts a duration (`30s`, `2m`) or whole seconds (`-1` = forever); integer spellings are canonicalized before JSON encoding. Sent per request, so it does not depend on Ollama's own env var. Keep it above `TURING_APPROVAL_WAIT_TIMEOUT_MS` or the model unloads mid-run |
-| `OLLAMA_CONTEXT_WINDOW_TOKENS` | Local context cap and advertised routing ceiling (default `32768`). Must be `1`–`16777216`; invalid values fail startup. Every request sends an explicit `options.num_ctx` rounded up to a stable power-of-two bucket covering admitted prompt bytes plus output reserve, never above this cap. Small requests avoid the maximum allocation, nearby turns reuse the same runner, and the runtime never relies on the host default |
-| `OLLAMA_MAX_OUTPUT_TOKENS` | Answer reservation inside the Ollama window (default `2048`). Must be positive and smaller than the window; sent as `options.num_predict`. A `length` stop emits a durable run notice |
+| `TURING_LOCAL_CONTEXT_WINDOW_TOKENS` | Local context cap and advertised routing ceiling (default `32768`; replaces `OLLAMA_CONTEXT_WINDOW_TOKENS`). Must be `1`–`16777216`; invalid values fail startup. On Ollama every request sends an explicit `options.num_ctx` rounded up to a stable power-of-two bucket covering admitted prompt bytes plus output reserve, never above this cap. Small requests avoid the maximum allocation, nearby turns reuse the same runner, and the runtime never relies on the host default. For an OpenAI-compatible engine keep it at or below the context the server was started with |
+| `TURING_LOCAL_MAX_OUTPUT_TOKENS` | Answer reservation inside the local window (default `2048`; replaces `OLLAMA_MAX_OUTPUT_TOKENS`). Must be positive and smaller than the window; sent as Ollama's `options.num_predict` or an OpenAI-compatible engine's `max_tokens`. A `length` stop emits a durable run notice |
 | `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL` | Optional OpenAI-compatible model configuration. A keyed non-loopback URL must use HTTPS; plaintext is limited to exact localhost/loopback IP development endpoints, and redirects are refused |
 | `OPENAI_CONTEXT_WINDOW_TOKENS` | Local window and advertised routing ceiling for OpenAI-compatible models and routed external agents (default `32768`, same validation). Match it to the configured model; it is enforced locally and is not sent as Ollama's `num_ctx` |
 | `OPENAI_MAX_OUTPUT_TOKENS` | Answer reservation for OpenAI-compatible requests (default `2048`); sent as `max_completion_tokens` for o1/o3/o4 and GPT-5 model families, and `max_tokens` otherwise. A `length` stop emits the same durable notice |
