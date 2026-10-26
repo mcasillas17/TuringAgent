@@ -1052,6 +1052,7 @@ func TestLoadConfigUsesVerificationModelPrecedence(t *testing.T) {
 	}
 	t.Setenv("TURING_CLIENT_API_KEY", "")
 	t.Setenv("OLLAMA_MODEL", "")
+	t.Setenv("TURING_LOCAL_MODEL", "")
 	t.Setenv("TURING_VERIFY_MODEL", "")
 	t.Setenv("TURING_JOB_TIMEOUT_MS", "")
 
@@ -1073,6 +1074,37 @@ func TestLoadConfigUsesVerificationModelPrecedence(t *testing.T) {
 	}
 	if cfg.model != "verify-model" {
 		t.Fatalf("model = %q, want verify-model", cfg.model)
+	}
+}
+
+// The smoke client sends the model the services would resolve: the
+// TURING_LOCAL_MODEL name wins over OLLAMA_MODEL from any source.
+func TestLoadConfigPrefersTheLocalModelName(t *testing.T) {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(workingDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(".env", []byte("TURING_CLIENT_API_KEY=token\nTURING_LOCAL_MODEL=local-model\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TURING_CLIENT_API_KEY", "")
+	t.Setenv("TURING_VERIFY_MODEL", "")
+	t.Setenv("TURING_LOCAL_MODEL", "")
+	t.Setenv("OLLAMA_MODEL", "ambient-old-model")
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.model != "local-model" {
+		t.Fatalf("model = %q, want local-model", cfg.model)
 	}
 }
 
