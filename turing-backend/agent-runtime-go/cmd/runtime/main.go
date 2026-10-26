@@ -34,10 +34,13 @@ var checks = []servicecmd.Check{{Name: "config", Run: checkConfig}}
 // refuses every request, so the check can never reach an engine.
 var offlineClient = &http.Client{Transport: refuseRequests{}}
 
+// errOffline is what every request through offlineClient fails with.
+var errOffline = errors.New("check-config makes no network requests")
+
 type refuseRequests struct{}
 
 func (refuseRequests) RoundTrip(*http.Request) (*http.Response, error) {
-	return nil, errors.New("check-config makes no network requests")
+	return nil, errOffline
 }
 
 func main() {

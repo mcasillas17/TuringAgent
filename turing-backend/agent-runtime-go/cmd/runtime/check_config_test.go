@@ -189,13 +189,20 @@ func TestTheRuntimeImageLabelsItsChecks(t *testing.T) {
 
 // The check builds the providers with a client that refuses every request,
 // so a constructor that ever started reaching the network would fail here
-// rather than quietly calling the engine.
+// rather than quietly calling the engine. The request goes to a live server,
+// which any ordinary client would reach.
 func TestRuntimeCheckConfigUsesAClientThatRefusesRequests(t *testing.T) {
-	request, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:1/", nil)
+	h := newOfflineHarness(t)
+	request, err := http.NewRequest(http.MethodGet, h.engineURL+"/v1/models", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := offlineClient.Do(request); err == nil {
-		t.Fatal("offlineClient made a request")
+	response, err := offlineClient.Do(request)
+	if err == nil {
+		_ = response.Body.Close()
+		t.Fatal("offlineClient reached the server")
+	}
+	if !errors.Is(err, errOffline) {
+		t.Fatalf("offlineClient.Do error = %v, want the offline refusal", err)
 	}
 }
