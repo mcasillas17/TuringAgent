@@ -684,3 +684,16 @@ func TestLoadFromEnvValidatesTheEngineLabel(t *testing.T) {
 		wantConfigError(t, map[string]string{"TURING_LOCAL_ENGINE_LABEL": label}, "TURING_LOCAL_ENGINE_LABEL")
 	}
 }
+
+// Ollama's keep-alive is Ollama's alone: an OpenAI-compatible engine never
+// reads it, so a value only Ollama would reject does not stop that engine.
+func TestLoadFromEnvIgnoresOllamaKeepAliveForTheOpenAIEngine(t *testing.T) {
+	cfg := loadLocal(t, map[string]string{
+		"TURING_LOCAL_ENGINE": "openai", "TURING_LOCAL_ENGINE_URL": "http://localhost:8000/v1",
+		"OLLAMA_KEEP_ALIVE": "forever",
+	})
+	if cfg.OllamaKeepAlive != "" {
+		t.Fatalf("keep-alive = %q, want none for the OpenAI engine", cfg.OllamaKeepAlive)
+	}
+	wantConfigError(t, map[string]string{"OLLAMA_KEEP_ALIVE": "forever"}, "OLLAMA_KEEP_ALIVE")
+}

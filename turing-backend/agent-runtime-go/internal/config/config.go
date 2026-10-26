@@ -90,15 +90,19 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if runtimeToken == "" {
 		return Config{}, errors.New("missing required env var TURING_RUNTIME_TOKEN")
 	}
-	keepAlive := defaultString(getenv("OLLAMA_KEEP_ALIVE"), defaultOllamaKeepAlive)
-	// Validated here so a bad value is a startup failure with a readable message
-	// rather than an opaque "Ollama returned 400" on every chat request.
-	if _, err := llm.EncodeOllamaKeepAlive(keepAlive); err != nil {
-		return Config{}, fmt.Errorf("OLLAMA_KEEP_ALIVE: %w", err)
-	}
 	local, err := loadLocalEngine(getenv)
 	if err != nil {
 		return Config{}, err
+	}
+	// Ollama's alone: only that engine reads it. Validated here so a bad value
+	// is a startup failure with a readable message rather than an opaque
+	// "Ollama returned 400" on every chat request.
+	keepAlive := ""
+	if local.LocalEngine == llm.LocalEngineOllama {
+		keepAlive = defaultString(getenv("OLLAMA_KEEP_ALIVE"), defaultOllamaKeepAlive)
+		if _, err := llm.EncodeOllamaKeepAlive(keepAlive); err != nil {
+			return Config{}, fmt.Errorf("OLLAMA_KEEP_ALIVE: %w", err)
+		}
 	}
 	openAIContextWindowTokens, openAIMaxOutputTokens, err := providerContextLimits(
 		getenv,
