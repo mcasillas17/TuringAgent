@@ -15,7 +15,7 @@ import (
 
 func TestAdvertisedModelsReflectConfiguredProvidersAndContextLimits(t *testing.T) {
 	cfg := config.Config{
-		OllamaModel: "qwen", OllamaContextWindowTokens: 32768,
+		LocalModel: "qwen", LocalContextWindowTokens: 32768,
 		OpenAIModel: "gpt", OpenAIContextWindowTokens: 128000,
 	}
 	models := advertisedModels(cfg)

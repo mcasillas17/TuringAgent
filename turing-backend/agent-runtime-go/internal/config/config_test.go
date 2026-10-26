@@ -79,8 +79,8 @@ func TestLoadFromEnvLoadsBoundedAdvertisedContextLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.OllamaContextWindowTokens != 32768 || cfg.OpenAIContextWindowTokens != 128000 {
-		t.Fatalf("context limits = %d/%d", cfg.OllamaContextWindowTokens, cfg.OpenAIContextWindowTokens)
+	if cfg.LocalContextWindowTokens != 32768 || cfg.OpenAIContextWindowTokens != 128000 {
+		t.Fatalf("context limits = %d/%d", cfg.LocalContextWindowTokens, cfg.OpenAIContextWindowTokens)
 	}
 	for _, value := range []string{"-1", "2147483648"} {
 		t.Run(value, func(t *testing.T) {
@@ -383,8 +383,8 @@ func TestLoadFromEnvDefaultsTheLocalModelAndKeepAlive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromEnv failed: %v", err)
 	}
-	if cfg.OllamaModel != "qwen2.5:7b" {
-		t.Fatalf("OllamaModel = %q, want qwen2.5:7b", cfg.OllamaModel)
+	if cfg.LocalModel != "qwen2.5:7b" {
+		t.Fatalf("LocalModel = %q, want qwen2.5:7b", cfg.LocalModel)
 	}
 	// Must stay above TURING_APPROVAL_WAIT_TIMEOUT_MS (71s) or the model is
 	// evicted mid-run while the user decides on an approval, costing a reload
@@ -433,8 +433,8 @@ func TestLoadFromEnvHonoursExplicitModelAndKeepAlive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromEnv failed: %v", err)
 	}
-	if cfg.OllamaModel != "llama3.2" || cfg.OllamaKeepAlive != "5m" {
-		t.Fatalf("overrides ignored: model=%q keepAlive=%q", cfg.OllamaModel, cfg.OllamaKeepAlive)
+	if cfg.LocalModel != "llama3.2" || cfg.OllamaKeepAlive != "5m" {
+		t.Fatalf("overrides ignored: model=%q keepAlive=%q", cfg.LocalModel, cfg.OllamaKeepAlive)
 	}
 }
 
@@ -445,14 +445,14 @@ func TestLoadFromEnvDefaultsProviderContextWindows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromEnv failed: %v", err)
 	}
-	if cfg.OllamaContextWindowTokens != 32768 {
-		t.Fatalf("OllamaContextWindowTokens = %d, want 32768", cfg.OllamaContextWindowTokens)
+	if cfg.LocalContextWindowTokens != 32768 {
+		t.Fatalf("LocalContextWindowTokens = %d, want 32768", cfg.LocalContextWindowTokens)
 	}
 	if cfg.OpenAIContextWindowTokens != 32768 {
 		t.Fatalf("OpenAIContextWindowTokens = %d, want 32768", cfg.OpenAIContextWindowTokens)
 	}
-	if cfg.OllamaMaxOutputTokens != 2048 {
-		t.Fatalf("OllamaMaxOutputTokens = %d, want 2048", cfg.OllamaMaxOutputTokens)
+	if cfg.LocalMaxOutputTokens != 2048 {
+		t.Fatalf("LocalMaxOutputTokens = %d, want 2048", cfg.LocalMaxOutputTokens)
 	}
 	if cfg.OpenAIMaxOutputTokens != 2048 {
 		t.Fatalf("OpenAIMaxOutputTokens = %d, want 2048", cfg.OpenAIMaxOutputTokens)
@@ -470,14 +470,14 @@ func TestLoadFromEnvHonoursProviderContextWindowOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromEnv failed: %v", err)
 	}
-	if cfg.OllamaContextWindowTokens != 4096 {
-		t.Fatalf("OllamaContextWindowTokens = %d, want 4096", cfg.OllamaContextWindowTokens)
+	if cfg.LocalContextWindowTokens != 4096 {
+		t.Fatalf("LocalContextWindowTokens = %d, want 4096", cfg.LocalContextWindowTokens)
 	}
 	if cfg.OpenAIContextWindowTokens != 65536 {
 		t.Fatalf("OpenAIContextWindowTokens = %d, want 65536", cfg.OpenAIContextWindowTokens)
 	}
-	if cfg.OllamaMaxOutputTokens != 512 || cfg.OpenAIMaxOutputTokens != 4096 {
-		t.Fatalf("output limits = %d/%d, want 512/4096", cfg.OllamaMaxOutputTokens, cfg.OpenAIMaxOutputTokens)
+	if cfg.LocalMaxOutputTokens != 512 || cfg.OpenAIMaxOutputTokens != 4096 {
+		t.Fatalf("output limits = %d/%d, want 512/4096", cfg.LocalMaxOutputTokens, cfg.OpenAIMaxOutputTokens)
 	}
 }
 
@@ -539,5 +539,144 @@ func TestLoadFromEnvValidatesProviderOutputReservations(t *testing.T) {
 				t.Fatalf("LoadFromEnv error = %v, want output reservation validation", err)
 			}
 		})
+	}
+}
+
+func loadLocal(t *testing.T, env map[string]string) Config {
+	t.Helper()
+	env["TURING_RUNTIME_TOKEN"] = "internal"
+	cfg, err := LoadFromEnv(mapEnv(env))
+	if err != nil {
+		t.Fatalf("LoadFromEnv failed: %v", err)
+	}
+	return cfg
+}
+
+func wantDefaultLocalEngine(t *testing.T, cfg Config) {
+	t.Helper()
+	if cfg.LocalEngine != "ollama" || cfg.LocalEngineURL != "http://host.docker.internal:11434" ||
+		cfg.LocalModel != "qwen2.5:7b" || cfg.LocalEngineLabel != "Ollama" || cfg.LocalEngineAPIKey != "" ||
+		cfg.LocalContextWindowTokens != 32768 || cfg.LocalMaxOutputTokens != 2048 || len(cfg.DeprecatedKeys) != 0 {
+		t.Fatalf("local engine = %+v", cfg)
+	}
+}
+
+func TestLoadFromEnvDefaultsTheLocalEngine(t *testing.T) {
+	wantDefaultLocalEngine(t, loadLocal(t, map[string]string{}))
+}
+
+// Compose passes every key through, empty when the operator set nothing, and
+// the service owns the defaults: an empty value is no value.
+func TestLoadFromEnvTreatsEmptyValuesAsUnset(t *testing.T) {
+	env := map[string]string{}
+	for _, key := range []string{
+		"TURING_LOCAL_ENGINE", "TURING_LOCAL_ENGINE_URL", "TURING_LOCAL_ENGINE_API_KEY", "TURING_LOCAL_ENGINE_LABEL",
+		"TURING_LOCAL_MODEL", "TURING_LOCAL_CONTEXT_WINDOW_TOKENS", "TURING_LOCAL_MAX_OUTPUT_TOKENS",
+		"OLLAMA_BASE_URL", "OLLAMA_MODEL", "OLLAMA_CONTEXT_WINDOW_TOKENS", "OLLAMA_MAX_OUTPUT_TOKENS",
+	} {
+		env[key] = ""
+	}
+	wantDefaultLocalEngine(t, loadLocal(t, env))
+}
+
+func TestLoadFromEnvSelectsTheOpenAIEngine(t *testing.T) {
+	cfg := loadLocal(t, map[string]string{
+		"TURING_LOCAL_ENGINE":         "openai",
+		"TURING_LOCAL_ENGINE_URL":     "http://host.docker.internal:8000/v1",
+		"TURING_LOCAL_MODEL":          "deepseek-chat",
+		"TURING_LOCAL_ENGINE_API_KEY": "dsv4-local",
+		"TURING_LOCAL_ENGINE_LABEL":   "ds4",
+	})
+	if cfg.LocalEngine != "openai" || cfg.LocalEngineURL != "http://host.docker.internal:8000/v1" ||
+		cfg.LocalModel != "deepseek-chat" || cfg.LocalEngineAPIKey != "dsv4-local" || cfg.LocalEngineLabel != "ds4" {
+		t.Fatalf("local engine = %+v", cfg)
+	}
+	if cfg := loadLocal(t, map[string]string{
+		"TURING_LOCAL_ENGINE": "openai", "TURING_LOCAL_ENGINE_URL": "http://localhost:8000/v1",
+	}); cfg.LocalEngineLabel != "OpenAI-compatible" {
+		t.Fatalf("default label = %q, want OpenAI-compatible", cfg.LocalEngineLabel)
+	}
+}
+
+func wantConfigError(t *testing.T, env map[string]string, key string) {
+	t.Helper()
+	env["TURING_RUNTIME_TOKEN"] = "internal"
+	if _, err := LoadFromEnv(mapEnv(env)); err == nil || !strings.Contains(err.Error(), key) {
+		t.Fatalf("LoadFromEnv(%v) error = %v, want one naming %s", env, err, key)
+	}
+}
+
+func TestLoadFromEnvRefusesAnUnknownEngine(t *testing.T) {
+	wantConfigError(t, map[string]string{"TURING_LOCAL_ENGINE": "vllm"}, "TURING_LOCAL_ENGINE")
+}
+
+// An OpenAI-compatible engine has no default address, and an Ollama URL left
+// over from before is not one.
+func TestLoadFromEnvRequiresAURLForTheOpenAIEngine(t *testing.T) {
+	wantConfigError(t, map[string]string{
+		"TURING_LOCAL_ENGINE": "openai", "OLLAMA_BASE_URL": "http://host.docker.internal:11434",
+	}, "TURING_LOCAL_ENGINE_URL")
+}
+
+// The local route is consent-free because its engine is on this machine, so
+// an address anywhere else is refused, whatever the engine.
+func TestLoadFromEnvRefusesANonLocalEngineURL(t *testing.T) {
+	for _, engine := range []string{"ollama", "openai"} {
+		for _, url := range []string{"http://192.168.1.20:8000/v1", "https://api.example.com/v1"} {
+			wantConfigError(t, map[string]string{
+				"TURING_LOCAL_ENGINE": engine, "TURING_LOCAL_ENGINE_URL": url,
+			}, "TURING_LOCAL_ENGINE_URL")
+		}
+	}
+}
+
+func TestLoadFromEnvFallsBackToTheOllamaNames(t *testing.T) {
+	cfg := loadLocal(t, map[string]string{
+		"OLLAMA_BASE_URL":              "http://localhost:11500",
+		"OLLAMA_MODEL":                 "llama3.2",
+		"OLLAMA_CONTEXT_WINDOW_TOKENS": "16384",
+		"OLLAMA_MAX_OUTPUT_TOKENS":     "1024",
+	})
+	if cfg.LocalEngineURL != "http://localhost:11500" || cfg.LocalModel != "llama3.2" ||
+		cfg.LocalContextWindowTokens != 16384 || cfg.LocalMaxOutputTokens != 1024 {
+		t.Fatalf("local engine = %+v", cfg)
+	}
+	want := []string{
+		"OLLAMA_BASE_URL is deprecated; set TURING_LOCAL_ENGINE_URL instead",
+		"OLLAMA_MODEL is deprecated; set TURING_LOCAL_MODEL instead",
+		"OLLAMA_CONTEXT_WINDOW_TOKENS is deprecated; set TURING_LOCAL_CONTEXT_WINDOW_TOKENS instead",
+		"OLLAMA_MAX_OUTPUT_TOKENS is deprecated; set TURING_LOCAL_MAX_OUTPUT_TOKENS instead",
+	}
+	if strings.Join(cfg.DeprecatedKeys, "|") != strings.Join(want, "|") {
+		t.Fatalf("deprecated = %q, want %q", cfg.DeprecatedKeys, want)
+	}
+}
+
+func TestLoadFromEnvPrefersTheNewNames(t *testing.T) {
+	cfg := loadLocal(t, map[string]string{
+		"OLLAMA_BASE_URL": "http://localhost:11500", "TURING_LOCAL_ENGINE_URL": "http://localhost:11600",
+		"OLLAMA_MODEL": "llama3.2", "TURING_LOCAL_MODEL": "qwen3:8b",
+		"OLLAMA_CONTEXT_WINDOW_TOKENS": "16384", "TURING_LOCAL_CONTEXT_WINDOW_TOKENS": "65536",
+		"OLLAMA_MAX_OUTPUT_TOKENS": "1024", "TURING_LOCAL_MAX_OUTPUT_TOKENS": "4096",
+	})
+	if cfg.LocalEngineURL != "http://localhost:11600" || cfg.LocalModel != "qwen3:8b" ||
+		cfg.LocalContextWindowTokens != 65536 || cfg.LocalMaxOutputTokens != 4096 || len(cfg.DeprecatedKeys) != 0 {
+		t.Fatalf("local engine = %+v", cfg)
+	}
+}
+
+// A key only an OpenAI-compatible server takes is refused for Ollama, and the
+// refusal never repeats the key.
+func TestLoadFromEnvRefusesAnAPIKeyForTheOllamaEngine(t *testing.T) {
+	env := map[string]string{"TURING_RUNTIME_TOKEN": "internal", "TURING_LOCAL_ENGINE_API_KEY": "secret-xyz"}
+	_, err := LoadFromEnv(mapEnv(env))
+	if err == nil || !strings.Contains(err.Error(), "TURING_LOCAL_ENGINE_API_KEY") || strings.Contains(err.Error(), "secret-xyz") {
+		t.Fatalf("LoadFromEnv error = %v, want a refusal naming the key but not its value", err)
+	}
+}
+
+func TestLoadFromEnvValidatesTheEngineLabel(t *testing.T) {
+	for _, label := range []string{"a\nb", strings.Repeat("a", 65), "\xff"} {
+		wantConfigError(t, map[string]string{"TURING_LOCAL_ENGINE_LABEL": label}, "TURING_LOCAL_ENGINE_LABEL")
 	}
 }

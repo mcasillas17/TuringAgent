@@ -22,11 +22,14 @@ const (
 	maxHeartbeatInterval            = 30 * time.Second
 )
 
-// defaultOllamaModel keeps this side in step with the orchestrator, which is
-// where the effective default actually lives (sessions advertises it to
-// clients). Nothing in the runtime reads cfg.OllamaModel today; the constant
-// exists so the two cannot drift silently.
-const defaultOllamaModel = "qwen2.5:7b"
+// defaultLocalModel is the model the local route advertises when nothing is
+// configured. The orchestrator has the same default; a test in
+// turing-backend/tests holds the two services to the same resolution.
+const defaultLocalModel = "qwen2.5:7b"
+
+// defaultOllamaURL is where the Ollama engine is reached from the runtime's
+// container when nothing is configured.
+const defaultOllamaURL = "http://host.docker.internal:11434"
 
 // defaultOllamaKeepAlive must stay ABOVE the approval wait
 // (TURING_APPROVAL_WAIT_TIMEOUT_MS, 71s by default). A shorter value evicts the
@@ -40,11 +43,21 @@ type Config struct {
 	OrchestratorGRPCAddr      string
 	RuntimeToken              string
 	WorkerID                  string
-	OllamaBaseURL             string
-	OllamaModel               string
-	OllamaKeepAlive           string
-	OllamaContextWindowTokens int
-	OllamaMaxOutputTokens     int
+	// LocalEngine is the protocol the local route speaks: llm.LocalEngineOllama
+	// or llm.LocalEngineOpenAI. LocalEngineURL passed egress.ParseLocalEndpoint;
+	// LocalEngineAPIKey is set only for the OpenAI engine; LocalEngineLabel is
+	// display text the runtime advertises and never routes on.
+	LocalEngine              string
+	LocalEngineURL           string
+	LocalEngineAPIKey        string
+	LocalEngineLabel         string
+	LocalModel               string
+	LocalContextWindowTokens int
+	LocalMaxOutputTokens     int
+	OllamaKeepAlive          string
+	// DeprecatedKeys holds one sentence for each OLLAMA_* setting that was read
+	// because its TURING_LOCAL_* replacement was unset, for the runtime to log.
+	DeprecatedKeys []string
 	OpenAIBaseURL             string
 	OpenAIAPIKey              string
 	OpenAIModel               string
@@ -83,11 +96,7 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if _, err := llm.EncodeOllamaKeepAlive(keepAlive); err != nil {
 		return Config{}, fmt.Errorf("OLLAMA_KEEP_ALIVE: %w", err)
 	}
-	ollamaContextWindowTokens, ollamaMaxOutputTokens, err := providerContextLimits(
-		getenv,
-		"OLLAMA_CONTEXT_WINDOW_TOKENS",
-		"OLLAMA_MAX_OUTPUT_TOKENS",
-	)
+	local, err := loadLocalEngine(getenv)
 	if err != nil {
 		return Config{}, err
 	}
@@ -144,15 +153,6 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if totalToolTimeout <= approvalTimeout || toolTimeout > (totalToolTimeout-approvalTimeout)/3 {
 		return Config{}, errors.New("TURING_TOOL_TOTAL_TIMEOUT_MS must cover approval and tool lifecycle stages")
 	}
-	ollamaBaseURL, err := endpointURLValue(getenv, "OLLAMA_BASE_URL", "http://host.docker.internal:11434")
-	if err != nil {
-		return Config{}, err
-	}
-	ollamaEndpoint, err := egress.ParseLocalEndpoint(ollamaBaseURL)
-	if err != nil {
-		return Config{}, fmt.Errorf("OLLAMA_BASE_URL: %w", err)
-	}
-	ollamaBaseURL = ollamaEndpoint.Canonical
 	openAIBaseURL, err := endpointURLValue(getenv, "OPENAI_BASE_URL", "https://api.openai.com/v1")
 	if err != nil {
 		return Config{}, err
@@ -181,11 +181,15 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		OrchestratorGRPCAddr:      grpcAddr(getenv),
 		RuntimeToken:              runtimeToken,
 		WorkerID:                  defaultString(getenv("TURING_WORKER_ID"), "worker-general-go"),
-		OllamaBaseURL:             ollamaBaseURL,
-		OllamaModel:               defaultString(getenv("OLLAMA_MODEL"), defaultOllamaModel),
+		LocalEngine:               local.LocalEngine,
+		LocalEngineURL:            local.LocalEngineURL,
+		LocalEngineAPIKey:         local.LocalEngineAPIKey,
+		LocalEngineLabel:          local.LocalEngineLabel,
+		LocalModel:                local.LocalModel,
+		LocalContextWindowTokens:  local.LocalContextWindowTokens,
+		LocalMaxOutputTokens:      local.LocalMaxOutputTokens,
+		DeprecatedKeys:            local.DeprecatedKeys,
 		OllamaKeepAlive:           keepAlive,
-		OllamaContextWindowTokens: ollamaContextWindowTokens,
-		OllamaMaxOutputTokens:     ollamaMaxOutputTokens,
 		OpenAIBaseURL:             openAIBaseURL,
 		OpenAIAPIKey:              openAIAPIKey,
 		OpenAIModel:               defaultString(getenv("OPENAI_MODEL"), "gpt-4o-mini"),
@@ -204,6 +208,70 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 		ApprovalTimeout:           approvalTimeout,
 		TotalToolTimeout:          totalToolTimeout,
 	}, nil
+}
+
+// loadLocalEngine reads the local route's settings. Each TURING_LOCAL_* key
+// wins over the OLLAMA_* name it replaces; the old name is read only when the
+// new one is empty, and is reported in DeprecatedKeys.
+func loadLocalEngine(getenv func(string) string) (Config, error) {
+	var local Config
+	local.LocalEngine = defaultString(getenv("TURING_LOCAL_ENGINE"), llm.LocalEngineOllama)
+	if local.LocalEngine != llm.LocalEngineOllama && local.LocalEngine != llm.LocalEngineOpenAI {
+		return Config{}, fmt.Errorf("TURING_LOCAL_ENGINE must be %q or %q", llm.LocalEngineOllama, llm.LocalEngineOpenAI)
+	}
+	urlKey := "TURING_LOCAL_ENGINE_URL"
+	defaultURL := defaultOllamaURL
+	if local.LocalEngine == llm.LocalEngineOllama {
+		urlKey = localKey(getenv, urlKey, "OLLAMA_BASE_URL", &local.DeprecatedKeys)
+	} else if getenv(urlKey) == "" {
+		// An OpenAI-compatible engine has no conventional address, and an
+		// Ollama URL left in place from before is not one.
+		return Config{}, fmt.Errorf("TURING_LOCAL_ENGINE_URL is required when TURING_LOCAL_ENGINE is %q", llm.LocalEngineOpenAI)
+	}
+	engineURL, err := endpointURLValue(getenv, urlKey, defaultURL)
+	if err != nil {
+		return Config{}, err
+	}
+	endpoint, err := egress.ParseLocalEndpoint(engineURL)
+	if err != nil {
+		return Config{}, fmt.Errorf("%s: %w", urlKey, err)
+	}
+	local.LocalEngineURL = endpoint.Canonical
+	local.LocalEngineAPIKey = getenv("TURING_LOCAL_ENGINE_API_KEY")
+	if local.LocalEngineAPIKey != "" && local.LocalEngine != llm.LocalEngineOpenAI {
+		return Config{}, fmt.Errorf("TURING_LOCAL_ENGINE_API_KEY applies only when TURING_LOCAL_ENGINE is %q", llm.LocalEngineOpenAI)
+	}
+	local.LocalEngineLabel = getenv("TURING_LOCAL_ENGINE_LABEL")
+	switch {
+	case local.LocalEngineLabel == "" && local.LocalEngine == llm.LocalEngineOllama:
+		local.LocalEngineLabel = "Ollama"
+	case local.LocalEngineLabel == "":
+		local.LocalEngineLabel = "OpenAI-compatible"
+	default:
+		if err := llm.ValidateEngineLabel(local.LocalEngineLabel); err != nil {
+			return Config{}, fmt.Errorf("TURING_LOCAL_ENGINE_LABEL %w", err)
+		}
+	}
+	local.LocalModel = defaultString(getenv(localKey(getenv, "TURING_LOCAL_MODEL", "OLLAMA_MODEL", &local.DeprecatedKeys)), defaultLocalModel)
+	local.LocalContextWindowTokens, local.LocalMaxOutputTokens, err = providerContextLimits(
+		getenv,
+		localKey(getenv, "TURING_LOCAL_CONTEXT_WINDOW_TOKENS", "OLLAMA_CONTEXT_WINDOW_TOKENS", &local.DeprecatedKeys),
+		localKey(getenv, "TURING_LOCAL_MAX_OUTPUT_TOKENS", "OLLAMA_MAX_OUTPUT_TOKENS", &local.DeprecatedKeys),
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	return local, nil
+}
+
+// localKey is the key to read for one local setting: the new name unless it is
+// empty and the deprecated one is not.
+func localKey(getenv func(string) string, newKey, oldKey string, deprecated *[]string) string {
+	if getenv(newKey) == "" && getenv(oldKey) != "" {
+		*deprecated = append(*deprecated, oldKey+" is deprecated; set "+newKey+" instead")
+		return oldKey
+	}
+	return newKey
 }
 
 func providerContextLimits(

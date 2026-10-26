@@ -43,10 +43,10 @@ func run() error {
 	}
 	defer func() { _ = client.Close() }()
 	ollamaProvider, err := llm.NewOllamaWithLimits(
-		cfg.OllamaBaseURL,
+		cfg.LocalEngineURL,
 		http.DefaultClient,
-		cfg.OllamaContextWindowTokens,
-		cfg.OllamaMaxOutputTokens,
+		cfg.LocalContextWindowTokens,
+		cfg.LocalMaxOutputTokens,
 	)
 	if err != nil {
 		return fmt.Errorf("configure Ollama provider: %w", err)
@@ -163,8 +163,8 @@ func agentCredentialRefs(keys map[string]string) []string {
 func advertisedModels(cfg config.Config) []*turingv1.ModelCapability {
 	models := []*turingv1.ModelCapability{{
 		Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
-		Model:            cfg.OllamaModel,
-		MaxContextTokens: int32(cfg.OllamaContextWindowTokens),
+		Model:            cfg.LocalModel,
+		MaxContextTokens: int32(cfg.LocalContextWindowTokens),
 	}}
 	if cfg.OpenAIAPIKey != "" {
 		models = append(models, &turingv1.ModelCapability{
