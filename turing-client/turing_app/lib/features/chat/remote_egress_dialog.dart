@@ -2,12 +2,16 @@ import 'package:flutter/material.dart';
 
 import '../../l10n/generated/app_localizations.dart';
 import '../../l10n/memory_localizations.dart';
+import '../../models/model_provider.dart';
 import '../../models/remote_egress.dart';
 
+/// [requester] names the specialist asking, when the disclosure is for a
+/// delegated task and not for a send; the user then allows rather than sends.
 Future<bool> showRemoteEgressDialog(
   BuildContext context,
-  RemoteEgressDisclosure disclosure,
-) async {
+  RemoteEgressDisclosure disclosure, {
+  String? requester,
+}) async {
   return await showDialog<bool>(
         context: context,
         barrierDismissible: false,
@@ -27,8 +31,13 @@ Future<bool> showRemoteEgressDialog(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    if (requester != null) ...[
+                      Text(l10n.egressDialogRequester(requester)),
+                      const SizedBox(height: 8),
+                    ],
                     Text(
-                      '${disclosure.provider} / ${disclosure.model}\n'
+                      '${disclosure.provider == localModelProvider ? l10n.egressDialogLocalProvider : disclosure.provider}'
+                      ' / ${disclosure.model}\n'
                       '${disclosure.endpoint}',
                     ),
                     const SizedBox(height: 16),
@@ -136,7 +145,11 @@ Future<bool> showRemoteEgressDialog(
               ),
               FilledButton(
                 onPressed: () => Navigator.of(context).pop(true),
-                child: Text(l10n.egressDialogSend),
+                child: Text(
+                  requester == null
+                      ? l10n.egressDialogSend
+                      : l10n.egressDialogAllow,
+                ),
               ),
             ],
           );

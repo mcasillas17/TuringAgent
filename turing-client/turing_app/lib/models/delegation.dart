@@ -13,6 +13,9 @@ class Delegation {
     this.approvalId = '',
     this.summary = '',
     this.continuationRunId = '',
+    this.egressTools = const [],
+    this.egressConsent = '',
+    this.egressRequired = false,
   });
 
   final String delegationId;
@@ -42,6 +45,16 @@ class Delegation {
   /// The run that answered from this task's result once it was joined.
   final String continuationRunId;
 
+  /// Tools that leave the machine which the task asked the user's consent
+  /// for, where that consent stands (pending, granted, declined, or empty
+  /// when none was needed), and whether declining ends the task.
+  final List<String> egressTools;
+  final String egressConsent;
+  final bool egressRequired;
+
+  /// The task waits, unclaimed, for the user to allow or decline its tools.
+  bool get waitingForConsent => state == 'waiting_consent';
+
   String get specialist => '$emoji $displayName'.trim();
 
   bool get isTerminal =>
@@ -66,6 +79,9 @@ class Delegation {
       return value.isEmpty ? old : value;
     }
 
+    final tools = payload['egressTools'];
+    final required = payload['egressRequired'];
+
     final id = read('delegationId');
     if (current != null && current.delegationId != id) return current;
     final parentRunId = keep('parentRunId', current?.parentRunId ?? '');
@@ -85,6 +101,13 @@ class Delegation {
         'continuationRunId',
         current?.continuationRunId ?? '',
       ),
+      egressTools: tools is List && tools.isNotEmpty
+          ? List.unmodifiable(tools.whereType<String>())
+          : current?.egressTools ?? const [],
+      egressConsent: keep('egressConsent', current?.egressConsent ?? ''),
+      egressRequired: required is bool
+          ? required
+          : current?.egressRequired ?? false,
     );
   }
 }

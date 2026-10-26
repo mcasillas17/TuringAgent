@@ -148,9 +148,16 @@ GitHub connection covers any repository that credential can reach. Because
 enabled integration tools may be called by a local run, connecting an account
 makes every local send ask until those tools are disabled.
 
-Ollama is the local provider identity, so its endpoint is restricted to
-`localhost`, `host.docker.internal`, or a loopback IP literal. Pointing the
-Ollama configuration at a remote host is refused instead of bypassing consent.
+The local provider (`ollama` on the wire, whichever engine serves it: Ollama
+or an OpenAI-compatible server) is restricted to `localhost`,
+`host.docker.internal`, or a loopback IP literal, by `TURING_LOCAL_ENGINE_URL`
+(or the deprecated `OLLAMA_BASE_URL`). Pointing it at another host, including
+a machine on the same network, is refused instead of bypassing consent. The
+OpenAI-compatible local engine never presents a remote endpoint, so a run
+consented to as remote can never resolve to it. Locality is the engine's
+address: a server on this machine that itself forwards requests elsewhere (a
+proxy in front of a hosted API, say) is the operator's choice, and Turing
+cannot see past it.
 
 Runs already queued for a remote provider before TUR-003 have no run-owned
 egress decision. Migration 0014 terminalizes them with
@@ -174,6 +181,65 @@ would forge that consent with this server's own signature. Failing closed is
 the specified behaviour, pinned by
 `agent-runtime-go/internal/agent/egress_version_skew_test.go` against the
 literal pre-bump number.
+
+## A specialist's task
+
+A task Turing delegates gets its own consent, never Turing's. A specialist's
+model is always local, so only its tool calls can leave the machine: those to a
+connected account's integration or to a remote MCP server. A profile that
+declares such a tool lists it on the Agents page as one it asks about for each
+task (`AgentProfile.consent_tools`) when a team-protocol worker that can carry
+an egress decision serves it on the specialist's route; otherwise it is
+withheld with the route reason, and with no model it waits on the model like
+any other tool.
+
+A task whose specialist has such tools is created as before, with its local
+tools only and no decision, but its `delegations` row records them
+(`egress_tools`, migration 0030), `egress_consent = 'pending'`, and
+`egress_required` when one of the profile's `requires` patterns is met by them
+alone. While consent is pending the claim query skips the task's job, so no
+worker can take it, and its card shows `waiting_consent`.
+
+`TeamService.PrepareDelegationEgress(delegation_id)` is read-only. It resolves
+the task's whole set (its local tools plus the ones it waits on), where those
+tools would send calls (each integration endpoint and connection, each remote
+MCP server), the skill fingerprint over the task's pinned skills and the memory
+fingerprint of an empty snapshot (a task gets no persona, profile or recall),
+checks the task's whole route with a decision through `ValidateRouting`, and
+signs a five-minute challenge with the same `TURING_EGRESS_SIGNING_SECRET` under
+its own domain, so a send's challenge is never accepted here nor this one by
+`SendMessage`. Its data categories are tool arguments and tool results only.
+
+`TeamService.DecideDelegationEgress(delegation_id, consent)` with a consent
+needs the acknowledgment and exactly the disclosed categories, a challenge this
+flow signed for this task that has not expired, and the task resolving now to
+byte-identical bindings, so connecting a second account or disconnecting one
+since asks the user to review it again. In one transaction the repository then
+re-checks that the task is still queued and pending and that the model, tools
+and fingerprints match, writes the decision onto the task's own run (a
+challenge's nonce is spent once anywhere), widens the queued job's frozen set to
+the whole set with the decision beside it, marks consent granted, adds a
+routing notice to the task's conversation and an `egress.consent.recorded`
+audit row held to the rule below, and reports the change on the turn's stream.
+Only a worker that validates the decision can then take the task, and it checks
+it exactly as it checks a send's. The decision names the whole set, not only the
+tools that leave, because a worker requires a decision to name the run's frozen
+set exactly; only the egressing tools have destinations in it.
+
+Without a consent the call declines. A task whose specialist does not require
+the tools runs with its local tools, and the results Turing reads say the user
+declined them. A task that requires them is cancelled
+before it runs, with code `egress_consent_declined` (reason `abandoned`, from the
+client), and is joined like any other task that ended.
+
+Consent is per task (spec §17, question 6): never inherited from Turing's send,
+never shared with another task, and never carried by the continuation, whose
+tools exclude every tool that leaves the machine. A task waiting for consent is
+still a queued run, so `TURING_QUEUE_MAX_WAIT_MS` bounds the wait (the orchestrator
+refuses to start with it, or the recovery loop it runs on, switched off while
+delegation is on or any task still waits for consent), and it ends,
+undecidable, when its turn fails or is cancelled or its conversation is being
+deleted.
 
 ## Background work and audit
 

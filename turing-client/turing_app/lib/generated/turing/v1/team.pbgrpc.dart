@@ -88,6 +88,27 @@ class TeamServiceClient extends $grpc.Client {
     return $createUnaryCall(_$getDelegation, request, options: options);
   }
 
+  /// The disclosure for a task waiting for consent to tools that leave the
+  /// machine. FailedPrecondition once it is not waiting.
+  $grpc.ResponseFuture<$0.PrepareDelegationEgressResponse>
+      prepareDelegationEgress(
+    $0.PrepareDelegationEgressRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$prepareDelegationEgress, request,
+        options: options);
+  }
+
+  /// The user's decision for that one task: a decision bound to the task's
+  /// own run, never its turn's.
+  $grpc.ResponseFuture<$0.Delegation> decideDelegationEgress(
+    $0.DecideDelegationEgressRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$decideDelegationEgress, request,
+        options: options);
+  }
+
   // method descriptors
 
   static final _$listAgentProfiles = $grpc.ClientMethod<
@@ -124,6 +145,17 @@ class TeamServiceClient extends $grpc.Client {
       $grpc.ClientMethod<$0.GetDelegationRequest, $0.Delegation>(
           '/turing.v1.TeamService/GetDelegation',
           ($0.GetDelegationRequest value) => value.writeToBuffer(),
+          $0.Delegation.fromBuffer);
+  static final _$prepareDelegationEgress = $grpc.ClientMethod<
+          $0.PrepareDelegationEgressRequest,
+          $0.PrepareDelegationEgressResponse>(
+      '/turing.v1.TeamService/PrepareDelegationEgress',
+      ($0.PrepareDelegationEgressRequest value) => value.writeToBuffer(),
+      $0.PrepareDelegationEgressResponse.fromBuffer);
+  static final _$decideDelegationEgress =
+      $grpc.ClientMethod<$0.DecideDelegationEgressRequest, $0.Delegation>(
+          '/turing.v1.TeamService/DecideDelegationEgress',
+          ($0.DecideDelegationEgressRequest value) => value.writeToBuffer(),
           $0.Delegation.fromBuffer);
 }
 
@@ -194,6 +226,24 @@ abstract class TeamServiceBase extends $grpc.Service {
         ($core.List<$core.int> value) =>
             $0.GetDelegationRequest.fromBuffer(value),
         ($0.Delegation value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.PrepareDelegationEgressRequest,
+            $0.PrepareDelegationEgressResponse>(
+        'PrepareDelegationEgress',
+        prepareDelegationEgress_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.PrepareDelegationEgressRequest.fromBuffer(value),
+        ($0.PrepareDelegationEgressResponse value) => value.writeToBuffer()));
+    $addMethod(
+        $grpc.ServiceMethod<$0.DecideDelegationEgressRequest, $0.Delegation>(
+            'DecideDelegationEgress',
+            decideDelegationEgress_Pre,
+            false,
+            false,
+            ($core.List<$core.int> value) =>
+                $0.DecideDelegationEgressRequest.fromBuffer(value),
+            ($0.Delegation value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.ListAgentProfilesResponse> listAgentProfiles_Pre(
@@ -256,4 +306,22 @@ abstract class TeamServiceBase extends $grpc.Service {
 
   $async.Future<$0.Delegation> getDelegation(
       $grpc.ServiceCall call, $0.GetDelegationRequest request);
+
+  $async.Future<$0.PrepareDelegationEgressResponse> prepareDelegationEgress_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.PrepareDelegationEgressRequest> $request) async {
+    return prepareDelegationEgress($call, await $request);
+  }
+
+  $async.Future<$0.PrepareDelegationEgressResponse> prepareDelegationEgress(
+      $grpc.ServiceCall call, $0.PrepareDelegationEgressRequest request);
+
+  $async.Future<$0.Delegation> decideDelegationEgress_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.DecideDelegationEgressRequest> $request) async {
+    return decideDelegationEgress($call, await $request);
+  }
+
+  $async.Future<$0.Delegation> decideDelegationEgress(
+      $grpc.ServiceCall call, $0.DecideDelegationEgressRequest request);
 }

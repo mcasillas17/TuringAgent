@@ -36,6 +36,10 @@ class AgentId extends $pb.ProtobufEnum {
 class ModelProvider extends $pb.ProtobufEnum {
   static const ModelProvider MODEL_PROVIDER_UNSPECIFIED =
       ModelProvider._(0, _omitEnumNames ? '' : 'MODEL_PROVIDER_UNSPECIFIED');
+
+  /// The local route on this machine, whichever engine serves it: Ollama or an
+  /// OpenAI-compatible server. Named before other engines existed; the name is
+  /// kept because the wire value and stored identity cannot change.
   static const ModelProvider MODEL_PROVIDER_OLLAMA =
       ModelProvider._(1, _omitEnumNames ? '' : 'MODEL_PROVIDER_OLLAMA');
   static const ModelProvider MODEL_PROVIDER_OPENAI_COMPATIBLE = ModelProvider._(

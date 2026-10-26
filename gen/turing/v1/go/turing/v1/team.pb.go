@@ -231,8 +231,12 @@ type AgentProfile struct {
 	UnavailableReasons []string                     `protobuf:"bytes,18,rep,name=unavailable_reasons,json=unavailableReasons,proto3" json:"unavailable_reasons,omitempty"`
 	ExcludedTools      []*AgentProfileToolExclusion `protobuf:"bytes,19,rep,name=excluded_tools,json=excludedTools,proto3" json:"excluded_tools,omitempty"`
 	ParseError         string                       `protobuf:"bytes,20,opt,name=parse_error,json=parseError,proto3" json:"parse_error,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Declared tools that leave the machine (connected-account integrations
+	// and remote MCP servers), qualified as server/tool. A delegated run
+	// receives them only after the user consents for that one task.
+	ConsentTools  []string `protobuf:"bytes,21,rep,name=consent_tools,json=consentTools,proto3" json:"consent_tools,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentProfile) Reset() {
@@ -403,6 +407,13 @@ func (x *AgentProfile) GetParseError() string {
 		return x.ParseError
 	}
 	return ""
+}
+
+func (x *AgentProfile) GetConsentTools() []string {
+	if x != nil {
+		return x.ConsentTools
+	}
+	return nil
 }
 
 type ListAgentProfilesRequest struct {
@@ -932,9 +943,18 @@ type Delegation struct {
 	// Absent while the task has not finished.
 	FinishedAt *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
 	// One line in the orchestrator's words, never a model's.
-	Summary       string `protobuf:"bytes,17,opt,name=summary,proto3" json:"summary,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Summary string `protobuf:"bytes,17,opt,name=summary,proto3" json:"summary,omitempty"`
+	// Tools that leave the machine which the task asked the user's consent
+	// for, qualified as server/tool, and where that consent stands: pending,
+	// granted or declined, or empty when the task needed none. While it is
+	// pending the state is waiting_consent and no worker can take the task.
+	EgressTools   []string `protobuf:"bytes,18,rep,name=egress_tools,json=egressTools,proto3" json:"egress_tools,omitempty"`
+	EgressConsent string   `protobuf:"bytes,19,opt,name=egress_consent,json=egressConsent,proto3" json:"egress_consent,omitempty"`
+	// Declining ends the task instead of running it without egress_tools,
+	// because the specialist requires them.
+	EgressRequired bool `protobuf:"varint,20,opt,name=egress_required,json=egressRequired,proto3" json:"egress_required,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Delegation) Reset() {
@@ -1086,6 +1106,27 @@ func (x *Delegation) GetSummary() string {
 	return ""
 }
 
+func (x *Delegation) GetEgressTools() []string {
+	if x != nil {
+		return x.EgressTools
+	}
+	return nil
+}
+
+func (x *Delegation) GetEgressConsent() string {
+	if x != nil {
+		return x.EgressConsent
+	}
+	return ""
+}
+
+func (x *Delegation) GetEgressRequired() bool {
+	if x != nil {
+		return x.EgressRequired
+	}
+	return false
+}
+
 type ListDelegationsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// A conversation; a specialist's own session has no delegations.
@@ -1220,6 +1261,152 @@ func (x *GetDelegationRequest) GetDelegationId() string {
 	return ""
 }
 
+type PrepareDelegationEgressRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DelegationId  string                 `protobuf:"bytes,1,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrepareDelegationEgressRequest) Reset() {
+	*x = PrepareDelegationEgressRequest{}
+	mi := &file_turing_v1_team_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareDelegationEgressRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareDelegationEgressRequest) ProtoMessage() {}
+
+func (x *PrepareDelegationEgressRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_team_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareDelegationEgressRequest.ProtoReflect.Descriptor instead.
+func (*PrepareDelegationEgressRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_team_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *PrepareDelegationEgressRequest) GetDelegationId() string {
+	if x != nil {
+		return x.DelegationId
+	}
+	return ""
+}
+
+type PrepareDelegationEgressResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Where the task's tool calls may go and what may leave the machine. Its
+	// challenge is accepted only by DecideDelegationEgress for this
+	// delegation, never by ChatService.SendMessage.
+	Disclosure    *RemoteEgressDisclosure `protobuf:"bytes,1,opt,name=disclosure,proto3" json:"disclosure,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrepareDelegationEgressResponse) Reset() {
+	*x = PrepareDelegationEgressResponse{}
+	mi := &file_turing_v1_team_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareDelegationEgressResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareDelegationEgressResponse) ProtoMessage() {}
+
+func (x *PrepareDelegationEgressResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_team_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareDelegationEgressResponse.ProtoReflect.Descriptor instead.
+func (*PrepareDelegationEgressResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_team_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *PrepareDelegationEgressResponse) GetDisclosure() *RemoteEgressDisclosure {
+	if x != nil {
+		return x.Disclosure
+	}
+	return nil
+}
+
+type DecideDelegationEgressRequest struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	DelegationId string                 `protobuf:"bytes,1,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`
+	// Present, and acknowledged, to let the task use the disclosed tools.
+	// Absent to decline: the task runs without them, or is ended when its
+	// specialist requires them.
+	Consent       *RemoteEgressConsent `protobuf:"bytes,2,opt,name=consent,proto3" json:"consent,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DecideDelegationEgressRequest) Reset() {
+	*x = DecideDelegationEgressRequest{}
+	mi := &file_turing_v1_team_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DecideDelegationEgressRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DecideDelegationEgressRequest) ProtoMessage() {}
+
+func (x *DecideDelegationEgressRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_team_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DecideDelegationEgressRequest.ProtoReflect.Descriptor instead.
+func (*DecideDelegationEgressRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_team_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *DecideDelegationEgressRequest) GetDelegationId() string {
+	if x != nil {
+		return x.DelegationId
+	}
+	return ""
+}
+
+func (x *DecideDelegationEgressRequest) GetConsent() *RemoteEgressConsent {
+	if x != nil {
+		return x.Consent
+	}
+	return nil
+}
+
 var File_turing_v1_team_proto protoreflect.FileDescriptor
 
 const file_turing_v1_team_proto_rawDesc = "" +
@@ -1227,7 +1414,7 @@ const file_turing_v1_team_proto_rawDesc = "" +
 	"\x14turing/v1/team.proto\x12\tturing.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16turing/v1/common.proto\"G\n" +
 	"\x19AgentProfileToolExclusion\x12\x12\n" +
 	"\x04tool\x18\x01 \x01(\tR\x04tool\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xd8\x05\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xfd\x05\n" +
 	"\fAgentProfile\x12\x1d\n" +
 	"\n" +
 	"profile_id\x18\x01 \x01(\tR\tprofileId\x12\x12\n" +
@@ -1251,7 +1438,8 @@ const file_turing_v1_team_proto_rawDesc = "" +
 	"\x13unavailable_reasons\x18\x12 \x03(\tR\x12unavailableReasons\x12K\n" +
 	"\x0eexcluded_tools\x18\x13 \x03(\v2$.turing.v1.AgentProfileToolExclusionR\rexcludedTools\x12\x1f\n" +
 	"\vparse_error\x18\x14 \x01(\tR\n" +
-	"parseError\"\x1a\n" +
+	"parseError\x12#\n" +
+	"\rconsent_tools\x18\x15 \x03(\tR\fconsentTools\"\x1a\n" +
 	"\x18ListAgentProfilesRequest\"P\n" +
 	"\x19ListAgentProfilesResponse\x123\n" +
 	"\bprofiles\x18\x01 \x03(\v2\x17.turing.v1.AgentProfileR\bprofiles\"X\n" +
@@ -1283,7 +1471,7 @@ const file_turing_v1_team_proto_rawDesc = "" +
 	"\ttool_name\x18\x05 \x01(\tR\btoolName\x12+\n" +
 	"\x04args\x18\x06 \x01(\v2\x17.google.protobuf.StructR\x04args\"G\n" +
 	"\x14CallTeamToolResponse\x12/\n" +
-	"\x06result\x18\x01 \x01(\v2\x17.google.protobuf.StructR\x06result\"\xe9\x04\n" +
+	"\x06result\x18\x01 \x01(\v2\x17.google.protobuf.StructR\x06result\"\xdc\x05\n" +
 	"\n" +
 	"Delegation\x12#\n" +
 	"\rdelegation_id\x18\x01 \x01(\tR\fdelegationId\x12*\n" +
@@ -1309,13 +1497,25 @@ const file_turing_v1_team_proto_rawDesc = "" +
 	"created_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12;\n" +
 	"\vfinished_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"finishedAt\x12\x18\n" +
-	"\asummary\x18\x11 \x01(\tR\asummary\"D\n" +
+	"\asummary\x18\x11 \x01(\tR\asummary\x12!\n" +
+	"\fegress_tools\x18\x12 \x03(\tR\vegressTools\x12%\n" +
+	"\x0eegress_consent\x18\x13 \x01(\tR\regressConsent\x12'\n" +
+	"\x0fegress_required\x18\x14 \x01(\bR\x0eegressRequired\"D\n" +
 	"\x16ListDelegationsRequest\x12*\n" +
 	"\x11parent_session_id\x18\x01 \x01(\tR\x0fparentSessionId\"R\n" +
 	"\x17ListDelegationsResponse\x127\n" +
 	"\vdelegations\x18\x01 \x03(\v2\x15.turing.v1.DelegationR\vdelegations\";\n" +
 	"\x14GetDelegationRequest\x12#\n" +
-	"\rdelegation_id\x18\x01 \x01(\tR\fdelegationId*\xe9\x01\n" +
+	"\rdelegation_id\x18\x01 \x01(\tR\fdelegationId\"E\n" +
+	"\x1ePrepareDelegationEgressRequest\x12#\n" +
+	"\rdelegation_id\x18\x01 \x01(\tR\fdelegationId\"d\n" +
+	"\x1fPrepareDelegationEgressResponse\x12A\n" +
+	"\n" +
+	"disclosure\x18\x01 \x01(\v2!.turing.v1.RemoteEgressDisclosureR\n" +
+	"disclosure\"~\n" +
+	"\x1dDecideDelegationEgressRequest\x12#\n" +
+	"\rdelegation_id\x18\x01 \x01(\tR\fdelegationId\x128\n" +
+	"\aconsent\x18\x02 \x01(\v2\x1e.turing.v1.RemoteEgressConsentR\aconsent*\xe9\x01\n" +
 	"\x11AgentProfileState\x12#\n" +
 	"\x1fAGENT_PROFILE_STATE_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aAGENT_PROFILE_STATE_ACTIVE\x10\x01\x12 \n" +
@@ -1327,7 +1527,7 @@ const file_turing_v1_team_proto_rawDesc = "" +
 	"'AGENT_PROFILE_MEMORY_ACCESS_UNSPECIFIED\x10\x00\x12$\n" +
 	" AGENT_PROFILE_MEMORY_ACCESS_NONE\x10\x01\x12$\n" +
 	" AGENT_PROFILE_MEMORY_ACCESS_READ\x10\x02\x12'\n" +
-	"#AGENT_PROFILE_MEMORY_ACCESS_PROPOSE\x10\x032\xe5\x04\n" +
+	"#AGENT_PROFILE_MEMORY_ACCESS_PROPOSE\x10\x032\xb2\x06\n" +
 	"\vTeamService\x12^\n" +
 	"\x11ListAgentProfiles\x12#.turing.v1.ListAgentProfilesRequest\x1a$.turing.v1.ListAgentProfilesResponse\x12[\n" +
 	"\x16SetAgentProfileEnabled\x12(.turing.v1.SetAgentProfileEnabledRequest\x1a\x17.turing.v1.AgentProfile\x12Q\n" +
@@ -1335,7 +1535,9 @@ const file_turing_v1_team_proto_rawDesc = "" +
 	"\rListTeamTools\x12\x1f.turing.v1.ListTeamToolsRequest\x1a .turing.v1.ListTeamToolsResponse\x12O\n" +
 	"\fCallTeamTool\x12\x1e.turing.v1.CallTeamToolRequest\x1a\x1f.turing.v1.CallTeamToolResponse\x12X\n" +
 	"\x0fListDelegations\x12!.turing.v1.ListDelegationsRequest\x1a\".turing.v1.ListDelegationsResponse\x12G\n" +
-	"\rGetDelegation\x12\x1f.turing.v1.GetDelegationRequest\x1a\x15.turing.v1.DelegationB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
+	"\rGetDelegation\x12\x1f.turing.v1.GetDelegationRequest\x1a\x15.turing.v1.Delegation\x12p\n" +
+	"\x17PrepareDelegationEgress\x12).turing.v1.PrepareDelegationEgressRequest\x1a*.turing.v1.PrepareDelegationEgressResponse\x12Y\n" +
+	"\x16DecideDelegationEgress\x12(.turing.v1.DecideDelegationEgressRequest\x1a\x15.turing.v1.DelegationB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
 var (
 	file_turing_v1_team_proto_rawDescOnce sync.Once
@@ -1350,61 +1552,72 @@ func file_turing_v1_team_proto_rawDescGZIP() []byte {
 }
 
 var file_turing_v1_team_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_turing_v1_team_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_turing_v1_team_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_turing_v1_team_proto_goTypes = []any{
-	(AgentProfileState)(0),                // 0: turing.v1.AgentProfileState
-	(AgentProfileMemoryAccess)(0),         // 1: turing.v1.AgentProfileMemoryAccess
-	(*AgentProfileToolExclusion)(nil),     // 2: turing.v1.AgentProfileToolExclusion
-	(*AgentProfile)(nil),                  // 3: turing.v1.AgentProfile
-	(*ListAgentProfilesRequest)(nil),      // 4: turing.v1.ListAgentProfilesRequest
-	(*ListAgentProfilesResponse)(nil),     // 5: turing.v1.ListAgentProfilesResponse
-	(*SetAgentProfileEnabledRequest)(nil), // 6: turing.v1.SetAgentProfileEnabledRequest
-	(*GrantAgentProfileRequest)(nil),      // 7: turing.v1.GrantAgentProfileRequest
-	(*TeamToolDescriptor)(nil),            // 8: turing.v1.TeamToolDescriptor
-	(*ListTeamToolsRequest)(nil),          // 9: turing.v1.ListTeamToolsRequest
-	(*ListTeamToolsResponse)(nil),         // 10: turing.v1.ListTeamToolsResponse
-	(*CallTeamToolRequest)(nil),           // 11: turing.v1.CallTeamToolRequest
-	(*CallTeamToolResponse)(nil),          // 12: turing.v1.CallTeamToolResponse
-	(*Delegation)(nil),                    // 13: turing.v1.Delegation
-	(*ListDelegationsRequest)(nil),        // 14: turing.v1.ListDelegationsRequest
-	(*ListDelegationsResponse)(nil),       // 15: turing.v1.ListDelegationsResponse
-	(*GetDelegationRequest)(nil),          // 16: turing.v1.GetDelegationRequest
-	(ToolPolicy)(0),                       // 17: turing.v1.ToolPolicy
-	(*structpb.Struct)(nil),               // 18: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),         // 19: google.protobuf.Timestamp
+	(AgentProfileState)(0),                  // 0: turing.v1.AgentProfileState
+	(AgentProfileMemoryAccess)(0),           // 1: turing.v1.AgentProfileMemoryAccess
+	(*AgentProfileToolExclusion)(nil),       // 2: turing.v1.AgentProfileToolExclusion
+	(*AgentProfile)(nil),                    // 3: turing.v1.AgentProfile
+	(*ListAgentProfilesRequest)(nil),        // 4: turing.v1.ListAgentProfilesRequest
+	(*ListAgentProfilesResponse)(nil),       // 5: turing.v1.ListAgentProfilesResponse
+	(*SetAgentProfileEnabledRequest)(nil),   // 6: turing.v1.SetAgentProfileEnabledRequest
+	(*GrantAgentProfileRequest)(nil),        // 7: turing.v1.GrantAgentProfileRequest
+	(*TeamToolDescriptor)(nil),              // 8: turing.v1.TeamToolDescriptor
+	(*ListTeamToolsRequest)(nil),            // 9: turing.v1.ListTeamToolsRequest
+	(*ListTeamToolsResponse)(nil),           // 10: turing.v1.ListTeamToolsResponse
+	(*CallTeamToolRequest)(nil),             // 11: turing.v1.CallTeamToolRequest
+	(*CallTeamToolResponse)(nil),            // 12: turing.v1.CallTeamToolResponse
+	(*Delegation)(nil),                      // 13: turing.v1.Delegation
+	(*ListDelegationsRequest)(nil),          // 14: turing.v1.ListDelegationsRequest
+	(*ListDelegationsResponse)(nil),         // 15: turing.v1.ListDelegationsResponse
+	(*GetDelegationRequest)(nil),            // 16: turing.v1.GetDelegationRequest
+	(*PrepareDelegationEgressRequest)(nil),  // 17: turing.v1.PrepareDelegationEgressRequest
+	(*PrepareDelegationEgressResponse)(nil), // 18: turing.v1.PrepareDelegationEgressResponse
+	(*DecideDelegationEgressRequest)(nil),   // 19: turing.v1.DecideDelegationEgressRequest
+	(ToolPolicy)(0),                         // 20: turing.v1.ToolPolicy
+	(*structpb.Struct)(nil),                 // 21: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),           // 22: google.protobuf.Timestamp
+	(*RemoteEgressDisclosure)(nil),          // 23: turing.v1.RemoteEgressDisclosure
+	(*RemoteEgressConsent)(nil),             // 24: turing.v1.RemoteEgressConsent
 }
 var file_turing_v1_team_proto_depIdxs = []int32{
 	1,  // 0: turing.v1.AgentProfile.memory:type_name -> turing.v1.AgentProfileMemoryAccess
 	0,  // 1: turing.v1.AgentProfile.state:type_name -> turing.v1.AgentProfileState
 	2,  // 2: turing.v1.AgentProfile.excluded_tools:type_name -> turing.v1.AgentProfileToolExclusion
 	3,  // 3: turing.v1.ListAgentProfilesResponse.profiles:type_name -> turing.v1.AgentProfile
-	17, // 4: turing.v1.TeamToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
-	18, // 5: turing.v1.TeamToolDescriptor.schema:type_name -> google.protobuf.Struct
+	20, // 4: turing.v1.TeamToolDescriptor.policy:type_name -> turing.v1.ToolPolicy
+	21, // 5: turing.v1.TeamToolDescriptor.schema:type_name -> google.protobuf.Struct
 	8,  // 6: turing.v1.ListTeamToolsResponse.tools:type_name -> turing.v1.TeamToolDescriptor
-	18, // 7: turing.v1.CallTeamToolRequest.args:type_name -> google.protobuf.Struct
-	18, // 8: turing.v1.CallTeamToolResponse.result:type_name -> google.protobuf.Struct
-	19, // 9: turing.v1.Delegation.created_at:type_name -> google.protobuf.Timestamp
-	19, // 10: turing.v1.Delegation.finished_at:type_name -> google.protobuf.Timestamp
+	21, // 7: turing.v1.CallTeamToolRequest.args:type_name -> google.protobuf.Struct
+	21, // 8: turing.v1.CallTeamToolResponse.result:type_name -> google.protobuf.Struct
+	22, // 9: turing.v1.Delegation.created_at:type_name -> google.protobuf.Timestamp
+	22, // 10: turing.v1.Delegation.finished_at:type_name -> google.protobuf.Timestamp
 	13, // 11: turing.v1.ListDelegationsResponse.delegations:type_name -> turing.v1.Delegation
-	4,  // 12: turing.v1.TeamService.ListAgentProfiles:input_type -> turing.v1.ListAgentProfilesRequest
-	6,  // 13: turing.v1.TeamService.SetAgentProfileEnabled:input_type -> turing.v1.SetAgentProfileEnabledRequest
-	7,  // 14: turing.v1.TeamService.GrantAgentProfile:input_type -> turing.v1.GrantAgentProfileRequest
-	9,  // 15: turing.v1.TeamService.ListTeamTools:input_type -> turing.v1.ListTeamToolsRequest
-	11, // 16: turing.v1.TeamService.CallTeamTool:input_type -> turing.v1.CallTeamToolRequest
-	14, // 17: turing.v1.TeamService.ListDelegations:input_type -> turing.v1.ListDelegationsRequest
-	16, // 18: turing.v1.TeamService.GetDelegation:input_type -> turing.v1.GetDelegationRequest
-	5,  // 19: turing.v1.TeamService.ListAgentProfiles:output_type -> turing.v1.ListAgentProfilesResponse
-	3,  // 20: turing.v1.TeamService.SetAgentProfileEnabled:output_type -> turing.v1.AgentProfile
-	3,  // 21: turing.v1.TeamService.GrantAgentProfile:output_type -> turing.v1.AgentProfile
-	10, // 22: turing.v1.TeamService.ListTeamTools:output_type -> turing.v1.ListTeamToolsResponse
-	12, // 23: turing.v1.TeamService.CallTeamTool:output_type -> turing.v1.CallTeamToolResponse
-	15, // 24: turing.v1.TeamService.ListDelegations:output_type -> turing.v1.ListDelegationsResponse
-	13, // 25: turing.v1.TeamService.GetDelegation:output_type -> turing.v1.Delegation
-	19, // [19:26] is the sub-list for method output_type
-	12, // [12:19] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	23, // 12: turing.v1.PrepareDelegationEgressResponse.disclosure:type_name -> turing.v1.RemoteEgressDisclosure
+	24, // 13: turing.v1.DecideDelegationEgressRequest.consent:type_name -> turing.v1.RemoteEgressConsent
+	4,  // 14: turing.v1.TeamService.ListAgentProfiles:input_type -> turing.v1.ListAgentProfilesRequest
+	6,  // 15: turing.v1.TeamService.SetAgentProfileEnabled:input_type -> turing.v1.SetAgentProfileEnabledRequest
+	7,  // 16: turing.v1.TeamService.GrantAgentProfile:input_type -> turing.v1.GrantAgentProfileRequest
+	9,  // 17: turing.v1.TeamService.ListTeamTools:input_type -> turing.v1.ListTeamToolsRequest
+	11, // 18: turing.v1.TeamService.CallTeamTool:input_type -> turing.v1.CallTeamToolRequest
+	14, // 19: turing.v1.TeamService.ListDelegations:input_type -> turing.v1.ListDelegationsRequest
+	16, // 20: turing.v1.TeamService.GetDelegation:input_type -> turing.v1.GetDelegationRequest
+	17, // 21: turing.v1.TeamService.PrepareDelegationEgress:input_type -> turing.v1.PrepareDelegationEgressRequest
+	19, // 22: turing.v1.TeamService.DecideDelegationEgress:input_type -> turing.v1.DecideDelegationEgressRequest
+	5,  // 23: turing.v1.TeamService.ListAgentProfiles:output_type -> turing.v1.ListAgentProfilesResponse
+	3,  // 24: turing.v1.TeamService.SetAgentProfileEnabled:output_type -> turing.v1.AgentProfile
+	3,  // 25: turing.v1.TeamService.GrantAgentProfile:output_type -> turing.v1.AgentProfile
+	10, // 26: turing.v1.TeamService.ListTeamTools:output_type -> turing.v1.ListTeamToolsResponse
+	12, // 27: turing.v1.TeamService.CallTeamTool:output_type -> turing.v1.CallTeamToolResponse
+	15, // 28: turing.v1.TeamService.ListDelegations:output_type -> turing.v1.ListDelegationsResponse
+	13, // 29: turing.v1.TeamService.GetDelegation:output_type -> turing.v1.Delegation
+	18, // 30: turing.v1.TeamService.PrepareDelegationEgress:output_type -> turing.v1.PrepareDelegationEgressResponse
+	13, // 31: turing.v1.TeamService.DecideDelegationEgress:output_type -> turing.v1.Delegation
+	23, // [23:32] is the sub-list for method output_type
+	14, // [14:23] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_team_proto_init() }
@@ -1419,7 +1632,7 @@ func file_turing_v1_team_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_team_proto_rawDesc), len(file_turing_v1_team_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   15,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

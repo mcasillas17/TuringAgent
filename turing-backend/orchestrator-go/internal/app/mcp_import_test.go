@@ -24,7 +24,7 @@ func TestUnreadableMCPJSONAbortsStartup(t *testing.T) {
 		ClientAPIKey: "client", RuntimeToken: "runtime",
 		ApprovalConsumerToken: "consumer", ApprovalJWTSecret: "approval",
 		EgressSigningSecret: "egress", DatabasePath: filepath.Join(t.TempDir(), "turing.db"),
-		MCPConfigRoot: root, OllamaModel: "local",
+		MCPConfigRoot: root, LocalModel: "local",
 	})
 	if err == nil {
 		t.Fatal("startup succeeded despite an unreadable mcp.json")
@@ -43,7 +43,7 @@ func TestMalformedMCPJSONIsReportedWithoutPreventingStartup(t *testing.T) {
 		ClientAPIKey: "client", RuntimeToken: "runtime",
 		ApprovalConsumerToken: "consumer", ApprovalJWTSecret: "approval",
 		EgressSigningSecret: "egress", DatabasePath: filepath.Join(t.TempDir(), "turing.db"),
-		MCPConfigRoot: root, OllamaModel: "local",
+		MCPConfigRoot: root, LocalModel: "local",
 	})
 	if err != nil {
 		t.Fatalf("startup failed for malformed mcp.json: %v", err)

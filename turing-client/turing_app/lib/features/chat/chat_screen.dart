@@ -31,6 +31,7 @@ import 'run_state_reconciler.dart';
 import 'run_cancellation_controller.dart';
 import 'run_stop_control.dart';
 import 'tool_call_card.dart';
+import '../../models/model_provider.dart';
 
 final Random _sendIdempotencyRandom = Random.secure();
 
@@ -49,7 +50,7 @@ class ChatScreen extends StatefulWidget {
     required this.apiClient,
     required this.eventSource,
     this.embedded = false,
-    this.modelProvider = 'ollama',
+    this.modelProvider = localModelProvider,
     this.onSessionUpdated,
     this.onSessionDeleted,
   });
@@ -102,6 +103,10 @@ class _ChatScreenState extends State<ChatScreen> {
   /// the replayed events are what builds the cards.
   bool _delegationsLoaded = false;
   final Set<String> _cancellingDelegations = {};
+
+  /// Delegation IDs with a consent decision open — see
+  /// [_allowDelegationEgress] and [_declineDelegationEgress].
+  final Set<String> _decidingDelegations = {};
 
   /// Approval IDs whose details are being read to relay them onto a card,
   /// and those whose read failed, which the card then offers to read again.
@@ -1750,7 +1755,7 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       } on Exception {
         if (!mounted) return;
-        if (modelProvider != 'ollama') {
+        if (modelProvider != localModelProvider) {
           setState(() => _sending = false);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Could not prepare remote send')),
@@ -2173,6 +2178,13 @@ class _ChatScreenState extends State<ChatScreen> {
       onViewWork: delegation.childSessionId.isEmpty
           ? null
           : () => _openDelegationTranscript(delegation),
+      deciding: _decidingDelegations.contains(delegation.delegationId),
+      onAllowEgress: _sessionDeleted
+          ? null
+          : () => _allowDelegationEgress(delegation),
+      onDeclineEgress: _sessionDeleted
+          ? null
+          : () => _declineDelegationEgress(delegation),
       approval: relayed != null
           ? _approvalCard(relayed)
           : _relayFailedApprovals.contains(delegation.approvalId)
@@ -2372,6 +2384,107 @@ class _ChatScreenState extends State<ChatScreen> {
     } finally {
       if (mounted) {
         setState(() => _cancellingDelegations.remove(delegation.delegationId));
+      }
+    }
+    if (problem != null && mounted) {
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(SnackBar(content: Text(problem)));
+    }
+  }
+
+  /// Shows what the task's tools may send and where, and records the user's
+  /// consent if they allow it. The card follows from the task's next update.
+  Future<void> _allowDelegationEgress(Delegation delegation) async {
+    await _decideDelegationEgress(delegation, () async {
+      final RemoteEgressDisclosure disclosure;
+      try {
+        disclosure = await widget.apiClient.prepareDelegationEgress(
+          delegationId: delegation.delegationId,
+        );
+      } on Exception catch (error) {
+        return _consentProblem(
+          "Could not open ${delegation.specialist}'s request",
+          error,
+        );
+      }
+      if (!mounted) return null;
+      final allowed = await showRemoteEgressDialog(
+        context,
+        disclosure,
+        requester: delegation.specialist,
+      );
+      if (!allowed || !mounted) return null;
+      return _recordDelegationEgress(
+        delegation,
+        RemoteEgressConsent(
+          challenge: disclosure.challenge,
+          acknowledgedDataCategories: disclosure.dataCategories,
+        ),
+      );
+    });
+  }
+
+  Future<void> _declineDelegationEgress(Delegation delegation) =>
+      _decideDelegationEgress(
+        delegation,
+        () => _recordDelegationEgress(delegation, null),
+      );
+
+  Future<String?> _recordDelegationEgress(
+    Delegation delegation,
+    RemoteEgressConsent? consent,
+  ) async {
+    try {
+      final decided = await widget.apiClient.decideDelegationEgress(
+        delegationId: delegation.delegationId,
+        consent: consent,
+      );
+      _applyDecidedDelegation(decided);
+      return null;
+    } on Exception catch (error) {
+      return _consentProblem(
+        "Could not record your decision for ${delegation.specialist}'s task",
+        error,
+      );
+    }
+  }
+
+  /// The orchestrator's answer to a decision, so the card follows it even if
+  /// the task's update is late or lost. It applies only while the card still
+  /// waits for consent: an update that already moved the task on is newer.
+  void _applyDecidedDelegation(Delegation decided) {
+    final current = _delegations[decided.delegationId];
+    if (!mounted || current == null || !current.waitingForConsent) return;
+    setState(() {
+      _delegations[decided.delegationId] = decided;
+      _placeDelegations();
+    });
+    _syncDelegationApprovals();
+    if (decided.isTerminal) _requireCoalescedResync();
+  }
+
+  /// A refusal the orchestrator explains — the task changed, or stopped
+  /// waiting — is shown in its words; anything else is not echoed.
+  static String _consentProblem(String lead, Exception error) =>
+      error is TuringApiException && error.code == 'failed_precondition'
+      ? '$lead: ${error.message}'
+      : '$lead. Try again.';
+
+  /// Runs one consent decision for [delegation] at a time, and reports the
+  /// problem [decide] returns, if any.
+  Future<void> _decideDelegationEgress(
+    Delegation delegation,
+    Future<String?> Function() decide,
+  ) async {
+    if (_decidingDelegations.contains(delegation.delegationId)) return;
+    setState(() => _decidingDelegations.add(delegation.delegationId));
+    String? problem;
+    try {
+      problem = await decide();
+    } finally {
+      if (mounted) {
+        setState(() => _decidingDelegations.remove(delegation.delegationId));
       }
     }
     if (problem != null && mounted) {

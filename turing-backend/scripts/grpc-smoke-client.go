@@ -147,7 +147,12 @@ func loadConfig() (smokeConfig, error) {
 	if token == "" {
 		return smokeConfig{}, errors.New("TURING_CLIENT_API_KEY is required")
 	}
+	// The model the services resolve: TURING_LOCAL_MODEL wins over the
+	// deprecated OLLAMA_MODEL from any source.
 	model := os.Getenv("TURING_VERIFY_MODEL")
+	if model == "" {
+		model = lookup("TURING_LOCAL_MODEL")
+	}
 	if model == "" {
 		model = lookup("OLLAMA_MODEL")
 	}

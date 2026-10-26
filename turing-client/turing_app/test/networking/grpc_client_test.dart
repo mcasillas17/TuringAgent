@@ -111,6 +111,46 @@ void main() {
     },
   );
 
+  test(
+    'getLocalEngine names the engine serving the local default model',
+    () async {
+      final service = _CapturingSessionService()
+        ..configResponse = sessionpb.GetConfigResponse(
+          providers: [
+            commonpb.ProviderConfig(
+              provider: commonpb.ModelProvider.MODEL_PROVIDER_OLLAMA,
+              enabled: true,
+              defaultModel: 'deepseek-chat',
+              models: [
+                commonpb.ModelCapability(model: 'qwen3:8b', engine: 'Ollama'),
+                commonpb.ModelCapability(model: 'deepseek-chat', engine: 'ds4'),
+              ],
+            ),
+          ],
+        );
+      final api = await _startSessionApi(service);
+
+      final engine = await api.getLocalEngine();
+
+      expect(engine?.label, 'ds4');
+      expect(engine?.model, 'deepseek-chat');
+    },
+  );
+
+  test('getLocalEngine is null when nothing serves the local route', () async {
+    final service = _CapturingSessionService()
+      ..configResponse = sessionpb.GetConfigResponse(
+        providers: [
+          commonpb.ProviderConfig(
+            provider: commonpb.ModelProvider.MODEL_PROVIDER_OLLAMA,
+          ),
+        ],
+      );
+    final api = await _startSessionApi(service);
+
+    expect(await api.getLocalEngine(), isNull);
+  });
+
   test('getSession forwards the session id with a bounded deadline', () async {
     final service = _CapturingSessionService();
     final server = grpc.Server.create(services: [service]);
@@ -938,6 +978,14 @@ Future<TuringGrpcApi> _startSessionApi(_CapturingSessionService service) async {
 }
 
 class _CapturingSessionService extends sessiongrpc.SessionServiceBase {
+  sessionpb.GetConfigResponse configResponse = sessionpb.GetConfigResponse();
+
+  @override
+  Future<sessionpb.GetConfigResponse> getConfig(
+    grpc.ServiceCall call,
+    sessionpb.GetConfigRequest request,
+  ) async => configResponse;
+
   sessionpb.GetSessionRequest? getSessionRequest;
   DateTime? getSessionDeadline;
   sessionpb.ListSessionsRequest? listSessionsRequest;

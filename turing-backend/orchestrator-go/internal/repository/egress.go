@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 )
@@ -134,7 +135,7 @@ func normalizePendingEgressDecision(input *PendingEgressDecision) (*PendingEgres
 		normalized.ChallengeNonce == "" ||
 		normalized.ChallengeFingerprint == "" ||
 		normalized.RequestDigest == "" ||
-		(normalized.Provider != "openai_compatible" && normalized.Provider != "ollama") ||
+		(normalized.Provider != "openai_compatible" && normalized.Provider != backendegress.LocalProvider) ||
 		normalized.Model == "" ||
 		(normalized.ExternalAgentID != "" && normalized.ExternalCredentialRefHash == "") ||
 		(normalized.ExternalAgentID == "" && normalized.ExternalCredentialRefHash != "") ||
@@ -649,4 +650,30 @@ func (r *Repository) LookupSendMessageReplay(ctx context.Context, idempotencyKey
 		return EnqueueUserMessageResult{}, false, err
 	}
 	return record.result(), true, nil
+}
+
+// RemoteMCPServersProto and IntegrationEndpointsProto are destinations as a
+// disclosure names them, a send's and a delegated task's alike.
+func RemoteMCPServersProto(destinations []RemoteMCPServerEgress) []*turingv1.RemoteMcpEgressDestination {
+	result := make([]*turingv1.RemoteMcpEgressDestination, len(destinations))
+	for index, destination := range destinations {
+		result[index] = &turingv1.RemoteMcpEgressDestination{
+			ServerName:   destination.ServerName,
+			Endpoint:     destination.Endpoint,
+			EndpointHost: destination.EndpointHost,
+		}
+	}
+	return result
+}
+
+func IntegrationEndpointsProto(destinations []IntegrationEndpointEgress) []*turingv1.IntegrationEgressDestination {
+	result := make([]*turingv1.IntegrationEgressDestination, len(destinations))
+	for index, destination := range destinations {
+		result[index] = &turingv1.IntegrationEgressDestination{
+			Endpoint: destination.Endpoint, EndpointHost: destination.EndpointHost,
+			ConnectionId: destination.ConnectionID, DisplayName: destination.DisplayName,
+			Tools: append([]string(nil), destination.Tools...),
+		}
+	}
+	return result
 }

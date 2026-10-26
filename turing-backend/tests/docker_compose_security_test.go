@@ -117,6 +117,9 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		// never hold the bearer token or API key those calls would need.
 		"MCP_FILES_TOKEN_GENERAL:",
 		"OPENAI_API_KEY:",
+		// The local engine's key is the runtime's alone: only it calls the
+		// engine.
+		"TURING_LOCAL_ENGINE_API_KEY:",
 	)
 
 	agent := composeServiceBlock(t, compose, "turing-agent-runtime-general")
@@ -131,6 +134,9 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"OLLAMA_BASE_URL:",
 		"OLLAMA_CONTEXT_WINDOW_TOKENS:",
 		"OLLAMA_MAX_OUTPUT_TOKENS:",
+		"TURING_LOCAL_ENGINE:",
+		"TURING_LOCAL_ENGINE_URL:",
+		"TURING_LOCAL_ENGINE_API_KEY:",
 		"OPENAI_API_KEY:",
 		"OPENAI_CONTEXT_WINDOW_TOKENS:",
 		"OPENAI_MAX_OUTPUT_TOKENS:",
@@ -171,6 +177,9 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"OPENAI_API_KEY:",
 		"OLLAMA_CONTEXT_WINDOW_TOKENS:",
 		"OLLAMA_MAX_OUTPUT_TOKENS:",
+		"TURING_LOCAL_ENGINE_API_KEY:",
+		"TURING_LOCAL_ENGINE_URL:",
+		"TURING_LOCAL_MODEL:",
 		"OPENAI_CONTEXT_WINDOW_TOKENS:",
 		"OPENAI_MAX_OUTPUT_TOKENS:",
 		// A tool server has no reason to hold a user's third-party API keys,
@@ -201,6 +210,9 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		"OPENAI_API_KEY:",
 		"OLLAMA_CONTEXT_WINDOW_TOKENS:",
 		"OLLAMA_MAX_OUTPUT_TOKENS:",
+		"TURING_LOCAL_ENGINE_API_KEY:",
+		"TURING_LOCAL_ENGINE_URL:",
+		"TURING_LOCAL_MODEL:",
 		"OPENAI_CONTEXT_WINDOW_TOKENS:",
 		"OPENAI_MAX_OUTPUT_TOKENS:",
 		"TURING_AGENT_API_KEYS:",
@@ -241,6 +253,8 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"MCP_CONFIG_ROOT",
 			"OLLAMA_MODEL",
 			"OLLAMA_CONTEXT_WINDOW_TOKENS",
+			"TURING_LOCAL_MODEL",
+			"TURING_LOCAL_CONTEXT_WINDOW_TOKENS",
 			"OPENAI_BASE_URL",
 			"OPENAI_MODEL",
 			"OPENAI_CONTEXT_WINDOW_TOKENS",
@@ -285,6 +299,13 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 			"OLLAMA_CONTEXT_WINDOW_TOKENS",
 			"OLLAMA_MAX_OUTPUT_TOKENS",
 			"OLLAMA_KEEP_ALIVE",
+			"TURING_LOCAL_ENGINE",
+			"TURING_LOCAL_ENGINE_URL",
+			"TURING_LOCAL_ENGINE_API_KEY",
+			"TURING_LOCAL_ENGINE_LABEL",
+			"TURING_LOCAL_MODEL",
+			"TURING_LOCAL_CONTEXT_WINDOW_TOKENS",
+			"TURING_LOCAL_MAX_OUTPUT_TOKENS",
 			"OPENAI_BASE_URL",
 			"OPENAI_API_KEY",
 			"OPENAI_MODEL",
@@ -329,6 +350,33 @@ func TestDockerComposeKeepsServiceSecretsLeastPrivilege(t *testing.T) {
 		sort.Strings(allowed)
 		if !equalStrings(actual, allowed) {
 			t.Errorf("%s environment = %v, want %v", serviceName, actual, allowed)
+		}
+	}
+}
+
+// The services own the local engine's defaults and read an old OLLAMA_* name
+// only while its TURING_LOCAL_* replacement is empty, so Compose must pass
+// each one through empty when unset: a default here would make a fresh
+// install read a deprecated key, or hide an old .env's value behind a new
+// one.
+func TestLocalEngineKeysHaveNoComposeDefault(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "infra", "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(data)
+	for _, service := range []string{"turing-orchestrator", "turing-agent-runtime-general"} {
+		block := composeServiceBlock(t, compose, service)
+		for _, line := range strings.Split(block, "\n") {
+			key, value, found := strings.Cut(strings.TrimSpace(line), ": ")
+			localKey := strings.HasPrefix(key, "TURING_LOCAL_") || key == "OLLAMA_BASE_URL" || key == "OLLAMA_MODEL" ||
+				key == "OLLAMA_CONTEXT_WINDOW_TOKENS" || key == "OLLAMA_MAX_OUTPUT_TOKENS"
+			if !found || !localKey {
+				continue
+			}
+			if value != "${"+key+":-}" {
+				t.Fatalf("%s passes %s as %q, want ${%s:-}", service, key, value, key)
+			}
 		}
 	}
 }

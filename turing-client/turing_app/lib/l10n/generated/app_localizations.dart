@@ -1168,6 +1168,24 @@ abstract class AppLocalizations {
   /// **'Send'**
   String get egressDialogSend;
 
+  /// No description provided for @egressDialogLocalProvider.
+  ///
+  /// In en, this message translates to:
+  /// **'Local'**
+  String get egressDialogLocalProvider;
+
+  /// No description provided for @egressDialogAllow.
+  ///
+  /// In en, this message translates to:
+  /// **'Allow'**
+  String get egressDialogAllow;
+
+  /// No description provided for @egressDialogRequester.
+  ///
+  /// In en, this message translates to:
+  /// **'{requester} asks to use these tools for this one task.'**
+  String egressDialogRequester(String requester);
+
   /// No description provided for @egressCategoryCurrentMessage.
   ///
   /// In en, this message translates to:

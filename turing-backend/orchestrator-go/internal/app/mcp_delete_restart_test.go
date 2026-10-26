@@ -22,7 +22,7 @@ func TestDeletedImportedMCPServerStaysDeletedAfterRestart(t *testing.T) {
 		ClientAPIKey: "client", RuntimeToken: "runtime",
 		ApprovalConsumerToken: "consumer", ApprovalJWTSecret: "approval",
 		EgressSigningSecret: "egress", DatabasePath: databasePath,
-		MCPConfigRoot: root, OllamaModel: "local",
+		MCPConfigRoot: root, LocalModel: "local",
 	}
 	first, err := New(cfg)
 	if err != nil {

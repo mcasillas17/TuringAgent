@@ -19,7 +19,18 @@ env_value() {
   ' .env
 }
 
-configured_ollama_url="${OLLAMA_BASE_URL:-$(env_value OLLAMA_BASE_URL)}"
+# This script drives Ollama's own API; another local engine is checked another
+# way. Each TURING_LOCAL_* name wins over the OLLAMA_* one it replaces, as in
+# the services.
+engine="${TURING_LOCAL_ENGINE:-$(env_value TURING_LOCAL_ENGINE)}"
+if [[ -n "$engine" && "$engine" != "ollama" ]]; then
+  echo "verify-tool-loop.sh checks the Ollama engine; TURING_LOCAL_ENGINE is ${engine}." >&2
+  exit 2
+fi
+configured_ollama_url="${TURING_LOCAL_ENGINE_URL:-$(env_value TURING_LOCAL_ENGINE_URL)}"
+if [[ -z "$configured_ollama_url" ]]; then
+  configured_ollama_url="${OLLAMA_BASE_URL:-$(env_value OLLAMA_BASE_URL)}"
+fi
 configured_ollama_url="${configured_ollama_url:-http://localhost:11434}"
 ollama_base_url="${TURING_VERIFY_OLLAMA_URL:-${configured_ollama_url/host.docker.internal/localhost}}"
 if [[ -n "${TURING_VERIFY_OLLAMA_CONTAINER_URL:-}" ]]; then
@@ -29,13 +40,15 @@ else
   compose_ollama_url="${compose_ollama_url/127.0.0.1/host.docker.internal}"
   compose_ollama_url="${compose_ollama_url/localhost/host.docker.internal}"
 fi
-export OLLAMA_BASE_URL="$compose_ollama_url"
+export OLLAMA_BASE_URL="$compose_ollama_url" TURING_LOCAL_ENGINE_URL="$compose_ollama_url"
 if ! curl -sf -m 3 "${ollama_base_url}/api/tags" >/dev/null; then
   echo "Ollama is not reachable at ${ollama_base_url}. It runs on the HOST, not in Compose. Start it and retry." >&2
   exit 2
 fi
 
-model="${TURING_VERIFY_MODEL:-${OLLAMA_MODEL:-$(env_value OLLAMA_MODEL)}}"
+local_model="${TURING_LOCAL_MODEL:-$(env_value TURING_LOCAL_MODEL)}"
+legacy_model="${OLLAMA_MODEL:-$(env_value OLLAMA_MODEL)}"
+model="${TURING_VERIFY_MODEL:-${local_model:-$legacy_model}}"
 model="${model:-qwen2.5:7b}"
 if ! curl -sf -m 10 \
   -H "Content-Type: application/json" \

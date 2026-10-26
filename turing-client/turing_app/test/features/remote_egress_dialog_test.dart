@@ -61,6 +61,24 @@ void main() {
     expect(find.text('Must Not Render'), findsNothing);
   });
 
+  // A specialist's local model is named as the local route, not by its wire
+  // identity, whichever engine serves it.
+  testWidgets('the local route is shown as Local', (tester) async {
+    final disclosure = RemoteEgressDisclosure(
+      challenge: 'challenge',
+      provider: 'ollama',
+      model: 'deepseek-chat',
+      endpoint: '',
+      endpointHost: '',
+      dataCategories: const [EgressDataCategory.toolArguments],
+      expiresAt: DateTime.utc(2026, 8, 22),
+    );
+    await _open(tester, disclosure);
+
+    expect(find.textContaining('Local / deepseek-chat'), findsOneWidget);
+    expect(find.textContaining('ollama'), findsNothing);
+  });
+
   testWidgets('skill header is not rendered when the skill list is empty', (
     tester,
   ) async {
@@ -111,6 +129,33 @@ void main() {
     );
     expect(find.text('vendor/vendor.lookup'), findsOneWidget);
   });
+
+  testWidgets(
+    'a specialist\'s request names who asks and allows rather than sends',
+    (tester) async {
+      final disclosure = RemoteEgressDisclosure(
+        challenge: 'challenge',
+        provider: 'ollama',
+        model: 'local',
+        endpoint: '',
+        endpointHost: '',
+        dataCategories: const [
+          EgressDataCategory.toolArguments,
+          EgressDataCategory.toolResults,
+        ],
+        expiresAt: DateTime.utc(2026, 8, 21),
+        selectedTools: const ['integrations/github.get_issue'],
+      );
+      await _open(tester, disclosure, requester: '💻 Dev');
+
+      expect(
+        find.text('💻 Dev asks to use these tools for this one task.'),
+        findsOneWidget,
+      );
+      expect(find.text('Allow'), findsOneWidget);
+      expect(find.text('Send'), findsNothing);
+    },
+  );
 
   group('memory disclosure', () {
     testWidgets('pinned memory names the tiers that would leave', (
@@ -548,15 +593,17 @@ void main() {
 
 Future<void> _open(
   WidgetTester tester,
-  RemoteEgressDisclosure disclosure,
-) async {
+  RemoteEgressDisclosure disclosure, {
+  String? requester,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
       home: Builder(
         builder: (context) => TextButton(
-          onPressed: () => showRemoteEgressDialog(context, disclosure),
+          onPressed: () =>
+              showRemoteEgressDialog(context, disclosure, requester: requester),
           child: const Text('Open'),
         ),
       ),

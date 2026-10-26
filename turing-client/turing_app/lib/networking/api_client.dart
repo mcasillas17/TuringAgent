@@ -10,6 +10,7 @@ import '../models/automation.dart';
 import '../models/memory.dart';
 import '../models/message.dart';
 import '../models/mcp_server.dart';
+import '../models/model_provider.dart';
 import '../models/remote_egress.dart';
 import '../models/run_cancellation.dart';
 import '../models/search_hit.dart';
@@ -72,7 +73,7 @@ abstract class TuringApi implements RemoteEgressApi {
   Future<Map<String, dynamic>> sendMessage({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     String? idempotencyKey,
   });
 
@@ -101,10 +102,10 @@ abstract class TuringApi implements RemoteEgressApi {
   Future<RemoteEgressDisclosure?> prepareRemoteEgress({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     required String idempotencyKey,
   }) async {
-    if (modelProvider == 'ollama') return null;
+    if (modelProvider == localModelProvider) return null;
     throw const TuringApiException(
       code: 'remote_egress_unsupported',
       message: 'This client cannot prepare remote egress consent',
@@ -115,7 +116,7 @@ abstract class TuringApi implements RemoteEgressApi {
   Future<Map<String, dynamic>> sendMessageWithRemoteEgressConsent({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     required String idempotencyKey,
     required RemoteEgressConsent consent,
   }) {
@@ -282,6 +283,34 @@ abstract class TuringApi implements RemoteEgressApi {
     throw const TuringApiException(
       code: 'team_unsupported',
       message: 'This client cannot read delegations',
+    );
+  }
+
+  /// The engine and model serving the local route, or null when no worker
+  /// serves it or this client cannot ask.
+  Future<LocalEngine?> getLocalEngine() async => null;
+
+  /// The disclosure for a task waiting for consent to tools that leave the
+  /// machine: where its tool calls may go and what may leave.
+  Future<RemoteEgressDisclosure> prepareDelegationEgress({
+    required String delegationId,
+  }) {
+    throw const TuringApiException(
+      code: 'team_unsupported',
+      message: 'This client cannot read a task\'s consent request',
+    );
+  }
+
+  /// The user's decision for that one task: [consent] allows the disclosed
+  /// tools; none declines them, which runs the task without them or ends it
+  /// when its specialist requires them.
+  Future<Delegation> decideDelegationEgress({
+    required String delegationId,
+    RemoteEgressConsent? consent,
+  }) {
+    throw const TuringApiException(
+      code: 'team_unsupported',
+      message: 'This client cannot decide a task\'s consent request',
     );
   }
 
@@ -545,14 +574,14 @@ abstract interface class RemoteEgressApi {
   Future<RemoteEgressDisclosure?> prepareRemoteEgress({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     required String idempotencyKey,
   });
 
   Future<Map<String, dynamic>> sendMessageWithRemoteEgressConsent({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     required String idempotencyKey,
     required RemoteEgressConsent consent,
   });

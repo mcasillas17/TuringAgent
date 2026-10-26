@@ -37,7 +37,7 @@ func newTestApp(t *testing.T) *App {
 		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret: "approval-secret",
 		DatabasePath:      t.TempDir() + "/turing.db",
-		OllamaModel:       "llama3.2",
+		LocalModel:        "llama3.2",
 		OpenAIModel:       "gpt-4o-mini",
 	}
 	app, err := New(cfg)
@@ -154,7 +154,7 @@ func TestAppEnforcesConfiguredGlobalGeneralRunCapacity(t *testing.T) {
 		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret:        "approval-secret",
 		DatabasePath:             t.TempDir() + "/turing.db",
-		OllamaModel:              "llama3.2",
+		LocalModel:               "llama3.2",
 		MaxConcurrentRunsGeneral: 1,
 	})
 	if err != nil {
@@ -1215,7 +1215,7 @@ func newMemoryTestApp(t *testing.T) *App {
 		ApprovalJWTSecret: "approval-secret",
 		DatabasePath:      t.TempDir() + "/turing.db",
 		MemoryRoot:        root,
-		OllamaModel:       "llama3.2",
+		LocalModel:        "llama3.2",
 		OpenAIModel:       "gpt-4o-mini",
 	})
 	if err != nil {
@@ -1323,7 +1323,7 @@ func TestTeamServiceListsProfilesFromTheConfiguredRoot(t *testing.T) {
 		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret: "approval-secret",
 		DatabasePath:      t.TempDir() + "/turing.db",
-		OllamaModel:       "llama3.2",
+		LocalModel:        "llama3.2",
 		TeamRoot:          teamRoot,
 	})
 	if err != nil {

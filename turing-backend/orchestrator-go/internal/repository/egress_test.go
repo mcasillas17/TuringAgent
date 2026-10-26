@@ -642,6 +642,17 @@ func TestRemoteEgressNoticeTruncatesSkillNamesAtEight(t *testing.T) {
 	}
 }
 
+// A consented send tells its conversation where it is going and what may
+// leave, before anything has.
+func TestAConsentedSendSaysWhereItGoesAndWhatMayLeave(t *testing.T) {
+	repo, _ := newTitleTestRepo(t)
+	const want = "Sending to api.example.com — disclosed data categories: Current message, Conversation history, " +
+		"Tool schemas. Data leaves your machine if this run reaches a remote destination"
+	if note := enqueueEgressNoticeNote(t, repo, remoteDecision(), "openai_compatible"); note != want {
+		t.Fatalf("notice = %q, want %q", note, want)
+	}
+}
+
 func enqueueEgressNoticeNote(t *testing.T, repo *Repository, decision *PendingEgressDecision, provider string) string {
 	t.Helper()
 	session, err := repo.CreateSession(context.Background(), "Egress notice")

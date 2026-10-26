@@ -1122,6 +1122,43 @@ func TestCallTeamToolProtoContract(t *testing.T) {
 	assertProtoFieldMembers(t, response, map[protoreflect.Name]protoreflect.FieldNumber{"result": 1})
 }
 
+// Child egress consent: a profile names the tools that need it, a
+// delegation says where its consent stands, and two public methods prepare
+// and record the user's decision for one task.
+func TestDelegationEgressProtoContract(t *testing.T) {
+	file := turingv1.File_turing_v1_team_proto
+	assertProtoField(t, file.Messages().ByName("AgentProfile"), "consent_tools", 21, protoreflect.StringKind, true, "")
+	delegation := file.Messages().ByName("Delegation")
+	assertProtoField(t, delegation, "egress_tools", 18, protoreflect.StringKind, true, "")
+	assertProtoField(t, delegation, "egress_consent", 19, protoreflect.StringKind, false, "")
+	assertProtoField(t, delegation, "egress_required", 20, protoreflect.BoolKind, false, "")
+	for name, want := range map[protoreflect.Name][2]protoreflect.FullName{
+		"PrepareDelegationEgress": {"turing.v1.PrepareDelegationEgressRequest", "turing.v1.PrepareDelegationEgressResponse"},
+		"DecideDelegationEgress":  {"turing.v1.DecideDelegationEgressRequest", "turing.v1.Delegation"},
+	} {
+		method := file.Services().ByName("TeamService").Methods().ByName(name)
+		if method == nil || method.Input().FullName() != want[0] || method.Output().FullName() != want[1] {
+			t.Fatalf("TeamService.%s = %v, want %v", name, method, want)
+		}
+	}
+	assertProtoFieldMembers(t, file.Messages().ByName("PrepareDelegationEgressRequest"), map[protoreflect.Name]protoreflect.FieldNumber{"delegation_id": 1})
+	assertProtoField(t, file.Messages().ByName("PrepareDelegationEgressResponse"), "disclosure", 1, protoreflect.MessageKind, false, "turing.v1.RemoteEgressDisclosure")
+	decide := file.Messages().ByName("DecideDelegationEgressRequest")
+	assertProtoField(t, decide, "delegation_id", 1, protoreflect.StringKind, false, "")
+	assertProtoField(t, decide, "consent", 2, protoreflect.MessageKind, false, "turing.v1.RemoteEgressConsent")
+	assertProtoFieldMembers(t, decide, map[protoreflect.Name]protoreflect.FieldNumber{"delegation_id": 1, "consent": 2})
+}
+
+// A worker names the engine serving each model, for display; routing never
+// reads it.
+func TestModelCapabilityCarriesTheEngine(t *testing.T) {
+	capability := turingv1.File_turing_v1_common_proto.Messages().ByName("ModelCapability")
+	assertProtoField(t, capability, "engine", 4, protoreflect.StringKind, false, "")
+	assertProtoFieldMembers(t, capability, map[protoreflect.Name]protoreflect.FieldNumber{
+		"provider": 1, "model": 2, "max_context_tokens": 3, "engine": 4,
+	})
+}
+
 func TestMCPRegistryProtoContract(t *testing.T) {
 	file := turingv1.File_turing_v1_mcp_proto
 	server := file.Messages().ByName("McpServerDescriptor")

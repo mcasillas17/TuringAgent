@@ -26,6 +26,8 @@ type fakeOllama struct {
 	specialistSeen bool
 	// continuation is the request Turing's continuation sent, if any.
 	continuation string
+	// specialist is the request the specialist sent, if any.
+	specialist string
 }
 
 func (f *fakeOllama) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +46,7 @@ func (f *fakeOllama) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"message":{"role":"assistant","content":"Research found the notes."},"done":true,"done_reason":"stop"}`+"\n")
 	case strings.Contains(request, "Gather the notes") && !strings.Contains(request, `"team.delegate"`):
 		f.specialistSeen = true
+		f.specialist = request
 		_, _ = io.WriteString(w, `{"message":{"role":"assistant","content":"Found the notes."},"done":true,"done_reason":"stop"}`+"\n")
 	case strings.Contains(request, `"role":"tool"`):
 		_, _ = io.WriteString(w, `{"message":{"role":"assistant","content":"Asked Research to gather the notes."},"done":true,"done_reason":"stop"}`+"\n")
@@ -84,7 +87,7 @@ func testTuringDelegatesThroughTheRuntime(t *testing.T, approvalRequired bool) {
 			Conn: internalConn, RuntimeToken: "internal", WorkerID: "team-runtime",
 			MaxConcurrentRuns: 1, MaxToolCallsPerRun: 10,
 			OpenAIBaseURL: server.URL, OpenAIModel: "unused",
-			OllamaBaseURL: server.URL, OllamaModel: "llama3.2",
+			OllamaBaseURL: server.URL, LocalModel: "llama3.2",
 		})
 	}()
 	t.Cleanup(func() {
@@ -215,6 +218,151 @@ func testTuringDelegatesThroughTheRuntime(t *testing.T, approvalRequired bool) {
 		SELECT COUNT(*) FROM events WHERE session_id = ? AND type = 'delegation.finished'`, session.SessionID).Scan(&finished); err != nil || finished != 1 {
 		t.Fatalf("delegation.finished events = %d, %v; want 1", finished, err)
 	}
+}
+
+// A specialist that may use a GitHub tool gets a task that waits, unclaimed,
+// for the user's consent. Allowing it, through the public API, records a
+// decision the real runtime accepts: the task runs with the tool offered,
+// and its result is joined back.
+func TestASpecialistsGitHubToolWaitsForTheUsersConsent(t *testing.T) {
+	app := newTeamTestAppWithProfile(t, true, "---\nname: Research\ndescription: Looks things up\ntools: [skills_list, github.get_issue]\nmemory: none\n---\nYou research.\n")
+	model := &fakeOllama{}
+	server := httptest.NewServer(model)
+	t.Cleanup(server.Close)
+	publicConn := newBufconnClient(t, app.PublicServer)
+	internalConn := newBufconnClient(t, app.InternalServer)
+	publicCtx, cancelPublic := context.WithCancel(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer client"))
+	defer cancelPublic()
+	if _, err := turingv1.NewIntegrationServiceClient(publicConn).ConnectAccount(publicCtx, &turingv1.ConnectAccountRequest{
+		Provider: turingv1.IntegrationProvider_INTEGRATION_PROVIDER_GITHUB, DisplayName: "Work GitHub",
+		Credential: "ghp_test", ConsentAcknowledged: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	workerCtx, stopWorker := context.WithCancel(context.Background())
+	workerDone := make(chan error, 1)
+	go func() {
+		workerDone <- runtimetestkit.RunWorker(workerCtx, runtimetestkit.WorkerConfig{
+			Conn: internalConn, RuntimeToken: "internal", WorkerID: "team-runtime",
+			MaxConcurrentRuns: 1, MaxToolCallsPerRun: 10,
+			OpenAIBaseURL: server.URL, OpenAIModel: "unused",
+			OllamaBaseURL: server.URL, LocalModel: "llama3.2",
+		})
+	}()
+	t.Cleanup(func() {
+		stopWorker()
+		<-workerDone
+	})
+	waitFor(t, "the runtime worker to serve the local model with GitHub", func() bool {
+		return app.RuntimeService.ValidateRouting(context.Background(), repository.RoutingRequirements{
+			AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
+			RequestedTools:             []string{repository.TeamDelegateTool, "integrations/github.get_issue"},
+			MinimumTeamProtocolVersion: 1, RemoteEgressDecision: true,
+		}) == nil
+	})
+
+	team := turingv1.NewTeamServiceClient(publicConn)
+	profiles, err := team.ListAgentProfiles(publicCtx, &turingv1.ListAgentProfilesRequest{})
+	if err != nil || len(profiles.GetProfiles()) != 1 {
+		t.Fatalf("profiles = %+v, %v", profiles, err)
+	}
+	if consent := profiles.GetProfiles()[0].GetConsentTools(); len(consent) != 1 || consent[0] != "integrations/github.get_issue" {
+		t.Fatalf("consent tools = %q, want the GitHub tool", consent)
+	}
+	if _, err := team.GrantAgentProfile(publicCtx, &turingv1.GrantAgentProfileRequest{
+		ProfileId: "research", Revision: profiles.GetProfiles()[0].GetRevision(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := team.SetAgentProfileEnabled(publicCtx, &turingv1.SetAgentProfileEnabledRequest{ProfileId: "research", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := app.Repository.CreateSession(context.Background(), "Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// With GitHub connected, Turing's own send carries a decision of its own.
+	chat := turingv1.NewChatServiceClient(publicConn)
+	send := &turingv1.SendMessageRequest{
+		SessionId: session.SessionID, Content: "prep me for the design review", ContentType: "text",
+		AgentId:       turingv1.AgentId_AGENT_ID_GENERAL_ASSISTANT,
+		ModelProvider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "llama3.2",
+		IdempotencyKey: "team_consent_e2e",
+	}
+	prepared, err := chat.PrepareRemoteEgress(publicCtx, &turingv1.PrepareRemoteEgressRequest{
+		SessionId: send.SessionId, Content: send.Content, ContentType: send.ContentType, AgentId: send.AgentId,
+		ModelProvider: send.ModelProvider, Model: send.Model, IdempotencyKey: send.IdempotencyKey,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	send.RemoteEgressConsent = &turingv1.RemoteEgressConsent{
+		Challenge: prepared.GetDisclosure().GetChallenge(), Acknowledged: true,
+		AcknowledgedDataCategories: prepared.GetDisclosure().GetDataCategories(),
+	}
+	stream, err := chat.SendMessage(publicCtx, send)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := stream.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentRunID := queued.GetRunQueued().GetRunId()
+	waitFor(t, "the parent to complete", func() bool {
+		run, err := app.Repository.GetRun(context.Background(), parentRunID)
+		return err == nil && run.Status == "completed"
+	})
+	listed, err := team.ListDelegations(publicCtx, &turingv1.ListDelegationsRequest{ParentSessionId: session.SessionID})
+	if err != nil || len(listed.GetDelegations()) != 1 {
+		t.Fatalf("delegations = %+v, %v", listed, err)
+	}
+	delegation := listed.GetDelegations()[0]
+	if delegation.GetState() != "waiting_consent" || delegation.GetEgressConsent() != "pending" {
+		t.Fatalf("delegation = %+v, want it waiting for consent", delegation)
+	}
+	time.Sleep(200 * time.Millisecond)
+	model.mu.Lock()
+	ranEarly := model.specialistSeen
+	model.mu.Unlock()
+	if ranEarly {
+		t.Fatal("the specialist ran before the user consented")
+	}
+
+	disclosure, err := team.PrepareDelegationEgress(publicCtx, &turingv1.PrepareDelegationEgressRequest{DelegationId: delegation.GetDelegationId()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decided, err := team.DecideDelegationEgress(publicCtx, &turingv1.DecideDelegationEgressRequest{
+		DelegationId: delegation.GetDelegationId(),
+		Consent: &turingv1.RemoteEgressConsent{
+			Challenge: disclosure.GetDisclosure().GetChallenge(), Acknowledged: true,
+			AcknowledgedDataCategories: disclosure.GetDisclosure().GetDataCategories(),
+		},
+	})
+	if err != nil || decided.GetEgressConsent() != "granted" {
+		t.Fatalf("decision = %+v, %v", decided, err)
+	}
+	waitFor(t, "the specialist's task to finish", func() bool {
+		run, err := app.Repository.GetRun(context.Background(), delegation.GetChildRunId())
+		return err == nil && (run.Status == "completed" || run.Status == "failed")
+	})
+	child, err := app.Repository.GetRun(context.Background(), delegation.GetChildRunId())
+	if err != nil || child.Status != "completed" {
+		t.Fatalf("task = %+v, %v; want the runtime to accept its decision and complete it", child, err)
+	}
+	model.mu.Lock()
+	request := model.specialist
+	model.mu.Unlock()
+	if !strings.Contains(request, "github.get_issue") {
+		t.Fatalf("specialist request = %s, want the granted GitHub tool offered", request)
+	}
+	waitFor(t, "Turing's continuation to answer", func() bool {
+		var status string
+		return app.database.QueryRowContext(context.Background(),
+			`SELECT status FROM agent_runs WHERE continues_run_id = ?`, parentRunID).Scan(&status) == nil && status == "completed"
+	})
 }
 
 func waitFor(t *testing.T, what string, done func() bool) {
