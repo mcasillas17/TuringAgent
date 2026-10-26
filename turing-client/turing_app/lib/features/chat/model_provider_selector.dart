@@ -21,6 +21,7 @@ class ModelProviderSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     return DropdownButton<String>(
       value: value,
+      isExpanded: true,
       items: [
         DropdownMenuItem(
           value: localModelProvider,
@@ -28,6 +29,7 @@ class ModelProviderSelector extends StatelessWidget {
             localEngineLabel == null || localEngineLabel!.isEmpty
                 ? 'Local'
                 : 'Local · $localEngineLabel',
+            overflow: TextOverflow.ellipsis,
           ),
         ),
         const DropdownMenuItem(

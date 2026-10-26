@@ -72,6 +72,7 @@ func NewLocal(opts LocalOptions) (Provider, error) {
 		if err != nil {
 			return nil, err
 		}
+		inner.plainMaxTokens = true
 		return &LocalOpenAI{inner: inner}, nil
 	}
 	return nil, fmt.Errorf("local engine %q is not %q or %q", opts.Engine, LocalEngineOllama, LocalEngineOpenAI)

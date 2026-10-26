@@ -73,10 +73,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
-            ModelProviderSelector(
-              value: _modelProvider,
-              localEngineLabel: _localEngine?.label,
-              onChanged: (value) => setState(() => _modelProvider = value),
+            // The full label is in the note below; the selector only has to
+            // fit beside its heading.
+            Flexible(
+              child: ModelProviderSelector(
+                value: _modelProvider,
+                localEngineLabel: _localEngine?.label,
+                onChanged: (value) => setState(() => _modelProvider = value),
+              ),
             ),
           ],
         ),

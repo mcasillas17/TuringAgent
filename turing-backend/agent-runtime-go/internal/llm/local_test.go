@@ -206,3 +206,24 @@ func TestTheLocalOpenAIEngineReportsALengthStopWithNoText(t *testing.T) {
 		t.Fatalf("events = %+v, want one length completion and no text", got)
 	}
 }
+
+// A local alias that happens to look like an OpenAI reasoning model is still a
+// local model: the engine always gets max_tokens with the configured limit.
+func TestTheLocalOpenAIEngineAlwaysSendsMaxTokens(t *testing.T) {
+	for _, model := range []string{"o3", "gpt-5", "gpt-5-mini"} {
+		engine := &fakeLocalEngine{}
+		url := engine.serve(t, `{"choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}]}`)
+		events, err := newLocalOpenAI(t, url, "").StreamChat(context.Background(), ChatRequest{Model: model})
+		if err != nil {
+			t.Fatal(err)
+		}
+		collectEvents(events)
+		engine.mu.Lock()
+		maxTokens, hasMax := engine.body["max_tokens"]
+		_, hasCompletion := engine.body["max_completion_tokens"]
+		engine.mu.Unlock()
+		if !hasMax || maxTokens != float64(512) || hasCompletion {
+			t.Fatalf("%s: body = %v, want max_tokens 512 and no max_completion_tokens", model, engine.body)
+		}
+	}
+}

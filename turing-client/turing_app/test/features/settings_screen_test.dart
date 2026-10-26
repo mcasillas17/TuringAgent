@@ -74,4 +74,43 @@ void main() {
     expect(find.text('Local'), findsOneWidget);
     expect(find.text('Save'), findsOneWidget);
   });
+
+  testWidgets('a longest engine label fits a phone-width settings screen', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final label = 'W' * 64;
+    var saved = '';
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SettingsScreen(
+          authStorage: _RecordingAuthStorage((provider) => saved = provider),
+          loadLocalEngine: () async =>
+              LocalEngine(label: label, model: 'deepseek-chat'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byType(DropdownButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OpenAI-compatible').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(saved, 'openai_compatible');
+  });
+}
+
+class _RecordingAuthStorage extends _AuthStorage {
+  _RecordingAuthStorage(this.onSave);
+
+  final void Function(String provider) onSave;
+
+  @override
+  Future<void> saveModelProvider(String provider) async => onSave(provider);
 }
