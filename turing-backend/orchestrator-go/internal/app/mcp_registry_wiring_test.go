@@ -40,7 +40,7 @@ func newMCPWiringTestApp(t *testing.T, root string) *App {
 		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret: "approval-secret",
 		DatabasePath:      t.TempDir() + "/turing.db",
-		OllamaModel:       "llama3.2",
+		LocalModel:        "llama3.2",
 		MCPConfigRoot:     root,
 		IntegrationKey:    mcpWiringIntegrationKey,
 	})
@@ -99,7 +99,7 @@ func TestStartupImportRefusalLogsCountOnlyNeverNamesOrReasons(t *testing.T) {
 		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret: "approval-secret",
 		DatabasePath:      t.TempDir() + "/turing.db",
-		OllamaModel:       "llama3.2",
+		LocalModel:        "llama3.2",
 		MCPConfigRoot:     root,
 		IntegrationKey:    mcpWiringIntegrationKey,
 	})

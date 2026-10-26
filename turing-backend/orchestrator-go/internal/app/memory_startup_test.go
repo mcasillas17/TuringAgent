@@ -55,7 +55,7 @@ func startAppOver(t *testing.T, databasePath string, memoryRoot string) *App {
 		MemoryRoot:           memoryRoot,
 		MCPFilesBaseURL:      sandbox.URL + "/mcp",
 		MCPFilesCleanupToken: "cleanup-token",
-		OllamaModel:          "llama3.2",
+		LocalModel:           "llama3.2",
 		OpenAIModel:          "gpt-4o-mini",
 	})
 	if err != nil {
@@ -195,7 +195,7 @@ func TestStartupWithNoVaultStartsAnyway(t *testing.T) {
 		ApprovalJWTSecret: "approval-secret",
 		DatabasePath:      filepath.Join(t.TempDir(), "turing.db"),
 		MemoryRoot:        filepath.Join(t.TempDir(), "not-created-yet"),
-		OllamaModel:       "llama3.2",
+		LocalModel:        "llama3.2",
 		OpenAIModel:       "gpt-4o-mini",
 	})
 	if err != nil {
@@ -239,7 +239,7 @@ func TestStartupFailsClosedOnADatabaseThatCannotAnswerForTheVault(t *testing.T) 
 		ApprovalJWTSecret: "approval-secret",
 		DatabasePath:      databasePath,
 		MemoryRoot:        memoryRoot,
-		OllamaModel:       "llama3.2",
+		LocalModel:        "llama3.2",
 		OpenAIModel:       "gpt-4o-mini",
 	})
 	if err == nil {

@@ -772,7 +772,7 @@ func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turing
 	}
 	ollamaDefault, openAIDefault := "", ""
 	if s.capabilities != nil {
-		ollamaDefault = s.capabilities.RoutableDefaultModel(backendegress.LocalProvider, s.cfg.OllamaModel)
+		ollamaDefault = s.capabilities.RoutableDefaultModel(backendegress.LocalProvider, s.cfg.LocalModel)
 		openAIDefault = s.capabilities.RoutableDefaultModel("openai_compatible", s.cfg.OpenAIModel)
 	}
 	providers := []*turingv1.ProviderConfig{

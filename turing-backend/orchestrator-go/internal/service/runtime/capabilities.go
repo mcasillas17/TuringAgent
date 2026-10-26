@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
@@ -32,6 +35,8 @@ type registeredModelCapability struct {
 	provider         string
 	model            string
 	maxContextTokens int
+	// engine is the display label of the engine serving the model.
+	engine string
 }
 
 type registeredWorkerCapabilities struct {
@@ -107,6 +112,9 @@ func decodeWorkerCapabilities(snapshot *turingv1.WorkerCapabilities) (*registere
 		if advertised.GetMaxContextTokens() < 0 {
 			return nil, nil, fmt.Errorf("max_context_tokens must be non-negative")
 		}
+		if engine := advertised.GetEngine(); engine != "" && !validEngineLabel(engine) {
+			return nil, nil, fmt.Errorf("model capability %s/%s engine must be 1 to 64 bytes of printable UTF-8", provider, model)
+		}
 		key := provider + "\x00" + model
 		if _, duplicate := seenModels[key]; duplicate {
 			return nil, nil, fmt.Errorf("model capability %s/%s is duplicated", provider, model)
@@ -116,6 +124,7 @@ func decodeWorkerCapabilities(snapshot *turingv1.WorkerCapabilities) (*registere
 			provider:         provider,
 			model:            model,
 			maxContextTokens: int(advertised.GetMaxContextTokens()),
+			engine:           advertised.GetEngine(),
 		})
 	}
 	sort.Slice(models, func(i, j int) bool {
@@ -394,6 +403,7 @@ func (s *Server) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.M
 		model    string
 	}
 	advertised := make(map[modelKey]int32)
+	engines := make(map[modelKey][]string)
 	for _, candidate := range s.liveRoutingCandidates(time.Now().UTC()) {
 		for _, model := range candidate.capabilities.models {
 			provider := modelProviderProto(model.provider)
@@ -409,6 +419,9 @@ func (s *Server) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.M
 			if limit := int32(model.maxContextTokens); !present || limit > current {
 				advertised[key] = limit
 			}
+			if model.engine != "" && !slices.Contains(engines[key], model.engine) {
+				engines[key] = append(engines[key], model.engine)
+			}
 		}
 	}
 	keys := make([]modelKey, 0, len(advertised))
@@ -423,10 +436,12 @@ func (s *Server) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.M
 	})
 	out := make(map[turingv1.ModelProvider][]*turingv1.ModelCapability)
 	for _, key := range keys {
+		slices.Sort(engines[key])
 		out[key.provider] = append(out[key.provider], &turingv1.ModelCapability{
 			Provider:         key.provider,
 			Model:            key.model,
 			MaxContextTokens: advertised[key],
+			Engine:           strings.Join(engines[key], ", "),
 		})
 	}
 	return out
@@ -1193,4 +1208,15 @@ func collectAvailable(s *Server, values func(*registeredWorkerCapabilities) []st
 	}
 	sort.Strings(available)
 	return available
+}
+
+// validEngineLabel is the runtime's llm.ValidateEngineLabel rule, repeated
+// because the orchestrator cannot import the runtime: a label reaches every
+// client verbatim, so it is 1 to 64 bytes of valid UTF-8 without control
+// characters.
+func validEngineLabel(label string) bool {
+	if label == "" || len(label) > 64 || !utf8.ValidString(label) {
+		return false
+	}
+	return !strings.ContainsFunc(label, unicode.IsControl)
 }

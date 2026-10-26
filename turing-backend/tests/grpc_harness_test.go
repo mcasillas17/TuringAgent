@@ -298,7 +298,7 @@ func newGRPCHarness(t *testing.T, opts ...harnessOption) *grpcHarness {
 		ApprovalJWTSecret:        integrationApprovalKey,
 		EgressSigningSecret:      "integration-egress-signing-key",
 		DatabasePath:             dbPath,
-		OllamaModel:              "fake-ollama",
+		LocalModel:               "fake-ollama",
 		OpenAIBaseURL:            fakeModel.server.URL,
 		OpenAIModel:              "fake-model",
 		OpenAIEnabled:            true,

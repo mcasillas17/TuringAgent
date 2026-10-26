@@ -36,7 +36,7 @@ func TestAnUnboundedQueueIsRefusedWhileATaskWaitsForConsent(t *testing.T) {
 			RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 			ApprovalJWTSecret: "approval-secret",
 			DatabasePath:      databasePath,
-			OllamaModel:       "llama3.2",
+			LocalModel:        "llama3.2",
 			TeamRoot:          teamRoot,
 			QueueMaxWaitMS:    maxWaitMS, JobReaperIntervalMS: reaperMS,
 		})
