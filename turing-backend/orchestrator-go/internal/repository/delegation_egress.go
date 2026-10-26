@@ -149,7 +149,7 @@ func (r *Repository) GrantDelegationEgress(ctx context.Context, delegationID str
 	}
 	// A specialist runs on a local model, so only its tools may leave the
 	// machine, and only through the destinations the decision names.
-	if decision.Provider != "ollama" || decision.Model != egress.Model ||
+	if decision.Provider != backendegress.LocalProvider || decision.Model != egress.Model ||
 		decision.RecallApplicable || decision.MemoryProfileApplicable ||
 		!slices.Equal(decision.SelectedTools, egress.SelectedTools) {
 		return DelegationEgressResult{}, ErrEgressDecisionInvalid

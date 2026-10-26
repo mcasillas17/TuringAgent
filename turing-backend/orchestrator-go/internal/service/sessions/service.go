@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/persisttime"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
@@ -771,7 +772,7 @@ func (s *Server) GetConfig(context.Context, *turingv1.GetConfigRequest) (*turing
 	}
 	ollamaDefault, openAIDefault := "", ""
 	if s.capabilities != nil {
-		ollamaDefault = s.capabilities.RoutableDefaultModel("ollama", s.cfg.OllamaModel)
+		ollamaDefault = s.capabilities.RoutableDefaultModel(backendegress.LocalProvider, s.cfg.OllamaModel)
 		openAIDefault = s.capabilities.RoutableDefaultModel("openai_compatible", s.cfg.OpenAIModel)
 	}
 	providers := []*turingv1.ProviderConfig{

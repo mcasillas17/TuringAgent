@@ -16,6 +16,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
@@ -3573,7 +3574,7 @@ func nullString(value sql.NullString) string {
 
 func mapJob(job repository.Job) *turingv1.AgentJob {
 	provider := turingv1.ModelProvider_MODEL_PROVIDER_UNSPECIFIED
-	if job.ModelProvider == "ollama" {
+	if job.ModelProvider == backendegress.LocalProvider {
 		provider = turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA
 	}
 	if job.ModelProvider == "openai_compatible" {
@@ -3713,7 +3714,7 @@ func providerToProto(provider string) turingv1.ModelProvider {
 	if provider == "openai_compatible" {
 		return turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
 	}
-	if provider == "ollama" {
+	if provider == backendegress.LocalProvider {
 		return turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA
 	}
 	return turingv1.ModelProvider_MODEL_PROVIDER_UNSPECIFIED

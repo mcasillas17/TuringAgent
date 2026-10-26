@@ -14,6 +14,9 @@ enum AgentId {
 
 enum ModelProvider {
   MODEL_PROVIDER_UNSPECIFIED = 0;
+  // The local route on this machine, whichever engine serves it: Ollama or an
+  // OpenAI-compatible server. Named before other engines existed; the name is
+  // kept because the wire value and stored identity cannot change.
   MODEL_PROVIDER_OLLAMA = 1;
   MODEL_PROVIDER_OPENAI_COMPATIBLE = 2;
 }
@@ -229,6 +232,9 @@ message ModelCapability {
   // An operator-configured routing guarantee, not a value inferred from a
   // provider label or model name.
   int32 max_context_tokens = 3;
+  // Display label of the engine serving this model, such as "Ollama" or
+  // "ds4". Never used for routing.
+  string engine = 4;
 }
 
 message ProviderConfig {

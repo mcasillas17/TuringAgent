@@ -10,6 +10,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
@@ -469,7 +470,7 @@ func New(cfg config.Config) (*App, error) {
 	}
 	scheduler := automationsvc.NewScheduler(repo, eventBus, runtimeService, repository.AutomationRunDefaults{
 		AgentID:         "general_assistant",
-		ModelProvider:   "ollama",
+		ModelProvider:   backendegress.LocalProvider,
 		Model:           cfg.OllamaModel,
 		ValidateRouting: runtimeService.ValidateRouting,
 	})

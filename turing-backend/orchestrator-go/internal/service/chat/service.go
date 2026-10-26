@@ -382,7 +382,7 @@ func requestTools(requested []string) ([]string, error) {
 func requestModelProvider(provider turingv1.ModelProvider) (string, error) {
 	switch provider {
 	case turingv1.ModelProvider_MODEL_PROVIDER_UNSPECIFIED, turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA:
-		return "ollama", nil
+		return backendegress.LocalProvider, nil
 	case turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE:
 		return "openai_compatible", nil
 	default:

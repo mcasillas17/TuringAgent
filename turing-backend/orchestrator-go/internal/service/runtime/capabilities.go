@@ -12,6 +12,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 	"google.golang.org/grpc/codes"
@@ -244,7 +245,7 @@ func agentIDName(agentID turingv1.AgentId) string {
 func modelProviderName(provider turingv1.ModelProvider) string {
 	switch provider {
 	case turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA:
-		return "ollama"
+		return backendegress.LocalProvider
 	case turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE:
 		return "openai_compatible"
 	default:
@@ -537,7 +538,7 @@ func (s *Server) AgentAvailable(agentID turingv1.AgentId) bool {
 
 func modelProviderProto(provider string) turingv1.ModelProvider {
 	switch provider {
-	case "ollama":
+	case backendegress.LocalProvider:
 		return turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA
 	case "openai_compatible":
 		return turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE

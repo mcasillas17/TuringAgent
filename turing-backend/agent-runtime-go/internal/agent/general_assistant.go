@@ -870,7 +870,7 @@ func (a *GeneralAssistant) prepareRecallForRun(
 
 func maxOutputTokensSetting(provider llm.Provider) string {
 	switch provider.ID() {
-	case "ollama":
+	case backendegress.LocalProvider:
 		return "OLLAMA_MAX_OUTPUT_TOKENS"
 	case "openai_compatible":
 		return "OPENAI_MAX_OUTPUT_TOKENS"

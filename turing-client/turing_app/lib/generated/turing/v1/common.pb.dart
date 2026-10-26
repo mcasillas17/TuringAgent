@@ -584,11 +584,13 @@ class ModelCapability extends $pb.GeneratedMessage {
     ModelProvider? provider,
     $core.String? model,
     $core.int? maxContextTokens,
+    $core.String? engine,
   }) {
     final result = ModelCapability._();
     if (provider != null) result.provider = provider;
     if (model != null) result.model = model;
     if (maxContextTokens != null) result.maxContextTokens = maxContextTokens;
+    if (engine != null) result.engine = engine;
     return result;
   }
 
@@ -609,6 +611,7 @@ class ModelCapability extends $pb.GeneratedMessage {
         enumValues: ModelProvider.values)
     ..aOS(2, _omitFieldNames ? '' : 'model')
     ..aI(3, _omitFieldNames ? '' : 'maxContextTokens')
+    ..aOS(4, _omitFieldNames ? '' : 'engine')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -661,6 +664,17 @@ class ModelCapability extends $pb.GeneratedMessage {
   $core.bool hasMaxContextTokens() => $_has(2);
   @$pb.TagNumber(3)
   void clearMaxContextTokens() => $_clearField(3);
+
+  /// Display label of the engine serving this model, such as "Ollama" or
+  /// "ds4". Never used for routing.
+  @$pb.TagNumber(4)
+  $core.String get engine => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set engine($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasEngine() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearEngine() => $_clearField(4);
 }
 
 class ProviderConfig extends $pb.GeneratedMessage {
