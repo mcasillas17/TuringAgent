@@ -369,8 +369,9 @@ func TestLocalEngineKeysHaveNoComposeDefault(t *testing.T) {
 		block := composeServiceBlock(t, compose, service)
 		for _, line := range strings.Split(block, "\n") {
 			key, value, found := strings.Cut(strings.TrimSpace(line), ": ")
-			if !found || !(strings.HasPrefix(key, "TURING_LOCAL_") || key == "OLLAMA_BASE_URL" || key == "OLLAMA_MODEL" ||
-				key == "OLLAMA_CONTEXT_WINDOW_TOKENS" || key == "OLLAMA_MAX_OUTPUT_TOKENS") {
+			localKey := strings.HasPrefix(key, "TURING_LOCAL_") || key == "OLLAMA_BASE_URL" || key == "OLLAMA_MODEL" ||
+				key == "OLLAMA_CONTEXT_WINDOW_TOKENS" || key == "OLLAMA_MAX_OUTPUT_TOKENS"
+			if !found || !localKey {
 				continue
 			}
 			if value != "${"+key+":-}" {
