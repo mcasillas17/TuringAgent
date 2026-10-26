@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"os/signal"
 	"sort"
 	"syscall"
@@ -22,12 +23,40 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/tools"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/worker"
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/servicecmd"
 )
 
+// checks are the subcommands that validate without serving. The Dockerfile's
+// org.turing.checks label must list exactly these; a test enforces it.
+var checks = []servicecmd.Check{{Name: "config", Run: checkConfig}}
+
+// offlineClient is the HTTP client check-config builds providers with. It
+// refuses every request, so the check can never reach an engine.
+var offlineClient = &http.Client{Transport: refuseRequests{}}
+
+type refuseRequests struct{}
+
+func (refuseRequests) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("check-config makes no network requests")
+}
+
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
+	os.Exit(servicecmd.Main(os.Args[1:], os.Environ(), checks, run, os.Stdout, os.Stderr))
+}
+
+// checkConfig is startup without the connections: the loader run() starts
+// with, then the provider construction it performs after dialing the
+// orchestrator, which this never does.
+func checkConfig(environ []string) ([]string, error) {
+	env := servicecmd.EnvMap(environ)
+	cfg, err := config.LoadFromEnv(func(key string) string { return env[key] })
+	if err != nil {
+		return nil, err
 	}
+	if _, err := buildProviders(cfg, offlineClient); err != nil {
+		return nil, err
+	}
+	return cfg.DeprecatedKeys, nil
 }
 
 func run() error {
