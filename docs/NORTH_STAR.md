@@ -756,9 +756,8 @@ separate lifecycle, visibility and evaluation gates.
 - **Scope:** A user-run `turing` command on the server: guided `setup`,
   `status`, lifecycle, `logs`, `connect`, `config` validated by each service's
   own `check-config` before anything is written, and `engine detect | use |
-  check` from the local inference engines design. Reaching the server from
-  another machine before SEC-001 is an open owner decision, not part of this
-  scope. Design:
+  check` from the local inference engines design. Until SEC-001, the app
+  runs on the server itself (owner decision, 2026-10-26). Design:
   [host command](superpowers/specs/2026-10-25-turing-host-command-design.md).
 - **Acceptance:** Every `.env` setting a user should change is changed through
   the command; a value a service's configuration check refuses, or that could

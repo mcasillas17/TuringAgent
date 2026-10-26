@@ -1,6 +1,8 @@
 # The `turing` host command: design
 
-**Status:** proposed.
+**Status:** approved (#170). PR 1 (`check-config`) is implemented. On
+2026-10-26 the owner decided section 12's question 4: **b**, the app runs on
+the server until SEC-001.
 
 **Date:** 2026-10-25.
 
@@ -51,10 +53,9 @@ The user plans to run Turing on a 128 GB Framework Desktop with ds4.
 
 These assumptions were made under autopilot and are open to correction:
 
-1. **The Framework Desktop may run headless.** How the Mac reaches it is not
-   assumed; it is an owner decision (section 12, question 4). Until then, the
-   supported setup runs the app on the server itself, and Flutter's Linux
-   build runs on the Framework Desktop.
+1. **The app runs on the server until SEC-001.** The owner decided this
+   (section 12, question 4): on the Framework Desktop, the Flutter Linux build
+   is the client, and the Mac reaches Turing only once SEC-001 pairs it.
 2. **The server UX is a terminal command, not a web console** (section 5).
 3. **Each setting has one home** (section 4). Until OPS-002 ships, every
    setting a user should change is changed through this command.
@@ -312,41 +313,20 @@ On the server, `connect` prints the app's backend URL
 that anyone holding the key can use Turing. This is the README's supported
 setup: the app on the same machine.
 
-**From another machine: an owner decision (section 12, question 4).** The
-user wants the Mac's app to use Turing on the Framework Desktop. Owner
-decision 8 and the identity invariants require a device identity, a scoped
-credential, revocation and encrypted transport for every non-loopback native
-client, and that is SEC-001. An SSH local forward would let the Mac reach the
-published port today, but the Mac would then hold the shared desktop key, with
-no per-device revocation. Losing it means rotating the key for every client.
-The tunnel is therefore not presented as compliant. It is a proposed, bounded
-exception that only the owner can accept:
+**From another machine: not until SEC-001 (owner decision, 2026-10-26).**
+Owner decision 8 and the identity invariants require a device identity, a
+scoped credential, revocation and encrypted transport for every non-loopback
+native client, and that is SEC-001. Until it ships, the app runs on the
+server. `connect` run over SSH (`SSH_CONNECTION` set) prints the same-machine
+text, then says that the app must run on this machine until SEC-001 pairs
+other devices, and prints no tunnel.
 
-- **Who:** the owner's own devices, authenticated by SSH.
-- **What:** a forward from the device's loopback to the server's
-  `127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT}`. No port opens to the network.
-- **Recovery:** on losing a device, `turing connect --rotate-key`.
-- **Docs:** the identity invariant names the exception, and the README's
-  supported-setup paragraph and the mobile reachability notes say so.
-- **End:** SEC-001 replaces it with `turing pair`.
-
-Until the owner accepts it, `connect` run over SSH says that the app must run
-on this machine until SEC-001, and prints no tunnel. If the owner accepts it,
-`connect` also prints the tunnel when `SSH_CONNECTION` is set. The host
-address and the SSH port come from that variable's third and fourth fields,
-and the user from `$USER`:
-
-```text
-On the machine where the app runs, open a tunnel and keep it open:
-  ssh -N -p 22 -L 3000:127.0.0.1:3000 mike@192.168.1.40
-Then use Backend URL http://localhost:3000 in the app.
-To keep it, add to ~/.ssh/config:
-  Host turing
-    HostName 192.168.1.40
-    Port 22
-    User mike
-    LocalForward 3000 127.0.0.1:3000
-```
+*Not adopted:* a bounded SSH exception was proposed. It would have used a
+local forward from the owner's own devices to the server's
+`127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT}`, authenticated by SSH, with key
+rotation on losing a device. The owner chose not to make an exception to the
+identity invariant; such a device would have held the shared desktop key with
+no per-device revocation.
 
 **`--rotate-key`:**
 
@@ -558,9 +538,9 @@ Everything else is as written there:
   - It never runs a service image that cannot prove, by its label, that it
     will treat an argument as a check rather than start the service.
 - **There is no new listener or daemon.**
-  - Reaching the server from another machine waits for SEC-001, or for the
-    owner to accept section 6.4's bounded exception.
-  - LAN membership grants nothing either way.
+  - Reaching the server from another machine waits for SEC-001 (section
+    6.4).
+  - LAN membership grants nothing.
 - **Secrets:**
   - never on the command line;
   - read with echo off;
@@ -686,9 +666,7 @@ Every new behaviour has a test that fails without it.
   - no secret in any output.
 - **`connect`:**
   - the same-machine text;
-  - over SSH without the owner's exception, no tunnel and the SEC-001 note;
-  - with it, the tunnel text from a fixture `SSH_CONNECTION`, including a
-    non-22 port;
+  - over SSH (a fixture `SSH_CONNECTION`), no tunnel and the SEC-001 note;
   - rotation in the key format, written without `check-config` or Docker,
     applied through `up -d`, and the declined path.
 - **Root:** running as root is refused before anything is read or written.
@@ -719,12 +697,16 @@ one item.
    - The wrapper.
    - `status`, `start`, `stop`, `restart` and `logs`, plus `compose.sh`'s
      read-only subcommands.
-   - `connect` on the same machine, with rotation. The tunnel joins only if
-     the owner accepts the exception.
+   - `connect` on the same machine, with rotation.
    - `config`: the registry, the writer, validation, and apply with rollback.
    - The README's quick start.
    - After this PR, ds4 on the Framework Desktop is configured with
      `turing config` rather than an editor.
+   - **Follow-up, from the owner's decision on question 4:** prove the
+     Flutter Linux desktop build that option b depends on. CI builds no
+     Linux app today. This PR adds a CI `flutter build linux` step and README
+     prerequisites. `flutter_secure_storage_linux` needs `libsecret-1-dev` to
+     build, and a Secret Service keyring such as gnome-keyring at runtime.
 3. **PR 3: set up for the machine.**
    - `engine detect`, `use` and `check`.
    - The runtime's `check-engine`, with `engine` added to its image's
@@ -744,8 +726,7 @@ editors) each get their own design afterwards.
 - Updating the checkout. `git pull` followed by `turing restart --build` stays
   the user's step.
 - Backups and restore (TUR-016).
-- Reaching the server from another machine, beyond the bounded exception the
-  owner may accept (section 6.4). SEC-001 is the real answer.
+- Reaching the server from another machine before SEC-001 (section 6.4).
 - Live settings and storing settings in the database (OPS-002).
 - Editing profiles and skills (OPS-003).
 - Raising concurrency (AGT-000).
@@ -754,7 +735,7 @@ editors) each get their own design afterwards.
 ## 12. Open questions
 
 Questions 1–3 and 5 were decided under autopilot and are open to correction.
-Question 4 is the owner's to decide.
+The owner decided question 4.
 
 1. **Terminal or web?** Terminal (section 5).
 2. **Go or bash?** Go. It reuses the shared validators and the generated
@@ -763,17 +744,10 @@ Question 4 is the owner's to decide.
 3. **Who validates a setting?** The services, through `check-config`. The
    exceptions are the few host-owned values the services cannot judge, such as
    whether a port is free.
-4. **How does the Mac reach a headless server before SEC-001?** This is an
-   owner decision, because it touches owner decision 8. The options are:
-   - **a.** Accept the bounded SSH exception in section 6.4. The roadmap's
-     identity invariant and the README then name it.
-   - **b.** Run the app on the server until SEC-001. Flutter's Linux build
-     runs on the Framework Desktop.
-   - **c.** Bring SEC-001 forward, before OPS-001's PR 2.
-
-   The recommendation is **a** for the owner's own devices. It opens no port,
-   SSH already authenticates the device, and rotation is the stated recovery.
-   Without that sign-off, the design ships **b**.
+4. **How does the Mac reach a headless server before SEC-001?** Decided by
+   the owner on 2026-10-26: **b**, run the app on the server until SEC-001.
+   The other options were a bounded SSH exception (**a**, not adopted; see
+   section 6.4) and bringing SEC-001 forward (**c**).
 5. **Should this command edit settings that OPS-002 will move into the app?**
    Yes, until OPS-002 ships; leaving them hand-edited in the meantime is what
    the user asked to stop. OPS-002 decides the move. The proposal is to import
