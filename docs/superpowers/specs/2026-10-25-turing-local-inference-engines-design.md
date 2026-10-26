@@ -216,10 +216,13 @@ Compose passes both names through.
 ### 5.4 Choosing an engine for the machine
 
 > **Amended 2026-10-25.** This is delivered as `turing engine detect | use |
-> check` in Go, part of the host command (OPS-001b), rather than as
+> check` in Go, part of the host command (OPS-001, its PR 3), rather than as
 > `local-engine.sh`. `detect` also lists each engine's models, and `init.sh`
-> does not run `detect`: `turing setup` asks instead. The facts, the table, the
-> four `check` steps and the Linux guidance below are unchanged.
+> does not run `detect`: `turing setup` asks instead. `use` writes through the
+> host command's writer: a bare value only for an allowlisted token, a Compose
+> literal otherwise. Besides its own keys, it also migrates deprecated
+> `OLLAMA_*` names. The facts, the table, the four `check` steps and the Linux
+> guidance below are unchanged.
 
 A new script, `turing-backend/scripts/local-engine.sh`, has three commands.
 
@@ -379,11 +382,12 @@ cache. `detect` repeats this when it finds ds4.
      `remote-egress-policy.md`. That document's "Ollama is the local provider
      identity" becomes "the local provider", with the same endpoint rule.
    - After this PR, ds4 on the Framework Desktop works by hand-editing `.env`.
-2. **PR 2: choosing for the machine.** *Moved to OPS-001b in the
-   [host command design](2026-10-25-turing-host-command-design.md).*
-   - `runtime check-engine`, `local-engine.sh` and the `init.sh` integration.
-   - A new `docs/architecture/local-engines.md` holding the table in
-     section 5.4, Linux networking and engine caches.
+2. **PR 2: choosing for the machine.** *Moved:* delivered as PR 3 of OPS-001
+   in the [host command design](2026-10-25-turing-host-command-design.md)
+   (section 10). That PR adds `runtime check-engine`, `turing engine detect |
+   use | check` in place of `local-engine.sh`, `turing setup` in place of the
+   `init.sh` integration, and `docs/architecture/local-engines.md` holding the
+   table in section 5.4, Linux networking and engine caches.
 3. **PR 3: the client.** The **Local · engine** label in the selector and
    Settings. It is small, and could join PR 1 if review prefers.
 

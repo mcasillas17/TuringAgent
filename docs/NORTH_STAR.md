@@ -754,14 +754,18 @@ separate lifecycle, visibility and evaluation gates.
 - **Outcome:** A user sets up, runs, reconfigures and connects to a Turing
   server without editing `.env` or reading scripts.
 - **Scope:** A user-run `turing` command on the server: guided `setup`,
-  `status`, lifecycle, `logs`, `connect` (with an SSH tunnel before SEC-001),
-  `config` validated by each service's own `check-config`, and `engine
-  detect | use | check` from the local inference engines design. Design:
+  `status`, lifecycle, `logs`, `connect`, `config` validated by each service's
+  own `check-config` before anything is written, and `engine detect | use |
+  check` from the local inference engines design. Reaching the server from
+  another machine before SEC-001 is an open owner decision, not part of this
+  scope. Design:
   [host command](superpowers/specs/2026-10-25-turing-host-command-design.md).
-- **Acceptance:** Every user-facing setting is changed through the command;
-  a refused value leaves `.env` unchanged; no secret appears on a command line
-  or in output other than `connect`; nothing in Turing can invoke the command,
-  and the orchestrator gains no Docker control.
+- **Acceptance:** Every `.env` setting a user should change is changed through
+  the command; a refused or unchecked value leaves `.env` unchanged; no image
+  that predates `check-config` is run with an argument; no secret appears on a
+  command line, and the app's key appears only in `connect` and `setup`;
+  nothing in Turing can invoke the command, and the orchestrator gains no
+  Docker control.
 - **Dependencies:** None.
 
 #### OPS-002 - Server settings in the app
@@ -781,10 +785,11 @@ separate lifecycle, visibility and evaluation gates.
 - **Outcome:** Specialist profiles and skills are authored in forms, not
   Markdown files.
 - **Scope:** App editors that write `team/` and `skills/` through the
-  orchestrator, and the change to the read-only `/team` mount's threat model.
+  orchestrator, reusing SKL-002's staging, diff and install-disabled path for
+  skills, and the change to the read-only `/team` mount's threat model.
 - **Acceptance:** An authority change still requires a fresh grant; no agent
   path can write a profile or a skill.
-- **Dependencies:** OPS-002.
+- **Dependencies:** OPS-002 and SKL-002.
 
 #### TUR-025 - Fence tool authorization cancellation
 
