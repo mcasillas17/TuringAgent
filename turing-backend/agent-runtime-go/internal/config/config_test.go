@@ -606,8 +606,12 @@ func wantConfigError(t *testing.T, env map[string]string, key string) {
 	}
 }
 
+// Given everything else an engine needs, an unknown one is still refused, by
+// name.
 func TestLoadFromEnvRefusesAnUnknownEngine(t *testing.T) {
-	wantConfigError(t, map[string]string{"TURING_LOCAL_ENGINE": "vllm"}, "TURING_LOCAL_ENGINE")
+	wantConfigError(t, map[string]string{
+		"TURING_LOCAL_ENGINE": "vllm", "TURING_LOCAL_ENGINE_URL": "http://localhost:8000/v1",
+	}, "TURING_LOCAL_ENGINE must be")
 }
 
 // An OpenAI-compatible engine has no default address, and an Ollama URL left
