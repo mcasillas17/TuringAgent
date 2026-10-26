@@ -35,7 +35,7 @@ func newTeamTestAppWithProfile(t *testing.T, enabled bool, profile string) *App 
 		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret:    "approval-secret",
 		DatabasePath:         t.TempDir() + "/turing.db",
-		OllamaModel:          "llama3.2",
+		LocalModel:           "llama3.2",
 		TeamRoot:             teamRoot,
 		AgentTeamEnabled:     enabled,
 		MaxDelegationsPerRun: 3,

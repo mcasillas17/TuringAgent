@@ -789,7 +789,7 @@ func validChallengePayload(payload egressChallengePayload) bool {
 		len(payload.IdempotencyKey) > maxEgressIDBytes ||
 		payload.RequestDigest == "" ||
 		payload.MemorySnapshotFingerprint == "" ||
-		(payload.Provider != "openai_compatible" && payload.Provider != "ollama") ||
+		(payload.Provider != "openai_compatible" && payload.Provider != backendegress.LocalProvider) ||
 		payload.Model == "" || len(payload.Model) > maxEgressModelBytes ||
 		(payload.ExternalAgentID != "" && payload.ExternalCredentialRefHash == "") ||
 		(payload.ExternalAgentID == "" && payload.ExternalCredentialRefHash != "") ||
@@ -921,7 +921,7 @@ func providerToProto(provider string) turingv1.ModelProvider {
 	if provider == "openai_compatible" {
 		return turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
 	}
-	if provider == "ollama" {
+	if provider == backendegress.LocalProvider {
 		return turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA
 	}
 	return turingv1.ModelProvider_MODEL_PROVIDER_UNSPECIFIED

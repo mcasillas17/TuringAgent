@@ -1,6 +1,7 @@
 # Local inference engines: design
 
-**Status:** proposed, awaiting review.
+**Status:** approved (#168). Slice 1 (the engine seam) and slice 3 (the app's
+label) are implemented together; slice 2 (choosing for the machine) is next.
 
 **Date:** 2026-10-25.
 

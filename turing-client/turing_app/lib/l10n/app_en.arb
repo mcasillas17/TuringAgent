@@ -309,6 +309,7 @@
   },
   "egressDialogCancel": "Cancel",
   "egressDialogSend": "Send",
+  "egressDialogLocalProvider": "Local",
   "egressDialogAllow": "Allow",
   "egressDialogRequester": "{requester} asks to use these tools for this one task.",
   "@egressDialogRequester": {"placeholders": {"requester": {"type": "String"}}},

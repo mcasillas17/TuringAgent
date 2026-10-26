@@ -170,7 +170,10 @@ reports:
 | `1` | `FAIL` | The `system.time` lifecycle was malformed, mismatched, incomplete after starting (including a post-start timeout), or ended without a later final answer. |
 | `2` | `INCONCLUSIVE` | The proof could not exercise the target lifecycle because of setup, model, transport or timeout before the tool started, a different/no tool choice, or an answer that could not be correlated to the returned time. |
 
-`TURING_VERIFY_MODEL` defaults to `OLLAMA_MODEL` and then `qwen2.5:7b`.
+`TURING_VERIFY_MODEL` defaults to `TURING_LOCAL_MODEL`, then the deprecated
+`OLLAMA_MODEL`, and then `qwen2.5:7b`; the script checks the Ollama engine and
+refuses another `TURING_LOCAL_ENGINE`. The engine address is read the same way,
+from `TURING_LOCAL_ENGINE_URL` before `OLLAMA_BASE_URL`.
 `TURING_VERIFY_ATTEMPTS` defaults to `3`. The host preflight rewrites the
 Compose-oriented `host.docker.internal` Ollama hostname to `localhost`; set
 `TURING_VERIFY_OLLAMA_URL` to override the host-side probe and model endpoint.

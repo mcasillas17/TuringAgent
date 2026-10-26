@@ -1149,6 +1149,16 @@ func TestDelegationEgressProtoContract(t *testing.T) {
 	assertProtoFieldMembers(t, decide, map[protoreflect.Name]protoreflect.FieldNumber{"delegation_id": 1, "consent": 2})
 }
 
+// A worker names the engine serving each model, for display; routing never
+// reads it.
+func TestModelCapabilityCarriesTheEngine(t *testing.T) {
+	capability := turingv1.File_turing_v1_common_proto.Messages().ByName("ModelCapability")
+	assertProtoField(t, capability, "engine", 4, protoreflect.StringKind, false, "")
+	assertProtoFieldMembers(t, capability, map[protoreflect.Name]protoreflect.FieldNumber{
+		"provider": 1, "model": 2, "max_context_tokens": 3, "engine": 4,
+	})
+}
+
 func TestMCPRegistryProtoContract(t *testing.T) {
 	file := turingv1.File_turing_v1_mcp_proto
 	server := file.Messages().ByName("McpServerDescriptor")

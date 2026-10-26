@@ -18,6 +18,7 @@ import '../generated/turing/v1/skills.pb.dart' as skillpb;
 import '../generated/turing/v1/team.pb.dart' as teampb;
 import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
 import '../utils/protobuf_enum.dart';
+import 'model_provider.dart';
 import 'agent_descriptor.dart' as model_agent;
 import 'agent_profile.dart' as model_agent_profile;
 import 'approval.dart' as model_approval;
@@ -856,7 +857,7 @@ class GrpcMappers {
       case commonpb.ModelProvider.MODEL_PROVIDER_OLLAMA:
       case commonpb.ModelProvider.MODEL_PROVIDER_UNSPECIFIED:
       default:
-        return 'ollama';
+        return localModelProvider;
     }
   }
 
@@ -864,7 +865,7 @@ class GrpcMappers {
     switch (provider) {
       case 'openai_compatible':
         return commonpb.ModelProvider.MODEL_PROVIDER_OPENAI_COMPATIBLE;
-      case 'ollama':
+      case localModelProvider:
       default:
         return commonpb.ModelProvider.MODEL_PROVIDER_OLLAMA;
     }

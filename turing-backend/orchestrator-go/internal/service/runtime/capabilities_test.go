@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,6 +178,39 @@ func TestProviderCapabilitiesIncludesModelsWithoutPositiveContextGuarantee(t *te
 	models := h.service.ProviderCapabilities()[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA]
 	if len(models) != 1 || models[0].GetModel() != "operator-unspecified-context" || models[0].GetMaxContextTokens() != 0 {
 		t.Fatalf("provider capabilities = %+v, want the zero-context model", models)
+	}
+}
+
+// The engine label is display text, joined across the live workers serving a
+// model; a worker that names none adds nothing.
+func TestProviderCapabilitiesCarryTheEngineLabel(t *testing.T) {
+	h := newHarness(t)
+	for index, engine := range []string{"llama.cpp", "ds4", ""} {
+		capabilities := modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "deepseek-chat", 8192, 1)
+		capabilities.Models[0].Engine = engine
+		id := fmt.Sprintf("worker-engine-%d", index)
+		stream := connectWorkerCapabilities(t, h, id, "registration-"+id, capabilities)
+		defer func() { _ = stream.CloseSend() }()
+	}
+	models := h.service.ProviderCapabilities()[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA]
+	if len(models) != 1 || models[0].GetEngine() != "ds4, llama.cpp" {
+		t.Fatalf("provider capabilities = %+v, want the two engines joined", models)
+	}
+}
+
+// A label reaches every client verbatim, so one that is not short, printable
+// text is refused with the registration.
+func TestRegistrationRefusesAnUnsafeEngineLabel(t *testing.T) {
+	for name, engine := range map[string]string{
+		"newline": "a\nb", "65 bytes": strings.Repeat("a", 65), "invalid UTF-8": "\xff", "line separator": "a\u2028b",
+	} {
+		t.Run(name, func(t *testing.T) {
+			snapshot := modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1)
+			snapshot.Models[0].Engine = engine
+			if _, _, err := decodeWorkerCapabilities(snapshot); err == nil || !strings.Contains(err.Error(), "engine") {
+				t.Fatalf("engine %q: error = %v, want a refusal naming the engine", engine, err)
+			}
+		})
 	}
 }
 

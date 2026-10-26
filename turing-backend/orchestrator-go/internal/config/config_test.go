@@ -19,8 +19,8 @@ func TestLoadFromEnvRequiresSecretsAndDefaultsPorts(t *testing.T) {
 	if cfg.PublicPort != 3000 || cfg.InternalPort != 3001 {
 		t.Fatalf("ports = %d/%d, want 3000/3001", cfg.PublicPort, cfg.InternalPort)
 	}
-	if cfg.OllamaModel != "qwen2.5:7b" {
-		t.Fatalf("OllamaModel = %q", cfg.OllamaModel)
+	if cfg.LocalModel != "qwen2.5:7b" {
+		t.Fatalf("LocalModel = %q", cfg.LocalModel)
 	}
 }
 
@@ -140,8 +140,8 @@ func TestLoadFromMapLoadsBoundedAdvertisedContextLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.OllamaContextWindowTokens != 32768 || cfg.OpenAIContextWindowTokens != 128000 {
-		t.Fatalf("context limits = %d/%d", cfg.OllamaContextWindowTokens, cfg.OpenAIContextWindowTokens)
+	if cfg.LocalContextWindowTokens != 32768 || cfg.OpenAIContextWindowTokens != 128000 {
+		t.Fatalf("context limits = %d/%d", cfg.LocalContextWindowTokens, cfg.OpenAIContextWindowTokens)
 	}
 	env["OLLAMA_CONTEXT_WINDOW_TOKENS"] = "16777217"
 	if _, err := LoadFromMap(env); err == nil || !strings.Contains(err.Error(), "OLLAMA_CONTEXT_WINDOW_TOKENS") {
@@ -722,5 +722,48 @@ func TestLoadFromMapRejectsUnusableQueueWaitPolicy(t *testing.T) {
 	env["TURING_QUEUE_MAX_WAIT_MS"] = "-1"
 	if _, err := LoadFromMap(env); err == nil {
 		t.Fatal("LoadFromMap accepted a negative queue bound")
+	}
+}
+
+func TestLoadFromMapReadsTheLocalModel(t *testing.T) {
+	load := func(extra map[string]string) Config {
+		t.Helper()
+		env := requiredEnv()
+		for key, value := range extra {
+			env[key] = value
+		}
+		cfg, err := LoadFromMap(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	for name, extra := range map[string]map[string]string{
+		"default": {},
+		"empty":   {"TURING_LOCAL_MODEL": "", "OLLAMA_MODEL": "", "TURING_LOCAL_CONTEXT_WINDOW_TOKENS": "", "OLLAMA_CONTEXT_WINDOW_TOKENS": ""},
+	} {
+		if cfg := load(extra); cfg.LocalModel != "qwen2.5:7b" || cfg.LocalContextWindowTokens != 32768 || len(cfg.DeprecatedKeys) != 0 {
+			t.Fatalf("%s: local model = %q/%d, deprecated %q", name, cfg.LocalModel, cfg.LocalContextWindowTokens, cfg.DeprecatedKeys)
+		}
+	}
+	cfg := load(map[string]string{"OLLAMA_MODEL": "llama3.2", "OLLAMA_CONTEXT_WINDOW_TOKENS": "16384"})
+	want := []string{
+		"OLLAMA_MODEL is deprecated; set TURING_LOCAL_MODEL instead",
+		"OLLAMA_CONTEXT_WINDOW_TOKENS is deprecated; set TURING_LOCAL_CONTEXT_WINDOW_TOKENS instead",
+	}
+	if cfg.LocalModel != "llama3.2" || cfg.LocalContextWindowTokens != 16384 || strings.Join(cfg.DeprecatedKeys, "|") != strings.Join(want, "|") {
+		t.Fatalf("old names: %q/%d, deprecated %q", cfg.LocalModel, cfg.LocalContextWindowTokens, cfg.DeprecatedKeys)
+	}
+	cfg = load(map[string]string{
+		"OLLAMA_MODEL": "llama3.2", "TURING_LOCAL_MODEL": "deepseek-chat",
+		"OLLAMA_CONTEXT_WINDOW_TOKENS": "16384", "TURING_LOCAL_CONTEXT_WINDOW_TOKENS": "65536",
+	})
+	if cfg.LocalModel != "deepseek-chat" || cfg.LocalContextWindowTokens != 65536 || len(cfg.DeprecatedKeys) != 0 {
+		t.Fatalf("both names: %q/%d, deprecated %q", cfg.LocalModel, cfg.LocalContextWindowTokens, cfg.DeprecatedKeys)
+	}
+	env := requiredEnv()
+	env["TURING_LOCAL_CONTEXT_WINDOW_TOKENS"] = "16777217"
+	if _, err := LoadFromMap(env); err == nil || !strings.Contains(err.Error(), "TURING_LOCAL_CONTEXT_WINDOW_TOKENS") {
+		t.Fatalf("oversized window error = %v, want one naming the key read", err)
 	}
 }

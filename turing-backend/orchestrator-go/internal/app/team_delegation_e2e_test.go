@@ -87,7 +87,7 @@ func testTuringDelegatesThroughTheRuntime(t *testing.T, approvalRequired bool) {
 			Conn: internalConn, RuntimeToken: "internal", WorkerID: "team-runtime",
 			MaxConcurrentRuns: 1, MaxToolCallsPerRun: 10,
 			OpenAIBaseURL: server.URL, OpenAIModel: "unused",
-			OllamaBaseURL: server.URL, OllamaModel: "llama3.2",
+			OllamaBaseURL: server.URL, LocalModel: "llama3.2",
 		})
 	}()
 	t.Cleanup(func() {
@@ -247,7 +247,7 @@ func TestASpecialistsGitHubToolWaitsForTheUsersConsent(t *testing.T) {
 			Conn: internalConn, RuntimeToken: "internal", WorkerID: "team-runtime",
 			MaxConcurrentRuns: 1, MaxToolCallsPerRun: 10,
 			OpenAIBaseURL: server.URL, OpenAIModel: "unused",
-			OllamaBaseURL: server.URL, OllamaModel: "llama3.2",
+			OllamaBaseURL: server.URL, LocalModel: "llama3.2",
 		})
 	}()
 	t.Cleanup(func() {

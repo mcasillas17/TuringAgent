@@ -18,7 +18,7 @@ import (
 func TestAppSchedulerFiresADueAutomationAndStops(t *testing.T) {
 	cfg := config.Config{
 		ClientAPIKey: "client", RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer", ApprovalJWTSecret: "approval-secret",
-		DatabasePath: t.TempDir() + "/turing.db", AutomationTickMS: 5, OllamaModel: "qwen2.5:7b",
+		DatabasePath: t.TempDir() + "/turing.db", AutomationTickMS: 5, LocalModel: "qwen2.5:7b",
 	}
 	application, err := New(cfg)
 	if err != nil {
@@ -49,11 +49,11 @@ func TestAppSchedulerFiresADueAutomationAndStops(t *testing.T) {
 	recvRuntimeCommand(t, worker, func(command *turingv1.RuntimeCommand) bool {
 		return command.GetWorkerAccepted() != nil
 	})
-	if got := application.RuntimeService.RoutableDefaultModel("ollama", cfg.OllamaModel); got != cfg.OllamaModel {
-		t.Fatalf("live default model = %q, want %q; providers = %+v", got, cfg.OllamaModel, application.RuntimeService.ProviderCapabilities())
+	if got := application.RuntimeService.RoutableDefaultModel("ollama", cfg.LocalModel); got != cfg.LocalModel {
+		t.Fatalf("live default model = %q, want %q; providers = %+v", got, cfg.LocalModel, application.RuntimeService.ProviderCapabilities())
 	}
 	if err := application.RuntimeService.ValidateRouting(context.Background(), repository.RoutingRequirements{
-		AgentID: "general_assistant", ModelProvider: "ollama", Model: cfg.OllamaModel, MinimumWorkerMaxConcurrentRuns: 1,
+		AgentID: "general_assistant", ModelProvider: "ollama", Model: cfg.LocalModel, MinimumWorkerMaxConcurrentRuns: 1,
 	}); err != nil {
 		t.Fatalf("worker accepted without becoming routable: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestAppSchedulerFiresADueAutomationAndStops(t *testing.T) {
 func TestAppWithNoAutomationTickNeverFiresAndStillStops(t *testing.T) {
 	cfg := config.Config{
 		ClientAPIKey: "client", RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer", ApprovalJWTSecret: "approval-secret",
-		DatabasePath: t.TempDir() + "/turing.db", AutomationTickMS: 0, OllamaModel: "qwen2.5:7b",
+		DatabasePath: t.TempDir() + "/turing.db", AutomationTickMS: 0, LocalModel: "qwen2.5:7b",
 	}
 	application, err := New(cfg)
 	if err != nil {

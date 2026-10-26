@@ -188,7 +188,7 @@ func (s *Server) consentedDecision(ctx context.Context, id string, consent *turi
 		ChallengeNonce:            challenge.Nonce,
 		ChallengeFingerprint:      hex.EncodeToString(fingerprint[:]),
 		RequestDigest:             hex.EncodeToString(requestDigest[:]),
-		Provider:                  "ollama",
+		Provider:                  backendegress.LocalProvider,
 		Model:                     challenge.Model,
 		DataCategories:            categories,
 		SelectedTools:             challenge.SelectedTools,

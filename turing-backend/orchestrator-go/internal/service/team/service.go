@@ -22,7 +22,7 @@ import (
 // A delegated run is a general-assistant child on a local Ollama model.
 const (
 	childAgentID  = "general_assistant"
-	childProvider = "ollama"
+	childProvider = backendegress.LocalProvider
 )
 
 // Routes is the slice of the runtime the team needs: which workers are live,

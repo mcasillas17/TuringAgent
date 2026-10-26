@@ -681,6 +681,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get egressDialogSend => 'Send';
 
   @override
+  String get egressDialogLocalProvider => 'Local';
+
+  @override
   String get egressDialogAllow => 'Allow';
 
   @override

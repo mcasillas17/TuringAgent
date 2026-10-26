@@ -575,6 +575,7 @@ func cloneModelCapabilities(models []*turingv1.ModelCapability) []*turingv1.Mode
 			Provider:         model.GetProvider(),
 			Model:            model.GetModel(),
 			MaxContextTokens: model.GetMaxContextTokens(),
+			Engine:           model.GetEngine(),
 		})
 	}
 	return cloned

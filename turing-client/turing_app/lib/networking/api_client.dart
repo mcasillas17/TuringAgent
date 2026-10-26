@@ -10,6 +10,7 @@ import '../models/automation.dart';
 import '../models/memory.dart';
 import '../models/message.dart';
 import '../models/mcp_server.dart';
+import '../models/model_provider.dart';
 import '../models/remote_egress.dart';
 import '../models/run_cancellation.dart';
 import '../models/search_hit.dart';
@@ -72,7 +73,7 @@ abstract class TuringApi implements RemoteEgressApi {
   Future<Map<String, dynamic>> sendMessage({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     String? idempotencyKey,
   });
 
@@ -101,10 +102,10 @@ abstract class TuringApi implements RemoteEgressApi {
   Future<RemoteEgressDisclosure?> prepareRemoteEgress({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     required String idempotencyKey,
   }) async {
-    if (modelProvider == 'ollama') return null;
+    if (modelProvider == localModelProvider) return null;
     throw const TuringApiException(
       code: 'remote_egress_unsupported',
       message: 'This client cannot prepare remote egress consent',
@@ -115,7 +116,7 @@ abstract class TuringApi implements RemoteEgressApi {
   Future<Map<String, dynamic>> sendMessageWithRemoteEgressConsent({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     required String idempotencyKey,
     required RemoteEgressConsent consent,
   }) {
@@ -284,6 +285,10 @@ abstract class TuringApi implements RemoteEgressApi {
       message: 'This client cannot read delegations',
     );
   }
+
+  /// The engine and model serving the local route, or null when no worker
+  /// serves it or this client cannot ask.
+  Future<LocalEngine?> getLocalEngine() async => null;
 
   /// The disclosure for a task waiting for consent to tools that leave the
   /// machine: where its tool calls may go and what may leave.
@@ -569,14 +574,14 @@ abstract interface class RemoteEgressApi {
   Future<RemoteEgressDisclosure?> prepareRemoteEgress({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     required String idempotencyKey,
   });
 
   Future<Map<String, dynamic>> sendMessageWithRemoteEgressConsent({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     required String idempotencyKey,
     required RemoteEgressConsent consent,
   });

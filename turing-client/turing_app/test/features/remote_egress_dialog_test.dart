@@ -61,6 +61,24 @@ void main() {
     expect(find.text('Must Not Render'), findsNothing);
   });
 
+  // A specialist's local model is named as the local route, not by its wire
+  // identity, whichever engine serves it.
+  testWidgets('the local route is shown as Local', (tester) async {
+    final disclosure = RemoteEgressDisclosure(
+      challenge: 'challenge',
+      provider: 'ollama',
+      model: 'deepseek-chat',
+      endpoint: '',
+      endpointHost: '',
+      dataCategories: const [EgressDataCategory.toolArguments],
+      expiresAt: DateTime.utc(2026, 8, 22),
+    );
+    await _open(tester, disclosure);
+
+    expect(find.textContaining('Local / deepseek-chat'), findsOneWidget);
+    expect(find.textContaining('ollama'), findsNothing);
+  });
+
   testWidgets('skill header is not rendered when the skill list is empty', (
     tester,
   ) async {

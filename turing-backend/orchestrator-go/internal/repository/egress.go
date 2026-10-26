@@ -135,7 +135,7 @@ func normalizePendingEgressDecision(input *PendingEgressDecision) (*PendingEgres
 		normalized.ChallengeNonce == "" ||
 		normalized.ChallengeFingerprint == "" ||
 		normalized.RequestDigest == "" ||
-		(normalized.Provider != "openai_compatible" && normalized.Provider != "ollama") ||
+		(normalized.Provider != "openai_compatible" && normalized.Provider != backendegress.LocalProvider) ||
 		normalized.Model == "" ||
 		(normalized.ExternalAgentID != "" && normalized.ExternalCredentialRefHash == "") ||
 		(normalized.ExternalAgentID == "" && normalized.ExternalCredentialRefHash != "") ||

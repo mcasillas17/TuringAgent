@@ -25,7 +25,7 @@ func testPublicCancelLosingApprovalReady(t *testing.T, scenario string) {
 	app, err := New(config.Config{
 		ClientAPIKey: "client", RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret: "approval-secret", DatabasePath: t.TempDir() + "/turing.db",
-		OllamaModel: "llama3.2", MaxConcurrentRunsGeneral: 2,
+		LocalModel: "llama3.2", MaxConcurrentRunsGeneral: 2,
 	})
 	if err != nil {
 		t.Fatal(err)

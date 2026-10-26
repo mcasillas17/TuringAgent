@@ -234,6 +234,9 @@ void main() {
       // And the same caveat on a model group, with the thousands separator
       // every other count on the page uses.
       expect(find.text('1,200 runs reported no usage'), findsOneWidget);
+      // The local route is named as such, not by its wire identity.
+      expect(find.text('Local'), findsOneWidget);
+      expect(find.text('ollama'), findsNothing);
     });
 
     testWidgets('says plainly when nothing left the machine', (tester) async {

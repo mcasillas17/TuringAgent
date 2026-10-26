@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../chat/model_provider_selector.dart';
 
+import '../../models/model_provider.dart';
 import '../../networking/auth_storage.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -14,6 +15,7 @@ class SettingsScreen extends StatefulWidget {
     this.initialBackendUrl = 'http://localhost:3000',
     this.initialApiKey = '',
     this.embedded = false,
+    this.loadLocalEngine,
   });
 
   final ClientAuthStorage authStorage;
@@ -22,6 +24,10 @@ class SettingsScreen extends StatefulWidget {
   final String initialApiKey;
   final bool embedded;
 
+  /// Reads which engine and model serve the local route. Absent before the
+  /// app has a backend to ask; the local entry then reads only "Local".
+  final Future<LocalEngine?> Function()? loadLocalEngine;
+
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
@@ -29,7 +35,8 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _backendUrl;
   late final TextEditingController _apiKey;
-  String _modelProvider = 'ollama';
+  String _modelProvider = localModelProvider;
+  LocalEngine? _localEngine;
   bool _saving = false;
 
   @override
@@ -38,6 +45,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _backendUrl = TextEditingController(text: widget.initialBackendUrl);
     _apiKey = TextEditingController(text: widget.initialApiKey);
     unawaited(_loadModelProvider());
+    unawaited(_loadLocalEngine());
   }
 
   @override
@@ -65,16 +73,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
-            ModelProviderSelector(
-              value: _modelProvider,
-              onChanged: (value) => setState(() => _modelProvider = value),
+            // The full label is in the note below; the selector only has to
+            // fit beside its heading.
+            Flexible(
+              child: ModelProviderSelector(
+                value: _modelProvider,
+                localEngineLabel: _localEngine?.label,
+                onChanged: (value) => setState(() => _modelProvider = value),
+              ),
             ),
           ],
         ),
         const SizedBox(height: 6),
         Text(
-          'Ollama runs entirely on this machine. An OpenAI-compatible provider '
-          'requires a destination and data-category confirmation for every send.',
+          '${_localNote()} An OpenAI-compatible provider requires a '
+          'destination and data-category confirmation for every send.',
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 20),
@@ -97,6 +110,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
       appBar: AppBar(title: const Text('Project Turing Settings')),
       body: body,
     );
+  }
+
+  /// Where the local route runs, naming the engine and model once known.
+  String _localNote() {
+    final engine = _localEngine;
+    if (engine == null) return 'Local runs entirely on this machine.';
+    final serving = engine.label.isEmpty
+        ? engine.model
+        : '${engine.label} serving ${engine.model}';
+    return 'Local runs on this machine: $serving.';
+  }
+
+  Future<void> _loadLocalEngine() async {
+    final load = widget.loadLocalEngine;
+    if (load == null) return;
+    try {
+      final engine = await load();
+      if (!mounted) return;
+      setState(() => _localEngine = engine);
+    } on Exception {
+      // The note and the entry stay generic; settings must work offline.
+    }
   }
 
   Future<void> _loadModelProvider() async {

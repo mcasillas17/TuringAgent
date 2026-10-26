@@ -133,7 +133,7 @@ func publicServices(t *testing.T, h *restartHarness) *grpc.ClientConn {
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
 	turingv1.RegisterSessionServiceServer(server, sessions.New(h.repo, config.Config{
-		OllamaModel: "llama3.2",
+		LocalModel: "llama3.2",
 	}, &restartCapabilities{}))
 	turingv1.RegisterEventServiceServer(server, events.NewServer(h.repo, events.NewBus(8)))
 	go func() {

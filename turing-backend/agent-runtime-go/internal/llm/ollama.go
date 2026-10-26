@@ -113,7 +113,7 @@ func EncodeOllamaKeepAlive(value string) (json.RawMessage, error) {
 	return quoted, nil
 }
 
-func (p *Ollama) ID() string { return "ollama" }
+func (p *Ollama) ID() string { return egress.LocalProvider }
 
 func (p *Ollama) ContextWindowTokens() int { return p.contextWindowTokens }
 

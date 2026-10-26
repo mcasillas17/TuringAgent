@@ -21,7 +21,7 @@ type Config struct {
 	ApprovalJWTSecret        string
 	EgressSigningSecret      string
 	DatabasePath             string
-	OllamaModel              string
+	LocalModel               string
 	OpenAIBaseURL            string
 	OpenAIModel              string
 	OpenAIEnabled            bool
@@ -69,7 +69,7 @@ func NewApp(cfg Config) (*App, error) {
 		ApprovalJWTSecret:        cfg.ApprovalJWTSecret,
 		EgressSigningSecret:      cfg.EgressSigningSecret,
 		DatabasePath:             cfg.DatabasePath,
-		OllamaModel:              cfg.OllamaModel,
+		LocalModel:               cfg.LocalModel,
 		OpenAIBaseURL:            cfg.OpenAIBaseURL,
 		OpenAIModel:              cfg.OpenAIModel,
 		OpenAIEnabled:            cfg.OpenAIEnabled,

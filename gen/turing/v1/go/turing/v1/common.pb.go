@@ -72,7 +72,10 @@ func (AgentId) EnumDescriptor() ([]byte, []int) {
 type ModelProvider int32
 
 const (
-	ModelProvider_MODEL_PROVIDER_UNSPECIFIED       ModelProvider = 0
+	ModelProvider_MODEL_PROVIDER_UNSPECIFIED ModelProvider = 0
+	// The local route on this machine, whichever engine serves it: Ollama or an
+	// OpenAI-compatible server. Named before other engines existed; the name is
+	// kept because the wire value and stored identity cannot change.
 	ModelProvider_MODEL_PROVIDER_OLLAMA            ModelProvider = 1
 	ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE ModelProvider = 2
 )
@@ -1148,8 +1151,11 @@ type ModelCapability struct {
 	// An operator-configured routing guarantee, not a value inferred from a
 	// provider label or model name.
 	MaxContextTokens int32 `protobuf:"varint,3,opt,name=max_context_tokens,json=maxContextTokens,proto3" json:"max_context_tokens,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Display label of the engine serving this model, such as "Ollama" or
+	// "ds4". Never used for routing.
+	Engine        string `protobuf:"bytes,4,opt,name=engine,proto3" json:"engine,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ModelCapability) Reset() {
@@ -1201,6 +1207,13 @@ func (x *ModelCapability) GetMaxContextTokens() int32 {
 		return x.MaxContextTokens
 	}
 	return 0
+}
+
+func (x *ModelCapability) GetEngine() string {
+	if x != nil {
+		return x.Engine
+	}
+	return ""
 }
 
 type ProviderConfig struct {
@@ -2174,11 +2187,12 @@ const file_turing_v1_common_proto_rawDesc = "" +
 	"\x18RoutingUnavailableDetail\x125\n" +
 	"\x04kind\x18\x01 \x01(\x0e2!.turing.v1.RoutingRequirementKindR\x04kind\x12\x1c\n" +
 	"\trequested\x18\x02 \x01(\tR\trequested\x12\x1c\n" +
-	"\tavailable\x18\x03 \x03(\tR\tavailable\"\x8b\x01\n" +
+	"\tavailable\x18\x03 \x03(\tR\tavailable\"\xa3\x01\n" +
 	"\x0fModelCapability\x124\n" +
 	"\bprovider\x18\x01 \x01(\x0e2\x18.turing.v1.ModelProviderR\bprovider\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12,\n" +
-	"\x12max_context_tokens\x18\x03 \x01(\x05R\x10maxContextTokens\"\x9b\x02\n" +
+	"\x12max_context_tokens\x18\x03 \x01(\x05R\x10maxContextTokens\x12\x16\n" +
+	"\x06engine\x18\x04 \x01(\tR\x06engine\"\x9b\x02\n" +
 	"\x0eProviderConfig\x124\n" +
 	"\bprovider\x18\x01 \x01(\x0e2\x18.turing.v1.ModelProviderR\bprovider\x12\x18\n" +
 	"\aenabled\x18\x02 \x01(\bR\aenabled\x12#\n" +

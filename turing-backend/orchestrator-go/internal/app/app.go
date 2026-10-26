@@ -10,6 +10,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
@@ -86,6 +87,9 @@ func New(cfg config.Config) (*App, error) {
 	if skillsRoot == "" {
 		skillsRoot = "/skills"
 	}
+	for _, deprecated := range cfg.DeprecatedKeys {
+		log.Print(deprecated)
+	}
 	database, err := db.Open(cfg.DatabasePath)
 	if err != nil {
 		return nil, err
@@ -148,8 +152,8 @@ func New(cfg config.Config) (*App, error) {
 	}
 	legacyModels := []*turingv1.ModelCapability{{
 		Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
-		Model:            cfg.OllamaModel,
-		MaxContextTokens: int32(cfg.OllamaContextWindowTokens),
+		Model:            cfg.LocalModel,
+		MaxContextTokens: int32(cfg.LocalContextWindowTokens),
 	}}
 	if cfg.OpenAIEnabled {
 		legacyModels = append(legacyModels, &turingv1.ModelCapability{
@@ -238,7 +242,7 @@ func New(cfg config.Config) (*App, error) {
 	agentService := agentsvc.New(repo, cfg.AgentCredentialNames)
 	automationService := automationsvc.New(repo)
 	eventService := eventsvc.NewServer(repo, eventBus)
-	chatService := chatsvc.NewWithEgressConfig(repo, eventBus, runtimeService, cfg.OllamaModel, cfg.OpenAIModel, chatsvc.EgressConfig{
+	chatService := chatsvc.NewWithEgressConfig(repo, eventBus, runtimeService, cfg.LocalModel, cfg.OpenAIModel, chatsvc.EgressConfig{
 		OpenAIBaseURL: cfg.OpenAIBaseURL,
 		SigningSecret: cfg.EgressSigningSecret,
 	})
@@ -393,7 +397,7 @@ func New(cfg config.Config) (*App, error) {
 	// Split like memory: enabling and granting a specialist are the user's
 	// decisions, while the team tool a run is offered is the runtime's to
 	// read. Neither facet can do the other's half.
-	teamService := teamsvc.New(repo, runtimeService, cfg.OllamaModel, cfg.AgentTeamEnabled)
+	teamService := teamsvc.New(repo, runtimeService, cfg.LocalModel, cfg.AgentTeamEnabled)
 	teamService.SetApprovalEnforcer(approvalService)
 	teamService.SetEventPublisher(eventBus)
 	teamService.SetMaxDelegationsPerRun(cfg.MaxDelegationsPerRun)
@@ -469,8 +473,8 @@ func New(cfg config.Config) (*App, error) {
 	}
 	scheduler := automationsvc.NewScheduler(repo, eventBus, runtimeService, repository.AutomationRunDefaults{
 		AgentID:         "general_assistant",
-		ModelProvider:   "ollama",
-		Model:           cfg.OllamaModel,
+		ModelProvider:   backendegress.LocalProvider,
+		Model:           cfg.LocalModel,
 		ValidateRouting: runtimeService.ValidateRouting,
 	})
 	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
