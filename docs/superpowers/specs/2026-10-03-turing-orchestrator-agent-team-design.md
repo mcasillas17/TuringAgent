@@ -1,9 +1,11 @@
 # Turing Orchestrator and Agent Team Design
 
 **Date:** 2026-10-03
-**Status:** Proposed. This is a design only, and nothing in it is shipped. It
-does not change the status of any `docs/NORTH_STAR.md` row. Section 15 proposes
-roadmap amendments; they are not applied.
+**Status:** Implemented as delivery slices 1–4 (section 14): PRs #150,
+#152–#158, #162, #163 and #167. Delegation is experimental and off by default
+until EVAL-001. Section 15's roadmap amendments were applied to
+`docs/NORTH_STAR.md` on 2026-10-25. The text below is the design as proposed;
+where the build deviated, the "As built" notes and `CLAUDE.md` say how.
 
 ## 1. Summary
 
@@ -1683,11 +1685,12 @@ defaults to on only when these pass.
 
 ## 14. Delivery slices
 
-1. **PR 1: profiles.** The `team/` root, loader, seeding, Migration A,
+1. **PR 1: profiles** (#150). The `team/` root, loader, seeding, Migration A,
    `TeamService` public facet, the Agents page Team section, and the Compose,
    ignore and docs-guard updates. No runtime behavior changes. This slice is
    useful alone, because users can author and grant profiles.
-2. **PR 2: delegation core**, behind `TURING_AGENT_TEAM_ENABLED=false`.
+2. **PR 2: delegation core**, behind `TURING_AGENT_TEAM_ENABLED=false`. Landed
+   in eight parts, 2a–2h (#152–#158 and #162).
    Migration B, the internal facet and `team.delegate`, the persisted roster,
    child creation, `insertSessionAnchorTx`, the profile snapshot and the
    enforcement and recall-skip fields, the team-protocol worker capability and
@@ -1705,16 +1708,21 @@ defaults to on only when these pass.
    `tool_not_selected` denial, the anchor-role audit, and the tests in
    section 13.
    The proto changes are regenerated with the pinned toolchain.
-3. **PR 3: client.** Delegation events, cards, the approval relay, the child
+3. **PR 3: client** (#163). Delegation events, cards, the approval relay, the child
    transcript view, and the continuation's provenance chip.
-4. **PR 4: child egress consent** (section 7.8). The waiting state, the
+4. **PR 4: child egress consent** (section 7.8, #167). The waiting state, the
    disclosure on the card through a `TeamService` method, and a
    `RunEgressDecision` bound to the child run.
    This unlocks GitHub for Dev, and later web, mail and Drive.
 5. **Later: connectors and collaboration**, per section 10. Each is its own
    roadmap item.
 
-## 15. Proposed roadmap amendments (not applied)
+## 15. Roadmap amendments (applied 2026-10-25)
+
+These were applied to `docs/NORTH_STAR.md` once slices 1–4 had landed: AGT-001
+and AGT-002 are marked shipped (delegation behind the flag), AGT-003 partly
+shipped, the three new items below added, and spine item 9 updated. The text
+below is the proposal as written.
 
 **AGT-001** would be satisfied by **file-defined agent profiles under the
 existing `AgentId`**, rather than "a second `AgentId`".
