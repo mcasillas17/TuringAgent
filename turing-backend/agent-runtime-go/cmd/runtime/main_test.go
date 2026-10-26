@@ -10,24 +10,48 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/config"
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/worker"
 )
 
 func TestAdvertisedModelsReflectConfiguredProvidersAndContextLimits(t *testing.T) {
 	cfg := config.Config{
-		LocalModel: "qwen", LocalContextWindowTokens: 32768,
+		LocalModel: "qwen", LocalContextWindowTokens: 32768, LocalEngineLabel: "ds4",
 		OpenAIModel: "gpt", OpenAIContextWindowTokens: 128000,
 	}
 	models := advertisedModels(cfg)
 	if len(models) != 1 || models[0].GetProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA ||
-		models[0].GetModel() != "qwen" || models[0].GetMaxContextTokens() != 32768 {
+		models[0].GetModel() != "qwen" || models[0].GetMaxContextTokens() != 32768 || models[0].GetEngine() != "ds4" {
 		t.Fatalf("models without OpenAI key = %+v", models)
 	}
 	cfg.OpenAIAPIKey = "configured"
 	models = advertisedModels(cfg)
 	if len(models) != 2 || models[1].GetProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE ||
-		models[1].GetModel() != "gpt" || models[1].GetMaxContextTokens() != 128000 {
+		models[1].GetModel() != "gpt" || models[1].GetMaxContextTokens() != 128000 || models[1].GetEngine() != "" {
 		t.Fatalf("models with OpenAI key = %+v", models)
+	}
+}
+
+// The local engine and the remote provider are two providers: an
+// OpenAI-compatible local engine never takes the remote one's place or its
+// identity as a destination data leaves for.
+func TestTheLocalEngineAndTheRemoteProviderStaySeparate(t *testing.T) {
+	cfg := config.Config{
+		LocalEngine: llm.LocalEngineOpenAI, LocalEngineURL: "http://host.docker.internal:8000/v1",
+		LocalContextWindowTokens: 8192, LocalMaxOutputTokens: 512,
+		OpenAIAPIKey: "k", OpenAIBaseURL: "https://api.openai.com/v1",
+		OpenAIContextWindowTokens: 8192, OpenAIMaxOutputTokens: 512,
+	}
+	providers, err := buildProviders(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, remote := providers[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA].(llm.EgressProvider); remote {
+		t.Fatalf("the local provider %T exposes an egress endpoint", providers[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA])
+	}
+	remote, ok := providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE].(llm.EgressProvider)
+	if !ok || remote.EgressEndpoint() != "https://api.openai.com/v1" {
+		t.Fatalf("remote provider = %+v", providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE])
 	}
 }
 

@@ -29,11 +29,15 @@ type WorkerConfig struct {
 	OpenAIBaseURL      string
 	OpenAIAPIKey       string
 	OpenAIModel        string
-	// OllamaBaseURL, when set, adds a local Ollama provider serving
-	// OllamaModel (default llama3.2), which a test needs for anything only a
-	// local route gets, such as Turing's team.
+	// OllamaBaseURL, when set, adds the local route on Ollama, serving
+	// LocalModel (default llama3.2), which a test needs for anything only a
+	// local route gets, such as Turing's team. LocalOpenAIBaseURL instead puts
+	// the local route on an OpenAI-compatible engine at that URL; it wins when
+	// both are set. LocalEngineLabel is the engine the worker advertises.
 	OllamaBaseURL               string
-	OllamaModel                 string
+	LocalOpenAIBaseURL          string
+	LocalModel                  string
+	LocalEngineLabel            string
 	ContextWindowTokens         int
 	MaxOutputTokens             int
 	MCPSystemBaseURL            string
@@ -67,12 +71,15 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 	providers := map[turingv1.ModelProvider]llm.Provider{
 		turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE: openAIProvider,
 	}
-	if cfg.OllamaBaseURL != "" {
-		ollamaProvider, err := llm.NewOllamaWithLimits(cfg.OllamaBaseURL, http.DefaultClient, cfg.contextWindowTokens(), cfg.maxOutputTokens())
+	if engine, url := cfg.localEngine(); url != "" {
+		local, err := llm.NewLocal(llm.LocalOptions{
+			Engine: engine, BaseURL: url, Client: http.DefaultClient,
+			ContextWindowTokens: cfg.contextWindowTokens(), MaxOutputTokens: cfg.maxOutputTokens(),
+		})
 		if err != nil {
 			return err
 		}
-		providers[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA] = ollamaProvider
+		providers[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA] = local
 	}
 
 	toolRunner := &tools.Runner{
@@ -211,18 +218,32 @@ func (cfg WorkerConfig) models() []*turingv1.ModelCapability {
 		Model:            model,
 		MaxContextTokens: int32(cfg.contextWindowTokens()),
 	}}
-	if cfg.OllamaBaseURL != "" {
-		ollamaModel := cfg.OllamaModel
-		if ollamaModel == "" {
-			ollamaModel = "llama3.2"
+	if _, url := cfg.localEngine(); url != "" {
+		localModel := cfg.LocalModel
+		if localModel == "" {
+			localModel = "llama3.2"
+		}
+		label := cfg.LocalEngineLabel
+		if label == "" {
+			label = "Ollama"
 		}
 		models = append(models, &turingv1.ModelCapability{
 			Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
-			Model:            ollamaModel,
+			Model:            localModel,
 			MaxContextTokens: int32(cfg.contextWindowTokens()),
+			Engine:           label,
 		})
 	}
 	return models
+}
+
+// localEngine is the local route's engine and address, or no address when the
+// test configured none.
+func (cfg WorkerConfig) localEngine() (string, string) {
+	if cfg.LocalOpenAIBaseURL != "" {
+		return llm.LocalEngineOpenAI, cfg.LocalOpenAIBaseURL
+	}
+	return llm.LocalEngineOllama, cfg.OllamaBaseURL
 }
 
 type runtimeClientAdapter struct{ client *orchestrator.Client }

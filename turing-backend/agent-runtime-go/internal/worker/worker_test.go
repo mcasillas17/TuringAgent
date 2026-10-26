@@ -2056,3 +2056,14 @@ func TestWorkerTypedFailureOriginsForRuntimeAndDispatch(t *testing.T) {
 func retryableFailure(failed *turingv1.RuntimeRunFailed) bool {
 	return failed.GetAutomaticRetryClass() == turingv1.AutomaticRetryClass_AUTOMATIC_RETRY_CLASS_SAME_RUN_TRANSIENT
 }
+
+// A worker re-sends its capabilities on every reconnect; the engine label
+// travels with them.
+func TestCloneModelCapabilitiesKeepsTheEngine(t *testing.T) {
+	cloned := cloneModelCapabilities([]*turingv1.ModelCapability{{
+		Provider: turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, Model: "deepseek-chat", MaxContextTokens: 8192, Engine: "ds4",
+	}})
+	if len(cloned) != 1 || cloned[0].GetEngine() != "ds4" {
+		t.Fatalf("cloned = %+v, want the engine kept", cloned)
+	}
+}

@@ -1056,8 +1056,8 @@ func TestExecuteNoticesWhenOllamaReachesConfiguredOutputLimit(t *testing.T) {
 			t.Fatalf("maxOutputTokens = %#v, want %d", payload["maxOutputTokens"], llm.DefaultMaxOutputTokens)
 		}
 		note, _ := payload["note"].(string)
-		if !strings.Contains(note, "OLLAMA_MAX_OUTPUT_TOKENS") {
-			t.Fatalf("notice = %q, want Ollama configuration guidance", note)
+		if !strings.Contains(note, "TURING_LOCAL_MAX_OUTPUT_TOKENS") {
+			t.Fatalf("notice = %q, want the local engine's configuration guidance", note)
 		}
 	}
 

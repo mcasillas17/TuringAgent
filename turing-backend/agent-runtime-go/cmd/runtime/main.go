@@ -42,31 +42,12 @@ func run() error {
 		return err
 	}
 	defer func() { _ = client.Close() }()
-	ollamaProvider, err := llm.NewOllamaWithLimits(
-		cfg.LocalEngineURL,
-		http.DefaultClient,
-		cfg.LocalContextWindowTokens,
-		cfg.LocalMaxOutputTokens,
-	)
+	for _, deprecated := range cfg.DeprecatedKeys {
+		log.Print(deprecated)
+	}
+	providers, err := buildProviders(cfg, http.DefaultClient)
 	if err != nil {
-		return fmt.Errorf("configure Ollama provider: %w", err)
-	}
-	ollamaProvider.WithKeepAlive(cfg.OllamaKeepAlive)
-	providers := map[turingv1.ModelProvider]llm.Provider{
-		turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: ollamaProvider,
-	}
-	if cfg.OpenAIAPIKey != "" {
-		openAIProvider, err := llm.NewOpenAICompatibleWithLimits(
-			cfg.OpenAIBaseURL,
-			cfg.OpenAIAPIKey,
-			http.DefaultClient,
-			cfg.OpenAIContextWindowTokens,
-			cfg.OpenAIMaxOutputTokens,
-		)
-		if err != nil {
-			return fmt.Errorf("configure OpenAI-compatible provider: %w", err)
-		}
-		providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE] = openAIProvider
+		return err
 	}
 	toolRunner := &tools.Runner{
 		WaitApproval: func(ctx context.Context, approvalID string) (string, error) {
@@ -160,11 +141,36 @@ func agentCredentialRefs(keys map[string]string) []string {
 	return refs
 }
 
+// buildProviders is the local route's engine under the local provider and,
+// when a key is configured, the remote OpenAI-compatible provider beside it.
+func buildProviders(cfg config.Config, client *http.Client) (map[turingv1.ModelProvider]llm.Provider, error) {
+	local, err := llm.NewLocal(llm.LocalOptions{
+		Engine: cfg.LocalEngine, BaseURL: cfg.LocalEngineURL, APIKey: cfg.LocalEngineAPIKey,
+		KeepAlive: cfg.OllamaKeepAlive, Client: client,
+		ContextWindowTokens: cfg.LocalContextWindowTokens, MaxOutputTokens: cfg.LocalMaxOutputTokens,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure the local engine: %w", err)
+	}
+	providers := map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: local}
+	if cfg.OpenAIAPIKey != "" {
+		remote, err := llm.NewOpenAICompatibleWithLimits(
+			cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, client, cfg.OpenAIContextWindowTokens, cfg.OpenAIMaxOutputTokens,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("configure OpenAI-compatible provider: %w", err)
+		}
+		providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE] = remote
+	}
+	return providers, nil
+}
+
 func advertisedModels(cfg config.Config) []*turingv1.ModelCapability {
 	models := []*turingv1.ModelCapability{{
 		Provider:         turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA,
 		Model:            cfg.LocalModel,
 		MaxContextTokens: int32(cfg.LocalContextWindowTokens),
+		Engine:           cfg.LocalEngineLabel,
 	}}
 	if cfg.OpenAIAPIKey != "" {
 		models = append(models, &turingv1.ModelCapability{
