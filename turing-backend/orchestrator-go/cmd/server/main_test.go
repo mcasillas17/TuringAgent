@@ -116,32 +116,45 @@ func TestCheckConfigWarnsAboutDeprecatedKeys(t *testing.T) {
 	}
 }
 
+// The check must neither need nor make anything on disk. With a writable
+// directory, anything it created would be found there; with a read-only one,
+// a check that tried to open its database would be refused.
 func TestCheckConfigCreatesNothing(t *testing.T) {
-	dir := t.TempDir()
-	absent := filepath.Join(dir, "absent")
-	environ := validEnviron(
-		"DATABASE_PATH="+filepath.Join(absent, "data", "turing.db"),
-		"MEMORY_ROOT="+filepath.Join(absent, "memory"),
-		"SKILLS_ROOT="+filepath.Join(absent, "skills"),
-		"TEAM_ROOT="+filepath.Join(absent, "team"),
-		"MCP_CONFIG_ROOT="+filepath.Join(absent, "mcp"),
-	)
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatal(err)
+	environUnder := func(dir string) []string {
+		absent := filepath.Join(dir, "absent")
+		return validEnviron(
+			"DATABASE_PATH="+filepath.Join(absent, "data", "turing.db"),
+			"MEMORY_ROOT="+filepath.Join(absent, "memory"),
+			"SKILLS_ROOT="+filepath.Join(absent, "skills"),
+			"TEAM_ROOT="+filepath.Join(absent, "team"),
+			"MCP_CONFIG_ROOT="+filepath.Join(absent, "mcp"),
+		)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-
-	code, stdout, stderr := checkConfigWith(t, environ)
-	if code != 0 {
-		t.Fatalf("code = %d, stdout = %q, stderr = %q; missing paths are not a configuration error", code, stdout, stderr)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("check-config created %v", entries)
-	}
+	t.Run("writable", func(t *testing.T) {
+		dir := t.TempDir()
+		code, stdout, stderr := checkConfigWith(t, environUnder(dir))
+		if code != 0 {
+			t.Fatalf("code = %d, stdout = %q, stderr = %q; missing paths are not a configuration error", code, stdout, stderr)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("check-config created %v", entries)
+		}
+	})
+	t.Run("read-only", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		code, stdout, stderr := checkConfigWith(t, environUnder(dir))
+		if code != 0 {
+			t.Fatalf("code = %d, stdout = %q, stderr = %q; the check must not need to write", code, stdout, stderr)
+		}
+	})
 }
 
 func TestTheOrchestratorRefusesUnknownArguments(t *testing.T) {
