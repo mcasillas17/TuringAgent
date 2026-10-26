@@ -31,6 +31,7 @@ import 'run_state_reconciler.dart';
 import 'run_cancellation_controller.dart';
 import 'run_stop_control.dart';
 import 'tool_call_card.dart';
+import '../../models/model_provider.dart';
 
 final Random _sendIdempotencyRandom = Random.secure();
 
@@ -49,7 +50,7 @@ class ChatScreen extends StatefulWidget {
     required this.apiClient,
     required this.eventSource,
     this.embedded = false,
-    this.modelProvider = 'ollama',
+    this.modelProvider = localModelProvider,
     this.onSessionUpdated,
     this.onSessionDeleted,
   });
@@ -1754,7 +1755,7 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       } on Exception {
         if (!mounted) return;
-        if (modelProvider != 'ollama') {
+        if (modelProvider != localModelProvider) {
           setState(() => _sending = false);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Could not prepare remote send')),

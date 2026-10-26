@@ -40,6 +40,7 @@ import '../models/integration.dart';
 import '../models/memory.dart';
 import '../models/message.dart';
 import '../models/mcp_server.dart';
+import '../models/model_provider.dart';
 import '../models/remote_egress.dart';
 import '../models/run_cancellation.dart';
 import '../models/run_lifecycle.dart';
@@ -472,7 +473,7 @@ class TuringGrpcApi
   Future<Map<String, dynamic>> sendMessage({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     String? idempotencyKey,
   }) {
     return _sendMessage(
@@ -487,7 +488,7 @@ class TuringGrpcApi
   Future<RemoteEgressDisclosure?> prepareRemoteEgress({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     required String idempotencyKey,
   }) async {
     final response = await _chat.prepareRemoteEgress(
@@ -602,7 +603,7 @@ class TuringGrpcApi
   Future<Map<String, dynamic>> sendMessageWithRemoteEgressConsent({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     required String idempotencyKey,
     required RemoteEgressConsent consent,
   }) {
@@ -1238,6 +1239,27 @@ class TuringGrpcApi
       );
       return response.delegations.map(GrpcMappers.delegationToModel).toList();
     });
+  }
+
+  @override
+  Future<LocalEngine?> getLocalEngine() async {
+    final response = await _sessions.getConfig(
+      sessionpb.GetConfigRequest(),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    for (final provider in response.providers) {
+      if (provider.provider != commonpb.ModelProvider.MODEL_PROVIDER_OLLAMA ||
+          !provider.enabled ||
+          provider.models.isEmpty) {
+        continue;
+      }
+      final model = provider.models.firstWhere(
+        (candidate) => candidate.model == provider.defaultModel,
+        orElse: () => provider.models.first,
+      );
+      return LocalEngine(label: model.engine, model: model.model);
+    }
+    return null;
   }
 
   @override

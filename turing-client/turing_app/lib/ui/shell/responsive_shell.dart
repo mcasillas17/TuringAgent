@@ -24,6 +24,7 @@ import '../../networking/api_client.dart';
 import '../../networking/auth_storage.dart';
 import '../../networking/event_source.dart';
 import 'shell_destination.dart';
+import '../../models/model_provider.dart';
 
 /// A conversation, with a rail of past ones and the app's other surfaces
 /// beside it.
@@ -111,7 +112,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   final Set<String> _eventOnlySessionIds = {};
   ShellDestination _destination = ShellDestination.chats;
   String? _activeSessionId;
-  String _modelProvider = 'ollama';
+  String _modelProvider = localModelProvider;
   bool _creating = false;
   final Set<String> _deleting = {};
   final Set<String> _lifecycleMutating = {};
@@ -923,6 +924,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           initialBackendUrl: widget.initialBackendUrl,
           initialApiKey: widget.initialApiKey,
           onSaved: widget.onSettingsChanged,
+          loadLocalEngine: widget.apiClient.getLocalEngine,
         ),
       ),
     );
