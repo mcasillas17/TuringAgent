@@ -202,7 +202,7 @@ func TestProviderCapabilitiesCarryTheEngineLabel(t *testing.T) {
 // text is refused with the registration.
 func TestRegistrationRefusesAnUnsafeEngineLabel(t *testing.T) {
 	for name, engine := range map[string]string{
-		"newline": "a\nb", "65 bytes": strings.Repeat("a", 65), "invalid UTF-8": "\xff",
+		"newline": "a\nb", "65 bytes": strings.Repeat("a", 65), "invalid UTF-8": "\xff", "line separator": "a\u2028b",
 	} {
 		t.Run(name, func(t *testing.T) {
 			snapshot := modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1)

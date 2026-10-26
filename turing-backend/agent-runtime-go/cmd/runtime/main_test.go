@@ -2,9 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +35,51 @@ func TestAdvertisedModelsReflectConfiguredProvidersAndContextLimits(t *testing.T
 	if len(models) != 2 || models[1].GetProvider() != turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE ||
 		models[1].GetModel() != "gpt" || models[1].GetMaxContextTokens() != 128000 || models[1].GetEngine() != "" {
 		t.Fatalf("models with OpenAI key = %+v", models)
+	}
+}
+
+// The Ollama engine sends the configured keep-alive on every request.
+func TestBuildProvidersPassesTheKeepAliveToOllama(t *testing.T) {
+	keepAlive := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			KeepAlive json.RawMessage `json:"keep_alive"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		keepAlive <- string(body.KeepAlive)
+		_, _ = io.WriteString(w, `{"message":{"role":"assistant","content":"ok"},"done":true,"done_reason":"stop"}`+"\n")
+	}))
+	t.Cleanup(server.Close)
+	providers, err := buildProviders(config.Config{
+		LocalEngine: llm.LocalEngineOllama, LocalEngineURL: server.URL, OllamaKeepAlive: "30s",
+		LocalContextWindowTokens: 8192, LocalMaxOutputTokens: 512,
+	}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := providers[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA].StreamChat(context.Background(), llm.ChatRequest{Model: "llama3.2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range events {
+	}
+	if got := <-keepAlive; got != `"30s"` {
+		t.Fatalf("keep_alive = %s, want \"30s\"", got)
+	}
+}
+
+// Each deprecated setting the configuration fell back to is logged once at
+// startup, naming its replacement.
+func TestReportDeprecatedKeysLogsEachOnce(t *testing.T) {
+	var logged strings.Builder
+	previous := log.Writer()
+	log.SetOutput(&logged)
+	defer log.SetOutput(previous)
+	reportDeprecatedKeys(config.Config{DeprecatedKeys: []string{
+		"OLLAMA_MODEL is deprecated; set TURING_LOCAL_MODEL instead",
+	}})
+	if strings.Count(logged.String(), "OLLAMA_MODEL is deprecated; set TURING_LOCAL_MODEL instead") != 1 {
+		t.Fatalf("log = %q", logged.String())
 	}
 }
 

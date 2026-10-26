@@ -248,7 +248,7 @@ func loadLocalEngine(getenv func(string) string) (Config, error) {
 	case local.LocalEngineLabel == "":
 		local.LocalEngineLabel = "OpenAI-compatible"
 	default:
-		if err := llm.ValidateEngineLabel(local.LocalEngineLabel); err != nil {
+		if err := egress.ValidateEngineLabel(local.LocalEngineLabel); err != nil {
 			return Config{}, fmt.Errorf("TURING_LOCAL_ENGINE_LABEL %w", err)
 		}
 	}

@@ -42,9 +42,7 @@ func run() error {
 		return err
 	}
 	defer func() { _ = client.Close() }()
-	for _, deprecated := range cfg.DeprecatedKeys {
-		log.Print(deprecated)
-	}
+	reportDeprecatedKeys(cfg)
 	providers, err := buildProviders(cfg, http.DefaultClient)
 	if err != nil {
 		return err
@@ -139,6 +137,14 @@ func agentCredentialRefs(keys map[string]string) []string {
 	}
 	sort.Strings(refs)
 	return refs
+}
+
+// reportDeprecatedKeys logs, once each, the OLLAMA_* settings configuration
+// fell back to because their TURING_LOCAL_* replacement was unset.
+func reportDeprecatedKeys(cfg config.Config) {
+	for _, deprecated := range cfg.DeprecatedKeys {
+		log.Print(deprecated)
+	}
 }
 
 // buildProviders is the local route's engine under the local provider and,

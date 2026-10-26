@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 )
@@ -18,24 +16,6 @@ const (
 	LocalEngineOllama = "ollama"
 	LocalEngineOpenAI = "openai"
 )
-
-// maxEngineLabelBytes bounds a label a client renders verbatim.
-const maxEngineLabelBytes = 64
-
-// ValidateEngineLabel accepts a display label for the local engine: 1–64
-// bytes of valid UTF-8 with no control characters. It is shown to the user and
-// never routed on.
-func ValidateEngineLabel(label string) error {
-	if label == "" || len(label) > maxEngineLabelBytes || !utf8.ValidString(label) {
-		return errors.New("must be 1 to 64 bytes of valid UTF-8")
-	}
-	for _, r := range label {
-		if unicode.IsControl(r) {
-			return errors.New("must not contain control characters")
-		}
-	}
-	return nil
-}
 
 // LocalOptions configures the local route's engine. BaseURL must name this
 // machine; APIKey is for the OpenAI engine only; KeepAlive is Ollama's only.

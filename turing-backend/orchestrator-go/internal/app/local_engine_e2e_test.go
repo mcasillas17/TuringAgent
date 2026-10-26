@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	runtimetestkit "github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/testkit"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"google.golang.org/grpc/metadata"
 )
@@ -178,5 +180,25 @@ func TestATurnAndADelegatedTaskRunOnAnOpenAICompatibleLocalEngine(t *testing.T) 
 		if header != "" {
 			t.Fatalf("authorization = %q, want none without a key", header)
 		}
+	}
+}
+
+// Startup logs each deprecated setting the configuration fell back to.
+func TestStartupLogsDeprecatedLocalKeys(t *testing.T) {
+	var logged strings.Builder
+	previous := log.Writer()
+	log.SetOutput(&logged)
+	defer log.SetOutput(previous)
+	app, err := New(config.Config{
+		ClientAPIKey: "client", RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
+		ApprovalJWTSecret: "approval-secret", DatabasePath: t.TempDir() + "/turing.db", LocalModel: "llama3.2",
+		DeprecatedKeys: []string{"OLLAMA_MODEL is deprecated; set TURING_LOCAL_MODEL instead"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Stop)
+	if !strings.Contains(logged.String(), "OLLAMA_MODEL is deprecated; set TURING_LOCAL_MODEL instead") {
+		t.Fatalf("log = %q, want the deprecated key named", logged.String())
 	}
 }

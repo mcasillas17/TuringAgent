@@ -14,24 +14,6 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 )
 
-// An engine label is shown to the user and nothing else, so it must be short,
-// printable text.
-func TestValidateEngineLabel(t *testing.T) {
-	if err := ValidateEngineLabel("ds4"); err != nil {
-		t.Fatalf("ds4: %v", err)
-	}
-	if err := ValidateEngineLabel(strings.Repeat("a", 64)); err != nil {
-		t.Fatalf("64 bytes: %v", err)
-	}
-	for name, label := range map[string]string{
-		"empty": "", "newline": "a\nb", "65 bytes": strings.Repeat("a", 65), "invalid UTF-8": "\xff", "escape": "a\x1b[31m",
-	} {
-		if err := ValidateEngineLabel(label); err == nil {
-			t.Fatalf("%s: accepted %q", name, label)
-		}
-	}
-}
-
 // fakeLocalEngine is an OpenAI-compatible server on this machine that streams
 // the given SSE data lines and records the one request it was sent.
 type fakeLocalEngine struct {
@@ -79,8 +61,13 @@ func TestNewLocalBuildsOllamaForTheOllamaEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := provider.(*Ollama); !ok || provider.ID() != egress.LocalProvider {
+	ollama, ok := provider.(*Ollama)
+	if !ok || provider.ID() != egress.LocalProvider {
 		t.Fatalf("provider = %T %q, want Ollama as the local provider", provider, provider.ID())
+	}
+	// The configured keep-alive travels with every Ollama request.
+	if string(ollama.keepAlive) != `"2m"` {
+		t.Fatalf("keep-alive = %s, want \"2m\"", ollama.keepAlive)
 	}
 }
 

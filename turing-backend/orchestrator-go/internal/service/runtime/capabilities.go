@@ -11,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
@@ -112,8 +110,10 @@ func decodeWorkerCapabilities(snapshot *turingv1.WorkerCapabilities) (*registere
 		if advertised.GetMaxContextTokens() < 0 {
 			return nil, nil, fmt.Errorf("max_context_tokens must be non-negative")
 		}
-		if engine := advertised.GetEngine(); engine != "" && !validEngineLabel(engine) {
-			return nil, nil, fmt.Errorf("model capability %s/%s engine must be 1 to 64 bytes of printable UTF-8", provider, model)
+		if engine := advertised.GetEngine(); engine != "" {
+			if err := backendegress.ValidateEngineLabel(engine); err != nil {
+				return nil, nil, fmt.Errorf("model capability %s/%s engine %w", provider, model, err)
+			}
 		}
 		key := provider + "\x00" + model
 		if _, duplicate := seenModels[key]; duplicate {
@@ -1208,15 +1208,4 @@ func collectAvailable(s *Server, values func(*registeredWorkerCapabilities) []st
 	}
 	sort.Strings(available)
 	return available
-}
-
-// validEngineLabel is the runtime's llm.ValidateEngineLabel rule, repeated
-// because the orchestrator cannot import the runtime: a label reaches every
-// client verbatim, so it is 1 to 64 bytes of valid UTF-8 without control
-// characters.
-func validEngineLabel(label string) bool {
-	if label == "" || len(label) > 64 || !utf8.ValidString(label) {
-		return false
-	}
-	return !strings.ContainsFunc(label, unicode.IsControl)
 }
