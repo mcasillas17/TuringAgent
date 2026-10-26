@@ -40,9 +40,9 @@ const defaultOllamaURL = "http://host.docker.internal:11434"
 const defaultOllamaKeepAlive = "2m"
 
 type Config struct {
-	OrchestratorGRPCAddr      string
-	RuntimeToken              string
-	WorkerID                  string
+	OrchestratorGRPCAddr string
+	RuntimeToken         string
+	WorkerID             string
 	// LocalEngine is the protocol the local route speaks: llm.LocalEngineOllama
 	// or llm.LocalEngineOpenAI. LocalEngineURL passed egress.ParseLocalEndpoint;
 	// LocalEngineAPIKey is set only for the OpenAI engine; LocalEngineLabel is
@@ -57,7 +57,7 @@ type Config struct {
 	OllamaKeepAlive          string
 	// DeprecatedKeys holds one sentence for each OLLAMA_* setting that was read
 	// because its TURING_LOCAL_* replacement was unset, for the runtime to log.
-	DeprecatedKeys []string
+	DeprecatedKeys            []string
 	OpenAIBaseURL             string
 	OpenAIAPIKey              string
 	OpenAIModel               string
