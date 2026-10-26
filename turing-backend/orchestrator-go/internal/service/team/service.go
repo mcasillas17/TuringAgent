@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
 	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
@@ -52,12 +53,19 @@ type Server struct {
 	maxDelegationsPerRun int
 	// delegationResultMaxBytes is TURING_DELEGATION_RESULT_MAX_BYTES.
 	delegationResultMaxBytes int
+	// egressSecret signs the disclosures a task waiting for consent is
+	// offered; now and nonce are their clock and randomness.
+	egressSecret string
+	now          func() time.Time
+	nonce        func() (string, error)
 }
 
 func New(repo *repository.Repository, routes Routes, defaultModel string, enabled bool) *Server {
 	return &Server{
 		repo: repo, routes: routes, defaultModel: defaultModel, enabled: enabled,
 		delegationResultMaxBytes: backendegress.DefaultDelegationResultMaxBytes,
+		now:                      time.Now,
+		nonce:                    backendegress.NewChallengeNonce,
 	}
 }
 
@@ -142,6 +150,9 @@ type resolver struct {
 	catalog    []repository.ToolCatalogEntry
 	models     map[string]bool
 	routeTools map[string]map[string]bool
+	// decisionTools is routeTools for a run that carries an egress decision,
+	// which only workers that can validate one may claim.
+	decisionTools map[string]map[string]bool
 }
 
 func (s *Server) newResolver(ctx context.Context) (*resolver, error) {
@@ -159,6 +170,8 @@ func (s *Server) newResolver(ctx context.Context) (*resolver, error) {
 		catalog:    catalog,
 		models:     map[string]bool{},
 		routeTools: map[string]map[string]bool{},
+
+		decisionTools: map[string]map[string]bool{},
 	}
 	if s.routes != nil {
 		// A child runs only on a team-protocol worker, so a model only older
@@ -209,17 +222,28 @@ func (r *resolver) model(declared string) (string, string) {
 // can run. The route is a child's, so only workers that honor the
 // specialist-job contract count: an older one could never claim the child.
 func (r *resolver) toolsOn(model string) map[string]bool {
+	return r.toolsOnRoute(model, false, r.routeTools)
+}
+
+// decisionToolsOn is toolsOn for a child that carries an egress decision.
+func (r *resolver) decisionToolsOn(model string) map[string]bool {
+	return r.toolsOnRoute(model, true, r.decisionTools)
+}
+
+func (r *resolver) toolsOnRoute(model string, decision bool, cache map[string]map[string]bool) map[string]bool {
 	if model == "" || r.routes == nil {
 		return nil
 	}
-	if tools, ok := r.routeTools[model]; ok {
+	if tools, ok := cache[model]; ok {
 		return tools
 	}
+	route := childRoute(model)
+	route.RemoteEgressDecision = decision
 	tools := map[string]bool{}
-	for _, name := range r.routes.EgressToolNames(childRoute(model)) {
+	for _, name := range r.routes.EgressToolNames(route) {
 		tools[name] = true
 	}
-	r.routeTools[model] = tools
+	cache[model] = tools
 	return tools
 }
 
@@ -264,13 +288,28 @@ func (r *resolver) resolve(profile repository.AgentProfile) *turingv1.AgentProfi
 	// rather than being blamed on the route.
 	excluded := map[string]string{}
 	noRoute := modelReason != ""
-	var resolved, waiting []string
+	var resolved, waiting, consent []string
 	for _, entry := range r.catalog {
 		if !teamfiles.MatchAny(profile.Tools, entry.ToolName) {
 			continue
 		}
 		qualified := entry.ServerName + "/" + entry.ToolName
-		if reason := exclusionReason(entry, profile.Memory, noRoute || routeTools[qualified]); reason != "" {
+		reason := exclusionReason(entry, profile.Memory, noRoute || routeTools[qualified])
+		// A tool that leaves the machine is the user's to allow for each
+		// task, and worth asking about only if a worker that can carry
+		// their decision would then run it.
+		if reason == consentReason {
+			switch {
+			case noRoute:
+				waiting = append(waiting, qualified)
+				continue
+			case r.decisionToolsOn(model)[qualified]:
+				consent = append(consent, qualified)
+				continue
+			}
+			reason = routeReason
+		}
+		if reason != "" {
 			excluded[qualified] = reason
 			out.ExcludedTools = append(out.ExcludedTools, &turingv1.AgentProfileToolExclusion{Tool: qualified, Reason: reason})
 			continue
@@ -282,13 +321,15 @@ func (r *resolver) resolve(profile repository.AgentProfile) *turingv1.AgentProfi
 		resolved = append(resolved, qualified)
 	}
 	slices.Sort(resolved)
+	slices.Sort(consent)
+	out.ConsentTools = consent
 	slices.SortFunc(out.ExcludedTools, func(a, b *turingv1.AgentProfileToolExclusion) int {
 		return strings.Compare(a.GetTool(), b.GetTool())
 	})
 	out.ResolvedTools = resolved
 
 	for _, pattern := range profile.Requires {
-		if reason := r.requirementReason(pattern, profile.Tools, slices.Concat(resolved, waiting), excluded); reason != "" {
+		if reason := r.requirementReason(pattern, profile.Tools, slices.Concat(resolved, waiting, consent), excluded); reason != "" {
 			reasons = append(reasons, reason)
 		}
 	}
@@ -320,12 +361,19 @@ func exclusionReason(entry repository.ToolCatalogEntry, memory string, onRoute b
 	case entry.ServerName == "memory" && !memoryAllows(memory, entry.ToolName):
 		return fmt.Sprintf("beyond the profile's memory level (%s)", memory)
 	case entry.ServerName == "integrations" || entry.ServerTier == string(repository.MCPServerTierRemoteURL):
-		return "declared, needs per-delegation consent"
+		return consentReason
 	case !onRoute:
-		return "not served by every live worker on the route"
+		return routeReason
 	}
 	return ""
 }
+
+const (
+	// consentReason marks a tool that leaves the machine. A child may use one
+	// only once the user consents for that task; no continuation ever does.
+	consentReason = "declared, needs per-delegation consent"
+	routeReason   = "not served by every live worker on the route"
+)
 
 func memoryAllows(level, tool string) bool {
 	switch tool {

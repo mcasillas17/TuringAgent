@@ -26,8 +26,12 @@ type fakeRoutes struct {
 	// lands on one.
 	older []string
 	// tools is, per model, what EgressToolNames returns for that route.
-	tools  map[string][]string
-	routes []repository.RoutingRequirements
+	tools map[string][]string
+	// decisionTools, when set for a model, is what EgressToolNames returns
+	// for that route when the run will carry an egress decision: only the
+	// workers that can validate one count.
+	decisionTools map[string][]string
+	routes        []repository.RoutingRequirements
 	// validated is every route ValidateRouting was asked about.
 	validated []repository.RoutingRequirements
 	// refuseTools refuses every route that asks for tools, as when no one
@@ -66,6 +70,9 @@ func (f *fakeRoutes) ValidateRouting(_ context.Context, route repository.Routing
 
 func (f *fakeRoutes) EgressToolNames(route repository.RoutingRequirements) []string {
 	f.routes = append(f.routes, route)
+	if tools, ok := f.decisionTools[route.Model]; ok && route.RemoteEgressDecision {
+		return tools
+	}
 	return f.tools[route.Model]
 }
 
@@ -348,24 +355,26 @@ func TestEditingOnlyTheBodyAndDisplayFieldsKeepsTheGrant(t *testing.T) {
 	}
 }
 
-func TestARequiredEgressingToolIsUnavailableWithTheConsentReason(t *testing.T) {
+// A tool that leaves the machine is never among the tools a task gets
+// outright: it is one the user is asked about for each task. It still meets
+// requires, so a specialist that needs it is active.
+func TestAnEgressingToolNeedsConsentForEachTask(t *testing.T) {
 	h := newHarness(t)
 	h.routes.tools[defaultModel] = append(slices.Clone(builtinTools), "integrations/github.get_issue")
 	h.write(t, "dev", "name: Dev\ndescription: Code\ntools: [files.*, github.get_issue]\nrequires: [github.get_issue]\n")
 	h.activate(t, "dev")
 
 	dev := h.profile(t, "dev")
-	wantState(t, dev, turingv1.AgentProfileState_AGENT_PROFILE_STATE_UNAVAILABLE)
-	wantReason(t, dev, "github.get_issue", "consent")
-	if reason := exclusion(dev, "integrations/github.get_issue"); !strings.Contains(reason, "consent") {
-		t.Fatalf("exclusion = %q, want the consent reason", reason)
+	wantState(t, dev, turingv1.AgentProfileState_AGENT_PROFILE_STATE_ACTIVE)
+	if !slices.Equal(dev.GetConsentTools(), []string{"integrations/github.get_issue"}) {
+		t.Fatalf("consent tools = %q, want the GitHub tool", dev.GetConsentTools())
 	}
-	if slices.Contains(dev.GetResolvedTools(), "integrations/github.get_issue") {
-		t.Fatalf("resolved tools %q include an egressing tool", dev.GetResolvedTools())
+	if slices.Contains(dev.GetResolvedTools(), "integrations/github.get_issue") || exclusion(dev, "integrations/github.get_issue") != "" {
+		t.Fatalf("resolved %q, excluded %+v; want the GitHub tool only behind consent", dev.GetResolvedTools(), dev.GetExcludedTools())
 	}
 }
 
-func TestARemoteMCPServerToolIsEgressing(t *testing.T) {
+func TestARemoteMCPServerToolNeedsConsentForEachTask(t *testing.T) {
 	h := newHarness(t)
 	h.registerRemoteServer(t, "notes", "notes.search")
 	h.routes.tools[defaultModel] = append(slices.Clone(builtinTools), "notes/notes.search")
@@ -373,10 +382,45 @@ func TestARemoteMCPServerToolIsEgressing(t *testing.T) {
 	h.activate(t, "research")
 
 	research := h.profile(t, "research")
-	if reason := exclusion(research, "notes/notes.search"); !strings.Contains(reason, "consent") {
-		t.Fatalf("exclusion = %q (excluded %+v)", reason, research.GetExcludedTools())
+	wantState(t, research, turingv1.AgentProfileState_AGENT_PROFILE_STATE_ACTIVE)
+	if !slices.Equal(research.GetConsentTools(), []string{"notes/notes.search"}) {
+		t.Fatalf("consent tools = %q (excluded %+v)", research.GetConsentTools(), research.GetExcludedTools())
 	}
-	wantState(t, research, turingv1.AgentProfileState_AGENT_PROFILE_STATE_UNAVAILABLE)
+}
+
+// Consent is only worth asking for if a worker that can carry the decision
+// would then run the task: a tool only workers too old to validate one have
+// is withheld for the route, like any tool no worker serves.
+func TestAnEgressingToolNoDecisionWorkerServesIsWithheld(t *testing.T) {
+	h := newHarness(t)
+	h.routes.tools[defaultModel] = append(slices.Clone(builtinTools), "integrations/github.get_issue")
+	h.routes.decisionTools = map[string][]string{defaultModel: builtinTools}
+	h.write(t, "dev", "name: Dev\ndescription: Code\ntools: [files.*, github.get_issue]\nrequires: [github.get_issue]\n")
+	h.activate(t, "dev")
+
+	dev := h.profile(t, "dev")
+	wantState(t, dev, turingv1.AgentProfileState_AGENT_PROFILE_STATE_UNAVAILABLE)
+	if len(dev.GetConsentTools()) != 0 {
+		t.Fatalf("consent tools = %q, want none", dev.GetConsentTools())
+	}
+	if reason := exclusion(dev, "integrations/github.get_issue"); !strings.Contains(reason, "not served") {
+		t.Fatalf("exclusion = %q, want the route reason", reason)
+	}
+}
+
+// With no model there is no route to ask a worker about, so a tool that
+// leaves the machine waits on the model like any other tool.
+func TestAnEgressingToolWaitsOnAnUnservedModel(t *testing.T) {
+	h := newHarness(t)
+	h.write(t, "dev", "name: Dev\ndescription: Code\nmodel: llama3.1:8b\ntools: [files.*, github.get_issue]\nrequires: [github.get_issue]\n")
+	h.activate(t, "dev")
+
+	dev := h.profile(t, "dev")
+	wantState(t, dev, turingv1.AgentProfileState_AGENT_PROFILE_STATE_UNAVAILABLE)
+	wantOnlyTheModelReason(t, dev)
+	if len(dev.GetConsentTools()) != 0 {
+		t.Fatalf("consent tools = %q, want none without a route", dev.GetConsentTools())
+	}
 }
 
 func TestARequiredToolDisabledByPolicyIsUnavailable(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/teamfiles"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -198,6 +199,14 @@ func (s *Server) admitDelegation(ctx context.Context, runID string, args map[str
 		return repository.CreateDelegationInput{}, status.Error(codes.FailedPrecondition, repository.ErrDelegationCapReached.Error())
 	}
 	tools := resolved.GetResolvedTools()
+	// The profile is active, so each requires pattern is met; one met only by
+	// a tool behind consent is one declining leaves the task without.
+	required := false
+	for _, pattern := range profile.Requires {
+		if !slices.ContainsFunc(tools, func(tool string) bool { return teamfiles.MatchPattern(pattern, toolPart(tool)) }) {
+			required = true
+		}
+	}
 	// A child no worker could claim is never queued just to wait out the
 	// queue bound: its whole route has to be served now.
 	if err := s.routes.ValidateRouting(ctx, repository.RoutingRequirements{
@@ -217,12 +226,14 @@ func (s *Server) admitDelegation(ctx context.Context, runID string, args map[str
 			ProfileID: profile.ID, Revision: entry.Revision, DisplayName: profile.Name, Emoji: profile.Emoji,
 			Instructions: profile.Instructions, MaxToolCalls: profile.MaxToolCalls,
 		},
-		SkillPatterns: profile.Skills,
-		ModelProvider: childProvider,
-		Model:         resolved.GetResolvedModel(),
-		SelectedTools: tools,
-		Brief:         brief,
-		Task:          task,
+		SkillPatterns:  profile.Skills,
+		ModelProvider:  childProvider,
+		Model:          resolved.GetResolvedModel(),
+		SelectedTools:  tools,
+		Brief:          brief,
+		Task:           task,
+		EgressTools:    resolved.GetConsentTools(),
+		EgressRequired: required,
 	}, nil
 }
 

@@ -26,6 +26,7 @@ void main() {
         grantedRevision: 'rev-1',
         state: teampb.AgentProfileState.AGENT_PROFILE_STATE_NEEDS_GRANT,
         resolvedTools: ['memory/read', 'files/read_file'],
+        consentTools: ['integrations/github.get_issue'],
         unavailableReasons: ['no live worker serves model qwen2.5:7b'],
         excludedTools: [
           teampb.AgentProfileToolExclusion(
@@ -55,6 +56,7 @@ void main() {
     expect(model.grantsCurrentRevision, isFalse);
     expect(model.state, AgentProfileState.needsGrant);
     expect(model.resolvedTools, ['memory/read', 'files/read_file']);
+    expect(model.consentTools, ['integrations/github.get_issue']);
     expect(model.unavailableReasons, [
       'no live worker serves model qwen2.5:7b',
     ]);

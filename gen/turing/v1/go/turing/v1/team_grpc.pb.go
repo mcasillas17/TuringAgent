@@ -19,13 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TeamService_ListAgentProfiles_FullMethodName      = "/turing.v1.TeamService/ListAgentProfiles"
-	TeamService_SetAgentProfileEnabled_FullMethodName = "/turing.v1.TeamService/SetAgentProfileEnabled"
-	TeamService_GrantAgentProfile_FullMethodName      = "/turing.v1.TeamService/GrantAgentProfile"
-	TeamService_ListTeamTools_FullMethodName          = "/turing.v1.TeamService/ListTeamTools"
-	TeamService_CallTeamTool_FullMethodName           = "/turing.v1.TeamService/CallTeamTool"
-	TeamService_ListDelegations_FullMethodName        = "/turing.v1.TeamService/ListDelegations"
-	TeamService_GetDelegation_FullMethodName          = "/turing.v1.TeamService/GetDelegation"
+	TeamService_ListAgentProfiles_FullMethodName       = "/turing.v1.TeamService/ListAgentProfiles"
+	TeamService_SetAgentProfileEnabled_FullMethodName  = "/turing.v1.TeamService/SetAgentProfileEnabled"
+	TeamService_GrantAgentProfile_FullMethodName       = "/turing.v1.TeamService/GrantAgentProfile"
+	TeamService_ListTeamTools_FullMethodName           = "/turing.v1.TeamService/ListTeamTools"
+	TeamService_CallTeamTool_FullMethodName            = "/turing.v1.TeamService/CallTeamTool"
+	TeamService_ListDelegations_FullMethodName         = "/turing.v1.TeamService/ListDelegations"
+	TeamService_GetDelegation_FullMethodName           = "/turing.v1.TeamService/GetDelegation"
+	TeamService_PrepareDelegationEgress_FullMethodName = "/turing.v1.TeamService/PrepareDelegationEgress"
+	TeamService_DecideDelegationEgress_FullMethodName  = "/turing.v1.TeamService/DecideDelegationEgress"
 )
 
 // TeamServiceClient is the client API for TeamService service.
@@ -46,6 +48,12 @@ type TeamServiceClient interface {
 	ListDelegations(ctx context.Context, in *ListDelegationsRequest, opts ...grpc.CallOption) (*ListDelegationsResponse, error)
 	// One delegation. NotFound once its conversation is being deleted.
 	GetDelegation(ctx context.Context, in *GetDelegationRequest, opts ...grpc.CallOption) (*Delegation, error)
+	// The disclosure for a task waiting for consent to tools that leave the
+	// machine. FailedPrecondition once it is not waiting.
+	PrepareDelegationEgress(ctx context.Context, in *PrepareDelegationEgressRequest, opts ...grpc.CallOption) (*PrepareDelegationEgressResponse, error)
+	// The user's decision for that one task: a decision bound to the task's
+	// own run, never its turn's.
+	DecideDelegationEgress(ctx context.Context, in *DecideDelegationEgressRequest, opts ...grpc.CallOption) (*Delegation, error)
 }
 
 type teamServiceClient struct {
@@ -126,6 +134,26 @@ func (c *teamServiceClient) GetDelegation(ctx context.Context, in *GetDelegation
 	return out, nil
 }
 
+func (c *teamServiceClient) PrepareDelegationEgress(ctx context.Context, in *PrepareDelegationEgressRequest, opts ...grpc.CallOption) (*PrepareDelegationEgressResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareDelegationEgressResponse)
+	err := c.cc.Invoke(ctx, TeamService_PrepareDelegationEgress_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *teamServiceClient) DecideDelegationEgress(ctx context.Context, in *DecideDelegationEgressRequest, opts ...grpc.CallOption) (*Delegation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Delegation)
+	err := c.cc.Invoke(ctx, TeamService_DecideDelegationEgress_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TeamServiceServer is the server API for TeamService service.
 // All implementations must embed UnimplementedTeamServiceServer
 // for forward compatibility.
@@ -144,6 +172,12 @@ type TeamServiceServer interface {
 	ListDelegations(context.Context, *ListDelegationsRequest) (*ListDelegationsResponse, error)
 	// One delegation. NotFound once its conversation is being deleted.
 	GetDelegation(context.Context, *GetDelegationRequest) (*Delegation, error)
+	// The disclosure for a task waiting for consent to tools that leave the
+	// machine. FailedPrecondition once it is not waiting.
+	PrepareDelegationEgress(context.Context, *PrepareDelegationEgressRequest) (*PrepareDelegationEgressResponse, error)
+	// The user's decision for that one task: a decision bound to the task's
+	// own run, never its turn's.
+	DecideDelegationEgress(context.Context, *DecideDelegationEgressRequest) (*Delegation, error)
 	mustEmbedUnimplementedTeamServiceServer()
 }
 
@@ -174,6 +208,12 @@ func (UnimplementedTeamServiceServer) ListDelegations(context.Context, *ListDele
 }
 func (UnimplementedTeamServiceServer) GetDelegation(context.Context, *GetDelegationRequest) (*Delegation, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetDelegation not implemented")
+}
+func (UnimplementedTeamServiceServer) PrepareDelegationEgress(context.Context, *PrepareDelegationEgressRequest) (*PrepareDelegationEgressResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareDelegationEgress not implemented")
+}
+func (UnimplementedTeamServiceServer) DecideDelegationEgress(context.Context, *DecideDelegationEgressRequest) (*Delegation, error) {
+	return nil, status.Error(codes.Unimplemented, "method DecideDelegationEgress not implemented")
 }
 func (UnimplementedTeamServiceServer) mustEmbedUnimplementedTeamServiceServer() {}
 func (UnimplementedTeamServiceServer) testEmbeddedByValue()                     {}
@@ -322,6 +362,42 @@ func _TeamService_GetDelegation_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TeamService_PrepareDelegationEgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareDelegationEgressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TeamServiceServer).PrepareDelegationEgress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TeamService_PrepareDelegationEgress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TeamServiceServer).PrepareDelegationEgress(ctx, req.(*PrepareDelegationEgressRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TeamService_DecideDelegationEgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DecideDelegationEgressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TeamServiceServer).DecideDelegationEgress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TeamService_DecideDelegationEgress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TeamServiceServer).DecideDelegationEgress(ctx, req.(*DecideDelegationEgressRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TeamService_ServiceDesc is the grpc.ServiceDesc for TeamService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -356,6 +432,14 @@ var TeamService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetDelegation",
 			Handler:    _TeamService_GetDelegation_Handler,
+		},
+		{
+			MethodName: "PrepareDelegationEgress",
+			Handler:    _TeamService_PrepareDelegationEgress_Handler,
+		},
+		{
+			MethodName: "DecideDelegationEgress",
+			Handler:    _TeamService_DecideDelegationEgress_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

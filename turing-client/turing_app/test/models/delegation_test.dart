@@ -15,37 +15,46 @@ Map<String, dynamic> _payload(Map<String, dynamic> overrides) => {
 };
 
 void main() {
-  test('a delegation maps from the read API with everything its card shows', () {
-    final delegation = GrpcMappers.delegationToModel(
-      teampb.Delegation(
-        delegationId: 'dlg_1',
-        parentSessionId: 'sess_parent',
-        parentRunId: 'run_parent',
-        childSessionId: 'sess_child',
-        childRunId: 'run_child',
-        profileId: 'research',
-        displayName: 'Research',
-        emoji: '🔬',
-        task: 'Gather the notes',
-        state: 'waiting_approval',
-        approvalId: 'appr_1',
-        continuationRunId: 'run_continuation',
-        summary: '🔬 Research is waiting for your approval',
-      ),
-    );
+  test(
+    'a delegation maps from the read API with everything its card shows',
+    () {
+      final delegation = GrpcMappers.delegationToModel(
+        teampb.Delegation(
+          delegationId: 'dlg_1',
+          parentSessionId: 'sess_parent',
+          parentRunId: 'run_parent',
+          childSessionId: 'sess_child',
+          childRunId: 'run_child',
+          profileId: 'research',
+          displayName: 'Research',
+          emoji: '🔬',
+          task: 'Gather the notes',
+          state: 'waiting_approval',
+          approvalId: 'appr_1',
+          continuationRunId: 'run_continuation',
+          summary: '🔬 Research is waiting for your approval',
+          egressTools: ['integrations/github.get_issue'],
+          egressConsent: 'pending',
+          egressRequired: true,
+        ),
+      );
+      expect(delegation.egressTools, ['integrations/github.get_issue']);
+      expect(delegation.egressConsent, 'pending');
+      expect(delegation.egressRequired, isTrue);
 
-    expect(delegation.delegationId, 'dlg_1');
-    expect(delegation.parentRunId, 'run_parent');
-    expect(delegation.childSessionId, 'sess_child');
-    expect(delegation.childRunId, 'run_child');
-    expect(delegation.specialist, '🔬 Research');
-    expect(delegation.task, 'Gather the notes');
-    expect(delegation.state, 'waiting_approval');
-    expect(delegation.approvalId, 'appr_1');
-    expect(delegation.continuationRunId, 'run_continuation');
-    expect(delegation.summary, '🔬 Research is waiting for your approval');
-    expect(delegation.isTerminal, isFalse);
-  });
+      expect(delegation.delegationId, 'dlg_1');
+      expect(delegation.parentRunId, 'run_parent');
+      expect(delegation.childSessionId, 'sess_child');
+      expect(delegation.childRunId, 'run_child');
+      expect(delegation.specialist, '🔬 Research');
+      expect(delegation.task, 'Gather the notes');
+      expect(delegation.state, 'waiting_approval');
+      expect(delegation.approvalId, 'appr_1');
+      expect(delegation.continuationRunId, 'run_continuation');
+      expect(delegation.summary, '🔬 Research is waiting for your approval');
+      expect(delegation.isTerminal, isFalse);
+    },
+  );
 
   test('a started event makes a card, and later events replace its state', () {
     final started = Delegation.fromEvent(
@@ -104,6 +113,32 @@ void main() {
       isNull,
       reason: 'a card that cannot be placed under its turn is not made',
     );
+  });
+
+  test('a task waiting for consent says which tools it waits on', () {
+    final waiting = Delegation.fromEvent(
+      null,
+      _payload({
+        'state': 'waiting_consent',
+        'egressTools': ['integrations/github.get_issue'],
+        'egressConsent': 'pending',
+        'egressRequired': true,
+      }),
+    )!;
+    expect(waiting.waitingForConsent, isTrue);
+    expect(waiting.egressTools, ['integrations/github.get_issue']);
+    expect(waiting.egressRequired, isTrue);
+    expect(waiting.isTerminal, isFalse);
+
+    final granted = Delegation.fromEvent(
+      waiting,
+      _payload({'state': 'queued', 'egressConsent': 'granted'}),
+    )!;
+    expect(granted.waitingForConsent, isFalse);
+    expect(granted.egressConsent, 'granted');
+    // An update that leaves the tools out keeps the ones the task asked for.
+    expect(granted.egressTools, ['integrations/github.get_issue']);
+    expect(granted.egressRequired, isTrue);
   });
 
   test('only completed, failed and cancelled are terminal', () {

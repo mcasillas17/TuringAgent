@@ -285,6 +285,30 @@ abstract class TuringApi implements RemoteEgressApi {
     );
   }
 
+  /// The disclosure for a task waiting for consent to tools that leave the
+  /// machine: where its tool calls may go and what may leave.
+  Future<RemoteEgressDisclosure> prepareDelegationEgress({
+    required String delegationId,
+  }) {
+    throw const TuringApiException(
+      code: 'team_unsupported',
+      message: 'This client cannot read a task\'s consent request',
+    );
+  }
+
+  /// The user's decision for that one task: [consent] allows the disclosed
+  /// tools; none declines them, which runs the task without them or ends it
+  /// when its specialist requires them.
+  Future<Delegation> decideDelegationEgress({
+    required String delegationId,
+    RemoteEgressConsent? consent,
+  }) {
+    throw const TuringApiException(
+      code: 'team_unsupported',
+      message: 'This client cannot decide a task\'s consent request',
+    );
+  }
+
   /// Enabling does not grant anything; a profile becomes active only once the
   /// user also grants its current revision.
   Future<AgentProfile> setAgentProfileEnabled({

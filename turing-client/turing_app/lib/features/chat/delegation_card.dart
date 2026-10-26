@@ -13,6 +13,9 @@ class DelegationCard extends StatelessWidget {
     this.onViewWork,
     this.cancelling = false,
     this.approval,
+    this.onAllowEgress,
+    this.onDeclineEgress,
+    this.deciding = false,
   });
 
   final Delegation delegation;
@@ -25,6 +28,13 @@ class DelegationCard extends StatelessWidget {
 
   /// The existing approval card for the approval this task waits on.
   final Widget? approval;
+
+  /// While the task waits for consent to tools that leave the machine:
+  /// review and allow them, or decline them. [deciding] holds both while a
+  /// decision is open.
+  final VoidCallback? onAllowEgress;
+  final VoidCallback? onDeclineEgress;
+  final bool deciding;
 
   @override
   Widget build(BuildContext context) {
@@ -66,9 +76,30 @@ class DelegationCard extends StatelessWidget {
               ),
             ),
             ?approval,
+            if (delegation.waitingForConsent) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Wants to use: ${delegation.egressTools.join(', ')}',
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
             Wrap(
               spacing: 4,
               children: [
+                if (delegation.waitingForConsent && onAllowEgress != null)
+                  TextButton(
+                    onPressed: deciding ? null : onAllowEgress,
+                    child: const Text('Allow…'),
+                  ),
+                if (delegation.waitingForConsent && onDeclineEgress != null)
+                  TextButton(
+                    onPressed: deciding ? null : onDeclineEgress,
+                    child: Text(
+                      delegation.egressRequired
+                          ? 'Decline (stops the task)'
+                          : 'Run without',
+                    ),
+                  ),
                 if (onCancel != null)
                   TextButton(
                     onPressed: cancelling ? null : onCancel,

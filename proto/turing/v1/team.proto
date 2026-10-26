@@ -74,6 +74,10 @@ message AgentProfile {
   repeated string unavailable_reasons = 18;
   repeated AgentProfileToolExclusion excluded_tools = 19;
   string parse_error = 20;
+  // Declared tools that leave the machine (connected-account integrations
+  // and remote MCP servers), qualified as server/tool. A delegated run
+  // receives them only after the user consents for that one task.
+  repeated string consent_tools = 21;
 }
 
 message ListAgentProfilesRequest {}
@@ -172,6 +176,15 @@ message Delegation {
   google.protobuf.Timestamp finished_at = 16;
   // One line in the orchestrator's words, never a model's.
   string summary = 17;
+  // Tools that leave the machine which the task asked the user's consent
+  // for, qualified as server/tool, and where that consent stands: pending,
+  // granted or declined, or empty when the task needed none. While it is
+  // pending the state is waiting_consent and no worker can take the task.
+  repeated string egress_tools = 18;
+  string egress_consent = 19;
+  // Declining ends the task instead of running it without egress_tools,
+  // because the specialist requires them.
+  bool egress_required = 20;
 }
 
 message ListDelegationsRequest {
@@ -188,6 +201,25 @@ message GetDelegationRequest {
   string delegation_id = 1;
 }
 
+message PrepareDelegationEgressRequest {
+  string delegation_id = 1;
+}
+
+message PrepareDelegationEgressResponse {
+  // Where the task's tool calls may go and what may leave the machine. Its
+  // challenge is accepted only by DecideDelegationEgress for this
+  // delegation, never by ChatService.SendMessage.
+  RemoteEgressDisclosure disclosure = 1;
+}
+
+message DecideDelegationEgressRequest {
+  string delegation_id = 1;
+  // Present, and acknowledged, to let the task use the disclosed tools.
+  // Absent to decline: the task runs without them, or is ended when its
+  // specialist requires them.
+  RemoteEgressConsent consent = 2;
+}
+
 // Like MemoryService, one service with two facets split by method name: the
 // public facet manages profiles and reads delegations, and the internal facet,
 // which only the runtime identity reaches, serves the team tool.
@@ -202,4 +234,10 @@ service TeamService {
   rpc ListDelegations(ListDelegationsRequest) returns (ListDelegationsResponse);
   // One delegation. NotFound once its conversation is being deleted.
   rpc GetDelegation(GetDelegationRequest) returns (Delegation);
+  // The disclosure for a task waiting for consent to tools that leave the
+  // machine. FailedPrecondition once it is not waiting.
+  rpc PrepareDelegationEgress(PrepareDelegationEgressRequest) returns (PrepareDelegationEgressResponse);
+  // The user's decision for that one task: a decision bound to the task's
+  // own run, never its turn's.
+  rpc DecideDelegationEgress(DecideDelegationEgressRequest) returns (Delegation);
 }

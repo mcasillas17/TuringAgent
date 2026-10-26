@@ -38,7 +38,7 @@ accepted and lost its workers afterwards, or was requeued after a disconnect.
 | Variable | Default | Meaning |
 |---|---|---|
 | `TURING_QUEUE_NO_WORKER_TIMEOUT_MS` | `900000` (15 min) | How long a run may stay queued while no live worker satisfies its route. The clock starts the first time the orchestrator *observes* that condition — not at enqueue — and is cleared the moment a compatible worker returns. `0` turns the bound off. |
-| `TURING_QUEUE_MAX_WAIT_MS` | `43200000` (12 h) | Total time a run may spend queued, accumulated across every queued interval. Starts at enqueue. This is the bound that covers a compatible worker that is present but never gets to this run. `0` turns the bound off. |
+| `TURING_QUEUE_MAX_WAIT_MS` | `43200000` (12 h) | Total time a run may spend queued, accumulated across every queued interval. Starts at enqueue. This is the bound that covers a compatible worker that is present but never gets to this run. `0` turns the bound off, and is refused while `TURING_AGENT_TEAM_ENABLED` is true or a delegated task waits for consent. |
 | `TURING_QUEUE_TIMEOUT_POLICY` | `fail` | What happens when either bound is reached: `fail` or `cancel`. |
 
 Both bounds are checked on the existing recovery tick
@@ -53,6 +53,17 @@ worker connecting, disconnecting or changing capabilities, so a busy install
 still enforces the bounds, but a run left waiting on a stack where nothing else
 happens is never looked at again. An operator who disables the reaper is
 choosing that.
+
+**Neither may be switched off while delegation is on.** With
+`TURING_AGENT_TEAM_ENABLED=true` the orchestrator refuses to start with
+`TURING_QUEUE_MAX_WAIT_MS=0` or `TURING_JOB_REAPER_INTERVAL_MS=0`: a specialist's
+task waiting for the user's consent to its tools is held only by the claim,
+while a compatible worker is present, so this total bound is the only thing that
+ends one nobody answers and lets its turn's results come back
+(see [remote-egress-policy.md](remote-egress-policy.md#a-specialists-task)).
+Such a task outlives a restart, even one that turns the team off, so while any
+task still waits for consent the orchestrator also refuses to start with either
+at `0`, whatever the flag says.
 
 The defaults suit a home hub. Fifteen minutes with nothing able to run a message
 survives a restart, a model swap or a closed laptop lid, and still answers the

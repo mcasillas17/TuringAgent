@@ -119,6 +119,21 @@ func New(cfg config.Config) (*App, error) {
 		_ = database.Close()
 		return nil, fmt.Errorf("backfill session titles: %w", err)
 	}
+	// A task held for the user's consent outlives a restart, even one that
+	// turns the team off, and only the queue bound the recovery loop applies
+	// ends one nobody answers.
+	if cfg.QueueMaxWaitMS == 0 || cfg.JobReaperIntervalMS == 0 {
+		waiting, err := repo.DelegationsWaitingForConsent(context.Background())
+		if err != nil {
+			_ = database.Close()
+			return nil, fmt.Errorf("count tasks waiting for consent: %w", err)
+		}
+		if waiting > 0 {
+			_ = database.Close()
+			return nil, fmt.Errorf("%d delegated task(s) wait for your consent, so TURING_QUEUE_MAX_WAIT_MS and "+
+				"TURING_JOB_REAPER_INTERVAL_MS must be above 0 until they are decided", waiting)
+		}
+	}
 	eventBus := eventsvc.NewBus(128)
 	recoveredEvents, err := repo.RecoverAllActiveAssignmentsWithLimit(context.Background(), cfg.JobMaxAttempts)
 	if err != nil {
@@ -383,6 +398,7 @@ func New(cfg config.Config) (*App, error) {
 	teamService.SetEventPublisher(eventBus)
 	teamService.SetMaxDelegationsPerRun(cfg.MaxDelegationsPerRun)
 	teamService.SetDelegationResultMaxBytes(cfg.DelegationResultMaxBytes)
+	teamService.SetEgressSigningSecret(cfg.EgressSigningSecret)
 	// Off, no run is offered the team, and a send pays nothing to find out.
 	if cfg.AgentTeamEnabled {
 		chatService.SetTeamRoster(teamService)

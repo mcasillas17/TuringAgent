@@ -76,3 +76,35 @@ func TestDelegationTaskMigrationLeavesExistingDelegationsEmpty(t *testing.T) {
 		t.Fatalf("pre-upgrade delegations with an empty task = %d, want 1", got)
 	}
 }
+
+// Delegations made before child egress consent needed none: they read as
+// asking for no tools that leave the machine, with no consent pending, and the
+// consent column takes only its four states.
+func TestDelegationEgressMigrationLeavesExistingDelegationsWithoutConsent(t *testing.T) {
+	ctx := context.Background()
+	database := databaseBeforeMigration(t, ctx, "0030_delegation_egress.sql")
+	parentRun := seedDelegationRun(t, ctx, database, "sess_parent", "", "chat")
+	childRun := seedDelegationRun(t, ctx, database, "sess_child", "sess_parent", "delegation")
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO delegations (id, parent_session_id, parent_run_id, parent_tool_call_id, child_session_id, child_run_id,
+			profile_id, profile_revision, args_hash, created_at)
+		VALUES ('dlg_before', 'sess_parent', ?, 'call_1', 'sess_child', ?, 'research', 'rev-1', 'sha256:x',
+			'2026-10-05T00:00:00.000000000Z')`, parentRun, childRun); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(t, ctx, database, `SELECT COUNT(*) FROM delegations
+		WHERE id = 'dlg_before' AND egress_tools_json = '[]' AND egress_consent = '' AND egress_required = 0`); got != 1 {
+		t.Fatalf("pre-upgrade delegations without consent = %d, want 1", got)
+	}
+	for _, state := range []string{"pending", "granted", "declined", ""} {
+		if _, err := database.ExecContext(ctx, `UPDATE delegations SET egress_consent = ? WHERE id = 'dlg_before'`, state); err != nil {
+			t.Fatalf("consent %q refused: %v", state, err)
+		}
+	}
+	if _, err := database.ExecContext(ctx, `UPDATE delegations SET egress_consent = 'maybe' WHERE id = 'dlg_before'`); err == nil {
+		t.Fatal("an unknown consent state was stored")
+	}
+}

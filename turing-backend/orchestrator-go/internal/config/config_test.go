@@ -358,6 +358,24 @@ func TestLoadFromMapParsesAgentTeamEnabled(t *testing.T) {
 	}
 }
 
+// A task waiting for the user's consent is held only by the claim, so the
+// queue bound, applied by the recovery loop, is all that ends one nobody
+// answers; with the team on neither may be switched off.
+func TestLoadFromMapRefusesAnUnboundedQueueWithTheTeamOn(t *testing.T) {
+	for _, name := range []string{"TURING_QUEUE_MAX_WAIT_MS", "TURING_JOB_REAPER_INTERVAL_MS"} {
+		env := requiredEnv()
+		env["TURING_AGENT_TEAM_ENABLED"] = "true"
+		env[name] = "0"
+		if _, err := LoadFromMap(env); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("LoadFromMap(%s=0) error = %v, want one naming it", name, err)
+		}
+		env["TURING_AGENT_TEAM_ENABLED"] = "false"
+		if _, err := LoadFromMap(env); err != nil {
+			t.Fatalf("%s=0 with the team off was refused: %v", name, err)
+		}
+	}
+}
+
 func TestLoadFromMapParsesMaxDelegationsPerRun(t *testing.T) {
 	cfg, err := LoadFromMap(requiredEnv())
 	if err != nil {

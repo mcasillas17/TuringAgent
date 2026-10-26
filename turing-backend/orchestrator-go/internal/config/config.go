@@ -387,6 +387,14 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if queueMaxWait > maxQueueWaitMS {
 		return Config{}, fmt.Errorf("TURING_QUEUE_MAX_WAIT_MS must be between 0 and %d", maxQueueWaitMS)
 	}
+	// A task waiting for the user's consent is held only by the claim, so this
+	// bound, which the recovery loop applies, is what ends one nobody answers.
+	if agentTeamEnabled && queueMaxWait == 0 {
+		return Config{}, fmt.Errorf("TURING_QUEUE_MAX_WAIT_MS must be above 0 while TURING_AGENT_TEAM_ENABLED is true")
+	}
+	if agentTeamEnabled && reaperInterval == 0 {
+		return Config{}, fmt.Errorf("TURING_JOB_REAPER_INTERVAL_MS must be above 0 while TURING_AGENT_TEAM_ENABLED is true")
+	}
 	queueNoWorkerTimeout, err := intValue("TURING_QUEUE_NO_WORKER_TIMEOUT_MS", defaultQueueNoWorkerTimeoutMS)
 	if err != nil {
 		return Config{}, err
