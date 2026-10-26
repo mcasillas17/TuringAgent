@@ -749,6 +749,50 @@ separate lifecycle, visibility and evaluation gates.
   provider-reported usage remains distinct from estimates and cost.
 - **Dependencies:** TUR-018.
 
+#### OPS-001 - Host command for setup and operation
+
+- **Outcome:** A user sets up, runs, reconfigures and connects to a Turing
+  server without editing `.env` or reading scripts.
+- **Scope:** A user-run `turing` command on the server: guided `setup`,
+  `status`, lifecycle, `logs`, `connect`, `config` validated by each service's
+  own `check-config` before anything is written, and `engine detect | use |
+  check` from the local inference engines design. Reaching the server from
+  another machine before SEC-001 is an open owner decision, not part of this
+  scope. Design:
+  [host command](superpowers/specs/2026-10-25-turing-host-command-design.md).
+- **Acceptance:** Every `.env` setting a user should change is changed through
+  the command; a value a service's configuration check refuses, or that could
+  not be checked, leaves `.env` unchanged (the generated app key is the one
+  value written without that check); a refusal only a running orchestrator can
+  see is reported on apply, with a restore offered; no image that predates
+  `check-config` is run with an argument; no secret appears on a command line,
+  and the app's key appears only in `connect` and `setup`; nothing in Turing
+  can invoke the command, and the orchestrator gains no Docker control.
+- **Dependencies:** None.
+
+#### OPS-002 - Server settings in the app
+
+- **Outcome:** Settings the orchestrator can apply safely while running are
+  changed from the app, wherever it runs.
+- **Scope:** An orchestrator-owned settings store with server-side validation,
+  sealed provider keys, live application to workers, and a one-time import from
+  `.env`; host-owned settings (engine, ports, secrets) stay with OPS-001.
+- **Acceptance:** Each setting has one home; a change applies without a
+  restart or reports that it cannot; `turing config` and the app never
+  disagree.
+- **Dependencies:** OPS-001.
+
+#### OPS-003 - Profile and skill editors
+
+- **Outcome:** Specialist profiles and skills are authored in forms, not
+  Markdown files.
+- **Scope:** App editors that write `team/` and `skills/` through the
+  orchestrator, reusing SKL-002's staging, diff and install-disabled path for
+  skills, and the change to the read-only `/team` mount's threat model.
+- **Acceptance:** An authority change still requires a fresh grant; no agent
+  path can write a profile or a skill.
+- **Dependencies:** OPS-002 and SKL-002.
+
 #### TUR-025 - Fence tool authorization cancellation
 
 - **Outcome:** A tool cannot be authorized after its run leaves an active
@@ -1579,6 +1623,9 @@ MCPP-005/006 provide the long-wait capacity and UI benefit, behind explicit
 custody and EVAL-001 gates. MCPP-007 follows with user-input support; MCPP-008
 waits for the separate host bridge. Do not bypass those gates to advertise
 the latest protocol revision.
+
+An operator track also runs alongside: OPS-001 first, because a new server
+needs it before anything else, then OPS-002 and OPS-003.
 
 ## Success measures
 
