@@ -1,7 +1,9 @@
 # Local inference engines: design
 
 **Status:** approved (#168). Slice 1 (the engine seam) and slice 3 (the app's
-label) are implemented together; slice 2 (choosing for the machine) is next.
+label) are implemented together (#169). Slice 2 (choosing for the machine) moves
+into the [`turing` host command design](2026-10-25-turing-host-command-design.md),
+whose section 6.7 records what changes from section 5.4 below.
 
 **Date:** 2026-10-25.
 
@@ -213,6 +215,12 @@ Compose passes both names through.
 
 ### 5.4 Choosing an engine for the machine
 
+> **Amended 2026-10-25.** This is delivered as `turing engine detect | use |
+> check` in Go, part of the host command (OPS-001b), rather than as
+> `local-engine.sh`. `detect` also lists each engine's models, and `init.sh`
+> does not run `detect`: `turing setup` asks instead. The facts, the table, the
+> four `check` steps and the Linux guidance below are unchanged.
+
 A new script, `turing-backend/scripts/local-engine.sh`, has three commands.
 
 **`detect`** prints what it finds and a recommendation. It changes nothing.
@@ -371,7 +379,8 @@ cache. `detect` repeats this when it finds ds4.
      `remote-egress-policy.md`. That document's "Ollama is the local provider
      identity" becomes "the local provider", with the same endpoint rule.
    - After this PR, ds4 on the Framework Desktop works by hand-editing `.env`.
-2. **PR 2: choosing for the machine.**
+2. **PR 2: choosing for the machine.** *Moved to OPS-001b in the
+   [host command design](2026-10-25-turing-host-command-design.md).*
    - `runtime check-engine`, `local-engine.sh` and the `init.sh` integration.
    - A new `docs/architecture/local-engines.md` holding the table in
      section 5.4, Linux networking and engine caches.
@@ -396,7 +405,9 @@ cache. `detect` repeats this when it finds ds4.
    if a second kind of local provider ever needs a separate trust identity.
 2. **Should `init.sh` write an engine choice on its own?** Only when exactly
    one engine answers and it matches the recommendation (section 5.4).
-   Otherwise it prints the recommendation.
+   Otherwise it prints the recommendation. *Amended 2026-10-25:* `init.sh`
+   stays non-interactive and writes no engine choice; `turing setup` asks
+   (host command design, section 6.7).
 3. **Should a failed `check` block startup?** No. `check` is advice for the
    operator. Startup refuses only invalid configuration; a working but weak
    engine is the operator's choice.
