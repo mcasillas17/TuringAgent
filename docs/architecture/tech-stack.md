@@ -159,6 +159,11 @@ older `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_CONTEXT_WINDOW_TOKENS` and
 and are logged as deprecated; both services resolve the model the same way.
 Each worker advertises its engine's label on the model it serves
 (`ModelCapability.engine`), which the app shows as **Local · <engine>**.
+A thinking model's reasoning is dropped when the engine sends it as a separate
+field; an engine that writes it into the answer itself (for example inside
+`<think>` tags) shows it, so prefer a non-thinking model or alias (for ds4,
+`deepseek-chat`). An OpenAI-compatible engine always receives `max_tokens`:
+its model names are its own aliases, whatever they look like.
 
 OpenAI-compatible models can be configured with:
 

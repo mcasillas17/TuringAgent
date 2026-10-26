@@ -154,7 +154,10 @@ or an OpenAI-compatible server) is restricted to `localhost`,
 (or the deprecated `OLLAMA_BASE_URL`). Pointing it at another host, including
 a machine on the same network, is refused instead of bypassing consent. The
 OpenAI-compatible local engine never presents a remote endpoint, so a run
-consented to as remote can never resolve to it.
+consented to as remote can never resolve to it. Locality is the engine's
+address: a server on this machine that itself forwards requests elsewhere (a
+proxy in front of a hosted API, say) is the operator's choice, and Turing
+cannot see past it.
 
 Runs already queued for a remote provider before TUR-003 have no run-owned
 egress decision. Migration 0014 terminalizes them with
