@@ -32,7 +32,7 @@ Nothing here is enforced by one place, so a bump is never a one-line edit. The *
 | Dart `protoc_plugin` | 25.1.0 | `tools/proto/generate.sh` | `ci.yml`, `generate_test.go` |
 | MCP Go SDK (conformance fixtures) | v1.8.0 | root, `mcp-files` and `mcp-system` go.mod | test-only; the pinned peer implementation the CON-001 conformance tests run against |
 | Flutter | **not pinned** (`channel: stable`) | — | `ci.yml` |
-| Dart SDK | `^3.10.4` | `turing_app/pubspec.yaml` | — |
+| Dart SDK (app declaration) | `^3.10.4` | `turing_app/pubspec.yaml` | Current dependencies also require Dart 3.12.0+ within Dart 3.x; see README requirements |
 
 **`tools/proto/README.md` is the install guide** for the proto toolchain and buf, with the exact `go install` lines and Buf's verify-the-checksum steps. It is the older and more detailed source; this table exists to say *what fails* and *where*, not to replace it. Version strings above mirror each tool's own `--version` output, which the scripts string-compare literally — hence `v1.36.11` but `1.6.2`, even though both `go install` refs carry a `v`.
 

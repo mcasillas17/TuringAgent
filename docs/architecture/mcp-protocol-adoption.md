@@ -10,6 +10,15 @@ comparison, design choices, and acceptance boundaries behind MCPP-001 through
 MCPP-009. It does not change protocol versions, defaults, approvals, or runtime
 behavior. Repository paths and line references describe the inspected commit.
 
+**Implementation-status addendum, 2026-10-26:** At `main` `5fd493b5`, the team
+client (#163) and per-specialist child egress consent (#167) are merged.
+MCPP-006's reusable team-client prerequisite is therefore satisfied, but the
+MCP operation APIs, task UI and all MCPP implementation work remain pending.
+The references below to an unmerged client or future child consent describe
+the original research baseline. Child consent does not authorize a new
+remote-provider continuation; that boundary is unchanged. This addendum does
+not re-date the external specification research.
+
 ## Findings in brief
 
 The current published MCP revision is **2026-07-28**, not Turing's implemented

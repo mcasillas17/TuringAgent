@@ -2,7 +2,7 @@
 
 TuringAgent is a local-first AI orchestration platform for running a private assistant stack on your own machine. It pairs a Flutter client with a Go gRPC backend that owns chat sessions, model routing, streaming events, tool execution, approvals, and audit state.
 
-The project is designed for local development first: secrets stay in your local `.env`, data is stored under `turing-backend/data/`, file tools are constrained to `turing-backend/sandbox/`, and the memory vault — the persona, profile, beliefs and proposals Turing keeps as plain Markdown you can open in Obsidian — lives under `turing-backend/memory/`, which is ignored by git except for its `.gitkeep`. The specialists Turing will be able to hand work to are files too, one `turing-backend/team/<id>/AGENT.md` each, also ignored by git except for its `.gitkeep`.
+The project is designed for local development first: secrets stay in your local `.env`, data is stored under `turing-backend/data/`, file tools are constrained to `turing-backend/sandbox/`, and the memory vault — the persona, profile, beliefs and proposals Turing keeps as plain Markdown you can open in Obsidian — lives under `turing-backend/memory/`, which is ignored by git except for its `.gitkeep`. The specialists Turing can hand work to (experimental, off by default) are files too, one `turing-backend/team/<id>/AGENT.md` each, also ignored by git except for its `.gitkeep`.
 
 ## What it does
 
@@ -77,7 +77,7 @@ vendor separately when needed.
 
 ## Turing's team
 
-Turing is the orchestrator agent. The specialists it will hand work to are
+Turing is the orchestrator agent. The specialists it can hand work to are
 profiles, one Markdown file each at `turing-backend/team/<id>/AGENT.md`: front
 matter names the model, tool patterns (the tool name without its server:
 `files.read`, not `files/files.read`), skills, memory access
@@ -181,9 +181,12 @@ Remove it, or that tool, and the next worker registration restores the name. See
 - Go 1.26+ — all three modules (root, `turing-backend/mcp-files` and
   `turing-backend/mcp-system`) declare `go 1.26.0`, so 1.26 is the floor for
   building every module with one toolchain
-- Flutter, on a release bundling Dart 3.10.4 or newer (`turing_app`'s
-  pubspec declares `sdk: ^3.10.4`; `flutter pub get` fails below it). CI
-  tracks the `stable` channel rather than pinning a version.
+- Flutter, on a release bundling Dart 3.12.0 or newer within Dart 3.x:
+  the current [`cupertino_icons` 2.0.0 dependency](https://pub.dev/api/packages/cupertino_icons/versions/2.0.0)
+  requires `^3.12.0`. The app-declared Dart SDK constraint remains `^3.10.4`
+  in `turing-client/turing_app/pubspec.yaml`; that declaration alone is not
+  sufficient to resolve the current dependencies. CI tracks the `stable`
+  channel rather than pinning a Flutter version.
 - A local inference engine on the host: Ollama for the default path, or any
   OpenAI-compatible server on the same machine (ds4, llama.cpp's
   `llama-server`, LM Studio, Lemonade, vLLM) with `TURING_LOCAL_ENGINE=openai`
@@ -193,7 +196,7 @@ By default, containers reach Ollama at `http://host.docker.internal:11434`.
 On Linux, `host.docker.internal` is the Docker bridge's gateway, so the
 engine must listen there, not only on `127.0.0.1`; avoid `0.0.0.0` on a
 shared network. The app's model picker shows the local route as
-**Local · <engine>**, and Settings names the engine and model serving it.
+`Local · <engine>`, and Settings names the engine and model serving it.
 
 ## Install and run
 
@@ -373,7 +376,7 @@ Common values:
 | `TURING_QUEUE_TIMEOUT_POLICY` | What happens when a queue bound is reached: `fail` (default) or `cancel`. Both are final; there is no paused state to resume from |
 | `HOST_UID` / `HOST_GID` | Current canonical non-root host IDs, managed by `init.sh` and overridden safely by `scripts/compose.sh` at launch |
 | `ORCHESTRATOR_GRPC_ADDR` | Internal orchestrator gRPC address, usually `turing-orchestrator:3001` |
-| `TURING_LOCAL_ENGINE` | The local route's engine protocol: `ollama` (default) or `openai`, for any OpenAI-compatible server on this machine. Either way a send needs no remote-egress consent; any other value stops startup |
+| `TURING_LOCAL_ENGINE` | The local route's engine protocol: `ollama` (default) or `openai`, for any OpenAI-compatible server on this machine. Inference alone needs no remote-egress consent; enabled remote MCP or connected-account tools still make each send ask. Any other engine value stops startup |
 | `TURING_LOCAL_ENGINE_URL` / `TURING_LOCAL_MODEL` | The engine's address and the local model. The URL must use localhost, `host.docker.internal`, or a loopback IP literal; anything else is refused rather than treated as local. For `ollama` it defaults to `http://host.docker.internal:11434`; for `openai` it is required and is the base the API hangs off, such as `http://host.docker.internal:8000/v1`. Replaces `OLLAMA_BASE_URL` / `OLLAMA_MODEL`, which still work while the new key is empty and are logged as deprecated |
 | `TURING_LOCAL_ENGINE_API_KEY` / `TURING_LOCAL_ENGINE_LABEL` | A bearer value for a server that wants one (`openai` only; refused for `ollama`), and the engine's display name, such as `ds4` (default `Ollama` or `OpenAI-compatible`; 1–64 printable bytes). The label is shown in the app and never routed on |
 | `OLLAMA_KEEP_ALIVE` | How long Ollama holds the model in memory after a reply (default `2m`). Accepts a duration (`30s`, `2m`) or whole seconds (`-1` = forever); integer spellings are canonicalized before JSON encoding. Sent per request, so it does not depend on Ollama's own env var. Keep it above `TURING_APPROVAL_WAIT_TIMEOUT_MS` or the model unloads mid-run |
