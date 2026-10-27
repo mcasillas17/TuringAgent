@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -32,6 +33,10 @@ Commands:
   restart [--build] [--yes]  stop, then start; this ends a reply in progress, so it asks first
   logs [service] [-f]        show a service's recent log; -f follows it
                              (service: orchestrator, runtime, files or system; default: all)
+  status                     one-screen health report; exits 1 when a check fails
+  connect [--rotate-key] [--yes]
+                             show how the app connects; --rotate-key makes a new app key
+                             and, when you agree, applies it by restarting the orchestrator
   help                       show this text
   setup                      guided first-time setup (coming in a later version)
   engine                     choose and check the local model engine (coming in a later version)
@@ -74,6 +79,12 @@ type Env struct {
 	ReadSecret func(prompt string) (string, error)
 	// HealthTimeout and PollInterval bound waitHealthy.
 	HealthTimeout, PollInterval time.Duration
+	// EngineClient fetches the local engine's model list from this machine. Its
+	// Timeout bounds one request, and it must not follow redirects.
+	EngineClient *http.Client
+	// BridgeGateway returns the address of Docker's default bridge, which is
+	// where host.docker.internal leads on Linux.
+	BridgeGateway func(ctx context.Context) (string, error)
 }
 
 // OSEnv is the Env for this process.
@@ -102,6 +113,13 @@ func OSEnv(backendDir string) Env {
 		},
 		HealthTimeout: 120 * time.Second,
 		PollInterval:  2 * time.Second,
+		EngineClient: &http.Client{
+			Timeout: engineTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		BridgeGateway: dockerBridgeGateway(host.ExecRunner{}, backendDir, os.Environ()),
 	}
 }
 
@@ -128,6 +146,10 @@ func Main(args []string, env Env) int {
 		return env.restart(ctx, rest)
 	case "logs":
 		return env.logs(ctx, rest)
+	case "status":
+		return env.status(ctx, rest)
+	case "connect":
+		return env.connect(ctx, rest)
 	case "help", "-h", "--help":
 		_, _ = io.WriteString(env.Stdout, Usage)
 		return 0
@@ -173,15 +195,26 @@ func (e Env) readDotEnv() (*envfile.File, error) {
 	return file, nil
 }
 
+// publicPort is the port the orchestrator is published on, which is 3000 unless
+// .env says otherwise.
+func publicPort(file *envfile.File) (int, error) {
+	value, _ := file.Get(portKey)
+	if value == "" {
+		return defaultPort, nil
+	}
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, fmt.Errorf("%s in .env is not a port number from 1 to 65535; correct it in .env and try again", portKey)
+	}
+	return port, nil
+}
+
 // appEndpoint returns where the orchestrator listens on this machine and the
 // key the app presents, as .env names them.
 func appEndpoint(file *envfile.File) (port int, key string, err error) {
-	port = defaultPort
-	if value, _ := file.Get(portKey); value != "" {
-		port, err = strconv.Atoi(value)
-		if err != nil || port < 1 || port > 65535 {
-			return 0, "", fmt.Errorf("%s in .env is not a port number from 1 to 65535; correct it in .env and try again", portKey)
-		}
+	port, err = publicPort(file)
+	if err != nil {
+		return 0, "", err
 	}
 	key, _ = file.Get(clientKey)
 	if key == "" {
@@ -241,15 +274,26 @@ func (e Env) confirm(question string, defaultYes, yes bool) bool {
 
 // dockerRunning reports whether the Docker daemon answers.
 func (e Env) dockerRunning(ctx context.Context) bool {
+	_, ok := e.dockerVersion(ctx)
+	return ok
+}
+
+// dockerVersion asks the Docker daemon for its version, and reports whether it
+// answered.
+func (e Env) dockerVersion(ctx context.Context) (version string, ok bool) {
+	var out strings.Builder
 	code, err := e.Runner.Run(ctx, host.Command{
 		Dir:    e.BackendDir,
 		Name:   "docker",
 		Args:   []string{"info", "--format", "{{.ServerVersion}}"},
 		Env:    e.Environ,
-		Stdout: io.Discard,
+		Stdout: &out,
 		Stderr: io.Discard,
 	})
-	return err == nil && code == 0
+	if err != nil || code != 0 {
+		return "", false
+	}
+	return strings.TrimSpace(out.String()), true
 }
 
 // composeFailed explains a compose.sh call that did not succeed, after its own

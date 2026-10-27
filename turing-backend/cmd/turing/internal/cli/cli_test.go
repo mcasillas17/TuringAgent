@@ -11,7 +11,7 @@ import (
 )
 
 func TestMainRefusesRootBeforeAnythingIsReadOrRun(t *testing.T) {
-	for _, args := range [][]string{{"start"}, {"stop"}, {"restart", "--yes"}, {"logs"}, {"help"}, {"bogus"}, {}} {
+	for _, args := range [][]string{{"start"}, {"stop"}, {"restart", "--yes"}, {"logs"}, {"status"}, {"connect"}, {"connect", "--rotate-key", "--yes"}, {"help"}, {"bogus"}, {}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			h := newHarness(t)
 			h.Geteuid = func() int { return 0 }
@@ -60,13 +60,24 @@ func TestHelpListsTheCommandsAndNamesWhatIsComing(t *testing.T) {
 			t.Fatalf("%s: exit = %d, want 0", arg, code)
 		}
 		out := h.out.String()
-		for _, want := range []string{"Usage:", "start", "stop", "restart", "logs", "help", "setup", "engine", "coming in a later version"} {
+		for _, want := range []string{"Usage:", "start", "stop", "restart", "logs", "status", "connect", "--rotate-key", "help", "setup", "engine", "coming in a later version"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("%s: usage does not mention %q:\n%s", arg, want, out)
 			}
 		}
 		if len(h.runner.calls) != 0 {
 			t.Fatalf("help ran %q", h.runner.commands())
+		}
+	}
+}
+
+func TestHelpNoLongerCallsStatusOrConnectComingLater(t *testing.T) {
+	h := newHarness(t)
+	h.run("help")
+	for _, line := range strings.Split(h.out.String(), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if (strings.HasPrefix(trimmed, "status") || strings.HasPrefix(trimmed, "connect")) && strings.Contains(line, "coming in a later version") {
+			t.Errorf("help says a shipped command is still coming: %q", line)
 		}
 	}
 }
@@ -87,7 +98,7 @@ func TestACommandThatIsPlannedButNotShippedSaysSoAndDoesNothing(t *testing.T) {
 }
 
 func TestAFlagThatDoesNotExistIsAUsageError(t *testing.T) {
-	for _, args := range [][]string{{"start", "--nope"}, {"stop", "--build"}, {"restart", "-x"}, {"start", "extra"}} {
+	for _, args := range [][]string{{"start", "--nope"}, {"stop", "--build"}, {"restart", "-x"}, {"start", "extra"}, {"status", "extra"}, {"connect", "extra"}} {
 		h := newHarness(t)
 		if code := h.run(args...); code != 2 {
 			t.Fatalf("%q: exit = %d, want 2", args, code)

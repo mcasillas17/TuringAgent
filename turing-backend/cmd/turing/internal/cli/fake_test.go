@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -142,6 +144,50 @@ func withService(states []host.ServiceState, service, state, health string) []ho
 	return out
 }
 
+// fakeEngine is an HTTP transport for the engine probe: a request goes to the
+// scripted reply for its host:port, and a host:port with none is refused, as
+// when nothing listens there.
+type fakeEngine struct {
+	routes   map[string]fakeEngineReply
+	requests []*http.Request
+}
+
+type fakeEngineReply struct {
+	status int
+	body   string
+}
+
+func (f *fakeEngine) serve(hostPort string, status int, body string) {
+	if f.routes == nil {
+		f.routes = make(map[string]fakeEngineReply)
+	}
+	f.routes[hostPort] = fakeEngineReply{status: status, body: body}
+}
+
+func (f *fakeEngine) RoundTrip(req *http.Request) (*http.Response, error) {
+	f.requests = append(f.requests, req)
+	reply, ok := f.routes[req.URL.Host]
+	if !ok {
+		return nil, errors.New("dial tcp " + req.URL.Host + ": connect: connection refused")
+	}
+	return &http.Response{
+		StatusCode: reply.status,
+		Status:     http.StatusText(reply.status),
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(reply.body)),
+		Request:    req,
+	}, nil
+}
+
+// urls lists what the probe asked, in order.
+func (f *fakeEngine) urls() []string {
+	var out []string
+	for _, req := range f.requests {
+		out = append(out, req.URL.String())
+	}
+	return out
+}
+
 type healthCall struct {
 	port int
 	key  string
@@ -155,11 +201,16 @@ type harness struct {
 	out, errOut *bytes.Buffer
 	healthCalls []healthCall
 	healthErr   func(call int) error
+	engine      *fakeEngine
+	// gateway is what the Docker bridge lookup answers.
+	gateway      string
+	gatewayErr   error
+	gatewayAsked int
 }
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	h := &harness{t: t, runner: &fakeRunner{t: t}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}}
+	h := &harness{t: t, runner: &fakeRunner{t: t}, out: &bytes.Buffer{}, errOut: &bytes.Buffer{}, engine: &fakeEngine{}}
 	dir := t.TempDir()
 	h.Env = Env{
 		BackendDir: dir,
@@ -178,7 +229,12 @@ func newHarness(t *testing.T) *harness {
 			}
 			return nil
 		},
-		ReadSecret:    func(string) (string, error) { return "", os.ErrInvalid },
+		ReadSecret:   func(string) (string, error) { return "", os.ErrInvalid },
+		EngineClient: &http.Client{Transport: h.engine},
+		BridgeGateway: func(context.Context) (string, error) {
+			h.gatewayAsked++
+			return h.gateway, h.gatewayErr
+		},
 		HealthTimeout: 200 * time.Millisecond,
 		PollInterval:  time.Millisecond,
 	}
