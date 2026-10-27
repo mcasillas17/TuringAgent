@@ -509,7 +509,7 @@ func TestStatusEngineLineReportsAModelThatIsNotListedAndWarns(t *testing.T) {
 	}
 }
 
-func TestStatusEngineOnLinuxBoundToLoopbackFailsAndNamesTheHostFlag(t *testing.T) {
+func TestStatusEngineOnLinuxBoundToLoopbackFailsAndNamesTheOllamaSetting(t *testing.T) {
 	s := newStatusHarness(t)
 	s.engine.routes = nil
 	s.engine.serve("127.0.0.1:11434", 200, ollamaTags)
@@ -518,9 +518,15 @@ func TestStatusEngineOnLinuxBoundToLoopbackFailsAndNamesTheHostFlag(t *testing.T
 		t.Fatalf("exit = %d, want 1: the containers cannot reach an engine bound to 127.0.0.1", code)
 	}
 	s.wantFailed("Engine", "172.17.0.1:11434")
+	if line := s.line("Engine"); strings.Contains(line, "OLLAMA_HOST") || strings.Contains(line, "listens only") {
+		t.Errorf("Engine line = %q, want the diagnosis left to the warning", line)
+	}
 	warnings := s.warnings()
-	if !strings.Contains(warnings, "listens only on 127.0.0.1") || !strings.Contains(warnings, "--host 172.17.0.1") {
-		t.Errorf("warnings = %q, want the loopback-only explanation and --host <gateway>", warnings)
+	if !strings.Contains(warnings, "listens only on 127.0.0.1") || !strings.Contains(warnings, "OLLAMA_HOST=172.17.0.1") {
+		t.Errorf("warnings = %q, want the loopback-only explanation and OLLAMA_HOST=<gateway>", warnings)
+	}
+	if strings.Contains(s.out.String(), "--host") {
+		t.Errorf("output = %q: ollama serve has no --host flag", s.out.String())
 	}
 }
 

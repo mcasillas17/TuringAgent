@@ -276,8 +276,15 @@ func TestRotateKeyDeclinedOffATerminalLeavesTheOldKeyRunning(t *testing.T) {
 	if !clientKeyFormat.MatchString(newKey) || newKey == testKey {
 		t.Fatalf(".env key = %q, want a new key saved", newKey)
 	}
-	if strings.Contains(got+h.errOut.String(), newKey) || strings.Contains(got+h.errOut.String(), testKey) {
-		t.Fatalf("a key was printed although it is not in use:\n%s", got)
+	// The new key is shown even though it is not live yet, as the old script did.
+	if !strings.Contains(got, "API key: "+newKey+"\n") || !strings.Contains(got, "Backend URL: http://localhost:3456\n") || !strings.Contains(got, "Anyone holding this key can use Turing.") {
+		t.Fatalf("stdout = %q, want the connection details with the new key", got)
+	}
+	if strings.Contains(got+h.errOut.String(), testKey) {
+		t.Fatalf("the old key was printed:\n%s", got)
+	}
+	if strings.Index(got, "API key: ") > strings.Index(got, "The old key keeps working") {
+		t.Fatalf("stdout = %q, want the details before the decline sentence", got)
 	}
 }
 
@@ -449,8 +456,16 @@ func TestRotateKeyWhenComposeFailsSaysTheKeyIsSavedAndHowToRetry(t *testing.T) {
 		t.Fatalf("stderr = %q", got)
 	}
 	newKey := h.clientKeyInEnv()
-	if strings.Contains(h.out.String()+got, newKey) {
-		t.Fatalf("the new key was printed although it is not in use")
+	out := h.out.String()
+	// The key is saved, so it is shown even though it is not live yet.
+	if !strings.Contains(out, "API key: "+newKey+"\n") || !strings.Contains(out, "Backend URL: http://localhost:3456\n") || !strings.Contains(out, "Anyone holding this key can use Turing.") {
+		t.Fatalf("stdout = %q, want the connection details with the new key", out)
+	}
+	if strings.Contains(out+got, testKey) {
+		t.Fatalf("the old key was printed")
+	}
+	if strings.Contains(out, "Turing is running with the new key") {
+		t.Fatalf("stdout = %q claims the new key is live", out)
 	}
 }
 
@@ -469,5 +484,16 @@ func TestRotateKeyWhenTheStackDoesNotComeUpHealthySaysTheKeyIsSaved(t *testing.T
 		if !strings.Contains(got, want) {
 			t.Errorf("stderr = %q, want %q", got, want)
 		}
+	}
+	newKey := h.clientKeyInEnv()
+	out := h.out.String()
+	if !strings.Contains(out, "API key: "+newKey+"\n") || !strings.Contains(out, "Backend URL: http://localhost:3456\n") {
+		t.Fatalf("stdout = %q, want the connection details with the new key", out)
+	}
+	if strings.Contains(out+got, testKey) {
+		t.Fatalf("the old key was printed")
+	}
+	if strings.Contains(out, "Turing is running with the new key") {
+		t.Fatalf("stdout = %q claims the new key is live", out)
 	}
 }

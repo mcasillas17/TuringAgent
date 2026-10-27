@@ -299,17 +299,43 @@ func TestEngineProbeOnLinuxWarnsWhenOnlyLoopbackAnswers(t *testing.T) {
 	if got.ok() {
 		t.Fatalf("result = %+v, want the engine reported unreachable: the containers cannot reach 127.0.0.1", got)
 	}
-	for _, want := range []string{"127.0.0.1", "--host 172.17.0.1"} {
+	for _, want := range []string{"127.0.0.1", "OLLAMA_HOST=172.17.0.1", "sudo systemctl edit ollama", "restart"} {
 		if !strings.Contains(got.Warning, want) {
 			t.Fatalf("warning = %q, want it to mention %q", got.Warning, want)
 		}
 	}
+	if strings.Contains(got.Warning, "--host") {
+		t.Fatalf("warning = %q: ollama serve has no --host flag", got.Warning)
+	}
 	if !strings.Contains(got.Problem, "172.17.0.1:11434") {
 		t.Fatalf("problem = %q, want it to name the gateway address", got.Problem)
+	}
+	// The diagnosis is said once, in the warning: the failure line only points to it.
+	if strings.Contains(got.Problem, "OLLAMA_HOST") || strings.Contains(got.Problem, "--host") || strings.Contains(got.Problem, "listens only") {
+		t.Fatalf("problem = %q, want it not to repeat the warning's diagnosis and advice", got.Problem)
 	}
 	want := []string{"http://172.17.0.1:11434/api/tags", "http://127.0.0.1:11434/api/tags"}
 	if !slices.Equal(h.engine.urls(), want) {
 		t.Fatalf("asked %q, want the gateway then loopback %q", h.engine.urls(), want)
+	}
+}
+
+func TestEngineProbeOnLinuxAdvisesTheHostFlagForAnOpenAIEngine(t *testing.T) {
+	h := newHarness(t)
+	h.gateway = "172.17.0.1"
+	h.engine.serve("127.0.0.1:8000", 200, openAIModels)
+
+	got := h.engineProbe(context.Background(), dotEnv(t,
+		"TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1\n"))
+
+	if got.ok() {
+		t.Fatalf("result = %+v, want the engine reported unreachable", got)
+	}
+	if !strings.Contains(got.Warning, "--host 172.17.0.1") || strings.Contains(got.Warning, "OLLAMA_HOST") {
+		t.Fatalf("warning = %q, want the --host flag and no Ollama setting", got.Warning)
+	}
+	if strings.Contains(got.Problem, "--host") || strings.Contains(got.Problem, "OLLAMA_HOST") {
+		t.Fatalf("problem = %q, want it not to repeat the warning's advice", got.Problem)
 	}
 }
 
@@ -339,6 +365,26 @@ func TestEngineProbeOnLinuxNeedsTheBridgeGateway(t *testing.T) {
 	}
 	if len(h.engine.requests) != 0 {
 		t.Fatalf("asked %q after the lookup failed", h.engine.urls())
+	}
+}
+
+func TestEngineProbeOnLinuxWithNoIPv4GatewayDoesNotBlameDocker(t *testing.T) {
+	h := newHarness(t)
+	runner := &fakeRunner{t: t}
+	runner.on(dockerCall(bridgeInspect...), fakeReply{stdout: "fd00::1 \n"})
+	h.BridgeGateway = dockerBridgeGateway(runner, "/backend", nil)
+	h.engine.serve("127.0.0.1:11434", 200, ollamaTags)
+
+	got := h.engineProbe(context.Background(), dotEnv(t, ""))
+
+	if got.ok() || !strings.Contains(got.Problem, "IPv4") || !strings.Contains(got.Problem, "fd00::1") {
+		t.Fatalf("result = %+v, want the missing IPv4 gateway reported with what Docker said", got)
+	}
+	if strings.Contains(got.Problem, "is running") || strings.Contains(got.Problem, "daemon") {
+		t.Fatalf("problem = %q: Docker answered, so it must not be blamed for being down", got.Problem)
+	}
+	if len(h.engine.requests) != 0 {
+		t.Fatalf("asked %q without a gateway", h.engine.urls())
 	}
 }
 
@@ -440,25 +486,31 @@ func TestOSEnvAsksAnEngineForThreeSeconds(t *testing.T) {
 	}
 }
 
+// bridgeInspect is the lookup's command; the trailing space in the template
+// keeps the gateways of a dual-stack bridge apart.
+var bridgeInspect = []string{"network", "inspect", "bridge", "--format", "{{range .IPAM.Config}}{{.Gateway}} {{end}}"}
+
 func TestDockerBridgeGatewayReadsTheBridgeNetwork(t *testing.T) {
-	inspect := []string{"network", "inspect", "bridge", "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}"}
 	tests := []struct {
 		name  string
 		reply fakeReply
 		want  string
 		fail  string
 	}{
-		{name: "an address", reply: fakeReply{stdout: "172.17.0.1\n"}, want: "172.17.0.1"},
-		{name: "an IPv6 address", reply: fakeReply{stdout: "fd00::1\n"}, want: "fd00::1"},
+		{name: "an address", reply: fakeReply{stdout: "172.17.0.1 \n"}, want: "172.17.0.1"},
+		{name: "a dual-stack bridge takes the IPv4 gateway", reply: fakeReply{stdout: "172.17.0.1 fd00::1 \n"}, want: "172.17.0.1"},
+		{name: "an IPv4 gateway listed after the IPv6 one", reply: fakeReply{stdout: "fd00::1 172.17.0.1 \n"}, want: "172.17.0.1"},
+		{name: "a subnet with no gateway between two", reply: fakeReply{stdout: " 172.18.0.1 \n"}, want: "172.18.0.1"},
+		{name: "only an IPv6 gateway", reply: fakeReply{stdout: "fd00::1 \n"}, fail: "no IPv4 gateway"},
 		{name: "docker refuses", reply: fakeReply{stderr: "Cannot connect to the Docker daemon\n", code: 1}, fail: "Cannot connect to the Docker daemon"},
 		{name: "docker cannot run", reply: fakeReply{err: errors.New("exec: docker: not found")}, fail: "docker: not found"},
-		{name: "no gateway", reply: fakeReply{stdout: "\n"}, fail: "no gateway"},
-		{name: "not an address", reply: fakeReply{stdout: "172.17.0.1fd00::1\n"}, fail: "172.17.0.1fd00::1"},
+		{name: "no gateway", reply: fakeReply{stdout: " \n"}, fail: "no gateway"},
+		{name: "not an address", reply: fakeReply{stdout: "172.17.0.1fd00::1 \n"}, fail: "172.17.0.1fd00::1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := &fakeRunner{t: t}
-			runner.on(dockerCall(inspect...), tt.reply)
+			runner.on(dockerCall(bridgeInspect...), tt.reply)
 			lookup := dockerBridgeGateway(runner, "/backend", []string{"PATH=/bin"})
 
 			got, err := lookup(context.Background())

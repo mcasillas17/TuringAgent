@@ -125,6 +125,12 @@ func (e Env) engineProbe(ctx context.Context, file *envfile.File) engineResult {
 	switch {
 	case onLinuxBridge:
 		target, err = e.BridgeGateway(ctx)
+		var noIPv4 noIPv4GatewayError
+		if errors.As(err, &noIPv4) {
+			result.Problem = fmt.Sprintf("%v, which %s leads to on Linux; give the default bridge an IPv4 subnet (docker network inspect bridge shows it), then run ./turing status",
+				noIPv4, dockerInternalHost)
+			return result
+		}
 		if err != nil {
 			result.Problem = fmt.Sprintf("could not find Docker's bridge gateway, which %s leads to on Linux (%s); check that Docker is running, then run ./turing status",
 				dockerInternalHost, oneLine(err.Error()))
@@ -143,15 +149,24 @@ func (e Env) engineProbe(ctx context.Context, file *envfile.File) engineResult {
 
 	if onLinuxBridge && failure.noAnswer {
 		if _, again := e.listModels(ctx, settings, configured, loopback); again == nil {
-			result.Warning = fmt.Sprintf("the engine listens only on %s, which the containers cannot reach: it answered there but not on %s, where they reach this machine; start it with --host %s",
-				loopback, target, target)
-			result.Problem = fmt.Sprintf("the engine %s, though it answers on %s; start it with --host %s, then run ./turing status", failure.clause, loopback, target)
+			result.Warning = fmt.Sprintf("the engine listens only on %s, which the containers cannot reach: it answered there but not on %s, where they reach this machine; %s",
+				loopback, target, bindAdvice(settings.engine, target))
+			result.Problem = fmt.Sprintf("the engine %s, though it answers on %s (the fix is under Warnings); then run ./turing status", failure.clause, loopback)
 			return result
 		}
 	}
 	result.Problem = fmt.Sprintf("the engine %s; start it on this machine, or correct TURING_LOCAL_ENGINE and %s in .env, then run ./turing status",
 		failure.clause, settings.urlKey)
 	return result
+}
+
+// bindAdvice is how to make the engine listen on address. Ollama has no
+// listen flag: it reads OLLAMA_HOST. ds4's server takes --host.
+func bindAdvice(engine, address string) string {
+	if engine == engineOllama {
+		return fmt.Sprintf("set OLLAMA_HOST=%s for the Ollama service (for example with sudo systemctl edit ollama) and restart it", address)
+	}
+	return fmt.Sprintf("start it with --host %s", address)
 }
 
 // engineFailure is why the engine's model list could not be had. clause
@@ -283,15 +298,30 @@ func oneLine(text string) string {
 	return strings.Join(strings.Fields(text), " ")
 }
 
+// noIPv4GatewayError is Docker answering, but with no IPv4 gateway for its
+// default bridge: host.docker.internal resolves to the IPv4 one.
+type noIPv4GatewayError struct {
+	reported []string
+}
+
+func (e noIPv4GatewayError) Error() string {
+	if len(e.reported) == 0 {
+		return "docker reports no gateway for its bridge network"
+	}
+	return fmt.Sprintf("docker reports no IPv4 gateway for its bridge network (only %s)", strings.Join(e.reported, " "))
+}
+
 // dockerBridgeGateway returns a lookup of the address of Docker's default
-// bridge network, which is where host.docker.internal leads on Linux.
+// bridge network, which is where host.docker.internal leads on Linux. A bridge
+// with both IPv4 and IPv6 subnets lists both gateways; the IPv4 one is the
+// one host-gateway resolves to.
 func dockerBridgeGateway(runner host.Runner, backendDir string, environ []string) func(context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		var stdout, stderr bytes.Buffer
 		code, err := runner.Run(ctx, host.Command{
 			Dir:    backendDir,
 			Name:   "docker",
-			Args:   []string{"network", "inspect", "bridge", "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}"},
+			Args:   []string{"network", "inspect", "bridge", "--format", "{{range .IPAM.Config}}{{.Gateway}} {{end}}"},
 			Env:    environ,
 			Stdout: &stdout,
 			Stderr: &stderr,
@@ -302,13 +332,20 @@ func dockerBridgeGateway(runner host.Runner, backendDir string, environ []string
 		case code != 0:
 			return "", fmt.Errorf("docker network inspect bridge exited %d: %s", code, oneLine(stderr.String()))
 		}
-		gateway := strings.TrimSpace(stdout.String())
-		if gateway == "" {
-			return "", errors.New("docker reports no gateway for its bridge network")
+		fields := strings.Fields(stdout.String())
+		var first netip.Addr
+		for _, field := range fields {
+			address, err := netip.ParseAddr(field)
+			if err != nil {
+				return "", fmt.Errorf("docker reports %q as its bridge gateway, which is not an address", field)
+			}
+			if address.Is4() && !first.IsValid() {
+				first = address
+			}
 		}
-		if _, err := netip.ParseAddr(gateway); err != nil {
-			return "", fmt.Errorf("docker reports %q as its bridge gateway, which is not an address", gateway)
+		if !first.IsValid() {
+			return "", noIPv4GatewayError{reported: fields}
 		}
-		return gateway, nil
+		return first.String(), nil
 	}
 }

@@ -65,19 +65,24 @@ func (e Env) rotateKey(ctx context.Context, yes bool) int {
 	}
 	_, _ = fmt.Fprintln(e.Stdout, "A new app key is saved in .env.")
 
+	// Every path below shows the key: it is saved, and this is the only place
+	// the user is given it.
 	if !e.confirm(rotateQuestion, true, yes) {
+		e.printConnection(port, key)
 		_, _ = fmt.Fprintln(e.Stdout, rotateDeclined)
 		return 0
 	}
 	// `restart` would keep the orchestrator's old environment; `up -d`
 	// recreates it with the new one.
 	if code, err := e.compose().Run(ctx, nil, nil, e.Stdout, e.Stderr, "up", "-d"); err != nil || code != 0 {
+		e.printConnection(port, key)
 		exit := e.composeFailed(ctx, code, err, "./turing restart")
 		_, _ = fmt.Fprintln(e.Stderr, "The new app key is saved in .env; once Compose works, run ./turing restart to switch to it.")
 		return exit
 	}
 	_, _ = fmt.Fprintln(e.Stdout, "Waiting for Turing to become healthy...")
 	if err := e.waitHealthy(ctx, port, key); err != nil {
+		e.printConnection(port, key)
 		return e.fail("the new app key is saved in .env, but %v", err)
 	}
 	_, _ = fmt.Fprintln(e.Stdout, "Turing is running with the new key. Give it to the app: the old key no longer works.")
