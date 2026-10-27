@@ -11,7 +11,7 @@ import (
 )
 
 func TestMainRefusesRootBeforeAnythingIsReadOrRun(t *testing.T) {
-	for _, args := range [][]string{{"start"}, {"stop"}, {"restart", "--yes"}, {"logs"}, {"status"}, {"connect"}, {"connect", "--rotate-key", "--yes"}, {"help"}, {"bogus"}, {}} {
+	for _, args := range [][]string{{"start"}, {"stop"}, {"restart", "--yes"}, {"logs"}, {"status"}, {"connect"}, {"connect", "--rotate-key", "--yes"}, {"config"}, {"config", "show"}, {"config", "set", "TURING_LOCAL_MODEL", "x", "--yes"}, {"help"}, {"bogus"}, {}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			h := newHarness(t)
 			h.Geteuid = func() int { return 0 }
@@ -60,7 +60,7 @@ func TestHelpListsTheCommandsAndNamesWhatIsComing(t *testing.T) {
 			t.Fatalf("%s: exit = %d, want 0", arg, code)
 		}
 		out := h.out.String()
-		for _, want := range []string{"Usage:", "start", "stop", "restart", "logs", "status", "connect", "--rotate-key", "help", "setup", "engine", "coming in a later version"} {
+		for _, want := range []string{"Usage:", "start", "stop", "restart", "logs", "status", "connect", "--rotate-key", "config", "config show", "config get KEY", "config set KEY", "--stdin", "--no-apply", "config unset KEY", "help", "setup", "engine", "coming in a later version"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("%s: usage does not mention %q:\n%s", arg, want, out)
 			}

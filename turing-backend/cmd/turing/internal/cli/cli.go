@@ -37,6 +37,16 @@ Commands:
   connect [--rotate-key] [--yes]
                              show how the app connects; --rotate-key makes a new app key
                              and, when you agree, applies it by restarting the orchestrator
+  config                     change settings in a menu (at a terminal)
+  config show                list the settings you can change; a secret shows only as set or not set
+  config get KEY             print one setting; a secret is never printed
+  config set KEY [VALUE] [--stdin] [--yes] [--no-apply]
+                             check a new value with the services, save it in .env, then apply it
+                             (a secret is never taken on the command line: it is asked for with
+                             typing hidden, or read from standard input with --stdin;
+                             --no-apply saves without restarting; KEY may be TURING_AGENT_API_KEYS.<name>)
+  config unset KEY [--yes] [--no-apply]
+                             clear a setting the same way; TURING_AGENT_API_KEYS.<name> removes one agent
   help                       show this text
   setup                      guided first-time setup (coming in a later version)
   engine                     choose and check the local model engine (coming in a later version)
@@ -150,11 +160,13 @@ func Main(args []string, env Env) int {
 		return env.status(ctx, rest)
 	case "connect":
 		return env.connect(ctx, rest)
+	case "config":
+		return env.config(ctx, rest)
 	case "help", "-h", "--help":
 		_, _ = io.WriteString(env.Stdout, Usage)
 		return 0
 	case "setup", "engine":
-		return env.fail("./turing %s is coming in a later version; until then, run ./scripts/init.sh to set up and edit .env to choose an engine", command)
+		return env.fail("./turing %s is coming in a later version; until then, run ./scripts/init.sh to set up and ./turing config to choose an engine", command)
 	default:
 		return env.usageError("unknown command %q; run ./turing help", command)
 	}
@@ -181,18 +193,25 @@ var errNoDotEnv = errors.New("there is no .env file; run ./scripts/init.sh first
 
 // readDotEnv reads and parses .env, which must be a regular file.
 func (e Env) readDotEnv() (*envfile.File, error) {
+	_, file, err := e.readDotEnvBytes()
+	return file, err
+}
+
+// readDotEnvBytes reads .env, which must be a regular file, and returns its
+// bytes with their parse.
+func (e Env) readDotEnvBytes() ([]byte, *envfile.File, error) {
 	data, err := envfile.ReadRegular(filepath.Join(e.BackendDir, ".env"))
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, errNoDotEnv
+		return nil, nil, errNoDotEnv
 	}
 	if err != nil {
-		return nil, fmt.Errorf("cannot read .env: %w; make it a regular file (./scripts/init.sh creates one) and try again", err)
+		return nil, nil, fmt.Errorf("cannot read .env: %w; make it a regular file (./scripts/init.sh creates one) and try again", err)
 	}
 	file, err := envfile.Parse(data)
 	if err != nil {
-		return nil, fmt.Errorf("cannot parse .env: %w; fix it and try again", err)
+		return nil, nil, fmt.Errorf("cannot parse .env: %w; fix it and try again", err)
 	}
-	return file, nil
+	return data, file, nil
 }
 
 // publicPort is the port the orchestrator is published on, which is 3000 unless

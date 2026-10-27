@@ -35,7 +35,10 @@ type fakeReply struct {
 type fakeStep struct {
 	match   func(host.Command) bool
 	replies []fakeReply
-	used    int
+	// answer, when set, decides the reply from the command and the moment it
+	// runs, instead of replies.
+	answer func(host.Command) fakeReply
+	used   int
 }
 
 // fakeRunner records each command and answers it from a script. A command the
@@ -52,6 +55,14 @@ func (f *fakeRunner) on(match func(host.Command) bool, replies ...fakeReply) *fa
 	return step
 }
 
+// onFunc answers every command match accepts with whatever answer returns
+// when the command runs.
+func (f *fakeRunner) onFunc(match func(host.Command) bool, answer func(host.Command) fakeReply) *fakeStep {
+	step := &fakeStep{match: match, answer: answer}
+	f.steps = append(f.steps, step)
+	return step
+}
+
 func (f *fakeRunner) Run(_ context.Context, cmd host.Command) (int, error) {
 	f.t.Helper()
 	f.calls = append(f.calls, cmd)
@@ -59,7 +70,12 @@ func (f *fakeRunner) Run(_ context.Context, cmd host.Command) (int, error) {
 		if !step.match(cmd) {
 			continue
 		}
-		reply := step.replies[min(step.used, len(step.replies)-1)]
+		var reply fakeReply
+		if step.answer != nil {
+			reply = step.answer(cmd)
+		} else {
+			reply = step.replies[min(step.used, len(step.replies)-1)]
+		}
 		step.used++
 		if cmd.Stdout != nil {
 			_, _ = cmd.Stdout.Write([]byte(reply.stdout))
