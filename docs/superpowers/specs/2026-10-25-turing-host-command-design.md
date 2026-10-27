@@ -4,7 +4,8 @@
 
 **Date:** 2026-10-25.
 
-**Roadmap:** OPS-001 in `docs/NORTH_STAR.md`. This design also delivers slice 2
+**Roadmap:** OPS-001 in the [canonical roadmap](../../NORTH_STAR.md).
+This design also covers slice 2
 of the [local inference engines design](2026-10-25-turing-local-inference-engines-design.md)
 (choosing an engine for the machine).
 

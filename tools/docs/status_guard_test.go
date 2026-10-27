@@ -537,6 +537,8 @@ func TestCanonicalRoadmapLinks(t *testing.T) {
 		{"docs/architecture/tech-stack.md", "../NORTH_STAR.md"},
 		{"docs/architecture/audit-read-api.md", "../NORTH_STAR.md"},
 		{"docs/architecture/mcp-protocol-adoption.md", "../NORTH_STAR.md"},
+		{"docs/superpowers/specs/2026-10-25-turing-local-inference-engines-design.md", "../../NORTH_STAR.md"},
+		{"docs/superpowers/specs/2026-10-25-turing-host-command-design.md", "../../NORTH_STAR.md"},
 		{"docs/architecture/tur-022-encrypted-database-retirement-design.md", "../NORTH_STAR.md"},
 		{"docs/mcp-security-and-integration.md", "NORTH_STAR.md"},
 		{"docs/superpowers/integration-checklist.md", "../NORTH_STAR.md"},

@@ -150,8 +150,9 @@ TURING_LOCAL_ENGINE_LABEL=ds4
 ```
 
 Either engine is the local route (`ollama` on the wire, whatever serves it):
-its URL must name this machine, a send needs no remote-egress consent, and
-specialists can use it. The OpenAI-compatible engine reuses the remote
+its URL must name this machine, inference alone needs no remote-egress consent,
+and specialists can use it. Enabled remote tools still require a per-run
+disclosure. The OpenAI-compatible engine reuses the remote
 transport's streaming and tool calls but never presents a remote endpoint, so
 the runtime's egress check keeps refusing a remote run resolved to it. The
 older `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_CONTEXT_WINDOW_TOKENS` and
@@ -175,7 +176,7 @@ OPENAI_CONTEXT_WINDOW_TOKENS=32768
 OPENAI_MAX_OUTPUT_TOKENS=2048
 ```
 
-Both context values must be integers from `1` through `16777216`. Each is also the exact routing ceiling advertised by the runtime; Turing does not infer limits from model names. Each output value must be positive and smaller than its context window; invalid configuration stops the runtime at startup. Ollama receives `num_predict` plus an explicit `num_ctx` rounded up to a stable power-of-two bucket that covers exact admitted request bytes and output reserve, capped by `TURING_LOCAL_CONTEXT_WINDOW_TOKENS`; small requests avoid the cap's full KV-cache allocation while nearby turns reuse one runner size. OpenAI-compatible providers and routed external agents use their window for local admission and receive `max_completion_tokens` for o1/o3/o4 and GPT-5 model families, or `max_tokens` otherwise, so no Ollama-only option leaks onto their wire format. Operators must match each cap to the selected model.
+Both context values must be integers from `1` through `16777216`. Each is also the exact routing ceiling advertised by the runtime; Turing does not infer limits from model names. Each output value must be positive and smaller than its context window; invalid configuration stops the runtime at startup. Ollama receives `num_predict` plus an explicit `num_ctx` rounded up to a stable power-of-two bucket that covers exact admitted request bytes and output reserve, capped by `TURING_LOCAL_CONTEXT_WINDOW_TOKENS`; small requests avoid the cap's full KV-cache allocation while nearby turns reuse one runner size. Remote OpenAI-compatible providers and routed external agents use their window for local admission and receive `max_completion_tokens` for o1/o3/o4 and GPT-5 model families, or `max_tokens` otherwise; the OpenAI-compatible local engine always receives `max_tokens`. No Ollama-only option leaks onto either OpenAI-compatible wire format. Operators must match each cap to the selected model.
 
 Before dispatch, each built-in provider serializes the exact JSON request it would send. The runtime conservatively counts one UTF-8 request byte as an upper bound of one prompt token and requires that bound plus the output reservation fit the configured window. This intentionally avoids claiming exact tokenizer or billing usage while providing one deterministic bound for messages, tool schemas, aliases, and provider framing.
 

@@ -14,6 +14,11 @@ specialist team landed in PRs #150, #152–#158, #162, #163 and #167
 Its roadmap amendments are applied to AGT-001 through AGT-004, WEB-001, AZ-001
 and the priority spine below. Delegation is experimental and off by default.
 
+**Local inference and operator UX:** Reconciled 2026-10-26 against `main`
+at `5fd493b5`. Local engine selection and app labels shipped in #169;
+hardware-guided setup is still planned under OPS-001, whose host-command
+design landed in #170. Neither that command nor OPS-002/003 is implemented.
+
 **Supersedes:** `docs/VISION.md` and
 `docs/architecture/2026-08-18-personal-agent-audit.md` as active roadmap
 documents. Those paths remain historical pointers; the earlier records are
@@ -134,6 +139,7 @@ claims.
 |---|---|
 | MCP lifecycle | Turing speaks MCP revision `2025-11-25` over the Streamable HTTP transport in both directions: the two bundled servers answer `initialize`, `notifications/initialized`, `ping`, `tools/list` (one page; a cursor is refused), `tools/call` and `notifications/cancelled`, and both client paths negotiate before any tool call and page through a third-party server's cursors. Bundled servers are sessionless, and only mcp-files cancels in-flight work; resources, prompts, sampling, elicitation, OAuth and stdio are out of scope. |
 | Local chat and tool loop | Ollama is the default; streaming, bounded tool iterations, zero-argument recovery, and unknown-tool recovery are implemented. |
+| Pluggable local inference | #169 adds `TURING_LOCAL_ENGINE=ollama` or `openai` for a same-machine engine, configured through `TURING_LOCAL_*`. The app names its engine and model; the local wire identity remains `ollama`. Local inference needs no remote-model consent, but remote tools still require their own disclosure. Hardware-guided engine selection remains in OPS-001 ([design](superpowers/specs/2026-10-25-turing-local-inference-engines-design.md)). |
 | Durable orchestration | Sessions, runs, events, jobs, leases, fencing, retries, recovery, and reopenable run outcomes are persisted in SQLite. |
 | Bounded queue waiting | A queued run records whether any live worker can serve its route, and two configurable bounds end one that waits too long. Not a pause/resume state: both outcomes are terminal. |
 | File actions | Sandboxed read/list/search plus preview-bound create/update are implemented; both reviewed file versions must be safe text within 64 KiB. |
@@ -751,6 +757,8 @@ separate lifecycle, visibility and evaluation gates.
 
 #### OPS-001 - Host command for setup and operation
 
+- **Status:** Host-command implementation pending; #170 supplies the design.
+  The current setup still uses `init.sh` and `compose.sh`.
 - **Outcome:** A user sets up, runs, reconfigures and connects to a Turing
   server without editing `.env` or reading scripts.
 - **Scope:** A user-run `turing` command on the server: guided `setup`,
@@ -978,9 +986,11 @@ separate lifecycle, visibility and evaluation gates.
   and concurrency tests.
 - **Acceptance:** Routing is visible; handoff preserves provenance; concurrent
   agents do not violate session ordering, leases, fencing, or approvals.
-- **Dependencies:** TUR-010, TUR-011, TUR-014, TUR-018, TUR-019 and CON-002.
-  AGT-000 gates only raising concurrency above one, which this item does not
-  do.
+- **Delivered prerequisites:** TUR-010, TUR-018, TUR-019 and CON-002.
+- **Follow-on hardening:** TUR-011 (delta batching) and TUR-014 (provider
+  usage and health) remain pending; they are not claimed as delivered by the
+  single-slot specialist implementation. AGT-000 still gates raising
+  concurrency above one, which this item does not do.
 
 #### AGT-002 - Parent/child delegated runs
 
@@ -1552,9 +1562,10 @@ shipped in its documented 2025-11-25 scope.
   a separately cancellable pending operation without rewriting that run.
 - **Dependencies:** MCPP-005 operation APIs and the team-client delivery slice
   ([design slice 3](superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md#14-delivery-slices),
-  shipped in [#163](https://github.com/mcasillas17/TuringAgent/pull/163) after
-  this review was written). The UI must ship before deferred execution becomes
-  default-on.
+  shipped in [#163](https://github.com/mcasillas17/TuringAgent/pull/163)).
+  The reusable team UI prerequisite is satisfied; the MCP remote-operation
+  APIs and UI are still pending and must ship before deferred execution
+  becomes default-on.
 
 #### MCPP-007 - Explicit user input for MCP operations
 

@@ -7,6 +7,10 @@ whose section 6.7 records what changes from section 5.4 below.
 
 **Date:** 2026-10-25.
 
+**Roadmap:** The [canonical roadmap](../../NORTH_STAR.md) records the shipped
+local-engine capability and tracks the remaining setup work under OPS-001.
+The baseline and alternatives below retain the original design context.
+
 ## 1. Goal
 
 Turing should run its local model on whichever inference engine suits the

@@ -2,10 +2,14 @@
 
 **Status:** implemented.
 
-Turing's default execution path is local Ollama. A run reaches an
-OpenAI-compatible endpoint only after the client asks the orchestrator for a
-disclosure and the user confirms that exact prepared send. A registered remote
-MCP server is the second egress path and uses the same decision.
+Turing's default model route is local, served by Ollama or a configured
+same-machine OpenAI-compatible engine. Local inference alone does not require
+remote-egress consent; the API protocol does not determine locality.
+A run using a remote model, a registered remote MCP server, or a
+connected-account integration requires a disclosure from the orchestrator and
+the user's confirmation of that exact prepared send. A local-model turn may
+still need that decision for its remote tools. A specialist's task obtains its
+own decision, as described in [A specialist's task](#a-specialists-task).
 
 ## One run, one decision
 
