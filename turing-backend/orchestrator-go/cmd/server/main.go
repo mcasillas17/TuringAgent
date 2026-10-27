@@ -9,15 +9,30 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/servicecmd"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/app"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"google.golang.org/grpc"
 )
 
+// checks are the subcommands that validate without serving. The Dockerfile's
+// org.turing.checks label must list exactly these; a test enforces it.
+var checks = []servicecmd.Check{{Name: "config", Run: checkConfig}}
+
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
+	os.Exit(servicecmd.Main(os.Args[1:], os.Environ(), checks, run, os.Stdout, os.Stderr))
+}
+
+// checkConfig is the environment-only part of startup: the same loader run()
+// starts with, and nothing after it. app.New's other refusals need the
+// database, the files under the mounted roots, or concern generated secrets,
+// so they surface when the change is applied, not here.
+func checkConfig(environ []string) ([]string, error) {
+	cfg, err := config.LoadFromMap(servicecmd.EnvMap(environ))
+	if err != nil {
+		return nil, err
 	}
+	return cfg.DeprecatedKeys, nil
 }
 
 func run() error {

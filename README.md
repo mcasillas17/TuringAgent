@@ -358,6 +358,21 @@ request are measured separately; this does not evaluate generated answers.
 
 Backend configuration lives in `turing-backend/.env`, copied from `turing-backend/.env.example`.
 
+To check a change before starting the stack, run each service's own check
+from `turing-backend/`:
+
+```bash
+./scripts/compose.sh run --rm --no-deps turing-orchestrator check-config
+./scripts/compose.sh run --rm --no-deps turing-agent-runtime-general check-config
+```
+
+Each check loads the configuration the way startup does, then stops: it opens
+no database or file and contacts nothing. It exits non-zero and names the
+setting it refuses. Deprecated names are reported as warnings. It needs images
+built from this version or later, because an older image ignores the argument
+and starts the service, so rebuild first (`./scripts/compose.sh build`). An
+image that can check carries the `org.turing.checks` label.
+
 Common values:
 
 | Variable | Purpose |

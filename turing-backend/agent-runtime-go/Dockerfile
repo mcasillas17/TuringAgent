@@ -18,4 +18,9 @@ RUN groupadd --gid 1000 turing-agent-runtime \
     && useradd --uid 1000 --gid 1000 --no-create-home --home-dir /app --shell /usr/sbin/nologin turing-agent-runtime
 COPY --from=build /out/turing-agent-runtime-go /app/turing-agent-runtime-go
 USER turing-agent-runtime:turing-agent-runtime
+# The check subcommands this binary knows (servicecmd). The turing host command
+# reads this label before running a check: an image without it predates
+# check-config, and its binary would ignore the argument and connect to the
+# live orchestrator as a second worker. A test in cmd/runtime keeps it exact.
+LABEL org.turing.checks="config"
 ENTRYPOINT ["/app/turing-agent-runtime-go"]
