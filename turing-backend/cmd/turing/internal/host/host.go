@@ -156,11 +156,10 @@ func ImageChecks(ctx context.Context, c Compose, service string) ([]string, erro
 	if code != 0 {
 		return nil, fmt.Errorf("compose could not name the %s image (exit %d): %s", service, code, lastLines(stderr, 5))
 	}
-	images := strings.Fields(stdout)
-	if len(images) != 1 {
-		return nil, fmt.Errorf("compose named %d images for %s, want one", len(images), service)
+	image, err := serviceImage(strings.Fields(stdout), service)
+	if err != nil {
+		return nil, err
 	}
-	image := images[0]
 
 	format := fmt.Sprintf(`{{ index .Config.Labels %q }}`, servicecmd.LabelKey)
 	label, _, code, err := c.capture(ctx, nil, "docker", "image", "inspect", "--format", format, image)
@@ -181,6 +180,26 @@ func ImageChecks(ctx context.Context, c Compose, service string) ([]string, erro
 		}
 	}
 	return checks, nil
+}
+
+// serviceImage picks the service's own image from what `config --images`
+// names. Compose lists the images of the service's dependencies too, so with
+// more than one it is the one named the way Compose names a built image:
+// <project>-<service>.
+func serviceImage(images []string, service string) (string, error) {
+	if len(images) == 1 {
+		return images[0], nil
+	}
+	var own []string
+	for _, image := range images {
+		if strings.HasSuffix(image, "-"+service) {
+			own = append(own, image)
+		}
+	}
+	if len(own) != 1 {
+		return "", fmt.Errorf("compose named %d images for %s, and %d of them are named for it; want one", len(images), service, len(own))
+	}
+	return own[0], nil
 }
 
 // lastLines returns the last n non-empty lines of text, joined by a newline.

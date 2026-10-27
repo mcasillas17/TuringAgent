@@ -89,3 +89,40 @@ func TestImageChecksRefusesAnAnswerThatIsNotOneImage(t *testing.T) {
 		t.Fatal("an empty image name was accepted")
 	}
 }
+
+// Compose lists a service's dependencies' images too, in no fixed order, as
+// Docker Compose 5.4 does for the runtime.
+func TestImageChecksPicksTheServicesOwnImageAmongItsDependencies(t *testing.T) {
+	runner := &scriptedRunner{reply: func(cmd Command) reply {
+		if cmd.Name == "docker" {
+			return reply{stdout: "config\n"}
+		}
+		return reply{stdout: "infra-turing-mcp-files\ninfra-turing-orchestrator\ninfra-turing-agent-runtime-general\ninfra-turing-mcp-system\n"}
+	}}
+
+	checks, err := ImageChecks(context.Background(), Compose{Runner: runner, BackendDir: "/b"}, "turing-agent-runtime-general")
+	if err != nil || !slices.Equal(checks, []string{"config"}) {
+		t.Fatalf("ImageChecks = %q, %v", checks, err)
+	}
+	if got := runner.calls[1].Args; got[len(got)-1] != "infra-turing-agent-runtime-general" {
+		t.Fatalf("inspected %q, want the runtime's own image", got)
+	}
+}
+
+func TestImageChecksRefusesSeveralImagesNoneOfThemTheServices(t *testing.T) {
+	for name, stdout := range map[string]string{
+		"none is the service's": "infra-turing-mcp-files\ninfra-turing-orchestrator\n",
+		"two could be":          "a-svc\nb-svc\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			runner := &scriptedRunner{reply: func(Command) reply { return reply{stdout: stdout} }}
+			_, err := ImageChecks(context.Background(), Compose{Runner: runner, BackendDir: "/b"}, "svc")
+			if err == nil || errors.Is(err, ErrImageMissing) {
+				t.Fatalf("err = %v, want an error that is not ErrImageMissing", err)
+			}
+			if len(runner.calls) != 1 {
+				t.Fatalf("docker was asked about an image: %+v", runner.calls)
+			}
+		})
+	}
+}
