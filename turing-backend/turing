@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# turing: operate the Turing server without editing files.
+#
+# Builds turing-backend/cmd/turing into .turing/bin and runs it. Symlink this
+# file from anywhere on PATH; it resolves itself first. It builds rather than
+# `go run`, because `go run` turns every non-zero exit status into 1 and the
+# commands report meaningful ones (Ctrl-C on `logs -f` is 130).
+set -euo pipefail
+
+if [[ "$(id -u)" == "0" ]]; then
+  printf 'turing refuses to run as root, because the files it manages belong to the user who ran ./scripts/init.sh; run it again as that user.\n' >&2
+  exit 1
+fi
+
+source="${BASH_SOURCE[0]}"
+while [[ -L "$source" ]]; do
+  link_dir="$(cd -P "$(dirname "$source")" && pwd)"
+  source="$(readlink "$source")"
+  [[ "$source" == /* ]] || source="$link_dir/$source"
+done
+backend="$(cd -P "$(dirname "$source")" && pwd)"
+repo="$(cd -P "$backend/.." && pwd)"
+binary="$backend/.turing/bin/turing"
+
+mkdir -p "$backend/.turing/bin"
+if ! (cd "$repo" && go build -o "$binary" ./turing-backend/cmd/turing); then
+  printf 'Could not build the turing command. It needs Go 1.26 or newer; check `go version`, then run ./turing again.\n' >&2
+  exit 1
+fi
+
+exec "$binary" --backend-dir "$backend" "$@"
