@@ -50,10 +50,11 @@ func (e Env) parseFlags(set *flag.FlagSet, args []string) (code int, ok bool) {
 			_, _ = io.WriteString(e.Stdout, Usage)
 			return 0, false
 		}
-		return e.usageError("turing %s: %v; run ./turing help", set.Name(), err), false
+		// The flag package's error repeats the argument, which could be a secret.
+		return e.usageError("turing %s: unknown option, or a value given to an option that takes none; run ./turing help", set.Name()), false
 	}
 	if set.NArg() > 0 {
-		return e.usageError("turing %s takes no arguments, got %q; run ./turing help", set.Name(), set.Arg(0)), false
+		return e.usageError("turing %s takes no arguments; run ./turing help", set.Name()), false
 	}
 	return 0, true
 }
@@ -144,10 +145,11 @@ func (e Env) logs(ctx context.Context, args []string) int {
 		switch {
 		case arg == "-f":
 			follow = true
+		// No argument is repeated: a secret typed in the wrong place would be printed.
 		case strings.HasPrefix(arg, "-"):
-			return e.usageError("turing logs: unknown option %q; run ./turing help", arg)
+			return e.usageError("turing logs: unknown option (an argument that begins with -); its only option is -f; run ./turing help")
 		case service != "":
-			return e.usageError("turing logs takes one service, got %q and %q; run ./turing help", service, arg)
+			return e.usageError("turing logs takes at most one service; run ./turing help")
 		default:
 			service = arg
 		}
@@ -159,7 +161,7 @@ func (e Env) logs(ctx context.Context, args []string) int {
 	if service != "" {
 		name, ok := composeName(service)
 		if !ok {
-			return e.usageError("unknown service %q; choose one of %s", service, strings.Join(friendlyNames(), ", "))
+			return e.usageError("no service has that name; choose one of %s", strings.Join(friendlyNames(), ", "))
 		}
 		composeArgs = append(composeArgs, name)
 	}

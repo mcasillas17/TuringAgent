@@ -45,7 +45,7 @@ func TestMainRefusesAnUnknownCommandAndPointsToHelp(t *testing.T) {
 	if code := h.run("bogus"); code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
-	if got := h.errOut.String(); !strings.Contains(got, `unknown command "bogus"`) || !strings.Contains(got, "./turing help") {
+	if got := h.errOut.String(); !strings.Contains(got, "unknown command") || !strings.Contains(got, "./turing help") || strings.Contains(got, "bogus") {
 		t.Fatalf("stderr = %q", got)
 	}
 	if len(h.runner.calls) != 0 {

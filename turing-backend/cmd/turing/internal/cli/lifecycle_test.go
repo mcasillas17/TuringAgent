@@ -427,7 +427,7 @@ func TestLogsRefusesAnUnknownServiceAndListsTheNames(t *testing.T) {
 		t.Fatalf("exit = %d, want 2", code)
 	}
 	got := h.errOut.String()
-	for _, name := range []string{`"database"`, "orchestrator", "runtime", "files", "system"} {
+	for _, name := range []string{"no service has that name", "orchestrator", "runtime", "files", "system"} {
 		if !strings.Contains(got, name) {
 			t.Errorf("stderr = %q, want it to name %s", got, name)
 		}
@@ -446,6 +446,40 @@ func TestLogsRefusesOptionsAndServicesItDoesNotKnow(t *testing.T) {
 		if len(h.runner.calls) != 0 {
 			t.Fatalf("%q ran %q", args, h.runner.commands())
 		}
+	}
+}
+
+// A secret typed as an option or a stray argument must not be printed back.
+func TestCommandsNeverRepeatAnArgumentTheyDoNotKnow(t *testing.T) {
+	for _, args := range [][]string{
+		{"logs", "--sk-CANARY"},
+		{"logs", "-sk-CANARY"},
+		{"logs", "sk-CANARY"},
+		{"logs", "runtime", "sk-CANARY"},
+		{"logs", "sk-CANARY", "runtime"},
+		{"start", "--sk-CANARY"},
+		{"start", "sk-CANARY"},
+		{"stop", "sk-CANARY"},
+		{"restart", "--sk-CANARY"},
+		{"status", "sk-CANARY"},
+		{"connect", "--yes=sk-CANARY"},
+		{"connect", "sk-CANARY"},
+		{"sk-CANARY"},
+		{"OPENAI_API_KEY=sk-CANARY"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			h := newHarness(t)
+			before := h.envBytes()
+
+			if code := h.run(args...); code != 2 {
+				t.Fatalf("exit = %d, want 2; stderr: %s", code, h.errOut)
+			}
+			if len(h.runner.calls) != 0 {
+				t.Fatalf("ran %q", h.runner.commands())
+			}
+			h.unchanged(before)
+			h.noOutputContains("CANARY")
+		})
 	}
 }
 

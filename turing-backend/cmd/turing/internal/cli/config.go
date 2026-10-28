@@ -23,6 +23,9 @@ const (
 	maxAgentNameRunes = 64
 
 	secretsOffTheCommandLine = "secrets are never taken on the command line; use --stdin or answer the prompt"
+	// nameWithValue answers a setting typed as NAME=VALUE, which is never
+	// repeated: the value may be a secret.
+	nameWithValue = "a setting and its value are two arguments, not one joined by =, and a secret is given through --stdin or at the prompt; run ./turing help"
 )
 
 var errAgentKeysUnreadable = errors.New(agentKeysName + " in .env is not a JSON object of names and keys; clear it with ./turing config unset " +
@@ -67,7 +70,8 @@ func (e Env) config(ctx context.Context, args []string) int {
 		_, _ = io.WriteString(e.Stdout, Usage)
 		return 0
 	default:
-		return e.usageError("unknown config command %q; run ./turing help", command)
+		// Not repeated, in case it is a secret typed in the wrong place.
+		return e.usageError("unknown config command; run ./turing help")
 	}
 }
 
@@ -122,7 +126,11 @@ func (e Env) resolveSetting(name string) (setting, int, bool) {
 				return setting{}, e.usageError("%s is the old name of %s; run the command again with %s", name, candidate.Name, candidate.Name), false
 			}
 		}
-		return setting{}, e.usageError("unknown setting %q; ./turing config show lists the settings", name), false
+		// The name is never repeated: a secret typed in its place would be printed.
+		if strings.Contains(name, "=") {
+			return setting{}, e.usageError("%s", nameWithValue), false
+		}
+		return setting{}, e.usageError("no setting has that name; ./turing config show lists the settings"), false
 	}
 	if !key.Editable {
 		return setting{}, e.fail("%s", homeOf(key)), false
@@ -196,7 +204,7 @@ func (e Env) configShow(args []string) int {
 		return code
 	}
 	if len(parsed.positional) > 0 {
-		return e.usageError("turing config show takes no arguments, got %q; run ./turing help", parsed.positional[0])
+		return e.usageError("turing config show takes no arguments; run ./turing help")
 	}
 	file, err := e.readDotEnv()
 	if err != nil {
@@ -234,6 +242,9 @@ func (e Env) configGet(args []string) int {
 	s, code, ok := e.resolveSetting(parsed.positional[0])
 	if !ok {
 		return code
+	}
+	if s.isAgent && !validAgentName(s.agent) {
+		return e.fail("%s", invalidAgentName(s.agent))
 	}
 	if s.secret() {
 		return e.fail("%s is a secret; ./turing config show says whether it is set", s.label())
@@ -379,7 +390,7 @@ func agentKeyEdit(name string, key *string) settingsEdit {
 		}
 		if key == nil {
 			if _, ok := keys[name]; !ok {
-				return nil, fmt.Errorf("%s has no agent named %q; ./turing config show lists the names", agentKeysName, name)
+				return nil, fmt.Errorf("%s has no agent by that name; ./turing config show lists the names", agentKeysName)
 			}
 			delete(keys, name)
 		} else {
@@ -415,7 +426,13 @@ func validAgentName(name string) bool {
 	return true
 }
 
+// invalidAgentName refuses a name without repeating it: a key typed in its
+// place would be printed.
 func invalidAgentName(name string) string {
-	return fmt.Sprintf("%q is not a valid agent name: use letters, digits, _, - and ., at most %d of them; run the command again with another name",
-		name, maxAgentNameRunes)
+	if strings.Contains(name, "=") {
+		return "an agent name cannot contain =, and an agent's key is never given with it: name the agent, as in ./turing config set " +
+			agentKeysPrefix + "<name>, then give the key at the prompt or through --stdin"
+	}
+	return fmt.Sprintf("that is not a valid agent name: use letters, digits, _, - and ., at most %d of them; run the command again with another name",
+		maxAgentNameRunes)
 }

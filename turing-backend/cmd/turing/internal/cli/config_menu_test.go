@@ -310,3 +310,36 @@ func TestConfigMenuEditsAgentKeysOneNameAtATime(t *testing.T) {
 	}
 	h.noOutputContains("CANARY")
 }
+
+func TestConfigMenuNeverRepeatsAnAgentNameItRefuses(t *testing.T) {
+	h := newConfigHarness(t)
+	h.writeEnv(fullEnv(`TURING_AGENT_API_KEYS={"openai":"sk-kept"}`))
+	h.IsTerminal = true
+	h.ReadSecret = func(string) (string, error) {
+		t.Fatal("asked for a key after a refused name")
+		return "", nil
+	}
+	agents, mapKey := menuSection(t, "External agents"), menuSetting(t, "TURING_AGENT_API_KEYS")
+	h.Stdin = answers(
+		agents, mapKey,
+		"1", "a=sk-ant-CANARY", // the key typed after the name
+		"2", "sk-ant-api03-CANARY"+strings.Repeat("x", 64), // a key typed as the name
+		"q", "q", "q",
+	)
+	before := h.envBytes()
+
+	if code := h.config(); code != 0 {
+		t.Fatalf("exit = %d; stderr: %s", code, h.errOut)
+	}
+	if got := strings.Count(h.errOut.String(), "agent name"); got != 2 {
+		t.Fatalf("stderr = %q, want both names refused", h.errOut)
+	}
+	if !strings.Contains(h.errOut.String(), "--stdin") {
+		t.Fatalf("stderr = %q, want how to give the key instead", h.errOut)
+	}
+	if len(h.runner.calls) != 0 {
+		t.Fatalf("ran %q", h.runner.commands())
+	}
+	h.unchanged(before)
+	h.noOutputContains("CANARY")
+}

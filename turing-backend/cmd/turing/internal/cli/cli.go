@@ -178,7 +178,8 @@ func Main(args []string, env Env) int {
 	case "setup", "engine":
 		return env.fail("./turing %s is coming in a later version; until then, run ./scripts/init.sh to set up and ./turing config to choose an engine", command)
 	default:
-		return env.usageError("unknown command %q; run ./turing help", command)
+		// Not repeated, in case it is a secret typed in the wrong place.
+		return env.usageError("unknown command; run ./turing help")
 	}
 }
 
