@@ -530,6 +530,31 @@ func TestStatusEngineOnLinuxBoundToLoopbackFailsAndNamesTheOllamaSetting(t *test
 	}
 }
 
+func TestStatusEngineFailsWithoutAskingAURLTheContainersCannotUse(t *testing.T) {
+	for _, tt := range unusableEngineURLs {
+		for _, goos := range []string{"linux", "darwin"} {
+			t.Run(tt.name+" on "+goos, func(t *testing.T) {
+				s := newStatusHarness(t)
+				s.GOOS = goos
+				s.engine.serveEverywhere()
+				s.writeEnv(fullEnv("TURING_LOCAL_ENGINE=openai", "TURING_LOCAL_ENGINE_API_KEY=CANARY-ENGINE", strings.TrimSuffix(tt.env, "\n")))
+
+				if code := s.status(); code != 1 {
+					t.Fatalf("exit = %d, want 1\n%s", code, s.out)
+				}
+				s.wantFailed("Engine", tt.key)
+				if len(s.engine.requests) != 0 {
+					t.Fatalf("asked %q", s.engine.urls())
+				}
+				for _, label := range []string{"Setup", "Docker", "Services", "App port"} {
+					s.wantOK(label)
+				}
+				s.noOutputContains("CANARY")
+			})
+		}
+	}
+}
+
 func TestStatusEngineOnLinuxFailsWhenTheGatewayCannotBeFound(t *testing.T) {
 	s := newStatusHarness(t)
 	s.gatewayErr = errors.New("Cannot connect to the Docker daemon")

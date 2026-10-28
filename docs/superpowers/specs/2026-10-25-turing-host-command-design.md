@@ -304,7 +304,7 @@ script or a cron job can use it.
 | Docker | `docker info` answers. On Linux, `systemctl is-enabled docker` also runs, and a disabled Docker produces a warning that Turing will not come back after a reboot. |
 | Services | `compose.sh ps`: each service's state, and its health where it has a healthcheck. |
 | App port | `HealthService/Check` on `127.0.0.1:${ORCHESTRATOR_PUBLIC_PORT}` with the client key from `.env`. When the check is refused as unauthenticated, the line says the key in `.env` is not the one the running orchestrator started with, which happens after a rotation that was not applied, and names `turing restart`. |
-| Engine | The engine's model list, fetched from the host. `host.docker.internal` maps to `127.0.0.1` on macOS and to the bridge gateway on Linux. It notes that `turing engine check` is the in-container proof. |
+| Engine | The engine's model list, fetched from the host, never through a proxy. `host.docker.internal` maps to `127.0.0.1` on macOS and to the bridge gateway on Linux, and it is the only host asked: a URL the runtime refuses (`egress.ParseLocalEndpoint`), or one naming `localhost` or a loopback address, which inside a container is the container, fails the line with no request made. It notes that `turing engine check` is the in-container proof. |
 | Agent team | On or off, labelled experimental. |
 | Warnings | Deprecated keys; a stopped service; an `.env` not at mode 0600; a Linux engine listening only on `127.0.0.1`; and a registry key exported in the current shell, which Compose would otherwise prefer to `.env` (section 6.5). |
 

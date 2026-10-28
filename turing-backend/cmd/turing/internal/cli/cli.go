@@ -124,13 +124,23 @@ func OSEnv(backendDir string) Env {
 		HealthTimeout: 120 * time.Second,
 		PollInterval:  2 * time.Second,
 		EngineClient: &http.Client{
-			Timeout: engineTimeout,
+			Transport: directTransport(),
+			Timeout:   engineTimeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
 		},
 		BridgeGateway: dockerBridgeGateway(host.ExecRunner{}, backendDir, os.Environ()),
 	}
+}
+
+// directTransport never uses a proxy. The default transport honours
+// HTTP_PROXY for any address but loopback, Docker's bridge gateway included,
+// and the engine's request can carry its key.
+func directTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return transport
 }
 
 // Main runs one command and returns the process exit code: 0 for success, 1

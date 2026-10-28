@@ -317,6 +317,18 @@ func TestDescribeAndShipped(t *testing.T) {
 	}
 }
 
+// turing config shows this description beside the URL, so it has to say how
+// the containers reach an engine on this machine: localhost inside a
+// container is the container.
+func TestTheEngineURLDescriptionNamesHostDockerInternal(t *testing.T) {
+	got := strings.Join(strings.Fields(Describe(readFile(t, envExamplePath), "TURING_LOCAL_ENGINE_URL")), " ")
+	for _, want := range []string{"use host.docker.internal", "inside a container, localhost and 127.0.0.1 are the container itself"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Describe(TURING_LOCAL_ENGINE_URL) = %q, want it to say %q", got, want)
+		}
+	}
+}
+
 func TestDescribeReadsTheWholeSharedQueueComment(t *testing.T) {
 	got := Describe(readFile(t, envExamplePath), "TURING_QUEUE_NO_WORKER_TIMEOUT_MS")
 	for _, want := range []string{"How long a queued message may wait", "even with the team turned off."} {

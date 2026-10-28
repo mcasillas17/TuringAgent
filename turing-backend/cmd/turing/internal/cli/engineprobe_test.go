@@ -5,8 +5,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -388,26 +391,80 @@ func TestEngineProbeOnLinuxWithNoIPv4GatewayDoesNotBlameDocker(t *testing.T) {
 	}
 }
 
-func TestEngineProbeAsksAnotherHostAsConfigured(t *testing.T) {
-	for _, goos := range []string{"linux", "darwin"} {
-		t.Run(goos, func(t *testing.T) {
-			h := newHarness(t)
-			h.GOOS = goos
-			h.engine.serve("192.168.1.5:8000", 200, openAIModels)
+// unusableEngineURLs are engine addresses the probe must not ask: ones the
+// runtime refuses, and ones that inside its container name the container.
+var unusableEngineURLs = []struct {
+	name, env string
+	key       string // the setting the problem names
+	advice    string // the address to use instead, "" when none can be built
+}{
+	{name: "a LAN address", env: "TURING_LOCAL_ENGINE_URL=http://192.168.1.5:8000/v1\n", key: "TURING_LOCAL_ENGINE_URL"},
+	{name: "credentials", env: "TURING_LOCAL_ENGINE_URL=http://user:CANARY-URLPASS@host.docker.internal:8000/v1\n", key: "TURING_LOCAL_ENGINE_URL"},
+	{name: "a query", env: "TURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1?token=CANARY-QUERY\n", key: "TURING_LOCAL_ENGINE_URL"},
+	{name: "a fragment", env: "TURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1#CANARY-FRAGMENT\n", key: "TURING_LOCAL_ENGINE_URL"},
+	{name: "localhost", env: "TURING_LOCAL_ENGINE_URL=http://localhost:8000/v1\n", key: "TURING_LOCAL_ENGINE_URL", advice: "http://host.docker.internal:8000/v1"},
+	{name: "localhost in capitals", env: "TURING_LOCAL_ENGINE_URL=http://LOCALHOST:8000/v1\n", key: "TURING_LOCAL_ENGINE_URL", advice: "http://host.docker.internal:8000/v1"},
+	{name: "127.0.0.1", env: "TURING_LOCAL_ENGINE_URL=http://127.0.0.1:8000/v1\n", key: "TURING_LOCAL_ENGINE_URL", advice: "http://host.docker.internal:8000/v1"},
+	{name: "another loopback address", env: "TURING_LOCAL_ENGINE_URL=http://127.0.0.2:8000/v1\n", key: "TURING_LOCAL_ENGINE_URL", advice: "http://host.docker.internal:8000/v1"},
+	{name: "IPv6 loopback", env: "TURING_LOCAL_ENGINE_URL=http://[::1]:8000/v1\n", key: "TURING_LOCAL_ENGINE_URL", advice: "http://host.docker.internal:8000/v1"},
+}
 
-			got := h.engineProbe(context.Background(), dotEnv(t,
-				"TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_URL=http://192.168.1.5:8000/v1\n"))
+// serveEverywhere has an engine answer at every address an unusable URL
+// could lead to, so a probe that asked would succeed.
+func (f *fakeEngine) serveEverywhere() {
+	for _, address := range []string{"192.168.1.5", "host.docker.internal", "localhost", "LOCALHOST", "127.0.0.1", "127.0.0.2", "[::1]", "172.17.0.1"} {
+		f.serve(address+":8000", 200, openAIModels)
+		f.serve(address+":11434", 200, ollamaTags)
+	}
+}
 
-			if !got.ok() {
-				t.Fatalf("result = %+v", got)
-			}
-			if want := []string{"http://192.168.1.5:8000/v1/models"}; !slices.Equal(h.engine.urls(), want) {
-				t.Fatalf("asked %q, want %q", h.engine.urls(), want)
-			}
-			if h.gatewayAsked != 0 {
-				t.Fatal("asked Docker for the bridge gateway for a host that is not host.docker.internal")
-			}
-		})
+func TestEngineProbeNeverAsksAURLTheRuntimeRefusesOrCannotReach(t *testing.T) {
+	for _, tt := range unusableEngineURLs {
+		for _, goos := range []string{"linux", "darwin"} {
+			t.Run(tt.name+" on "+goos, func(t *testing.T) {
+				h := newHarness(t)
+				h.GOOS = goos
+				h.gateway = "172.17.0.1"
+				h.engine.serveEverywhere()
+
+				got := h.engineProbe(context.Background(), dotEnv(t,
+					"TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_API_KEY=CANARY-ENGINE\n"+tt.env))
+
+				if got.ok() {
+					t.Fatalf("result = %+v, want a problem", got)
+				}
+				if len(h.engine.requests) != 0 {
+					t.Fatalf("asked %q", h.engine.urls())
+				}
+				if !strings.Contains(got.Problem, tt.key) || !strings.Contains(got.Problem, "./turing config set TURING_LOCAL_ENGINE_URL") {
+					t.Fatalf("problem = %q, want it to name %s and how to set the URL", got.Problem, tt.key)
+				}
+				if tt.advice != "" && !strings.Contains(got.Problem, "inside the runtime's container") {
+					t.Fatalf("problem = %q, want it to say why the containers cannot reach that address", got.Problem)
+				}
+				if tt.advice != "" && !strings.Contains(got.Problem, "./turing config set TURING_LOCAL_ENGINE_URL "+tt.advice) {
+					t.Fatalf("problem = %q, want the address to use, %s", got.Problem, tt.advice)
+				}
+				if shown := got.URL + got.Problem + got.Warning; strings.Contains(shown, "CANARY") {
+					t.Fatalf("the result shows part of the URL or the key: %+v", got)
+				}
+			})
+		}
+	}
+}
+
+func TestEngineProbeNeverAsksALoopbackOllamaURLUnderItsOldName(t *testing.T) {
+	h := newHarness(t)
+	h.GOOS = "darwin"
+	h.engine.serveEverywhere()
+
+	got := h.engineProbe(context.Background(), dotEnv(t, "OLLAMA_BASE_URL=http://localhost:11434\n"))
+
+	if got.ok() || len(h.engine.requests) != 0 {
+		t.Fatalf("result = %+v, asked %q; want a problem and no request", got, h.engine.urls())
+	}
+	if !strings.Contains(got.Problem, "OLLAMA_BASE_URL") || !strings.Contains(got.Problem, "./turing config set TURING_LOCAL_ENGINE_URL http://host.docker.internal:11434") {
+		t.Fatalf("problem = %q, want the old name and the new setting with host.docker.internal", got.Problem)
 	}
 }
 
@@ -442,8 +499,8 @@ func TestEngineProbeNeverShowsCredentialsInTheURL(t *testing.T) {
 
 	got := h.engineProbe(context.Background(), dotEnv(t, "TURING_LOCAL_ENGINE_URL=http://user:CANARY-URLPASS@host.docker.internal:11434\n"))
 
-	if got.ok() {
-		t.Fatalf("result = %+v, want a refused connection", got)
+	if got.ok() || len(h.engine.requests) != 0 {
+		t.Fatalf("result = %+v, asked %q; want a problem and no request", got, h.engine.urls())
 	}
 	if shown := got.URL + got.Problem + got.Warning; strings.Contains(shown, "CANARY-URLPASS") {
 		t.Fatalf("the result shows the URL's password: %+v", got)
@@ -463,14 +520,17 @@ func TestEngineProbeWorksThroughTheRealClientOSEnvBuilds(t *testing.T) {
 	}))
 	t.Cleanup(engine.Close)
 	h := newHarness(t)
+	h.GOOS = "darwin"
 	h.EngineClient = OSEnv(h.BackendDir).EngineClient
+	// On macOS host.docker.internal is asked at 127.0.0.1, where the server listens.
+	at := "http://host.docker.internal:" + strings.TrimPrefix(engine.URL, "http://127.0.0.1:")
 
-	got := h.engineProbe(context.Background(), dotEnv(t, "TURING_LOCAL_ENGINE_URL="+engine.URL+"\n"))
+	got := h.engineProbe(context.Background(), dotEnv(t, "TURING_LOCAL_ENGINE_URL="+at+"\n"))
 	if !got.ok() || len(got.Models) != 3 || asked != "/api/tags" {
 		t.Fatalf("result = %+v, asked %q", got, asked)
 	}
 
-	got = h.engineProbe(context.Background(), dotEnv(t, "TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_URL="+engine.URL+"/v1\n"))
+	got = h.engineProbe(context.Background(), dotEnv(t, "TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_URL="+at+"/v1\n"))
 	if got.ok() || !strings.Contains(got.Problem, "HTTP 302") {
 		t.Fatalf("result = %+v, want a redirect reported rather than followed", got)
 	}
@@ -484,6 +544,86 @@ func TestOSEnvAsksAnEngineForThreeSeconds(t *testing.T) {
 	if env.BridgeGateway == nil {
 		t.Fatal("OSEnv has no bridge gateway lookup")
 	}
+}
+
+func TestOSEnvAsksAnEngineDirectlyAndNeverThroughAProxy(t *testing.T) {
+	client := OSEnv(t.TempDir()).EngineClient
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("EngineClient.Transport = %T, want its own *http.Transport: the default one sends a request through HTTP_PROXY", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("EngineClient's transport has a Proxy function; it must be nil, or the engine's key can reach a proxy")
+	}
+	if client.CheckRedirect == nil {
+		t.Fatal("EngineClient follows redirects")
+	}
+}
+
+// proxyChildEnv marks the child process TestOSEnvEngineProbeNeverSendsTheKeyToAnInheritedProxy starts.
+const proxyChildEnv = "TURING_TEST_ENGINE_PROXY_CHILD"
+
+// The probe runs in a child process because net/http reads the proxy
+// variables once per process: setting HTTP_PROXY in this one proves nothing.
+func TestOSEnvEngineProbeNeverSendsTheKeyToAnInheritedProxy(t *testing.T) {
+	if os.Getenv(proxyChildEnv) == "1" {
+		probeWithTheOSEnvClient(t)
+		return
+	}
+	var mu sync.Mutex
+	var asked []string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		asked = append(asked, r.URL.String()+" Authorization="+r.Header.Get("Authorization"))
+		mu.Unlock()
+		_, _ = w.Write([]byte(openAIModels))
+	}))
+	t.Cleanup(proxy.Close)
+
+	child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+t.Name()+"$", "-test.count=1")
+	child.Env = append(withoutProxySettings(os.Environ()),
+		proxyChildEnv+"=1", "HTTP_PROXY="+proxy.URL, "http_proxy="+proxy.URL, "HTTPS_PROXY="+proxy.URL)
+	output, err := child.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the probe in the child process failed: %v\n%s", err, output)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) > 0 {
+		t.Fatalf("the proxy in HTTP_PROXY was asked %q", asked)
+	}
+	if strings.Contains(string(output), "CANARY-PROXY") {
+		t.Fatalf("the child printed the engine's key:\n%s", output)
+	}
+}
+
+// probeWithTheOSEnvClient asks an engine at a gateway that is not loopback,
+// which Go would send through a proxy, with OSEnv's own client.
+func probeWithTheOSEnvClient(t *testing.T) {
+	h := newHarness(t)
+	// TEST-NET-1: never answers, and is not exempt from a proxy as loopback is.
+	h.gateway = "192.0.2.1"
+	client := *OSEnv(h.BackendDir).EngineClient
+	client.Timeout = 300 * time.Millisecond
+	h.EngineClient = &client
+
+	h.engineProbe(context.Background(), dotEnv(t,
+		"TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1\nTURING_LOCAL_ENGINE_API_KEY=CANARY-PROXY\n"))
+}
+
+// withoutProxySettings drops what would change how net/http picks a proxy,
+// REQUEST_METHOD included: under CGI it ignores HTTP_PROXY.
+func withoutProxySettings(environ []string) []string {
+	var kept []string
+	for _, entry := range environ {
+		name, _, _ := strings.Cut(entry, "=")
+		switch strings.ToUpper(name) {
+		case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "REQUEST_METHOD", proxyChildEnv:
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
 }
 
 // bridgeInspect is the lookup's command; the trailing space in the template

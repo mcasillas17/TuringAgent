@@ -17,6 +17,7 @@ import (
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/envfile"
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/host"
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 )
 
 // engineTimeout bounds one request for an engine's model list.
@@ -34,6 +35,8 @@ const (
 	dockerInternalHost = "host.docker.internal"
 	loopback           = "127.0.0.1"
 	maxModelListBytes  = 4 << 20
+
+	engineURLKey = "TURING_LOCAL_ENGINE_URL"
 )
 
 // engineResult is what asking the local engine for its models found.
@@ -72,7 +75,7 @@ func resolveEngine(file *envfile.File) (engineSettings, error) {
 	}
 	settings := engineSettings{
 		engine: get("TURING_LOCAL_ENGINE"),
-		urlKey: "TURING_LOCAL_ENGINE_URL",
+		urlKey: engineURLKey,
 		apiKey: get("TURING_LOCAL_ENGINE_API_KEY"),
 	}
 	if settings.engine == "" {
@@ -105,7 +108,9 @@ func resolveEngine(file *envfile.File) (engineSettings, error) {
 
 // engineProbe asks the local engine for its models from this machine, at the
 // address the containers use: host.docker.internal is this machine's loopback
-// under Docker Desktop and Docker's bridge gateway on Linux.
+// under Docker Desktop and Docker's bridge gateway on Linux. A URL the runtime
+// refuses, or one naming localhost or a loopback address, is reported without
+// asking anything.
 func (e Env) engineProbe(ctx context.Context, file *envfile.File) engineResult {
 	settings, err := resolveEngine(file)
 	result := engineResult{Engine: settings.engine, Model: settings.model}
@@ -113,12 +118,29 @@ func (e Env) engineProbe(ctx context.Context, file *envfile.File) engineResult {
 		result.Problem = err.Error()
 		return result
 	}
-	configured, err := url.Parse(settings.url)
-	if err != nil || (configured.Scheme != "http" && configured.Scheme != "https") || configured.Hostname() == "" {
-		result.Problem = fmt.Sprintf("%s must be an http or https URL with a host; correct it in .env", settings.urlKey)
+	// The runtime refuses any URL ParseLocalEndpoint refuses, so asking it
+	// would test an engine the runtime never uses, and could hand its key to
+	// another machine.
+	endpoint, err := egress.ParseLocalEndpoint(settings.url)
+	var configured *url.URL
+	if err == nil {
+		configured, err = url.Parse(endpoint.Canonical)
+	}
+	if err != nil {
+		result.Problem = fmt.Sprintf("the runtime refuses %s: it takes only an http or https URL on this machine, with no user, password, query or fragment, "+
+			"and the containers reach this machine at %s; run ./turing config set %s http://%s:PORT with the engine's port (and its path, such as /v1), then ./turing status",
+			settings.urlKey, dockerInternalHost, engineURLKey, dockerInternalHost)
 		return result
 	}
-	result.URL = withoutCredentials(configured)
+	result.URL = settings.url
+	if namesTheContainer(configured.Hostname()) {
+		instead := *configured
+		instead.Host = joinHostPort(dockerInternalHost, configured.Port())
+		result.Problem = fmt.Sprintf("%s names %s, which inside the runtime's container is the container itself, so the engine on this machine cannot be reached there; "+
+			"run ./turing config set %s %s, then ./turing status",
+			settings.urlKey, configured.Hostname(), engineURLKey, instead.String())
+		return result
+	}
 
 	target := configured.Hostname()
 	onLinuxBridge := target == dockerInternalHost && e.GOOS == "linux"
@@ -158,6 +180,16 @@ func (e Env) engineProbe(ctx context.Context, file *envfile.File) engineResult {
 	result.Problem = fmt.Sprintf("the engine %s; start it on this machine, or correct TURING_LOCAL_ENGINE and %s in .env, then run ./turing status",
 		failure.clause, settings.urlKey)
 	return result
+}
+
+// namesTheContainer reports whether host, as ParseLocalEndpoint leaves it, is
+// localhost or a loopback address, which inside a container is the container.
+func namesTheContainer(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	address, err := netip.ParseAddr(host)
+	return err == nil && address.Unmap().IsLoopback()
 }
 
 // bindAdvice is how to make the engine listen on address. Ollama has no
