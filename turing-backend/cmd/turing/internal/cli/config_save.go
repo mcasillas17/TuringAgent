@@ -142,13 +142,14 @@ func buildCandidate(data []byte, changes map[string]*string) (*envfile.File, map
 // migrateDeprecated follows the services' own fallback against the
 // candidate: an old name's value moves to its new name only where the
 // services would read it, and the old line goes either way, since nothing
-// else reads it.
+// else reads it. An old value Compose interpolates is left alone, with its
+// new name: Set would write ${VAR} as literal text.
 func migrateDeprecated(candidate *envfile.File, changed map[string]string) error {
 	engine := cmp.Or(envValue(candidate, "TURING_LOCAL_ENGINE"), engineOllama)
 	for _, key := range registry.All() {
 		for _, old := range key.Deprecated {
 			value, present := candidate.Get(old)
-			if !present {
+			if !present || candidate.Interpolates(old) {
 				continue
 			}
 			// The runtime ignores an old Ollama URL for any other engine, so

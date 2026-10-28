@@ -28,7 +28,8 @@ type entry struct {
 	eol    string // "\n", "\r\n", or "" for a last line with no ending
 	prefix string // what precedes the key: indentation and `export `
 	key    string // empty unless the entry is an assignment
-	value  string // the value Compose reads
+	value  string // the value Compose reads, before any interpolation
+	quote  byte   // the value's opening quote, or 0 for a bare value
 }
 
 // Parse reads an .env. Unknown content is kept verbatim and is never an
@@ -66,6 +67,7 @@ func parseEntry(s string, pos int) (entry, int) {
 	}
 
 	open := pos + afterEquals + len(rest) - len(trimmed)
+	e.quote = s[open]
 	closing := closingQuote(s, open)
 	if closing < 0 {
 		// Compose would refuse this line; the rest of it is the best reading.
@@ -215,6 +217,21 @@ func (f *File) Get(key string) (string, bool) {
 	return "", false
 }
 
+// Interpolates reports whether Compose expands variables in key's last
+// assignment: it is bare or double-quoted, and its value holds a $. Get
+// returns such a value as written, not as Compose expands it.
+func (f *File) Interpolates(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i := len(f.entries) - 1; i >= 0; i-- {
+		if e := f.entries[i]; e.key == key {
+			return e.quote != '\'' && strings.Contains(e.value, "$")
+		}
+	}
+	return false
+}
+
 // Set writes value for key. It replaces the last assignment, which is the one
 // Compose reads, drops any earlier ones, and appends the key when absent. A
 // value that cannot be written is refused before anything changes.
@@ -239,16 +256,24 @@ func (f *File) Set(key, value string) error {
 			f.entries[n-1].eol = ending
 		}
 		f.entries = append(f.entries, entry{
-			text: key + "=" + encoded, eol: ending, key: key, value: value,
+			text: key + "=" + encoded, eol: ending, key: key, value: value, quote: encodedQuote(encoded),
 		})
 		return nil
 	}
 
 	replaced := &f.entries[last]
 	replaced.text = replaced.prefix + key + "=" + encoded
-	replaced.value = value
+	replaced.value, replaced.quote = value, encodedQuote(encoded)
 	f.removeKeyExcept(key, last)
 	return nil
+}
+
+// encodedQuote is the opening quote of what Encode returned: ' or none.
+func encodedQuote(encoded string) byte {
+	if strings.HasPrefix(encoded, "'") {
+		return '\''
+	}
+	return 0
 }
 
 // Delete removes every assignment of key.

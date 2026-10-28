@@ -926,6 +926,55 @@ func TestSaveMigratesDeprecatedNamesTheWayTheServicesReadThem(t *testing.T) {
 	}
 }
 
+// Compose expands a bare or double-quoted $ in .env, and Set writes a value
+// single-quoted, so moving such a value would freeze ${MODEL_NAME} into its
+// text: the old line is left alone, and its new name too.
+func TestSaveLeavesADeprecatedValueComposeInterpolatesWhereItIs(t *testing.T) {
+	tests := []struct {
+		name, line string
+		env        []string
+		moved      string // TURING_LOCAL_MODEL's line afterwards, "" when there is none
+	}{
+		{name: "bare", line: "OLLAMA_MODEL=${MODEL_NAME}"},
+		{name: "bare without braces", line: "OLLAMA_MODEL=$MODEL_NAME"},
+		{name: "double quoted", line: `OLLAMA_MODEL="$MODEL_NAME"`},
+		{name: "bare, with the new name set", line: "OLLAMA_MODEL=${MODEL_NAME}", env: []string{"TURING_LOCAL_MODEL=qwen2.5:7b"}, moved: "TURING_LOCAL_MODEL=qwen2.5:7b"},
+		{name: "single quoted, which Compose reads as written", line: "OLLAMA_MODEL='${MODEL_NAME}'", moved: "TURING_LOCAL_MODEL='${MODEL_NAME}'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newConfigHarness(t)
+			h.writeEnv(fullEnv(append([]string{"MODEL_NAME=llama3", tt.line}, tt.env...)...))
+
+			if code := h.config("set", "OPENAI_MODEL", "gpt-x", "--no-apply"); code != 0 {
+				t.Fatalf("exit = %d; stderr: %s", code, h.errOut)
+			}
+
+			lines := strings.Split(string(h.envBytes()), "\n")
+			interpolated := !strings.Contains(tt.line, "'")
+			if slices.Contains(lines, tt.line) != interpolated {
+				t.Fatalf("%s kept = %v, want %v:\n%s", tt.line, !interpolated, interpolated, h.envBytes())
+			}
+			newLine := ""
+			for _, line := range lines {
+				if strings.HasPrefix(line, "TURING_LOCAL_MODEL=") {
+					newLine = line
+				}
+			}
+			if newLine != tt.moved {
+				t.Fatalf("TURING_LOCAL_MODEL line = %q, want %q", newLine, tt.moved)
+			}
+			want := []string{"PATH=/usr/bin:/bin", "OPENAI_MODEL=gpt-x"}
+			if !interpolated {
+				want = []string{"PATH=/usr/bin:/bin", "OLLAMA_MODEL=", "OPENAI_MODEL=gpt-x", "TURING_LOCAL_MODEL=${MODEL_NAME}"}
+			}
+			if calls := h.checkCalls(); len(calls) != 2 || !slices.Equal(calls[0].Env, want) {
+				t.Fatalf("check-config env = %q, want %q", h.checkCalls(), want)
+			}
+		})
+	}
+}
+
 // --- host rules for the app port ---
 
 func TestSaveRefusesAnAppPortTheHostCannotUse(t *testing.T) {

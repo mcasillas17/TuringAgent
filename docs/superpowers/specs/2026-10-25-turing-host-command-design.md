@@ -166,6 +166,10 @@ being saved:
   `openai` engine, so moving it there would turn a startup refusal into a
   local route pointing at the wrong server.
 - In every case the old line is then removed, because nothing else reads it.
+- The exception is an old value Compose interpolates: its last assignment is
+  bare or double-quoted and holds a `$`. Moving it would write `${VAR}` as
+  literal text, so the old line and the new name are both left as they are,
+  and Compose keeps supplying the value it always did.
 
 `turing status` reports any deprecated key that is left.
 

@@ -115,6 +115,52 @@ func TestGetReadsTheValueComposeWouldRead(t *testing.T) {
 	}
 }
 
+func TestInterpolatesIsTrueOnlyWhereComposeExpandsTheLastAssignment(t *testing.T) {
+	tests := []struct {
+		name, content, key string
+		want               bool
+	}{
+		{"bare with a brace", "K=${X}\n", "K", true},
+		{"bare with a dollar", "K=$X\n", "K", true},
+		{"bare with an escaped dollar, which Compose also rewrites", "K=a$$b\n", "K", true},
+		{"double quoted", `K="$X"` + "\n", "K", true},
+		{"double quoted with a default", `K="${X:-d}"` + "\n", "K", true},
+		{"export prefix", "export K=$X\n", "K", true},
+		{"single quoted", "K='${X}'\n", "K", false},
+		{"bare without a dollar", "K=abc\n", "K", false},
+		{"double quoted without a dollar", `K="abc"` + "\n", "K", false},
+		{"a dollar only in a comment", "K=abc # $X\n", "K", false},
+		{"a dollar only after the closing quote", "K='abc' $X\n", "K", false},
+		{"the last assignment decides: single quoted", "K=$X\nK='$X'\n", "K", false},
+		{"the last assignment decides: bare", "K='$X'\nK=$X\n", "K", true},
+		{"absent", "A=$X\n", "K", false},
+		{"empty key", "K=$X\n", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mustParse(t, tt.content).Interpolates(tt.key); got != tt.want {
+				t.Fatalf("Interpolates(%q) in %q = %v, want %v", tt.key, tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInterpolatesIsFalseForAValueSetWrote(t *testing.T) {
+	file := mustParse(t, "K=$OLD\n")
+	if err := file.Set("K", "${X}"); err != nil {
+		t.Fatal(err)
+	}
+	if file.Interpolates("K") {
+		t.Fatalf("Interpolates(K) = true after Set wrote %q", file.Bytes())
+	}
+	if err := file.Set("NEW", "$Y"); err != nil {
+		t.Fatal(err)
+	}
+	if file.Interpolates("NEW") {
+		t.Fatalf("Interpolates(NEW) = true after Set appended %q", file.Bytes())
+	}
+}
+
 func TestKeysListsDistinctKeysInFileOrder(t *testing.T) {
 	file := mustParse(t, "# c\nB=1\nA=2\nexport C=3\nB=4\nnot a key\nA=5\n")
 	got := strings.Join(file.Keys(), ",")

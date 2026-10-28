@@ -103,6 +103,33 @@ func TestGetAgreesWithComposeOnHandWrittenLines(t *testing.T) {
 	}
 }
 
+// Interpolates must say exactly where Compose's reading differs from Get's:
+// a value Compose expands is not the text Get returns.
+func TestInterpolatesAgreesWithCompose(t *testing.T) {
+	requireDockerCompose(t)
+
+	content := "NAME=interpolated\n" +
+		"V_BRACE=${NAME}\n" +
+		"V_PLAIN_DOLLAR=$NAME\n" +
+		"V_DQ=\"$NAME\"\n" +
+		"V_DQ_DEFAULT=\"${V_UNSET:-fallback}\"\n" +
+		"V_ESCAPED=a$$b\n" +
+		"V_SQ='${NAME}'\n" +
+		"V_NONE=abc\n" +
+		"V_DQ_NONE=\"abc\"\n" +
+		"V_COMMENT=abc # $NAME\n"
+	file := mustParse(t, content)
+	keys := file.Keys()[1:]
+	resolved := composeResolve(t, []byte(content), keys)
+
+	for _, key := range keys {
+		got, _ := file.Get(key)
+		if expands := resolved[key] != got; expands != file.Interpolates(key) {
+			t.Errorf("Interpolates(%s) = %v, but Compose read %q where Get reads %q", key, file.Interpolates(key), resolved[key], got)
+		}
+	}
+}
+
 // composeResolve has Compose read an .env and returns what each of keys
 // resolves to in a service's environment, with the $$ that `config` prints for
 // a literal $ undone. A $ that had been interpolated would not be there to
