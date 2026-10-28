@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -1431,11 +1433,58 @@ func TestSaveWithNoApplySavesWithoutRestarting(t *testing.T) {
 	if got, _ := h.envGet("TURING_LOCAL_MODEL"); got != "llama3.2" {
 		t.Fatalf("TURING_LOCAL_MODEL = %q", got)
 	}
-	if h.ranCommand("compose up") || strings.Contains(h.out.String(), "Apply now?") {
+	if h.ranCommand("compose up") || strings.Contains(h.out.String(), "Apply now?") || strings.Contains(h.out.String(), "Saved in .env.") {
 		t.Fatalf("ran %q; stdout %q", h.runner.commands(), h.out)
 	}
 	if !strings.Contains(h.out.String(), savedNotApplied) {
 		t.Fatalf("stdout = %q", h.out)
+	}
+}
+
+// interruptedAnswer is a terminal whose first read fails, as when Ctrl-C
+// ends the prompt, and it keeps what stdout held at that moment.
+type interruptedAnswer struct {
+	out  *bytes.Buffer
+	seen string
+	read bool
+}
+
+func (a *interruptedAnswer) Read([]byte) (int, error) {
+	if !a.read {
+		a.seen, a.read = a.out.String(), true
+	}
+	return 0, io.ErrUnexpectedEOF
+}
+
+// Ctrl-C at the Apply prompt ends the process, so what was saved has to be
+// said before the question.
+func TestSaveSaysItSavedBeforeAskingToApply(t *testing.T) {
+	h := newConfigHarness(t)
+	h.IsTerminal = true
+	answer := &interruptedAnswer{out: h.out}
+	h.Stdin = answer
+
+	if code := h.config("set", "TURING_LOCAL_MODEL", "llama3.2"); code != 0 {
+		t.Fatalf("exit = %d; stderr: %s", code, h.errOut)
+	}
+	if want := "Saved in .env.\n" + applyQuestion + " "; !strings.HasSuffix(answer.seen, want) {
+		t.Fatalf("stdout when the answer was read = %q, want it to end %q", answer.seen, want)
+	}
+	if !strings.Contains(h.out.String(), savedNotApplied) {
+		t.Fatalf("stdout = %q, want the declined save's own message too", h.out)
+	}
+}
+
+func TestSaveSaysItSavedBeforeApplyingWithYes(t *testing.T) {
+	h := newConfigHarness(t)
+
+	if code := h.config("set", "TURING_LOCAL_MODEL", "llama3.2", "--yes"); code != 0 {
+		t.Fatalf("exit = %d; stderr: %s", code, h.errOut)
+	}
+	out := h.out.String()
+	saved, waiting := strings.Index(out, "Saved in .env.\n"), strings.Index(out, "Waiting for Turing")
+	if saved < 0 || waiting < 0 || saved > waiting {
+		t.Fatalf("stdout = %q, want Saved in .env. before the wait", out)
 	}
 }
 

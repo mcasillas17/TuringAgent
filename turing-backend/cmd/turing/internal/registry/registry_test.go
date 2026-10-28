@@ -228,6 +228,18 @@ func TestEveryEditableKeyHasADescription(t *testing.T) {
 	}
 }
 
+// turing config shows each description as it stands, so one that stops at a
+// colon reads as if something were missing.
+func TestEveryEditableKeysDescriptionEndsASentence(t *testing.T) {
+	example := readFile(t, envExamplePath)
+	for _, key := range Editable() {
+		description := Describe(example, key.Name)
+		if !strings.HasSuffix(description, ".") {
+			t.Errorf("Describe(%s) = %q, want it to end a sentence", key.Name, description)
+		}
+	}
+}
+
 func TestShippedReadsTheExampleFile(t *testing.T) {
 	example := readFile(t, envExamplePath)
 	for name, want := range map[string]string{

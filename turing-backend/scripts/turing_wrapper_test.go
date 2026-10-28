@@ -59,8 +59,14 @@ func newWrapperTree(t *testing.T) wrapperTree {
 
 func (tree wrapperTree) run(t *testing.T, script string, env []string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return tree.runIn(t, t.TempDir(), script, env, args...)
+}
+
+// runIn runs script from dir, so a relative script path is resolved there.
+func (tree wrapperTree) runIn(t *testing.T, dir, script string, env []string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	cmd := exec.Command(script, args...)
-	cmd.Dir = t.TempDir()
+	cmd.Dir = dir
 	cmd.Env = append([]string{"PATH=" + tree.bin + ":/usr/bin:/bin", "GO_LOG=" + tree.goLog}, env...)
 	var out, errOut bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
@@ -168,5 +174,47 @@ func TestTuringWrapperDoesNotRunAStaleBinaryWhenTheBuildFails(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "go: build failed") || !strings.Contains(stderr, "Go 1.26") {
 		t.Fatalf("stderr = %q, want go's message and the Go version needed", stderr)
+	}
+}
+
+// With CDPATH exported, `cd dir` searches it first and prints where it went,
+// so a wrapper started by a relative path such as turing-backend/turing, or
+// rotate-client-key.sh's scripts/../turing, would resolve its backend in a
+// decoy tree and capture that path twice.
+func TestTuringWrapperIgnoresAnExportedCDPATH(t *testing.T) {
+	tree := newWrapperTree(t)
+	decoy := filepath.Join(tree.root, "decoy")
+	for _, dir := range []string{filepath.Join(decoy, "turing-backend"), filepath.Join(decoy, "scripts")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(tree.backend, "scripts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	copyScript(t, "rotate-client-key.sh", filepath.Join(tree.backend, "scripts", "rotate-client-key.sh"))
+	cdpath := []string{"CDPATH=" + decoy}
+
+	for _, tt := range []struct {
+		name, dir, script string
+		args              []string
+		want              string
+	}{
+		{"the wrapper by a relative path", tree.root, "turing-backend/turing", []string{"help"}, "help"},
+		{"the wrapper as rotate-client-key.sh names it", tree.backend, "scripts/../turing", []string{"help"}, "help"},
+		// macOS's bash 3.2 execs the wrapper by an absolute path, so there this
+		// case passes even without the fix; the case above is the form it
+		// passes on otherwise.
+		{"rotate-client-key.sh by a relative path", tree.backend, "scripts/rotate-client-key.sh", nil, "connect --rotate-key"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout, stderr, code := tree.runIn(t, tt.dir, tt.script, cdpath, tt.args...)
+			if code != 0 {
+				t.Fatalf("exit = %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+			}
+			if want := "STUB --backend-dir " + tree.backend + " " + tt.want + "\n"; stdout != want {
+				t.Fatalf("stdout = %q, want %q", stdout, want)
+			}
+		})
 	}
 }

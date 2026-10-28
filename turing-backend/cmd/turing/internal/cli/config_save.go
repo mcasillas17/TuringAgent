@@ -291,6 +291,10 @@ func tailLines(text string, n int) string {
 // previous bytes until the stack is healthy, so that a change only a running
 // service can refuse can be undone.
 func (e Env) applySaved(ctx context.Context, path string, previous []byte, current, candidate *envfile.File, changed map[string]string, opts saveOptions) int {
+	if !opts.NoApply {
+		// Ctrl-C at the prompt ends the process, so the save is said first.
+		_, _ = fmt.Fprintln(e.Stdout, "Saved in .env.")
+	}
 	if opts.NoApply || !e.confirm(applyPrompt, true, opts.Yes) {
 		_, _ = fmt.Fprintln(e.Stdout, savedMessage)
 		for _, name := range zeroBounds {

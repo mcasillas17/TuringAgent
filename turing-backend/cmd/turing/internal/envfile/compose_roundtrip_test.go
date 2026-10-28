@@ -84,13 +84,18 @@ func TestGetAgreesWithComposeOnHandWrittenLines(t *testing.T) {
 		"  export\tV_EXPORT=exported\n" +
 		"V_DUP=1\nV_DUP=\"2\"\nV_DUP='3'\n" +
 		"V_EMPTY=\n" +
-		"V_EMPTY_QUOTED=''\n"
+		"V_EMPTY_QUOTED=''\n" +
+		"V_TAB_HASH=abc\t# not a comment\n" +
+		"V_TAB_SPACE_HASH=abc\t #comment\n" +
+		"V_CRLF=crlf # comment\r\n" +
+		"V_CRLF_BARE=bare\r\n" +
+		"V_CRLF_QUOTED='quoted'\r\n"
 	file := mustParse(t, content)
 	keys := file.Keys()
 	resolved := composeResolve(t, []byte(content), keys)
 
-	if len(keys) != 16 {
-		t.Fatalf("Keys() = %v, want the 16 distinct keys written above", keys)
+	if len(keys) != 21 {
+		t.Fatalf("Keys() = %v, want the 21 distinct keys written above", keys)
 	}
 	for _, key := range keys {
 		want, ok := resolved[key]

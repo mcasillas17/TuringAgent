@@ -166,15 +166,11 @@ func closingQuote(s string, open int) int {
 	return -1
 }
 
-// decodeBare reads an unquoted value: it ends at the first blank followed by
-// `#`, and surrounding blanks are not part of it. Nothing is interpolated.
+// decodeBare reads an unquoted value: it ends at the first space followed by
+// `#` (Compose does not cut at a tab before `#`), and surrounding blanks are
+// not part of it. Nothing is interpolated.
 func decodeBare(trimmed string) string {
-	for i := 0; i+1 < len(trimmed); i++ {
-		if isBlank(trimmed[i]) && trimmed[i+1] == '#' {
-			trimmed = trimmed[:i]
-			break
-		}
-	}
+	trimmed, _, _ = strings.Cut(trimmed, " #")
 	return strings.TrimRight(trimmed, " \t\r")
 }
 
