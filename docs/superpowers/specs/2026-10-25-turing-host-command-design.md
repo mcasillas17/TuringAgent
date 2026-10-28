@@ -1,6 +1,9 @@
 # The `turing` host command: design
 
-**Status:** approved (#170). PR 1 (`check-config`) is implemented. On
+**Status:** approved (#170). PR 1 (`check-config`) and PR 2 (operate without
+editing files: `start`, `stop`, `restart`, `logs`, `status`, `connect` and
+`config`, and the Flutter Linux desktop build in CI) are implemented; `setup`
+and `engine` arrive in PR 3. On
 2026-10-26 the owner decided section 12's question 4: **b**, the app runs on
 the server until SEC-001.
 

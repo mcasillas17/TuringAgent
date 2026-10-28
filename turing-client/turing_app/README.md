@@ -90,6 +90,19 @@ flutter pub get
 flutter run -d macos
 ```
 
+On a Linux server, run `flutter run -d linux` on the server itself, from a
+graphical session. Until SEC-001 pairs other devices, the server accepts the
+app only from the machine it runs on, so the Linux build is the client for a
+headless Linux host. To build it you need the Linux desktop toolchain and
+`clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev`
+(`flutter_secure_storage_linux` links against `libsecret`). To run it you need a
+Secret Service keyring, for example `gnome-keyring`, running and unlocked in
+that session, because `flutter_secure_storage` stores the API key there. CI
+runs `flutter build linux --debug` with these packages; it proves the app
+builds, not that it launches. The repository README's
+[Linux desktop client](../../README.md#linux-desktop-client) section has the
+details.
+
 Use `flutter devices` to inspect available development targets, not as a list
 of supported deployments. The current client uses native `ClientChannel`
 gRPC; this guide does not provide a working Chrome/gRPC-Web deployment.
