@@ -214,7 +214,7 @@ jobs:
         run: tools/proto/check.sh
 
       - name: Check shell scripts
-        run: bash -n tools/proto/breaking.sh turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh turing-backend/scripts/verify-tool-loop.sh
+        run: bash -n tools/proto/breaking.sh turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh turing-backend/scripts/verify-tool-loop.sh turing-backend/turing
 
       - name: Check workflow coverage
         run: go test -tags sqlite_fts5 ./.github/workflows
@@ -243,3 +243,12 @@ jobs:
 
       - name: Run Flutter tests
         run: flutter test
+
+      # The app runs on the server until SEC-001 pairs other devices, so the
+      # Linux runner has to build. libsecret is what
+      # flutter_secure_storage_linux links against to keep the API key.
+      - name: Install Linux desktop build dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev
+
+      - name: Build the Linux desktop app
+        run: flutter build linux --debug

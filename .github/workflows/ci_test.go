@@ -63,7 +63,7 @@ func TestCIWorkflowCoversCoreChecks(t *testing.T) {
 	requireContains(t, protoJob, `TURING_REQUIRE_BUF=1 go test ./tools/proto -run '^TestBreaking' -count=1`)
 	requireContains(t, protoJob, `tools/proto/breaking.sh "origin/${GITHUB_BASE_REF:-main}"`)
 	requireContains(t, protoJob, "tools/proto/check.sh")
-	requireContains(t, protoJob, "bash -n tools/proto/breaking.sh turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh turing-backend/scripts/verify-tool-loop.sh")
+	requireContains(t, protoJob, "bash -n tools/proto/breaking.sh turing-backend/scripts/compose.sh turing-backend/scripts/dev.sh turing-backend/scripts/init.sh turing-backend/scripts/reset.sh turing-backend/scripts/rotate-client-key.sh turing-backend/scripts/smoke-grpc.sh turing-backend/scripts/smoke.sh turing-backend/scripts/verify-tool-loop.sh turing-backend/turing")
 	requireContains(t, workflow, "uses: dart-lang/setup-dart@v1")
 	requireContains(t, workflow, "dart pub global activate protoc_plugin 25.1.0")
 	requireContains(t, workflow, `echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"`)
@@ -110,6 +110,39 @@ func TestCIWorkflowRunsPinnedLintInRootAndNestedModules(t *testing.T) {
 	requireContains(t, lintJob, `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" --build-tags sqlite_fts5 ./... ./.github/workflows`)
 	requireRunsIn(t, lintJob, "turing-backend/mcp-files", `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" ./...`)
 	requireRunsIn(t, lintJob, "turing-backend/mcp-system", `golangci-lint run --config "$GITHUB_WORKSPACE/.golangci.yml" ./...`)
+}
+
+// TestCIFlutterJobBuildsTheLinuxDesktopApp pins the proof that the app runs on
+// the server, which is the supported setup until SEC-001 pairs other devices
+// (host-command design, section 6.4). Nothing else in CI compiles the Linux
+// runner, and flutter_secure_storage_linux cannot link without libsecret.
+//
+// Every requirement is asserted inside the flutter job's own block, because
+// "flutter test" and the package names would otherwise be satisfied by a step
+// added to some other job.
+func TestCIFlutterJobBuildsTheLinuxDesktopApp(t *testing.T) {
+	data, err := os.ReadFile("ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flutterJob := requireIndentedBlock(t, string(data), "  flutter:", 2)
+
+	requireContains(t, flutterJob, "working-directory: turing-client/turing_app")
+	for _, snippet := range []string{
+		"libsecret-1-dev",
+		"libgtk-3-dev",
+		"ninja-build",
+		"flutter build linux",
+	} {
+		requireContains(t, flutterJob, snippet)
+	}
+	requireInOrder(t, flutterJob,
+		"run: flutter test\n",
+		"name: Install Linux desktop build dependencies",
+		"sudo apt-get install -y",
+		"name: Build the Linux desktop app",
+		"run: flutter build linux --debug",
+	)
 }
 
 func TestMCPFilesImagePreparesSandboxBeforeDroppingPrivileges(t *testing.T) {
