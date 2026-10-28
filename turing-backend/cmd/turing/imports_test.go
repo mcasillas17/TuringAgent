@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -23,11 +26,11 @@ func TestTheTuringCommandImportsNoSQLitePackage(t *testing.T) {
 		"with sqlite_fts5":   {"list", "-deps", "-tags", "sqlite_fts5", "."},
 	} {
 		t.Run(name, func(t *testing.T) {
-			output, err := exec.CommandContext(t.Context(), "go", args...).Output()
+			output, err := goTool(t.Context(), args...)
 			if err != nil {
-				t.Fatalf("go %s: %v", strings.Join(args, " "), err)
+				t.Fatal(err)
 			}
-			packages := strings.Fields(string(output))
+			packages := strings.Fields(output)
 			if len(packages) == 0 {
 				t.Fatalf("go %s listed no packages; this guard reads its answer from there", strings.Join(args, " "))
 			}
@@ -38,4 +41,28 @@ func TestTheTuringCommandImportsNoSQLitePackage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGoToolReportsWhatGoPrintedWhenItFails(t *testing.T) {
+	_, err := goTool(t.Context(), "list", "-deps", "./no-such-package")
+	if err == nil {
+		t.Fatal("go list of a missing package succeeded")
+	}
+	if !strings.Contains(err.Error(), "directory not found") {
+		t.Fatalf("error = %q, want what go printed on stderr", err)
+	}
+}
+
+// goTool runs the go tool and returns its standard output. When it fails, the
+// error carries what it printed on standard error, which says why.
+func goTool(ctx context.Context, args ...string) (string, error) {
+	output, err := exec.CommandContext(ctx, "go", args...).Output()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return "", fmt.Errorf("go %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(exit.Stderr)))
+	}
+	if err != nil {
+		return "", fmt.Errorf("go %s: %w", strings.Join(args, " "), err)
+	}
+	return string(output), nil
 }

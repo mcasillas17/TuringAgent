@@ -184,3 +184,25 @@ func TestExecRunnerReportsASignalledChildAsTheShellWould(t *testing.T) {
 		t.Fatalf("Run = %d, %v; want 143, nil", code, err)
 	}
 }
+
+func TestLastLinesKeepsTheLastNonBlankLines(t *testing.T) {
+	tests := []struct {
+		name, text string
+		n          int
+		want       string
+	}{
+		{"fewer than n", "a\nb\n", 5, "a\nb"},
+		{"more than n", "1\n2\n3\n4\n5\n6\n7\n", 5, "3\n4\n5\n6\n7"},
+		{"blank lines are skipped", "a\n\n   \nb\n\t\nc\n", 2, "b\nc"},
+		{"carriage returns are dropped", "a\r\nb\r\n", 5, "a\nb"},
+		{"nothing", "", 5, ""},
+		{"only blanks", "\n \r\n", 5, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := LastLines(tt.text, tt.n); got != tt.want {
+				t.Fatalf("LastLines(%q, %d) = %q, want %q", tt.text, tt.n, got, tt.want)
+			}
+		})
+	}
+}

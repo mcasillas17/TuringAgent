@@ -22,7 +22,7 @@ func Ps(ctx context.Context, c Compose) ([]ServiceState, error) {
 		return nil, fmt.Errorf("could not run compose ps: %w", err)
 	}
 	if code != 0 {
-		return nil, fmt.Errorf("compose ps exited %d: %s", code, lastLines(stderr, 5))
+		return nil, fmt.Errorf("compose ps exited %d: %s", code, LastLines(stderr, 5))
 	}
 	trimmed := bytes.TrimSpace([]byte(stdout))
 	if len(trimmed) == 0 {

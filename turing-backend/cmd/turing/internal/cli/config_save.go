@@ -266,7 +266,7 @@ func (e Env) refused(service, message string) int {
 // it printed, and returns exit code 1.
 func (e Env) notChecked(what, detail string) int {
 	_, _ = fmt.Fprintf(e.Stderr, "not checked: %s, so nothing was saved:\n", what)
-	e.indented(tailLines(detail, 5))
+	e.indented(host.LastLines(detail, 5))
 	return e.fail("fix that, then run this command again; ./turing status shows the state of Docker and the services")
 }
 
@@ -274,17 +274,6 @@ func (e Env) indented(text string) {
 	for _, line := range strings.Split(text, "\n") {
 		_, _ = fmt.Fprintf(e.Stderr, "  %s\n", line)
 	}
-}
-
-// tailLines returns the last n non-blank lines of text.
-func tailLines(text string, n int) string {
-	var lines []string
-	for _, line := range strings.Split(text, "\n") {
-		if line = strings.TrimRight(line, "\r"); strings.TrimSpace(line) != "" {
-			lines = append(lines, line)
-		}
-	}
-	return strings.Join(lines[max(0, len(lines)-n):], "\n")
 }
 
 // applySaved applies a saved change if the person agrees, keeping the

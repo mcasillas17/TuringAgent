@@ -154,7 +154,7 @@ func ImageChecks(ctx context.Context, c Compose, service string) ([]string, erro
 		return nil, fmt.Errorf("could not ask compose for the %s image: %w", service, err)
 	}
 	if code != 0 {
-		return nil, fmt.Errorf("compose could not name the %s image (exit %d): %s", service, code, lastLines(stderr, 5))
+		return nil, fmt.Errorf("compose could not name the %s image (exit %d): %s", service, code, LastLines(stderr, 5))
 	}
 	image, err := serviceImage(strings.Fields(stdout), service)
 	if err != nil {
@@ -202,8 +202,9 @@ func serviceImage(images []string, service string) (string, error) {
 	return own[0], nil
 }
 
-// lastLines returns the last n non-empty lines of text, joined by a newline.
-func lastLines(text string, n int) string {
+// LastLines returns the last n non-blank lines of text, each without a
+// trailing carriage return, joined by a newline.
+func LastLines(text string, n int) string {
 	var lines []string
 	for _, line := range strings.Split(text, "\n") {
 		if strings.TrimSpace(line) != "" {
