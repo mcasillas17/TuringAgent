@@ -197,6 +197,81 @@ func TestConfigMenuKeepsASecretWhenNothingIsTyped(t *testing.T) {
 	h.unchanged(before)
 }
 
+func TestConfigMenuQAtTheValuePromptGoesBackInsteadOfSavingQ(t *testing.T) {
+	section := menuSection(t, "Local engine")
+	for name, typed := range map[string]string{"q": "q", "upper case": "Q", "spaces around it": "  q  "} {
+		t.Run("a setting, "+name, func(t *testing.T) {
+			h := newConfigHarness(t)
+			h.IsTerminal = true
+			h.Stdin = answers(section, menuSetting(t, "TURING_LOCAL_MODEL"), typed, "q", "q")
+			before := h.envBytes()
+
+			if code := h.config(); code != 0 {
+				t.Fatalf("exit = %d; stderr: %s", code, h.errOut)
+			}
+			if len(h.runner.calls) != 0 {
+				t.Fatalf("ran %q", h.runner.commands())
+			}
+			h.unchanged(before)
+			// Back at the section's list, not out of the menu or still at the prompt.
+			if got := strings.Count(h.out.String(), "Choose a setting"); got != 2 {
+				t.Fatalf("the settings were offered %d times, want 2 (before the edit and after going back):\n%s", got, h.out)
+			}
+		})
+	}
+
+	t.Run("a secret", func(t *testing.T) {
+		h := newConfigHarness(t)
+		h.IsTerminal = true
+		h.ReadSecret = func(string) (string, error) { return " q ", nil }
+		h.Stdin = answers(menuSection(t, "Remote model"), menuSetting(t, "OPENAI_API_KEY"), "q", "q")
+		before := h.envBytes()
+
+		if code := h.config(); code != 0 {
+			t.Fatalf("exit = %d; stderr: %s", code, h.errOut)
+		}
+		if len(h.runner.calls) != 0 {
+			t.Fatalf("ran %q", h.runner.commands())
+		}
+		h.unchanged(before)
+	})
+}
+
+func TestConfigMenuQAtTheAgentPromptsGoesBackInsteadOfSavingQ(t *testing.T) {
+	agents, mapKey := menuSection(t, "External agents"), menuSetting(t, "TURING_AGENT_API_KEYS")
+	tests := []struct {
+		name  string
+		stdin *strings.Reader
+		key   string
+	}{
+		{"the name, to add", answers(agents, mapKey, "1", "q", "q", "q", "q"), "sk-CANARY"},
+		{"the name, to remove", answers(agents, mapKey, "2", " Q ", "q", "q", "q"), "sk-CANARY"},
+		{"the key", answers(agents, mapKey, "1", "claude", "q", "q", "q"), "q"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newConfigHarness(t)
+			h.writeEnv(fullEnv(`TURING_AGENT_API_KEYS={"openai":"sk-CANARY-O"}`))
+			h.IsTerminal = true
+			h.ReadSecret = func(string) (string, error) { return tt.key, nil }
+			h.Stdin = tt.stdin
+			before := h.envBytes()
+
+			if code := h.config(); code != 0 {
+				t.Fatalf("exit = %d; stderr: %s", code, h.errOut)
+			}
+			if len(h.runner.calls) != 0 {
+				t.Fatalf("ran %q", h.runner.commands())
+			}
+			h.unchanged(before)
+			if strings.Contains(h.errOut.String(), "not a valid agent name") {
+				t.Fatalf("q was taken as a name: %s", h.errOut)
+			}
+			h.noOutputContains("CANARY")
+		})
+	}
+}
+
 func TestConfigMenuEditsAgentKeysOneNameAtATime(t *testing.T) {
 	h := newConfigHarness(t)
 	h.writeEnv(fullEnv(`TURING_AGENT_API_KEYS={"openai":"sk-CANARY-O"}`))

@@ -11,7 +11,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/registry"
 )
 
-const menuIntro = "Pick a section, then a setting. Enter keeps a value; to clear a setting, run ./turing config unset KEY."
+const menuIntro = "Pick a section, then a setting. Enter keeps a value and q goes back; to clear a setting, run ./turing config unset KEY."
 
 // configMenu walks a person through the sections and settings at a
 // terminal, and saves each new value with saveSettings. It returns the exit
@@ -73,11 +73,17 @@ func (e Env) choose(prompt string, n int, quit string) (int, bool) {
 			e.printf("\n")
 			return 0, false
 		}
-		if strings.EqualFold(answer, "q") {
+		if asksToGoBack(answer) {
 			return 0, false
 		}
 		e.printf("Type a number from 1 to %d, or q.\n", n)
 	}
+}
+
+// asksToGoBack is the answer that leaves a prompt without choosing: q, in
+// either case, with spaces around it ignored.
+func asksToGoBack(answer string) bool {
+	return strings.EqualFold(strings.TrimSpace(answer), "q")
 }
 
 // listSettings shows a section's settings, each with its description from
@@ -102,27 +108,30 @@ func (e Env) listSettings(section string, keys []registry.Key, file *envfile.Fil
 }
 
 // editSetting asks for a new value and saves it. An empty answer keeps the
-// value. It reports whether a save ran, and its exit code.
+// value and q goes back. It reports whether a save ran, and its exit code.
 func (e Env) editSetting(ctx context.Context, key registry.Key, file *envfile.File) (int, bool) {
 	if key.Kind == registry.SecretMap {
 		return e.editAgentKeys(ctx, file)
 	}
 	var value string
 	if key.IsSecret() {
-		typed, err := e.ReadSecret(fmt.Sprintf("New value for %s (typing is hidden; Enter keeps it): ", key.Name))
+		typed, err := e.ReadSecret(fmt.Sprintf("New value for %s (typing is hidden; Enter keeps it, q goes back): ", key.Name))
 		if err != nil {
 			_, _ = fmt.Fprintf(e.Stderr, "could not read the value: %v\n", err)
 			return 0, false
 		}
 		value = typed
 	} else {
-		e.printf("New value for %s%s (Enter keeps it): ", key.Name, choicesHint(key))
+		e.printf("New value for %s%s (Enter keeps it, q goes back): ", key.Name, choicesHint(key))
 		typed, err := e.readLine()
 		if err != nil && typed == "" {
 			e.printf("\n")
 			return 0, false
 		}
 		value = typed
+	}
+	if asksToGoBack(value) {
+		return 0, false
 	}
 	if value == "" {
 		e.printf("Kept.\n")
@@ -152,12 +161,15 @@ func (e Env) editAgentKeys(ctx context.Context, file *envfile.File) (int, bool) 
 		if !ok {
 			return 0, false
 		}
-		e.printf("Agent name: ")
+		e.printf("Agent name (q goes back): ")
 		line, err := e.readLine()
 		name := strings.TrimSpace(line)
 		if err != nil && name == "" {
 			e.printf("\n")
 			return 0, false
+		}
+		if asksToGoBack(name) {
+			continue
 		}
 		if !validAgentName(name) {
 			_, _ = fmt.Fprintln(e.Stderr, invalidAgentName(name))
@@ -166,9 +178,12 @@ func (e Env) editAgentKeys(ctx context.Context, file *envfile.File) (int, bool) 
 		if choice == 2 {
 			return e.saveEdit(ctx, agentKeyEdit(name, nil), saveOptions{}), true
 		}
-		secret, err := e.ReadSecret(fmt.Sprintf("Key for %s (typing is hidden; Enter leaves it unchanged): ", name))
+		secret, err := e.ReadSecret(fmt.Sprintf("Key for %s (typing is hidden; Enter leaves it unchanged, q goes back): ", name))
 		if err != nil {
 			_, _ = fmt.Fprintf(e.Stderr, "could not read the key: %v\n", err)
+			continue
+		}
+		if asksToGoBack(secret) {
 			continue
 		}
 		if secret == "" {

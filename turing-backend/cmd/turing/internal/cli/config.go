@@ -95,7 +95,8 @@ func (e Env) parseConfigArgs(command string, args []string, options ...string) (
 		default:
 			name := strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
 			if !slices.Contains(options, name) {
-				return parsed, e.usageError("turing config %s: unknown option %q; run ./turing help", command, arg), false
+				// The argument is not quoted: set's value comes last, so it can be a secret.
+				return parsed, e.usageError("turing config %s: unknown option (an argument that begins with -); a value that begins with - goes after --; run ./turing help", command), false
 			}
 			*flags[name] = true
 		}
@@ -282,6 +283,11 @@ func (e Env) configSet(ctx context.Context, args []string) int {
 			return e.fail("the key for %s is empty; to remove that agent, run ./turing config unset %s", s.agent, s.label())
 		}
 		return e.saveEdit(ctx, agentKeyEdit(s.agent, &value), opts)
+	}
+	// An empty answer is a slip, such as Enter at a prompt or an empty pipe,
+	// not a request to clear the setting; only a VALUE typed as "" is.
+	if value == "" && !given {
+		return e.usageError("no value was given for %s, so nothing changed; to clear it, run ./turing config unset %s", s.label(), s.label())
 	}
 	return e.saveSettings(ctx, map[string]*string{s.key.Name: &value}, opts)
 }
