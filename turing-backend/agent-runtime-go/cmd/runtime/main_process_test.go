@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mcasillas17/TuringAgent/turing-backend/agent-runtime-go/internal/llm"
 )
 
 const runMainEnv = "TURING_TEST_RUN_MAIN"
@@ -66,8 +68,22 @@ func TestMainHonoursTheLabelledChecks(t *testing.T) {
 		!strings.Contains(stderr, "TURING_LOCAL_ENGINE") {
 		t.Errorf("check-config with a refused environment: code = %d, stderr = %q; want 1 naming the key", code, stderr)
 	}
-	if code, _, stderr := runMain(t, "check-engine", environ); code != 2 || !strings.Contains(stderr, "check-engine") {
+	if code, _, stderr := runMain(t, "check-foo", environ); code != 2 || !strings.Contains(stderr, "check-foo") {
 		t.Errorf("an unknown argument: code = %d, stderr = %q; want 2 naming it", code, stderr)
+	}
+	h.assertNothingDialed()
+}
+
+// check-engine is the one check that uses the network, and only to reach the
+// configured engine: here a fake Ollama, while the orchestrator listener stays
+// untouched.
+func TestMainRunsCheckEngineAgainstTheConfiguredEngine(t *testing.T) {
+	fake := newFakeEngine(t, llm.LocalEngineOllama)
+	h, environ := newEngineHarness(t, fake)
+
+	code, stdout, stderr := runMain(t, "check-engine", environ)
+	if code != 0 || stdout != allFourSteps || stderr != "" {
+		t.Fatalf("check-engine: code = %d, stdout = %q, stderr = %q; want 0 and %q", code, stdout, stderr, allFourSteps)
 	}
 	h.assertNothingDialed()
 }

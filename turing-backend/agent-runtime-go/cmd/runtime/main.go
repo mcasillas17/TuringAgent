@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -28,7 +29,10 @@ import (
 
 // checks are the subcommands that validate without serving. The Dockerfile's
 // org.turing.checks label must list exactly these; a test enforces it.
-var checks = []servicecmd.Check{{Name: "config", Run: checkConfig}}
+var checks = []servicecmd.Check{
+	{Name: "config", Run: checkConfig},
+	{Name: "engine", Run: checkEngine, Success: "the engine is usable for Turing"},
+}
 
 // offlineClient is the HTTP client check-config builds providers with. It
 // refuses every request, so the check can never reach an engine.
@@ -50,7 +54,7 @@ func main() {
 // checkConfig is startup without the connections: the loader run() starts
 // with, then the provider construction it performs after dialing the
 // orchestrator, which this never does.
-func checkConfig(environ []string) ([]string, error) {
+func checkConfig(environ []string, _ io.Writer) ([]string, error) {
 	env := servicecmd.EnvMap(environ)
 	cfg, err := config.LoadFromEnv(func(key string) string { return env[key] })
 	if err != nil {

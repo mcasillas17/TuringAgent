@@ -169,8 +169,7 @@ func TestRuntimeCheckConfigWarnsAboutDeprecatedKeys(t *testing.T) {
 }
 
 func TestTheRuntimeRefusesUnknownArguments(t *testing.T) {
-	// check-engine arrives with OPS-001 PR 3; until then it is unknown.
-	for _, args := range [][]string{{"check-engine"}, {"check-config", "x"}} {
+	for _, args := range [][]string{{"check-foo"}, {"check-config", "x"}, {"check-engine", "x"}} {
 		var stdout, stderr bytes.Buffer
 		code := servicecmd.Main(args, []string{"TURING_RUNTIME_TOKEN=internal"}, checks, failServe(t), &stdout, &stderr)
 		if code != 2 {
