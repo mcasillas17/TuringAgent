@@ -183,9 +183,10 @@ func reportDeprecatedKeys(cfg config.Config) {
 	}
 }
 
-// buildProviders is the local route's engine under the local provider and,
-// when a key is configured, the remote OpenAI-compatible provider beside it.
-func buildProviders(cfg config.Config, client *http.Client) (map[turingv1.ModelProvider]llm.Provider, error) {
+// newLocalProvider is the local route's engine as the worker serves with it.
+// check-engine probes the provider this builds, so what it proves is what a
+// chat will run on.
+func newLocalProvider(cfg config.Config, client *http.Client) (llm.Provider, error) {
 	local, err := llm.NewLocal(llm.LocalOptions{
 		Engine: cfg.LocalEngine, BaseURL: cfg.LocalEngineURL, APIKey: cfg.LocalEngineAPIKey,
 		KeepAlive: cfg.OllamaKeepAlive, Client: client,
@@ -193,6 +194,16 @@ func buildProviders(cfg config.Config, client *http.Client) (map[turingv1.ModelP
 	})
 	if err != nil {
 		return nil, fmt.Errorf("configure the local engine: %w", err)
+	}
+	return local, nil
+}
+
+// buildProviders is the local route's engine under the local provider and,
+// when a key is configured, the remote OpenAI-compatible provider beside it.
+func buildProviders(cfg config.Config, client *http.Client) (map[turingv1.ModelProvider]llm.Provider, error) {
+	local, err := newLocalProvider(cfg, client)
+	if err != nil {
+		return nil, err
 	}
 	providers := map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: local}
 	if cfg.OpenAIAPIKey != "" {

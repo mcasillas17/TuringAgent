@@ -30,6 +30,9 @@ const (
 	modeStall     = "stall"
 	modeCall      = "call"
 	modeWrongName = "wrong-name"
+	// Two calls to the probe's tool: the first without arguments, the second
+	// with the arguments the probe asked for.
+	modeTwoCalls = "two-calls"
 )
 
 const (
@@ -219,6 +222,8 @@ func ollamaChunks(mode string) []string {
 			name = "get_weather"
 		}
 		return []string{fmt.Sprintf(`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":%q,"arguments":{"status":"ok"}}}]},"done":true,"done_reason":"stop"}`+"\n", name)}
+	case modeTwoCalls:
+		return []string{`{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"turing_engine_check"}},{"function":{"name":"turing_engine_check","arguments":{"status":"ok"}}}]},"done":true,"done_reason":"stop"}` + "\n"}
 	default:
 		return []string{
 			`{"message":{"role":"assistant","content":"rea"},"done":false}` + "\n",
@@ -245,6 +250,14 @@ func openAIChunks(mode string) []string {
 		return []string{
 			sse(fmt.Sprintf(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":%q,"arguments":""}}]}}]}`, name)),
 			sse(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"status\":\"ok\"}"}}]}}]}`),
+			sse(`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`),
+			done,
+		}
+	case modeTwoCalls:
+		return []string{
+			sse(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"turing_engine_check","arguments":""}}]}}]}`),
+			sse(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_1","type":"function","function":{"name":"turing_engine_check","arguments":""}}]}}]}`),
+			sse(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"status\":\"ok\"}"}}]}}]}`),
 			sse(`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`),
 			done,
 		}
@@ -404,7 +417,7 @@ func TestCheckEngineFailsAtStepTwoWhenTheListIsNotWhatTheEngineSends(t *testing.
 		f := newFakeEngine(t, engine)
 		f.listBody = `<html>not a model list</html>`
 		code, stdout, stderr := runCheckEngine(t, f)
-		requireStepFailure(t, code, stdout, stderr, 2, "model present", "model list")
+		requireStepFailure(t, code, stdout, stderr, 2, "model present", "model list", fmt.Sprintf("in the %q format", engine))
 	})
 }
 
@@ -488,6 +501,37 @@ func TestCheckEngineFailsAtStepFourWhenTheToolHasAnotherName(t *testing.T) {
 		code, stdout, stderr := runCheckEngine(t, f)
 		requireStepFailure(t, code, stdout, stderr, 4, "tool calling", `"get_weather"`, "turing_engine_check")
 	})
+}
+
+// A model may call the tool twice; the probe has what it asked for once any
+// call carries arguments, whichever order they come in.
+func TestCheckEnginePassesWhenALaterToolCallHasTheArguments(t *testing.T) {
+	eachEngine(t, func(t *testing.T, engine string) {
+		f := newFakeEngine(t, engine)
+		f.tool = modeTwoCalls
+		code, stdout, stderr := runCheckEngine(t, f)
+		if code != 0 || stdout != allFourSteps || stderr != "" {
+			t.Fatalf("code = %d, stdout = %q, stderr = %q; want 0 and %q", code, stdout, stderr, allFourSteps)
+		}
+	})
+}
+
+// check-engine probes the provider the worker serves with: an option the
+// worker's provider takes reaches the check's own requests.
+func TestCheckEngineProbesWithTheWorkersOwnProvider(t *testing.T) {
+	f := newFakeEngine(t, llm.LocalEngineOllama)
+	if code, stdout, stderr := runCheckEngine(t, f, "OLLAMA_KEEP_ALIVE=7m"); code != 0 {
+		t.Fatalf("code = %d, stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	bodies := f.chatBodies(t)
+	if len(bodies) != 2 {
+		t.Fatalf("the engine saw %d chat requests, want the streaming probe and the tool probe", len(bodies))
+	}
+	for i, body := range bodies {
+		if body["keep_alive"] != "7m" {
+			t.Errorf("request %d keep_alive = %v, want the configured 7m", i+1, body["keep_alive"])
+		}
+	}
 }
 
 func TestCheckEngineFailsAtStepFourWithTheStreamErrorsCode(t *testing.T) {
@@ -793,6 +837,9 @@ func TestToolCallingAcceptsACallOnTheToolCallEventOrOnCompleted(t *testing.T) {
 		{"completed event", []llm.StreamEvent{{Type: "completed", ToolCalls: []llm.ToolCall{ok}}}},
 		{"empty arguments object", []llm.StreamEvent{{Type: "tool_call", ToolCalls: []llm.ToolCall{probeCall("turing_engine_check", map[string]any{})}}, {Type: "completed"}}},
 		{"the right call among others", []llm.StreamEvent{{Type: "tool_call", ToolCalls: []llm.ToolCall{probeCall("other", map[string]any{}), ok}}, {Type: "completed"}}},
+		{"a later call has the arguments the first lacks", []llm.StreamEvent{{Type: "tool_call", ToolCalls: []llm.ToolCall{probeCall("turing_engine_check", nil), ok}}, {Type: "completed"}}},
+		{"the arguments come on a later event", []llm.StreamEvent{{Type: "tool_call", ToolCalls: []llm.ToolCall{probeCall("turing_engine_check", nil)}}, {Type: "tool_call", ToolCalls: []llm.ToolCall{ok}}, {Type: "completed"}}},
+		{"the arguments come on completed", []llm.StreamEvent{{Type: "tool_call", ToolCalls: []llm.ToolCall{probeCall("turing_engine_check", nil)}}, {Type: "completed", ToolCalls: []llm.ToolCall{ok}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := stubbedProbe(tc.events, nil).toolCalling(context.Background()); err != nil {
@@ -811,6 +858,7 @@ func TestToolCallingRejectsWhatIsNotAUsableCall(t *testing.T) {
 		{"text only", []llm.StreamEvent{{Type: "delta", Text: "Sure, ok"}, {Type: "completed"}}, "does not do tool calling"},
 		{"nothing at all", []llm.StreamEvent{{Type: "completed"}}, "does not do tool calling"},
 		{"nil arguments", []llm.StreamEvent{{Type: "tool_call", ToolCalls: []llm.ToolCall{probeCall("turing_engine_check", nil)}}, {Type: "completed"}}, "arguments"},
+		{"nil arguments on every call", []llm.StreamEvent{{Type: "tool_call", ToolCalls: []llm.ToolCall{probeCall("turing_engine_check", nil), probeCall("turing_engine_check", nil)}}, {Type: "completed"}}, "did not parse"},
 		{"another tool", []llm.StreamEvent{{Type: "tool_call", ToolCalls: []llm.ToolCall{probeCall("other", map[string]any{})}}, {Type: "completed"}}, `"other"`},
 		{"an error event", []llm.StreamEvent{{Type: "error", Code: "model_bad_chunk", Message: "arguments are malformed"}}, "model_bad_chunk"},
 		{"a stream that just ends", nil, "ended"},
@@ -866,6 +914,24 @@ func TestStreamingNeedsATextDeltaBeforeCompleted(t *testing.T) {
 func TestToolCallFailureNamesWhatWentWrong(t *testing.T) {
 	if err := toolCallFailure([]llm.ToolCall{probeCall("turing_engine_check", map[string]any{"status": "ok"})}); err != nil {
 		t.Fatalf("toolCallFailure = %v, want nil", err)
+	}
+	ok := probeCall("turing_engine_check", map[string]any{"status": "ok"})
+	for name, calls := range map[string][]llm.ToolCall{
+		"a call without arguments, then one with":          {probeCall("turing_engine_check", nil), ok},
+		"another tool, a call without arguments, then one": {probeCall("other", map[string]any{}), probeCall("turing_engine_check", nil), ok},
+		"one with arguments, then one without":             {ok, probeCall("turing_engine_check", nil)},
+	} {
+		if err := toolCallFailure(calls); err != nil {
+			t.Errorf("toolCallFailure(%s) = %v, want nil", name, err)
+		}
+	}
+	for name, calls := range map[string][]llm.ToolCall{
+		"only calls without arguments":    {probeCall("turing_engine_check", nil), probeCall("turing_engine_check", nil)},
+		"another tool beside one without": {probeCall("other", map[string]any{}), probeCall("turing_engine_check", nil)},
+	} {
+		if err := toolCallFailure(calls); err == nil || !strings.Contains(err.Error(), "did not parse") {
+			t.Errorf("toolCallFailure(%s) = %v, want the arguments failure", name, err)
+		}
 	}
 	if err := toolCallFailure(nil); err == nil || !strings.Contains(err.Error(), "does not do tool calling") {
 		t.Fatalf("toolCallFailure(nil) = %v, want the no-tool-calling failure", err)

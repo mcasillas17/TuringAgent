@@ -68,6 +68,75 @@ func TestBuildProvidersPassesTheKeepAliveToOllama(t *testing.T) {
 	}
 }
 
+// The worker's local provider and the one check-engine probes are built by one
+// function, so an option added to the worker reaches the check too: both send
+// the same request for the same configuration.
+func TestTheWorkersLocalProviderSendsWhatNewLocalProviderSends(t *testing.T) {
+	type sent struct{ authorization, body string }
+	for _, engine := range []string{llm.LocalEngineOllama, llm.LocalEngineOpenAI} {
+		t.Run(engine, func(t *testing.T) {
+			var seen []sent
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				seen = append(seen, sent{r.Header.Get("Authorization"), string(body)})
+				if engine == llm.LocalEngineOllama {
+					_, _ = io.WriteString(w, `{"message":{"role":"assistant","content":"ok"},"done":true,"done_reason":"stop"}`+"\n")
+					return
+				}
+				_, _ = io.WriteString(w, `data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
+			}))
+			t.Cleanup(server.Close)
+			cfg := config.Config{
+				LocalEngine: engine, LocalEngineURL: server.URL, LocalEngineAPIKey: "k",
+				OllamaKeepAlive: "7m", LocalContextWindowTokens: 8192, LocalMaxOutputTokens: 512,
+			}
+			if engine == llm.LocalEngineOllama {
+				cfg.LocalEngineAPIKey = ""
+			} else {
+				cfg.LocalEngineURL += "/v1"
+			}
+			providers, err := buildProviders(cfg, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			local, err := newLocalProvider(cfg, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, provider := range []llm.Provider{providers[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA], local} {
+				events, err := provider.StreamChat(context.Background(), llm.ChatRequest{
+					Model: "m", Messages: []llm.ChatMessage{{Role: "user", Content: "hi"}}, MaxTokens: 64,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for range events {
+				}
+			}
+			if len(seen) != 2 || seen[0] != seen[1] {
+				t.Fatalf("buildProviders' local provider and newLocalProvider sent %+v, want the same request", seen)
+			}
+			if engine == llm.LocalEngineOllama && !strings.Contains(seen[0].body, `"keep_alive":"7m"`) {
+				t.Fatalf("request body = %s, want the configured keep_alive", seen[0].body)
+			}
+			if engine == llm.LocalEngineOpenAI && seen[0].authorization != "Bearer k" {
+				t.Fatalf("Authorization = %q, want the configured key", seen[0].authorization)
+			}
+		})
+	}
+}
+
+func TestNewLocalProviderNamesTheLocalEngineWhenItCannotBuildOne(t *testing.T) {
+	cfg := config.Config{LocalEngine: llm.LocalEngineOllama, LocalEngineURL: "https://api.example.com"}
+	_, err := newLocalProvider(cfg, nil)
+	if err == nil || !strings.Contains(err.Error(), "configure the local engine") {
+		t.Fatalf("newLocalProvider = %v, want an error naming the local engine", err)
+	}
+	if _, err := buildProviders(cfg, nil); err == nil || !strings.Contains(err.Error(), "configure the local engine") {
+		t.Fatalf("buildProviders = %v, want the same error", err)
+	}
+}
+
 // Each deprecated setting the configuration fell back to is logged once at
 // startup, naming its replacement.
 func TestReportDeprecatedKeysLogsEachOnce(t *testing.T) {

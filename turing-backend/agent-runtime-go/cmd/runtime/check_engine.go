@@ -69,13 +69,9 @@ func checkEngine(environ []string, progress io.Writer) ([]string, error) {
 	}
 	client := newEngineClient()
 	defer client.CloseIdleConnections()
-	provider, err := llm.NewLocal(llm.LocalOptions{
-		Engine: cfg.LocalEngine, BaseURL: cfg.LocalEngineURL, APIKey: cfg.LocalEngineAPIKey,
-		KeepAlive: cfg.OllamaKeepAlive, Client: client,
-		ContextWindowTokens: cfg.LocalContextWindowTokens, MaxOutputTokens: cfg.LocalMaxOutputTokens,
-	})
+	provider, err := newLocalProvider(cfg, client)
 	if err != nil {
-		return nil, fmt.Errorf("configure the local engine: %w", err)
+		return nil, err
 	}
 	probe := &engineProbe{
 		engine:   cfg.LocalEngine,
@@ -146,7 +142,7 @@ func (p *engineProbe) modelPresent(ctx context.Context) (string, error) {
 	names, err := listedNames(p.engine, body)
 	if err != nil {
 		return "", failure{
-			reason: "the engine's model list is not what a " + p.engine + " server sends",
+			reason: fmt.Sprintf("the engine's model list is not in the %q format", p.engine),
 			fix:    "check that TURING_LOCAL_ENGINE matches the server at TURING_LOCAL_ENGINE_URL",
 		}
 	}
@@ -236,24 +232,28 @@ func (p *engineProbe) toolCalling(ctx context.Context) (string, error) {
 	return "", p.streamEnded(ctx, completionTimeout)
 }
 
-// toolCallFailure judges the calls the model made: nil when one names the
-// probe's tool with parsed arguments.
+// toolCallFailure judges the calls the model made: nil when any call names the
+// probe's tool with parsed arguments, whatever else was called beside it.
 func toolCallFailure(calls []llm.ToolCall) error {
 	other := ""
+	unparsed := false
 	for _, call := range calls {
-		if call.Name != probeToolName {
+		switch {
+		case call.Name != probeToolName:
 			if other == "" {
 				other = call.Name
 			}
-			continue
+		case call.Arguments != nil:
+			return nil
+		default:
+			unparsed = true
 		}
-		if call.Arguments == nil {
-			return failure{
-				reason: "the tool call's arguments did not parse as a JSON object",
-				fix:    "the server's tool-call parsing is not working; check its tool-calling option, or use another model",
-			}
+	}
+	if unparsed {
+		return failure{
+			reason: "the tool call's arguments did not parse as a JSON object",
+			fix:    "the server's tool-call parsing is not working; check its tool-calling option, or use another model",
 		}
-		return nil
 	}
 	if len(calls) == 0 {
 		return failure{
