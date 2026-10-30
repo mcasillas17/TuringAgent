@@ -2,7 +2,7 @@
 
 TuringAgent is a local-first AI orchestration platform for running a private assistant stack on your own machine. It pairs a Flutter client with a Go gRPC backend that owns chat sessions, model routing, streaming events, tool execution, approvals, and audit state.
 
-The project is designed for local development first: secrets stay in your local `.env`, data is stored under `turing-backend/data/`, file tools are constrained to `turing-backend/sandbox/`, and the memory vault — the persona, profile, beliefs and proposals Turing keeps as plain Markdown you can open in Obsidian — lives under `turing-backend/memory/`, which is ignored by git except for its `.gitkeep`. The specialists Turing will be able to hand work to are files too, one `turing-backend/team/<id>/AGENT.md` each, also ignored by git except for its `.gitkeep`.
+The project is designed for local development first: secrets stay in your local `.env`, data is stored under `turing-backend/data/`, file tools are constrained to `turing-backend/sandbox/`, and the memory vault — the persona, profile, beliefs and proposals Turing keeps as plain Markdown you can open in Obsidian — lives under `turing-backend/memory/`, which is ignored by git except for its `.gitkeep`. The specialists Turing can hand work to (experimental, off by default) are files too, one `turing-backend/team/<id>/AGENT.md` each, also ignored by git except for its `.gitkeep`.
 
 ## What it does
 
@@ -77,7 +77,7 @@ vendor separately when needed.
 
 ## Turing's team
 
-Turing is the orchestrator agent. The specialists it will hand work to are
+Turing is the orchestrator agent. The specialists it can hand work to are
 profiles, one Markdown file each at `turing-backend/team/<id>/AGENT.md`: front
 matter names the model, tool patterns (the tool name without its server:
 `files.read`, not `files/files.read`), skills, memory access
@@ -91,8 +91,9 @@ reference format to copy. A fresh install gets three, from
 `turing-backend/scripts/team-templates/`:
 
 - 💻 **Dev** — `files.*`, `system.*` and `github.*`. GitHub calls leave the
-  machine, so `github.*` is declared but withheld until per-delegation consent
-  ships; once GitHub is connected, its card lists those tools under Withheld.
+  machine, so once GitHub is connected its card says it asks you before each
+  task, and each task it is given waits for you to allow those tools or run
+  without them.
 - 📨 **Inbox** — `gmail.*` only, and it requires it. No Gmail tools exist yet:
   its card says why from the start, and once you turn it on and grant it, it
   shows Unavailable.
@@ -149,8 +150,18 @@ When the turn and every task it delegated have finished, the results are added
 to the conversation and Turing answers from them in a follow-up reply. Each
 result is cut to `TURING_DELEGATION_RESULT_MAX_BYTES` (default 8192), and the
 cut is marked. A turn that fails or that you cancel stops the tasks it started,
-and a note in the conversation says whose work was stopped. The app shows the
-results and that note as plain messages, with no delegation cards yet.
+and a note in the conversation says whose work was stopped. In the app, each
+task is a card under the turn that asked for it, with who is doing what and how
+it is going, **Cancel** while it runs and **View work** to read the
+specialist's conversation. A task's approval is decided on its card. The
+results show as a collapsed "Results from the team" row, Turing's answer from
+them is marked with who helped, and a note that work was stopped is a status
+line. Reopening a conversation rebuilds the cards. A task whose specialist
+would use a tool that leaves the machine, such as GitHub, waits on its card
+until you decide for that task alone: **Allow…** shows where its tool calls may
+go and what may leave, as a send's consent does, and **Run without** runs it
+with its local tools — or, when the specialist requires those tools, **Decline**
+stops it. Turing's own consent never carries over to a task.
 Profiles can be turned on and granted either way.
 
 The name `team` belongs to Turing's delegation tool, `team.delegate`. Registering
@@ -170,13 +181,22 @@ Remove it, or that tool, and the next worker registration restores the name. See
 - Go 1.26+ — all three modules (root, `turing-backend/mcp-files` and
   `turing-backend/mcp-system`) declare `go 1.26.0`, so 1.26 is the floor for
   building every module with one toolchain
-- Flutter, on a release bundling Dart 3.10.4 or newer (`turing_app`'s
-  pubspec declares `sdk: ^3.10.4`; `flutter pub get` fails below it). CI
-  tracks the `stable` channel rather than pinning a version.
-- Ollama running on the host for the default local model path
+- Flutter, on a release bundling Dart 3.12.0 or newer within Dart 3.x:
+  the current [`cupertino_icons` 2.0.0 dependency](https://pub.dev/api/packages/cupertino_icons/versions/2.0.0)
+  requires `^3.12.0`. The app-declared Dart SDK constraint remains `^3.10.4`
+  in `turing-client/turing_app/pubspec.yaml`; that declaration alone is not
+  sufficient to resolve the current dependencies. CI tracks the `stable`
+  channel rather than pinning a Flutter version.
+- A local inference engine on the host: Ollama for the default path, or any
+  OpenAI-compatible server on the same machine (ds4, llama.cpp's
+  `llama-server`, LM Studio, Lemonade, vLLM) with `TURING_LOCAL_ENGINE=openai`
 - A non-root host account for backend initialization and Compose launches
 
 By default, containers reach Ollama at `http://host.docker.internal:11434`.
+On Linux, `host.docker.internal` is the Docker bridge's gateway, so the
+engine must listen there, not only on `127.0.0.1`; avoid `0.0.0.0` on a
+shared network. The app's model picker shows the local route as
+`Local · <engine>`, and Settings names the engine and model serving it.
 
 ## Install and run
 
@@ -199,18 +219,26 @@ secured to `0600` and never rewritten), and
 prints the Flutter client API key. It fails rather than changing ownership or
 permissions when existing sandbox content is inaccessible. Do not commit `.env`.
 
-Start the backend stack:
+Start the backend stack with the `turing` command, which lives next to
+`init.sh` in `turing-backend/`:
 
 ```bash
-./scripts/dev.sh
+./turing start     # build the images the first time, start Turing, and wait until it is healthy
+./turing status    # one-screen health report; exits 1 when a check fails
+./turing connect   # the backend URL and the key the app asks for
+./turing config    # change settings from a menu, without editing .env
 ```
 
-This builds and runs the orchestrator, agent runtime, and MCP servers through
+`./turing start` builds and runs the orchestrator, agent runtime, and MCP servers through
 Docker Compose. Compose publishes the public gRPC API on `127.0.0.1` only;
 its host port defaults to `3000` and can be changed with
 `ORCHESTRATOR_PUBLIC_PORT`. The orchestrator listens on all interfaces inside
 its container; the host restriction comes from Compose's port publication,
 not an in-process loopback check.
+
+`./scripts/dev.sh` is kept as the foreground development loop: it runs
+`init.sh`, then builds the stack and runs it in your terminal with its log
+output. Use `./turing` to run Turing in the background.
 
 The supported client setup runs on that same host. A LAN/Tailscale client URL
 alone does not expose the loopback service. iOS/Android scaffolding and
@@ -219,7 +247,7 @@ non-loopback identity/TLS remain future work, and Android's main manifest
 lacks network permission. See the [Flutter deployment limits](turing-client/turing_app/README.md#run-locally);
 do not widen the host publication or add a public tunnel as a shortcut.
 
-Use the repository scripts rather than invoking this Compose file directly.
+Use `./turing` or the repository scripts rather than invoking this Compose file directly.
 `scripts/compose.sh` validates and injects the current non-root host UID/GID;
 this prevents stale `.env` values or exported `HOST_UID`/`HOST_GID` variables
 from selecting the identity used for the data, skills, memory, team, and sandbox
@@ -245,7 +273,8 @@ be evaluated on `down`, `stop` and `rm` too, and teardown has to work on the
 broken install it is being run to fix — including the `down --remove-orphans`
 that `scripts/reset.sh` runs before it deletes local data.
 
-In another terminal, from the repository root, run the Flutter app:
+Then, from the repository root, run the Flutter app on the machine that runs
+Turing (in another terminal if you started the stack with `./scripts/dev.sh`):
 
 ```bash
 cd turing-client/turing_app
@@ -256,10 +285,77 @@ flutter run -d macos
 On first launch, enter:
 
 - **Backend URL:** `http://localhost:3000`
-- **API key:** the `Flutter client API key` printed by `./scripts/init.sh`
+- **API key:** the `Flutter client API key` printed by `./scripts/init.sh`, which
+  `./turing connect` shows again at any time
 
 The sandboxed macOS builds include the outbound-network entitlement required to
 reach the local backend.
+
+### Linux desktop client
+
+On a Linux server, run the Linux desktop app on the server itself: until device
+pairing (SEC-001) ships, Turing accepts the app only from the machine it runs
+on, so a Mac or phone cannot reach a headless server. Use `-d linux` instead of
+`-d macos`:
+
+```bash
+cd turing-client/turing_app
+flutter pub get
+flutter run -d linux
+```
+
+- **To build:** Flutter's Linux toolchain, plus the development packages
+  `clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev`. On Debian
+  or Ubuntu:
+  `sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev`.
+  `libsecret-1-dev` is what `flutter_secure_storage` links against, and CI
+  builds the Linux app (`flutter build linux`) with exactly these packages.
+- **To run:** a Secret Service keyring, for example `gnome-keyring`, running
+  and unlocked in the desktop session, because `flutter_secure_storage` keeps
+  the API key there. Without one, the app cannot save its key.
+
+`flutter run -d linux` needs a graphical session on the server. The CI job
+builds the app but does not launch it.
+
+### The `turing` command
+
+`./turing` builds a small Go program each time it runs (it needs Go 1.26+, and
+Go's build cache keeps later runs quick). It refuses to run as root, because
+the files it manages belong to the account that ran `init.sh`. Symlink it onto
+your `PATH` to run it from anywhere. `./turing help` prints the full usage.
+
+| Command | What it does |
+|---|---|
+| `./turing start [--build]` | Starts Turing and waits until it is healthy. `--build` rebuilds the images first; run it after pulling a new version. |
+| `./turing stop` | Stops Turing. It stays stopped after a reboot. |
+| `./turing restart [--build] [--yes]` | Stops, then starts. This ends a reply in progress, so it asks first. |
+| `./turing logs [service] [-f]` | Shows a service's recent log; `-f` follows it. The service is `orchestrator`, `runtime`, `files` or `system`; the default is all four. |
+| `./turing status` | One-screen health report. It never prints a secret, and exits 1 when a check fails. |
+| `./turing connect [--rotate-key] [--yes]` | Shows the backend URL and the key for the app. `--rotate-key` makes a new key and, when you agree, applies it by restarting the orchestrator. `scripts/rotate-client-key.sh` now calls this. |
+| `./turing config` | Changes settings from a menu, at a terminal. |
+| `./turing config show`, `get KEY` | Lists the settings you can change, or prints one. A secret shows only as set or not set, and is never printed. |
+| `./turing config set KEY [VALUE]`, `unset KEY` | Changes one setting, as described below. `--no-apply` saves without restarting, and `--yes` answers the questions. `KEY` may be `TURING_AGENT_API_KEYS.<name>` for one agent's key. |
+
+`turing config` is how settings are changed without editing `.env`:
+
+- **A secret is never taken on the command line**, where it would reach shell
+  history and the process list. It is asked for with typing hidden, or read
+  from standard input with `--stdin`.
+- **Each change is checked first.** The orchestrator and the agent runtime
+  each run their own `check-config` on the new value, the way startup would
+  load it, and `.env` is written only after both accept it. A refusal names the
+  setting and nothing is saved.
+- **Applying a change recreates the containers it affects** and waits for them
+  to be healthy. If they do not come up, it offers to restore the previous
+  settings and apply them again.
+
+The command never opens the database. It talks to the orchestrator only as a
+client, for its health check.
+
+`setup` and `engine` are listed in `./turing help` but are not available yet.
+Nor does this version reach the server from another machine: until SEC-001, the
+app runs on the machine that runs Turing, and `./turing connect` run over SSH
+says so.
 
 ## Verify the stack
 
@@ -337,6 +433,23 @@ request are measured separately; this does not evaluate generated answers.
 ## Configuration
 
 Backend configuration lives in `turing-backend/.env`, copied from `turing-backend/.env.example`.
+`./turing config` changes a setting without editing that file by hand, and
+checks it with the services before saving it (see [the `turing` command](#the-turing-command)).
+
+To check a change you made by hand before starting the stack, run each service's own check
+from `turing-backend/`:
+
+```bash
+./scripts/compose.sh run --rm --no-deps turing-orchestrator check-config
+./scripts/compose.sh run --rm --no-deps turing-agent-runtime-general check-config
+```
+
+Each check loads the configuration the way startup does, then stops: it opens
+no database or file and contacts nothing. It exits non-zero and names the
+setting it refuses. Deprecated names are reported as warnings. It needs images
+built from this version or later, because an older image ignores the argument
+and starts the service, so rebuild first (`./scripts/compose.sh build`). An
+image that can check carries the `org.turing.checks` label.
 
 Common values:
 
@@ -352,14 +465,16 @@ Common values:
 | Approval-consumer scope | `ApprovalService.ConsumeApproval`, `FinalizeSandboxArtifact`, and `CheckSessionCapability`; never runtime-only methods |
 | `TURING_APPROVAL_TIMEOUT_MS` / `TURING_APPROVAL_WAIT_TIMEOUT_MS` | Approval lifetime and the longer runtime observation bound (defaults: 65s / 71s) |
 | `TURING_TOOL_TIMEOUT_MS` / `TURING_TOOL_TOTAL_TIMEOUT_MS` | Per-request MCP timeout and whole-tool lifecycle timeout (defaults: 30s / 180s) |
-| `TURING_QUEUE_NO_WORKER_TIMEOUT_MS` / `TURING_QUEUE_MAX_WAIT_MS` | How long an already-accepted message may sit in the queue: while nothing connected can run it (default 15m), and in total across requeues (default 12h). Either may be `0` to switch that bound off. These bound waiting only — they are not the model, approval, lease or retry timeouts, and a message that never started has consumed none of those. Deadlines are noticed on `TURING_JOB_REAPER_INTERVAL_MS`, and setting that to `0` turns both bounds off whatever these say. See [bounded queue waiting](docs/architecture/queue-wait.md) |
+| `TURING_QUEUE_NO_WORKER_TIMEOUT_MS` / `TURING_QUEUE_MAX_WAIT_MS` | How long an already-accepted message may sit in the queue: while nothing connected can run it (default 15m), and in total across requeues (default 12h). Either may be `0` to switch that bound off — except the total while `TURING_AGENT_TEAM_ENABLED` is true or a delegated task still waits for your consent, since it is what ends one left unanswered. These bound waiting only — they are not the model, approval, lease or retry timeouts, and a message that never started has consumed none of those. Deadlines are noticed on `TURING_JOB_REAPER_INTERVAL_MS`, and setting that to `0` turns both bounds off whatever these say (also refused while delegation is on or a task waits for your consent). See [bounded queue waiting](docs/architecture/queue-wait.md) |
 | `TURING_QUEUE_TIMEOUT_POLICY` | What happens when a queue bound is reached: `fail` (default) or `cancel`. Both are final; there is no paused state to resume from |
 | `HOST_UID` / `HOST_GID` | Current canonical non-root host IDs, managed by `init.sh` and overridden safely by `scripts/compose.sh` at launch |
 | `ORCHESTRATOR_GRPC_ADDR` | Internal orchestrator gRPC address, usually `turing-orchestrator:3001` |
-| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local model endpoint and default model. The URL must use localhost, `host.docker.internal`, or a loopback IP literal; remote Ollama hosts are refused rather than treated as local |
+| `TURING_LOCAL_ENGINE` | The local route's engine protocol: `ollama` (default) or `openai`, for any OpenAI-compatible server on this machine. Inference alone needs no remote-egress consent; enabled remote MCP or connected-account tools still make each send ask. Any other engine value stops startup |
+| `TURING_LOCAL_ENGINE_URL` / `TURING_LOCAL_MODEL` | The engine's address and the local model. The URL must use localhost, `host.docker.internal`, or a loopback IP literal; anything else is refused rather than treated as local. For `ollama` it defaults to `http://host.docker.internal:11434`; for `openai` it is required and is the base the API hangs off, such as `http://host.docker.internal:8000/v1`. Replaces `OLLAMA_BASE_URL` / `OLLAMA_MODEL`, which still work while the new key is empty and are logged as deprecated |
+| `TURING_LOCAL_ENGINE_API_KEY` / `TURING_LOCAL_ENGINE_LABEL` | A bearer value for a server that wants one (`openai` only; refused for `ollama`), and the engine's display name, such as `ds4` (default `Ollama` or `OpenAI-compatible`; 1–64 printable bytes). The label is shown in the app and never routed on |
 | `OLLAMA_KEEP_ALIVE` | How long Ollama holds the model in memory after a reply (default `2m`). Accepts a duration (`30s`, `2m`) or whole seconds (`-1` = forever); integer spellings are canonicalized before JSON encoding. Sent per request, so it does not depend on Ollama's own env var. Keep it above `TURING_APPROVAL_WAIT_TIMEOUT_MS` or the model unloads mid-run |
-| `OLLAMA_CONTEXT_WINDOW_TOKENS` | Local context cap and advertised routing ceiling (default `32768`). Must be `1`–`16777216`; invalid values fail startup. Every request sends an explicit `options.num_ctx` rounded up to a stable power-of-two bucket covering admitted prompt bytes plus output reserve, never above this cap. Small requests avoid the maximum allocation, nearby turns reuse the same runner, and the runtime never relies on the host default |
-| `OLLAMA_MAX_OUTPUT_TOKENS` | Answer reservation inside the Ollama window (default `2048`). Must be positive and smaller than the window; sent as `options.num_predict`. A `length` stop emits a durable run notice |
+| `TURING_LOCAL_CONTEXT_WINDOW_TOKENS` | Local context cap and advertised routing ceiling (default `32768`; replaces `OLLAMA_CONTEXT_WINDOW_TOKENS`). Must be `1`–`16777216`; invalid values fail startup. On Ollama every request sends an explicit `options.num_ctx` rounded up to a stable power-of-two bucket covering admitted prompt bytes plus output reserve, never above this cap. Small requests avoid the maximum allocation, nearby turns reuse the same runner, and the runtime never relies on the host default. For an OpenAI-compatible engine keep it at or below the context the server was started with |
+| `TURING_LOCAL_MAX_OUTPUT_TOKENS` | Answer reservation inside the local window (default `2048`; replaces `OLLAMA_MAX_OUTPUT_TOKENS`). Must be positive and smaller than the window; sent as Ollama's `options.num_predict` or an OpenAI-compatible engine's `max_tokens`. A `length` stop emits a durable run notice |
 | `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL` | Optional OpenAI-compatible model configuration. A keyed non-loopback URL must use HTTPS; plaintext is limited to exact localhost/loopback IP development endpoints, and redirects are refused |
 | `OPENAI_CONTEXT_WINDOW_TOKENS` | Local window and advertised routing ceiling for OpenAI-compatible models and routed external agents (default `32768`, same validation). Match it to the configured model; it is enforced locally and is not sent as Ollama's `num_ctx` |
 | `OPENAI_MAX_OUTPUT_TOKENS` | Answer reservation for OpenAI-compatible requests (default `2048`); sent as `max_completion_tokens` for o1/o3/o4 and GPT-5 model families, and `max_tokens` otherwise. A `length` stop emits the same durable notice |
@@ -402,8 +517,8 @@ orchestrator remains stopped, use a SQLite client to run
 
 ## Troubleshooting
 
-- **Backend is not reachable:** check that Docker Compose is running and port `3000` is free.
-- **Authentication fails:** confirm the Flutter API key matches `TURING_CLIENT_API_KEY` in `turing-backend/.env`.
+- **Backend is not reachable:** run `./turing status`, which names the check that fails; `./turing logs` shows a service's recent log. Otherwise check that Docker Compose is running and port `3000` is free.
+- **Authentication fails:** confirm the Flutter API key matches `TURING_CLIENT_API_KEY` in `turing-backend/.env`; `./turing connect` shows it. If you changed the key but did not restart, `./turing restart` makes the orchestrator use it.
 - **No model response:** ensure Ollama is running on the host and the configured model is available.
 - **Remote send is refused:** confirm the per-run disclosure in the client. If
   configuration fails at startup, use HTTPS for keyed non-loopback

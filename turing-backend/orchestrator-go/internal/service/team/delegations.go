@@ -78,6 +78,9 @@ func delegationProto(record repository.DelegationRecord) (*turingv1.Delegation, 
 		Joined:            record.Joined,
 		ContinuationRunId: record.ContinuationRunID,
 		CreatedAt:         timestamppb.New(createdAt),
+		EgressTools:       record.EgressTools,
+		EgressConsent:     record.EgressConsent,
+		EgressRequired:    record.EgressRequired,
 		Summary:           record.Summary,
 	}
 	if record.FinishedAt != "" {

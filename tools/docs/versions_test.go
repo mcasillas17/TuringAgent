@@ -282,20 +282,17 @@ func TestDocumentedContainerImagesMatchTheDockerfiles(t *testing.T) {
 	}
 }
 
-// TestDocumentedDartFloorMatchesThePubspec guards the one requirement the docs
-// carried unversioned the longest.
-func TestDocumentedDartFloorMatchesThePubspec(t *testing.T) {
+// TestDocumentedDartConstraintMatchesThePubspec checks the app declaration,
+// not the stricter SDK requirements its dependencies can impose.
+func TestDocumentedDartConstraintMatchesThePubspec(t *testing.T) {
 	pubspec := repoFile(t, "turing-client/turing_app/pubspec.yaml")
 	constraint := extract(t, pubspec, "pubspec.yaml", `(?m)^\s+sdk:\s*(\^[0-9]+\.[0-9]+\.[0-9]+)$`)
 
 	if claude := repoFile(t, "CLAUDE.md"); !attributes(claude, "Dart", constraint) {
 		t.Errorf("CLAUDE.md does not attribute the Dart SDK constraint %q to Dart (from pubspec.yaml)", constraint)
 	}
-	// README states it as a bare version rather than a caret constraint, since
-	// it is prose for a human installing Flutter rather than a table entry.
-	bare := strings.TrimPrefix(constraint, "^")
-	if readme := repoFile(t, "README.md"); !attributes(readme, "Dart", bare) {
-		t.Errorf("README.md does not attribute the Dart SDK floor %q to Dart (from pubspec.yaml)", bare)
+	if readme := repoFile(t, "README.md"); !attributes(readme, "Dart", constraint) {
+		t.Errorf("README.md does not attribute the app-declared Dart SDK constraint %q to Dart (from pubspec.yaml)", constraint)
 	}
 }
 

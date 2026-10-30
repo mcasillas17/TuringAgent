@@ -43,6 +43,13 @@ type DelegationRecord struct {
 	FinishedAt        string
 	// Summary is one line in the orchestrator's words, never a model's.
 	Summary string
+	// EgressTools are the tools that leave the machine the task asked
+	// consent for; EgressConsent is where that consent stands (pending,
+	// granted, declined, or empty when none was needed); EgressRequired says
+	// declining ends the task.
+	EgressTools    []string
+	EgressConsent  string
+	EgressRequired bool
 
 	outcomeReason string
 }
@@ -64,21 +71,25 @@ const delegationViewSelect = `
 			ORDER BY a.created_at DESC, a.id DESC LIMIT 1), '') ELSE '' END,
 		d.joined,
 		COALESCE((SELECT c.id FROM agent_runs c WHERE c.continues_run_id = d.parent_run_id), ''),
-		d.created_at, COALESCE(child.finished_at, '')
+		d.created_at, COALESCE(child.finished_at, ''),
+		d.egress_tools_json, d.egress_consent, d.egress_required
 	FROM delegations d
 	JOIN agent_runs child ON child.id = d.child_run_id
 	LEFT JOIN jobs job ON job.run_id = child.id`
 
 func scanDelegationRecord(scan func(...any) error) (DelegationRecord, error) {
 	var record DelegationRecord
-	var status string
+	var status, egressToolsJSON string
 	if err := scan(&record.ID, &record.ParentSessionID, &record.ParentRunID, &record.ChildSessionID, &record.ChildRunID,
 		&record.ProfileID, &record.DisplayName, &record.Emoji, &record.Task, &status, &record.outcomeReason,
 		&record.ErrorCode, &record.ApprovalID, &record.Joined, &record.ContinuationRunID,
-		&record.CreatedAt, &record.FinishedAt); err != nil {
+		&record.CreatedAt, &record.FinishedAt, &egressToolsJSON, &record.EgressConsent, &record.EgressRequired); err != nil {
 		return DelegationRecord{}, err
 	}
-	record.State = displayedState(status)
+	if err := json.Unmarshal([]byte(egressToolsJSON), &record.EgressTools); err != nil {
+		return DelegationRecord{}, err
+	}
+	record.State = displayedState(status, record.EgressConsent)
 	record.Summary = delegationSummary(record.Emoji, record.DisplayName, record.State, record.outcomeReason, record.ErrorCode)
 	return record, nil
 }
@@ -150,11 +161,16 @@ func delegationByChildRunTx(ctx context.Context, tx *sql.Tx, childRunID string) 
 	return record, err == nil, err
 }
 
-// displayedState is a run's status as a card shows it: a run whose worker is
-// being recovered is still working, as far as anyone watching can tell.
-func displayedState(status string) string {
-	if status == lifecycleRecovering {
+// displayedState is a task's run status as a card shows it, given where its
+// consent stands: a run whose worker is being recovered is still working, as
+// far as anyone watching can tell, and a queued one held for consent waits
+// for the user.
+func displayedState(status, consent string) string {
+	switch {
+	case status == lifecycleRecovering:
 		return lifecycleRunning
+	case status == lifecycleQueued && consent == egressConsentPending:
+		return DelegationWaitingConsent
 	}
 	return status
 }
@@ -164,6 +180,8 @@ func delegationStatePhrase(state, outcomeReason, code string) string {
 	switch state {
 	case lifecycleQueued:
 		return "is queued"
+	case DelegationWaitingConsent:
+		return "is waiting for your consent"
 	case lifecycleRunning:
 		return "is working"
 	case lifecycleWaitingApproval:
@@ -176,6 +194,8 @@ func delegationStatePhrase(state, outcomeReason, code string) string {
 			return "was cancelled by you"
 		case code == runoutcome.CodeParentRunEnded:
 			return "was stopped because Turing's turn ended"
+		case code == runoutcome.CodeEgressConsentDeclined:
+			return "was not run because you declined the tools it needs"
 		}
 		return "was cancelled (" + code + ")"
 	default:
@@ -198,7 +218,9 @@ func specialistName(emoji, displayName string) string {
 // being deleted its stream takes no new event, so nothing is reported; the
 // transition itself still commits.
 func delegationUpdatedTx(ctx context.Context, tx *sql.Tx, runID, from, to, at string) ([]Event, error) {
-	if displayedState(from) == displayedState(to) {
+	// A run's transition leaves its consent as it was, so only the status
+	// can change what the card shows.
+	if displayedState(from, "") == displayedState(to, "") {
 		return nil, nil
 	}
 	return reportDelegationTx(ctx, tx, runID, at)
@@ -232,6 +254,9 @@ func reportDelegationTx(ctx context.Context, tx *sql.Tx, runID, at string) ([]Ev
 		"emoji":          record.Emoji,
 		"state":          record.State,
 		"summary":        record.Summary,
+		"egressTools":    append([]string{}, record.EgressTools...),
+		"egressConsent":  record.EgressConsent,
+		"egressRequired": record.EgressRequired,
 	}
 	if record.ApprovalID != "" {
 		payload["approvalId"] = record.ApprovalID

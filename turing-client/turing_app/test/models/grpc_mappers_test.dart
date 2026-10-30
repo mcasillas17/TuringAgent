@@ -68,6 +68,41 @@ void main() {
     );
   });
 
+  test('maps DELEGATION_* event types to their dotted strings', () {
+    expect(
+      GrpcMappers.eventTypeToString(
+        eventpb.TuringEventType.TURING_EVENT_TYPE_DELEGATION_STARTED,
+      ),
+      'delegation.started',
+    );
+    expect(
+      GrpcMappers.eventTypeToString(
+        eventpb.TuringEventType.TURING_EVENT_TYPE_DELEGATION_UPDATED,
+      ),
+      'delegation.updated',
+    );
+    expect(
+      GrpcMappers.eventTypeToString(
+        eventpb.TuringEventType.TURING_EVENT_TYPE_DELEGATION_FINISHED,
+      ),
+      'delegation.finished',
+    );
+  });
+
+  test('a message keeps its content type', () {
+    final mapped = GrpcMappers.messageToModel(
+      commonpb.Message(
+        messageId: 'msg_join',
+        role: commonpb.MessageRole.MESSAGE_ROLE_SYSTEM,
+        content: 'Results',
+        contentType: 'delegation_results',
+      ),
+    );
+
+    expect(mapped.role, 'system');
+    expect(mapped.contentType, 'delegation_results');
+  });
+
   test('maps SESSION_DELETED to the terminal session event string', () {
     expect(
       GrpcMappers.eventTypeToString(

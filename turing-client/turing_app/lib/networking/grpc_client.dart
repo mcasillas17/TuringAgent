@@ -31,6 +31,7 @@ import '../generated/turing/v1/telemetry.pb.dart' as telemetrypb;
 import '../generated/turing/v1/telemetry.pbgrpc.dart' as telemetrygrpc;
 import '../models/agent_descriptor.dart';
 import '../models/agent_profile.dart';
+import '../models/delegation.dart';
 import '../models/approval.dart';
 import '../models/automation.dart';
 import '../models/external_agent.dart';
@@ -39,6 +40,7 @@ import '../models/integration.dart';
 import '../models/memory.dart';
 import '../models/message.dart';
 import '../models/mcp_server.dart';
+import '../models/model_provider.dart';
 import '../models/remote_egress.dart';
 import '../models/run_cancellation.dart';
 import '../models/run_lifecycle.dart';
@@ -471,7 +473,7 @@ class TuringGrpcApi
   Future<Map<String, dynamic>> sendMessage({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     String? idempotencyKey,
   }) {
     return _sendMessage(
@@ -486,7 +488,7 @@ class TuringGrpcApi
   Future<RemoteEgressDisclosure?> prepareRemoteEgress({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     required String idempotencyKey,
   }) async {
     final response = await _chat.prepareRemoteEgress(
@@ -501,7 +503,12 @@ class TuringGrpcApi
       options: grpc.CallOptions(timeout: _startupUnaryTimeout),
     );
     if (!response.hasDisclosure()) return null;
-    final disclosure = response.disclosure;
+    return _disclosureFromProto(response.disclosure);
+  }
+
+  RemoteEgressDisclosure _disclosureFromProto(
+    commonpb.RemoteEgressDisclosure disclosure,
+  ) {
     return RemoteEgressDisclosure(
       challenge: disclosure.challenge,
       provider: GrpcMappers.modelProviderToString(disclosure.provider),
@@ -596,7 +603,7 @@ class TuringGrpcApi
   Future<Map<String, dynamic>> sendMessageWithRemoteEgressConsent({
     required String sessionId,
     required String content,
-    String modelProvider = 'ollama',
+    String modelProvider = localModelProvider,
     required String idempotencyKey,
     required RemoteEgressConsent consent,
   }) {
@@ -1219,6 +1226,76 @@ class TuringGrpcApi
         teampb.ListAgentProfilesRequest(),
       );
       return response.profiles.map(GrpcMappers.agentProfileToModel).toList();
+    });
+  }
+
+  @override
+  Future<List<Delegation>> listDelegations({required String parentSessionId}) {
+    return _statusCall('team', () async {
+      // Chat startup waits on this read, like history.
+      final response = await _team.listDelegations(
+        teampb.ListDelegationsRequest(parentSessionId: parentSessionId),
+        options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+      );
+      return response.delegations.map(GrpcMappers.delegationToModel).toList();
+    });
+  }
+
+  @override
+  Future<LocalEngine?> getLocalEngine() async {
+    final response = await _sessions.getConfig(
+      sessionpb.GetConfigRequest(),
+      options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+    );
+    for (final provider in response.providers) {
+      // The backend reports a provider enabled exactly when it lists models.
+      if (provider.provider != commonpb.ModelProvider.MODEL_PROVIDER_OLLAMA ||
+          provider.models.isEmpty) {
+        continue;
+      }
+      final model = provider.models.firstWhere(
+        (candidate) => candidate.model == provider.defaultModel,
+        orElse: () => provider.models.first,
+      );
+      return LocalEngine(label: model.engine, model: model.model);
+    }
+    return null;
+  }
+
+  @override
+  Future<RemoteEgressDisclosure> prepareDelegationEgress({
+    required String delegationId,
+  }) {
+    return _statusCall('team', () async {
+      final response = await _team.prepareDelegationEgress(
+        teampb.PrepareDelegationEgressRequest(delegationId: delegationId),
+        options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+      );
+      return _disclosureFromProto(response.disclosure);
+    });
+  }
+
+  @override
+  Future<Delegation> decideDelegationEgress({
+    required String delegationId,
+    RemoteEgressConsent? consent,
+  }) {
+    return _statusCall('team', () async {
+      final response = await _team.decideDelegationEgress(
+        teampb.DecideDelegationEgressRequest(
+          delegationId: delegationId,
+          consent: consent == null
+              ? null
+              : commonpb.RemoteEgressConsent(
+                  challenge: consent.challenge,
+                  acknowledged: true,
+                  acknowledgedDataCategories: consent.acknowledgedDataCategories
+                      .map(_egressCategoryToProto),
+                ),
+        ),
+        options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+      );
+      return GrpcMappers.delegationToModel(response);
     });
   }
 

@@ -7,6 +7,7 @@ class Message {
     this.runState,
     required this.role,
     required this.content,
+    this.contentType = 'text',
     required this.sequence,
     required this.createdAt,
   });
@@ -16,6 +17,10 @@ class Message {
   final RunState? runState;
   final String role;
   final String content;
+
+  /// What kind of row this is beyond its role — `delegation_results` (a join)
+  /// and `delegation_notice` render as their own rows, not as answers.
+  final String contentType;
   final int sequence;
   final DateTime createdAt;
 
@@ -27,6 +32,7 @@ class Message {
       runState: null,
       role: json['role'] as String,
       content: json['content'] as String,
+      contentType: json['contentType'] as String? ?? 'text',
       sequence: (json['sequence'] as num).toInt(),
       createdAt: DateTime.parse(json['createdAt'] as String),
     );

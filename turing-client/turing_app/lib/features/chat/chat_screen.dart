@@ -7,8 +7,10 @@ import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 
 import '../../constants/app_colors.dart';
 import '../../models/approval.dart';
+import '../../models/delegation.dart';
 import '../../models/message.dart';
 import '../../models/remote_egress.dart';
+import '../../models/run_cancellation.dart';
 import '../../models/run_lifecycle.dart';
 import '../../models/run_state.dart';
 import '../../models/turing_event.dart';
@@ -16,6 +18,8 @@ import '../../networking/api_client.dart';
 import '../../networking/event_source.dart';
 import '../../utils/content_presence.dart';
 import '../approvals/approval_card.dart';
+import 'delegation_card.dart';
+import 'delegation_transcript_screen.dart';
 import 'message_send_failure_card.dart';
 import 'message_send_unconfirmed_card.dart';
 import 'run_cancelled_card.dart';
@@ -27,15 +31,16 @@ import 'run_state_reconciler.dart';
 import 'run_cancellation_controller.dart';
 import 'run_stop_control.dart';
 import 'tool_call_card.dart';
+import '../../models/model_provider.dart';
 
 final Random _sendIdempotencyRandom = Random.secure();
 
-String _newSendIdempotencyKey() {
+String _newIdempotencyKey(String purpose) {
   final bytes = List<int>.generate(
     16,
     (_) => _sendIdempotencyRandom.nextInt(256),
   );
-  return 'send-${bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join()}';
+  return '$purpose-${bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join()}';
 }
 
 class ChatScreen extends StatefulWidget {
@@ -45,7 +50,7 @@ class ChatScreen extends StatefulWidget {
     required this.apiClient,
     required this.eventSource,
     this.embedded = false,
-    this.modelProvider = 'ollama',
+    this.modelProvider = localModelProvider,
     this.onSessionUpdated,
     this.onSessionDeleted,
   });
@@ -84,6 +89,29 @@ class _ChatScreenState extends State<ChatScreen> {
   final Map<String, _ToolCallEntry> _toolEntries = {};
   final List<_PendingApproval> _approvals = [];
   final Set<String> _completedHistoryRunIds = {};
+
+  /// Every task this conversation delegated, by delegation ID, in the order
+  /// they were asked for — see [_loadDelegations] and [_applyDelegationEvent].
+  final Map<String, Delegation> _delegations = {};
+
+  /// The one [_DelegationsEntry] holding each asking turn's cards, by the
+  /// turn's run ID — see [_placeDelegations].
+  final Map<String, _DelegationsEntry> _delegationEntries = {};
+
+  /// True once [_loadDelegations] read the durable cards. Their snapshot is
+  /// newer than every replayed event, so those are then skipped; without it,
+  /// the replayed events are what builds the cards.
+  bool _delegationsLoaded = false;
+  final Set<String> _cancellingDelegations = {};
+
+  /// Delegation IDs with a consent decision open — see
+  /// [_allowDelegationEgress] and [_declineDelegationEgress].
+  final Set<String> _decidingDelegations = {};
+
+  /// Approval IDs whose details are being read to relay them onto a card,
+  /// and those whose read failed, which the card then offers to read again.
+  final Set<String> _relayingApprovals = {};
+  final Set<String> _relayFailedApprovals = {};
 
   /// One accepted [RunState] per run ID, reconciled from every message page
   /// and every live/replayed event alike — the design's "history and live
@@ -328,6 +356,9 @@ class _ChatScreenState extends State<ChatScreen> {
       // one — true whether or not the watermark above already failed.
       if (mounted) setState(() => _historyLoadFailed = true);
     }
+    // Before the subscription opens, so a replayed event cannot race the
+    // durable cards it is older than.
+    await _loadDelegations();
     if (!mounted || !replayBoundaryLoaded) return;
     if (!_openSubscription()) {
       setState(() {
@@ -786,7 +817,10 @@ class _ChatScreenState extends State<ChatScreen> {
       final entry = _MessageEntry.fromMessage(message);
       if (isInitialLoad) {
         prepend.add(entry);
-      } else if (_historyLoadFailed) {
+      } else if (_historyLoadFailed || message.role == 'system') {
+        // A row the orchestrator writes itself — a team's results, a notice
+        // that tasks were stopped — can reach this screen by resync after a
+        // live row that follows it, so it takes its place in the page order.
         _insertRecoveredHistoryEntry(entry, messages, i);
       } else {
         _messages.add(entry);
@@ -831,6 +865,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (assistantIndex == null) continue;
       _upsertRunStateCard(state, _messages[assistantIndex] as _MessageEntry);
     }
+    _placeDelegations();
   }
 
   /// Inserts one newly recovered row according to the durable page order
@@ -1296,6 +1331,11 @@ class _ChatScreenState extends State<ChatScreen> {
         // No extra effect beyond the unconditional reconciliation above:
         // this event type carries nothing but the state snapshot itself.
         break;
+      case 'delegation.started':
+      case 'delegation.updated':
+      case 'delegation.finished':
+        _applyDelegationEvent(event);
+        break;
       // Everything below has no case above and so is deliberately left
       // unhandled — it falls out of this switch untouched, not implicitly
       // grouped with any handled case above (in particular, not with the
@@ -1596,7 +1636,10 @@ class _ChatScreenState extends State<ChatScreen> {
         runId: event.runId,
       );
       _assistantEntries[messageId] = entry;
-      setState(() => _messages.add(entry!));
+      setState(() {
+        _messages.add(entry!);
+        _placeDelegations();
+      });
     }
     entry.content.value = '${entry.content.value}$delta';
     // The row was adopted (empty, no `RunState` at all) with a neutral
@@ -1638,6 +1681,7 @@ class _ChatScreenState extends State<ChatScreen> {
           approvalId: approvalId,
           toolName: toolName,
           runId: runId,
+          sessionId: widget.sessionId,
         ),
       );
     });
@@ -1682,7 +1726,7 @@ class _ChatScreenState extends State<ChatScreen> {
         retry.modelProvider == modelProvider;
     final idempotencyKey = isMatchingRetry
         ? retry.idempotencyKey
-        : _newSendIdempotencyKey();
+        : _newIdempotencyKey('send');
     RemoteEgressConsent? remoteEgressConsent = isMatchingRetry
         ? retry.remoteEgressConsent
         : null;
@@ -1711,7 +1755,7 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       } on Exception {
         if (!mounted) return;
-        if (modelProvider != 'ollama') {
+        if (modelProvider != localModelProvider) {
           setState(() => _sending = false);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Could not prepare remote send')),
@@ -1909,6 +1953,18 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // A task's approval sits on its card; one whose card is not on screen
+    // (its turn is older than the loaded page) still has to be decidable.
+    final docked = _approvals
+        .where((approval) => _cardFor(approval) == null)
+        .toList();
+    final dockedFailures = _delegations.values
+        .where(
+          (delegation) =>
+              _relayFailedApprovals.contains(delegation.approvalId) &&
+              !_delegationEntries.containsKey(delegation.parentRunId),
+        )
+        .toList();
     final body = Column(
       children: [
         Expanded(
@@ -1931,18 +1987,44 @@ class _ChatScreenState extends State<ChatScreen> {
                   // ValueListenableBuilder and resetting a running card's spinner.
                   itemBuilder: (context, index) {
                     final entry = _messages[index];
-                    final state =
+                    final runId =
                         entry is _MessageEntry &&
                             !entry.isUser &&
                             entry.runId != null &&
                             _assistantEntryIndexForRun(entry.runId!) == index
-                        ? _runStateReconciler.stateFor(entry.runId!)
+                        ? entry.runId
                         : null;
+                    final state = runId == null
+                        ? null
+                        : _runStateReconciler.stateFor(runId);
+                    // An answer Turing wrote from its team's results says who
+                    // helped.
+                    final helpers = runId == null
+                        ? const <Delegation>[]
+                        : _delegations.values
+                              .where(
+                                (delegation) =>
+                                    delegation.continuationRunId == runId,
+                              )
+                              .toList();
                     return Column(
                       key: ObjectKey(entry),
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _ChatMessageTile(entry: entry),
+                        if (entry is _DelegationsEntry)
+                          ..._delegations.values
+                              .where(
+                                (delegation) =>
+                                    delegation.parentRunId == entry.parentRunId,
+                              )
+                              .map(_delegationCard)
+                        else
+                          _ChatMessageTile(entry: entry),
+                        if (helpers.isNotEmpty)
+                          ContinuationChip(
+                            delegations: helpers,
+                            onPressed: () => _showDelegations(helpers),
+                          ),
                         if (state != null && !_sessionDeleted)
                           if (_runCancellations[state.runId] case final control?)
                             RunStopControl(
@@ -1986,7 +2068,7 @@ class _ChatScreenState extends State<ChatScreen> {
             // visually or programmatically conflated with either.
             icon: Icons.warning_amber_rounded,
           ),
-        if (_approvals.isNotEmpty)
+        if (docked.isNotEmpty || dockedFailures.isNotEmpty)
           Flexible(
             flex: 0,
             child: ConstrainedBox(
@@ -1998,18 +2080,14 @@ class _ChatScreenState extends State<ChatScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    for (final approval in _approvals)
-                      ApprovalCard(
-                        key: ValueKey(
-                          '${approval.approvalId}:${_approvalReviewVersions[approval.approvalId] ?? 0}',
+                    for (final approval in docked) _approvalCard(approval),
+                    for (final delegation in dockedFailures)
+                      Card(
+                        margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: _approvalLoadFailure(delegation),
                         ),
-                        approvalId: approval.approvalId,
-                        toolName: approval.toolName,
-                        loadDetails: (refresh) =>
-                            _loadApprovalDetails(approval, refresh),
-                        onApprove: (details) => _approve(approval, details),
-                        onDeny: () => _deny(approval),
-                        busy: _approvalsInFlight.contains(approval.approvalId),
                       ),
                   ],
                 ),
@@ -2057,6 +2135,396 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Widget _approvalCard(_PendingApproval approval) => ApprovalCard(
+    key: ValueKey(
+      '${approval.approvalId}:${_approvalReviewVersions[approval.approvalId] ?? 0}',
+    ),
+    approvalId: approval.approvalId,
+    toolName: approval.toolName,
+    requester: approval.requester,
+    loadDetails: (refresh) => _loadApprovalDetails(approval, refresh),
+    onApprove: (details) => _approve(approval, details),
+    onDeny: () => _deny(approval),
+    busy: _approvalsInFlight.contains(approval.approvalId),
+  );
+
+  /// The on-screen card of the task a relayed [approval] belongs to.
+  Delegation? _cardFor(_PendingApproval approval) {
+    if (approval.requester == null) return null;
+    return _delegations.values
+        .where(
+          (delegation) =>
+              delegation.childRunId == approval.runId &&
+              _delegationEntries.containsKey(delegation.parentRunId),
+        )
+        .firstOrNull;
+  }
+
+  Widget _delegationCard(Delegation delegation) {
+    final relayed = _approvals
+        .where(
+          (approval) =>
+              approval.requester != null &&
+              approval.runId == delegation.childRunId,
+        )
+        .firstOrNull;
+    return DelegationCard(
+      key: ValueKey('delegation-${delegation.delegationId}'),
+      delegation: delegation,
+      cancelling: _cancellingDelegations.contains(delegation.delegationId),
+      onCancel: delegation.isTerminal || _sessionDeleted
+          ? null
+          : () => _cancelDelegation(delegation),
+      onViewWork: delegation.childSessionId.isEmpty
+          ? null
+          : () => _openDelegationTranscript(delegation),
+      deciding: _decidingDelegations.contains(delegation.delegationId),
+      onAllowEgress: _sessionDeleted
+          ? null
+          : () => _allowDelegationEgress(delegation),
+      onDeclineEgress: _sessionDeleted
+          ? null
+          : () => _declineDelegationEgress(delegation),
+      approval: relayed != null
+          ? _approvalCard(relayed)
+          : _relayFailedApprovals.contains(delegation.approvalId)
+          ? _approvalLoadFailure(delegation)
+          : null,
+    );
+  }
+
+  /// A waiting task's approval whose read failed: the task may send no
+  /// further update while it waits, so reading it again is the user's.
+  Widget _approvalLoadFailure(Delegation delegation) => Row(
+    children: [
+      Expanded(
+        child: Text(
+          'The approval ${delegation.specialist} asked for could not be '
+          'loaded.',
+        ),
+      ),
+      TextButton(
+        onPressed: _syncDelegationApprovals,
+        child: const Text('Load approval'),
+      ),
+    ],
+  );
+
+  /// Reads the durable cards once, at startup. A server without the read API,
+  /// or with the team switched off, refuses it; the replayed events then
+  /// build whatever cards there are.
+  Future<void> _loadDelegations() async {
+    final List<Delegation> delegations;
+    try {
+      delegations = await widget.apiClient.listDelegations(
+        parentSessionId: widget.sessionId,
+      );
+    } on Exception {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _delegationsLoaded = true;
+      for (final delegation in delegations) {
+        _delegations[delegation.delegationId] = delegation;
+      }
+      _placeDelegations();
+    });
+    _syncDelegationApprovals();
+  }
+
+  void _applyDelegationEvent(TuringEvent event) {
+    final watermark = _replayWatermarkSequence;
+    final replayed = watermark != null && event.sequence <= watermark;
+    if (replayed && _delegationsLoaded) return;
+    final id = _asString(event.payload['delegationId']);
+    if (id == null) return;
+    final current = _delegations[id];
+    final next = Delegation.fromEvent(current, event.payload);
+    if (next == null || identical(next, current)) return;
+    setState(() {
+      _delegations[id] = next;
+      _placeDelegations();
+    });
+    _syncDelegationApprovals();
+    // A task's end can write a notice that tasks were stopped, or the join
+    // and its answer; both are messages this screen does not have yet. Even
+    // a card the startup read already showed ended may have ended after the
+    // history read, so a live terminal event always asks.
+    if (!replayed && next.isTerminal) _requireCoalescedResync();
+  }
+
+  /// Gives each asking turn whose answer is on screen its one entry of cards,
+  /// right after the turn's last answer row and that row's own tool and
+  /// notice rows — where reopening puts them. A turn whose answer is not
+  /// loaded yet gets its entry once it is, and an entry follows its turn when
+  /// a later row of the same answer streams in below it.
+  ///
+  /// Must be called from inside a `setState`.
+  void _placeDelegations() {
+    final runIds = {
+      for (final delegation in _delegations.values) delegation.parentRunId,
+    };
+    for (final runId in runIds) {
+      final assistantIndex = _assistantEntryIndexForRun(runId);
+      if (assistantIndex == null) continue;
+      final anchor = _messages[assistantIndex] as _MessageEntry;
+      final existing = _delegationEntries[runId];
+      if (existing != null) _messages.remove(existing);
+      final entry = existing ?? _DelegationsEntry(runId);
+      _delegationEntries[runId] = entry;
+      _messages.insert(_runStateCardInsertionIndex(runId, anchor), entry);
+    }
+  }
+
+  /// Puts the approval each waiting task names on its card, and takes off any
+  /// its task no longer names. The task's own conversation carries the
+  /// approval's events, so its card's state is what this screen follows.
+  void _syncDelegationApprovals() {
+    final waiting = {
+      for (final delegation in _delegations.values)
+        if (delegation.state == 'waiting_approval' &&
+            delegation.approvalId.isNotEmpty)
+          delegation.approvalId: delegation,
+    };
+    final stale = _approvals
+        .where(
+          (approval) =>
+              approval.requester != null &&
+              !waiting.containsKey(approval.approvalId),
+        )
+        .map((approval) => approval.approvalId)
+        .toList();
+    setState(() {
+      _relayFailedApprovals.removeWhere(
+        (approvalId) => !waiting.containsKey(approvalId),
+      );
+    });
+    if (stale.isNotEmpty) {
+      setState(() {
+        for (final approvalId in stale) {
+          _approvals.removeWhere((item) => item.approvalId == approvalId);
+          _approvalsInFlight.remove(approvalId);
+          _approvalReviewVersions.remove(approvalId);
+          _clearApprovalActionFailureFor(approvalId);
+        }
+      });
+    }
+    for (final delegation in waiting.values) {
+      if (_isApprovalPending(delegation.approvalId) ||
+          !_relayingApprovals.add(delegation.approvalId)) {
+        continue;
+      }
+      unawaited(_relayApproval(delegation));
+    }
+  }
+
+  Future<void> _relayApproval(Delegation delegation) async {
+    final approvalId = delegation.approvalId;
+    try {
+      final details = await widget.apiClient.getApprovalDetails(approvalId);
+      final current = _delegations[delegation.delegationId];
+      // Only a decision still open, on the task's own run, that the task
+      // still waits on: an approval already decided reaches this read while
+      // the task's next update is on its way.
+      if (!mounted ||
+          _sessionDeleted ||
+          current == null ||
+          current.state != 'waiting_approval' ||
+          current.approvalId != approvalId ||
+          details.approvalId != approvalId ||
+          details.sessionId != delegation.childSessionId ||
+          details.runId != delegation.childRunId ||
+          details.status != 'pending' ||
+          _isApprovalPending(approvalId)) {
+        return;
+      }
+      setState(
+        () => _approvals.add(
+          _PendingApproval(
+            approvalId: approvalId,
+            toolName: details.toolName,
+            runId: delegation.childRunId,
+            sessionId: delegation.childSessionId,
+            requester: delegation.specialist,
+          ),
+        ),
+      );
+      _relayFailedApprovals.remove(approvalId);
+    } on Exception {
+      // The task's next update may be a long way off, so its card offers to
+      // read the approval again.
+      if (mounted) setState(() => _relayFailedApprovals.add(approvalId));
+    } finally {
+      _relayingApprovals.remove(approvalId);
+    }
+  }
+
+  Future<void> _cancelDelegation(Delegation delegation) async {
+    if (_cancellingDelegations.contains(delegation.delegationId)) return;
+    setState(() => _cancellingDelegations.add(delegation.delegationId));
+    String? problem;
+    try {
+      // The specialist's own run, as the user: its join says "cancelled by
+      // you". The card follows from the task's next update.
+      final receipt = await widget.apiClient.cancelRun(
+        sessionId: delegation.childSessionId,
+        runId: delegation.childRunId,
+        idempotencyKey: _newIdempotencyKey('cancel'),
+      );
+      problem = switch (receipt.result) {
+        CancelRunResult.accepted || CancelRunResult.alreadyTerminal => null,
+        CancelRunResult.unavailable =>
+          '${delegation.specialist}\'s task can no longer be cancelled.',
+        CancelRunResult.unknown =>
+          'Could not cancel ${delegation.specialist}\'s task. Try again.',
+      };
+    } on Exception {
+      problem = 'Could not cancel ${delegation.specialist}\'s task. Try again.';
+    } finally {
+      if (mounted) {
+        setState(() => _cancellingDelegations.remove(delegation.delegationId));
+      }
+    }
+    if (problem != null && mounted) {
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(SnackBar(content: Text(problem)));
+    }
+  }
+
+  /// Shows what the task's tools may send and where, and records the user's
+  /// consent if they allow it. The card follows from the task's next update.
+  Future<void> _allowDelegationEgress(Delegation delegation) async {
+    await _decideDelegationEgress(delegation, () async {
+      final RemoteEgressDisclosure disclosure;
+      try {
+        disclosure = await widget.apiClient.prepareDelegationEgress(
+          delegationId: delegation.delegationId,
+        );
+      } on Exception catch (error) {
+        return _consentProblem(
+          "Could not open ${delegation.specialist}'s request",
+          error,
+        );
+      }
+      if (!mounted) return null;
+      final allowed = await showRemoteEgressDialog(
+        context,
+        disclosure,
+        requester: delegation.specialist,
+      );
+      if (!allowed || !mounted) return null;
+      return _recordDelegationEgress(
+        delegation,
+        RemoteEgressConsent(
+          challenge: disclosure.challenge,
+          acknowledgedDataCategories: disclosure.dataCategories,
+        ),
+      );
+    });
+  }
+
+  Future<void> _declineDelegationEgress(Delegation delegation) =>
+      _decideDelegationEgress(
+        delegation,
+        () => _recordDelegationEgress(delegation, null),
+      );
+
+  Future<String?> _recordDelegationEgress(
+    Delegation delegation,
+    RemoteEgressConsent? consent,
+  ) async {
+    try {
+      final decided = await widget.apiClient.decideDelegationEgress(
+        delegationId: delegation.delegationId,
+        consent: consent,
+      );
+      _applyDecidedDelegation(decided);
+      return null;
+    } on Exception catch (error) {
+      return _consentProblem(
+        "Could not record your decision for ${delegation.specialist}'s task",
+        error,
+      );
+    }
+  }
+
+  /// The orchestrator's answer to a decision, so the card follows it even if
+  /// the task's update is late or lost. It applies only while the card still
+  /// waits for consent: an update that already moved the task on is newer.
+  void _applyDecidedDelegation(Delegation decided) {
+    final current = _delegations[decided.delegationId];
+    if (!mounted || current == null || !current.waitingForConsent) return;
+    setState(() {
+      _delegations[decided.delegationId] = decided;
+      _placeDelegations();
+    });
+    _syncDelegationApprovals();
+    if (decided.isTerminal) _requireCoalescedResync();
+  }
+
+  /// A refusal the orchestrator explains — the task changed, or stopped
+  /// waiting — is shown in its words; anything else is not echoed.
+  static String _consentProblem(String lead, Exception error) =>
+      error is TuringApiException && error.code == 'failed_precondition'
+      ? '$lead: ${error.message}'
+      : '$lead. Try again.';
+
+  /// Runs one consent decision for [delegation] at a time, and reports the
+  /// problem [decide] returns, if any.
+  Future<void> _decideDelegationEgress(
+    Delegation delegation,
+    Future<String?> Function() decide,
+  ) async {
+    if (_decidingDelegations.contains(delegation.delegationId)) return;
+    setState(() => _decidingDelegations.add(delegation.delegationId));
+    String? problem;
+    try {
+      problem = await decide();
+    } finally {
+      if (mounted) {
+        setState(() => _decidingDelegations.remove(delegation.delegationId));
+      }
+    }
+    if (problem != null && mounted) {
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(SnackBar(content: Text(problem)));
+    }
+  }
+
+  void _openDelegationTranscript(Delegation delegation) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DelegationTranscriptScreen(
+          delegation: delegation,
+          apiClient: widget.apiClient,
+        ),
+      ),
+    );
+  }
+
+  void _showDelegations(List<Delegation> delegations) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => ListView(
+        shrinkWrap: true,
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        children: [
+          for (final delegation in delegations)
+            DelegationCard(
+              delegation: delegation,
+              onViewWork: delegation.childSessionId.isEmpty
+                  ? null
+                  : () => _openDelegationTranscript(delegation),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// Whether [approvalId] is still present in [_approvals] — i.e. still
   /// pending a decision, as opposed to already resolved by ANY means (an
   /// approve, a deny, an expiry, or a consumption) via the event stream.
@@ -2094,7 +2562,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _sessionDeleted ||
         !_isApprovalPending(approval.approvalId) ||
         details.approvalId != approval.approvalId ||
-        details.sessionId != widget.sessionId ||
+        details.sessionId != approval.sessionId ||
         details.runId != approval.runId ||
         details.toolName != approval.toolName) {
       throw const TuringApiException(
@@ -2119,7 +2587,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _approvalsInFlight.contains(approval.approvalId) ||
         details.approvalId != approval.approvalId ||
         details.runId != approval.runId ||
-        details.sessionId != widget.sessionId ||
+        details.sessionId != approval.sessionId ||
         !details.canApproveAt(DateTime.now())) {
       return;
     }
@@ -2261,8 +2729,17 @@ class _ChatMessageTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     switch (entry) {
+      case _MessageEntry message
+          when message.contentType == 'delegation_results':
+        return _TeamResultsRow(content: message.content.value);
+      case _MessageEntry message
+          when message.contentType == 'delegation_notice':
+        return RunNoticeCard(note: message.content.value);
       case _MessageEntry message:
         return _MessageBubble(entry: message);
+      case _DelegationsEntry _:
+        // Rendered by the screen itself, which owns the cards' actions.
+        return const SizedBox.shrink();
       case _ToolCallEntry tool:
         return ValueListenableBuilder<_ToolCallState>(
           valueListenable: tool.state,
@@ -2386,6 +2863,33 @@ MarkdownStyleSheet _assistantMarkdown(
     ),
     blockSpacing: 10,
   );
+}
+
+/// A team's results, which Turing answered from: collapsed, because the
+/// answer below it is what the user came for.
+class _TeamResultsRow extends StatelessWidget {
+  const _TeamResultsRow({required this.content});
+
+  final String content;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppColors.of(context);
+    return ExpansionTile(
+      leading: const Icon(Icons.groups_outlined),
+      title: const Text('Results from the team'),
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsets.only(bottom: 12),
+      expandedCrossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        MarkdownBody(
+          data: content,
+          selectable: true,
+          styleSheet: _assistantMarkdown(context, palette),
+        ),
+      ],
+    );
+  }
 }
 
 class _EmptyConversation extends StatelessWidget {
@@ -2524,6 +3028,7 @@ class _MessageEntry extends _ChatEntry {
     required String content,
     this.runId,
     this.canAdoptPersistedIdentity = false,
+    this.contentType = 'text',
   }) : content = ValueNotifier(content);
 
   factory _MessageEntry.user({
@@ -2560,11 +3065,16 @@ class _MessageEntry extends _ChatEntry {
       isUser: message.role == 'user',
       content: message.content,
       runId: message.runId,
+      contentType: message.contentType,
     );
   }
 
   String messageId;
   final bool isUser;
+
+  /// A team's results (`delegation_results`) and a notice that tasks were
+  /// stopped (`delegation_notice`) render as their own rows, not as answers.
+  final String contentType;
 
   /// The run this row belongs to, if any — used by
   /// [_ChatScreenState._assistantEntryIndexForRun] to place (and find) the
@@ -2701,6 +3211,18 @@ class _NoResponseCardEntry extends _ChatEntry {
   void dispose() {}
 }
 
+/// Where the cards of the tasks one turn delegated sit: under that turn's
+/// answer, after its own tool and notice rows — see
+/// [_ChatScreenState._placeDelegations].
+class _DelegationsEntry extends _ChatEntry {
+  _DelegationsEntry(this.parentRunId);
+
+  final String parentRunId;
+
+  @override
+  void dispose() {}
+}
+
 /// A `sendMessage` RPC rejected before any `RunQueued` event ever arrived,
 /// with a status NOT in [_ChatScreenState._isConfirmedPreEnqueueSendFailure]'s
 /// allowlist — see [MessageSendUnconfirmedCard] for why the true outcome is
@@ -2746,9 +3268,19 @@ class _PendingApproval {
     required this.approvalId,
     required this.toolName,
     required this.runId,
+    required this.sessionId,
+    this.requester,
   });
 
   final String approvalId;
   final String toolName;
   final String? runId;
+
+  /// The conversation the approval belongs to: this one, or a delegated
+  /// task's own.
+  final String sessionId;
+
+  /// The specialist asking, for an approval relayed from a delegated task;
+  /// such an approval is shown on that task's card rather than in the dock.
+  final String? requester;
 }

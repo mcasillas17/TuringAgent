@@ -29,6 +29,11 @@ turing-backend/memory
 # orchestrator-go/internal/service/team, which the image is built from.
 turing-backend/team
 turing-backend/mcp
+# The turing wrapper's compiled command, and its .env lock. Scoped like the
+# lines above: neither is source, and the lock sits beside the .env that
+# .env.* already keeps out.
+turing-backend/.turing
+turing-backend/.env.lock
 **/sandbox
 
 # Dependency caches, generated build output, and test artifacts

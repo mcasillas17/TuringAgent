@@ -88,11 +88,17 @@ type Config struct {
 	// is validated as a clean absolute path all the same — a string rendered as
 	// "your memory is here" is a string somebody will eventually paste into a
 	// terminal, and a relative fragment or a traversal is not that.
-	MemoryDisplayRoot         string
-	MCPConfigRoot             string
-	OllamaModel               string
-	OllamaContextWindowTokens int
-	OpenAIBaseURL             string
+	MemoryDisplayRoot string
+	MCPConfigRoot     string
+	// LocalModel and LocalContextWindowTokens describe the local route's model,
+	// read like the runtime reads them (turing-backend/tests holds the two
+	// services to the same resolution).
+	LocalModel               string
+	LocalContextWindowTokens int
+	// DeprecatedKeys holds one sentence for each OLLAMA_* setting read because
+	// its TURING_LOCAL_* replacement was unset, for startup to log.
+	DeprecatedKeys []string
+	OpenAIBaseURL  string
 	// FilesMCPEnabled and OpenAIEnabled are presence flags sourced from
 	// MCP_FILES_ENABLED and OPENAI_ENABLED, which Compose derives from
 	// whether MCP_FILES_TOKEN_GENERAL / OPENAI_API_KEY are set without ever
@@ -339,12 +345,24 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	if maxRuns < 1 || maxRuns > maxConcurrentRunsLimit {
 		return Config{}, fmt.Errorf("TURING_MAX_CONCURRENT_RUNS_GENERAL must be between 1 and %d", maxConcurrentRunsLimit)
 	}
-	ollamaContextWindowTokens, err := positiveIntValue("OLLAMA_CONTEXT_WINDOW_TOKENS", 32768)
+	// Each TURING_LOCAL_* key wins over the OLLAMA_* name it replaces; the old
+	// name is read only when the new one is empty.
+	var deprecated []string
+	localKey := func(newKey, oldKey string) string {
+		if env[newKey] == "" && env[oldKey] != "" {
+			deprecated = append(deprecated, oldKey+" is deprecated; set "+newKey+" instead")
+			return oldKey
+		}
+		return newKey
+	}
+	localModel := stringValue(localKey("TURING_LOCAL_MODEL", "OLLAMA_MODEL"), "qwen2.5:7b")
+	windowKey := localKey("TURING_LOCAL_CONTEXT_WINDOW_TOKENS", "OLLAMA_CONTEXT_WINDOW_TOKENS")
+	localContextWindowTokens, err := positiveIntValue(windowKey, 32768)
 	if err != nil {
 		return Config{}, err
 	}
-	if ollamaContextWindowTokens > maxContextWindowTokens {
-		return Config{}, fmt.Errorf("OLLAMA_CONTEXT_WINDOW_TOKENS must be between 1 and %d", maxContextWindowTokens)
+	if localContextWindowTokens > maxContextWindowTokens {
+		return Config{}, fmt.Errorf("%s must be between 1 and %d", windowKey, maxContextWindowTokens)
 	}
 	openAIContextWindowTokens, err := positiveIntValue("OPENAI_CONTEXT_WINDOW_TOKENS", 32768)
 	if err != nil {
@@ -386,6 +404,14 @@ func LoadFromMap(env map[string]string) (Config, error) {
 	}
 	if queueMaxWait > maxQueueWaitMS {
 		return Config{}, fmt.Errorf("TURING_QUEUE_MAX_WAIT_MS must be between 0 and %d", maxQueueWaitMS)
+	}
+	// A task waiting for the user's consent is held only by the claim, so this
+	// bound, which the recovery loop applies, is what ends one nobody answers.
+	if agentTeamEnabled && queueMaxWait == 0 {
+		return Config{}, fmt.Errorf("TURING_QUEUE_MAX_WAIT_MS must be above 0 while TURING_AGENT_TEAM_ENABLED is true")
+	}
+	if agentTeamEnabled && reaperInterval == 0 {
+		return Config{}, fmt.Errorf("TURING_JOB_REAPER_INTERVAL_MS must be above 0 while TURING_AGENT_TEAM_ENABLED is true")
 	}
 	queueNoWorkerTimeout, err := intValue("TURING_QUEUE_NO_WORKER_TIMEOUT_MS", defaultQueueNoWorkerTimeoutMS)
 	if err != nil {
@@ -459,8 +485,9 @@ func LoadFromMap(env map[string]string) (Config, error) {
 		MemoryRoot:                memoryRoot,
 		MemoryDisplayRoot:         memoryDisplayRoot,
 		MCPConfigRoot:             mcpConfigRoot,
-		OllamaModel:               stringValue("OLLAMA_MODEL", "qwen2.5:7b"),
-		OllamaContextWindowTokens: ollamaContextWindowTokens,
+		LocalModel:                localModel,
+		LocalContextWindowTokens:  localContextWindowTokens,
+		DeprecatedKeys:            deprecated,
 		OpenAIBaseURL:             openAIBaseURL,
 		FilesMCPEnabled:           filesMCPEnabled,
 		OpenAIEnabled:             openAIEnabled,

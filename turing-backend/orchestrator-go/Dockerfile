@@ -21,4 +21,9 @@ RUN groupadd --gid 1000 turing-orchestrator \
 COPY --from=build /out/turing-orchestrator-go /app/turing-orchestrator-go
 EXPOSE 3000 3001
 USER turing-orchestrator:turing-orchestrator
+# The check subcommands this binary knows (servicecmd). The turing host command
+# reads this label before running a check: an image without it predates
+# check-config, and its binary would ignore the argument and start a second
+# orchestrator on the live database. A test in cmd/server keeps it exact.
+LABEL org.turing.checks="config"
 ENTRYPOINT ["/app/turing-orchestrator-go"]

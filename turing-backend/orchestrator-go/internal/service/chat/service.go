@@ -11,6 +11,7 @@ import (
 	"time"
 
 	turingv1 "github.com/mcasillas17/TuringAgent/gen/turing/v1/go/turing/v1"
+	backendegress "github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
@@ -61,7 +62,7 @@ func NewWithEgressConfig(repo *repository.Repository, bus *events.Bus, runtimeSe
 	return &Server{
 		repo: repo, bus: bus, runtime: runtimeServer,
 		ollamaModel: ollamaModel, openAIModel: openAIModel,
-		egress: egressConfig, now: time.Now, nonce: newEgressNonce,
+		egress: egressConfig, now: time.Now, nonce: backendegress.NewChallengeNonce,
 		integrationEndpointResolver: repo.IntegrationEndpointsForTools,
 	}
 }
@@ -381,7 +382,7 @@ func requestTools(requested []string) ([]string, error) {
 func requestModelProvider(provider turingv1.ModelProvider) (string, error) {
 	switch provider {
 	case turingv1.ModelProvider_MODEL_PROVIDER_UNSPECIFIED, turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA:
-		return "ollama", nil
+		return backendegress.LocalProvider, nil
 	case turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE:
 		return "openai_compatible", nil
 	default:

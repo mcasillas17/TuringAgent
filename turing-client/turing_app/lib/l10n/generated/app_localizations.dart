@@ -100,6 +100,12 @@ abstract class AppLocalizations {
   /// **'Approval requested: {tool}'**
   String approvalRequested(String tool);
 
+  /// No description provided for @approvalRequestedBy.
+  ///
+  /// In en, this message translates to:
+  /// **'{requester} wants to use {tool}'**
+  String approvalRequestedBy(String requester, String tool);
+
   /// No description provided for @approvalLoading.
   ///
   /// In en, this message translates to:
@@ -1161,6 +1167,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Send'**
   String get egressDialogSend;
+
+  /// No description provided for @egressDialogLocalProvider.
+  ///
+  /// In en, this message translates to:
+  /// **'Local'**
+  String get egressDialogLocalProvider;
+
+  /// No description provided for @egressDialogAllow.
+  ///
+  /// In en, this message translates to:
+  /// **'Allow'**
+  String get egressDialogAllow;
+
+  /// No description provided for @egressDialogRequester.
+  ///
+  /// In en, this message translates to:
+  /// **'{requester} asks to use these tools for this one task.'**
+  String egressDialogRequester(String requester);
 
   /// No description provided for @egressCategoryCurrentMessage.
   ///

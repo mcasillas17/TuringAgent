@@ -13,7 +13,9 @@ import (
 // seedDelegatedParent is a Turing turn that delegated one task asking for
 // childTools and then completed, run by a worker this test drives through the
 // repository.
-func seedDelegatedParent(t *testing.T, h *harness, childTools []string) (string, repository.EnqueueUserMessageResult, repository.Delegation) {
+// egressTools, when given, are tools the task then waits for the user's
+// consent to.
+func seedDelegatedParent(t *testing.T, h *harness, childTools []string, egressTools ...string) (string, repository.EnqueueUserMessageResult, repository.Delegation) {
 	t.Helper()
 	ctx := context.Background()
 	if err := h.repo.UpsertTools(ctx, []repository.DiscoveredTool{
@@ -54,7 +56,8 @@ func seedDelegatedParent(t *testing.T, h *harness, childTools []string) (string,
 			ProfileID: "research", Revision: "rev-1", DisplayName: "Research", Instructions: "You are Research.",
 		},
 		ModelProvider: "ollama", Model: "llama3.2", SelectedTools: childTools,
-		Brief: "BEGIN TURING_RETRIEVED_DELEGATION_BRIEF_x\nTask:\nGather the notes\nEND TURING_RETRIEVED_DELEGATION_BRIEF_x",
+		Brief:       "BEGIN TURING_RETRIEVED_DELEGATION_BRIEF_x\nTask:\nGather the notes\nEND TURING_RETRIEVED_DELEGATION_BRIEF_x",
+		EgressTools: egressTools,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -96,6 +99,39 @@ func TestAQueueExpiryThatJoinsDispatchesTheContinuation(t *testing.T) {
 		return command.GetRunAssigned() != nil
 	}).GetRunAssigned()
 	if assigned.GetSessionId() != sessionID || assigned.GetRunId() == parent.RunID || !assigned.GetEnforceSelectedTools() {
+		t.Fatalf("assigned = %+v, want the parent's continuation", assigned)
+	}
+}
+
+// A task held for the user's consent has a worker that serves it, so the
+// no-worker bound never applies, and nothing claims it. The total bound still
+// ends one nobody answers, and its end joins and dispatches the continuation.
+func TestTheQueueBoundEndsATaskNobodyAnsweredAConsentFor(t *testing.T) {
+	clock := newQueueClock()
+	h := newHarnessWithDispatch(t, queueWaitDispatch(runoutcome.QueueTimeoutPolicyFail))
+	h.service.queueNow = clock.read
+	sessionID, parent, delegation := seedDelegatedParent(t, h, []string{"system/system.time"}, "integrations/github.get_issue")
+	stream := connectWorkerCapabilities(t, h, "team-worker", "registration-team", teamCapabilities(1, "system.time"))
+	refreshQueue(t, h)
+	clock.advance(30 * time.Minute)
+	refreshQueue(t, h)
+	if child := h.runState(t, delegation.ChildRunID); child.Lifecycle != "queued" {
+		t.Fatalf("child = %s, want it still waiting past the no-worker bound", child.Lifecycle)
+	}
+
+	clock.advance(31 * time.Minute)
+	refreshQueue(t, h)
+
+	record, err := h.repo.GetDelegation(context.Background(), delegation.ID)
+	if err != nil || record.State != "failed" || record.ErrorCode != runoutcome.CodeQueueWaitExpired {
+		t.Fatalf("delegation = %+v, %v; want it failed at the queue bound", record, err)
+	}
+	// The first run the worker is given is the continuation: the held task
+	// was never assigned.
+	assigned := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
+		return command.GetRunAssigned() != nil
+	}).GetRunAssigned()
+	if assigned.GetSessionId() != sessionID || assigned.GetRunId() == parent.RunID || assigned.GetRunId() == delegation.ChildRunID {
 		t.Fatalf("assigned = %+v, want the parent's continuation", assigned)
 	}
 }

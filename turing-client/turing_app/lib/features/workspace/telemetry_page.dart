@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../constants/app_colors.dart';
 import '../../models/telemetry.dart';
 import '../../networking/api_client.dart';
+import '../../models/model_provider.dart';
 import 'workspace_pages.dart';
 
 /// The windows this page offers. Kept short on purpose: the question is
@@ -687,7 +688,7 @@ class _ModelRow extends StatelessWidget {
       palette: palette,
       title: model.model,
       titleIsCode: true,
-      subtitle: model.provider,
+      subtitle: modelProviderLabel(model.provider),
       facts: [
         _Fact(
           icon: Icons.forum_outlined,

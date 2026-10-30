@@ -5,6 +5,20 @@
 **Inspected baseline:** `main` at `fcaf6062`, inspected 2026-10-02. Seven of
 the first ten tasks below have shipped; PROV-001, SKL-001 and SEC-001 remain.
 
+**MCP protocol review:** Added 2026-10-15 against `main` at `09d3d5dc`.
+The MCPP adoption plan does not change the shipped capability inventory.
+
+**Agent team:** Updated 2026-10-25 against `main` at `4148cd92`, after the
+specialist team landed in PRs #150, #152–#158, #162, #163 and #167
+([design](superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md)).
+Its roadmap amendments are applied to AGT-001 through AGT-004, WEB-001, AZ-001
+and the priority spine below. Delegation is experimental and off by default.
+
+**Local inference and operator UX:** Reconciled 2026-10-26 against `main`
+at `5fd493b5`. Local engine selection and app labels shipped in #169;
+hardware-guided setup is still planned under OPS-001, whose host-command
+design landed in #170. Neither that command nor OPS-002/003 is implemented.
+
 **Supersedes:** `docs/VISION.md` and
 `docs/architecture/2026-08-18-personal-agent-audit.md` as active roadmap
 documents. Those paths remain historical pointers; the earlier records are
@@ -125,6 +139,7 @@ claims.
 |---|---|
 | MCP lifecycle | Turing speaks MCP revision `2025-11-25` over the Streamable HTTP transport in both directions: the two bundled servers answer `initialize`, `notifications/initialized`, `ping`, `tools/list` (one page; a cursor is refused), `tools/call` and `notifications/cancelled`, and both client paths negotiate before any tool call and page through a third-party server's cursors. Bundled servers are sessionless, and only mcp-files cancels in-flight work; resources, prompts, sampling, elicitation, OAuth and stdio are out of scope. |
 | Local chat and tool loop | Ollama is the default; streaming, bounded tool iterations, zero-argument recovery, and unknown-tool recovery are implemented. |
+| Pluggable local inference | #169 adds `TURING_LOCAL_ENGINE=ollama` or `openai` for a same-machine engine, configured through `TURING_LOCAL_*`. The app names its engine and model; the local wire identity remains `ollama`. Local inference needs no remote-model consent, but remote tools still require their own disclosure. Hardware-guided engine selection remains in OPS-001 ([design](superpowers/specs/2026-10-25-turing-local-inference-engines-design.md)). |
 | Durable orchestration | Sessions, runs, events, jobs, leases, fencing, retries, recovery, and reopenable run outcomes are persisted in SQLite. |
 | Bounded queue waiting | A queued run records whether any live worker can serve its route, and two configurable bounds end one that waits too long. Not a pause/resume state: both outcomes are terminal. |
 | File actions | Sandboxed read/list/search plus preview-bound create/update are implemented; both reviewed file versions must be safe text within 64 KiB. |
@@ -136,6 +151,7 @@ claims.
 | Memory vault | `persona.md`, `profile.md`, `inbox/`, and `beliefs/` are user-owned Markdown; `memory.search`, `memory.read`, and `memory.remember` exist. |
 | Skills | File-backed `SKILL.md` loading, progressive disclosure, enablement, and Turing capability grants exist. |
 | Automations | Interval and daily unattended runs with per-automation tool allowlists exist. |
+| Specialist team (experimental) | File-defined specialist profiles (Dev, Inbox, Research) with revision-bound grants. With `TURING_AGENT_TEAM_ENABLED=true` (default `false`), Turing delegates bounded tasks to them: each runs in a hidden child session with its own frozen tool set and approvals, asks the user before using a tool that leaves the machine, stops with its turn or conversation, and returns its result for Turing to answer from. The app shows each task as a card. Runs execute one at a time, and automations cannot delegate. |
 | Audit and telemetry | Redacted audit read APIs and local-only usage aggregation exist. |
 
 The configuration-driven registry scope originally named `CON-002` is treated
@@ -158,7 +174,7 @@ contract) are shipped on the inspected baseline.
 | Personal learning | The vault and proposal workflow exist, but normal conversation does not automatically extract candidates, revise beliefs, or measure learning quality. |
 | Skills ecosystem | The parser accepts a Turing-specific subset. It rejects several standard Agent Skills fields and has no import, quarantine, authoring, or marketplace flow. |
 | Audit UX | The API exists; a user-facing audit viewer does not. |
-| Multi-agent | The runtime is process-separated, but there is one `AgentId`, one general executor, and a default concurrency of one. |
+| Multi-agent | Specialists are file-defined profiles under the one `AgentId` and run on the same general executor. Delegation is experimental and off by default until EVAL-001, tasks run one at a time (concurrency one), and specialists cannot ask each other. |
 
 ### Not implemented
 
@@ -173,7 +189,8 @@ contract) are shipped on the inspected baseline.
 - A2A client/server behavior or ACP editor integration;
 - agent-authored skills or tools;
 - sandboxed executable tool generation;
-- plural local agents and parent/child delegation;
+- default-on delegation, parallel specialists, and specialist-to-specialist
+  requests (EVAL-001, AGT-000 and AGT-004);
 - consistent export, backup/restore, bounded retention, and database encryption;
 - evidence-gated vision, voice, and richer prospective memory.
 
@@ -192,7 +209,7 @@ inventory; the example wording itself is not machine-checked.
 | "Comment on this GitHub issue." | Works with setup | Requires a connected GitHub credential, per-run egress coverage, and tool approval. |
 | "Run this report every morning." | Partial | The automation can run, but there is no mobile/channel delivery and unattended tools are limited to its explicit allowlist. |
 | "Ask Claude/Gemini/ChatGPT instead." | Partial | A compatible remote model endpoint can answer under disclosure; this is model inference, not a conversation with another agent product. |
-| "Delegate this coding task to Copilot." | Does not work | No vendor delegation adapter or A2A peer exists. |
+| "Delegate this coding task to Copilot." | Does not work | No vendor delegation adapter or A2A peer exists. Turing's own specialists (experimental) are local profiles, not other agent products. |
 | "Use Turing from my phone." | Does not work safely | UI scaffolding exists; secure remote identity and reachability do not. |
 | "Message Turing in Slack or Telegram." | Does not work | No channel gateway exists. |
 | "Learn this workflow and make a skill." | Does not work | Skills are read-only to the agent. |
@@ -429,13 +446,24 @@ Turing will implement a compatibility profile for
 
 ### MCP
 
-Turing first becomes conformant on its existing bounded tool surface:
-initialization, capability negotiation, ping/liveness, paginated tool listing,
-and tool calls. Resources, prompts, sampling, elicitation, OAuth, and stdio are
-not part of the first conformance task.
+CON-001 shipped the bounded **2025-11-25** tool surface: initialization,
+capability negotiation, ping, paginated client-side tool listing and tool
+calls. This is legacy-era interoperability, not support for every current MCP
+feature. The guarded inventory above retains that precise shipped scope.
+
+The current published specification checked on 2026-10-15 is **2026-07-28**.
+Its stateless request model and optional official Tasks extension change how
+clients call tools and wait; the older experimental Tasks API is not a
+compatible substitute. [MCP protocol evolution](#mcp-protocol-evolution) tracks
+the staged migration, with the full [research and adoption
+plan](architecture/mcp-protocol-adoption.md). All MCPP tasks remain pending.
+Modern discovery must preserve legacy peers, and durable external waits must
+preserve Turing's approvals, egress ownership and worker fencing.
 
 Registry discovery is read-only. Namespace verification is not security
 review. Any discovered server is imported disabled and approval-required.
+Resources, prompts, sampling, elicitation, OAuth and stdio are not silently
+enabled by a protocol revision change.
 
 ### Connecting to Claude, Copilot, Gemini, and ChatGPT
 
@@ -467,6 +495,12 @@ The **first ten** below are the only serial near-term queue. The later
 workstreams are thematic, not a competing sequence. After the first ten,
 independent tasks may proceed in parallel when their dependencies and entry
 gates are satisfied.
+
+The MCPP track is independently scoped protocol maintenance and optional
+capability work. Its legacy-hardening and modern-interoperability slices may
+proceed when their own dependencies are met; they do not wait on native model
+providers or mobile work. Long-running task execution remains behind its
+separate lifecycle, visibility and evaluation gates.
 
 ## First ten implementation tasks
 
@@ -721,6 +755,51 @@ gates are satisfied.
   provider-reported usage remains distinct from estimates and cost.
 - **Dependencies:** TUR-018.
 
+#### OPS-001 - Host command for setup and operation
+
+- **Status:** Host-command implementation pending; #170 supplies the design.
+  The current setup still uses `init.sh` and `compose.sh`.
+- **Outcome:** A user sets up, runs, reconfigures and connects to a Turing
+  server without editing `.env` or reading scripts.
+- **Scope:** A user-run `turing` command on the server: guided `setup`,
+  `status`, lifecycle, `logs`, `connect`, `config` validated by each service's
+  own `check-config` before anything is written, and `engine detect | use |
+  check` from the local inference engines design. Until SEC-001, the app
+  runs on the server itself (owner decision, 2026-10-26). Design:
+  [host command](superpowers/specs/2026-10-25-turing-host-command-design.md).
+- **Acceptance:** Every `.env` setting a user should change is changed through
+  the command; a value a service's configuration check refuses, or that could
+  not be checked, leaves `.env` unchanged (the generated app key is the one
+  value written without that check); a refusal only a running orchestrator can
+  see is reported on apply, with a restore offered; no image that predates
+  `check-config` is run with an argument; no secret appears on a command line,
+  and the app's key appears only in `connect` and `setup`; nothing in Turing
+  can invoke the command, and the orchestrator gains no Docker control.
+- **Dependencies:** None.
+
+#### OPS-002 - Server settings in the app
+
+- **Outcome:** Settings the orchestrator can apply safely while running are
+  changed from the app, wherever it runs.
+- **Scope:** An orchestrator-owned settings store with server-side validation,
+  sealed provider keys, live application to workers, and a one-time import from
+  `.env`; host-owned settings (engine, ports, secrets) stay with OPS-001.
+- **Acceptance:** Each setting has one home; a change applies without a
+  restart or reports that it cannot; `turing config` and the app never
+  disagree.
+- **Dependencies:** OPS-001.
+
+#### OPS-003 - Profile and skill editors
+
+- **Outcome:** Specialist profiles and skills are authored in forms, not
+  Markdown files.
+- **Scope:** App editors that write `team/` and `skills/` through the
+  orchestrator, reusing SKL-002's staging, diff and install-disabled path for
+  skills, and the change to the read-only `/team` mount's threat model.
+- **Acceptance:** An authority change still requires a fresh grant; no agent
+  path can write a profile or a skill.
+- **Dependencies:** OPS-002 and SKL-002.
+
 #### TUR-025 - Fence tool authorization cancellation
 
 - **Outcome:** A tool cannot be authorized after its run leaves an active
@@ -896,13 +975,21 @@ gates are satisfied.
 
 #### AGT-001 - Second specialized agent
 
+- **Status:** Shipped as file-defined specialist profiles under the existing
+  `AgentId` (PR #150 and the delegation PRs), not as a second `AgentId`: an
+  enum value per agent could not be user-extensible, and every new agent would
+  need a proto change.
 - **Outcome:** Turing supports plural agents with explicit routing and policy.
-- **Scope:** A second `AgentId`, deterministic routing/handoff, per-agent tools,
-  provider capabilities, capacity, events, and concurrency tests.
+- **Scope:** File-defined profiles under the existing `AgentId`, deterministic
+  routing/handoff, per-agent tools, provider capabilities, capacity, events,
+  and concurrency tests.
 - **Acceptance:** Routing is visible; handoff preserves provenance; concurrent
   agents do not violate session ordering, leases, fencing, or approvals.
-- **Dependencies:** TUR-010, TUR-011, TUR-014, TUR-018, TUR-019, CON-002, and
-  AGT-000.
+- **Delivered prerequisites:** TUR-010, TUR-018, TUR-019 and CON-002.
+- **Follow-on hardening:** TUR-011 (delta batching) and TUR-014 (provider
+  usage and health) remain pending; they are not claimed as delivered by the
+  single-slot specialist implementation. AGT-000 still gates raising
+  concurrency above one, which this item does not do.
 
 #### AGT-002 - Parent/child delegated runs
 
@@ -911,7 +998,11 @@ gates are satisfied.
   artifact return, and failure aggregation.
 - **Acceptance:** A parent can spawn, observe, cancel, and collect a child;
   children cannot inherit undeclared tools, egress, memory, or approval.
-- **Dependencies:** AGT-001 and EVAL-001.
+- **Status:** Shipped behind `TURING_AGENT_TEAM_ENABLED`, default `false`
+  (PRs #152–#158, #162, #163 and #167), including child-owned egress consent
+  per task. The flag defaults to on only after EVAL-001's delegation scenarios
+  pass.
+- **Dependencies:** AGT-001 and EVAL-001 (the latter now gates the default).
 
 #### AGT-003 - Visible planning and handoff
 
@@ -919,7 +1010,23 @@ gates are satisfied.
 - **Scope:** Typed plan/handoff events, UI, audit, and replay.
 - **Acceptance:** Hidden delegation is impossible; reopen shows the same plan,
   agents, scopes, and outcomes.
+- **Status:** Partly shipped (PR #163): delegation events, task cards and
+  reopen. Typed plans and audit-viewer integration remain, with AUD-001 and
+  EVT-001.
 - **Dependencies:** AGT-002, AUD-001, and EVT-001.
+
+#### AGT-004 - Brokered specialist requests
+
+- **Outcome:** A specialist can ask another for help without Turing spending a
+  model call to relay it.
+- **Scope:** A request through the orchestrator service (for example
+  `team.ask`) with flow labels that refuse private-to-egress paths, a budget,
+  and no cycles.
+- **Acceptance:** A request never widens the asking specialist's tools, egress,
+  memory or approvals; cycles and over-budget chains are refused before any
+  run starts; the user can see who asked whom.
+- **Dependencies:** AGT-002, with AGT-000 evidence before requests run in
+  parallel.
 
 ### Workstream D - Safe customization ecosystem
 
@@ -1142,6 +1249,28 @@ gates are satisfied.
 
 ### Workstream G - Account integrations and imports
 
+#### WEB-001 - Web search and fetch
+
+- **Outcome:** Research can search the web and read pages.
+- **Scope:** Orchestrator-owned `web.search` and `web.fetch` with framed,
+  attributed results, a remote-egress disclosure, and domain and size limits;
+  a specialist reaches them through child egress consent.
+- **Acceptance:** No query or page leaves the machine without the disclosed
+  consent; fetched content is framed as untrusted data and cannot authorize a
+  tool call; size and domain limits fail closed.
+- **Dependencies:** TUR-003 and AGT-002's child egress consent.
+
+#### AZ-001 - Azure tooling
+
+- **Outcome:** Dev can inspect Azure resources.
+- **Scope:** Read-first resource inspection; any write is a mutation behind an
+  argument-bound approval. Credentials stay out of the runtime, as for GitHub.
+- **Acceptance:** Reads need the disclosed egress consent; no write runs
+  without an approval bound to its arguments; credentials never reach a run,
+  log or event.
+- **Dependencies:** TUR-021 and AGT-002's child egress consent; INT-002 if
+  sign-in requires OAuth.
+
 #### INT-002 - User-owned OAuth client architecture
 
 - **Outcome:** OAuth-only providers can be connected without a Turing-operated
@@ -1325,6 +1454,156 @@ gates are satisfied.
   create or rewrite memory, skills, or grants on its own.
 - **Dependencies:** MEM-010, MEM-012, SKL-004, and AUD-001.
 
+### Workstream J - MCP protocol evolution
+
+<a id="mcp-protocol-evolution"></a>
+
+**Status:** Planned. No MCPP capability is delivered by this document.
+The [research and adoption plan](architecture/mcp-protocol-adoption.md)
+records current-versus-legacy protocol facts, the four implementation surfaces,
+immutable sources, and failure/authorization contracts. `CON-001` remains
+shipped in its documented 2025-11-25 scope.
+
+#### MCPP-001 - Honest legacy interoperability and diagnostics
+
+- **Outcome:** Unsupported modern peers and task-only tools fail clearly,
+  without unsafe retries or misleading availability.
+- **Scope:** Typed bounded HTTP/JSON-RPC errors, era-aware retry classification,
+  filtering of legacy `execution.taskSupport: required` tools on both client
+  paths, and explicit premature-stream-closure outcomes.
+- **Likely files:** `turing-backend/mcpwire/`, runtime MCP client and tool
+  registry, orchestrator registry client and discovery.
+- **Acceptance:** Modern-only stock-peer, required-task and disconnect
+  fixtures prove clear failure; no peer-controlled error text or credentials
+  enter persisted status; an uncertain approved mutation is never replayed.
+- **Dependencies:** CON-001 (shipped).
+
+#### MCPP-002 - Modern registry client with legacy fallback
+
+- **Outcome:** Third-party modern-only, dual-era and legacy servers interoperate
+  without changing Turing's policy authority.
+- **Scope:** Safe `server/discover` probing, per-request version/capabilities,
+  required HTTP metadata and validated parameter headers, typed results,
+  structured output/schema bounds and cache hints; modern stream-close
+  cancellation versus legacy notifications/session cleanup.
+- **Likely files:** Shared wire helpers, registry client/transport/discovery,
+  tool descriptor contracts and conformance fixtures.
+- **Acceptance:** An explicit stock-peer matrix covers all three peer modes;
+  header/body mismatch and unsupported capabilities are actionable; unknown
+  result types fail closed; negotiation never retries a mutation; queued-run
+  tool snapshots and credential/endpoint boundaries survive cache refresh.
+- **Dependencies:** MCPP-001 and CON-002 (shipped). No PROV-001 dependency.
+
+#### MCPP-003 - Dual-era bundled MCP transport
+
+- **Outcome:** The runtime and bundled servers support the modern core while
+  retaining the current legacy callers.
+- **Scope:** Runtime client reuse of the era-aware wire layer; modern
+  `server/discover`, exact metadata allowlists, headers and result envelopes
+  in both bundled servers. Tasks are not required for short bundled tools.
+- **Likely files:** Runtime MCP client; `mcp-files` and `mcp-system` server
+  lifecycle/dispatch code; shared wire and stock-client tests.
+- **Acceptance:** Modern and legacy stock clients work; approval/provenance
+  identities and Origin rejection remain intact; error-envelope changes
+  preserve uncertain-effect handling; the system binary stays stdlib-only.
+- **Dependencies:** MCPP-002. Not a prerequisite for MCPP-004.
+
+#### MCPP-004 - Bounded consumption of the modern Tasks extension
+
+- **Outcome:** A registered modern tool can return a durable remote task handle
+  instead of forcing one long HTTP response.
+- **Scope:** Explicit opt-in to `io.modelcontextprotocol/tasks`, sealed handle
+  persistence, bounded inline `tasks/get`, cooperative `tasks/cancel`, task
+  expiry and exact result/error mapping. No `tasks/result` or `tasks/list`.
+- **Likely files:** Registry dispatch, repository/schema, cancellation/recovery
+  paths and schema-pinned task-peer fixtures.
+- **Acceptance:** One logical dispatch issues one initial `tools/call`;
+  task status/result validation, TTL, pacing and cancel-completes races are
+  covered; handles never leak; no traffic follows withdrawal. Inline mode
+  keeps its existing worker slot and does not poll orphaned handles after a
+  run has ended without operation-specific authorization.
+- **Dependencies:** MCPP-002 and CXL-001 (shipped).
+
+#### MCPP-005 - Durable external waits without occupied worker slots
+
+- **Outcome:** Long remote tasks survive restarts and release scarce execution
+  slots while Turing retains authoritative lifecycle truth.
+- **Entry gate:** Review a durable operation-custody design before implementation:
+  post-dispatch consent lifetime, exact endpoint/credential binding, allowed
+  poll/cancel methods, deadlines, revocation/deletion fences, cancellation
+  receipts and result retention. Existing active-run dispatch checks cannot
+  simply be bypassed after the dispatch turn completes.
+- **Scope:** Deferred tool receipts, orchestrator-owned polling, version-gated
+  worker acknowledgement and one generalized join across remote tasks and
+  specialist results. Initially attended local-model turns only; no automatic
+  reuse of a parent's consent for a remote-provider continuation.
+- **Likely files:** Repository/schema and lifecycle, orchestrator poller,
+  runtime job/worker contract, generalized result join and events.
+- **Acceptance:** With concurrency one, another turn finishes while a task
+  waits. Mixed tasks and specialists join once across crashes. Cancellation,
+  revocation and deletion stop unauthorized traffic and late writes. Lost
+  creation responses remain uncertain; no mutation is automatically repeated.
+- **Dependencies:** MCPP-004, TUR-010, CXL-001, and the merged team join/lifecycle
+  foundation through #162. MCPP-006 and EVAL-001 are default-enable gates;
+  AGT-000 still gates increased concurrency.
+
+#### MCPP-006 - Reopenable remote-operation UI
+
+- **Outcome:** Waiting, cancellation acknowledgement and unknown remote outcomes
+  remain visible and distinct after reconnect/reopen.
+- **Scope:** Public operation read/cancel contracts, bounded status messages,
+  cards, durable event reconciliation and continuation attribution; reuse
+  team-client components where their contracts fit.
+- **Likely files:** Operation proto/service, Flutter API/mappers/chat/cards,
+  widget and replay fixtures.
+- **Acceptance:** Every task state and cancellation race has live/reopen parity;
+  no opaque remote handle is shown; a completed dispatch turn can still expose
+  a separately cancellable pending operation without rewriting that run.
+- **Dependencies:** MCPP-005 operation APIs and the team-client delivery slice
+  ([design slice 3](superpowers/specs/2026-10-03-turing-orchestrator-agent-team-design.md#14-delivery-slices),
+  shipped in [#163](https://github.com/mcasillas17/TuringAgent/pull/163)).
+  The reusable team UI prerequisite is satisfied; the MCP remote-operation
+  APIs and UI are still pending and must ship before deferred execution
+  becomes default-on.
+
+#### MCPP-007 - Explicit user input for MCP operations
+
+- **Outcome:** Supported form elicitation can pause an operation for the user
+  without turning model output into consent.
+- **Scope:** Bounded MRTR and task `inputRequests`/`tasks/update`, user-only
+  answers, destination-bound input disclosure, deduplication and audit.
+  First delivery supports non-mutating tools only.
+- **Likely files:** Wire codec, operation/input services, consent contracts
+  and Flutter forms.
+- **Acceptance:** Negotiated MRTR uses a new request ID, unchanged canonical
+  tool arguments and the issued opaque state; lost-response replay remains
+  forbidden. Undeclared input types, model answers, stale keys and excessive
+  rounds fail closed. Sensitive URL-mode flows are not downgraded to forms.
+- **Dependencies:** MCPP-002, MCPP-004, MCPP-006 and TUR-021's approval boundary.
+  EVAL-001 and explicit input-disclosure evidence gate default enablement.
+
+#### MCPP-008 - Optional Tasks for Turing MCP hosts
+
+- **Outcome:** A future scoped MCP host can observe a Turing operation through
+  task handles without becoming its policy authority.
+- **Scope:** Separate host-facing task mapping, ownership, bounded retention
+  and authentication on every task method; not tasks in bundled tool servers.
+- **Acceptance:** Cross-client task access, guessing and stale credentials fail;
+  cancellation never grants rollback or bypasses the Turing lifecycle.
+- **Dependencies:** MCPX-001 and a reviewed server-task mapping. Optional.
+
+#### MCPP-009 - Versioned protocol and extension evidence
+
+- **Outcome:** Future protocol updates are based on pinned facts and behavior,
+  not SDK version numbers or moving draft pages.
+- **Scope:** Release-time core/extension/schema review, immutable fixture
+  provenance and an independent compatibility matrix.
+- **Acceptance:** Each adopted requirement names its revision and evidence;
+  stable extensions are distinguished from experimental/draft material;
+  missing SDK Tasks support is not mistaken for task conformance.
+- **Dependencies:** None. This is a review checklist, not a recurring
+  automation or an automatic protocol/policy upgrade.
+
 ## Priority spine after the first ten
 
 This is a dependency-aware recommendation, not a second immutable queue:
@@ -1340,10 +1619,23 @@ This is a dependency-aware recommendation, not a second immutable queue:
 6. Complete safe skill import/authoring: SKL-002 through SKL-004.
 7. Add outbound-only channels: CHN-000 through CHN-002, Telegram, then Slack.
 8. Add local interoperability: CON-REG-001 and MCPX-001.
-9. Add bounded delegation: A2A-001, then optional A2A-002 and AGT-001/002.
+9. Add bounded delegation: AGT-001/002 have shipped behind
+   `TURING_AGENT_TEAM_ENABLED`, whose default waits only for EVAL-001
+   (item 2). Next: A2A-001, then optional A2A-002 and AGT-004. AGT-000
+   (item 4) gates only raising `TURING_MAX_CONCURRENT_RUNS_GENERAL` above 1.
 10. Add executable extensibility: XTOOL-001 before XTOOL-002.
 11. Add webhook channels, account connectors, longevity, and modalities only
     when their gates pass.
+
+Alongside that product sequence, run the bounded MCP maintenance track:
+MCPP-001 then MCPP-002; MCPP-003 and MCPP-004 can follow independently.
+MCPP-005/006 provide the long-wait capacity and UI benefit, behind explicit
+custody and EVAL-001 gates. MCPP-007 follows with user-input support; MCPP-008
+waits for the separate host bridge. Do not bypass those gates to advertise
+the latest protocol revision.
+
+An operator track also runs alongside: OPS-001 first, because a new server
+needs it before anything else, then OPS-002 and OPS-003.
 
 ## Success measures
 
@@ -1380,7 +1672,10 @@ External product and protocol claims were checked against primary sources:
 - [Hermes messaging](https://hermes-agent.nousresearch.com/docs/user-guide/messaging)
 - [Hermes architecture](https://hermes-agent.nousresearch.com/docs/developer-guide/architecture)
 - [Agent Skills specification](https://agentskills.io/specification)
-- [MCP specification](https://modelcontextprotocol.io/specification/2025-11-25)
+- [MCP implemented legacy specification](https://modelcontextprotocol.io/specification/2025-11-25)
+- [MCP current specification](https://modelcontextprotocol.io/specification/2026-07-28)
+- [MCP Tasks extension, pinned specification](https://github.com/modelcontextprotocol/ext-tasks/blob/899c1bbc869567670093face3591b39c28ce3219/specification/2026-07-28/tasks.md)
+- [MCP adoption research and immutable sources](architecture/mcp-protocol-adoption.md#primary-sources)
 - [MCP Registry](https://modelcontextprotocol.io/registry/about)
 - [A2A 1.0 specification](https://a2a-protocol.org/latest/specification/)
 - [Agent Client Protocol](https://agentclientprotocol.com/overview/introduction)

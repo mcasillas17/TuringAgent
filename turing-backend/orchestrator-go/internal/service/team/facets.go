@@ -42,6 +42,12 @@ func (s *PublicServer) ListDelegations(ctx context.Context, req *turingv1.ListDe
 func (s *PublicServer) GetDelegation(ctx context.Context, req *turingv1.GetDelegationRequest) (*turingv1.Delegation, error) {
 	return s.service.GetDelegation(ctx, req)
 }
+func (s *PublicServer) PrepareDelegationEgress(ctx context.Context, req *turingv1.PrepareDelegationEgressRequest) (*turingv1.PrepareDelegationEgressResponse, error) {
+	return s.service.PrepareDelegationEgress(ctx, req)
+}
+func (s *PublicServer) DecideDelegationEgress(ctx context.Context, req *turingv1.DecideDelegationEgressRequest) (*turingv1.Delegation, error) {
+	return s.service.DecideDelegationEgress(ctx, req)
+}
 func (*PublicServer) ListTeamTools(context.Context, *turingv1.ListTeamToolsRequest) (*turingv1.ListTeamToolsResponse, error) {
 	return nil, status.Error(codes.PermissionDenied, "team tool discovery is internal")
 }
@@ -69,6 +75,12 @@ func (*InternalServer) ListDelegations(context.Context, *turingv1.ListDelegation
 	return nil, teamManagementDenied()
 }
 func (*InternalServer) GetDelegation(context.Context, *turingv1.GetDelegationRequest) (*turingv1.Delegation, error) {
+	return nil, teamManagementDenied()
+}
+func (*InternalServer) PrepareDelegationEgress(context.Context, *turingv1.PrepareDelegationEgressRequest) (*turingv1.PrepareDelegationEgressResponse, error) {
+	return nil, teamManagementDenied()
+}
+func (*InternalServer) DecideDelegationEgress(context.Context, *turingv1.DecideDelegationEgressRequest) (*turingv1.Delegation, error) {
 	return nil, teamManagementDenied()
 }
 func (s *InternalServer) ListTeamTools(ctx context.Context, req *turingv1.ListTeamToolsRequest) (*turingv1.ListTeamToolsResponse, error) {

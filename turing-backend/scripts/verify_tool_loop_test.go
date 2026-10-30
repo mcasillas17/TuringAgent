@@ -232,6 +232,8 @@ type verifyHarnessResult struct {
 type verifyHarnessOptions struct {
 	goBuildExit int
 	ollamaModel string
+	// dotEnv is appended to the harness's .env.
+	dotEnv string
 }
 
 func runVerifyToolLoopHarness(
@@ -293,7 +295,7 @@ func runVerifyToolLoopHarness(
 	chmod +x "$client_bin"
 	`)
 	if err := os.WriteFile(filepath.Join(root, ".env"), []byte(
-		"TURING_CLIENT_API_KEY=token\nOLLAMA_BASE_URL=http://host.docker.internal:11434\nOLLAMA_MODEL=qwen2.5:7b\n",
+		"TURING_CLIENT_API_KEY=token\nOLLAMA_BASE_URL=http://host.docker.internal:11434\nOLLAMA_MODEL=qwen2.5:7b\n"+dotEnvOption(options),
 	), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -309,6 +311,9 @@ func runVerifyToolLoopHarness(
 	cmd.Env = append(os.Environ(),
 		"PATH="+binDir+":"+os.Getenv("PATH"),
 		"TURING_VERIFY_MODEL=",
+		"TURING_LOCAL_ENGINE=",
+		"TURING_LOCAL_ENGINE_URL=",
+		"TURING_LOCAL_MODEL=",
 		"OLLAMA_MODEL="+opts.ollamaModel,
 		"TURING_VERIFY_OLLAMA_URL="+verifyURL,
 		"TURING_VERIFY_OLLAMA_CONTAINER_URL="+containerURL,
@@ -348,5 +353,37 @@ func writeExecutable(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0700); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func dotEnvOption(options []verifyHarnessOptions) string {
+	if len(options) == 0 {
+		return ""
+	}
+	return options[0].dotEnv
+}
+
+// The script reads the local model and engine address the way the services
+// do: the TURING_LOCAL_* name wins over the OLLAMA_* one it replaces.
+func TestVerifyToolLoopScriptPrefersTheLocalNames(t *testing.T) {
+	result := runVerifyToolLoopHarness(t, 0, 0, 0, 0, "", "", "", "", verifyHarnessOptions{
+		dotEnv: "TURING_LOCAL_MODEL=qwen3:8b\nTURING_LOCAL_ENGINE_URL=http://host.docker.internal:11500\n",
+	})
+	if result.exitCode != 0 {
+		t.Fatalf("exit code = %d; output:\n%s", result.exitCode, result.output)
+	}
+	if !strings.Contains(result.curlLog, `"qwen3:8b"`) || !strings.Contains(result.curlLog, "http://localhost:11500/api/show") {
+		t.Fatalf("curl log = %q, want the TURING_LOCAL_* model and address", result.curlLog)
+	}
+}
+
+// The script drives Ollama's own API, so it refuses another engine rather
+// than probing it as Ollama.
+func TestVerifyToolLoopScriptRefusesAnotherEngine(t *testing.T) {
+	result := runVerifyToolLoopHarness(t, 0, 0, 0, 0, "", "", "", "", verifyHarnessOptions{
+		dotEnv: "TURING_LOCAL_ENGINE=openai\n",
+	})
+	if result.exitCode != 2 || !strings.Contains(result.output, "Ollama engine") || result.composeLog != "" {
+		t.Fatalf("exit code = %d, compose %q; output:\n%s", result.exitCode, result.composeLog, result.output)
 	}
 }

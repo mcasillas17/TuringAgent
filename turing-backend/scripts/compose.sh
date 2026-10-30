@@ -316,6 +316,24 @@ is_recovery_command() {
   esac
 }
 
+# is_read_only_command names the subcommands that only ever look.
+#
+# `turing status` and `turing logs` are asked on exactly the install whose bind
+# sources or vault path are broken, so none of the launch checks apply: they
+# exist to stop a launch mounting something unsafe, and these mount nothing.
+#
+# They are kept apart from is_recovery_command rather than added to it, because
+# that list also retries a failed command without .env. Ctrl-C makes
+# `logs -f` exit with status 130, which the retry would read as an unreadable
+# .env and answer by starting the stream again behind the user's prompt. Docker
+# is asked once, and its answer is the answer.
+is_read_only_command() {
+  case "$(compose_subcommand "$@")" in
+    ps | logs) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 validate_database_file() {
   local database_path="$1"
   local relative="${database_path#"$PWD/data/"}"
@@ -386,6 +404,14 @@ if ! is_canonical_non_root_id "$current_uid" || ! is_canonical_non_root_id "$cur
 fi
 if [[ "${1:-}" == "--validate-host-identity" ]]; then
   exit 0
+fi
+if is_read_only_command "$@"; then
+  if [[ -f .env ]]; then
+    exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \
+      docker compose --env-file .env -f infra/docker-compose.yml "$@"
+  fi
+  exec env HOST_UID="$current_uid" HOST_GID="$current_gid" \
+    docker compose -f infra/docker-compose.yml "$@"
 fi
 if [[ -f .env ]]; then
   if ! is_recovery_command "$@"; then

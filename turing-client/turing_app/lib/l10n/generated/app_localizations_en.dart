@@ -14,6 +14,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String approvalRequestedBy(String requester, String tool) {
+    return '$requester wants to use $tool';
+  }
+
+  @override
   String get approvalLoading => 'Loading approval preview';
 
   @override
@@ -674,6 +679,17 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get egressDialogSend => 'Send';
+
+  @override
+  String get egressDialogLocalProvider => 'Local';
+
+  @override
+  String get egressDialogAllow => 'Allow';
+
+  @override
+  String egressDialogRequester(String requester) {
+    return '$requester asks to use these tools for this one task.';
+  }
 
   @override
   String get egressCategoryCurrentMessage => 'Current message';

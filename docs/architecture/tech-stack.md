@@ -129,14 +129,42 @@ read-only tmpfs.
 
 ## Model providers
 
-The default local model path is Ollama:
+The local route runs on Ollama by default:
 
 ```text
-OLLAMA_BASE_URL=http://host.docker.internal:11434
-OLLAMA_MODEL=qwen2.5:7b
-OLLAMA_CONTEXT_WINDOW_TOKENS=32768
-OLLAMA_MAX_OUTPUT_TOKENS=2048
+TURING_LOCAL_ENGINE=ollama
+TURING_LOCAL_ENGINE_URL=http://host.docker.internal:11434
+TURING_LOCAL_MODEL=qwen2.5:7b
+TURING_LOCAL_CONTEXT_WINDOW_TOKENS=32768
+TURING_LOCAL_MAX_OUTPUT_TOKENS=2048
 ```
+
+Or on any OpenAI-compatible server on the same machine, such as ds4,
+llama.cpp's `llama-server`, LM Studio, Lemonade or vLLM:
+
+```text
+TURING_LOCAL_ENGINE=openai
+TURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1
+TURING_LOCAL_MODEL=deepseek-chat
+TURING_LOCAL_ENGINE_LABEL=ds4
+```
+
+Either engine is the local route (`ollama` on the wire, whatever serves it):
+its URL must name this machine, inference alone needs no remote-egress consent,
+and specialists can use it. Enabled remote tools still require a per-run
+disclosure. The OpenAI-compatible engine reuses the remote
+transport's streaming and tool calls but never presents a remote endpoint, so
+the runtime's egress check keeps refusing a remote run resolved to it. The
+older `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_CONTEXT_WINDOW_TOKENS` and
+`OLLAMA_MAX_OUTPUT_TOKENS` names still work while their replacement is empty,
+and are logged as deprecated; both services resolve the model the same way.
+Each worker advertises its engine's label on the model it serves
+(`ModelCapability.engine`), which the app shows as **Local · <engine>**.
+A thinking model's reasoning is dropped when the engine sends it as a separate
+field; an engine that writes it into the answer itself (for example inside
+`<think>` tags) shows it, so prefer a non-thinking model or alias (for ds4,
+`deepseek-chat`). An OpenAI-compatible engine always receives `max_tokens`:
+its model names are its own aliases, whatever they look like.
 
 OpenAI-compatible models can be configured with:
 
@@ -148,7 +176,7 @@ OPENAI_CONTEXT_WINDOW_TOKENS=32768
 OPENAI_MAX_OUTPUT_TOKENS=2048
 ```
 
-Both context values must be integers from `1` through `16777216`. Each is also the exact routing ceiling advertised by the runtime; Turing does not infer limits from model names. Each output value must be positive and smaller than its context window; invalid configuration stops the runtime at startup. Ollama receives `num_predict` plus an explicit `num_ctx` rounded up to a stable power-of-two bucket that covers exact admitted request bytes and output reserve, capped by `OLLAMA_CONTEXT_WINDOW_TOKENS`; small requests avoid the cap's full KV-cache allocation while nearby turns reuse one runner size. OpenAI-compatible providers and routed external agents use their window for local admission and receive `max_completion_tokens` for o1/o3/o4 and GPT-5 model families, or `max_tokens` otherwise, so no Ollama-only option leaks onto their wire format. Operators must match each cap to the selected model.
+Both context values must be integers from `1` through `16777216`. Each is also the exact routing ceiling advertised by the runtime; Turing does not infer limits from model names. Each output value must be positive and smaller than its context window; invalid configuration stops the runtime at startup. Ollama receives `num_predict` plus an explicit `num_ctx` rounded up to a stable power-of-two bucket that covers exact admitted request bytes and output reserve, capped by `TURING_LOCAL_CONTEXT_WINDOW_TOKENS`; small requests avoid the cap's full KV-cache allocation while nearby turns reuse one runner size. Remote OpenAI-compatible providers and routed external agents use their window for local admission and receive `max_completion_tokens` for o1/o3/o4 and GPT-5 model families, or `max_tokens` otherwise; the OpenAI-compatible local engine always receives `max_tokens`. No Ollama-only option leaks onto either OpenAI-compatible wire format. Operators must match each cap to the selected model.
 
 Before dispatch, each built-in provider serializes the exact JSON request it would send. The runtime conservatively counts one UTF-8 request byte as an upper bound of one prompt token and requires that bound plus the output reservation fit the configured window. This intentionally avoids claiming exact tokenizer or billing usage while providing one deterministic bound for messages, tool schemas, aliases, and provider framing.
 
@@ -168,7 +196,7 @@ A provider completion with finish reason `length` emits a durable `agent.run.ste
 The Flutter client sends the selected provider with each message. The backend owns provider routing, context admission, and model execution.
 
 The Agents page manages endpoint records and Turing's team of specialist
-profiles (enablement and revision-bound grants; delegation is off by default and experimental; the app shows no delegation cards yet). `SessionAgentBar` reads/sets/clears
+profiles (enablement and revision-bound grants, and the tools each asks you about for every task; delegation is off by default and experimental, and its tasks show as cards in the conversation). `SessionAgentBar` reads/sets/clears
 the conversation route through `ExternalAgentService`, and the runtime's
 resolver performs inference using the OpenAI-compatible transport.
 Vendor names are descriptive labels, not native Anthropic/Gemini

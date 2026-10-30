@@ -791,6 +791,50 @@ void main() {
       );
     });
 
+    // Spec 7.8: a tool that leaves the machine is the user's to allow for
+    // each task, and the card and the grant sheet both say so.
+    testWidgets('a profile names the tools it asks consent for each task', (
+      tester,
+    ) async {
+      final api = _TeamAgentApi([
+        _profile(
+          'dev',
+          name: 'Dev',
+          tools: const ['files.*', 'github.*'],
+          resolvedTools: const ['files/files.read'],
+          consentTools: const ['integrations/github.get_issue'],
+        ),
+      ]);
+      await _pumpAgents(tester, api);
+
+      expect(
+        find.descendant(
+          of: _card('dev'),
+          matching: find.text(
+            'Asks you before each task: integrations/github.get_issue',
+          ),
+        ),
+        findsOneWidget,
+      );
+
+      await _toggle(tester, 'dev');
+      final sheet = find.byType(AgentProfileGrantSheet);
+      expect(
+        find.descendant(
+          of: sheet,
+          matching: find.text('Tools it asks you about for each task'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: sheet,
+          matching: find.text('integrations/github.get_issue'),
+        ),
+        findsOneWidget,
+      );
+    });
+
     // The memory level is a ceiling on memory tools the profile lists, not a
     // grant of its own, so a profile listing none is not told it can read.
     testWidgets('a memory level with no memory tool says it gives nothing', (
@@ -1463,6 +1507,7 @@ AgentProfile _profile(
   List<String> tools = const ['files.read'],
   List<String> resolvedTools = const ['files/files.read'],
   List<AgentProfileToolExclusion> excluded = const [],
+  List<String> consentTools = const [],
   List<String> skills = const [],
   int maxToolCalls = 0,
   String parseError = '',
@@ -1488,6 +1533,7 @@ AgentProfile _profile(
     grantedRevision: grantedRevision ?? (granted ? revision : ''),
     state: AgentProfileState.unknown,
     resolvedTools: resolvedTools,
+    consentTools: consentTools,
     unavailableReasons: unavailable,
     excludedTools: excluded,
     parseError: parseError,
@@ -1580,6 +1626,7 @@ class _TeamAgentApi extends _AgentApi {
       grantedRevision: grant,
       state: state,
       resolvedTools: p.resolvedTools,
+      consentTools: p.consentTools,
       unavailableReasons: p.unavailableReasons,
       excludedTools: p.excludedTools,
       parseError: p.parseError,

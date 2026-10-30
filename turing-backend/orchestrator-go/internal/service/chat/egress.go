@@ -3,10 +3,7 @@ package chat
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -198,8 +195,8 @@ func (s *Server) PrepareRemoteEgress(ctx context.Context, req *turingv1.PrepareR
 			ExternalAgentId:      resolved.ExternalAgentID,
 			DataCategories:       append([]turingv1.EgressDataCategory(nil), resolved.DataCategories...),
 			ExpiresAt:            timestamppb.New(time.Unix(0, payload.ExpiresAtUnixNano).UTC()),
-			RemoteMcpServers:     toProtoRemoteMCPServers(resolved.RemoteMCPServers),
-			IntegrationEndpoints: toProtoIntegrationEndpoints(resolved.IntegrationEndpoints),
+			RemoteMcpServers:     repository.RemoteMCPServersProto(resolved.RemoteMCPServers),
+			IntegrationEndpoints: repository.IntegrationEndpointsProto(resolved.IntegrationEndpoints),
 			SelectedTools:        append([]string(nil), resolved.SelectedTools...),
 			Skills:               disclosedSkills,
 			MemoryNotes:          toProtoMemoryEgressDisclosures(*resolved),
@@ -761,33 +758,13 @@ func (s *Server) signEgressChallenge(payload egressChallengePayload) (string, er
 	if len(canonical) > maxEgressChallengeBytes {
 		return "", errors.New("egress challenge payload is too large")
 	}
-	signature := hmac.New(sha256.New, s.egressSigningKey())
-	_, _ = signature.Write(canonical)
-	return base64.RawURLEncoding.EncodeToString(canonical) + "." +
-		base64.RawURLEncoding.EncodeToString(signature.Sum(nil)), nil
+	return backendegress.SignChallenge(s.egress.SigningSecret, egressChallengeDomain, canonical), nil
 }
 
 func (s *Server) parseEgressChallenge(token string) (egressChallengePayload, []byte, error) {
-	if token == "" || len(token) > maxEgressChallengeBytes*2 {
-		return egressChallengePayload{}, nil, errors.New("invalid challenge length")
-	}
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 {
-		return egressChallengePayload{}, nil, errors.New("invalid challenge shape")
-	}
-	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil || len(payloadBytes) > maxEgressChallengeBytes ||
-		base64.RawURLEncoding.EncodeToString(payloadBytes) != parts[0] {
-		return egressChallengePayload{}, nil, errors.New("invalid challenge payload")
-	}
-	providedSignature, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil || base64.RawURLEncoding.EncodeToString(providedSignature) != parts[1] {
-		return egressChallengePayload{}, nil, errors.New("invalid challenge signature")
-	}
-	expectedSignature := hmac.New(sha256.New, s.egressSigningKey())
-	_, _ = expectedSignature.Write(payloadBytes)
-	if !hmac.Equal(providedSignature, expectedSignature.Sum(nil)) {
-		return egressChallengePayload{}, nil, errors.New("invalid challenge signature")
+	payloadBytes, err := backendegress.OpenChallenge(s.egress.SigningSecret, egressChallengeDomain, token, maxEgressChallengeBytes)
+	if err != nil {
+		return egressChallengePayload{}, nil, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payloadBytes))
 	decoder.DisallowUnknownFields()
@@ -805,12 +782,6 @@ func (s *Server) parseEgressChallenge(token string) (egressChallengePayload, []b
 	return payload, payloadBytes, nil
 }
 
-func (s *Server) egressSigningKey() []byte {
-	deriver := hmac.New(sha256.New, []byte(s.egress.SigningSecret))
-	_, _ = deriver.Write([]byte(egressChallengeDomain))
-	return deriver.Sum(nil)
-}
-
 func validChallengePayload(payload egressChallengePayload) bool {
 	if payload.Version != egressChallengeVersion ||
 		payload.Nonce == "" || len(payload.Nonce) > maxEgressIDBytes ||
@@ -818,7 +789,7 @@ func validChallengePayload(payload egressChallengePayload) bool {
 		len(payload.IdempotencyKey) > maxEgressIDBytes ||
 		payload.RequestDigest == "" ||
 		payload.MemorySnapshotFingerprint == "" ||
-		(payload.Provider != "openai_compatible" && payload.Provider != "ollama") ||
+		(payload.Provider != "openai_compatible" && payload.Provider != backendegress.LocalProvider) ||
 		payload.Model == "" || len(payload.Model) > maxEgressModelBytes ||
 		(payload.ExternalAgentID != "" && payload.ExternalCredentialRefHash == "") ||
 		(payload.ExternalAgentID == "" && payload.ExternalCredentialRefHash != "") ||
@@ -950,7 +921,7 @@ func providerToProto(provider string) turingv1.ModelProvider {
 	if provider == "openai_compatible" {
 		return turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE
 	}
-	if provider == "ollama" {
+	if provider == backendegress.LocalProvider {
 		return turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA
 	}
 	return turingv1.ModelProvider_MODEL_PROVIDER_UNSPECIFIED
@@ -980,18 +951,6 @@ func fromChallengeRemoteMCPServers(destinations []remoteMCPChallengeDestination)
 	return result
 }
 
-func toProtoRemoteMCPServers(destinations []repository.RemoteMCPServerEgress) []*turingv1.RemoteMcpEgressDestination {
-	result := make([]*turingv1.RemoteMcpEgressDestination, len(destinations))
-	for index, destination := range destinations {
-		result[index] = &turingv1.RemoteMcpEgressDestination{
-			ServerName:   destination.ServerName,
-			Endpoint:     destination.Endpoint,
-			EndpointHost: destination.EndpointHost,
-		}
-	}
-	return result
-}
-
 func toProtoSkillEgressDisclosures(skills []repository.SkillEgressInfo) []*turingv1.SkillEgressDisclosure {
 	result := make([]*turingv1.SkillEgressDisclosure, len(skills))
 	for index, skill := range skills {
@@ -1001,26 +960,6 @@ func toProtoSkillEgressDisclosures(skills []repository.SkillEgressInfo) []*turin
 		}
 	}
 	return result
-}
-
-func toProtoIntegrationEndpoints(destinations []repository.IntegrationEndpointEgress) []*turingv1.IntegrationEgressDestination {
-	result := make([]*turingv1.IntegrationEgressDestination, len(destinations))
-	for index, destination := range destinations {
-		result[index] = &turingv1.IntegrationEgressDestination{
-			Endpoint: destination.Endpoint, EndpointHost: destination.EndpointHost,
-			ConnectionId: destination.ConnectionID, DisplayName: destination.DisplayName,
-			Tools: append([]string(nil), destination.Tools...),
-		}
-	}
-	return result
-}
-
-func newEgressNonce() (string, error) {
-	value := make([]byte, 32)
-	if _, err := rand.Read(value); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
 func requireJSONEOF(decoder *json.Decoder) error {

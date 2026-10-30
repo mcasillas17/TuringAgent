@@ -377,6 +377,16 @@ class _ProfileCard extends StatelessWidget {
                 color: palette.textMuted,
               ),
             ),
+            if (profile.consentTools.isNotEmpty)
+              Text(
+                'Asks you before each task: '
+                '${profile.consentTools.join(', ')}',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.5,
+                  color: palette.textMuted,
+                ),
+              ),
             // Still listed once granted: the sheet that showed them is not
             // shown again until the declaration changes.
             if (profile.excludedTools.isNotEmpty)
@@ -514,6 +524,11 @@ class AgentProfileGrantSheet extends StatelessWidget {
               label: 'Tools it would get now',
               value: _listOrNone(profile.resolvedTools),
             ),
+            if (profile.consentTools.isNotEmpty)
+              _GrantRow(
+                label: 'Tools it asks you about for each task',
+                value: _listOrNone(profile.consentTools),
+              ),
             if (profile.excludedTools.isNotEmpty)
               _GrantRow(
                 label: 'Tools it would not get',

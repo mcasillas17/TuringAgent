@@ -43,6 +43,10 @@ type OpenAICompatible struct {
 	// usageDrainTimeout is per-provider rather than a package variable so a
 	// test can shorten it without reaching into shared state.
 	usageDrainTimeout time.Duration
+	// plainMaxTokens sends max_tokens whatever the model is called. A local
+	// engine's model names are its own aliases, so OpenAI's reasoning-model
+	// naming says nothing about which field it accepts.
+	plainMaxTokens bool
 }
 
 var _ Provider = (*OpenAICompatible)(nil)
@@ -378,6 +382,9 @@ func (p *OpenAICompatible) marshalRequestWithUsage(
 		MaxTokens:           legacyMaxTokens(req.Model, maxTokens),
 		MaxCompletionTokens: reasoningMaxTokens(req.Model, maxTokens),
 		Tools:               tools,
+	}
+	if p.plainMaxTokens {
+		request.MaxTokens, request.MaxCompletionTokens = maxTokens, 0
 	}
 	if includeUsage {
 		request.StreamOptions = &openAIStreamOptions{IncludeUsage: true}

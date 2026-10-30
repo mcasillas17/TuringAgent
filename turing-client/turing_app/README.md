@@ -49,8 +49,14 @@ Implemented in the client:
 - Localized approval cards with authenticated server-derived details,
   complete bounded file diffs, explicit retry/refresh, and bound decisions.
   Approval terminal events and reconciled terminal runs clear their cards.
-- Model provider preference for `ollama` or `openai_compatible`; every effective
-  remote send separately confirms its exact endpoint and disclosed categories.
+- Model provider preference for **Local** (or `Local · <engine>` when the
+  backend supplies its label) or **OpenAI-compatible**, the remote route.
+  The local route still uses `ollama` on the wire, whether Ollama or a
+  same-machine OpenAI-compatible engine serves it. Remote model or tool use
+  separately confirms the exact destinations and disclosed categories.
+- Experimental specialist-task cards with Cancel, View work, relayed
+  approvals, per-task egress consent, result grouping and reopen reconstruction.
+  Delegation remains off by default.
 - Typed session-withdrawal receipts and terminal `session.deleted` events. The
   shell removes a conversation only after a completed receipt or its terminal
   event; an in-progress or failed-external receipt remains visible for retry.
@@ -72,6 +78,10 @@ Runtime prerequisites and limits:
 
 ## Run Locally
 
+Use a Flutter release that meets the [repository's Dart and dependency
+requirements](../../README.md#requirements); the app's SDK declaration alone
+is not the effective build minimum.
+
 From the repository root:
 
 ```bash
@@ -79,6 +89,19 @@ cd turing-client/turing_app
 flutter pub get
 flutter run -d macos
 ```
+
+On a Linux server, run `flutter run -d linux` on the server itself, from a
+graphical session. Until SEC-001 pairs other devices, the server accepts the
+app only from the machine it runs on, so the Linux build is the client for a
+headless Linux host. To build it you need the Linux desktop toolchain and
+`clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev`
+(`flutter_secure_storage_linux` links against `libsecret`). To run it you need a
+Secret Service keyring, for example `gnome-keyring`, running and unlocked in
+that session, because `flutter_secure_storage` stores the API key there. CI
+runs `flutter build linux --debug` with these packages; it proves the app
+builds, not that it launches. The repository README's
+[Linux desktop client](../../README.md#linux-desktop-client) section has the
+details.
 
 Use `flutter devices` to inspect available development targets, not as a list
 of supported deployments. The current client uses native `ClientChannel`
@@ -119,6 +142,14 @@ After saving, `TuringApp` reloads stored settings and opens `ResponsiveShell`.
 Settings remains available from the sidebar, rather than as a workspace
 destination, so the backend URL or API key can be updated later.
 
+When the backend reports its local engine and model, Settings names them,
+for example "Local runs on this machine: ds4 serving deepseek-chat". The
+provider picker shows **Local · ds4**; without an engine label it shows
+**Local**. This selects the local route, not a new inference server.
+Configure the engine on the backend with `TURING_LOCAL_*`, as described in
+the [backend environment reference](../../README.md#configuration).
+The app does not yet install engines or change those host settings.
+
 The current client sends authenticated gRPC metadata using:
 
 ```text
@@ -153,8 +184,8 @@ authorization: Bearer <api-key>
   with each one's state, and turns them on and off; turning one on asks for a
   grant bound to its current revision unless that revision is already granted
   (turning it off keeps the grant). Delegation is off by default and
-  experimental: a specialist's results appear as a plain message, with no
-  cards yet.
+  experimental; when enabled, [task cards](#specialist-tasks) show the work
+  in the parent conversation, independently of external model routing.
 - **Telemetry** shows backend local usage aggregates, not a user-facing audit log.
 
 The destination list is defined in `ShellDestination`; `ResponsiveShell`
@@ -253,6 +284,42 @@ lifecycle RPC responses, and `session.updated` events by authoritative snapshot.
 An archived row cannot be restored by omission from an active page or by an
 older status-less event.
 
+### Specialist tasks
+
+With `TURING_AGENT_TEAM_ENABLED=true` on the backend and active, granted
+profiles, an attended local-model turn can delegate. Each task appears under
+the turn that requested it, with the specialist, task and server-derived
+state. **Cancel** targets that child's run; **View work** opens its read-only
+transcript. Child sessions stay out of the normal chat list and search.
+Cancelling the parent turn stops its unfinished tasks; deleting the
+conversation also withdraws its children.
+
+A task's tool approval appears on its card, labeled with the specialist.
+When the card is off-page, the approval appears in the approval dock instead;
+a failed detail read offers **Load approval** in the same place. Approval
+still uses the existing server-derived preview and bound decision.
+
+A task that would receive tools that leave the machine waits for separate
+consent before a worker can run it:
+
+- **Allow…** opens the disclosure naming that specialist, the destinations
+  and the data categories. Confirmation authorizes that task only.
+- **Run without** keeps only local tools when the specialist can proceed
+  without the remote ones.
+- **Decline (stops the task)** is offered when the specialist requires them.
+
+The parent's consent never carries over to a task. Remote-tool consent is
+also separate from approving an individual mutation. Consent waiting is
+bounded by the backend queue deadline, not an indefinite UI pause.
+
+Reopening reads the durable delegation list and reconciles subsequent events
+to rebuild cards. Joined results appear in a collapsed **Results from the
+team** row; the continuation answer has a chip naming the specialists that
+helped. A stopped-work notice is a status line. This delegation-specific
+reconstruction does not implement general historical tool-card interleaving.
+
+### Historical tool activity and approval review
+
 Historical tool cards and nonterminal run notices are suppressed during event
 replay because persisted messages do not carry event sequence values that could
 place those artifacts back into the transcript correctly. Live events committed
@@ -299,6 +366,10 @@ event replay for a deleted session is `NotFound`, not an empty history.
 - `lib/features/search/search_screen.dart`: debounced, accessible exact-phrase
   conversation search and grouped result navigation.
 - `lib/features/chat/chat_screen.dart`: active backend-connected chat screen for message loading, sending, streaming deltas, inline run/tool activity, and approvals.
+- `lib/features/chat/delegation_card.dart`: specialist-task state, cancellation,
+  egress-consent actions and continuation attribution.
+- `lib/features/chat/delegation_transcript_screen.dart`: read-only child
+  transcript reached through View work.
 - `lib/features/chat/run_state_reconciler.dart`: pure run-ID/version acceptance
   rules shared by history and live state.
 - `lib/features/chat/run_state_card.dart`: localized durable lifecycle/outcome

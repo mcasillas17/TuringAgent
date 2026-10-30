@@ -58,8 +58,14 @@ services:
       # them.
       MEMORY_DISPLAY_ROOT: ${MEMORY_DISPLAY_ROOT:-}
       MCP_CONFIG_ROOT: /mcp
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
-      OLLAMA_CONTEXT_WINDOW_TOKENS: ${OLLAMA_CONTEXT_WINDOW_TOKENS:-32768}
+      # The local model, read exactly as the runtime reads it. Every local
+      # engine key passes through empty when unset: the services own the
+      # defaults, and read a deprecated OLLAMA_* name only while its
+      # TURING_LOCAL_* replacement is empty.
+      TURING_LOCAL_MODEL: ${TURING_LOCAL_MODEL:-}
+      TURING_LOCAL_CONTEXT_WINDOW_TOKENS: ${TURING_LOCAL_CONTEXT_WINDOW_TOKENS:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+      OLLAMA_CONTEXT_WINDOW_TOKENS: ${OLLAMA_CONTEXT_WINDOW_TOKENS:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       # The orchestrator never calls OpenAI and holds no normal mcp-files
       # bearer token. It only calls the dedicated, cleanup-token-authenticated
@@ -142,11 +148,21 @@ services:
       MCP_FILES_BASE_URL: ${MCP_FILES_BASE_URL:-http://turing-mcp-files:7110/mcp}
       MCP_SYSTEM_TOKEN_GENERAL: ${MCP_SYSTEM_TOKEN_GENERAL}
       MCP_FILES_TOKEN_GENERAL: ${MCP_FILES_TOKEN_GENERAL}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+      # The local engine: Ollama, or an OpenAI-compatible server on this
+      # machine. Empty when unset, like the orchestrator's: the runtime owns
+      # the defaults.
+      TURING_LOCAL_ENGINE: ${TURING_LOCAL_ENGINE:-}
+      TURING_LOCAL_ENGINE_URL: ${TURING_LOCAL_ENGINE_URL:-}
+      TURING_LOCAL_ENGINE_API_KEY: ${TURING_LOCAL_ENGINE_API_KEY:-}
+      TURING_LOCAL_ENGINE_LABEL: ${TURING_LOCAL_ENGINE_LABEL:-}
+      TURING_LOCAL_MODEL: ${TURING_LOCAL_MODEL:-}
+      TURING_LOCAL_CONTEXT_WINDOW_TOKENS: ${TURING_LOCAL_CONTEXT_WINDOW_TOKENS:-}
+      TURING_LOCAL_MAX_OUTPUT_TOKENS: ${TURING_LOCAL_MAX_OUTPUT_TOKENS:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-2m}
-      OLLAMA_CONTEXT_WINDOW_TOKENS: ${OLLAMA_CONTEXT_WINDOW_TOKENS:-32768}
-      OLLAMA_MAX_OUTPUT_TOKENS: ${OLLAMA_MAX_OUTPUT_TOKENS:-2048}
+      OLLAMA_CONTEXT_WINDOW_TOKENS: ${OLLAMA_CONTEXT_WINDOW_TOKENS:-}
+      OLLAMA_MAX_OUTPUT_TOKENS: ${OLLAMA_MAX_OUTPUT_TOKENS:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}

@@ -112,7 +112,7 @@ func newSessionHarnessWithDB(t *testing.T, database *db.DB) *sessionHarness {
 		FilesMCPEnabled:   true,
 		ApprovalJWTSecret: "approval-secret",
 		CursorHMACKey:     [32]byte{1},
-		OllamaModel:       "llama3.2",
+		LocalModel:        "llama3.2",
 		OpenAIEnabled:     true,
 		OpenAIBaseURL:     "https://api.openai.com/v1",
 		OpenAIModel:       "gpt-4o-mini",

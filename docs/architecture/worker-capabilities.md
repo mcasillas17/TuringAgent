@@ -215,7 +215,8 @@ current revision, it creates in one transaction a hidden `delegation` session,
 its first message (the brief: role `user`, content type `delegation_brief`,
 Turing's task and context framed as `DELEGATION_BRIEF`), a queued job anchored on
 that brief, a `delegations` row and `DELEGATION_STARTED` on the parent's
-stream, and then asks the runtime to dispatch it.
+stream (carrying the task, so a card made from it needs no read), and then asks
+the runtime to dispatch it.
 The job's `userText` is the stored brief; it carries `agentProfile`,
 `enforceSelectedTools` and `skipAutomaticRecall`, the profile's resolved tools as
 both `selectedTools` and `requestedTools`, the profile's enabled and granted
@@ -223,7 +224,10 @@ skills, the pinned persona and profile withheld, no egress decision, and
 `minimumTeamProtocolVersion: 1`, so only a team-protocol worker claims it. The
 call checks the child's whole route with `ValidateRouting` first, so a child no
 worker could claim is never queued. A retried tool call returns the delegation
-it created.
+it created. A specialist whose tools include some that leave the machine gets
+its local tools in that job and waits, unclaimable, for the user to allow or
+decline the rest for that task; allowing adds them and a decision bound to the
+child run (see [remote-egress-policy.md](remote-egress-policy.md#a-specialists-task)).
 
 **How the runtime offers it.** A worker built with the team client
 (`GeneralAssistantTools.Team`) advertises `team/team.delegate` from a constant,
@@ -300,8 +304,39 @@ appended once the parent's conversation is being deleted. The public
 same view back, in the order the tasks were asked for: the specialist as the
 task froze it, the task as the model wrote it (`delegations.task`, migration
 0029), the state, the approval it waits on, how it ended, whether it was joined
-and the continuation that answered. The internal facet refuses both. The app
-does not read them yet; its cards are the next slice.
+and the continuation that answered. The internal facet refuses both.
+
+**The app's cards.** The chat screen reads `ListDelegations` once when a
+conversation opens, before it subscribes (bounded like the history read), and
+gives each asking turn one block of cards after that turn's last answer row,
+moved down when a later row of the same answer streams in below it. That snapshot is newer than every event the
+subscription replays, so replayed `delegation.*` events are then skipped; a
+server that refuses the read leaves the replayed events to build the cards.
+Each live event replaces a card's state, summary and approval, and every live
+event reporting a task ended asks for the newest messages again — even for a
+card the snapshot already showed ended, since the turn may have stopped between
+the two startup reads — which brings in a stop notice or the join. **Cancel**
+is the public `ChatService.CancelRun` on the task's own session and run, so its
+join says "cancelled by you"; a refused or unavailable cancellation is reported.
+**View work** reads that session
+with `ListMessages`, leaving out the brief. A waiting task's approval travels on
+the task's own stream, so the screen follows the card instead: it reads the
+approval named in `approvalId` (only while still pending) and shows the
+existing approval card on the task's card, labelled with the specialist, or in
+the approval dock when the turn's answer is older than the loaded page. A read
+that fails leaves a "Load approval" action in the same place, because the task
+may send no further update while it waits. The join
+renders as a collapsed "Results from the team" row and a notice as a status
+line, each in the page's order even when the answer from the results streamed
+in before the resync that brought them returned, and the continuation's answer carries a chip naming who helped.
+A task waiting for consent names the tools it wants on its card. **Allow…**
+reads its disclosure with `PrepareDelegationEgress` and shows the send's consent
+dialog, naming the specialist, and records an allowed one with
+`DecideDelegationEgress`; **Run without** (or **Decline (stops the task)** when
+the specialist requires the tools) records none. One decision per card is open
+at a time, a deleted conversation offers neither, and the card takes the
+orchestrator's answer at once, unless an update already moved the task on. A refusal the orchestrator explains, such as tools that
+changed since they were shown, is reported in its words.
 
 ## Run ownership and version fencing
 

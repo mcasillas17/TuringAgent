@@ -35,10 +35,12 @@ func newTeamTestAppWithProfile(t *testing.T, enabled bool, profile string) *App 
 		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
 		ApprovalJWTSecret:    "approval-secret",
 		DatabasePath:         t.TempDir() + "/turing.db",
-		OllamaModel:          "llama3.2",
+		LocalModel:           "llama3.2",
 		TeamRoot:             teamRoot,
 		AgentTeamEnabled:     enabled,
 		MaxDelegationsPerRun: 3,
+		EgressSigningSecret:  "egress-secret",
+		IntegrationKey:       strings.Repeat("ab", 32),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +83,19 @@ func TestTeamServiceFacetAndRuntimeIdentityWiring(t *testing.T) {
 	}
 	if _, err := internal.ListDelegations(internalCtx, &turingv1.ListDelegationsRequest{ParentSessionId: "sess_missing"}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("internal ListDelegations error = %v, want PermissionDenied", err)
+	}
+	// Consenting to a task's tools is the user's too.
+	if _, err := public.PrepareDelegationEgress(publicCtx, &turingv1.PrepareDelegationEgressRequest{DelegationId: "dlg_missing"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("public PrepareDelegationEgress error = %v, want NotFound from the service", err)
+	}
+	if _, err := public.DecideDelegationEgress(publicCtx, &turingv1.DecideDelegationEgressRequest{DelegationId: "dlg_missing"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("public DecideDelegationEgress error = %v, want NotFound from the service", err)
+	}
+	if _, err := internal.PrepareDelegationEgress(internalCtx, &turingv1.PrepareDelegationEgressRequest{DelegationId: "dlg_missing"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("internal PrepareDelegationEgress error = %v, want PermissionDenied", err)
+	}
+	if _, err := internal.DecideDelegationEgress(internalCtx, &turingv1.DecideDelegationEgressRequest{DelegationId: "dlg_missing"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("internal DecideDelegationEgress error = %v, want PermissionDenied", err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -80,22 +81,21 @@ func (r *Repository) DelegationForToolCall(ctx context.Context, parentRunID, too
 
 func delegationForToolCall(ctx context.Context, q rowQuerier, parentRunID, toolCallID string) (Delegation, bool, error) {
 	var delegation Delegation
+	var consent string
 	err := q.QueryRowContext(ctx, `
 		SELECT d.id, d.parent_session_id, d.parent_run_id, d.child_session_id, d.child_run_id,
-			d.profile_id, d.args_hash, run.status
+			d.profile_id, d.args_hash, run.status, d.egress_consent
 		FROM delegations d JOIN agent_runs run ON run.id = d.child_run_id
 		WHERE d.parent_run_id = ? AND d.parent_tool_call_id = ?`, parentRunID, toolCallID,
 	).Scan(&delegation.ID, &delegation.ParentSessionID, &delegation.ParentRunID, &delegation.ChildSessionID,
-		&delegation.ChildRunID, &delegation.ProfileID, &delegation.ArgsHash, &delegation.State)
+		&delegation.ChildRunID, &delegation.ProfileID, &delegation.ArgsHash, &delegation.State, &consent)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Delegation{}, false, nil
 	}
 	if err != nil {
 		return Delegation{}, false, err
 	}
-	if delegation.State == lifecycleRecovering {
-		delegation.State = lifecycleRunning
-	}
+	delegation.State = displayedState(delegation.State, consent)
 	return delegation, true, nil
 }
 
@@ -122,6 +122,12 @@ type CreateDelegationInput struct {
 	Brief string
 	// Task is the task as the model wrote it, kept for the delegation's card.
 	Task string
+	// EgressTools are tools that leave the machine which the child may use
+	// only once the user consents for this task. Until they decide, its run
+	// waits and no worker can claim it. EgressRequired says the specialist's
+	// requires is met only by them, so declining ends the task.
+	EgressTools    []string
+	EgressRequired bool
 }
 
 type CreateDelegationResult struct {
@@ -203,6 +209,17 @@ func (r *Repository) CreateDelegation(ctx context.Context, input CreateDelegatio
 		}
 	}
 
+	egressTools := slices.Clone(input.EgressTools)
+	slices.Sort(egressTools)
+	egressTools = slices.Compact(egressTools)
+	egressToolsJSON, err := json.Marshal(append([]string{}, egressTools...))
+	if err != nil {
+		return CreateDelegationResult{}, err
+	}
+	consent, state := "", lifecycleQueued
+	if len(egressTools) > 0 {
+		consent, state = egressConsentPending, DelegationWaitingConsent
+	}
 	delegation := Delegation{
 		ID:              ids.New("dlg"),
 		ParentSessionID: parentSessionID,
@@ -211,7 +228,7 @@ func (r *Repository) CreateDelegation(ctx context.Context, input CreateDelegatio
 		ChildRunID:      ids.New("run"),
 		ProfileID:       input.Profile.ProfileID,
 		ArgsHash:        input.ArgsHash,
-		State:           lifecycleQueued,
+		State:           state,
 	}
 	sessionCreatedAt := now()
 	title := strings.TrimSpace(input.Profile.Emoji + " " + input.Profile.DisplayName)
@@ -265,10 +282,12 @@ func (r *Repository) CreateDelegation(ctx context.Context, input CreateDelegatio
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO delegations (
 			id, parent_session_id, parent_run_id, parent_tool_call_id, child_session_id, child_run_id,
-			profile_id, profile_revision, args_hash, created_at, task
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			profile_id, profile_revision, args_hash, created_at, task,
+			egress_tools_json, egress_consent, egress_required
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		delegation.ID, parentSessionID, input.ParentRunID, input.ToolCallID, delegation.ChildSessionID,
-		delegation.ChildRunID, profile.ProfileID, profile.Revision, input.ArgsHash, anchor.CreatedAt, input.Task); err != nil {
+		delegation.ChildRunID, profile.ProfileID, profile.Revision, input.ArgsHash, anchor.CreatedAt, input.Task,
+		string(egressToolsJSON), consent, len(egressTools) > 0 && input.EgressRequired); err != nil {
 		return CreateDelegationResult{}, err
 	}
 	startedPayload, err := json.Marshal(map[string]any{
@@ -281,6 +300,10 @@ func (r *Repository) CreateDelegation(ctx context.Context, input CreateDelegatio
 		"emoji":          profile.Emoji,
 		"state":          delegation.State,
 		"summary":        "Asked " + title,
+		"task":           input.Task,
+		"egressTools":    append([]string{}, egressTools...),
+		"egressConsent":  consent,
+		"egressRequired": len(egressTools) > 0 && input.EgressRequired,
 	})
 	if err != nil {
 		return CreateDelegationResult{}, err

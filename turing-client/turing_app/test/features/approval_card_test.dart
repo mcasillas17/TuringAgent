@@ -16,6 +16,7 @@ void main() {
     VoidCallback? deny,
     bool busy = false,
     double textScale = 1,
+    String? requester,
   }) => MaterialApp(
     localizationsDelegates: AppLocalizations.localizationsDelegates,
     supportedLocales: AppLocalizations.supportedLocales,
@@ -33,9 +34,27 @@ void main() {
         onApprove: approve ?? (_) {},
         onDeny: deny ?? () {},
         busy: busy,
+        requester: requester,
       ),
     ),
   );
+
+  testWidgets('a specialist\'s request names who is asking', (tester) async {
+    await tester.pumpWidget(
+      card(load: (_) async => approvalDetails(), requester: '📨 Inbox'),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('📨 Inbox wants to use files.update'), findsOneWidget);
+    expect(find.text('Approval requested: files.update'), findsNothing);
+  });
+
+  testWidgets('Turing\'s own request keeps its plain title', (tester) async {
+    await tester.pumpWidget(card(load: (_) async => approvalDetails()));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Approval requested: files.update'), findsOneWidget);
+  });
 
   FilledButton approveButton(WidgetTester tester) =>
       tester.widget<FilledButton>(

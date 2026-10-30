@@ -14,6 +14,7 @@ class ApprovalCard extends StatefulWidget {
     required this.onDeny,
     this.loadDetails,
     this.busy = false,
+    this.requester,
   });
 
   final String approvalId;
@@ -22,6 +23,10 @@ class ApprovalCard extends StatefulWidget {
   final ValueChanged<ApprovalDetails> onApprove;
   final VoidCallback onDeny;
   final bool busy;
+
+  /// The specialist asking, such as "📨 Inbox", when the request comes from a
+  /// task Turing delegated rather than from Turing itself.
+  final String? requester;
 
   @override
   State<ApprovalCard> createState() => _ApprovalCardState();
@@ -150,7 +155,13 @@ class _ApprovalCardState extends State<ApprovalCard> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          l10n.approvalRequested(widget.toolName),
+                          switch (widget.requester) {
+                            final requester? => l10n.approvalRequestedBy(
+                              requester,
+                              widget.toolName,
+                            ),
+                            null => l10n.approvalRequested(widget.toolName),
+                          },
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                         const SizedBox(height: 8),

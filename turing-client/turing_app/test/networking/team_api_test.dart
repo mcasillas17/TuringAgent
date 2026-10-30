@@ -1,9 +1,13 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart' as grpc;
+import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart';
+import 'package:turing_flutter_app/generated/turing/v1/common.pb.dart'
+    as commonpb;
 import 'package:turing_flutter_app/generated/turing/v1/team.pb.dart' as teampb;
 import 'package:turing_flutter_app/generated/turing/v1/team.pbgrpc.dart'
     as teamgrpc;
 import 'package:turing_flutter_app/models/agent_profile.dart';
+import 'package:turing_flutter_app/models/remote_egress.dart';
 import 'package:turing_flutter_app/networking/api_client.dart';
 import 'package:turing_flutter_app/networking/grpc_client.dart';
 
@@ -82,6 +86,104 @@ void main() {
   });
 
   test(
+    'listDelegations asks for one conversation and maps its cards',
+    () async {
+      final service = _TeamService();
+      final api = await connect(service);
+
+      final delegations = await api.listDelegations(parentSessionId: 'sess_1');
+
+      expect(service.delegationRequests.single.parentSessionId, 'sess_1');
+      expect(
+        service.delegationDeadline,
+        isNotNull,
+        reason: 'chat startup waits on this read',
+      );
+      expect(delegations.map((delegation) => delegation.delegationId), [
+        'dlg_1',
+        'dlg_2',
+      ]);
+      expect(delegations.first.specialist, '🔬 Research');
+      expect(delegations.first.task, 'Gather the notes');
+      expect(delegations.last.state, 'waiting_approval');
+      expect(delegations.last.approvalId, 'appr_1');
+    },
+  );
+
+  test('preparing a task\'s consent maps the whole disclosure', () async {
+    final service = _TeamService();
+    final api = await connect(service);
+
+    final disclosure = await api.prepareDelegationEgress(delegationId: 'dlg_1');
+
+    expect(service.prepared.single.delegationId, 'dlg_1');
+    expect(service.prepareDeadline, isNotNull);
+    expect(disclosure.challenge, 'signed-challenge');
+    expect(disclosure.provider, 'ollama');
+    expect(disclosure.selectedTools, [
+      'files/files.read',
+      'integrations/github.get_issue',
+    ]);
+    expect(disclosure.dataCategories, [
+      EgressDataCategory.toolArguments,
+      EgressDataCategory.toolResults,
+    ]);
+    expect(
+      disclosure.integrationEndpoints.single.endpointHost,
+      'api.github.com',
+    );
+    expect(disclosure.integrationEndpoints.single.tools, ['github.get_issue']);
+  });
+
+  test(
+    'allowing sends the acknowledged challenge, declining sends none',
+    () async {
+      final service = _TeamService();
+      final api = await connect(service);
+
+      final allowed = await api.decideDelegationEgress(
+        delegationId: 'dlg_1',
+        consent: RemoteEgressConsent(
+          challenge: 'signed-challenge',
+          acknowledgedDataCategories: const [
+            EgressDataCategory.toolArguments,
+            EgressDataCategory.toolResults,
+          ],
+        ),
+      );
+      final declined = await api.decideDelegationEgress(delegationId: 'dlg_2');
+
+      final allow = service.decided.first;
+      expect(allow.delegationId, 'dlg_1');
+      expect(allow.consent.challenge, 'signed-challenge');
+      expect(allow.consent.acknowledged, isTrue);
+      expect(allow.consent.acknowledgedDataCategories, [
+        commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
+        commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_RESULTS,
+      ]);
+      expect(service.decided.last.delegationId, 'dlg_2');
+      expect(service.decided.last.hasConsent(), isFalse);
+      expect(allowed.egressConsent, 'granted');
+      expect(declined.egressConsent, 'declined');
+    },
+  );
+
+  test('a server without delegations surfaces as a team error code', () async {
+    final api = await connect(_TeamService(listFailure: 12));
+
+    await expectLater(
+      api.listDelegations(parentSessionId: 'sess_1'),
+      throwsA(
+        isA<TuringApiException>().having(
+          (error) => error.code,
+          'code',
+          'unimplemented',
+        ),
+      ),
+    );
+  });
+
+  test(
     'statuses keep their own codes so the page can tell them apart',
     () async {
       final cases = {
@@ -118,6 +220,11 @@ class _TeamService extends teamgrpc.TeamServiceBase {
   final int? listFailure;
   final grants = <teampb.GrantAgentProfileRequest>[];
   final enables = <teampb.SetAgentProfileEnabledRequest>[];
+  final delegationRequests = <teampb.ListDelegationsRequest>[];
+  final prepared = <teampb.PrepareDelegationEgressRequest>[];
+  final decided = <teampb.DecideDelegationEgressRequest>[];
+  DateTime? prepareDeadline;
+  DateTime? delegationDeadline;
   Map<String, String> metadata = const {};
 
   @override
@@ -196,18 +303,87 @@ class _TeamService extends teamgrpc.TeamServiceBase {
   ) async =>
       throw grpc.GrpcError.permissionDenied('team tool dispatch is internal');
 
-  // The app does not read delegations yet.
   @override
   Future<teampb.ListDelegationsResponse> listDelegations(
     grpc.ServiceCall call,
     teampb.ListDelegationsRequest request,
-  ) async =>
-      throw grpc.GrpcError.unimplemented('not used by these tests');
+  ) async {
+    delegationRequests.add(request);
+    delegationDeadline = call.deadline;
+    final failure = listFailure;
+    if (failure != null) {
+      throw grpc.GrpcError.custom(failure, 'delegations cannot be listed');
+    }
+    return teampb.ListDelegationsResponse(
+      delegations: [
+        teampb.Delegation(
+          delegationId: 'dlg_1',
+          parentRunId: 'run_1',
+          displayName: 'Research',
+          emoji: '🔬',
+          task: 'Gather the notes',
+          state: 'completed',
+        ),
+        teampb.Delegation(
+          delegationId: 'dlg_2',
+          parentRunId: 'run_1',
+          displayName: 'Inbox',
+          emoji: '📨',
+          state: 'waiting_approval',
+          approvalId: 'appr_1',
+        ),
+      ],
+    );
+  }
+
+  @override
+  Future<teampb.PrepareDelegationEgressResponse> prepareDelegationEgress(
+    grpc.ServiceCall call,
+    teampb.PrepareDelegationEgressRequest request,
+  ) async {
+    prepared.add(request);
+    prepareDeadline = call.deadline;
+    return teampb.PrepareDelegationEgressResponse(
+      disclosure: commonpb.RemoteEgressDisclosure(
+        challenge: 'signed-challenge',
+        provider: commonpb.ModelProvider.MODEL_PROVIDER_OLLAMA,
+        model: 'llama3.2',
+        dataCategories: [
+          commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_ARGUMENTS,
+          commonpb.EgressDataCategory.EGRESS_DATA_CATEGORY_TOOL_RESULTS,
+        ],
+        selectedTools: ['files/files.read', 'integrations/github.get_issue'],
+        integrationEndpoints: [
+          commonpb.IntegrationEgressDestination(
+            endpoint: 'https://api.github.com',
+            endpointHost: 'api.github.com',
+            connectionId: 'conn_1',
+            displayName: 'Work GitHub',
+            tools: ['github.get_issue'],
+          ),
+        ],
+        expiresAt: Timestamp.fromDateTime(DateTime.utc(2026, 10, 1)),
+      ),
+    );
+  }
+
+  @override
+  Future<teampb.Delegation> decideDelegationEgress(
+    grpc.ServiceCall call,
+    teampb.DecideDelegationEgressRequest request,
+  ) async {
+    decided.add(request);
+    return teampb.Delegation(
+      delegationId: request.delegationId,
+      parentRunId: 'run_1',
+      state: 'queued',
+      egressConsent: request.hasConsent() ? 'granted' : 'declined',
+    );
+  }
 
   @override
   Future<teampb.Delegation> getDelegation(
     grpc.ServiceCall call,
     teampb.GetDelegationRequest request,
-  ) async =>
-      throw grpc.GrpcError.unimplemented('not used by these tests');
+  ) async => throw grpc.GrpcError.unimplemented('not used by these tests');
 }

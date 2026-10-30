@@ -437,6 +437,7 @@ const ModelCapability$json = {
       '5': 5,
       '10': 'maxContextTokens'
     },
+    {'1': 'engine', '3': 4, '4': 1, '5': 9, '10': 'engine'},
   ],
 };
 
@@ -444,7 +445,7 @@ const ModelCapability$json = {
 final $typed_data.Uint8List modelCapabilityDescriptor = $convert.base64Decode(
     'Cg9Nb2RlbENhcGFiaWxpdHkSNAoIcHJvdmlkZXIYASABKA4yGC50dXJpbmcudjEuTW9kZWxQcm'
     '92aWRlclIIcHJvdmlkZXISFAoFbW9kZWwYAiABKAlSBW1vZGVsEiwKEm1heF9jb250ZXh0X3Rv'
-    'a2VucxgDIAEoBVIQbWF4Q29udGV4dFRva2Vucw==');
+    'a2VucxgDIAEoBVIQbWF4Q29udGV4dFRva2VucxIWCgZlbmdpbmUYBCABKAlSBmVuZ2luZQ==');
 
 @$core.Deprecated('Use providerConfigDescriptor instead')
 const ProviderConfig$json = {
