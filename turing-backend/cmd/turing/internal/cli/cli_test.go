@@ -83,7 +83,7 @@ func TestHelpNoLongerCallsStatusOrConnectComingLater(t *testing.T) {
 }
 
 func TestACommandThatIsPlannedButNotShippedSaysSoAndDoesNothing(t *testing.T) {
-	for _, command := range []string{"setup", "engine"} {
+	for _, command := range []string{"setup"} {
 		h := newHarness(t)
 		if code := h.run(command); code != 1 {
 			t.Fatalf("%s: exit = %d, want 1", command, code)

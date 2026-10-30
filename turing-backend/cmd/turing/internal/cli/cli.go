@@ -20,6 +20,7 @@ import (
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/envfile"
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/host"
+	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/machine"
 	"golang.org/x/term"
 )
 
@@ -49,7 +50,10 @@ Commands:
                              clear a setting the same way; TURING_AGENT_API_KEYS.<name> removes one agent
   help                       show this text
   setup                      guided first-time setup (coming in a later version)
-  engine                     choose and check the local model engine (coming in a later version)
+  engine detect [--url URL]  show this machine's memory and GPU, the local model engines that answer on it,
+                             and the one Turing recommends; it changes nothing
+                             (--url also asks that address; localhost and 127.0.0.1 become host.docker.internal,
+                             which is how the containers name this machine)
 `
 
 // serviceNames pairs each service's friendly name with its Compose name, in
@@ -95,6 +99,8 @@ type Env struct {
 	// BridgeGateway returns the address of Docker's default bridge, which is
 	// where host.docker.internal leads on Linux.
 	BridgeGateway func(ctx context.Context) (string, error)
+	// Machine reads this computer's operating system, memory and GPUs.
+	Machine machine.Reader
 }
 
 // OSEnv is the Env for this process.
@@ -131,6 +137,7 @@ func OSEnv(backendDir string) Env {
 			},
 		},
 		BridgeGateway: dockerBridgeGateway(host.ExecRunner{}, backendDir, os.Environ()),
+		Machine:       machine.OSReader(),
 	}
 }
 
@@ -175,8 +182,10 @@ func Main(args []string, env Env) int {
 	case "help", "-h", "--help":
 		_, _ = io.WriteString(env.Stdout, Usage)
 		return 0
-	case "setup", "engine":
-		return env.fail("./turing %s is coming in a later version; until then, run ./scripts/init.sh to set up and ./turing config to choose an engine", command)
+	case "engine":
+		return env.engine(ctx, rest)
+	case "setup":
+		return env.fail("./turing setup is coming in a later version; until then, run ./scripts/init.sh to set up and ./turing config to choose an engine")
 	default:
 		// Not repeated, in case it is a secret typed in the wrong place.
 		return env.usageError("unknown command; run ./turing help")

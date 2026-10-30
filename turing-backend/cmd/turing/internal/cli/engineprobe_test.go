@@ -609,6 +609,8 @@ func probeWithTheOSEnvClient(t *testing.T) {
 
 	h.engineProbe(context.Background(), dotEnv(t,
 		"TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1\nTURING_LOCAL_ENGINE_API_KEY=CANARY-PROXY\n"))
+	h.discoverEngines(context.Background(), dotEnv(t,
+		"TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1\nTURING_LOCAL_ENGINE_API_KEY=CANARY-PROXY\n"), "http://localhost:9000")
 }
 
 // withoutProxySettings drops what would change how net/http picks a proxy,
