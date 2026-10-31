@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -363,6 +364,124 @@ func TestDiscoverEnginesDropsAGuessedAddressThatAnswersWithAnError(t *testing.T)
 	got := h.discoverEngines(t.Context(), dotEnv(t, ""), "")
 
 	sameEngines(t, got, nil)
+}
+
+// An engine that refuses the key, or is not quite an engine, still listens
+// only where the containers cannot reach it, and that is said too.
+func TestDiscoverEnginesOnLinuxKeepsLoopbackOnlyForAConfiguredEngineThatAnswersLoopbackWithAnError(t *testing.T) {
+	for _, status := range []int{401, 404, 500} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			h := newHarness(t)
+			h.gateway = bridgeGateway
+			h.engine.serve("127.0.0.1:8000", status, `{"error":"no"}`)
+
+			got := h.discoverEngines(t.Context(), dotEnv(t, "TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1\n"), "")
+
+			if len(got) != 1 || got[0].Label != "ds4" || !got[0].LoopbackOnly || got[0].HostURL != "http://127.0.0.1:8000/v1" {
+				t.Fatalf("engines = %+v, want the configured ds4 on loopback, marked loopback-only", got)
+			}
+			problem := got[0].Problem
+			for _, want := range []string{fmt.Sprintf("HTTP %d", status), "answers only on 127.0.0.1", "containers cannot reach"} {
+				if !strings.Contains(problem, want) {
+					t.Errorf("problem = %q, want %q", problem, want)
+				}
+			}
+		})
+	}
+}
+
+func TestEngineDetectGivesBindAdviceForAConfiguredEngineThatAnswersLoopbackWithAnError(t *testing.T) {
+	h := newHarness(t)
+	h.onFramework()
+	h.writeEnv("TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1\n")
+	h.engine.serve("127.0.0.1:8000", 401, `{"error":"unauthorized"}`)
+
+	out := h.detect()
+
+	inOrder(t, out,
+		"  ds4: http://host.docker.internal:8000/v1 (no models listed); the engine answered HTTP 401",
+		"  To reach ds4 from the containers, start it with --host 172.17.0.1.\n",
+	)
+}
+
+func TestDiscoverEnginesKeepsAURLThatAnswersWithoutAModelListAndSaysWhy(t *testing.T) {
+	for _, status := range []int{401, 404} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			h := newHarness(t)
+			h.GOOS = "darwin"
+			h.engine.serve("127.0.0.1:9000", status, "no")
+
+			got := h.discoverEngines(t.Context(), dotEnv(t, ""), "http://localhost:9000/v1")
+
+			if len(got) != 1 || got[0].ContainerURL != "http://host.docker.internal:9000/v1" || len(got[0].Models) != 0 {
+				t.Fatalf("engines = %+v, want the --url address kept with no models", got)
+			}
+			if want := fmt.Sprintf("the engine answered HTTP %d", status); !strings.Contains(got[0].Problem, want) {
+				t.Fatalf("problem = %q, want %q", got[0].Problem, want)
+			}
+		})
+	}
+}
+
+// --url naming an address that is also asked by guessing is still the
+// owner's own choice, so what it answered is not dropped.
+func TestDiscoverEnginesKeepsAURLThatIsAlsoAUsualAddressWhenItAnswersWithAnError(t *testing.T) {
+	h := newHarness(t)
+	h.GOOS = "darwin"
+	h.engine.serve("127.0.0.1:8000", 404, "not found")
+
+	got := h.discoverEngines(t.Context(), dotEnv(t, ""), "http://localhost:8000/v1")
+
+	if len(got) != 1 || got[0].Label != "ds4" || !strings.Contains(got[0].Problem, "HTTP 404") {
+		t.Fatalf("engines = %+v, want the --url address kept with what it answered", got)
+	}
+	if n := countAsked(h.engine, "127.0.0.1:8000"); n != 1 {
+		t.Fatalf("asked %q; the address is asked once", h.engine.urls())
+	}
+}
+
+func TestEngineDetectShowsAURLThatAnswersWithoutAModelList(t *testing.T) {
+	h := newHarness(t)
+	h.onMacMini()
+	h.engine.serve("127.0.0.1:9000", 401, "no")
+
+	out := h.detect("--url", "http://localhost:9000/v1")
+
+	if !strings.Contains(out, "  OpenAI-compatible: http://host.docker.internal:9000/v1 (no models listed); the engine answered HTTP 401") {
+		t.Fatalf("output does not show the --url address and what it answered:\n%s", out)
+	}
+}
+
+func TestEngineDetectPutsOnlyASafeModelNameIntoItsExample(t *testing.T) {
+	tests := []struct {
+		name, model, want string
+	}{
+		{"a name with a registry, path and tag", "hf.co/org/model-GGUF:Q4_K_M", "--model hf.co/org/model-GGUF:Q4_K_M\n"},
+		{"a name with @", "model@sha256", "--model model@sha256\n"},
+		{"a name of 80 characters", strings.Repeat("m", 80), "--model " + strings.Repeat("m", 80) + "\n"},
+		{"a name of 81 characters", strings.Repeat("m", 81), "--model <model>\n"},
+		{"a name with a space and a command", "x; rm -rf ~", "--model <model>\n"},
+		{"a name with a substitution", "$(touch pwned)", "--model <model>\n"},
+		{"a name with a quote", "it's", "--model <model>\n"},
+		{"a name with a non-ASCII letter", "modèle", "--model <model>\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.onMacMini()
+			name, err := json.Marshal(tt.model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.engine.serve("127.0.0.1:11434", 200, `{"models":[{"name":`+string(name)+`}]}`)
+
+			out := h.detect()
+
+			if !strings.Contains(out, "For example: ./turing engine use ollama --url http://host.docker.internal:11434 "+tt.want) {
+				t.Fatalf("output has no example ending %q:\n%s", tt.want, out)
+			}
+		})
+	}
 }
 
 func TestDiscoverEnginesLeavesOutAConfiguredEngineTheRuntimeWouldRefuse(t *testing.T) {

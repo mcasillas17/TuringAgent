@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -63,6 +64,9 @@ type engineCandidate struct {
 	// found by guessing.
 	apiKey     string
 	configured bool
+	// explicit is true for the address given with --url, whose answer is
+	// shown even when it is not a model list.
+	explicit bool
 }
 
 // hostRoute is how this machine reaches host.docker.internal.
@@ -75,16 +79,21 @@ type hostRoute struct {
 // engineCandidates lists, without repeats, the addresses worth asking: the
 // engine .env configures (as status resolves it), Ollama and ds4 at their
 // usual addresses, and the address given with --url. A URL the runtime would
-// refuse is left out; status and engine use say why.
+// refuse is left out; status and engine use say why. --url naming an address
+// already listed marks that one explicit.
 func engineCandidates(current *envfile.File, extraURL string) []engineCandidate {
 	var candidates []engineCandidate
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
 	add := func(candidate engineCandidate) {
 		canonical, err := containerEngineURL(candidate.url)
-		if err != nil || seen[canonical] {
+		if err != nil {
 			return
 		}
-		seen[canonical] = true
+		if i, ok := seen[canonical]; ok {
+			candidates[i].explicit = candidates[i].explicit || candidate.explicit
+			return
+		}
+		seen[canonical] = len(candidates)
 		candidate.url = canonical
 		candidates = append(candidates, candidate)
 	}
@@ -96,7 +105,7 @@ func engineCandidates(current *envfile.File, extraURL string) []engineCandidate 
 	add(engineCandidate{engine: engineOllama, url: defaultEngineURL})
 	add(engineCandidate{engine: engineOpenAI, url: ds4EngineURL})
 	if extraURL != "" {
-		add(engineCandidate{url: extraURL})
+		add(engineCandidate{url: extraURL, explicit: true})
 	}
 	return candidates
 }
@@ -136,8 +145,9 @@ type listing struct {
 }
 
 // attempt lists the engine's models at the address the containers use. On
-// Linux an engine that does not answer there is asked on 127.0.0.1 too: an
-// answer there means it listens where the containers cannot reach it.
+// Linux an engine that does not answer there is asked on 127.0.0.1 too: any
+// answer there, a model list or not, means it listens where the containers
+// cannot reach it.
 func (e Env) attempt(ctx context.Context, settings engineSettings, base *url.URL, route hostRoute) listing {
 	address := route.target
 	if route.err != nil {
@@ -153,7 +163,7 @@ func (e Env) attempt(ctx context.Context, settings engineSettings, base *url.URL
 			return listing{models: models, address: loopback, loopbackOnly: true}
 		}
 		if !again.noAnswer {
-			return listing{address: loopback, failure: again}
+			return listing{address: loopback, loopbackOnly: true, failure: again}
 		}
 	}
 	return listing{address: address, failure: failure}
@@ -161,7 +171,9 @@ func (e Env) attempt(ctx context.Context, settings engineSettings, base *url.URL
 
 // probeCandidate asks one candidate. An address given with --url might be
 // either kind of engine, so Ollama's list is tried first, and OpenAI's only if
-// something answered that was not Ollama's list.
+// something answered that was not Ollama's list. The configured engine and the
+// --url address are kept when they answer with something else, with Problem
+// saying what; a guessed address that does is not an engine.
 func (e Env) probeCandidate(ctx context.Context, candidate engineCandidate, route hostRoute) (foundEngine, bool) {
 	base, err := url.Parse(candidate.url)
 	if err != nil {
@@ -183,9 +195,13 @@ func (e Env) probeCandidate(ctx context.Context, candidate engineCandidate, rout
 		}
 		lastKind, last = kind, &got
 	}
-	if candidate.configured && last != nil {
+	if (candidate.configured || candidate.explicit) && last != nil {
 		found := foundFrom(lastKind, candidate.url, base, *last, route)
-		found.Problem = "the engine " + last.failure.clause
+		problems := []string{"the engine " + last.failure.clause}
+		if found.Problem != "" {
+			problems = append(problems, found.Problem)
+		}
+		found.Problem = strings.Join(problems, "; ")
 		return found, true
 	}
 	return foundEngine{}, false
@@ -343,7 +359,8 @@ func printBridgeAdvice(say func(string, ...any), route hostRoute, engines []foun
 // exampleUse is the `engine use` command for the engine found that matches the
 // recommendation, when one is usable. It names the recommended model when the
 // engine lists it, the engine's only model when it lists one, and otherwise
-// leaves the choice to the owner.
+// leaves the choice to the owner. A name the engine chose goes into the
+// command only when a shell would take it as one plain word.
 func exampleUse(recommendation machine.Recommendation, engines []foundEngine) (string, bool) {
 	for _, engine := range engines {
 		if engine.Engine != recommendation.Engine || engine.Problem != "" {
@@ -356,10 +373,16 @@ func exampleUse(recommendation machine.Recommendation, engines []foundEngine) (s
 		case len(engine.Models) == 1:
 			model = engine.Models[0]
 		}
+		if !safeModelName.MatchString(model) {
+			model = "<model>"
+		}
 		return fmt.Sprintf("./turing engine use %s --url %s --model %s", engine.Engine, engine.ContainerURL, model), true
 	}
 	return "", false
 }
+
+// safeModelName is a model name that can be pasted into a shell as it is.
+var safeModelName = regexp.MustCompile(`^[A-Za-z0-9._:/@-]{1,80}$`)
 
 // describeMachine is the one line `engine detect` opens with.
 func describeMachine(f machine.Facts) string {
