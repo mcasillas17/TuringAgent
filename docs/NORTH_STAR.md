@@ -14,10 +14,12 @@ specialist team landed in PRs #150, #152–#158, #162, #163 and #167
 Its roadmap amendments are applied to AGT-001 through AGT-004, WEB-001, AZ-001
 and the priority spine below. Delegation is experimental and off by default.
 
-**Local inference and operator UX:** Reconciled 2026-10-26 against `main`
-at `5fd493b5`. Local engine selection and app labels shipped in #169;
-hardware-guided setup is still planned under OPS-001, whose host-command
-design landed in #170. Neither that command nor OPS-002/003 is implemented.
+**Local inference and operator UX:** Reconciled 2026-10-31 against `main`
+at `57461e49`. Local engine selection and app labels shipped in #169.
+OPS-001 is partly delivered: #171 adds service `check-config`; #173 adds the
+host `turing` command for status, lifecycle, connection and validated
+configuration changes. Guided `setup` and `engine` commands remain pending,
+as do OPS-002/003. See the [current architecture and flows](architecture/system-flows.md).
 
 **Supersedes:** `docs/VISION.md` and
 `docs/architecture/2026-08-18-personal-agent-audit.md` as active roadmap
@@ -140,6 +142,7 @@ claims.
 | MCP lifecycle | Turing speaks MCP revision `2025-11-25` over the Streamable HTTP transport in both directions: the two bundled servers answer `initialize`, `notifications/initialized`, `ping`, `tools/list` (one page; a cursor is refused), `tools/call` and `notifications/cancelled`, and both client paths negotiate before any tool call and page through a third-party server's cursors. Bundled servers are sessionless, and only mcp-files cancels in-flight work; resources, prompts, sampling, elicitation, OAuth and stdio are out of scope. |
 | Local chat and tool loop | Ollama is the default; streaming, bounded tool iterations, zero-argument recovery, and unknown-tool recovery are implemented. |
 | Pluggable local inference | #169 adds `TURING_LOCAL_ENGINE=ollama` or `openai` for a same-machine engine, configured through `TURING_LOCAL_*`. The app names its engine and model; the local wire identity remains `ollama`. Local inference needs no remote-model consent, but remote tools still require their own disclosure. Hardware-guided engine selection remains in OPS-001 ([design](superpowers/specs/2026-10-25-turing-local-inference-engines-design.md)). |
+| Host operation (OPS-001, partial) | A user-run `./turing` command provides status, start/stop/restart, logs, connection/key rotation, and validated `.env` configuration. It checks image support before running service `check-config`, writes atomically after validation, and offers apply/restore. It never opens SQLite or gives Docker access to the agent. Guided `setup` and `engine` commands are not implemented. |
 | Durable orchestration | Sessions, runs, events, jobs, leases, fencing, retries, recovery, and reopenable run outcomes are persisted in SQLite. |
 | Bounded queue waiting | A queued run records whether any live worker can serve its route, and two configurable bounds end one that waits too long. Not a pause/resume state: both outcomes are terminal. |
 | File actions | Sandboxed read/list/search plus preview-bound create/update are implemented; both reviewed file versions must be safe text within 64 KiB. |
@@ -757,8 +760,12 @@ separate lifecycle, visibility and evaluation gates.
 
 #### OPS-001 - Host command for setup and operation
 
-- **Status:** Host-command implementation pending; #170 supplies the design.
-  The current setup still uses `init.sh` and `compose.sh`.
+- **Status:** Partly shipped: #171 delivers `check-config` and safe argument
+  handling in both services; #173 delivers the host `turing` command's
+  `status`, lifecycle, `logs`, `connect` and `config`, plus a CI Linux desktop
+  build. First-time provisioning still uses `scripts/init.sh`; guided
+  `setup` and `engine detect | use | check` remain pending in design slice 3.
+  The command invokes `compose.sh`, rather than replacing its launch checks.
 - **Outcome:** A user sets up, runs, reconfigures and connects to a Turing
   server without editing `.env` or reading scripts.
 - **Scope:** A user-run `turing` command on the server: guided `setup`,

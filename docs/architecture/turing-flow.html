@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>TuringAgent | Runtime architecture</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c171c; --panel: #13242a; --text: #e7f2f1; --muted: #abc2c5;
+      --line: #395059; --accent: #73e5cb; --warm: #efb16e; --shadow: #061012;
+      --afh-bg: var(--bg); --afh-zone-fill: var(--panel); --afh-zone-stroke: var(--line);
+      --afh-muted: var(--muted); --afh-ink: var(--text); --afh-card: var(--bg);
+      --afh-line: var(--line); --afh-card-active: var(--panel); --afh-icon: var(--panel);
+      --afh-accent: var(--accent); --afh-accent-2: var(--warm); --afh-shadow: var(--shadow);
+      --afh-edge: var(--muted);
+      font: 16px/1.6 system-ui, sans-serif;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f5f4ed; --panel: #ffffff; --text: #193137; --muted: #486069;
+      --line: #b7c8c8; --accent: #087561; --warm: #9c511b; --shadow: #d3dfdc;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--text); background: var(--bg); }
+    main { max-width: 1440px; margin: auto; padding: 38px 40px 30px; }
+    header { display: flex; justify-content: space-between; gap: 30px; align-items: start; }
+    .eyebrow, code { font-family: ui-monospace, monospace; }
+    .eyebrow { color: var(--accent); font-size: .73rem; letter-spacing: .17em; text-transform: uppercase; }
+    h1 { font: 500 clamp(2.4rem, 5vw, 4.5rem)/1.07 Georgia, serif; margin: 14px 0; letter-spacing: -.025em; }
+    h1 em { font-style: normal; color: var(--accent); }
+    .intro { max-width: 780px; color: var(--muted); margin: 0 0 24px; }
+    button, a { color: inherit; }
+    a { text-underline-offset: 4px; }
+    a:hover { color: var(--accent); }
+    button { font: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 9px 14px; cursor: pointer; }
+    button:hover, button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+    button:focus-visible, a:focus-visible, .diagram:focus-visible { outline: 3px solid var(--warm); outline-offset: 4px; }
+    .facts { display: flex; flex-wrap: wrap; gap: 10px 28px; padding: 15px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: .86rem; }
+    .facts strong { color: var(--warm); }
+    .hero { margin: 24px 0; border-radius: 16px; background: radial-gradient(ellipse at 50% 40%, color-mix(in srgb, var(--accent) 5%, var(--bg)), var(--bg)); }
+    .diagram { overflow-x: auto; padding: 8px 0; }
+    .diagram svg { min-width: 900px; }
+    .archflow-hero .afh-entity { opacity: .7; }
+    .archflow-hero .afh-flow { opacity: .55; }
+    .archflow-hero .afh-entity.is-active, .archflow-hero .afh-flow.is-active { opacity: 1; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    #phase-buttons { display: flex; gap: 7px; flex-wrap: wrap; }
+    #phase-buttons button { font-size: .8rem; }
+    .narrative { border-left: 3px solid var(--accent); padding: 12px 20px; margin: 20px 0 28px; background: var(--panel); min-height: 125px; }
+    .narrative h2 { font-size: 1.04rem; margin: 0 0 5px; }
+    .narrative p { color: var(--muted); margin: 0; max-width: 1050px; }
+    .boundaries { display: grid; grid-template-columns: 1.2fr 1fr; gap: 32px; border-top: 1px solid var(--line); padding-top: 22px; }
+    .boundaries h2 { font: 500 1.5rem Georgia, serif; margin: 0 0 8px; }
+    .boundaries p { color: var(--muted); font-size: .9rem; margin: 0; }
+    footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-top: 24px; font-size: .8rem; color: var(--muted); }
+    noscript p { padding: 16px; border: 1px solid var(--warm); }
+    @media (max-width: 700px) {
+      main { padding: 24px 18px; } header { gap: 14px; } header button { font-size: .8rem; white-space: nowrap; }
+      .boundaries { grid-template-columns: 1fr; gap: 18px; } .intro { font-size: .9rem; }
+      .narrative { min-height: 175px; } .facts { gap: 6px 18px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+    }
+    @media print {
+      @page { size: A4 landscape; margin: 10mm; }
+      :root, :root[data-theme="dark"], :root[data-theme="light"] {
+        --bg: #fff; --panel: #f5f7f6; --text: #193137; --muted: #42575d;
+        --line: #a4b7b7; --accent: #087561; --warm: #874412; --shadow: transparent;
+        color-scheme: light; font-size: 10px;
+      }
+      main { padding: 0; max-width: none; } h1 { font-size: 28px; margin: 5px 0; }
+      .intro { margin-bottom: 6px; } .facts { padding: 5px 0; }
+      .controls, #theme, .narrative, .screen-note, noscript { display: none; }
+      .hero { margin: 8px 0; background: none; break-inside: avoid; }
+      .diagram { overflow: visible; padding: 0; }
+      .diagram svg { min-width: 0; width: 100%; max-height: 110mm; }
+      .archflow-hero .afh-zone, .archflow-hero .afh-flow, .archflow-hero .afh-entity { opacity: 1 !important; }
+      .afh-entity-shadow { display: none; }
+      .boundaries { padding-top: 7px; gap: 20px; break-inside: avoid; }
+      footer { padding-top: 7px; }
+      .diagram, .facts { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <div class="eyebrow">TuringAgent / current architecture</div>
+      <h1>One assistant.<br><em>One durable authority.</em></h1>
+      <p class="intro">The orchestrator owns policy and durable state. The runtime executes model and tool work.
+        Specialist profiles use that same runtime; they are not extra daemons.
+        Explore the paths below, or show the complete map.</p>
+    </div>
+    <button id="theme" type="button">Light theme</button>
+  </header>
+  <div class="facts">
+    <span><strong>4</strong> backend services</span>
+    <span><strong>1</strong> default runtime slot</span>
+    <span><strong>127.0.0.1</strong> app access</span>
+    <span><strong>2025-11-25</strong> implemented MCP</span>
+  </div>
+  <noscript><p>The complete architecture is shown below. Enable JavaScript for phase highlighting; all source-backed flow explanations remain available in <a href="system-flows.md">the companion guide</a>.</p></noscript>
+  <section class="hero" aria-label="Runtime diagram">
+    <p class="screen-note">On narrow screens, scroll the diagram horizontally. Related endpoints are grouped for readability; the groups are not deployment or trust boundaries.</p>
+    <div class="diagram" role="group" tabindex="0" aria-label="Scrollable architecture diagram">
+      <svg class="archflow-hero" data-archflow-hero="1" viewBox="0 0 1210 655" role="img" aria-labelledby="afh-title afh-description" xmlns="http://www.w3.org/2000/svg"><title id="afh-title">TuringAgent runtime</title><desc id="afh-description">Current runtime at main 57461e49. The orchestrator owns durable truth; workers execute. Arrows name callers or update senders, not permission inheritance.</desc><metadata id="afh-chapters">[{&quot;id&quot;:&quot;admit-chapter&quot;,&quot;label&quot;:&quot;1. Admit and persist&quot;,&quot;description&quot;:&quot;ChatService validates a send and any required remote disclosure. The orchestrator records the message, run, job and events atomically; it remains the only durable authority.&quot;,&quot;entities&quot;:[&quot;desktop&quot;,&quot;orchestrator&quot;,&quot;durable&quot;],&quot;flows&quot;:[&quot;send&quot;,&quot;persist&quot;],&quot;zones&quot;:[&quot;desktop-zone&quot;,&quot;authority-zone&quot;]},{&quot;id&quot;:&quot;execute-chapter&quot;,&quot;label&quot;:&quot;2. Claim and infer&quot;,&quot;description&quot;:&quot;A compatible runtime claims a leased, attempt-fenced job. GeneralAssistant calls the selected local engine or explicitly disclosed remote model. Provider choice does not transfer policy authority.&quot;,&quot;entities&quot;:[&quot;orchestrator&quot;,&quot;runtime&quot;,&quot;models&quot;],&quot;flows&quot;:[&quot;assign&quot;,&quot;inference&quot;],&quot;zones&quot;:[&quot;authority-zone&quot;,&quot;execution-zone&quot;]},{&quot;id&quot;:&quot;tools-chapter&quot;,&quot;label&quot;:&quot;3. Gate every tool&quot;,&quot;description&quot;:&quot;BEFORE beacons obtain policy. The orchestrator reads bounded file previews on a private capability-protected endpoint. Bundled calls leave from the runtime; registered MCP/GitHub calls are mediated by the orchestrator. Only mcp-files consumes approvals over the return gRPC path.&quot;,&quot;entities&quot;:[&quot;runtime&quot;,&quot;orchestrator&quot;,&quot;bundled&quot;,&quot;registered&quot;],&quot;flows&quot;:[&quot;updates&quot;,&quot;mcp-call&quot;,&quot;consume&quot;,&quot;proxy&quot;,&quot;preview-cleanup&quot;],&quot;zones&quot;:[&quot;authority-zone&quot;,&quot;execution-zone&quot;]},{&quot;id&quot;:&quot;team-chapter&quot;,&quot;label&quot;:&quot;4. Delegate without waiting in-run&quot;,&quot;description&quot;:&quot;Optional team.delegate creates a hidden child job, not another daemon. The parent yields the single default slot. Each child has its own tools, approvals and egress decision; all terminal child results join into one local continuation.&quot;,&quot;entities&quot;:[&quot;orchestrator&quot;,&quot;durable&quot;,&quot;runtime&quot;,&quot;models&quot;],&quot;flows&quot;:[&quot;persist&quot;,&quot;assign&quot;,&quot;updates&quot;,&quot;inference&quot;],&quot;zones&quot;:[&quot;authority-zone&quot;,&quot;execution-zone&quot;]},{&quot;id&quot;:&quot;reconcile-chapter&quot;,&quot;label&quot;:&quot;5. Reconcile and display&quot;,&quot;description&quot;:&quot;The orchestrator persists outcomes and streams them to Flutter. Reopen reads history and delegation records. Stop and deletion fence late work; mcp-files cleanup uses its separate private bearer. No committed external effect is undone.&quot;,&quot;entities&quot;:[&quot;runtime&quot;,&quot;orchestrator&quot;,&quot;durable&quot;,&quot;desktop&quot;,&quot;bundled&quot;],&quot;flows&quot;:[&quot;updates&quot;,&quot;persist&quot;,&quot;events&quot;,&quot;preview-cleanup&quot;],&quot;zones&quot;:[&quot;desktop-zone&quot;,&quot;authority-zone&quot;,&quot;execution-zone&quot;]}]</metadata><defs><marker id="afh-arrow" markerUnits="userSpaceOnUse" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker><filter id="afh-soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="6"/></filter></defs><style>.archflow-hero{width:100%;height:auto;display:block;overflow:visible}.afh-zone{opacity:.76;transition:opacity .35s ease}.afh-zone-frame{fill:var(--afh-zone-fill,#121b2f);stroke:var(--afh-zone-stroke,#2b3a59);stroke-width:1}.afh-zone-title{fill:var(--afh-muted,#8290aa);font:600 11px var(--afh-mono,ui-monospace,monospace);letter-spacing:.12em;text-transform:uppercase}.afh-entity{opacity:.46;transition:opacity .3s ease,filter .3s ease}.afh-entity-shadow{fill:var(--afh-shadow,#050810);opacity:.44;filter:url(#afh-soft)}.afh-entity-frame{fill:var(--afh-card,#172137);stroke:var(--afh-line,#33425f);stroke-width:1.2;transition:stroke .3s ease,fill .3s ease}.afh-icon rect{fill:var(--afh-icon,#24334f)}.afh-icon text{fill:var(--afh-accent,#5eead4);font:700 8px var(--afh-mono,ui-monospace,monospace);letter-spacing:.05em}.afh-entity-title{fill:var(--afh-ink,#edf4ff);font:650 12px var(--afh-body,system-ui,sans-serif)}.afh-entity-caption{fill:var(--afh-muted,#95a4bd);font:500 9.5px var(--afh-body,system-ui,sans-serif)}.afh-tag{paint-order:stroke;stroke:var(--afh-bg,#08101f);stroke-width:5;stroke-linejoin:round;fill:var(--afh-accent-2,#f4b860);font:700 8px var(--afh-mono,ui-monospace,monospace);letter-spacing:.08em}.afh-flow{opacity:.22;transition:opacity .3s ease}.afh-flow-halo{fill:none;stroke:var(--afh-bg,#08101f);stroke-width:7;stroke-linejoin:round}.afh-flow-path{fill:none;stroke:var(--afh-edge,#6d7f9f);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.afh-flow-label{paint-order:stroke;stroke:var(--afh-bg,#08101f);stroke-width:7;stroke-linejoin:round;fill:var(--afh-muted,#95a4bd);font:650 8.5px var(--afh-mono,ui-monospace,monospace);letter-spacing:.04em}.afh-entity.is-active{opacity:1}.afh-entity.is-active .afh-entity-frame{stroke:var(--afh-accent,#5eead4);fill:var(--afh-card-active,#1b2a42)}.afh-flow.is-active{opacity:1}.afh-flow.is-active .afh-flow-path{stroke:var(--afh-accent,#5eead4);stroke-width:2.5}.afh-zone.is-active{opacity:1}.afh-zone.is-active .afh-zone-frame{stroke:var(--afh-accent,#5eead4);stroke-opacity:.5}@media(prefers-reduced-motion:reduce){.afh-zone,.afh-entity,.afh-flow{transition:none}}</style><g id="desktop-zone" class="afh-zone" data-af-zone="desktop-zone" data-af-tone="cool"><rect class="afh-zone-frame" x="20" y="215" width="280" height="195" rx="24"/><text class="afh-zone-title" x="42" y="246">Same-host desktop</text></g><g id="authority-zone" class="afh-zone" data-af-zone="authority-zone" data-af-tone="warm"><rect class="afh-zone-frame" x="420" y="20" width="310" height="615" rx="24"/><text class="afh-zone-title" x="442" y="51">Authority / mediated I/O</text></g><g id="execution-zone" class="afh-zone" data-af-zone="execution-zone" data-af-tone="cool"><rect class="afh-zone-frame" x="890" y="20" width="290" height="615" rx="24"/><text class="afh-zone-title" x="912" y="51">Execution / tool endpoints</text></g><g id="send" class="afh-flow" data-af-flow="send" data-af-kind="data"><path class="afh-flow-halo" d="M 270 303 L 450 303"/><path class="afh-flow-path" d="M 270 303 L 450 303" marker-end="url(#afh-arrow)"/><text class="afh-flow-label" x="360" y="285" text-anchor="middle">send / consent</text></g><g id="events" class="afh-flow" data-af-flow="events" data-af-kind="data"><path class="afh-flow-halo" d="M 450 349 L 270 349"/><path class="afh-flow-path" d="M 450 349 L 270 349" marker-end="url(#afh-arrow)"/><text class="afh-flow-label" x="360" y="332" text-anchor="middle">events / history</text></g><g id="assign" class="afh-flow" data-af-flow="assign" data-af-kind="data"><path class="afh-flow-halo" d="M 700 300 L 920 300"/><path class="afh-flow-path" d="M 700 300 L 920 300" marker-end="url(#afh-arrow)"/><text class="afh-flow-label" x="810" y="280" text-anchor="middle">leased job</text></g><g id="updates" class="afh-flow" data-af-flow="updates" data-af-kind="data"><path class="afh-flow-halo" d="M 920 330 L 700 330"/><path class="afh-flow-path" d="M 920 330 L 700 330" marker-end="url(#afh-arrow)"/><text class="afh-flow-label" x="810" y="320" text-anchor="middle">beacons + updates</text></g><g id="inference" class="afh-flow" data-af-flow="inference" data-af-kind="data"><path class="afh-flow-halo" d="M 1035 270 L 1035 185"/><path class="afh-flow-path" d="M 1035 270 L 1035 185" marker-end="url(#afh-arrow)"/><text class="afh-flow-label" x="1110" y="232" text-anchor="middle">inference</text></g><g id="proxy" class="afh-flow" data-af-flow="proxy" data-af-kind="data"><path class="afh-flow-halo" d="M 575 270 L 575 185"/><path class="afh-flow-path" d="M 575 270 L 575 185" marker-end="url(#afh-arrow)"/><text class="afh-flow-label" x="646" y="232" text-anchor="middle">gated I/O</text></g><g id="persist" class="afh-flow" data-af-flow="persist" data-af-kind="data"><path class="afh-flow-halo" d="M 575 380 L 575 500"/><path class="afh-flow-path" d="M 575 380 L 575 500" marker-end="url(#afh-arrow)"/><text class="afh-flow-label" x="648" y="443" text-anchor="middle">persist / load</text></g><g id="mcp-call" class="afh-flow" data-af-flow="mcp-call" data-af-kind="data"><path class="afh-flow-halo" d="M 1035 380 L 1035 500"/><path class="afh-flow-path" d="M 1035 380 L 1035 500" marker-end="url(#afh-arrow)"/><text class="afh-flow-label" x="1105" y="443" text-anchor="middle">internal HTTP</text></g><g id="consume" class="afh-flow" data-af-flow="consume" data-af-kind="data"><path class="afh-flow-halo" d="M 920 535 L 800 535 L 800 360 L 700 360"/><path class="afh-flow-path" d="M 920 535 L 800 535 L 800 360 L 700 360" marker-end="url(#afh-arrow)"/><text class="afh-flow-label" x="832" y="585" text-anchor="middle">files approval</text></g><g id="preview-cleanup" class="afh-flow" data-af-flow="preview-cleanup" data-af-kind="data"><path class="afh-flow-halo" d="M 700 372 L 770 372 L 770 560 L 920 560"/><path class="afh-flow-path" d="M 700 372 L 770 372 L 770 560 L 920 560" marker-end="url(#afh-arrow)"/><text class="afh-flow-label" x="805" y="620" text-anchor="middle">preview / cleanup</text></g><g id="desktop" class="afh-entity" data-af-entity="desktop" data-af-kind="view"><rect class="afh-entity-shadow" x="52" y="275" width="220" height="110" rx="16"/><rect class="afh-entity-frame" x="50" y="270" width="220" height="110" rx="16"/><g class="afh-icon" transform="translate(63 283)"><rect width="27" height="27" rx="8"/><text x="13.5" y="17.5" text-anchor="middle">VW</text></g><text class="afh-tag" x="263" y="263" text-anchor="end">CLIENT</text><text class="afh-entity-title" x="100" y="296">Flutter desktop</text><text class="afh-entity-caption" x="64" y="320">ChatScreen, cards, consent</text></g><g id="orchestrator" class="afh-entity" data-af-entity="orchestrator" data-af-kind="control"><rect class="afh-entity-shadow" x="452" y="275" width="250" height="110" rx="16"/><rect class="afh-entity-frame" x="450" y="270" width="250" height="110" rx="16"/><g class="afh-icon" transform="translate(463 283)"><rect width="27" height="27" rx="8"/><text x="13.5" y="17.5" text-anchor="middle">OK</text></g><text class="afh-tag" x="693" y="263" text-anchor="end">GO</text><text class="afh-entity-title" x="500" y="296">Orchestrator service</text><text class="afh-entity-caption" x="464" y="320">Policy, queue, events, approvals</text></g><g id="registered" class="afh-entity" data-af-entity="registered" data-af-kind="interface"><rect class="afh-entity-shadow" x="452" y="90" width="250" height="100" rx="16"/><rect class="afh-entity-frame" x="450" y="85" width="250" height="100" rx="16"/><g class="afh-icon" transform="translate(463 98)"><rect width="27" height="27" rx="8"/><text x="13.5" y="17.5" text-anchor="middle">API</text></g><text class="afh-tag" x="693" y="78" text-anchor="end">LOCAL OR REMOTE</text><text class="afh-entity-title" x="500" y="111">Registered tools</text><text class="afh-entity-caption" x="464" y="135">MCP registry / GitHub</text></g><g id="durable" class="afh-entity" data-af-entity="durable" data-af-kind="store"><rect class="afh-entity-shadow" x="452" y="505" width="250" height="100" rx="16"/><rect class="afh-entity-frame" x="450" y="500" width="250" height="100" rx="16"/><g class="afh-icon" transform="translate(463 513)"><rect width="27" height="27" rx="8"/><text x="13.5" y="17.5" text-anchor="middle">DB</text></g><text class="afh-tag" x="693" y="493" text-anchor="end">LOCAL</text><text class="afh-entity-title" x="500" y="526">Durable state + files</text><text class="afh-entity-caption" x="464" y="550">SQLite; vault, skills, team</text></g><g id="runtime" class="afh-entity" data-af-entity="runtime" data-af-kind="process"><rect class="afh-entity-shadow" x="922" y="275" width="230" height="110" rx="16"/><rect class="afh-entity-frame" x="920" y="270" width="230" height="110" rx="16"/><g class="afh-icon" transform="translate(933 283)"><rect width="27" height="27" rx="8"/><text x="13.5" y="17.5" text-anchor="middle">FX</text></g><text class="afh-tag" x="1143" y="263" text-anchor="end">GO WORKER</text><text class="afh-entity-title" x="970" y="296">Agent runtime</text><text class="afh-entity-caption" x="934" y="320">GeneralAssistant + tool runner</text></g><g id="models" class="afh-entity" data-af-entity="models" data-af-kind="interface"><rect class="afh-entity-shadow" x="922" y="90" width="230" height="100" rx="16"/><rect class="afh-entity-frame" x="920" y="85" width="230" height="100" rx="16"/><g class="afh-icon" transform="translate(933 98)"><rect width="27" height="27" rx="8"/><text x="13.5" y="17.5" text-anchor="middle">API</text></g><text class="afh-tag" x="1143" y="78" text-anchor="end">INFERENCE</text><text class="afh-entity-title" x="970" y="111">Selected model</text><text class="afh-entity-caption" x="934" y="135">Local engine or disclosed remote</text></g><g id="bundled" class="afh-entity" data-af-entity="bundled" data-af-kind="interface"><rect class="afh-entity-shadow" x="922" y="505" width="230" height="100" rx="16"/><rect class="afh-entity-frame" x="920" y="500" width="230" height="100" rx="16"/><g class="afh-icon" transform="translate(933 513)"><rect width="27" height="27" rx="8"/><text x="13.5" y="17.5" text-anchor="middle">API</text></g><text class="afh-tag" x="1143" y="493" text-anchor="end">TWO GO SERVICES</text><text class="afh-entity-title" x="970" y="526">Bundled MCP</text><text class="afh-entity-caption" x="934" y="550">mcp-files / mcp-system</text></g></svg>
+    </div>
+  </section>
+  <div class="controls" role="group" aria-label="Diagram controls">
+    <button id="overview" type="button" aria-pressed="true">Full map</button>
+    <button id="play" type="button">Play phases</button>
+    <div id="phase-buttons" role="group" aria-label="Select a phase"></div>
+  </div>
+  <section class="narrative" aria-live="polite" aria-atomic="true">
+    <h2 id="phase-title">The complete runtime</h2>
+    <p id="phase-description">Arrows identify callers or update senders, not inherited authority. Request responses are summarized, not drawn as a second arrow on every connection. Policy, approval and egress checks remain separate. Use the companion guide for the operator and failure paths.</p>
+  </section>
+  <section class="boundaries">
+    <div>
+      <h2>Administering is not executing.</h2>
+      <p>The owner-run <code>./turing</code> command validates <code>.env</code>, operates Compose, and checks health.
+        It does not open SQLite. The agent has no Docker control.
+        Guided <code>setup</code> and <code>engine</code> commands are still planned.</p>
+    </div>
+    <div>
+      <h2>Consent is scoped to the work.</h2>
+      <p>Delegation is experimental and off by default. Each child needs its own remote-tool consent.
+        Continuations have no egressing tools. Stop is not rollback; deletion withdraws owned state, not vendor copies.</p>
+    </div>
+  </section>
+  <footer>
+    <span>Snapshot <code>57461e49</code> / 2026-10-31 UTC · Archflow-assisted</span>
+    <span><a href="system-flows.md">Flow guide + evidence</a> · <a href="turing-flow.hero.json">Source manifest</a> · <a href="../NORTH_STAR.md">Roadmap</a></span>
+  </footer>
+</main>
+<script>
+  (() => {
+    const root = document.documentElement;
+    const themeButton = document.getElementById('theme');
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const metadata = document.getElementById('afh-chapters');
+    const chapters = JSON.parse(metadata.textContent);
+    const controls = document.getElementById('phase-buttons');
+    const overview = document.getElementById('overview');
+    const play = document.getElementById('play');
+    const title = document.getElementById('phase-title');
+    const description = document.getElementById('phase-description');
+    const fullTitle = title.textContent;
+    const fullDescription = description.textContent;
+    let active = -1;
+    let timer = null;
+    let printPhase = -1;
+    const setTheme = theme => {
+      root.dataset.theme = theme;
+      themeButton.textContent = theme === 'dark' ? 'Light theme' : 'Dark theme';
+    };
+    try {
+      const saved = localStorage.getItem('turing-architecture-theme');
+      if (saved === 'dark' || saved === 'light') setTheme(saved);
+    } catch (error) {
+      console.warn('Theme preference unavailable; using the page default.', error.name);
+    }
+    themeButton.addEventListener('click', () => {
+      const theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+      setTheme(theme);
+      try { localStorage.setItem('turing-architecture-theme', theme); }
+      catch (error) { console.warn('Theme changed for this view only.', error.name); }
+    });
+    const select = index => {
+      active = index;
+      const chapter = chapters[index];
+      for (const [attribute, field] of [['data-af-entity', 'entities'], ['data-af-flow', 'flows'], ['data-af-zone', 'zones']]) {
+        document.querySelectorAll(`[${attribute}]`).forEach(element => {
+          element.classList.toggle('is-active', index === -1 || (chapter[field] || []).includes(element.getAttribute(attribute)));
+        });
+      }
+      overview.setAttribute('aria-pressed', String(index === -1));
+      controls.querySelectorAll('button').forEach((button, i) => button.setAttribute('aria-pressed', String(index === i)));
+      title.textContent = chapter ? chapter.label : fullTitle;
+      description.textContent = chapter ? chapter.description : fullDescription;
+    };
+    const stop = () => {
+      if (timer !== null) clearInterval(timer);
+      timer = null;
+      play.textContent = reduced.matches ? 'Step forward' : 'Play phases';
+    };
+    chapters.forEach((chapter, index) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = chapter.label;
+      button.addEventListener('click', () => { stop(); select(index); });
+      controls.appendChild(button);
+    });
+    overview.addEventListener('click', () => { stop(); select(-1); });
+    play.addEventListener('click', () => {
+      if (timer !== null) { stop(); return; }
+      select((active + 1) % chapters.length);
+      if (reduced.matches) { stop(); return; }
+      play.textContent = 'Pause phases';
+      timer = setInterval(() => select((active + 1) % chapters.length), 5000);
+    });
+    reduced.addEventListener('change', () => {
+      if (reduced.matches) stop();
+      play.textContent = reduced.matches ? 'Step forward' : 'Play phases';
+    });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
+    window.addEventListener('beforeprint', () => { printPhase = active; stop(); select(-1); });
+    window.addEventListener('afterprint', () => select(printPhase));
+    if (reduced.matches) play.textContent = 'Step forward';
+    select(-1);
+  })();
+</script>
+</body>
+</html>

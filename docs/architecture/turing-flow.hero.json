@@ -1,0 +1,119 @@
+{
+  "archflow_hero": 1,
+  "project": {
+    "title": "TuringAgent runtime",
+    "subtitle": "Current runtime at main 57461e49. The orchestrator owns durable truth; workers execute. Arrows name callers or update senders, not permission inheritance.",
+    "baseline": "57461e49cd9a3a96e693ec833886de7b112e525d",
+    "checked": "2026-10-31",
+    "renderer": "rafaelolsr/archflow@40bff6a8ea632c545dbd308b2939ffdc1ff96d16"
+  },
+  "canvas": { "width": 1210, "height": 655 },
+  "zones": [
+    { "id": "desktop-zone", "title": "Same-host desktop", "tone": "cool", "frame": { "x": 20, "y": 215, "w": 280, "h": 195 } },
+    { "id": "authority-zone", "title": "Authority / mediated I/O", "tone": "warm", "frame": { "x": 420, "y": 20, "w": 310, "h": 615 } },
+    { "id": "execution-zone", "title": "Execution / tool endpoints", "tone": "cool", "frame": { "x": 890, "y": 20, "w": 290, "h": 615 } }
+  ],
+  "entities": [
+    {
+      "id": "desktop",
+      "title": "Flutter desktop",
+      "caption": "ChatScreen, cards, consent",
+      "kind": "view", "zone": "desktop-zone", "tag": "CLIENT",
+      "frame": { "x": 50, "y": 270, "w": 220, "h": 110 },
+      "evidence": [{ "path": "turing-client/turing_app/lib/features/chat/chat_screen.dart", "start_line": 1, "end_line": 80 }]
+    },
+    {
+      "id": "orchestrator",
+      "title": "Orchestrator service",
+      "caption": "Policy, queue, events, approvals",
+      "kind": "control", "zone": "authority-zone", "tag": "GO",
+      "frame": { "x": 450, "y": 270, "w": 250, "h": 110 },
+      "evidence": [{ "path": "turing-backend/orchestrator-go/internal/app/app.go", "start_line": 376, "end_line": 439 }]
+    },
+    {
+      "id": "registered",
+      "title": "Registered tools",
+      "caption": "MCP registry / GitHub",
+      "kind": "interface", "zone": "authority-zone", "tag": "LOCAL OR REMOTE",
+      "frame": { "x": 450, "y": 85, "w": 250, "h": 100 },
+      "evidence": [
+        { "path": "turing-backend/orchestrator-go/internal/service/mcpregistry/call.go", "start_line": 36, "end_line": 138 },
+        { "path": "turing-backend/orchestrator-go/internal/service/integrations/call.go", "start_line": 1, "end_line": 80 }
+      ]
+    },
+    {
+      "id": "durable",
+      "title": "Durable state + files",
+      "caption": "SQLite; vault, skills, team",
+      "kind": "store", "zone": "authority-zone", "tag": "LOCAL",
+      "frame": { "x": 450, "y": 500, "w": 250, "h": 100 },
+      "evidence": [{ "path": "turing-backend/infra/docker-compose.yml", "start_line": 103, "end_line": 119 }]
+    },
+    {
+      "id": "runtime",
+      "title": "Agent runtime",
+      "caption": "GeneralAssistant + tool runner",
+      "kind": "process", "zone": "execution-zone", "tag": "GO WORKER",
+      "frame": { "x": 920, "y": 270, "w": 230, "h": 110 },
+      "evidence": [{ "path": "turing-backend/agent-runtime-go/cmd/runtime/main.go", "start_line": 1, "end_line": 130 }]
+    },
+    {
+      "id": "models",
+      "title": "Selected model",
+      "caption": "Local engine or disclosed remote",
+      "kind": "interface", "zone": "execution-zone", "tag": "INFERENCE",
+      "frame": { "x": 920, "y": 85, "w": 230, "h": 100 },
+      "evidence": [
+        { "path": "turing-backend/agent-runtime-go/internal/llm/local.go", "start_line": 32, "end_line": 82 },
+        { "path": "turing-backend/agent-runtime-go/internal/agent/external_agent.go", "start_line": 26, "end_line": 71 }
+      ]
+    },
+    {
+      "id": "bundled",
+      "title": "Bundled MCP",
+      "caption": "mcp-files / mcp-system",
+      "kind": "interface", "zone": "execution-zone", "tag": "TWO GO SERVICES",
+      "frame": { "x": 920, "y": 500, "w": 230, "h": 100 },
+      "evidence": [{ "path": "turing-backend/infra/docker-compose.yml", "start_line": 189, "end_line": 255 }]
+    }
+  ],
+  "flows": [
+    { "id": "send", "source": "desktop", "target": "orchestrator", "source_offset": -22, "target_offset": -22, "label": "send / consent", "label_at": [360, 285] },
+    { "id": "events", "source": "orchestrator", "target": "desktop", "source_port": "left", "target_port": "right", "source_offset": 24, "target_offset": 24, "label": "events / history", "label_at": [360, 332] },
+    { "id": "assign", "source": "orchestrator", "target": "runtime", "source_offset": -25, "target_offset": -25, "label": "leased job", "label_at": [810, 280] },
+    { "id": "updates", "source": "runtime", "target": "orchestrator", "source_port": "left", "target_port": "right", "source_offset": 5, "target_offset": 5, "label": "beacons + updates", "label_at": [810, 320] },
+    { "id": "inference", "source": "runtime", "target": "models", "source_port": "top", "target_port": "bottom", "label": "inference", "label_at": [1110, 232] },
+    { "id": "proxy", "source": "orchestrator", "target": "registered", "source_port": "top", "target_port": "bottom", "label": "gated I/O", "label_at": [646, 232] },
+    { "id": "persist", "source": "orchestrator", "target": "durable", "source_port": "bottom", "target_port": "top", "label": "persist / load", "label_at": [648, 443] },
+    { "id": "mcp-call", "source": "runtime", "target": "bundled", "source_port": "bottom", "target_port": "top", "label": "internal HTTP", "label_at": [1105, 443] },
+    { "id": "consume", "source": "bundled", "target": "orchestrator", "source_port": "left", "target_port": "right", "source_offset": -15, "target_offset": 35, "via": [[800, 535], [800, 360]], "label": "files approval", "label_at": [832, 585] },
+    { "id": "preview-cleanup", "source": "orchestrator", "target": "bundled", "source_port": "right", "target_port": "left", "source_offset": 47, "target_offset": 10, "via": [[770, 372], [770, 560]], "label": "preview / cleanup", "label_at": [805, 620] }
+  ],
+  "chapters": [
+    {
+      "id": "admit-chapter", "label": "1. Admit and persist",
+      "description": "ChatService validates a send and any required remote disclosure. The orchestrator records the message, run, job and events atomically; it remains the only durable authority.",
+      "entities": ["desktop", "orchestrator", "durable"], "flows": ["send", "persist"], "zones": ["desktop-zone", "authority-zone"]
+    },
+    {
+      "id": "execute-chapter", "label": "2. Claim and infer",
+      "description": "A compatible runtime claims a leased, attempt-fenced job. GeneralAssistant calls the selected local engine or explicitly disclosed remote model. Provider choice does not transfer policy authority.",
+      "entities": ["orchestrator", "runtime", "models"], "flows": ["assign", "inference"], "zones": ["authority-zone", "execution-zone"]
+    },
+    {
+      "id": "tools-chapter", "label": "3. Gate every tool",
+      "description": "BEFORE beacons obtain policy. The orchestrator reads bounded file previews on a private capability-protected endpoint. Bundled calls leave from the runtime; registered MCP/GitHub calls are mediated by the orchestrator. Only mcp-files consumes approvals over the return gRPC path.",
+      "entities": ["runtime", "orchestrator", "bundled", "registered"], "flows": ["updates", "mcp-call", "consume", "proxy", "preview-cleanup"], "zones": ["authority-zone", "execution-zone"]
+    },
+    {
+      "id": "team-chapter", "label": "4. Delegate without waiting in-run",
+      "description": "Optional team.delegate creates a hidden child job, not another daemon. The parent yields the single default slot. Each child has its own tools, approvals and egress decision; all terminal child results join into one local continuation.",
+      "entities": ["orchestrator", "durable", "runtime", "models"], "flows": ["persist", "assign", "updates", "inference"], "zones": ["authority-zone", "execution-zone"]
+    },
+    {
+      "id": "reconcile-chapter", "label": "5. Reconcile and display",
+      "description": "The orchestrator persists outcomes and streams them to Flutter. Reopen reads history and delegation records. Stop and deletion fence late work; mcp-files cleanup uses its separate private bearer. No committed external effect is undone.",
+      "entities": ["runtime", "orchestrator", "durable", "desktop", "bundled"], "flows": ["updates", "persist", "events", "preview-cleanup"], "zones": ["desktop-zone", "authority-zone", "execution-zone"]
+    }
+  ]
+}

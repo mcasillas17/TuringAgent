@@ -1,6 +1,8 @@
 # TuringAgent Tech Stack and Architecture
 
 This document captures the implementation details that are useful for contributors but too detailed for the root README.
+For a source-backed visual tour and lifecycle sequences, see
+[Current architecture and execution flows](system-flows.md).
 
 ## Runtime architecture
 
@@ -13,6 +15,17 @@ TuringAgent has four backend processes plus a local Flutter client:
 | MCP system server | `turing-backend/mcp-system` | Safe system tools exposed over an HTTP JSON-RPC tools subset |
 | MCP files server | `turing-backend/mcp-files` | Sandboxed file tools; mutating tools require approval JWT validation and gRPC approval consumption |
 | Flutter client | `turing-client/turing_app` | Thin UI for settings, conversation search, sessions, chat, streamed events, model selection, and approvals |
+
+Separately, the owner invokes `turing-backend/turing` on the host. It builds
+`cmd/turing` and uses `scripts/compose.sh` for lifecycle and configuration
+operations; it is not another backend service or an agent tool. Its import
+guard excludes SQLite and `database/sql`. Before saving configuration it
+checks the selected images' `org.turing.checks` labels, runs both services'
+offline `check-config`, and atomically replaces `.env` only on success.
+Applying recreates containers with `up -d`; a failed health wait offers a
+restore. Read-only `ps` and `logs` bypass bind-source launch checks so the
+operator can inspect a broken installation. Guided `setup` and `engine`
+remain unimplemented.
 
 The client talks to the orchestrator through gRPC. The agent runtime calls
 bundled MCP servers over internal HTTP JSON-RPC. Registered-server calls instead
@@ -28,6 +41,7 @@ flowchart TB
   R -->|"Internal HTTP JSON-RPC tools subset"| F["Bundled mcp-files"]
   F -->|"Scoped approval-consumer identity; internal gRPC :3001; consume / finalize / capability checks"| O
   O -->|"Cleanup-only bearer; HTTP POST /internal/session-cleanup"| F
+  O -->|"Signed preview capability; HTTP POST /internal/approval-preview"| F
   O -->|"Policy-mediated calls; per-run egress for remote destinations"| A["Registered MCP servers / account integrations"]
 ```
 
@@ -36,9 +50,11 @@ This is the current local boundary, not the
 The mcp-files return path uses internal gRPC `:3001`, independently of the
 worker identity, to consume approvals, finalize artifacts and check session
 capabilities.
-Session withdrawal uses the separate orchestrator-to-mcp-files HTTP cleanup
-edge. Its cleanup-only bearer is not the approval-consumer identity used by
-the reverse gRPC edge.
+Session withdrawal uses the orchestrator-to-mcp-files HTTP cleanup edge.
+Approval review also reads and revalidates bounded file snapshots over its
+private HTTP preview endpoint. The cleanup bearer and signed short-lived
+preview capability are separate from each other and from the
+approval-consumer identity used by the reverse gRPC edge.
 The orchestrator also mediates registered third-party MCP and integration
 calls. Registry management is separate from protocol conformance; the bounded MCP lifecycle shipped with CON-001 and is described in [MCP lifecycle conformance](../mcp-security-and-integration.md#mcp-lifecycle-conformance). Resources, prompts, sampling, elicitation, OAuth and stdio are not implemented.
 Mobile scaffolding does not add pairing, non-loopback TLS or reachability:
