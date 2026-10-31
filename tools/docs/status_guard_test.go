@@ -535,6 +535,7 @@ func TestCanonicalRoadmapLinks(t *testing.T) {
 		{"turing-backend/recall/eval/README.md", "../../../docs/NORTH_STAR.md"},
 		{"turing-client/turing_app/README.md", "../../docs/NORTH_STAR.md"},
 		{"docs/architecture/tech-stack.md", "../NORTH_STAR.md"},
+		{"docs/architecture/system-flows.md", "../NORTH_STAR.md"},
 		{"docs/architecture/audit-read-api.md", "../NORTH_STAR.md"},
 		{"docs/architecture/mcp-protocol-adoption.md", "../NORTH_STAR.md"},
 		{"docs/superpowers/specs/2026-10-25-turing-local-inference-engines-design.md", "../../NORTH_STAR.md"},

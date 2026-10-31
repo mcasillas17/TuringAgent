@@ -9,6 +9,13 @@ the server until SEC-001.
 
 **Date:** 2026-10-25.
 
+**Reading this document:** The implementation status above is current through
+delivery slice 2 (#171 and #173). The baseline in section 2 and examples for
+`setup`, `engine`, and `check-engine` describe the original design or pending
+slice 3, not additional commands available today. Use the
+[current operator guide](../../../README.md#the-turing-command) and
+[architecture flows](../../architecture/system-flows.md) for shipped behavior.
+
 **Roadmap:** OPS-001 in the [canonical roadmap](../../NORTH_STAR.md).
 This design also covers slice 2
 of the [local inference engines design](2026-10-25-turing-local-inference-engines-design.md)

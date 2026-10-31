@@ -193,6 +193,10 @@ Remove it, or that tool, and the next worker registration restores the name. See
 - A non-root host account for backend initialization and Compose launches
 
 By default, containers reach Ollama at `http://host.docker.internal:11434`.
+Under the shipped Compose topology, `localhost` and loopback IPs in an engine
+URL name the runtime container, not the host. Use `host.docker.internal` for
+an engine running on the host; `./turing status` rejects loopback engine URLs
+rather than claiming the containers can reach them.
 On Linux, `host.docker.internal` is the Docker bridge's gateway, so the
 engine must listen there, not only on `127.0.0.1`; avoid `0.0.0.0` on a
 shared network. The app's model picker shows the local route as
@@ -219,8 +223,7 @@ secured to `0600` and never rewritten), and
 prints the Flutter client API key. It fails rather than changing ownership or
 permissions when existing sandbox content is inaccessible. Do not commit `.env`.
 
-Start the backend stack with the `turing` command, which lives next to
-`init.sh` in `turing-backend/`:
+Start the backend stack with the `turing` command in `turing-backend/`:
 
 ```bash
 ./turing start     # build the images the first time, start Turing, and wait until it is healthy
@@ -309,7 +312,8 @@ flutter run -d linux
   or Ubuntu:
   `sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev`.
   `libsecret-1-dev` is what `flutter_secure_storage` links against, and CI
-  builds the Linux app (`flutter build linux`) with exactly these packages.
+  builds the Linux app with these explicitly installed packages and the
+  runner's existing compiler/runtime libraries.
 - **To run:** a Secret Service keyring, for example `gnome-keyring`, running
   and unlocked in the desktop session, because `flutter_secure_storage` keeps
   the API key there. Without one, the app cannot save its key.
@@ -566,6 +570,9 @@ or migration.
 
 ## Documentation
 
+- [Current architecture and execution flows](docs/architecture/system-flows.md)
+  — source-backed topology, operator configuration, tool approval, specialist
+  consent, and withdrawal, plus an offline animated Archflow diagram.
 - [Canonical product direction and roadmap](docs/NORTH_STAR.md)
 - [Documentation status guard](tools/docs/README.md)
 - [Tech stack and architecture](docs/architecture/tech-stack.md)
