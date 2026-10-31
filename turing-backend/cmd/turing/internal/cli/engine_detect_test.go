@@ -597,6 +597,28 @@ func TestEngineDetectGivesTheUseCommandForAReachableEngine(t *testing.T) {
 	}
 }
 
+// Every OpenAI-compatible server is the openai engine; the example is for the
+// one the recommendation names, not the first of that kind to answer.
+func TestEngineDetectGivesTheExampleForTheRecommendedEngineNotAnotherOfTheSameKind(t *testing.T) {
+	h := newHarness(t)
+	h.onFramework()
+	h.writeEnv("TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_URL=http://host.docker.internal:1234/v1\nTURING_LOCAL_MODEL=qwen3-coder\n")
+	h.engine.serve(bridgeGateway+":1234", 200, vllmModels)
+	h.engine.serve(bridgeGateway+":8000", 200, openAIModels)
+
+	out := h.detect()
+
+	inOrder(t, out,
+		"  OpenAI-compatible: http://host.docker.internal:1234/v1 (models: qwen3-coder)\n",
+		"  ds4: http://host.docker.internal:8000/v1 (models: deepseek-chat, deepseek-reasoner)\n",
+		"Recommended: ds4 (ROCm)",
+		"For example: ./turing engine use openai --url http://host.docker.internal:8000/v1 --model deepseek-chat\n",
+	)
+	if strings.Contains(out, "--url http://host.docker.internal:1234/v1") {
+		t.Fatalf("the example names the other OpenAI-compatible server:\n%s", out)
+	}
+}
+
 func TestEngineDetectOnAMacMiniRecommendsOllama(t *testing.T) {
 	h := newHarness(t)
 	h.onMacMini()

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/envfile"
@@ -168,9 +169,11 @@ func (e Env) isBackend() bool {
 // provision runs init.sh as it is, which makes .env on a first run and fills
 // in only what is missing on a rerun, so no secret is ever regenerated. Its
 // output, the app key line included, goes straight to the terminal.
+// TURING_SETUP tells it that setup does the next step it would name.
 func (e Env) provision(ctx context.Context) int {
 	e.printf("Provisioning (%s)...\n", initScript)
-	code, err := e.Runner.Run(ctx, host.Command{Dir: e.BackendDir, Name: initScript, Env: e.Environ, Stdout: e.Stdout, Stderr: e.Stderr})
+	environ := append(slices.Clone(e.Environ), "TURING_SETUP=1")
+	code, err := e.Runner.Run(ctx, host.Command{Dir: e.BackendDir, Name: initScript, Env: environ, Stdout: e.Stdout, Stderr: e.Stderr})
 	switch {
 	case err != nil:
 		return e.fail("could not run %s: %v; check that this checkout is intact, then run ./turing setup again", initScript, err)
@@ -211,7 +214,9 @@ func (s *setupRun) save(ctx context.Context) int {
 	keyRemoved := false
 	edit := func(current *envfile.File) (map[string]*string, error) {
 		changes, removed := s.changesFor(current)
-		keyRemoved = removed
+		// Ollama takes no key, so dropping one is not news, and the command
+		// the notice names would be refused for it.
+		keyRemoved = removed && s.engineChoice.engine == engineOpenAI
 		return changes, nil
 	}
 	// The notice is for a removal that was saved, not one a check refused.

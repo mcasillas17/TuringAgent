@@ -332,6 +332,48 @@ func TestSetupFirstRunWithYesKeepsTheOllamaDefaultsUnlessTheRecommendationIsTheO
 	}
 }
 
+// --yes never guesses a model: an engine that lists several, none of them the
+// one Turing prefers, leaves the Ollama defaults in place, with the command
+// that switches.
+func TestSetupFirstRunWithYesKeepsTheOllamaDefaultsWhenTheRecommendedEngineListsSeveralModelsButNotThePreferredOne(t *testing.T) {
+	s := newSetupHarness(t)
+	s.engine.serve(bridgeGateway+":8000", 200, `{"object":"list","data":[{"id":"glm-5.3-q2"},{"id":"qwen3-coder"}]}`)
+
+	if code := s.setup("--yes"); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	if got := s.envBytes(); string(got) != string(s.fresh) {
+		t.Fatalf(".env changed:\n%s", got)
+	}
+	inOrder(t, s.out.String(),
+		"Keeping Ollama with qwen2.5:7b",
+		"To use ds4 instead, run: ./turing engine use openai --url http://host.docker.internal:8000/v1 --model <model>\n",
+		noChanges, engineUsable, connectLines)
+}
+
+// An engine that lists one model leaves nothing to guess: --yes takes the
+// recommended engine with that model, even when it is not the one Turing
+// prefers.
+func TestSetupFirstRunWithYesTakesTheRecommendedEngineWithTheOnlyModelItLists(t *testing.T) {
+	s := newSetupHarness(t)
+	s.engine.serve(bridgeGateway+":8000", 200, `{"object":"list","data":[{"id":"glm-5.3-q2"}]}`)
+
+	if code := s.setup("--yes"); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	s.wantEnv(t, map[string]string{
+		"TURING_LOCAL_ENGINE":       "openai",
+		"TURING_LOCAL_ENGINE_URL":   "http://host.docker.internal:8000/v1",
+		"TURING_LOCAL_MODEL":        "glm-5.3-q2",
+		"TURING_LOCAL_ENGINE_LABEL": "ds4",
+	})
+	out := s.out.String()
+	inOrder(t, out, "Settings to save:\n", "  TURING_LOCAL_MODEL=glm-5.3-q2\n", engineUsable, connectLines)
+	if strings.Contains(out, "Keeping Ollama") {
+		t.Fatalf("stdout = %q", out)
+	}
+}
+
 // --- a rerun ---
 
 func TestSetupRerunWithYesKeepsEveryCurrentChoiceAndWritesNothing(t *testing.T) {
@@ -384,9 +426,10 @@ func TestSetupWithEngineFlagsReplacesTheEngineAndRemovesTheKeyOfAnotherServer(t 
 		"TURING_LOCAL_ENGINE_API_KEY": "",
 	})
 	out := s.out.String()
-	inOrder(t, out, "  TURING_LOCAL_ENGINE_LABEL: cleared\n", "  TURING_LOCAL_ENGINE_API_KEY: removed\n", setupKeyRemovedNotice, engineUsable)
-	if n := strings.Count(out, setupKeyRemovedNotice); n != 1 {
-		t.Fatalf("the key notice was printed %d times, want once", n)
+	inOrder(t, out, "  TURING_LOCAL_ENGINE_LABEL: cleared\n", "  TURING_LOCAL_ENGINE_API_KEY: removed\n", engineUsable)
+	// Ollama takes no key, so there is no key to give it.
+	if strings.Contains(out, keyRemovedWords) {
+		t.Fatalf("stdout = %q; want no notice about giving Ollama a key", out)
 	}
 	if strings.Contains(out+s.errOut.String(), "--api-key-stdin") {
 		t.Fatalf("stdout = %q; setup has no --api-key-stdin, so it must not name one", out)
@@ -434,7 +477,10 @@ func TestSetupChoosingOllamaClearsAnEngineKeyEvenWhenOllamaIsCurrent(t *testing.
 		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
 	}
 	s.wantEnv(t, map[string]string{"TURING_LOCAL_ENGINE": "ollama", "TURING_LOCAL_ENGINE_API_KEY": ""})
-	inOrder(t, s.out.String(), "Settings to save:\n", "  TURING_LOCAL_ENGINE_API_KEY: removed\n", setupKeyRemovedNotice)
+	inOrder(t, s.out.String(), "Settings to save:\n", "  TURING_LOCAL_ENGINE_API_KEY: removed\n", engineUsable)
+	if strings.Contains(s.out.String(), keyRemovedWords) {
+		t.Fatalf("stdout = %q; want no notice about giving Ollama a key", s.out)
+	}
 	s.noOutputContains(engineKeyCanary)
 }
 
@@ -1115,8 +1161,8 @@ func TestSetupStopsWhenInitFails(t *testing.T) {
 	inOrder(t, s.errOut.String(), "Initialization failed", "./scripts/init.sh failed (exit status 1)")
 	oneNextStep(t, s.errOut.String())
 	call := s.runner.calls[1]
-	if call.Dir != s.BackendDir || !slices.Equal(call.Env, s.Environ) || call.Stdin != nil {
-		t.Fatalf("init.sh ran in %q with env %q and stdin %v", call.Dir, call.Env, call.Stdin)
+	if call.Dir != s.BackendDir || !slices.Equal(call.Env, append(slices.Clone(s.Environ), "TURING_SETUP=1")) || call.Stdin != nil {
+		t.Fatalf("init.sh ran in %q with env %q and stdin %v; want the backend, setup's environment with TURING_SETUP=1, and no input", call.Dir, call.Env, call.Stdin)
 	}
 }
 

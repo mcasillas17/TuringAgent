@@ -41,7 +41,7 @@ failure.
 | Apple Silicon, 64 GB class | ds4 (Metal) | Qwen3.8 Q2, about 42 GiB resident | the ds4 hardware page |
 | Apple Silicon, 96–128 GB class | ds4 (Metal) | DeepSeek V4 Flash Q2 | the ds4 hardware page |
 | AMD Strix Halo, 96 GB+ class | ds4 (ROCm) | DeepSeek V4 Flash Q2 or GLM 5.3 Q2; not Qwen3.8 | the ds4 hardware page |
-| Linux with an NVIDIA GPU, 96 GB+ class | ds4 (CUDA) | DeepSeek V4 Flash or GLM 5.3 Q2 | the ds4 hardware page |
+| Linux with an NVIDIA GPU, 96 GB+ class | ds4 (CUDA) | DeepSeek V4 Flash or GLM 5.3 Q2 | the ds4 hardware page lists NVIDIA DGX Spark and CUDA Linux at the 128 GB class; taking any NVIDIA GPU in the 96 GB+ class is Turing's choice |
 | Anything else | Ollama | `qwen2.5:7b` | this repository: Turing's default |
 
 The ds4 rows come from the hardware guidance on [dwarfstar.sh](https://dwarfstar.sh),
@@ -100,9 +100,9 @@ change that fixes each one:
   that runs it; without it the command looks for the server on `127.0.0.1` and
   cannot find it.
 
-Do not use `0.0.0.0` on a machine attached to a shared network: it publishes
-the engine, which has no login of its own by default, to every network the
-machine is on. `check` proves reachability from inside the container; when it
+Do not use `0.0.0.0` on a machine attached to a shared network: ds4's own docs
+say to restrict access, and the same applies to Ollama (`OLLAMA_HOST`). `check`
+proves reachability from inside the container; when it
 fails on Linux for an engine that answers only on `127.0.0.1`, it names the
 same change, then `./turing engine check`.
 
@@ -127,8 +127,8 @@ large model may still be loading when the first completion arrives.
 
 | Step | What it asks | Timeout | A failure means |
 | --- | --- | --- | --- |
-| 1/4 reachable | Ollama: `GET /api/version`. OpenAI-compatible: `GET <url>/models`. | 10 s | Nothing answers where the containers look: the engine is stopped, `TURING_LOCAL_ENGINE_URL` is wrong, on Linux the engine listens only on `127.0.0.1`, or it answers 401 or 403 because it wants an API key (or refused the one set). |
-| 2/4 model present | Ollama: `/api/tags`, `models[].name`, where an untagged name also matches `<model>:latest`. OpenAI-compatible: `/models`, `data[].id`. | 10 s | `TURING_LOCAL_MODEL` is not there: Ollama does not have it (run `ollama pull`), or an OpenAI-compatible server lists no models. A model not listed while the list is non-empty still passes, with the note `TURING_LOCAL_MODEL is not listed; treating it as an alias`, because such a server's names are its own aliases. |
+| 1/4 reachable | Ollama: `GET /api/version`. OpenAI-compatible: `GET <url>/models`. | 10 s | Nothing answers where the containers look (the engine is stopped, `TURING_LOCAL_ENGINE_URL` is wrong, or on Linux the engine listens only on `127.0.0.1`); it answers 401 or 403 because it wants an API key (or refused the one set); or it answers another HTTP status, so the engine kind may not match the server (`TURING_LOCAL_ENGINE`). |
+| 2/4 model present | Ollama: `/api/tags`, `models[].name`, where an untagged name also matches `<model>:latest`. OpenAI-compatible: `/models`, `data[].id`. | 10 s | `TURING_LOCAL_MODEL` is not there: Ollama does not have it (run `ollama pull`), or an OpenAI-compatible server lists no models; or the model list is not in the engine's format, so `TURING_LOCAL_ENGINE` does not match the server. A model not listed while the list is non-empty still passes, with the note `TURING_LOCAL_MODEL is not listed; treating it as an alias`, because such a server's names are its own aliases. |
 | 3/4 streaming | One short completion, which must stream at least one non-empty text delta and finish with a `completed` event. | 300 s | The model streamed no text (only reasoning, or nothing), the stream failed or ended early, or no complete answer came in time. |
 | 4/4 tool calling | A fixed prompt offers one tool, `turing_engine_check`, and needs a tool call naming it with parsed arguments. A call to another tool beside it does not matter. | 300 s | The model or server does not do tool calling (it answered in text), the arguments did not parse as a JSON object, or the model called a different tool. Turing depends on tool calling, and engines differ here, so this is the step that turns "speaks the API" into "usable for Turing". |
 

@@ -364,13 +364,14 @@ func printBridgeAdvice(say func(string, ...any), route hostRoute, engines []foun
 }
 
 // exampleUse is the `engine use` command for the engine found that matches the
-// recommendation, when one is usable. It names the recommended model when the
-// engine lists it, the engine's only model when it lists one, and otherwise
-// leaves the choice to the owner. A name the engine chose goes into the
-// command only when a shell would take it as one plain word.
+// recommendation, by kind and by label, when one is usable. It names the
+// recommended model when the engine lists it, the engine's only model when it
+// lists one, and otherwise leaves the choice to the owner. A name the engine
+// chose goes into the command only when a shell would take it as one plain
+// word.
 func exampleUse(recommendation machine.Recommendation, engines []foundEngine) (string, bool) {
 	for _, engine := range engines {
-		if engine.Engine != recommendation.Engine || engine.Problem != "" {
+		if engine.Engine != recommendation.Engine || engine.Label != recommendation.Label || engine.Problem != "" {
 			continue
 		}
 		model, ok := modelToSuggest(engine, recommendation.PreferredModel)
