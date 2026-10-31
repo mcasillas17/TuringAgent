@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -330,5 +331,120 @@ func TestComposeLaunchReadsABareDisplayRootTheWayComposeDoes(t *testing.T) {
 	}
 	if !strings.Contains(result.dockerLog, "MEMORY_DISPLAY_ROOT="+vault+"\n") {
 		t.Fatalf("docker was handed %q, want the path Compose would have read (%q)", result.dockerLog, vault)
+	}
+}
+
+// `status` and `logs` are what a person reaches for on an install that will not
+// start, so the read-only group must run over exactly the bind sources and
+// vault path a launch refuses — and ask Docker once.
+func TestComposeReadOnlyCommandsSkipLaunchChecks(t *testing.T) {
+	for _, command := range [][]string{{"ps", "--all"}, {"logs", "--tail", "5"}} {
+		for _, broken := range []struct {
+			name  string
+			setup func(*testing.T, string)
+		}{
+			{name: "missing vault", setup: func(t *testing.T, root string) {
+				if err := os.RemoveAll(filepath.Join(root, "memory")); err != nil {
+					t.Fatal(err)
+				}
+			}},
+			{name: "world-writable sandbox", setup: func(t *testing.T, root string) {
+				if err := os.Chmod(filepath.Join(root, "sandbox"), 0777); err != nil {
+					t.Fatal(err)
+				}
+			}},
+			{name: "no vault path", setup: func(t *testing.T, root string) {
+				writeComposeEnv(t, root, "TURING_CLIENT_API_KEY=client\n")
+			}},
+		} {
+			t.Run(command[0]+"/"+broken.name, func(t *testing.T) {
+				result := executeComposeWithSetup(t, true, "501", "20", "501", "20", broken.setup, command...)
+				if result.err != nil {
+					t.Fatalf("compose.sh refused a read-only command over a broken install: %v\n%s", result.err, result.output)
+				}
+				want := "compose --env-file .env -f infra/docker-compose.yml " + strings.Join(command, " ")
+				if len(result.dockerCalls) != 1 || result.dockerCalls[0] != want {
+					t.Fatalf("docker was invoked as %q, want exactly one call %q", result.dockerCalls, want)
+				}
+				if !strings.HasPrefix(result.dockerLog, "HOST_UID=501 HOST_GID=20 ") {
+					t.Fatalf("docker was not handed the current identity: %q", result.dockerLog)
+				}
+			})
+		}
+	}
+}
+
+// Ctrl-C ends `logs -f` with status 130. The teardown retry would read that as
+// an unreadable .env and restart the stream behind the user's prompt, so the
+// read-only group runs Docker once and reports whatever it said.
+func TestComposeReadOnlyCommandsRunOnceWithoutRetry(t *testing.T) {
+	t.Run("a refused .env is not retried", func(t *testing.T) {
+		result := executeComposeWithSetupIn(t, t.TempDir(), true, "501", "20", "501", "20", nil,
+			map[string]string{"DOCKER_REFUSE_ENV_FILE": "1"}, "logs", "--tail", "5")
+		if result.err == nil {
+			t.Fatalf("compose.sh reported success for a refused command; docker calls: %q", result.dockerCalls)
+		}
+		if len(result.dockerCalls) != 1 {
+			t.Fatalf("docker was invoked %d times, want once: %q", len(result.dockerCalls), result.dockerCalls)
+		}
+		if strings.Contains(result.output, "retrying") {
+			t.Fatalf("a read-only command announced a retry:\n%s", result.output)
+		}
+	})
+	t.Run("an interrupted follow is not restarted", func(t *testing.T) {
+		result := executeComposeWithSetupIn(t, t.TempDir(), true, "501", "20", "501", "20", nil,
+			map[string]string{"DOCKER_EXIT": "130"}, "logs", "-f")
+		var exit *exec.ExitError
+		if !errors.As(result.err, &exit) || exit.ExitCode() != 130 {
+			t.Fatalf("compose.sh exited with %v, want status 130", result.err)
+		}
+		if len(result.dockerCalls) != 1 {
+			t.Fatalf("docker was invoked %d times, want once: %q", len(result.dockerCalls), result.dockerCalls)
+		}
+		if strings.Contains(result.output, "retrying") {
+			t.Fatalf("an interrupted follow announced a retry:\n%s", result.output)
+		}
+	})
+}
+
+// A checkout that was never initialised has no .env. `ps` still has to answer
+// rather than send the person to init.sh, because "nothing is running" is what
+// it should say.
+func TestComposeReadOnlyCommandsWorkWithoutEnvFile(t *testing.T) {
+	for _, command := range [][]string{{"ps"}, {"logs", "--tail", "5"}} {
+		t.Run(command[0], func(t *testing.T) {
+			result := executeComposeWithEnv(t, false, "501", "20", "501", "20", command...)
+			if result.err != nil {
+				t.Fatalf("compose.sh refused a read-only command without .env: %v\n%s", result.err, result.output)
+			}
+			if strings.Contains(result.output, ".env is missing") {
+				t.Fatalf("compose.sh complained about the missing .env:\n%s", result.output)
+			}
+			want := "compose -f infra/docker-compose.yml " + strings.Join(command, " ")
+			if len(result.dockerCalls) != 1 || result.dockerCalls[0] != want {
+				t.Fatalf("docker was invoked as %q, want exactly one call %q", result.dockerCalls, want)
+			}
+		})
+	}
+}
+
+// The read-only group is a fixed, named list. Anything else that can start or
+// build a service keeps every launch check, whatever its options say.
+func TestComposeReadOnlyGroupDoesNotLoosenLaunchCommands(t *testing.T) {
+	for _, command := range [][]string{{"up", "-d"}, {"run", "--rm", "--no-deps", "orchestrator", "check-config"}, {"--project-name", "turing", "up"}} {
+		t.Run(strings.Join(command, " "), func(t *testing.T) {
+			result := executeComposeWithSetup(t, true, "501", "20", "501", "20",
+				func(t *testing.T, root string) {
+					if err := os.RemoveAll(filepath.Join(root, "memory")); err != nil {
+						t.Fatal(err)
+					}
+				}, command...)
+			if result.err == nil {
+				t.Fatalf("compose.sh launched over a missing vault; docker calls: %q", result.dockerCalls)
+			}
+			if len(result.dockerCalls) != 0 {
+				t.Fatalf("docker was called before the launch checks passed: %q", result.dockerCalls)
+			}
+		})
 	}
 }

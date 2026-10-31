@@ -655,7 +655,10 @@ func TestResetRejectsRootBeforeDeletingLocalState(t *testing.T) {
 type composeResult struct {
 	output    string
 	dockerLog string
-	err       error
+	// dockerCalls holds one entry per invocation. dockerLog is rewritten by
+	// each call, so only this can tell one invocation from two.
+	dockerCalls []string
+	err         error
 }
 
 func executeCompose(t *testing.T, uid, gid, exportedUID, exportedGID string, args ...string) composeResult {
@@ -749,10 +752,14 @@ func executeComposeWithSetupIn(
 		t.Fatal(err)
 	}
 	dockerLog := filepath.Join(root, "docker.log")
+	dockerCalls := filepath.Join(root, "docker.calls")
 	// The fake docker records what it was handed. With DOCKER_REFUSE_ENV_FILE
 	// set it also refuses any invocation carrying --env-file, which is how the
-	// real one answers a .env holding a variable it cannot resolve.
+	// real one answers a .env holding a variable it cannot resolve. With
+	// DOCKER_EXIT set it exits with that status, which is how Ctrl-C ends a
+	// `logs -f`.
 	fakeDocker := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> \"$DOCKER_CALLS\"\n" +
 		"printf 'HOST_UID=%s HOST_GID=%s MEMORY_DISPLAY_ROOT=%s\\n' \"$HOST_UID\" \"$HOST_GID\" \"$MEMORY_DISPLAY_ROOT\" > \"$DOCKER_LOG\"\n" +
 		"printf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n" +
 		"if [ -n \"$DOCKER_REFUSE_ENV_FILE\" ]; then\n" +
@@ -762,6 +769,9 @@ func executeComposeWithSetupIn(
 		"      exit 1\n" +
 		"      ;;\n" +
 		"  esac\n" +
+		"fi\n" +
+		"if [ -n \"$DOCKER_EXIT\" ]; then\n" +
+		"  exit \"$DOCKER_EXIT\"\n" +
 		"fi\n"
 	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(fakeDocker), 0700); err != nil {
 		t.Fatal(err)
@@ -771,6 +781,7 @@ func executeComposeWithSetupIn(
 	command.Env = append(os.Environ(),
 		"PATH="+binDir+":"+os.Getenv("PATH"),
 		"DOCKER_LOG="+dockerLog,
+		"DOCKER_CALLS="+dockerCalls,
 		"HOST_UID="+exportedUID,
 		"HOST_GID="+exportedGID,
 	)
@@ -782,7 +793,20 @@ func executeComposeWithSetupIn(
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	return composeResult{output: string(output), dockerLog: string(log), err: commandErr}
+	calls, err := os.ReadFile(dockerCalls)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	var invocations []string
+	if len(calls) > 0 {
+		invocations = strings.Split(strings.TrimSuffix(string(calls), "\n"), "\n")
+	}
+	return composeResult{
+		output:      string(output),
+		dockerLog:   string(log),
+		dockerCalls: invocations,
+		err:         commandErr,
+	}
 }
 
 func copyScript(t *testing.T, source, destination string) {

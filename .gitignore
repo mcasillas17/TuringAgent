@@ -174,6 +174,10 @@ turing-backend/.runtime/
 data/turing.db*
 turing-backend/data/turing.db*
 turing-backend/data/team-seeded
+# The turing wrapper's build output, and the lock `turing config` holds while
+# it changes .env.
+turing-backend/.turing/
+turing-backend/.env.lock
 .claude/worktrees/
 
 # ==========================

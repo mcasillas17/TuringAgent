@@ -219,18 +219,26 @@ secured to `0600` and never rewritten), and
 prints the Flutter client API key. It fails rather than changing ownership or
 permissions when existing sandbox content is inaccessible. Do not commit `.env`.
 
-Start the backend stack:
+Start the backend stack with the `turing` command, which lives next to
+`init.sh` in `turing-backend/`:
 
 ```bash
-./scripts/dev.sh
+./turing start     # build the images the first time, start Turing, and wait until it is healthy
+./turing status    # one-screen health report; exits 1 when a check fails
+./turing connect   # the backend URL and the key the app asks for
+./turing config    # change settings from a menu, without editing .env
 ```
 
-This builds and runs the orchestrator, agent runtime, and MCP servers through
+`./turing start` builds and runs the orchestrator, agent runtime, and MCP servers through
 Docker Compose. Compose publishes the public gRPC API on `127.0.0.1` only;
 its host port defaults to `3000` and can be changed with
 `ORCHESTRATOR_PUBLIC_PORT`. The orchestrator listens on all interfaces inside
 its container; the host restriction comes from Compose's port publication,
 not an in-process loopback check.
+
+`./scripts/dev.sh` is kept as the foreground development loop: it runs
+`init.sh`, then builds the stack and runs it in your terminal with its log
+output. Use `./turing` to run Turing in the background.
 
 The supported client setup runs on that same host. A LAN/Tailscale client URL
 alone does not expose the loopback service. iOS/Android scaffolding and
@@ -239,7 +247,7 @@ non-loopback identity/TLS remain future work, and Android's main manifest
 lacks network permission. See the [Flutter deployment limits](turing-client/turing_app/README.md#run-locally);
 do not widen the host publication or add a public tunnel as a shortcut.
 
-Use the repository scripts rather than invoking this Compose file directly.
+Use `./turing` or the repository scripts rather than invoking this Compose file directly.
 `scripts/compose.sh` validates and injects the current non-root host UID/GID;
 this prevents stale `.env` values or exported `HOST_UID`/`HOST_GID` variables
 from selecting the identity used for the data, skills, memory, team, and sandbox
@@ -265,7 +273,8 @@ be evaluated on `down`, `stop` and `rm` too, and teardown has to work on the
 broken install it is being run to fix — including the `down --remove-orphans`
 that `scripts/reset.sh` runs before it deletes local data.
 
-In another terminal, from the repository root, run the Flutter app:
+Then, from the repository root, run the Flutter app on the machine that runs
+Turing (in another terminal if you started the stack with `./scripts/dev.sh`):
 
 ```bash
 cd turing-client/turing_app
@@ -276,10 +285,77 @@ flutter run -d macos
 On first launch, enter:
 
 - **Backend URL:** `http://localhost:3000`
-- **API key:** the `Flutter client API key` printed by `./scripts/init.sh`
+- **API key:** the `Flutter client API key` printed by `./scripts/init.sh`, which
+  `./turing connect` shows again at any time
 
 The sandboxed macOS builds include the outbound-network entitlement required to
 reach the local backend.
+
+### Linux desktop client
+
+On a Linux server, run the Linux desktop app on the server itself: until device
+pairing (SEC-001) ships, Turing accepts the app only from the machine it runs
+on, so a Mac or phone cannot reach a headless server. Use `-d linux` instead of
+`-d macos`:
+
+```bash
+cd turing-client/turing_app
+flutter pub get
+flutter run -d linux
+```
+
+- **To build:** Flutter's Linux toolchain, plus the development packages
+  `clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev`. On Debian
+  or Ubuntu:
+  `sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev`.
+  `libsecret-1-dev` is what `flutter_secure_storage` links against, and CI
+  builds the Linux app (`flutter build linux`) with exactly these packages.
+- **To run:** a Secret Service keyring, for example `gnome-keyring`, running
+  and unlocked in the desktop session, because `flutter_secure_storage` keeps
+  the API key there. Without one, the app cannot save its key.
+
+`flutter run -d linux` needs a graphical session on the server. The CI job
+builds the app but does not launch it.
+
+### The `turing` command
+
+`./turing` builds a small Go program each time it runs (it needs Go 1.26+, and
+Go's build cache keeps later runs quick). It refuses to run as root, because
+the files it manages belong to the account that ran `init.sh`. Symlink it onto
+your `PATH` to run it from anywhere. `./turing help` prints the full usage.
+
+| Command | What it does |
+|---|---|
+| `./turing start [--build]` | Starts Turing and waits until it is healthy. `--build` rebuilds the images first; run it after pulling a new version. |
+| `./turing stop` | Stops Turing. It stays stopped after a reboot. |
+| `./turing restart [--build] [--yes]` | Stops, then starts. This ends a reply in progress, so it asks first. |
+| `./turing logs [service] [-f]` | Shows a service's recent log; `-f` follows it. The service is `orchestrator`, `runtime`, `files` or `system`; the default is all four. |
+| `./turing status` | One-screen health report. It never prints a secret, and exits 1 when a check fails. |
+| `./turing connect [--rotate-key] [--yes]` | Shows the backend URL and the key for the app. `--rotate-key` makes a new key and, when you agree, applies it by restarting the orchestrator. `scripts/rotate-client-key.sh` now calls this. |
+| `./turing config` | Changes settings from a menu, at a terminal. |
+| `./turing config show`, `get KEY` | Lists the settings you can change, or prints one. A secret shows only as set or not set, and is never printed. |
+| `./turing config set KEY [VALUE]`, `unset KEY` | Changes one setting, as described below. `--no-apply` saves without restarting, and `--yes` answers the questions. `KEY` may be `TURING_AGENT_API_KEYS.<name>` for one agent's key. |
+
+`turing config` is how settings are changed without editing `.env`:
+
+- **A secret is never taken on the command line**, where it would reach shell
+  history and the process list. It is asked for with typing hidden, or read
+  from standard input with `--stdin`.
+- **Each change is checked first.** The orchestrator and the agent runtime
+  each run their own `check-config` on the new value, the way startup would
+  load it, and `.env` is written only after both accept it. A refusal names the
+  setting and nothing is saved.
+- **Applying a change recreates the containers it affects** and waits for them
+  to be healthy. If they do not come up, it offers to restore the previous
+  settings and apply them again.
+
+The command never opens the database. It talks to the orchestrator only as a
+client, for its health check.
+
+`setup` and `engine` are listed in `./turing help` but are not available yet.
+Nor does this version reach the server from another machine: until SEC-001, the
+app runs on the machine that runs Turing, and `./turing connect` run over SSH
+says so.
 
 ## Verify the stack
 
@@ -357,6 +433,23 @@ request are measured separately; this does not evaluate generated answers.
 ## Configuration
 
 Backend configuration lives in `turing-backend/.env`, copied from `turing-backend/.env.example`.
+`./turing config` changes a setting without editing that file by hand, and
+checks it with the services before saving it (see [the `turing` command](#the-turing-command)).
+
+To check a change you made by hand before starting the stack, run each service's own check
+from `turing-backend/`:
+
+```bash
+./scripts/compose.sh run --rm --no-deps turing-orchestrator check-config
+./scripts/compose.sh run --rm --no-deps turing-agent-runtime-general check-config
+```
+
+Each check loads the configuration the way startup does, then stops: it opens
+no database or file and contacts nothing. It exits non-zero and names the
+setting it refuses. Deprecated names are reported as warnings. It needs images
+built from this version or later, because an older image ignores the argument
+and starts the service, so rebuild first (`./scripts/compose.sh build`). An
+image that can check carries the `org.turing.checks` label.
 
 Common values:
 
@@ -424,8 +517,8 @@ orchestrator remains stopped, use a SQLite client to run
 
 ## Troubleshooting
 
-- **Backend is not reachable:** check that Docker Compose is running and port `3000` is free.
-- **Authentication fails:** confirm the Flutter API key matches `TURING_CLIENT_API_KEY` in `turing-backend/.env`.
+- **Backend is not reachable:** run `./turing status`, which names the check that fails; `./turing logs` shows a service's recent log. Otherwise check that Docker Compose is running and port `3000` is free.
+- **Authentication fails:** confirm the Flutter API key matches `TURING_CLIENT_API_KEY` in `turing-backend/.env`; `./turing connect` shows it. If you changed the key but did not restart, `./turing restart` makes the orchestrator use it.
 - **No model response:** ensure Ollama is running on the host and the configured model is available.
 - **Remote send is refused:** confirm the per-run disclosure in the client. If
   configuration fails at startup, use HTTPS for keyed non-loopback
