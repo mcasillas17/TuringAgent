@@ -135,7 +135,7 @@ func TestStatusHealthyServerPrintsEveryLineAndExitsZero(t *testing.T) {
 	}
 	engine := s.line("Engine")
 	for _, want := range []string{"ollama", "http://host.docker.internal:11434", "3 models", "qwen2.5:7b", "listed",
-		"(turing engine check, coming in a later version, proves it from inside the runtime)"} {
+		"(run ./turing engine check to prove it from inside the runtime)"} {
 		if !strings.Contains(engine, want) {
 			t.Errorf("Engine line = %q, want %q", engine, want)
 		}

@@ -45,7 +45,8 @@ Commands:
                              check a new value with the services, save it in .env, then apply it
                              (a secret is never taken on the command line: it is asked for with
                              typing hidden, or read from standard input with --stdin;
-                             --no-apply saves without restarting; KEY may be TURING_AGENT_API_KEYS.<name>)
+                             --no-apply saves without restarting; KEY may be TURING_AGENT_API_KEYS.<name>;
+                             a change to the local engine is then proved with engine check)
   config unset KEY [--yes] [--no-apply]
                              clear a setting the same way; TURING_AGENT_API_KEYS.<name> removes one agent
   help                       show this text
@@ -54,6 +55,17 @@ Commands:
                              and the one Turing recommends; it changes nothing
                              (--url also asks that address; localhost and 127.0.0.1 become host.docker.internal,
                              which is how the containers name this machine)
+  engine use <ollama|openai> [--url URL] [--model M] [--context N] [--label L]
+             [--api-key-stdin] [--yes] [--no-apply]
+                             point Turing at a local model engine, saved and applied as config set does,
+                             then run engine check; openai needs --url and --model, and ollama without
+                             them uses the runtime's defaults (localhost and 127.0.0.1 in --url become
+                             host.docker.internal; --label names the engine in the app, ds4 by default
+                             for openai on port 8000; --context sets the context window in tokens; the
+                             engine's API key is never taken on the command line: --api-key-stdin reads
+                             it from standard input, or asks with typing hidden at a terminal)
+  engine check               prove the configured engine works for Turing from inside the runtime:
+                             it answers, lists the model, streams a reply and calls a tool
 `
 
 // serviceNames pairs each service's friendly name with its Compose name, in

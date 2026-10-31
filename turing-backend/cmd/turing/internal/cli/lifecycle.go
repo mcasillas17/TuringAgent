@@ -46,17 +46,23 @@ func (e Env) flagSet(command string) *flag.FlagSet {
 // ok means the exit code to return is already decided.
 func (e Env) parseFlags(set *flag.FlagSet, args []string) (code int, ok bool) {
 	if err := set.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			_, _ = io.WriteString(e.Stdout, Usage)
-			return 0, false
-		}
-		// The flag package's error repeats the argument, which could be a secret.
-		return e.usageError("turing %s: unknown option, or a value given to an option that takes none; run ./turing help", set.Name()), false
+		return e.flagError(set, err), false
 	}
 	if set.NArg() > 0 {
 		return e.usageError("turing %s takes no arguments; run ./turing help", set.Name()), false
 	}
 	return 0, true
+}
+
+// flagError answers an error from set.Parse: help is the usage text, anything
+// else a usage error.
+func (e Env) flagError(set *flag.FlagSet, err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		_, _ = io.WriteString(e.Stdout, Usage)
+		return 0
+	}
+	// The flag package's error repeats the argument, which could be a secret.
+	return e.usageError("turing %s: unknown option, or a value given to an option that takes none; run ./turing help", set.Name())
 }
 
 func (e Env) start(ctx context.Context, args []string) int {

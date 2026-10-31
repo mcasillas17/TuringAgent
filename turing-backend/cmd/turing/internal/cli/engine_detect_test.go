@@ -881,7 +881,6 @@ func TestEngineWithNoSubcommandOrAnUnknownOneIsAUsageErrorThatDoesNotEchoIt(t *t
 	for _, args := range [][]string{
 		{"engine"},
 		{"engine", "use"},
-		{"engine", "check"},
 		{"engine", "sk-CANARY-ARGUMENT"},
 		{"engine", "--url", "sk-CANARY-ARGUMENT"},
 	} {
@@ -917,29 +916,6 @@ func TestEngineDetectTakesNoPositionalArgumentAndNoUnknownOption(t *testing.T) {
 		}
 		if h.out.Len() != 0 || len(h.engine.requests) != 0 || strings.Contains(h.errOut.String(), "CANARY") {
 			t.Fatalf("%q: stdout %q, asked %q, stderr %q", args, h.out, h.engine.urls(), h.errOut)
-		}
-	}
-}
-
-func TestHelpListsEngineDetectAndDoesNotClaimUseOrCheckYet(t *testing.T) {
-	h := newHarness(t)
-	h.run("help")
-
-	var engineText []string
-	for _, line := range strings.Split(h.out.String(), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "engine") {
-			engineText = append(engineText, line)
-		}
-	}
-	if len(engineText) == 0 || !strings.Contains(engineText[0], "engine detect [--url URL]") {
-		t.Fatalf("help does not list engine detect [--url URL]:\n%s", h.out)
-	}
-	for _, line := range engineText {
-		for _, banned := range []string{"engine use", "engine check", "coming in a later version"} {
-			if strings.Contains(line, banned) {
-				t.Errorf("help line %q mentions %q", line, banned)
-			}
 		}
 	}
 }
