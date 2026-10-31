@@ -175,10 +175,8 @@ func (b *tailBuffer) String() string {
 // check-config judges what this does not. It never takes the engine's key as
 // an argument, and never repeats an argument it does not know.
 func (e Env) engineUse(ctx context.Context, args []string) int {
-	for _, arg := range args {
-		if name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "="); strings.HasPrefix(arg, "-") && name == "api-key" {
-			return e.usageError("the engine's API key is never taken on the command line, where shell history and ps would keep it; pipe it in with --api-key-stdin (see ./turing help)")
-		}
+	if namesOption(args, "api-key") {
+		return e.usageError("the engine's API key is never taken on the command line, where shell history and ps would keep it; pipe it in with --api-key-stdin (see ./turing help)")
 	}
 	set := e.flagSet("engine use")
 	engineURL := set.String("url", "", "")
@@ -219,8 +217,8 @@ func (e Env) engineUse(ctx context.Context, args []string) int {
 		}
 		containerURL = canonical
 	}
-	if *label == "" && engine == engineOpenAI && urlPort(containerURL) == ds4Port {
-		*label = labelDS4
+	if *label == "" {
+		*label = usualLabel(engine, containerURL)
 	}
 
 	// A key given here replaces the one in .env; Ollama takes none.
@@ -294,12 +292,19 @@ func (e Env) parseInterspersed(set *flag.FlagSet, args []string) (positional []s
 	}
 }
 
-// readEngineKey reads the engine's API key: with typing hidden at a terminal,
-// otherwise one line from standard input.
+// readEngineKey reads the engine's API key for --api-key-stdin.
 func (e Env) readEngineKey() (string, int, bool) {
+	return e.readKeyOption(engineAPIKeyKey, "./turing engine use openai ... --api-key-stdin")
+}
+
+// readKeyOption reads the value of the secret setting name for an option
+// that reads it rather than take it as an argument: with typing hidden at a
+// terminal, otherwise one line from standard input. pipeInto is the command
+// to pipe it into.
+func (e Env) readKeyOption(name, pipeInto string) (string, int, bool) {
 	var key string
 	if e.IsTerminal {
-		read, err := e.ReadSecret(fmt.Sprintf("Value for %s (typing is hidden): ", engineAPIKeyKey))
+		read, err := e.ReadSecret(fmt.Sprintf("Value for %s (typing is hidden): ", name))
 		if err != nil {
 			return "", e.fail("could not read the key: %v; run the command again", err), false
 		}
@@ -308,17 +313,27 @@ func (e Env) readEngineKey() (string, int, bool) {
 		line, err := e.readLine()
 		if err != nil && line == "" {
 			if errors.Is(err, io.EOF) {
-				return "", e.usageError("nothing was read from standard input for %s; pipe the key in, as in printf '%%s\\n' KEY | ./turing engine use openai ... --api-key-stdin",
-					engineAPIKeyKey), false
+				return "", e.usageError("nothing was read from standard input for %s; pipe the key in, as in printf '%%s\\n' KEY | %s",
+					name, pipeInto), false
 			}
 			return "", e.fail("could not read standard input: %v; run the command again", err), false
 		}
 		key = line
 	}
 	if key == "" {
-		return "", e.usageError("the key read from standard input is empty, so nothing changed; to remove the engine's key, run ./turing config unset %s", engineAPIKeyKey), false
+		return "", e.usageError("the key read from standard input is empty, so nothing changed; to remove %s, run ./turing config unset %s", name, name), false
 	}
 	return key, 0, true
+}
+
+// namesOption reports whether any of args is one of the named options, as
+// -name, --name or --name=value. A secret given that way is refused before
+// the flags are parsed, which could only call it unknown.
+func namesOption(args []string, names ...string) bool {
+	return slices.ContainsFunc(args, func(arg string) bool {
+		name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+		return strings.HasPrefix(arg, "-") && slices.Contains(names, name)
+	})
 }
 
 // urlPort is the port a URL names, or "" when it names none.

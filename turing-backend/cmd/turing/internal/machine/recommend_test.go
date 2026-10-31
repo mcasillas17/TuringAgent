@@ -163,3 +163,16 @@ func TestEveryRecommendationNamesItsTableRow(t *testing.T) {
 		seen[reason] = true
 	}
 }
+
+func TestPreferredModelIsWhatEachLabelServesTuringBest(t *testing.T) {
+	for label, want := range map[string]string{"ds4": "deepseek-chat", "Ollama": "qwen2.5:7b", "OpenAI-compatible": "", "": ""} {
+		if got := PreferredModel(label); got != want {
+			t.Errorf("PreferredModel(%q) = %q, want %q", label, got, want)
+		}
+	}
+	for _, facts := range []Facts{{AppleSilicon: true, MemoryBytes: 24 * gib}, {AppleSilicon: true, MemoryBytes: 128 * gib}, {StrixHalo: true, MemoryBytes: 128 * gib}} {
+		if got := Recommend(facts); got.PreferredModel != PreferredModel(got.Label) {
+			t.Errorf("Recommend(%+v).PreferredModel = %q, want PreferredModel(%q)", facts, got.PreferredModel, got.Label)
+		}
+	}
+}

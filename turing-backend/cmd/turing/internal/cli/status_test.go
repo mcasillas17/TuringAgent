@@ -194,7 +194,7 @@ func TestStatusSetupFailsWithoutAUsableDotEnv(t *testing.T) {
 		break_ func(s *statusHarness)
 		want   string
 	}{
-		{"missing", func(s *statusHarness) { s.removeEnv() }, "run ./scripts/init.sh first"},
+		{"missing", func(s *statusHarness) { s.removeEnv() }, "run ./turing setup first"},
 		{"a symlink", func(s *statusHarness) {
 			s.removeEnv()
 			target := filepath.Join(s.BackendDir, "elsewhere")

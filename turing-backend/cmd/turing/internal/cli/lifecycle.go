@@ -89,6 +89,16 @@ func (e Env) endpoint() (port int, key string, err error) {
 
 // bringUp starts the stack and waits for it to be healthy.
 func (e Env) bringUp(ctx context.Context, port int, key string, build bool) int {
+	if code := e.upAndWait(ctx, port, key, build); code != 0 {
+		return code
+	}
+	_, _ = fmt.Fprintln(e.Stdout, "Turing is running. To connect the app, run ./turing connect")
+	return 0
+}
+
+// upAndWait starts the stack and waits for it to be healthy, saying nothing
+// once it is. A failure names the next thing to run.
+func (e Env) upAndWait(ctx context.Context, port int, key string, build bool) int {
 	args := []string{"up", "-d"}
 	if build {
 		args = append(args, "--build")
@@ -100,7 +110,6 @@ func (e Env) bringUp(ctx context.Context, port int, key string, build bool) int 
 	if err := e.waitHealthy(ctx, port, key); err != nil {
 		return e.fail("%v", err)
 	}
-	_, _ = fmt.Fprintln(e.Stdout, "Turing is running. To connect the app, run ./turing connect")
 	return 0
 }
 

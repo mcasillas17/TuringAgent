@@ -312,7 +312,7 @@ func TestConfigShowNeedsADotEnvAndTakesNoArguments(t *testing.T) {
 	if code := h.config("show"); code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
-	if !strings.Contains(h.errOut.String(), "./scripts/init.sh") {
+	if !strings.Contains(h.errOut.String(), "run ./turing setup first") {
 		t.Fatalf("stderr = %q", h.errOut)
 	}
 
@@ -1312,14 +1312,14 @@ func TestSaveRefusesWhileAnotherCommandHoldsTheLock(t *testing.T) {
 	h.unchanged(before)
 }
 
-func TestSaveWithoutADotEnvSaysToRunInitAndMakesNoLock(t *testing.T) {
+func TestSaveWithoutADotEnvSaysToRunSetupAndMakesNoLock(t *testing.T) {
 	h := newConfigHarness(t)
 	h.removeEnv()
 
 	if code := h.config("set", "TURING_LOCAL_MODEL", "llama3.2", "--yes"); code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
-	if !strings.Contains(h.errOut.String(), "run ./scripts/init.sh first") {
+	if !strings.Contains(h.errOut.String(), "run ./turing setup first") {
 		t.Fatalf("stderr = %q", h.errOut)
 	}
 	if _, err := os.Lstat(filepath.Join(h.BackendDir, ".env.lock")); err == nil {

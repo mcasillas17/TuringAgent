@@ -28,6 +28,18 @@ import (
 const Usage = `Usage: ./turing <command> [options]
 
 Commands:
+  setup [--yes] [--engine ollama|openai] [--url URL] [--model M] [--label L]
+        [--remote-url URL] [--remote-model M] [--remote-key-stdin] [--team on|off]
+                             set Turing up, or go through its main choices again: provision with
+                             ./scripts/init.sh (no secret is ever regenerated), build the images, choose the
+                             local engine and model from what answers on this machine and what Turing
+                             recommends for it, optionally a remote model and the agent team (experimental),
+                             check and save the choices, start Turing, prove the engine and show how the
+                             app connects. At a terminal it asks; --yes asks nothing: the flags win, a rerun
+                             keeps every current choice, and a first run takes the recommended engine only
+                             when it is the one engine answering. --url, --model and --label go with --engine,
+                             as for engine use. The remote model's key is never taken on the command line:
+                             --remote-key-stdin reads it, with typing hidden at a terminal
   start [--build]            start Turing and wait until it is healthy
                              (--build rebuilds the images first; run it after pulling a new version)
   stop                       stop Turing; it stays stopped after a reboot
@@ -50,7 +62,6 @@ Commands:
   config unset KEY [--yes] [--no-apply]
                              clear a setting the same way; TURING_AGENT_API_KEYS.<name> removes one agent
   help                       show this text
-  setup                      guided first-time setup (coming in a later version)
   engine detect [--url URL]  show this machine's memory and GPU, the local model engines that answer on it,
                              and the one Turing recommends; it changes nothing
                              (--url also asks that address; localhost and 127.0.0.1 become host.docker.internal,
@@ -197,7 +208,7 @@ func Main(args []string, env Env) int {
 	case "engine":
 		return env.engine(ctx, rest)
 	case "setup":
-		return env.fail("./turing setup is coming in a later version; until then, run ./scripts/init.sh to set up and ./turing config to choose an engine")
+		return env.setup(ctx, rest)
 	default:
 		// Not repeated, in case it is a secret typed in the wrong place.
 		return env.usageError("unknown command; run ./turing help")
@@ -221,7 +232,7 @@ func (e Env) compose() host.Compose {
 	return host.Compose{Runner: e.Runner, BackendDir: e.BackendDir, Environ: e.Environ}
 }
 
-var errNoDotEnv = errors.New("there is no .env file; run ./scripts/init.sh first")
+var errNoDotEnv = errors.New("there is no .env file; run ./turing setup first")
 
 // readDotEnv reads and parses .env, which must be a regular file.
 func (e Env) readDotEnv() (*envfile.File, error) {
@@ -269,7 +280,7 @@ func appEndpoint(file *envfile.File) (port int, key string, err error) {
 	}
 	key, _ = file.Get(clientKey)
 	if key == "" {
-		return 0, "", fmt.Errorf("%s is missing from .env; run ./scripts/init.sh first", clientKey)
+		return 0, "", fmt.Errorf("%s is missing from .env; run ./turing setup first", clientKey)
 	}
 	return port, key, nil
 }

@@ -37,11 +37,25 @@ const (
 )
 
 func ollama(reason string) Recommendation {
-	return Recommendation{Engine: engineOllama, Label: ollamaLabel, ModelHint: ollamaModel, PreferredModel: ollamaModel, Reason: reason}
+	return Recommendation{Engine: engineOllama, Label: ollamaLabel, ModelHint: ollamaModel, PreferredModel: PreferredModel(ollamaLabel), Reason: reason}
 }
 
 func ds4(backend, modelHint, reason string) Recommendation {
-	return Recommendation{Engine: engineOpenAI, Label: ds4Label, Backend: backend, ModelHint: modelHint, PreferredModel: ds4ServedModel, Reason: reason}
+	return Recommendation{Engine: engineOpenAI, Label: ds4Label, Backend: backend, ModelHint: modelHint, PreferredModel: PreferredModel(ds4Label), Reason: reason}
+}
+
+// PreferredModel is the model to ask the engine a label names for when it
+// lists it: Ollama's default, or the non-thinking alias ds4 serves. Any other
+// engine has none.
+func PreferredModel(label string) string {
+	switch label {
+	case ollamaLabel:
+		return ollamaModel
+	case ds4Label:
+		return ds4ServedModel
+	default:
+		return ""
+	}
 }
 
 // Recommend picks the engine for the machine. Memory it could not read is 0,

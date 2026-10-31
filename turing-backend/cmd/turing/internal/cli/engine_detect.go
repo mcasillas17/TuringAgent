@@ -284,6 +284,19 @@ func (e Env) engineDetect(ctx context.Context, args []string) int {
 	route := e.route(ctx)
 	engines := e.discoverVia(ctx, current, *extraURL, route)
 
+	e.printDiscovery(facts, recommendation, engines, route, dotEnvNote)
+	_, _ = fmt.Fprintln(e.Stdout, "To use it: ./turing engine use <engine> --url <url> --model <model>, or ./turing setup")
+	if example, ok := exampleUse(recommendation, engines); ok {
+		_, _ = fmt.Fprintf(e.Stdout, "For example: %s\n", example)
+	}
+	return 0
+}
+
+// printDiscovery shows what this machine is, the engines that answered and
+// the one that suits it, with Linux's bridge advice and the ds4 cache note:
+// what detect shows, and what setup shows before it asks. dotEnvNote, when
+// set, says why the engine .env configures was not asked.
+func (e Env) printDiscovery(facts machine.Facts, recommendation machine.Recommendation, engines []foundEngine, route hostRoute, dotEnvNote string) {
 	say := func(format string, args ...any) { _, _ = fmt.Fprintf(e.Stdout, format+"\n", args...) }
 	say("This machine: %s", describeMachine(facts))
 	for _, problem := range facts.Problems {
@@ -319,12 +332,6 @@ func (e Env) engineDetect(ctx context.Context, args []string) int {
 	if recommendation.Label == labelDS4 || slices.ContainsFunc(engines, func(f foundEngine) bool { return f.Engine == engineOpenAI }) {
 		say("Note: %s", ds4CacheNote)
 	}
-
-	say("To use it: ./turing engine use <engine> --url <url> --model <model>, or ./turing setup")
-	if example, ok := exampleUse(recommendation, engines); ok {
-		say("For example: %s", example)
-	}
-	return 0
 }
 
 // detectDotEnv reads .env if there is one. detect works before the first
@@ -366,19 +373,26 @@ func exampleUse(recommendation machine.Recommendation, engines []foundEngine) (s
 		if engine.Engine != recommendation.Engine || engine.Problem != "" {
 			continue
 		}
-		model := "<model>"
-		switch {
-		case slices.Contains(engine.Models, recommendation.PreferredModel):
-			model = recommendation.PreferredModel
-		case len(engine.Models) == 1:
-			model = engine.Models[0]
-		}
-		if !safeModelName.MatchString(model) {
+		model, ok := modelToSuggest(engine, recommendation.PreferredModel)
+		if !ok || !safeModelName.MatchString(model) {
 			model = "<model>"
 		}
 		return fmt.Sprintf("./turing engine use %s --url %s --model %s", engine.Engine, engine.ContainerURL, model), true
 	}
 	return "", false
+}
+
+// modelToSuggest is the model to name for an engine without asking: the
+// preferred one when it lists it, or its only model when it lists one.
+func modelToSuggest(engine foundEngine, preferred string) (string, bool) {
+	switch {
+	case preferred != "" && slices.Contains(engine.Models, preferred):
+		return preferred, true
+	case len(engine.Models) == 1:
+		return engine.Models[0], true
+	default:
+		return "", false
+	}
 }
 
 // safeModelName is a model name that can be pasted into a shell as it is.
