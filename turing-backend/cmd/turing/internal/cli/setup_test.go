@@ -455,7 +455,10 @@ func TestSetupChoosingAnotherOpenAIAddressClearsTheEngineKey(t *testing.T) {
 	s.noOutputContains(engineKeyCanary)
 }
 
-func TestSetupAtATerminalKeepingTheCurrentOpenAIEngineKeepsItsKey(t *testing.T) {
+// Keeping the current engine keeps its address, unless .env names it as
+// localhost, which inside the runtime's container is the container itself: the
+// address shown is the one saved. The key stays, since it is the same server.
+func TestSetupAtATerminalKeepingTheCurrentOpenAIEngineSavesTheAddressTheContainersReachAndKeepsItsKey(t *testing.T) {
 	s := newSetupHarness(t)
 	s.engine.serve(bridgeGateway+":8000", 200, openAIModels)
 	s.rerun(map[string]string{
@@ -464,6 +467,37 @@ func TestSetupAtATerminalKeepingTheCurrentOpenAIEngineKeepsItsKey(t *testing.T) 
 		"TURING_LOCAL_MODEL":          "deepseek-chat",
 		"TURING_LOCAL_ENGINE_LABEL":   "ds4",
 		"TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary,
+	})
+	s.IsTerminal = true
+	s.Stdin = answers("", "", "", "", "")
+
+	if code := s.setup(); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	s.wantEnv(t, map[string]string{
+		"TURING_LOCAL_ENGINE_URL":     "http://host.docker.internal:8000/v1",
+		"TURING_LOCAL_MODEL":          "deepseek-chat",
+		"TURING_LOCAL_ENGINE_LABEL":   "ds4",
+		"TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary,
+	})
+	out := s.out.String()
+	inOrder(t, out, "  1) ds4 at http://host.docker.internal:8000/v1  (recommended, current)\n",
+		"Settings to save:\n", "  TURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1\n", "Save these settings? [Y/n] ")
+	if strings.Contains(out, "TURING_LOCAL_ENGINE_API_KEY") || strings.Contains(out, keyRemovedWords) {
+		t.Fatalf("stdout = %q; the key is for this same server", out)
+	}
+	s.noCheckGets(engineAPIKeyKey)
+	s.noOutputContains(engineKeyCanary)
+}
+
+func TestSetupAtATerminalKeepingTheCurrentEngineKeepsAnAddressTheContainersReachAsWritten(t *testing.T) {
+	s := newSetupHarness(t)
+	s.engine.serve(bridgeGateway+":8000", 200, openAIModels)
+	s.rerun(map[string]string{
+		"TURING_LOCAL_ENGINE":       "openai",
+		"TURING_LOCAL_ENGINE_URL":   "http://host.docker.internal:8000/v1/",
+		"TURING_LOCAL_MODEL":        "deepseek-chat",
+		"TURING_LOCAL_ENGINE_LABEL": "ds4",
 	})
 	before := s.envBytes()
 	s.IsTerminal = true
@@ -474,7 +508,72 @@ func TestSetupAtATerminalKeepingTheCurrentOpenAIEngineKeepsItsKey(t *testing.T) 
 	}
 	s.unchanged(before)
 	inOrder(t, s.out.String(), "  1) ds4 at http://host.docker.internal:8000/v1  (recommended, current)\n", noChanges)
-	s.noOutputContains(engineKeyCanary)
+}
+
+func TestSetupAtATerminalKeepingACurrentEngineThatDidNotAnswerSavesTheAddressTheContainersReach(t *testing.T) {
+	s := newSetupHarness(t)
+	s.rerun(map[string]string{
+		"TURING_LOCAL_ENGINE":     "openai",
+		"TURING_LOCAL_ENGINE_URL": "http://127.0.0.1:8001/v1",
+		"TURING_LOCAL_MODEL":      "qwen3-coder",
+	})
+	s.IsTerminal = true
+	s.Stdin = answers("", "", "", "")
+
+	if code := s.setup(); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	s.wantEnv(t, map[string]string{"TURING_LOCAL_ENGINE_URL": "http://host.docker.internal:8001/v1", "TURING_LOCAL_MODEL": "qwen3-coder"})
+	inOrder(t, s.out.String(),
+		"  2) OpenAI-compatible at http://host.docker.internal:8001/v1 with qwen3-coder  (current; it did not answer)\n",
+		"Choose [2]: ",
+		"  TURING_LOCAL_ENGINE_URL=http://host.docker.internal:8001/v1\n",
+	)
+}
+
+// --yes on a rerun keeps every current choice, so an address naming the
+// container is not rewritten; the command that does it is named instead.
+func TestSetupRerunWithYesWarnsAboutAnEngineAddressThatNamesTheContainerAndChangesNothing(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings map[string]string
+		command  string
+	}{
+		{"openai", map[string]string{
+			"TURING_LOCAL_ENGINE": "openai", "TURING_LOCAL_ENGINE_URL": "http://localhost:8000/v1", "TURING_LOCAL_MODEL": "deepseek-chat",
+			"TURING_LOCAL_ENGINE_LABEL": "ds4", "TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary,
+		}, "./turing engine use openai --url http://host.docker.internal:8000/v1 --model deepseek-chat"},
+		{"ollama", map[string]string{"TURING_LOCAL_ENGINE": "ollama", "TURING_LOCAL_ENGINE_URL": "http://127.0.0.1:11434", "TURING_LOCAL_MODEL": "llama3:latest"},
+			"./turing engine use ollama --url http://host.docker.internal:11434 --model llama3:latest"},
+		{"a label of its own", map[string]string{
+			"TURING_LOCAL_ENGINE": "openai", "TURING_LOCAL_ENGINE_URL": "http://localhost:1234/v1", "TURING_LOCAL_MODEL": "qwen3-coder",
+			"TURING_LOCAL_ENGINE_LABEL": "LM Studio's",
+		}, `./turing engine use openai --url http://host.docker.internal:1234/v1 --model qwen3-coder --label 'LM Studio'\''s'`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newSetupHarness(t)
+			s.rerun(tt.settings)
+			before := s.envBytes()
+
+			if code := s.setup("--yes"); code != 0 {
+				t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+			}
+			s.unchanged(before)
+			out := s.out.String()
+			var warning string
+			for _, line := range strings.Split(out, "\n") {
+				if strings.HasPrefix(line, "Warning:") {
+					warning = line
+				}
+			}
+			if !strings.Contains(warning, "the container itself") || !strings.HasSuffix(warning, "run "+tt.command+".") || strings.Count(warning, "./turing ") != 1 {
+				t.Fatalf("warning = %q, want one line naming only %q", warning, tt.command)
+			}
+			inOrder(t, out, warning, noChanges)
+			s.noOutputContains(engineKeyCanary)
+		})
+	}
 }
 
 func TestSetupDecidesTheEngineKeyAgainstDotEnvAsItIsWhenSaving(t *testing.T) {

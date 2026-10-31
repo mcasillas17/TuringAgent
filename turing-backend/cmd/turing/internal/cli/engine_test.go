@@ -892,6 +892,106 @@ func TestConfigSetOfALocalEngineSettingWhoseEngineCheckFailsExits1(t *testing.T)
 	}
 }
 
+// stepOneRefusal is check-engine's sentence for an engine the container
+// cannot reach.
+const stepOneRefusal = "step 1/4 (reachable) failed: cannot reach the engine at http://host.docker.internal:11434: connection refused; " +
+	"start the engine, and check that TURING_LOCAL_ENGINE_URL is an address the runtime container can reach\n"
+
+// On Linux an engine that listens only on 127.0.0.1 fails the check from the
+// container; the failure then names where it must listen, and one command.
+func TestAFailedEngineCheckOnLinuxNamesTheBindFixForAnEngineOnLoopbackOnly(t *testing.T) {
+	engines := []struct {
+		name    string
+		env     []string
+		serve   string
+		models  string
+		fix     string
+		notWant string
+	}{
+		{"ollama", []string{"TURING_LOCAL_ENGINE=ollama"}, "127.0.0.1:11434", ollamaTags, "set OLLAMA_HOST=172.17.0.1 for the Ollama service", "--host"},
+		{"openai", []string{"TURING_LOCAL_ENGINE=openai", "TURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1", "TURING_LOCAL_MODEL=deepseek-chat"},
+			"127.0.0.1:8000", openAIModels, "start it with --host 172.17.0.1", "OLLAMA_HOST"},
+	}
+	paths := []struct {
+		name, opening string
+		run           func(h *configHarness) int
+	}{
+		{"engine check", "The engine check failed because the engine listens only on 127.0.0.1", func(h *configHarness) int { return h.runEngine("check") }},
+		{"after a save", "The settings are saved and Turing is running, but the engine check failed because the engine listens only on 127.0.0.1",
+			func(h *configHarness) int {
+				return h.config("set", "TURING_LOCAL_CONTEXT_WINDOW_TOKENS", "16384", "--yes")
+			}},
+	}
+	for _, engine := range engines {
+		for _, path := range paths {
+			t.Run(engine.name+", "+path.name, func(t *testing.T) {
+				h := newConfigHarness(t)
+				h.writeEnv(fullEnv(engine.env...))
+				h.gateway = "172.17.0.1"
+				h.engine.serve(engine.serve, 200, engine.models)
+				h.runner.on(checkEngineCall(), fakeReply{stderr: stepOneRefusal, code: 1})
+
+				if code := path.run(h); code != 1 {
+					t.Fatalf("exit = %d, want 1; stderr: %s", code, h.errOut)
+				}
+				got := h.errOut.String()
+				if !strings.HasPrefix(got, stepOneRefusal) {
+					t.Fatalf("stderr = %q, want the runtime's sentence first", got)
+				}
+				last := lastLine(got)
+				if !strings.HasPrefix(last, path.opening) || !strings.Contains(last, engine.fix) ||
+					!strings.HasSuffix(last, ", then run ./turing engine check.") || strings.Contains(last, engine.notWant) {
+					t.Fatalf("last line = %q, want %q, the bind fix %q, then ./turing engine check", last, path.opening, engine.fix)
+				}
+				if strings.Count(got, "\n") != 2 {
+					t.Fatalf("stderr = %q, want the runtime's sentence and one more", got)
+				}
+				oneNextStep(t, got)
+			})
+		}
+	}
+}
+
+// Only Linux puts host.docker.internal on the bridge, so only there can an
+// engine on 127.0.0.1 be out of the containers' reach.
+func TestAFailedEngineCheckOffLinuxGivesNoBindAdvice(t *testing.T) {
+	for _, goos := range []string{"darwin", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			h := newConfigHarness(t)
+			h.GOOS = goos
+			h.gateway = "172.17.0.1"
+			h.engine.serve("127.0.0.1:11434", 200, ollamaTags)
+			h.runner.on(checkEngineCall(), fakeReply{stderr: stepOneRefusal, code: 1})
+
+			if code := h.runEngine("check"); code != 1 {
+				t.Fatalf("exit = %d, want 1", code)
+			}
+			if got := h.errOut.String(); got != stepOneRefusal {
+				t.Fatalf("stderr = %q, want the runtime's sentence alone", got)
+			}
+			if len(h.engine.requests) != 0 || h.gatewayAsked != 0 {
+				t.Fatalf("asked the engine %q and the gateway %d times, want neither", h.engine.urls(), h.gatewayAsked)
+			}
+		})
+	}
+}
+
+// An engine that answers where the containers reach it failed for another
+// reason, which the runtime's sentence already names.
+func TestAFailedEngineCheckOnLinuxGivesNoBindAdviceForAnEngineTheContainersReach(t *testing.T) {
+	h := newConfigHarness(t)
+	h.gateway = "172.17.0.1"
+	h.engine.serve("172.17.0.1:11434", 200, ollamaTags)
+	h.runner.on(checkEngineCall(), fakeReply{stderr: engineRefusal, code: 1})
+
+	if code := h.runEngine("check"); code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if got := h.errOut.String(); got != engineRefusal {
+		t.Fatalf("stderr = %q, want the runtime's sentence alone", got)
+	}
+}
+
 func TestASaveThatLeavesTheLocalEngineAloneDoesNotCheckIt(t *testing.T) {
 	for _, extra := range [][]string{{"--yes"}, {"--no-apply"}} {
 		h := newConfigHarness(t)

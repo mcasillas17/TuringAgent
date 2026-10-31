@@ -102,7 +102,9 @@ change that fixes each one:
 
 Do not use `0.0.0.0` on a machine attached to a shared network: it publishes
 the engine, which has no login of its own by default, to every network the
-machine is on. `check` proves reachability from inside the container.
+machine is on. `check` proves reachability from inside the container; when it
+fails on Linux for an engine that answers only on `127.0.0.1`, it names the
+same change, then `./turing engine check`.
 
 ## Proving an engine: `./turing engine check`
 
@@ -155,7 +157,10 @@ running yet, so the output says to run it after `./turing start`.
   asks nothing: flags win, a rerun keeps every current choice, and a first run
   takes the recommended engine only when it is the one engine answering and its
   model is clear. Otherwise it keeps Ollama with `qwen2.5:7b` and prints the
-  `engine use` command for the recommendation.
+  `engine use` command for the recommendation. Keeping an engine that `.env`
+  names at `localhost` or `127.0.0.1`, which inside a container is the
+  container itself, saves it at `host.docker.internal`; with `--yes` setup
+  changes nothing and prints the `engine use` command that does.
 - **`./turing engine use <ollama|openai> [--url URL] [--model M] [--context N]
   [--label L] [--api-key-stdin] [--yes] [--no-apply]`.** `openai` needs `--url`
   and `--model`. It saves the choice the way `config set` does, checking it

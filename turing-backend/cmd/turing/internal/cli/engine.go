@@ -74,6 +74,9 @@ func (e Env) engineCheckCommand(ctx context.Context, args []string) int {
 	case result.passed:
 		return 0
 	case result.stepFailed:
+		if fix := e.bindFix(ctx); fix != "" {
+			return e.fail("The engine check failed because %s, then run ./turing engine check.", fix)
+		}
 		return 1
 	case result.problem != "":
 		return e.fail("%s; %s", result.problem, result.next)
@@ -91,12 +94,32 @@ func (e Env) checkEngineOnceRunning(ctx context.Context) int {
 	case result.passed:
 		return 0
 	case result.stepFailed:
+		if fix := e.bindFix(ctx); fix != "" {
+			return e.fail("The settings are saved and Turing is running, but the engine check failed because %s, then run ./turing engine check.", fix)
+		}
 		return e.fail("%s", engineCheckFailedAfterApply)
 	}
 	if result.problem != "" {
 		_, _ = fmt.Fprintln(e.Stderr, result.problem)
 	}
 	return e.fail(engineNotCheckedAfterApply, result.next)
+}
+
+// bindFix is, on Linux, why an engine that failed its check cannot be reached
+// from the containers when it answers this machine only on 127.0.0.1, ending
+// with how to make it listen where they reach it; otherwise "". Only Linux
+// puts host.docker.internal on Docker's bridge rather than this machine's
+// loopback, and the runtime's own sentence cannot see this machine's
+// loopback, so the host asks.
+func (e Env) bindFix(ctx context.Context) string {
+	if e.GOOS != "linux" {
+		return ""
+	}
+	file, err := e.readDotEnv()
+	if err != nil {
+		return ""
+	}
+	return e.engineProbe(ctx, file).Warning
 }
 
 // engineCheckResult is how an engine check ended. passed is every step

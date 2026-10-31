@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/envfile"
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/machine"
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/registry"
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 )
 
 // maxMenuModels keeps an engine with a long list from filling the screen;
@@ -96,6 +98,9 @@ func (s *setupRun) chooseLocalEngine(ctx context.Context) error {
 		}
 		choice = picked
 	case !s.firstRun:
+		if current != nil {
+			s.warnAboutContainerAddress(*current)
+		}
 		return nil
 	default:
 		choice = s.firstRunChoice(recommendation, engines)
@@ -145,6 +150,58 @@ func recommendedUse(recommendation machine.Recommendation, engines []foundEngine
 		address = ds4EngineURL
 	}
 	return fmt.Sprintf("./turing engine use %s --url %s --model %s", recommendation.Engine, address, recommendation.PreferredModel)
+}
+
+// warnAboutContainerAddress names, for an engine .env sets at localhost or a
+// loopback address, where the runtime would reach its own container, the
+// command that points it at this machine instead. A rerun with --yes keeps
+// every choice as it is, so it changes nothing itself.
+func (s *setupRun) warnAboutContainerAddress(current localChoice) {
+	host, names := containerHost(current.url)
+	canonical, err := containerEngineURL(current.url)
+	if !names || err != nil {
+		return
+	}
+	command := fmt.Sprintf("./turing engine use %s --url %s --model %s", current.engine, canonical, shellWord(current.model))
+	if current.label != "" && current.label != usualLabel(current.engine, canonical) {
+		command += " --label " + shellWord(current.label)
+	}
+	s.printf("Warning: the local engine's address names %s, which inside the runtime's container is the container itself; to reach the engine on this machine, run %s.\n",
+		host, command)
+}
+
+// containerHost is the host raw names, as the runtime reads it, and whether
+// that is localhost or a loopback address, which inside a container is the
+// container itself.
+func containerHost(raw string) (host string, namesContainer bool) {
+	endpoint, err := egress.ParseLocalEndpoint(raw)
+	if err != nil {
+		return "", false
+	}
+	parsed, err := url.Parse(endpoint.Canonical)
+	if err != nil {
+		return "", false
+	}
+	return parsed.Hostname(), namesTheContainer(parsed.Hostname())
+}
+
+// keptAddress is the address to save for the engine .env names at raw when it
+// is kept: raw as written, unless it names the container, where the runtime
+// would reach itself; then containerURL, where the containers reach this
+// machine.
+func keptAddress(raw, containerURL string) string {
+	if _, names := containerHost(raw); names {
+		return containerURL
+	}
+	return raw
+}
+
+// shellWord is value as one word a shell takes as it is.
+func shellWord(value string) string {
+	if safeModelName.MatchString(value) {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 // setEngine records the changes that make .env's local engine choice. What
@@ -204,6 +261,7 @@ func engineOptions(recommendation machine.Recommendation, engines []foundEngine,
 		address := "an address the runtime refuses"
 		if canonical, err := containerEngineURL(kept.url); err == nil {
 			address = canonical
+			kept.url = keptAddress(kept.url, canonical)
 		}
 		label := cmp.Or(kept.label, engineLabel(kept.engine, urlPort(kept.url)))
 		options = append(options, engineOption{text: fmt.Sprintf("%s at %s with %s", label, address, kept.model), marks: []string{"current; it did not answer"}, fixed: &kept})
@@ -276,12 +334,13 @@ func (s *setupRun) askAddress(ctx context.Context, route hostRoute) (foundEngine
 }
 
 // askModel asks which of found's models to use. Keeping the engine .env names
-// keeps its address as written and its label.
+// keeps its label, and its address as written unless that names the
+// container: the address shown is then the one saved.
 func (s *setupRun) askModel(found foundEngine, current *localChoice) (localChoice, error) {
 	choice := foundChoice(found, "")
 	currentModel := ""
 	if isCurrent(found, current) {
-		choice.url, choice.label, currentModel = current.url, current.label, current.model
+		choice.url, choice.label, currentModel = keptAddress(current.url, found.ContainerURL), current.label, current.model
 	}
 	model, ok := s.pickModel(found.Models, machine.PreferredModel(found.Label), currentModel)
 	if !ok {
