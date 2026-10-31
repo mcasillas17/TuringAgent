@@ -156,8 +156,24 @@ func TestEngineCheckThatDidNotRunIsNotChecked(t *testing.T) {
 					t.Errorf("stderr = %q, want %q", got, want)
 				}
 			}
+			oneNextStep(t, got)
 		})
 	}
+}
+
+// oneNextStep fails the test unless stderr names exactly one command to run
+// next.
+func oneNextStep(t *testing.T, stderr string) {
+	t.Helper()
+	if n := strings.Count(stderr, "./turing "); n != 1 {
+		t.Errorf("stderr names %d commands to run, want one:\n%s", n, stderr)
+	}
+}
+
+// lastLine is the last line of text.
+func lastLine(text string) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	return lines[len(lines)-1]
 }
 
 func TestEngineCheckWithDockerDownSaysHowToStartIt(t *testing.T) {
@@ -176,6 +192,7 @@ func TestEngineCheckWithDockerDownSaysHowToStartIt(t *testing.T) {
 					t.Errorf("stderr = %q, want %q", got, want)
 				}
 			}
+			oneNextStep(t, got)
 			if want := []string{"docker info --format {{.ServerVersion}}"}; !slices.Equal(h.runner.commands(), want) {
 				t.Fatalf("ran %q", h.runner.commands())
 			}
@@ -488,14 +505,108 @@ func TestEngineUseAtATerminalReadsTheKeyWithTypingHidden(t *testing.T) {
 	h.noOutputContains(engineKeyCanary)
 }
 
-func TestEngineUseKeepsTheKeyOfAnOpenAIEngineWhenNoneIsGiven(t *testing.T) {
-	h := newConfigHarness(t)
-	h.writeEnv(fullEnv("TURING_LOCAL_ENGINE=openai", "TURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1", "TURING_LOCAL_ENGINE_API_KEY="+engineKeyCanary))
+const keyRemovedNotice = "The previous engine's API key was removed; if this server needs one, add --api-key-stdin."
 
-	if code := h.runEngine("use", "openai", "--url", "http://localhost:8000/v1", "--model", "glm", "--no-apply"); code != 0 {
+// The key belongs to the server .env names; another server, even on this
+// machine, never receives it.
+func TestEngineUseKeepsTheKeyOnlyForTheSameOpenAIServer(t *testing.T) {
+	tests := []struct {
+		name, engine, url string
+	}{
+		{"the same address", "openai", "http://host.docker.internal:8000/v1"},
+		{"the same address written as localhost", "openai", "http://localhost:8000/v1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newConfigHarness(t)
+			h.writeEnv(fullEnv("TURING_LOCAL_ENGINE="+tt.engine, "TURING_LOCAL_ENGINE_URL="+tt.url, "TURING_LOCAL_ENGINE_API_KEY="+engineKeyCanary))
+
+			if code := h.runEngine("use", "openai", "--url", "http://127.0.0.1:8000/v1", "--model", "glm", "--no-apply"); code != 0 {
+				t.Fatalf("exit = %d; stderr: %s", code, h.errOut)
+			}
+			h.wantEnv(t, map[string]string{"TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary, "TURING_LOCAL_MODEL": "glm"})
+			for _, call := range h.checkCalls() {
+				if slices.ContainsFunc(call.Env, func(entry string) bool { return strings.HasPrefix(entry, "TURING_LOCAL_ENGINE_API_KEY=") }) {
+					t.Errorf("%q was given the key as a change: %q", call.Args, call.Env)
+				}
+			}
+			if strings.Contains(h.out.String(), keyRemovedNotice) {
+				t.Fatalf("stdout = %q; the key was kept", h.out)
+			}
+			h.noOutputContains(engineKeyCanary)
+		})
+	}
+}
+
+func TestEngineUseRemovesTheKeyOfAnotherServer(t *testing.T) {
+	tests := []struct {
+		name string
+		env  []string
+	}{
+		{"another port", []string{"TURING_LOCAL_ENGINE=openai", "TURING_LOCAL_ENGINE_URL=http://host.docker.internal:9000/v1"}},
+		{"another path", []string{"TURING_LOCAL_ENGINE=openai", "TURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v2"}},
+		{"Ollama before, with a stray key", []string{"TURING_LOCAL_ENGINE=ollama", "TURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1"}},
+		{"no engine named, which is Ollama", []string{"TURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1"}},
+		{"an address the runtime refuses", []string{"TURING_LOCAL_ENGINE=openai", "TURING_LOCAL_ENGINE_URL=http://192.168.1.20:8000/v1"}},
+		{"no address", []string{"TURING_LOCAL_ENGINE=openai"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newConfigHarness(t)
+			h.writeEnv(fullEnv(append(tt.env, "TURING_LOCAL_ENGINE_API_KEY="+engineKeyCanary)...))
+
+			if code := h.runEngine("use", "openai", "--url", "http://localhost:8000/v1", "--model", "deepseek-chat", "--no-apply"); code != 0 {
+				t.Fatalf("exit = %d; stderr: %s", code, h.errOut)
+			}
+			h.wantEnv(t, map[string]string{"TURING_LOCAL_ENGINE_API_KEY": "", "TURING_LOCAL_ENGINE_URL": "http://host.docker.internal:8000/v1"})
+			calls := h.checkCalls()
+			if len(calls) != 2 {
+				t.Fatalf("check-config ran %d times, want 2", len(calls))
+			}
+			for _, call := range calls {
+				if !slices.Contains(call.Env, "TURING_LOCAL_ENGINE_API_KEY=") {
+					t.Errorf("%q env = %q, want the key cleared for the check", call.Args, call.Env)
+				}
+			}
+			if n := strings.Count(h.out.String(), keyRemovedNotice+"\n"); n != 1 {
+				t.Fatalf("stdout = %q, want the notice once", h.out)
+			}
+			inOrder(t, h.out.String(), keyRemovedNotice, savedNotApplied)
+			h.noOutputContains(engineKeyCanary)
+		})
+	}
+}
+
+func TestEngineUseWithAKeyFromStdinSetsItForAnotherServerWithoutANotice(t *testing.T) {
+	h := newConfigHarness(t)
+	h.writeEnv(fullEnv("TURING_LOCAL_ENGINE=openai", "TURING_LOCAL_ENGINE_URL=http://host.docker.internal:9000/v1", "TURING_LOCAL_ENGINE_API_KEY=sk-OLD-KEY-CANARY"))
+	h.Stdin = strings.NewReader(engineKeyCanary + "\n")
+
+	if code := h.runEngine("use", "openai", "--url", "http://localhost:8000/v1", "--model", "deepseek-chat", "--api-key-stdin", "--no-apply"); code != 0 {
 		t.Fatalf("exit = %d; stderr: %s", code, h.errOut)
 	}
-	h.wantEnv(t, map[string]string{"TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary, "TURING_LOCAL_MODEL": "glm"})
+	h.wantEnv(t, map[string]string{"TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary})
+	if strings.Contains(h.out.String(), keyRemovedNotice) {
+		t.Fatalf("stdout = %q", h.out)
+	}
+	h.noOutputContains(engineKeyCanary, "sk-OLD-KEY-CANARY")
+}
+
+// The notice says what was saved, so a change the services refuse says
+// nothing about the key.
+func TestEngineUseThatIsRefusedSaysNothingAboutTheKey(t *testing.T) {
+	h := newConfigHarness(t)
+	h.writeEnv(fullEnv("TURING_LOCAL_ENGINE=openai", "TURING_LOCAL_ENGINE_URL=http://host.docker.internal:9000/v1", "TURING_LOCAL_ENGINE_API_KEY="+engineKeyCanary))
+	before := h.envBytes()
+	h.runner.on(checkConfigCall("turing-agent-runtime-general"), fakeReply{stderr: "TURING_LOCAL_MODEL must not be empty\n", code: 1})
+
+	if code := h.runEngine("use", "openai", "--url", "http://localhost:8000/v1", "--model", "deepseek-chat", "--yes"); code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	h.unchanged(before)
+	if strings.Contains(h.out.String()+h.errOut.String(), "API key was removed") {
+		t.Fatalf("stdout %q, stderr %q", h.out, h.errOut)
+	}
 	h.noOutputContains(engineKeyCanary)
 }
 
@@ -577,12 +688,74 @@ func TestAnAppliedEngineChangeWhoseEngineCheckFailsKeepsTheSettingsAndSaysSo(t *
 	if got, want := h.errOut.String(), engineRefusal+engineFailedAfterRun+"\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
+	oneNextStep(t, h.errOut.String())
 	h.wantEnv(t, map[string]string{"TURING_LOCAL_ENGINE": "openai", "TURING_LOCAL_MODEL": "deepseek-chat"})
 	if n := h.countCommand("compose up -d"); n != 1 {
 		t.Fatalf("up -d ran %d times, want once: there is nothing to restore once health passed", n)
 	}
 	if strings.Contains(h.out.String(), "Restor") {
 		t.Fatalf("stdout = %q", h.out)
+	}
+}
+
+// An engine the check never reached has not failed, so the one next step is
+// what lets the check run, not "fix the engine".
+func TestAnAppliedEngineChangeThatCouldNotBeCheckedNamesOneNextStep(t *testing.T) {
+	const notChecked = "The settings are saved and Turing is running, but the engine was not checked; "
+	tests := []struct {
+		name   string
+		script func(h *configHarness)
+		reason string
+		last   string
+	}{
+		{
+			"images that predate check-engine",
+			func(h *configHarness) {
+				// check-config is known, so the change is checked and applied.
+				h.runner.on(inspectCall("turing-agent-runtime-general"), fakeReply{stdout: "config\n"})
+			},
+			"the images predate check-engine\n",
+			notChecked + "run ./turing start --build first",
+		},
+		{
+			"Docker gone by the engine check",
+			func(h *configHarness) {
+				h.runner.on(dockerCall(dockerInfoArgs...), fakeReply{stdout: "27.0.0\n"}, fakeReply{stderr: "Cannot connect to the Docker daemon\n", code: 1})
+			},
+			"Docker is not running\n",
+			notChecked + "open Docker Desktop and wait for it to finish starting, then run ./turing engine check",
+		},
+		{
+			"a check that did not run",
+			func(h *configHarness) {
+				h.runner.on(checkEngineCall(), fakeReply{stderr: "Error response from daemon: no such image\n", code: 125})
+			},
+			"not checked: the engine check did not run to the end (exit status 125):\n  Error response from daemon: no such image\n",
+			notChecked + "fix that, then run ./turing engine check",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newConfigHarness(t)
+			h.GOOS = "darwin"
+			tt.script(h)
+
+			if code := h.runEngine("use", "openai", "--url", "http://localhost:8000/v1", "--model", "deepseek-chat", "--yes"); code != 1 {
+				t.Fatalf("exit = %d, want 1", code)
+			}
+			got := h.errOut.String()
+			if !strings.Contains(got, tt.reason) || lastLine(got) != tt.last {
+				t.Fatalf("stderr = %q, want %q and then %q", got, tt.reason, tt.last)
+			}
+			oneNextStep(t, got)
+			if strings.Contains(got, "fix the engine") {
+				t.Fatalf("stderr = %q blames the engine, which was not checked", got)
+			}
+			h.wantEnv(t, map[string]string{"TURING_LOCAL_ENGINE": "openai", "TURING_LOCAL_MODEL": "deepseek-chat"})
+			if n := h.countCommand("compose up -d"); n != 1 {
+				t.Fatalf("up -d ran %d times, want once", n)
+			}
+		})
 	}
 }
 
@@ -718,15 +891,44 @@ func TestSaveSettingsLeavesTheEngineCheckToACallerThatRunsItItself(t *testing.T)
 	}
 }
 
-func TestEngineCheckIsWhatTheEngineCheckAfterASaveRuns(t *testing.T) {
+func TestEngineCheckReportsItsResultToTheCaller(t *testing.T) {
+	tests := []struct {
+		name  string
+		reply fakeReply
+		want  engineCheckResult
+	}{
+		{"passed", fakeReply{stdout: engineUsable}, engineCheckResult{passed: true}},
+		{"a step failed", fakeReply{stderr: engineRefusal, code: 1}, engineCheckResult{stepFailed: true}},
+		{"not checked", fakeReply{stderr: "Error response from daemon: gone\n", code: 125}, engineCheckResult{next: "fix that, then run ./turing engine check"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newConfigHarness(t)
+			h.runner.on(checkEngineCall(), tt.reply)
+			h.scriptSave()
+
+			if got := h.engineCheck(t.Context()); got != tt.want {
+				t.Fatalf("result = %+v, want %+v", got, tt.want)
+			}
+			if len(h.engineCheckCalls()) != 1 {
+				t.Fatalf("ran %q", h.runner.commands())
+			}
+		})
+	}
+}
+
+// checkEngineOnceRunning is the check setup runs after its own start.
+func TestCheckEngineOnceRunningNamesOneNextStepWhenTheEngineWasNotChecked(t *testing.T) {
 	h := newConfigHarness(t)
+	h.runner.on(inspectCall("turing-agent-runtime-general"), fakeReply{stdout: "config\n"})
 	h.scriptSave()
 
-	if code := h.engineCheck(t.Context()); code != 0 {
-		t.Fatalf("exit = %d; stderr: %s", code, h.errOut)
+	if code := h.checkEngineOnceRunning(t.Context()); code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
 	}
-	if len(h.engineCheckCalls()) != 1 {
-		t.Fatalf("ran %q", h.runner.commands())
+	want := "the images predate check-engine\nThe settings are saved and Turing is running, but the engine was not checked; run ./turing start --build first\n"
+	if got := h.errOut.String(); got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }
 

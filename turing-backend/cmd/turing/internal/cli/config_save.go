@@ -52,9 +52,12 @@ var infrastructureMarkers = []string{"Compose launch failed", "Cannot connect to
 // with its default, yes; NoApply saves without applying. SkipEngineCheck is
 // for a caller that checks the engine itself once Turing is up, as setup
 // does: a save that changes the local engine then neither checks it nor says
-// to.
+// to. Saved, when set, runs once the change is written to .env and before it
+// is applied, so a note about what was saved is never shown for a change a
+// check refused.
 type saveOptions struct {
 	Yes, NoApply, SkipEngineCheck bool
+	Saved                         func()
 }
 
 // settingsEdit returns the changes to save, given .env as it is under the
@@ -81,12 +84,8 @@ func (e Env) saveEdit(ctx context.Context, edit settingsEdit, opts saveOptions) 
 		_, _ = fmt.Fprintln(e.Stdout, engineCheckLater)
 		return 0
 	}
-	// Health has passed, so there is nothing to restore: the engine is what
-	// needs fixing.
-	if e.engineCheck(ctx) != 0 {
-		return e.fail("%s", engineCheckFailedAfterApply)
-	}
-	return 0
+	// Health has passed, so there is nothing to restore.
+	return e.checkEngineOnceRunning(ctx)
 }
 
 // saveLocked checks, writes and applies the changes under the lock. applied
@@ -131,6 +130,9 @@ func (e Env) saveLocked(ctx context.Context, edit settingsEdit, opts saveOptions
 	}
 	if err := envfile.WriteAtomic(path, candidate.Bytes()); err != nil {
 		return e.fail("cannot save .env: %v; check .env, then run this command again", err), false, false
+	}
+	if opts.Saved != nil {
+		opts.Saved()
 	}
 	code, applied = e.applySaved(ctx, path, previous, current, candidate, changed, opts)
 	return code, applied, changesLocalEngine(changes)

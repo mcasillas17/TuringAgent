@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/envfile"
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/host"
 	"github.com/mcasillas17/TuringAgent/turing-backend/internal/servicecmd"
 )
@@ -21,9 +22,13 @@ const (
 	engineCheckName = "engine"
 	runtimeService  = "turing-agent-runtime-general"
 
-	imagesTooOldForEngine       = "the images predate check-engine; run ./turing start --build first"
+	imagesTooOldForEngine       = "the images predate check-engine"
+	rebuildFirst                = "run ./turing start --build first"
+	fixThenCheckEngine          = "fix that, then run ./turing engine check"
 	engineCheckFailedAfterApply = "The settings are saved and Turing is running, but the engine check failed; fix the engine, then run ./turing engine check."
+	engineNotCheckedAfterApply  = "The settings are saved and Turing is running, but the engine was not checked; %s"
 	engineCheckLater            = "After ./turing start, run ./turing engine check."
+	engineKeyRemoved            = "The previous engine's API key was removed; if this server needs one, add --api-key-stdin."
 
 	engineAPIKeyKey  = "TURING_LOCAL_ENGINE_API_KEY"
 	engineContextKey = "TURING_LOCAL_CONTEXT_WINDOW_TOKENS"
@@ -58,28 +63,63 @@ func (e Env) engineCheckCommand(ctx context.Context, args []string) int {
 	if _, err := e.readDotEnv(); err != nil {
 		return e.fail("%v", err)
 	}
-	return e.engineCheck(ctx)
+	result := e.engineCheck(ctx)
+	switch {
+	case result.passed:
+		return 0
+	case result.stepFailed:
+		return 1
+	case result.problem != "":
+		return e.fail("%s; %s", result.problem, result.next)
+	default:
+		return e.fail("%s", result.next)
+	}
+}
+
+// checkEngineOnceRunning checks the engine once Turing is healthy with
+// settings just saved, and ends with one sentence saying where that leaves
+// them, which names one next step. It returns the exit code.
+func (e Env) checkEngineOnceRunning(ctx context.Context) int {
+	result := e.engineCheck(ctx)
+	switch {
+	case result.passed:
+		return 0
+	case result.stepFailed:
+		return e.fail("%s", engineCheckFailedAfterApply)
+	}
+	if result.problem != "" {
+		_, _ = fmt.Fprintln(e.Stderr, result.problem)
+	}
+	return e.fail(engineNotCheckedAfterApply, result.next)
+}
+
+// engineCheckResult is how an engine check ended. passed is every step
+// passing; stepFailed is the engine failing one, whose sentence the runtime
+// has already shown. Otherwise the engine was not checked: problem, when set,
+// says why, any details are already shown, and next is the one thing to do so
+// that it can be.
+type engineCheckResult struct {
+	passed, stepFailed bool
+	problem, next      string
 }
 
 // engineCheck runs the runtime's check-engine in a one-off runtime container,
 // so the engine is proved with the settings, network and provider code the
 // runtime itself uses: reachable, the model present, streaming and tool
-// calling. Its steps reach the terminal as they happen, and a failure is its
-// own sentence. An image that cannot say, by its label, that it knows
-// check-engine is never run with it. It returns the exit code.
-func (e Env) engineCheck(ctx context.Context) int {
+// calling. Its steps reach the terminal as they happen. An image that cannot
+// say, by its label, that it knows check-engine is never run with it. The
+// caller says what the result means for what it was doing.
+func (e Env) engineCheck(ctx context.Context) engineCheckResult {
 	if !e.dockerRunning(ctx) {
-		return e.fail("Docker is not running, so the engine was not checked; %s, then run ./turing engine check", e.startDockerHint())
+		return engineCheckResult{problem: "Docker is not running", next: e.startDockerHint() + ", then run ./turing engine check"}
 	}
 	compose := e.compose()
 	checks, err := host.ImageChecks(ctx, compose, runtimeService)
 	switch {
-	case errors.Is(err, host.ErrImageMissing):
-		return e.fail("%s", imagesTooOldForEngine)
-	case err != nil:
+	case err != nil && !errors.Is(err, host.ErrImageMissing):
 		return e.engineNotChecked("the runtime image's checks could not be read", err.Error())
-	case !slices.Contains(checks, engineCheckName):
-		return e.fail("%s", imagesTooOldForEngine)
+	case err != nil || !slices.Contains(checks, engineCheckName):
+		return engineCheckResult{problem: imagesTooOldForEngine, next: rebuildFirst}
 	}
 
 	_, _ = fmt.Fprintln(e.Stdout, "Checking the engine from inside the runtime; a model that is still loading can take a few minutes...")
@@ -90,22 +130,22 @@ func (e Env) engineCheck(ctx context.Context) int {
 	case err != nil:
 		return e.engineNotChecked("the engine check could not start", err.Error())
 	case code == 0:
-		return 0
+		return engineCheckResult{passed: true}
 	case code == 1 && !containsAny(output.String(), infrastructureMarkers):
 		// The runtime's own sentence, naming the step and what to change, is
 		// already on the terminal.
-		return 1
+		return engineCheckResult{stepFailed: true}
 	default:
 		return e.engineNotChecked(fmt.Sprintf("the engine check did not run to the end (exit status %d)", code), output.String())
 	}
 }
 
-// engineNotChecked reports an engine check that could not run, with the last
-// lines of what it printed, and returns exit code 1.
-func (e Env) engineNotChecked(what, detail string) int {
+// engineNotChecked shows why an engine check could not run, with the last
+// lines of what it printed.
+func (e Env) engineNotChecked(what, detail string) engineCheckResult {
 	_, _ = fmt.Fprintf(e.Stderr, "not checked: %s:\n", what)
 	e.indented(host.LastLines(detail, 5))
-	return e.fail("fix that, then run ./turing engine check; ./turing status shows the state of Docker and the services")
+	return engineCheckResult{next: fixThenCheckEngine}
 }
 
 // tailBuffer keeps the last maxCheckOutput bytes a command prints on both its
@@ -183,28 +223,59 @@ func (e Env) engineUse(ctx context.Context, args []string) int {
 		*label = labelDS4
 	}
 
-	changes := map[string]*string{
-		"TURING_LOCAL_ENGINE":       &engine,
-		engineURLKey:                &containerURL,
-		"TURING_LOCAL_MODEL":        model,
-		"TURING_LOCAL_ENGINE_LABEL": label,
-	}
-	if *contextTokens != "" {
-		changes[engineContextKey] = contextTokens
-	}
+	// A key given here replaces the one in .env; Ollama takes none.
+	var key *string
 	switch {
 	case engine == engineOllama:
-		// The runtime refuses a key with Ollama.
 		empty := ""
-		changes[engineAPIKeyKey] = &empty
+		key = &empty
 	case *keyFromStdin:
-		key, code, ok := e.readEngineKey()
+		read, code, ok := e.readEngineKey()
 		if !ok {
 			return code
 		}
-		changes[engineAPIKeyKey] = &key
+		key = &read
 	}
-	return e.saveSettings(ctx, changes, saveOptions{Yes: *yes, NoApply: *noApply})
+
+	keyRemoved := false
+	edit := func(current *envfile.File) (map[string]*string, error) {
+		changes := map[string]*string{
+			"TURING_LOCAL_ENGINE":       &engine,
+			engineURLKey:                &containerURL,
+			"TURING_LOCAL_MODEL":        model,
+			"TURING_LOCAL_ENGINE_LABEL": label,
+		}
+		if *contextTokens != "" {
+			changes[engineContextKey] = contextTokens
+		}
+		switch {
+		case key != nil:
+			changes[engineAPIKeyKey] = key
+		// The key is for the server .env names, and is never sent to another.
+		case envValue(current, engineAPIKeyKey) != "" && !keyBelongsTo(current, containerURL):
+			empty := ""
+			changes[engineAPIKeyKey] = &empty
+			keyRemoved = true
+		}
+		return changes, nil
+	}
+	// The notice is for a removal that was saved, not one a check refused.
+	saved := func() {
+		if keyRemoved {
+			_, _ = fmt.Fprintln(e.Stdout, engineKeyRemoved)
+		}
+	}
+	return e.saveEdit(ctx, edit, saveOptions{Yes: *yes, NoApply: *noApply, Saved: saved})
+}
+
+// keyBelongsTo reports whether the engine key in .env was set for the server
+// at containerURL: .env names an openai engine at that same address.
+func keyBelongsTo(current *envfile.File, containerURL string) bool {
+	if envValue(current, "TURING_LOCAL_ENGINE") != engineOpenAI {
+		return false
+	}
+	configured, err := containerEngineURL(envValue(current, engineURLKey))
+	return err == nil && configured == containerURL
 }
 
 // parseInterspersed parses set's options wherever they are among args, and
