@@ -1007,6 +1007,41 @@ func TestSetupAtATerminalWithAnotherRemoteAddressDoesNotKeepTheSavedKeyOnEnter(t
 	s.noOutputContains(remoteKeyCanary)
 }
 
+// A key given for a new address is that address's key, even when it is the
+// one saved: the save does not clear it as the previous server's.
+func TestSetupWithAnotherRemoteAddressKeepsTheSavedKeyWhenItIsGivenAgain(t *testing.T) {
+	t.Run("from stdin", func(t *testing.T) {
+		s := newSetupHarness(t)
+		s.rerun(map[string]string{"OPENAI_API_KEY": remoteKeyCanary})
+		s.Stdin = strings.NewReader(remoteKeyCanary + "\n")
+
+		if code := s.setup("--yes", "--remote-url", "https://api.example.com/v1", "--remote-key-stdin"); code != 0 {
+			t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+		}
+		s.wantEnv(t, map[string]string{"OPENAI_BASE_URL": "https://api.example.com/v1", "OPENAI_API_KEY": remoteKeyCanary})
+		if strings.Contains(s.out.String(), keyRemovedWords) || strings.Contains(s.out.String(), "OPENAI_API_KEY: removed") {
+			t.Fatalf("stdout = %q", s.out)
+		}
+		s.noOutputContains(remoteKeyCanary)
+	})
+	t.Run("at a terminal", func(t *testing.T) {
+		s := newSetupHarness(t)
+		s.rerun(map[string]string{"OPENAI_API_KEY": remoteKeyCanary})
+		s.IsTerminal = true
+		s.Stdin = answers("", "", "https://api.example.com/v1", "", "", "y")
+		s.ReadSecret = func(string) (string, error) { return remoteKeyCanary, nil }
+
+		if code := s.setup(); code != 0 {
+			t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+		}
+		s.wantEnv(t, map[string]string{"OPENAI_BASE_URL": "https://api.example.com/v1", "OPENAI_API_KEY": remoteKeyCanary})
+		if strings.Contains(s.out.String(), keyRemovedWords) || strings.Contains(s.out.String(), "OPENAI_API_KEY: removed") {
+			t.Fatalf("stdout = %q", s.out)
+		}
+		s.noOutputContains(remoteKeyCanary)
+	})
+}
+
 func TestSetupAtATerminalWithTheSameRemoteAddressKeepsTheSavedKeyOnEnter(t *testing.T) {
 	s := newSetupHarness(t)
 	s.rerun(map[string]string{"OPENAI_API_KEY": remoteKeyCanary})

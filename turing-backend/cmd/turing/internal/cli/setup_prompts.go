@@ -416,7 +416,7 @@ func (s *setupRun) chooseRemote(context.Context) error {
 			s.set(remoteModelKey, f.remoteModel, envValue(s.file, remoteModelKey))
 		}
 		if f.remoteKeyFromStdin {
-			s.set(remoteAPIKeyKey, f.remoteKey, savedKey)
+			s.setRemoteKey(f.remoteKey, savedKey)
 		}
 		return nil
 	}
@@ -454,7 +454,7 @@ func (s *setupRun) chooseRemote(context.Context) error {
 	s.set(remoteModelKey, model, envValue(s.file, remoteModelKey))
 	switch {
 	case key != "":
-		s.set(remoteAPIKeyKey, key, savedKey)
+		s.setRemoteKey(key, savedKey)
 	case keepable:
 		// Enter kept the saved key.
 	case savedKey != "":
@@ -464,6 +464,17 @@ func (s *setupRun) chooseRemote(context.Context) error {
 		s.printf("No key was given, so the remote model stays off.\n")
 	}
 	return nil
+}
+
+// setRemoteKey records key, given for the remote model at the address chosen.
+// With a new address it is recorded even when it is the saved key, so that the
+// save keeps it as that address's key rather than clear it as the previous
+// server's.
+func (s *setupRun) setRemoteKey(key, saved string) {
+	s.set(remoteAPIKeyKey, key, saved)
+	if _, moved := s.changes[remoteURLKey]; moved {
+		s.changes[remoteAPIKeyKey] = &key
+	}
 }
 
 // chooseTeam takes the agent team from --team, or asks at a terminal, with
