@@ -173,7 +173,9 @@ running yet, so the output says to run it after `./turing start`.
   a terminal. A saved key is kept only for the server it was set for: choosing
   Ollama, or an OpenAI-compatible engine at another address, removes it.
 - **`./turing config set TURING_LOCAL_MODEL <model>`** (or another `TURING_LOCAL_*`
-  key) changes one setting, then proves the engine the same way.
+  key) changes one setting, then proves the engine the same way. Setting
+  `TURING_LOCAL_ENGINE` or `TURING_LOCAL_ENGINE_URL` keeps the saved key only
+  as `engine use` does.
 
 An engine URL must name this machine: `localhost`, `127.0.0.1` or `[::1]`
 (rewritten to `host.docker.internal`), `host.docker.internal`, with no user,

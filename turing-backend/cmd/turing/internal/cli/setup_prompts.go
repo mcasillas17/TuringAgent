@@ -377,9 +377,15 @@ func (s *setupRun) chooseRemote(context.Context) error {
 	if !ok {
 		return errAnswersEnded
 	}
+	// The saved key belongs to the server it was set for, so Enter keeps it
+	// only for that server.
+	keepable := savedKey != "" && sameRemoteDestination(remoteURL(envValue(s.file, remoteURLKey)), address)
 	prompt := "API key for the remote model (typing is hidden): "
-	if savedKey != "" {
+	switch {
+	case keepable:
 		prompt = "API key for the remote model (typing is hidden; Enter keeps the saved one): "
+	case savedKey != "":
+		prompt = "API key for the remote model at the new address (typing is hidden; the saved key is for the previous one, so Enter turns the remote model off): "
 	}
 	key, err := s.ReadSecret(prompt)
 	if err != nil {
@@ -390,7 +396,12 @@ func (s *setupRun) chooseRemote(context.Context) error {
 	switch {
 	case key != "":
 		s.set(remoteAPIKeyKey, key, savedKey)
-	case savedKey == "":
+	case keepable:
+		// Enter kept the saved key.
+	case savedKey != "":
+		s.set(remoteAPIKeyKey, "", savedKey)
+		s.printf("No key was given for the new address, so the remote model is off; to turn it on, run ./turing config set %s.\n", remoteAPIKeyKey)
+	default:
 		s.printf("No key was given, so the remote model stays off.\n")
 	}
 	return nil

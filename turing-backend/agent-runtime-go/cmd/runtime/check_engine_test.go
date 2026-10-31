@@ -33,7 +33,14 @@ const (
 	// Two calls to the probe's tool: the first without arguments, the second
 	// with the arguments the probe asked for.
 	modeTwoCalls = "two-calls"
+	// An engine that echoes the request's Authorization header back, in an
+	// error's message or as the name of the tool it calls.
+	modeEchoError = "echo-error"
+	modeEchoName  = "echo-name"
 )
+
+// echoed is where an echoing engine puts the Authorization header it got.
+const echoed = "ECHO_AUTHORIZATION"
 
 const (
 	ollamaModel = "qwen2.5:7b"
@@ -187,6 +194,9 @@ func (f *fakeEngine) chat(w http.ResponseWriter, r *http.Request, body []byte) {
 		return
 	}
 	chunks := f.chunks(mode)
+	for i := range chunks {
+		chunks[i] = strings.ReplaceAll(chunks[i], echoed, r.Header.Get("Authorization"))
+	}
 	if mode == modeStall {
 		chunks = chunks[:1]
 	}
@@ -242,10 +252,15 @@ func openAIChunks(mode string) []string {
 		return []string{sse(`{"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"let me think"}}]}`), sse(finish), done}
 	case modeError:
 		return []string{sse(`{"error":{"message":"the model failed to load","type":"server_error","code":"engine_failure"}}`)}
-	case modeCall, modeWrongName:
+	case modeEchoError:
+		return []string{sse(`{"error":{"message":"refused the request with ` + echoed + `","type":"server_error","code":"engine_failure"}}`)}
+	case modeCall, modeWrongName, modeEchoName:
 		name := "turing_engine_check"
-		if mode == modeWrongName {
+		switch mode {
+		case modeWrongName:
 			name = "get_weather"
+		case modeEchoName:
+			name = echoed
 		}
 		return []string{
 			sse(fmt.Sprintf(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":%q,"arguments":""}}]}}]}`, name)),
@@ -638,6 +653,64 @@ func TestCheckEngineSendsTheAPIKeyOnEveryOpenAIRequestAndNeverPrintsIt(t *testin
 	}
 }
 
+// An engine may echo the request back; the key it carried is never printed,
+// not even in part.
+func TestCheckEngineNeverPrintsAKeyTheEngineEchoesBack(t *testing.T) {
+	const key = "sk-local-ECHOED-SECRET"
+	for _, tc := range []struct {
+		name     string
+		arrange  func(f *fakeEngine)
+		step     int
+		stepName string
+	}{
+		{"in a streaming error", func(f *fakeEngine) { f.stream = modeEchoError }, 3, "streaming"},
+		{"as the name of the tool called", func(f *fakeEngine) { f.tool = modeEchoName }, 4, "tool calling"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeEngine(t, llm.LocalEngineOpenAI)
+			f.requireKey = key
+			tc.arrange(f)
+			code, stdout, stderr := runCheckEngine(t, f, "TURING_LOCAL_ENGINE_API_KEY="+key)
+			requireStepFailure(t, code, stdout, stderr, tc.step, tc.stepName, "[redacted]")
+			if strings.Contains(stdout+stderr, "ECHOED-SECRET") {
+				t.Fatalf("output repeats the key: stdout = %q, stderr = %q", stdout, stderr)
+			}
+		})
+	}
+}
+
+func TestServerTextRedactsTheKeyBeforeItIsCutOrFolded(t *testing.T) {
+	const key = "SECRET VALUE\tWITH SPACES"
+	p := &engineProbe{apiKey: key}
+	for name, text := range map[string]string{
+		"alone":            key,
+		"as a bearer":      "got Authorization: Bearer " + key + ", refused",
+		"where a cut ends": strings.Repeat("x", maxDetailRunes-3) + key,
+		"twice":            key + " and " + key,
+	} {
+		got := p.serverText(text)
+		if strings.Contains(got, "SEC") || strings.Contains(got, "VALUE") || strings.Contains(got, "SPACES") {
+			t.Errorf("%s: serverText = %q, want the key redacted", name, got)
+		}
+	}
+	if got := p.serverText("bad\x1b[31m\nthing"); got != "bad [31m thing" {
+		t.Errorf("serverText = %q, want it still made one printable line", got)
+	}
+	if got := (&engineProbe{}).serverText("no key configured"); got != "no key configured" {
+		t.Errorf("serverText without a key = %q", got)
+	}
+}
+
+func TestAFailureToReachTheEngineNeverPrintsTheKey(t *testing.T) {
+	const key = "sk-local-TRANSPORT-SECRET"
+	probe := stubbedProbe(nil, errors.New(`malformed HTTP response "Bearer `+key+`"`))
+	probe.apiKey = key
+	_, err := probe.toolCalling(context.Background())
+	if err == nil || strings.Contains(err.Error(), "TRANSPORT-SECRET") || !strings.Contains(err.Error(), "[redacted]") {
+		t.Fatalf("toolCalling = %v, want the key redacted", err)
+	}
+}
+
 func TestCheckEngineSendsNoAuthorizationWithoutAKey(t *testing.T) {
 	eachEngine(t, func(t *testing.T, engine string) {
 		f := newFakeEngine(t, engine)
@@ -756,7 +829,18 @@ func TestTheEngineClientIgnoresProxiesAndHasNoClientWideTimeout(t *testing.T) {
 	if client.Timeout != 0 {
 		t.Fatalf("client timeout = %s, want none: each step's context carries its own", client.Timeout)
 	}
-	transport, ok := client.Transport.(*http.Transport)
+	requireNoProxy(t, client)
+}
+
+// requireNoProxy fails the test unless client reaches every address directly,
+// whatever proxy the environment names, with a transport of its own.
+func requireNoProxy(t *testing.T, client *http.Client) {
+	t.Helper()
+	roundTripper := client.Transport
+	if roundTripper == nil {
+		roundTripper = http.DefaultTransport
+	}
+	transport, ok := roundTripper.(*http.Transport)
 	if !ok {
 		t.Fatalf("client transport is %T, want an *http.Transport", client.Transport)
 	}
@@ -912,6 +996,7 @@ func TestStreamingNeedsATextDeltaBeforeCompleted(t *testing.T) {
 }
 
 func TestToolCallFailureNamesWhatWentWrong(t *testing.T) {
+	toolCallFailure := (&engineProbe{}).toolCallFailure
 	if err := toolCallFailure([]llm.ToolCall{probeCall("turing_engine_check", map[string]any{"status": "ok"})}); err != nil {
 		t.Fatalf("toolCallFailure = %v, want nil", err)
 	}

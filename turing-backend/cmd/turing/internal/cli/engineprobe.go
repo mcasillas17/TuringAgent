@@ -31,6 +31,7 @@ const (
 	// empty.
 	defaultEngineURL  = "http://host.docker.internal:11434"
 	defaultLocalModel = "qwen2.5:7b"
+	defaultRemoteURL  = "https://api.openai.com/v1"
 
 	dockerInternalHost = "host.docker.internal"
 	loopback           = "127.0.0.1"

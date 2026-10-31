@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func TestBuildProvidersPassesTheKeepAliveToOllama(t *testing.T) {
 	providers, err := buildProviders(config.Config{
 		LocalEngine: llm.LocalEngineOllama, LocalEngineURL: server.URL, OllamaKeepAlive: "30s",
 		LocalContextWindowTokens: 8192, LocalMaxOutputTokens: 512,
-	}, server.Client())
+	}, server.Client(), server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +96,7 @@ func TestTheWorkersLocalProviderSendsWhatNewLocalProviderSends(t *testing.T) {
 			} else {
 				cfg.LocalEngineURL += "/v1"
 			}
-			providers, err := buildProviders(cfg, server.Client())
+			providers, err := buildProviders(cfg, server.Client(), server.Client())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -132,7 +133,7 @@ func TestNewLocalProviderNamesTheLocalEngineWhenItCannotBuildOne(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "configure the local engine") {
 		t.Fatalf("newLocalProvider = %v, want an error naming the local engine", err)
 	}
-	if _, err := buildProviders(cfg, nil); err == nil || !strings.Contains(err.Error(), "configure the local engine") {
+	if _, err := buildProviders(cfg, nil, nil); err == nil || !strings.Contains(err.Error(), "configure the local engine") {
 		t.Fatalf("buildProviders = %v, want the same error", err)
 	}
 }
@@ -162,7 +163,7 @@ func TestTheLocalEngineAndTheRemoteProviderStaySeparate(t *testing.T) {
 		OpenAIAPIKey: "k", OpenAIBaseURL: "https://api.openai.com/v1",
 		OpenAIContextWindowTokens: 8192, OpenAIMaxOutputTokens: 512,
 	}
-	providers, err := buildProviders(cfg, nil)
+	providers, err := buildProviders(cfg, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +173,70 @@ func TestTheLocalEngineAndTheRemoteProviderStaySeparate(t *testing.T) {
 	remote, ok := providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE].(llm.EgressProvider)
 	if !ok || remote.EgressEndpoint() != "https://api.openai.com/v1" {
 		t.Fatalf("remote provider = %+v", providers[turingv1.ModelProvider_MODEL_PROVIDER_OPENAI_COMPATIBLE])
+	}
+}
+
+// The worker reaches its local engine as check-engine does, never through a
+// proxy, so what the check proves is the path a chat takes; the remote model
+// may need the proxy the container is given.
+func TestTheWorkersLocalEngineClientIgnoresProxiesAndTheRemoteOneDoesNot(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+	t.Setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+	local, remote := workerClients()
+	requireNoProxy(t, local)
+	if remote != http.DefaultClient {
+		t.Fatalf("the remote model's client is %+v, want http.DefaultClient, which honours the container's proxy", remote)
+	}
+}
+
+type recordingTransport struct {
+	mu    sync.Mutex
+	hosts []string
+}
+
+func (r *recordingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	r.mu.Lock()
+	r.hosts = append(r.hosts, request.URL.Host)
+	r.mu.Unlock()
+	return nil, errors.New("recorded")
+}
+
+func (r *recordingTransport) seen() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.hosts)
+}
+
+// Each provider buildProviders makes sends its requests through its own
+// client: the local engine through the local one, the remote model through the
+// remote one.
+func TestBuildProvidersSendsEachRouteThroughItsOwnClient(t *testing.T) {
+	localTransport, remoteTransport := &recordingTransport{}, &recordingTransport{}
+	cfg := config.Config{
+		LocalEngine: llm.LocalEngineOllama, LocalEngineURL: "http://host.docker.internal:11434",
+		LocalContextWindowTokens: 8192, LocalMaxOutputTokens: 512,
+		OpenAIAPIKey: "k", OpenAIBaseURL: "https://api.openai.com/v1",
+		OpenAIContextWindowTokens: 8192, OpenAIMaxOutputTokens: 512,
+	}
+	providers, err := buildProviders(cfg, &http.Client{Transport: localTransport}, &http.Client{Transport: remoteTransport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range providers {
+		events, err := provider.StreamChat(context.Background(), llm.ChatRequest{
+			Model: "m", Messages: []llm.ChatMessage{{Role: "user", Content: "hi"}}, MaxTokens: 64,
+		})
+		if err != nil {
+			continue
+		}
+		for range events {
+		}
+	}
+	if got := localTransport.seen(); len(got) == 0 || slices.ContainsFunc(got, func(host string) bool { return host != "host.docker.internal:11434" }) {
+		t.Fatalf("the local client carried requests to %q, want only the local engine's", got)
+	}
+	if got := remoteTransport.seen(); len(got) == 0 || slices.ContainsFunc(got, func(host string) bool { return host != "api.openai.com" }) {
+		t.Fatalf("the remote client carried requests to %q, want only the remote model's", got)
 	}
 }
 

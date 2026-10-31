@@ -28,11 +28,13 @@ const (
 	engineCheckFailedAfterApply = "The settings are saved and Turing is running, but the engine check failed; fix the engine, then run ./turing engine check."
 	engineNotCheckedAfterApply  = "The settings are saved and Turing is running, but the engine was not checked; %s"
 	engineCheckLater            = "After ./turing start, run ./turing engine check."
-	// engineKeyRemoved is engine use's notice and setupKeyRemoved setup's,
-	// each naming a way to give the new server a key that it has.
-	engineKeyRemovedOpening = "The previous engine's API key was removed; if this server needs one, "
-	engineKeyRemoved        = engineKeyRemovedOpening + "add --api-key-stdin."
-	setupKeyRemoved         = engineKeyRemovedOpening + "run ./turing config set " + engineAPIKeyKey + "."
+	// engineKeyRemoved is engine use's notice, and engineKeyRemovedConfigSet
+	// setup's and config's, each naming a way to give the new server a key
+	// that it has. remoteKeyRemoved is the notice for the remote model's key.
+	engineKeyRemovedOpening   = "The previous engine's API key was removed; if this server needs one, "
+	engineKeyRemoved          = engineKeyRemovedOpening + "add --api-key-stdin."
+	engineKeyRemovedConfigSet = engineKeyRemovedOpening + "run ./turing config set " + engineAPIKeyKey + "."
+	remoteKeyRemoved          = "The previous remote model's API key was removed; to use the new address, run ./turing config set " + remoteAPIKeyKey + "."
 
 	engineAPIKeyKey  = "TURING_LOCAL_ENGINE_API_KEY"
 	engineContextKey = "TURING_LOCAL_CONTEXT_WINDOW_TOKENS"

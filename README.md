@@ -369,6 +369,11 @@ your `PATH` to run it from anywhere. `./turing help` prints the full usage.
 - **Applying a change recreates the containers it affects** and waits for them
   to be healthy. If they do not come up, it offers to restore the previous
   settings and apply them again.
+- **A key stays with its server.** A change that points the local engine or
+  the remote model at another server, without giving a key for it, removes the
+  saved key, so it is never sent there, and says which command sets a new one.
+  The same address written another way, such as `localhost` for
+  `host.docker.internal`, is the same server.
 
 The command never opens the database. It talks to the orchestrator only as a
 client, for its health check.

@@ -60,7 +60,7 @@ func checkConfig(environ []string, _ io.Writer) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := buildProviders(cfg, offlineClient); err != nil {
+	if _, err := buildProviders(cfg, offlineClient, offlineClient); err != nil {
 		return nil, err
 	}
 	return cfg.DeprecatedKeys, nil
@@ -79,7 +79,8 @@ func run() error {
 	}
 	defer func() { _ = client.Close() }()
 	reportDeprecatedKeys(cfg)
-	providers, err := buildProviders(cfg, http.DefaultClient)
+	local, remote := workerClients()
+	providers, err := buildProviders(cfg, local, remote)
 	if err != nil {
 		return err
 	}
@@ -198,17 +199,26 @@ func newLocalProvider(cfg config.Config, client *http.Client) (llm.Provider, err
 	return local, nil
 }
 
-// buildProviders is the local route's engine under the local provider and,
-// when a key is configured, the remote OpenAI-compatible provider beside it.
-func buildProviders(cfg config.Config, client *http.Client) (map[turingv1.ModelProvider]llm.Provider, error) {
-	local, err := newLocalProvider(cfg, client)
+// workerClients are the HTTP clients the worker's providers use. The local
+// engine's is check-engine's own, which never goes through a proxy, so what
+// the check proves is the path a chat takes; the remote model may need the
+// proxy the container is given.
+func workerClients() (local, remote *http.Client) {
+	return newEngineClient(), http.DefaultClient
+}
+
+// buildProviders is the local route's engine under the local provider, which
+// uses localClient, and, when a key is configured, the remote
+// OpenAI-compatible provider beside it, which uses remoteClient.
+func buildProviders(cfg config.Config, localClient, remoteClient *http.Client) (map[turingv1.ModelProvider]llm.Provider, error) {
+	local, err := newLocalProvider(cfg, localClient)
 	if err != nil {
 		return nil, err
 	}
 	providers := map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: local}
 	if cfg.OpenAIAPIKey != "" {
 		remote, err := llm.NewOpenAICompatibleWithLimits(
-			cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, client, cfg.OpenAIContextWindowTokens, cfg.OpenAIMaxOutputTokens,
+			cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, remoteClient, cfg.OpenAIContextWindowTokens, cfg.OpenAIMaxOutputTokens,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("configure OpenAI-compatible provider: %w", err)

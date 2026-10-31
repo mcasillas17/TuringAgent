@@ -19,6 +19,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/envfile"
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/host"
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/registry"
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/internal/servicecmd"
 )
 
@@ -116,6 +117,7 @@ func (e Env) saveLocked(ctx context.Context, edit settingsEdit, opts saveOptions
 	if err != nil {
 		return e.fail("%v", err), false, false
 	}
+	changes, notices := scopeKeys(current, changes)
 	candidate, changed, err := buildCandidate(previous, changes)
 	if err != nil {
 		return e.fail("%v", err), false, false
@@ -133,11 +135,85 @@ func (e Env) saveLocked(ctx context.Context, edit settingsEdit, opts saveOptions
 	if err := envfile.WriteAtomic(path, candidate.Bytes()); err != nil {
 		return e.fail("cannot save .env: %v; check .env, then run this command again", err), false, false
 	}
+	for _, notice := range notices {
+		_, _ = fmt.Fprintln(e.Stdout, notice)
+	}
 	if opts.Saved != nil {
 		opts.Saved()
 	}
 	code, applied = e.applySaved(ctx, path, previous, current, candidate, changed, opts)
 	return code, applied, changesLocalEngine(changes)
+}
+
+// scopeKeys keeps each API key with the server it was set for. A change that
+// points the local engine or the remote model at another server, without
+// giving a key for it, also clears the key .env holds, so that it is never
+// sent there. It returns the changes with any key cleared, and a notice, to
+// show once the change is saved, for each cleared key that the new server
+// could still want. changes itself is left as it is.
+func scopeKeys(current *envfile.File, changes map[string]*string) (map[string]*string, []string) {
+	var notices []string
+	scoped, copied := changes, false
+	clearKey := func(name string) {
+		if !copied {
+			scoped, copied = make(map[string]*string, len(changes)+1), true
+			maps.Copy(scoped, changes)
+		}
+		cleared := ""
+		scoped[name] = &cleared
+	}
+	_, engineKeyGiven := changes[engineAPIKeyKey]
+	_, engineChanges := changes[engineKindKey]
+	_, urlChanges := changes[engineURLKey]
+	if !engineKeyGiven && (engineChanges || urlChanges) {
+		engine := cmp.Or(candidateValue(current, changes, engineKindKey), engineOllama)
+		if _, removed := engineKeyChange(current, engine, candidateValue(current, changes, engineURLKey)); removed {
+			clearKey(engineAPIKeyKey)
+			// Ollama takes no key, so there is none to give it.
+			if engine == engineOpenAI {
+				notices = append(notices, engineKeyRemovedConfigSet)
+			}
+		}
+	}
+	_, remoteKeyGiven := changes[remoteAPIKeyKey]
+	if _, ok := changes[remoteURLKey]; ok && !remoteKeyGiven && envValue(current, remoteAPIKeyKey) != "" &&
+		!sameRemoteDestination(remoteURL(envValue(current, remoteURLKey)), remoteURL(candidateValue(current, changes, remoteURLKey))) {
+		clearKey(remoteAPIKeyKey)
+		notices = append(notices, remoteKeyRemoved)
+	}
+	return scoped, notices
+}
+
+// candidateValue is what name will hold once changes are made to current.
+func candidateValue(current *envfile.File, changes map[string]*string, name string) string {
+	value, ok := changes[name]
+	switch {
+	case !ok:
+		return envValue(current, name)
+	case value == nil:
+		return ""
+	default:
+		return *value
+	}
+}
+
+// remoteURL is the remote model's base URL as the services read value: an
+// empty one is their default.
+func remoteURL(value string) string {
+	return cmp.Or(value, defaultRemoteURL)
+}
+
+// sameRemoteDestination reports whether a and b name the same server and
+// path: the same scheme, host, port and path once each is in canonical form,
+// with the host in lower case, a default port left out and no trailing slash.
+// A URL that cannot be put in that form is the same only as itself.
+func sameRemoteDestination(a, b string) bool {
+	if a == b {
+		return true
+	}
+	first, err := egress.ParseUnkeyedEndpoint(a)
+	second, otherErr := egress.ParseUnkeyedEndpoint(b)
+	return err == nil && otherErr == nil && first.Canonical == second.Canonical
 }
 
 // changesLocalEngine reports whether changes name a setting in the registry's

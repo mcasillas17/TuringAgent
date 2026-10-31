@@ -108,8 +108,9 @@ func checkEngine(environ []string, progress io.Writer) ([]string, error) {
 
 // newEngineClient reaches the engine directly: a proxy configured for the
 // container's other traffic must not stand between the runtime and an engine
-// on this machine. It has no client-wide timeout, since a completion is
-// bounded by its step's context.
+// on this machine. The worker's local provider uses it too (workerClients). It
+// has no client-wide timeout, since a completion is bounded by its own
+// context: a check step's, or a run's.
 func newEngineClient() *http.Client {
 	transport := &http.Transport{}
 	if base, ok := http.DefaultTransport.(*http.Transport); ok {
@@ -226,7 +227,7 @@ func (p *engineProbe) toolCalling(ctx context.Context) (string, error) {
 			return "", p.streamFailure(event, "see the engine's log; the server may be refusing tool definitions or the model's call")
 		case "completed":
 			calls = append(calls, event.ToolCalls...)
-			return "", toolCallFailure(calls)
+			return "", p.toolCallFailure(calls)
 		}
 	}
 	return "", p.streamEnded(ctx, completionTimeout)
@@ -234,7 +235,7 @@ func (p *engineProbe) toolCalling(ctx context.Context) (string, error) {
 
 // toolCallFailure judges the calls the model made: nil when any call names the
 // probe's tool with parsed arguments, whatever else was called beside it.
-func toolCallFailure(calls []llm.ToolCall) error {
+func (p *engineProbe) toolCallFailure(calls []llm.ToolCall) error {
 	other := ""
 	unparsed := false
 	for _, call := range calls {
@@ -262,7 +263,7 @@ func toolCallFailure(calls []llm.ToolCall) error {
 		}
 	}
 	return failure{
-		reason: fmt.Sprintf("the model called %q instead of %s", oneLine(other, maxDetailRunes), probeToolName),
+		reason: fmt.Sprintf("the model called %q instead of %s", p.serverText(other), probeToolName),
 		fix:    "this model does not follow tool definitions reliably; set TURING_LOCAL_MODEL to another",
 	}
 }
@@ -300,7 +301,7 @@ func (p *engineProbe) unreachable(err error, limit time.Duration) failure {
 		err = urlErr.Err
 	}
 	return failure{
-		reason: fmt.Sprintf("cannot reach the engine at %s: %s", p.baseURL, oneLine(err.Error(), maxDetailRunes)),
+		reason: fmt.Sprintf("cannot reach the engine at %s: %s", p.baseURL, p.serverText(err.Error())),
 		fix:    "start the engine, and check that TURING_LOCAL_ENGINE_URL is an address the runtime container can reach",
 	}
 }
@@ -339,11 +340,11 @@ func (p *engineProbe) refused(path string, status int) failure {
 }
 
 // streamFailure reports an error event, which the provider has classified:
-// its code is the provider's own, its message the server's, so it is cut and
-// made printable.
+// its code is the provider's own, its message the server's, so both go
+// through serverText.
 func (p *engineProbe) streamFailure(event llm.StreamEvent, fix string) failure {
-	reason := "the engine's stream failed with " + event.Code
-	if message := oneLine(event.Message, maxDetailRunes); message != "" {
+	reason := "the engine's stream failed with " + p.serverText(event.Code)
+	if message := p.serverText(event.Message); message != "" {
 		reason += ": " + message
 	}
 	if event.Code == "model_auth_failed" {
@@ -409,6 +410,16 @@ func modelListed(engine, model string, names []string) (listed bool, alias bool)
 		return untagged && slices.Contains(names, model+":latest"), false
 	}
 	return false, len(names) > 0
+}
+
+// serverText makes text that came from the engine safe to print. An engine
+// can echo the request back, so the configured API key is redacted first,
+// before oneLine can fold its spaces or cut it short and leave part of it.
+func (p *engineProbe) serverText(text string) string {
+	if p.apiKey != "" {
+		text = strings.ReplaceAll(text, p.apiKey, "[redacted]")
+	}
+	return oneLine(text, maxDetailRunes)
 }
 
 // oneLine makes text a server sent safe to print in one line: control

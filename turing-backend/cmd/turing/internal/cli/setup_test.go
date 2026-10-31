@@ -23,7 +23,7 @@ const (
 	initPrinted        = "TuringAgent backend initialized.\n"
 	vllmModels         = `{"object":"list","data":[{"id":"qwen3-coder"}]}`
 
-	setupKeyRemovedNotice = "The previous engine's API key was removed; if this server needs one, run ./turing config set TURING_LOCAL_ENGINE_API_KEY."
+	setupKeyRemovedNotice = engineKeyRemovedNotice
 	nextStartLine         = "takes effect at the next ./turing start"
 )
 
@@ -782,6 +782,104 @@ func TestSetupAtATerminalSayingNoToTheRemoteModelOnARerunRemovesItsKey(t *testin
 	}
 	s.wantEnv(t, map[string]string{"OPENAI_API_KEY": ""})
 	inOrder(t, s.out.String(), "Settings to save:\n", "  OPENAI_API_KEY: removed\n", "Save these settings? [Y/n] ")
+	s.noOutputContains(remoteKeyCanary)
+}
+
+func TestSetupWithAnotherRemoteAddressRemovesTheSavedRemoteKey(t *testing.T) {
+	s := newSetupHarness(t)
+	s.rerun(map[string]string{"OPENAI_API_KEY": remoteKeyCanary})
+
+	if code := s.setup("--yes", "--remote-url", "https://api.example.com/v1"); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	s.wantEnv(t, map[string]string{"OPENAI_BASE_URL": "https://api.example.com/v1", "OPENAI_API_KEY": ""})
+	s.checkEnvHas("OPENAI_BASE_URL=https://api.example.com/v1", "OPENAI_API_KEY=")
+	out := s.out.String()
+	inOrder(t, out, "Settings to save:\n", "  OPENAI_BASE_URL=https://api.example.com/v1\n", "  OPENAI_API_KEY: removed\n", remoteKeyRemovedNotice, connectLines)
+	if n := strings.Count(out, remoteKeyRemovedNotice); n != 1 {
+		t.Fatalf("the key notice was printed %d times, want once:\n%s", n, out)
+	}
+	s.noOutputContains(remoteKeyCanary)
+}
+
+func TestSetupWithTheSameRemoteAddressWrittenAnotherWayKeepsTheRemoteKey(t *testing.T) {
+	s := newSetupHarness(t)
+	s.rerun(map[string]string{"OPENAI_API_KEY": remoteKeyCanary})
+
+	if code := s.setup("--yes", "--remote-url", "https://API.openai.com:443/v1/"); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	s.wantEnv(t, map[string]string{"OPENAI_BASE_URL": "https://API.openai.com:443/v1/", "OPENAI_API_KEY": remoteKeyCanary})
+	s.noCheckGets("OPENAI_API_KEY")
+	if out := s.out.String(); strings.Contains(out, "OPENAI_API_KEY") || strings.Contains(out, keyRemovedWords) {
+		t.Fatalf("stdout = %q", out)
+	}
+	s.noOutputContains(remoteKeyCanary)
+}
+
+func TestSetupWithAnotherRemoteAddressAndAKeyFromStdinReplacesTheKey(t *testing.T) {
+	const newKey = "sk-NEW-REMOTE-CANARY"
+	s := newSetupHarness(t)
+	s.rerun(map[string]string{"OPENAI_API_KEY": remoteKeyCanary})
+	s.Stdin = strings.NewReader(newKey + "\n")
+
+	if code := s.setup("--yes", "--remote-url", "https://api.example.com/v1", "--remote-key-stdin"); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	s.wantEnv(t, map[string]string{"OPENAI_BASE_URL": "https://api.example.com/v1", "OPENAI_API_KEY": newKey})
+	inOrder(t, s.out.String(), "  OPENAI_API_KEY: set\n")
+	if strings.Contains(s.out.String(), keyRemovedWords) {
+		t.Fatalf("stdout = %q", s.out)
+	}
+	s.noOutputContains(remoteKeyCanary, newKey)
+}
+
+func TestSetupAtATerminalWithAnotherRemoteAddressDoesNotKeepTheSavedKeyOnEnter(t *testing.T) {
+	s := newSetupHarness(t)
+	s.rerun(map[string]string{"OPENAI_API_KEY": remoteKeyCanary})
+	s.IsTerminal = true
+	s.Stdin = answers("", "", "https://api.example.com/v1", "", "", "y")
+	var prompts []string
+	s.ReadSecret = func(prompt string) (string, error) {
+		prompts = append(prompts, prompt)
+		return "", nil
+	}
+
+	if code := s.setup(); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	s.wantEnv(t, map[string]string{"OPENAI_BASE_URL": "https://api.example.com/v1", "OPENAI_API_KEY": ""})
+	if len(prompts) != 1 || strings.Contains(prompts[0], "Enter keeps") || !strings.Contains(prompts[0], "new address") {
+		t.Fatalf("prompts = %q, want one that asks for a key for the new address and does not offer to keep the saved one", prompts)
+	}
+	out := s.out.String()
+	inOrder(t, out, "Remote base URL [https://api.openai.com/v1]: ",
+		"No key was given for the new address, so the remote model is off; to turn it on, run ./turing config set OPENAI_API_KEY.\n",
+		"  OPENAI_API_KEY: removed\n", "Save these settings? [Y/n] ")
+	if strings.Contains(out, remoteKeyRemovedNotice) {
+		t.Fatalf("stdout = %q; the removal was already said", out)
+	}
+	s.noOutputContains(remoteKeyCanary)
+}
+
+func TestSetupAtATerminalWithTheSameRemoteAddressKeepsTheSavedKeyOnEnter(t *testing.T) {
+	s := newSetupHarness(t)
+	s.rerun(map[string]string{"OPENAI_API_KEY": remoteKeyCanary})
+	s.IsTerminal = true
+	s.Stdin = answers("", "", "https://API.openai.com/v1/", "", "", "y")
+	var prompts []string
+	s.ReadSecret = func(prompt string) (string, error) {
+		prompts = append(prompts, prompt)
+		return "", nil
+	}
+
+	if code := s.setup(); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	s.wantEnv(t, map[string]string{"OPENAI_BASE_URL": "https://API.openai.com/v1/", "OPENAI_API_KEY": remoteKeyCanary})
+	if len(prompts) != 1 || !strings.Contains(prompts[0], "Enter keeps") {
+		t.Fatalf("prompts = %q, want one that says Enter keeps the saved key", prompts)
+	}
 	s.noOutputContains(remoteKeyCanary)
 }
 

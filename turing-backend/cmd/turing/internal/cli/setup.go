@@ -189,11 +189,12 @@ func (s *setupRun) set(name, value, now string) {
 
 // save shows the changes and, once they are confirmed, checks and saves them
 // without applying them: setup starts Turing and checks the engine itself
-// next. The engine's key is decided as engine use decides it, against .env as
-// it is under the lock; the list shown is that decision against .env as it
-// was read.
+// next. The engine's key is decided as engine use decides it, and every key is
+// kept with its server as saveSettings keeps it, against .env as it is under
+// the lock; the list shown is that decision against .env as it was read.
 func (s *setupRun) save(ctx context.Context) int {
 	shown, _ := s.changesFor(s.file)
+	shown, _ = scopeKeys(s.file, shown)
 	if len(shown) == 0 {
 		s.printf("\nNo changes.\n")
 		return 0
@@ -216,7 +217,7 @@ func (s *setupRun) save(ctx context.Context) int {
 	// The notice is for a removal that was saved, not one a check refused.
 	saved := func() {
 		if keyRemoved {
-			s.printf("%s\n", setupKeyRemoved)
+			s.printf("%s\n", engineKeyRemovedConfigSet)
 		}
 	}
 	return s.saveEdit(ctx, edit, saveOptions{Yes: s.flags.yes, NoApply: true, CallerStarts: true, SkipEngineCheck: true, Saved: saved})
