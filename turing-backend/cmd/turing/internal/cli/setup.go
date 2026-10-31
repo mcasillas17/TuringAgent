@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,9 +53,9 @@ type setupRun struct {
 	firstRun    bool
 	file        *envfile.File
 	changes     map[string]*string
-	// keyRemoved is the local engine's key being removed, because it belongs
-	// to another server.
-	keyRemoved bool
+	// engineChoice is the local engine chosen, or nil when .env's is kept as
+	// it is.
+	engineChoice *localChoice
 }
 
 // setup provisions and builds Turing, walks through the choices that matter
@@ -188,27 +189,52 @@ func (s *setupRun) set(name, value, now string) {
 
 // save shows the changes and, once they are confirmed, checks and saves them
 // without applying them: setup starts Turing and checks the engine itself
-// next.
+// next. The engine's key is decided as engine use decides it, against .env as
+// it is under the lock; the list shown is that decision against .env as it
+// was read.
 func (s *setupRun) save(ctx context.Context) int {
-	if len(s.changes) == 0 {
+	shown, _ := s.changesFor(s.file)
+	if len(shown) == 0 {
 		s.printf("\nNo changes.\n")
 		return 0
 	}
 	s.printf("\nSettings to save:\n")
 	for _, key := range registry.All() {
-		if value, ok := s.changes[key.Name]; ok {
+		if value, ok := shown[key.Name]; ok {
 			s.printf("  %s\n", shownChange(key, *value))
 		}
 	}
 	if !s.confirm("Save these settings?", true, s.flags.yes) {
 		return s.fail("nothing was saved, and Turing was not started; run ./turing setup again to choose again")
 	}
+	keyRemoved := false
+	edit := func(current *envfile.File) (map[string]*string, error) {
+		changes, removed := s.changesFor(current)
+		keyRemoved = removed
+		return changes, nil
+	}
+	// The notice is for a removal that was saved, not one a check refused.
 	saved := func() {
-		if s.keyRemoved {
-			s.printf("%s\n", engineKeyRemoved)
+		if keyRemoved {
+			s.printf("%s\n", setupKeyRemoved)
 		}
 	}
-	return s.saveSettings(ctx, s.changes, saveOptions{Yes: s.flags.yes, NoApply: true, SkipEngineCheck: true, Saved: saved})
+	return s.saveEdit(ctx, edit, saveOptions{Yes: s.flags.yes, NoApply: true, CallerStarts: true, SkipEngineCheck: true, Saved: saved})
+}
+
+// changesFor is the changes chosen, with what becomes of the engine's key
+// when .env is current; removed is a key that was set being cleared.
+func (s *setupRun) changesFor(current *envfile.File) (changes map[string]*string, removed bool) {
+	changes = maps.Clone(s.changes)
+	if s.engineChoice == nil {
+		return changes, false
+	}
+	value, removed := engineKeyChange(current, s.engineChoice.engine, s.engineChoice.url)
+	if value == nil || *value == envValue(current, engineAPIKeyKey) {
+		return changes, false
+	}
+	changes[engineAPIKeyKey] = value
+	return changes, removed
 }
 
 // shownChange is a change as it may be shown: a secret only as set or

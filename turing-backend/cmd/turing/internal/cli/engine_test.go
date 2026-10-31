@@ -577,6 +577,52 @@ func TestEngineUseRemovesTheKeyOfAnotherServer(t *testing.T) {
 	}
 }
 
+func TestEngineKeyChangeKeepsTheKeyOnlyForTheSameOpenAIServer(t *testing.T) {
+	const openAIAt8000 = "TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_URL=http://localhost:8000/v1\n"
+	tests := []struct {
+		name, dotEnv, engine, url string
+		// keep is the key left as it is; otherwise it is cleared, and
+		// removed says a key was set.
+		keep, removed bool
+	}{
+		{"openai at the same address, written another way", openAIAt8000 + "TURING_LOCAL_ENGINE_API_KEY=k\n", "openai", "http://127.0.0.1:8000/v1", true, false},
+		{"openai at the same address, canonical", openAIAt8000 + "TURING_LOCAL_ENGINE_API_KEY=k\n", "openai", "http://host.docker.internal:8000/v1", true, false},
+		{"openai at another port", openAIAt8000 + "TURING_LOCAL_ENGINE_API_KEY=k\n", "openai", "http://host.docker.internal:8001/v1", false, true},
+		{"openai where .env has Ollama at that address", "TURING_LOCAL_ENGINE=ollama\nTURING_LOCAL_ENGINE_URL=http://host.docker.internal:8000/v1\nTURING_LOCAL_ENGINE_API_KEY=k\n", "openai", "http://host.docker.internal:8000/v1", false, true},
+		{"openai with no key held", openAIAt8000, "openai", "http://host.docker.internal:8001/v1", true, false},
+		{"ollama with a key", "TURING_LOCAL_ENGINE_API_KEY=k\n", "ollama", "http://host.docker.internal:11434", false, true},
+		{"ollama at the address the key was set for", "TURING_LOCAL_ENGINE=openai\nTURING_LOCAL_ENGINE_URL=http://localhost:11434\nTURING_LOCAL_ENGINE_API_KEY=k\n", "ollama", "http://host.docker.internal:11434", false, true},
+		{"ollama with no key held", "", "ollama", "http://host.docker.internal:11434", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, removed := engineKeyChange(dotEnv(t, tt.dotEnv), tt.engine, tt.url)
+			switch {
+			case tt.keep && value != nil:
+				t.Fatalf("value = %q, want the key left as it is", *value)
+			case !tt.keep && (value == nil || *value != ""):
+				t.Fatalf("value = %v, want the key cleared", value)
+			case removed != tt.removed:
+				t.Fatalf("removed = %v, want %v", removed, tt.removed)
+			}
+		})
+	}
+}
+
+func TestEngineUseOllamaRemovesAKeyWithoutANotice(t *testing.T) {
+	h := newConfigHarness(t)
+	h.writeEnv(fullEnv("TURING_LOCAL_ENGINE=ollama", "TURING_LOCAL_ENGINE_API_KEY="+engineKeyCanary))
+
+	if code := h.runEngine("use", "ollama", "--no-apply"); code != 0 {
+		t.Fatalf("exit = %d; stderr: %s", code, h.errOut)
+	}
+	h.wantEnv(t, map[string]string{"TURING_LOCAL_ENGINE_API_KEY": ""})
+	if strings.Contains(h.out.String(), "API key was removed") {
+		t.Fatalf("stdout = %q; Ollama takes no key, and --api-key-stdin is for openai only", h.out)
+	}
+	h.noOutputContains(engineKeyCanary)
+}
+
 func TestEngineUseWithAKeyFromStdinSetsItForAnotherServerWithoutANotice(t *testing.T) {
 	h := newConfigHarness(t)
 	h.writeEnv(fullEnv("TURING_LOCAL_ENGINE=openai", "TURING_LOCAL_ENGINE_URL=http://host.docker.internal:9000/v1", "TURING_LOCAL_ENGINE_API_KEY=sk-OLD-KEY-CANARY"))

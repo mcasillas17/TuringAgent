@@ -147,20 +147,14 @@ func recommendedUse(recommendation machine.Recommendation, engines []foundEngine
 	return fmt.Sprintf("./turing engine use %s --url %s --model %s", recommendation.Engine, address, recommendation.PreferredModel)
 }
 
-// setEngine records the changes that make .env's local engine choice. The
-// engine's key belongs to the server .env names, so it is removed for any
-// other server.
+// setEngine records the changes that make .env's local engine choice. What
+// becomes of the engine's key is decided when the change is saved.
 func (s *setupRun) setEngine(effective, choice localChoice) {
 	s.set(engineKindKey, choice.engine, effective.engine)
 	s.set(engineURLKey, choice.url, effective.url)
 	s.set(localModelKey, choice.model, effective.model)
 	s.set(engineLabelKey, choice.label, effective.label)
-	sameServer := choice.engine == effective.engine && choice.url == effective.url
-	if envValue(s.file, engineAPIKeyKey) != "" && !sameServer && !keyBelongsTo(s.file, choice.url) {
-		removed := ""
-		s.changes[engineAPIKeyKey] = &removed
-		s.keyRemoved = true
-	}
+	s.engineChoice = &choice
 }
 
 // engineOption is one line of the engine menu: an engine that answered, whose

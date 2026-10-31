@@ -22,6 +22,9 @@ const (
 	noChanges          = "No changes.\n"
 	initPrinted        = "TuringAgent backend initialized.\n"
 	vllmModels         = `{"object":"list","data":[{"id":"qwen3-coder"}]}`
+
+	setupKeyRemovedNotice = "The previous engine's API key was removed; if this server needs one, run ./turing config set TURING_LOCAL_ENGINE_API_KEY."
+	nextStartLine         = "takes effect at the next ./turing start"
 )
 
 var (
@@ -242,12 +245,13 @@ func TestSetupFirstRunAtATerminalSavesTheChosenEngineStartsTuringAndShowsHowToCo
 		"  TURING_LOCAL_MODEL=deepseek-chat\n",
 		"  TURING_LOCAL_ENGINE_LABEL=ds4\n",
 		"Save these settings? [Y/n] ",
+		"Saved in .env.\n",
 		"Starting Turing",
 		engineUsable,
 		connectLines,
 	)
-	if strings.Contains(out, engineCheckHint) || strings.Contains(out, "Apply now?") {
-		t.Fatalf("stdout = %q; want no engine check left for later and no question about applying, since setup starts Turing and checks the engine itself", out)
+	if strings.Contains(out, engineCheckHint) || strings.Contains(out, "Apply now?") || strings.Contains(out, nextStartLine) {
+		t.Fatalf("stdout = %q; want no engine check left for later, no question about applying and no start left for later, since setup starts Turing and checks the engine itself", out)
 	}
 	if n := len(s.engineCheckCalls()); n != 1 {
 		t.Fatalf("the engine was checked %d times, want once", n)
@@ -275,7 +279,7 @@ func TestSetupFirstRunWithYesTakesTheRecommendationWhenItIsTheOneEngineAnswering
 	s.generatedUnchanged()
 	out := s.out.String()
 	inOrder(t, out, "Settings to save:\n", "  TURING_LOCAL_MODEL=deepseek-chat\n", engineUsable, connectLines)
-	for _, unwanted := range []string{"Choose", "[y/N]", "Save these settings?", ds4Use} {
+	for _, unwanted := range []string{"Choose", "[y/N]", "Save these settings?", ds4Use, nextStartLine} {
 		if strings.Contains(out, unwanted) {
 			t.Errorf("stdout has %q:\n%s", unwanted, out)
 		}
@@ -380,9 +384,12 @@ func TestSetupWithEngineFlagsReplacesTheEngineAndRemovesTheKeyOfAnotherServer(t 
 		"TURING_LOCAL_ENGINE_API_KEY": "",
 	})
 	out := s.out.String()
-	inOrder(t, out, "  TURING_LOCAL_ENGINE_LABEL: cleared\n", "  TURING_LOCAL_ENGINE_API_KEY: removed\n", keyRemovedNotice, engineUsable)
-	if n := strings.Count(out, keyRemovedNotice); n != 1 {
+	inOrder(t, out, "  TURING_LOCAL_ENGINE_LABEL: cleared\n", "  TURING_LOCAL_ENGINE_API_KEY: removed\n", setupKeyRemovedNotice, engineUsable)
+	if n := strings.Count(out, setupKeyRemovedNotice); n != 1 {
 		t.Fatalf("the key notice was printed %d times, want once", n)
+	}
+	if strings.Contains(out+s.errOut.String(), "--api-key-stdin") {
+		t.Fatalf("stdout = %q; setup has no --api-key-stdin, so it must not name one", out)
 	}
 	s.generatedUnchanged()
 	s.noOutputContains(engineKeyCanary, canaryGen)
@@ -392,16 +399,20 @@ func TestSetupWithEngineFlagsForTheSameServerKeepsItsKey(t *testing.T) {
 	s := newSetupHarness(t)
 	s.rerun(map[string]string{
 		"TURING_LOCAL_ENGINE":         "openai",
-		"TURING_LOCAL_ENGINE_URL":     "http://host.docker.internal:8000/v1",
+		"TURING_LOCAL_ENGINE_URL":     "http://localhost:8000/v1",
 		"TURING_LOCAL_MODEL":          "deepseek-reasoner",
 		"TURING_LOCAL_ENGINE_LABEL":   "ds4",
 		"TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary,
 	})
 
-	if code := s.setup("--yes", "--engine", "openai", "--url", "http://localhost:8000/v1", "--model", "deepseek-chat"); code != 0 {
+	if code := s.setup("--yes", "--engine", "openai", "--url", "http://127.0.0.1:8000/v1", "--model", "deepseek-chat"); code != 0 {
 		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
 	}
-	s.wantEnv(t, map[string]string{"TURING_LOCAL_MODEL": "deepseek-chat", "TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary})
+	s.wantEnv(t, map[string]string{
+		"TURING_LOCAL_ENGINE_URL":     "http://host.docker.internal:8000/v1",
+		"TURING_LOCAL_MODEL":          "deepseek-chat",
+		"TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary,
+	})
 	for _, call := range s.checkCalls() {
 		for _, entry := range call.Env {
 			if strings.HasPrefix(entry, engineAPIKeyKey+"=") {
@@ -409,9 +420,89 @@ func TestSetupWithEngineFlagsForTheSameServerKeepsItsKey(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(s.out.String(), keyRemovedNotice) {
+	if strings.Contains(s.out.String(), "API key was removed") {
 		t.Fatalf("stdout = %q", s.out)
 	}
+	s.noOutputContains(engineKeyCanary)
+}
+
+func TestSetupChoosingOllamaClearsAnEngineKeyEvenWhenOllamaIsCurrent(t *testing.T) {
+	s := newSetupHarness(t)
+	s.rerun(map[string]string{"TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary})
+
+	if code := s.setup("--yes", "--engine", "ollama"); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	s.wantEnv(t, map[string]string{"TURING_LOCAL_ENGINE": "ollama", "TURING_LOCAL_ENGINE_API_KEY": ""})
+	inOrder(t, s.out.String(), "Settings to save:\n", "  TURING_LOCAL_ENGINE_API_KEY: removed\n", setupKeyRemovedNotice)
+	s.noOutputContains(engineKeyCanary)
+}
+
+func TestSetupChoosingAnotherOpenAIAddressClearsTheEngineKey(t *testing.T) {
+	s := newSetupHarness(t)
+	s.rerun(map[string]string{
+		"TURING_LOCAL_ENGINE":         "openai",
+		"TURING_LOCAL_ENGINE_URL":     "http://host.docker.internal:8000/v1",
+		"TURING_LOCAL_MODEL":          "deepseek-chat",
+		"TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary,
+	})
+
+	if code := s.setup("--yes", "--engine", "openai", "--url", "http://localhost:8001/v1", "--model", "deepseek-chat"); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	s.wantEnv(t, map[string]string{"TURING_LOCAL_ENGINE_URL": "http://host.docker.internal:8001/v1", "TURING_LOCAL_ENGINE_API_KEY": ""})
+	inOrder(t, s.out.String(), "  TURING_LOCAL_ENGINE_API_KEY: removed\n", setupKeyRemovedNotice)
+	s.noOutputContains(engineKeyCanary)
+}
+
+func TestSetupAtATerminalKeepingTheCurrentOpenAIEngineKeepsItsKey(t *testing.T) {
+	s := newSetupHarness(t)
+	s.engine.serve(bridgeGateway+":8000", 200, openAIModels)
+	s.rerun(map[string]string{
+		"TURING_LOCAL_ENGINE":         "openai",
+		"TURING_LOCAL_ENGINE_URL":     "http://localhost:8000/v1",
+		"TURING_LOCAL_MODEL":          "deepseek-chat",
+		"TURING_LOCAL_ENGINE_LABEL":   "ds4",
+		"TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary,
+	})
+	before := s.envBytes()
+	s.IsTerminal = true
+	s.Stdin = answers("", "", "", "")
+
+	if code := s.setup(); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	s.unchanged(before)
+	inOrder(t, s.out.String(), "  1) ds4 at http://host.docker.internal:8000/v1  (recommended, current)\n", noChanges)
+	s.noOutputContains(engineKeyCanary)
+}
+
+func TestSetupDecidesTheEngineKeyAgainstDotEnvAsItIsWhenSaving(t *testing.T) {
+	s := newSetupHarness(t)
+	s.engine.serve(bridgeGateway+":8000", 200, openAIModels)
+	s.rerun(nil)
+	s.IsTerminal = true
+	// While the save question waits, another command gives the current
+	// engine, Ollama, a key; ds4 is another server, so the save removes it.
+	answered := strings.NewReader("1\n1\nn\nn\n")
+	last := strings.NewReader("y\n")
+	keyAdded := false
+	s.Stdin = readerFunc(func(b []byte) (int, error) {
+		if answered.Len() > 0 {
+			return answered.Read(b)
+		}
+		if !keyAdded {
+			keyAdded = true
+			s.rerun(map[string]string{"TURING_LOCAL_ENGINE_API_KEY": engineKeyCanary})
+		}
+		return last.Read(b)
+	})
+
+	if code := s.setup(); code != 0 {
+		t.Fatalf("exit = %d; stdout: %s\nstderr: %s", code, s.out, s.errOut)
+	}
+	s.wantEnv(t, map[string]string{"TURING_LOCAL_ENGINE": "openai", "TURING_LOCAL_ENGINE_API_KEY": ""})
+	inOrder(t, s.out.String(), "Save these settings? [Y/n] ", setupKeyRemovedNotice)
 	s.noOutputContains(engineKeyCanary)
 }
 

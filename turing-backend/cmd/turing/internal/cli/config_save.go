@@ -49,15 +49,17 @@ var zeroBounds = []string{"TURING_QUEUE_MAX_WAIT_MS", "TURING_JOB_REAPER_INTERVA
 var infrastructureMarkers = []string{"Compose launch failed", "Cannot connect to the Docker daemon", "Error response from daemon"}
 
 // saveOptions are answers the caller already has. Yes answers every question
-// with its default, yes; NoApply saves without applying. SkipEngineCheck is
-// for a caller that checks the engine itself once Turing is up, as setup
-// does: a save that changes the local engine then neither checks it nor says
-// to. Saved, when set, runs once the change is written to .env and before it
-// is applied, so a note about what was saved is never shown for a change a
-// check refused.
+// with its default, yes; NoApply saves without applying. CallerStarts, with
+// NoApply, is for a caller that starts Turing itself straight after the save,
+// as setup does: the save then says only that it is saved, not that it takes
+// effect at the next start. SkipEngineCheck is for a caller that checks the
+// engine itself once Turing is up, as setup does: a save that changes the
+// local engine then neither checks it nor says to. Saved, when set, runs once
+// the change is written to .env and before it is applied, so a note about
+// what was saved is never shown for a change a check refused.
 type saveOptions struct {
-	Yes, NoApply, SkipEngineCheck bool
-	Saved                         func()
+	Yes, NoApply, CallerStarts, SkipEngineCheck bool
+	Saved                                       func()
 }
 
 // settingsEdit returns the changes to save, given .env as it is under the
@@ -329,7 +331,11 @@ func (e Env) applySaved(ctx context.Context, path string, previous []byte, curre
 		_, _ = fmt.Fprintln(e.Stdout, "Saved in .env.")
 	}
 	if opts.NoApply || !e.confirm(applyPrompt, true, opts.Yes) {
-		_, _ = fmt.Fprintln(e.Stdout, savedMessage)
+		if opts.NoApply && opts.CallerStarts {
+			_, _ = fmt.Fprintln(e.Stdout, "Saved in .env.")
+		} else {
+			_, _ = fmt.Fprintln(e.Stdout, savedMessage)
+		}
 		for _, name := range zeroBounds {
 			if value, ok := changed[name]; ok && isZero(value) {
 				_, _ = fmt.Fprintf(e.Stdout, "Warning: the next start may refuse %s=0, because only a running orchestrator can see whether a delegated task is waiting for consent; if it does, run ./turing config set %s with a value above 0.\n",

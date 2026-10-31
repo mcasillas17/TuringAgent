@@ -28,7 +28,11 @@ const (
 	engineCheckFailedAfterApply = "The settings are saved and Turing is running, but the engine check failed; fix the engine, then run ./turing engine check."
 	engineNotCheckedAfterApply  = "The settings are saved and Turing is running, but the engine was not checked; %s"
 	engineCheckLater            = "After ./turing start, run ./turing engine check."
-	engineKeyRemoved            = "The previous engine's API key was removed; if this server needs one, add --api-key-stdin."
+	// engineKeyRemoved is engine use's notice and setupKeyRemoved setup's,
+	// each naming a way to give the new server a key that it has.
+	engineKeyRemovedOpening = "The previous engine's API key was removed; if this server needs one, "
+	engineKeyRemoved        = engineKeyRemovedOpening + "add --api-key-stdin."
+	setupKeyRemoved         = engineKeyRemovedOpening + "run ./turing config set " + engineAPIKeyKey + "."
 
 	engineAPIKeyKey  = "TURING_LOCAL_ENGINE_API_KEY"
 	engineContextKey = "TURING_LOCAL_CONTEXT_WINDOW_TOKENS"
@@ -221,13 +225,9 @@ func (e Env) engineUse(ctx context.Context, args []string) int {
 		*label = usualLabel(engine, containerURL)
 	}
 
-	// A key given here replaces the one in .env; Ollama takes none.
+	// A key given here replaces the one in .env.
 	var key *string
-	switch {
-	case engine == engineOllama:
-		empty := ""
-		key = &empty
-	case *keyFromStdin:
+	if *keyFromStdin {
 		read, code, ok := e.readEngineKey()
 		if !ok {
 			return code
@@ -246,14 +246,13 @@ func (e Env) engineUse(ctx context.Context, args []string) int {
 		if *contextTokens != "" {
 			changes[engineContextKey] = contextTokens
 		}
-		switch {
-		case key != nil:
+		if key != nil {
 			changes[engineAPIKeyKey] = key
-		// The key is for the server .env names, and is never sent to another.
-		case envValue(current, engineAPIKeyKey) != "" && !keyBelongsTo(current, containerURL):
-			empty := ""
-			changes[engineAPIKeyKey] = &empty
-			keyRemoved = true
+		} else if value, removed := engineKeyChange(current, engine, containerURL); value != nil {
+			changes[engineAPIKeyKey] = value
+			// Ollama takes no key, so dropping one is not news, and
+			// --api-key-stdin, which the notice names, is for openai only.
+			keyRemoved = removed && engine == engineOpenAI
 		}
 		return changes, nil
 	}
@@ -266,14 +265,31 @@ func (e Env) engineUse(ctx context.Context, args []string) int {
 	return e.saveEdit(ctx, edit, saveOptions{Yes: *yes, NoApply: *noApply, Saved: saved})
 }
 
+// engineKeyChange is what becomes of the engine's API key in .env when the
+// local engine becomes engine at containerURL. The key belongs to the server
+// .env names now and is never sent to another: Ollama takes none, so it is
+// always cleared, and an OpenAI-compatible engine keeps it only at the same
+// address, compared in canonical form. value is nil when the key is left as
+// it is; removed is true when a key that was set is cleared.
+func engineKeyChange(current *envfile.File, engine, containerURL string) (value *string, removed bool) {
+	held := envValue(current, engineAPIKeyKey)
+	if engine == engineOpenAI && (held == "" || keyBelongsTo(current, containerURL)) {
+		return nil, false
+	}
+	cleared := ""
+	return &cleared, held != ""
+}
+
 // keyBelongsTo reports whether the engine key in .env was set for the server
-// at containerURL: .env names an openai engine at that same address.
+// at containerURL: .env names an openai engine at that same address, each in
+// canonical form.
 func keyBelongsTo(current *envfile.File, containerURL string) bool {
 	if envValue(current, "TURING_LOCAL_ENGINE") != engineOpenAI {
 		return false
 	}
 	configured, err := containerEngineURL(envValue(current, engineURLKey))
-	return err == nil && configured == containerURL
+	wanted, wantedErr := containerEngineURL(containerURL)
+	return err == nil && wantedErr == nil && configured == wanted
 }
 
 // parseInterspersed parses set's options wherever they are among args, and
