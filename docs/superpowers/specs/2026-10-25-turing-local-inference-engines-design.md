@@ -1,14 +1,17 @@
 # Local inference engines: design
 
 **Status:** approved (#168). Slice 1 (the engine seam) and slice 3 (the app's
-label) are implemented together (#169). Slice 2 (choosing for the machine) moves
+label) are implemented together (#169). Slice 2 (choosing for the machine) moved
 into the [`turing` host command design](2026-10-25-turing-host-command-design.md),
-whose section 6.7 records what changes from section 5.4 below.
+whose section 6.7 records what changes from section 5.4 below, and is
+implemented there (OPS-001 PR 3): `turing engine detect | use | check`, the
+runtime's `check-engine` and the [local engines guide](../../architecture/local-engines.md).
 
 **Date:** 2026-10-25.
 
 **Roadmap:** The [canonical roadmap](../../NORTH_STAR.md) records the shipped
-local-engine capability and tracks the remaining setup work under OPS-001.
+local-engine capability and the host command (OPS-001) that chooses and proves
+an engine.
 The baseline and alternatives below retain the original design context.
 
 ## 1. Goal

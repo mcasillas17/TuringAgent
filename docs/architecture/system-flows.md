@@ -1,7 +1,7 @@
 # TuringAgent: current architecture and execution flows
 
-**Implementation snapshot:** `main` at `57461e49`, inspected 2026-10-31 UTC.
-This is the shipped architecture, not a second roadmap. The
+**Implementation snapshot:** `main` at `57461e49`, inspected 2026-10-31 UTC,
+plus OPS-001 PR 3. This is the shipped architecture, not a second roadmap. The
 [canonical roadmap](../NORTH_STAR.md) owns feature status and future gates.
 
 Open [the animated runtime diagram](turing-flow.html) locally in a browser.
@@ -14,14 +14,16 @@ Mermaid diagrams below remain readable directly on GitHub.
 | Delivered | Still outside this delivery |
 | --- | --- |
 | #171: orchestrator/runtime `check-config`, unknown-argument refusal, image support label | No database-backed startup validation inside the offline check |
-| #173: host `turing` status, lifecycle, logs, connect/key rotation, validated configuration | `turing setup`, `turing engine` and `check-engine` are pending |
+| #173: host `turing` status, lifecycle, logs, connect/key rotation, validated configuration | Guided setup and engine commands arrive in the next row |
+| OPS-001 PR 3: `turing setup`, `turing engine detect \| use \| check` and the runtime's `check-engine` | `check-engine` proves one engine's behavior, not model quality; no engine install or LAN engine |
 | #173: Flutter Linux debug build in CI | No proof of a running desktop/keyring from a compile alone |
 | #172: team/client/engine documentation reconciliation | No modern MCP protocol implementation |
 
 The specialist team and child-owned egress consent are shipped but
-experimental and off by default. Local engine selection is implemented;
-hardware-guided engine choice is not. Current MCP remains the bounded
-2025-11-25 surface; MCPP-001 through MCPP-009 are plans.
+experimental and off by default. Local engine selection and hardware-guided
+engine choice are implemented ([local inference engines](local-engines.md)).
+Current MCP remains the bounded 2025-11-25 surface; MCPP-001 through MCPP-009
+are plans.
 
 ## 1. Runtime and administration are separate authorities
 
@@ -48,7 +50,7 @@ flowchart TB
     Docker -.->|"Starts / recreates / stops"| Stack
     App -->|"Client bearer; loopback gRPC :3000"| Orchestrator
     CLI -->|"Authenticated health check only"| Orchestrator
-    CLI -->|"status: model-list probe, engine key if set"| Engine
+    CLI -->|"status, engine detect, setup: model-list probe, engine key if set"| Engine
     Runtime -->|"host.docker.internal"| Engine
     Orchestrator --> DB["SQLite: sessions, runs, jobs, events, policy, audit"]
     Orchestrator --> Vault["Memory + skills: read/write; team + MCP config: read-only mounts"]
@@ -73,8 +75,15 @@ The host command runs as the owner and can invoke Docker. Neither the runtime
 nor the orchestrator can invoke it. It is not a fifth daemon, a model tool, or
 a database client. `status` also probes the local engine's model list directly
 from the host, without an HTTP proxy; an OpenAI-compatible engine receives
-its configured engine key if one is set. This host-side probe is not the
-pending in-container `engine check`.
+its configured engine key if one is set. `engine detect` and `setup` ask the
+same way. These host-side probes are not the proof: `turing engine check` runs
+the runtime's `check-engine` in a one-off runtime container, so the engine is
+proved with the settings, network and provider code the runtime itself uses
+(reachable, model present, streaming, tool calling). It is the only check that
+uses the network, only to reach the configured engine, and it sends a fixed
+prompt and no user data. `turing setup` runs `init.sh`, builds, saves choices
+through the same validate-then-write flow as `config`, starts Turing, runs that
+check and shows the connection.
 The app runs on the backend host until SEC-001 supplies
 paired device identity and encrypted transport; a headless server alone is
 not a supported remote desktop setup.

@@ -1005,6 +1005,25 @@ func TestInitGeneratesAnIntegrationKeyOfTheRightShape(t *testing.T) {
 	}
 }
 
+// init.sh stays non-interactive and still prints the app's key; the line after
+// it names the guided setup, where the engine choice is made.
+func TestInitPrintsTheKeyThenNamesTuringSetup(t *testing.T) {
+	result := runInit(t, "501", "20", "")
+
+	key := envValue(t, result.env, "TURING_CLIENT_API_KEY")
+	lines := strings.Split(strings.TrimSpace(result.output), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("init.sh printed %d lines, want the key line and the next step:\n%s", len(lines), result.output)
+	}
+	last := lines[len(lines)-2:]
+	if last[0] != "Flutter client API key: "+key {
+		t.Fatalf("the line before the last = %q, want the Flutter client API key line", last[0])
+	}
+	if !strings.Contains(last[1], "./turing setup") {
+		t.Fatalf("the last line = %q, want it to suggest ./turing setup", last[1])
+	}
+}
+
 // Re-running init.sh must not rotate it: a new key would make every stored
 // credential unreadable, and the accounts would silently stop working.
 func TestInitKeepsAnExistingIntegrationKey(t *testing.T) {

@@ -712,3 +712,4 @@ rm -f .env.bak
 client_key="$(grep '^TURING_CLIENT_API_KEY=' .env | cut -d= -f2-)"
 printf 'TuringAgent backend initialized.\n'
 printf 'Flutter client API key: %s\n' "$client_key"
+printf 'Next: ./turing setup chooses the local engine and model, starts Turing and shows how the app connects.\n'
