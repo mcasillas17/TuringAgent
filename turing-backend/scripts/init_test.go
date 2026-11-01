@@ -1005,6 +1005,45 @@ func TestInitGeneratesAnIntegrationKeyOfTheRightShape(t *testing.T) {
 	}
 }
 
+// init.sh stays non-interactive and still prints the app's key; the line after
+// it names the guided setup, where the engine choice is made.
+func TestInitPrintsTheKeyThenNamesTuringSetup(t *testing.T) {
+	t.Setenv("TURING_SETUP", "")
+	result := runInit(t, "501", "20", "")
+
+	key := envValue(t, result.env, "TURING_CLIENT_API_KEY")
+	lines := strings.Split(strings.TrimSpace(result.output), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("init.sh printed %d lines, want the key line and the next step:\n%s", len(lines), result.output)
+	}
+	last := lines[len(lines)-2:]
+	if last[0] != "Flutter client API key: "+key {
+		t.Fatalf("the line before the last = %q, want the Flutter client API key line", last[0])
+	}
+	if !strings.HasPrefix(last[1], "Next: ./turing setup ") {
+		t.Fatalf("the last line = %q, want it to suggest ./turing setup", last[1])
+	}
+	if n := strings.Count(result.output, "./turing setup"); n != 1 {
+		t.Fatalf("init.sh named ./turing setup %d times, want once, on its own line:\n%s", n, result.output)
+	}
+}
+
+// ./turing setup runs init.sh with TURING_SETUP set, and goes on to do what
+// the next step would say, so init.sh does not say it.
+func TestInitRunBySetupLeavesTheNextStepToSetup(t *testing.T) {
+	t.Setenv("TURING_SETUP", "1")
+	result := runInit(t, "501", "20", "")
+
+	key := envValue(t, result.env, "TURING_CLIENT_API_KEY")
+	lines := strings.Split(strings.TrimSpace(result.output), "\n")
+	if last := lines[len(lines)-1]; last != "Flutter client API key: "+key {
+		t.Fatalf("the last line = %q, want the Flutter client API key line", last)
+	}
+	if strings.Contains(result.output, "./turing setup") || strings.Contains(result.output, "Next:") {
+		t.Fatalf("init.sh run by setup named a next step:\n%s", result.output)
+	}
+}
+
 // Re-running init.sh must not rotate it: a new key would make every stored
 // credential unreadable, and the accounts would silently stop working.
 func TestInitKeepsAnExistingIntegrationKey(t *testing.T) {

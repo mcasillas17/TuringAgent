@@ -135,7 +135,7 @@ func TestStatusHealthyServerPrintsEveryLineAndExitsZero(t *testing.T) {
 	}
 	engine := s.line("Engine")
 	for _, want := range []string{"ollama", "http://host.docker.internal:11434", "3 models", "qwen2.5:7b", "listed",
-		"(turing engine check, coming in a later version, proves it from inside the runtime)"} {
+		"(run ./turing engine check to prove it from inside the runtime)"} {
 		if !strings.Contains(engine, want) {
 			t.Errorf("Engine line = %q, want %q", engine, want)
 		}
@@ -194,7 +194,7 @@ func TestStatusSetupFailsWithoutAUsableDotEnv(t *testing.T) {
 		break_ func(s *statusHarness)
 		want   string
 	}{
-		{"missing", func(s *statusHarness) { s.removeEnv() }, "run ./scripts/init.sh first"},
+		{"missing", func(s *statusHarness) { s.removeEnv() }, "run ./turing setup first"},
 		{"a symlink", func(s *statusHarness) {
 			s.removeEnv()
 			target := filepath.Join(s.BackendDir, "elsewhere")

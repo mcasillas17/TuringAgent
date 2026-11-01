@@ -24,8 +24,12 @@ checks the selected images' `org.turing.checks` labels, runs both services'
 offline `check-config`, and atomically replaces `.env` only on success.
 Applying recreates containers with `up -d`; a failed health wait offers a
 restore. Read-only `ps` and `logs` bypass bind-source launch checks so the
-operator can inspect a broken installation. Guided `setup` and `engine`
-remain unimplemented.
+operator can inspect a broken installation. `turing setup` provisions with
+`scripts/init.sh`, builds, saves choices through that same validated write, starts
+Turing and checks the engine. `turing engine detect | use | check` choose and
+prove the local engine; `check` runs the runtime's `check-engine` in a one-off
+runtime container, the only check that uses the network, and only to reach the
+configured engine. See [local inference engines](local-engines.md).
 
 The client talks to the orchestrator through gRPC. The agent runtime calls
 bundled MCP servers over internal HTTP JSON-RPC. Registered-server calls instead

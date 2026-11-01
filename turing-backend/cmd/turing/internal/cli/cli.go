@@ -20,6 +20,7 @@ import (
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/envfile"
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/host"
+	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/machine"
 	"golang.org/x/term"
 )
 
@@ -27,6 +28,18 @@ import (
 const Usage = `Usage: ./turing <command> [options]
 
 Commands:
+  setup [--yes] [--engine ollama|openai] [--url URL] [--model M] [--label L]
+        [--remote-url URL] [--remote-model M] [--remote-key-stdin] [--team on|off]
+                             set Turing up, or go through its main choices again: provision with
+                             ./scripts/init.sh (no secret is ever regenerated), build the images, choose the
+                             local engine and model from what answers on this machine and what Turing
+                             recommends for it, optionally a remote model and the agent team (experimental),
+                             check and save the choices, start Turing, prove the engine and show how the
+                             app connects. At a terminal it asks; --yes asks nothing: the flags win, a rerun
+                             keeps every current choice, and a first run takes the recommended engine only
+                             when it is the one engine answering. --url, --model and --label go with --engine,
+                             as for engine use. The remote model's key is never taken on the command line:
+                             --remote-key-stdin reads it, with typing hidden at a terminal
   start [--build]            start Turing and wait until it is healthy
                              (--build rebuilds the images first; run it after pulling a new version)
   stop                       stop Turing; it stays stopped after a reboot
@@ -44,12 +57,26 @@ Commands:
                              check a new value with the services, save it in .env, then apply it
                              (a secret is never taken on the command line: it is asked for with
                              typing hidden, or read from standard input with --stdin;
-                             --no-apply saves without restarting; KEY may be TURING_AGENT_API_KEYS.<name>)
+                             --no-apply saves without restarting; KEY may be TURING_AGENT_API_KEYS.<name>;
+                             a change to the local engine is then proved with engine check)
   config unset KEY [--yes] [--no-apply]
                              clear a setting the same way; TURING_AGENT_API_KEYS.<name> removes one agent
   help                       show this text
-  setup                      guided first-time setup (coming in a later version)
-  engine                     choose and check the local model engine (coming in a later version)
+  engine detect [--url URL]  show this machine's memory and GPU, the local model engines that answer on it,
+                             and the one Turing recommends; it changes nothing
+                             (--url also asks that address; localhost and 127.0.0.1 become host.docker.internal,
+                             which is how the containers name this machine)
+  engine use <ollama|openai> [--url URL] [--model M] [--context N] [--label L]
+             [--api-key-stdin] [--yes] [--no-apply]
+                             point Turing at a local model engine, saved and applied as config set does,
+                             then run engine check; openai needs --url and --model, and ollama without
+                             them uses the runtime's defaults (localhost and 127.0.0.1 in --url become
+                             host.docker.internal; --label names the engine in the app, ds4 by default
+                             for openai on port 8000; --context sets the context window in tokens; the
+                             engine's API key is never taken on the command line: --api-key-stdin reads
+                             it from standard input, or asks with typing hidden at a terminal)
+  engine check               prove the configured engine works for Turing from inside the runtime:
+                             it answers, lists the model, streams a reply and calls a tool
 `
 
 // serviceNames pairs each service's friendly name with its Compose name, in
@@ -95,6 +122,8 @@ type Env struct {
 	// BridgeGateway returns the address of Docker's default bridge, which is
 	// where host.docker.internal leads on Linux.
 	BridgeGateway func(ctx context.Context) (string, error)
+	// Machine reads this computer's operating system, memory and GPUs.
+	Machine machine.Reader
 }
 
 // OSEnv is the Env for this process.
@@ -131,6 +160,7 @@ func OSEnv(backendDir string) Env {
 			},
 		},
 		BridgeGateway: dockerBridgeGateway(host.ExecRunner{}, backendDir, os.Environ()),
+		Machine:       machine.OSReader(),
 	}
 }
 
@@ -175,8 +205,10 @@ func Main(args []string, env Env) int {
 	case "help", "-h", "--help":
 		_, _ = io.WriteString(env.Stdout, Usage)
 		return 0
-	case "setup", "engine":
-		return env.fail("./turing %s is coming in a later version; until then, run ./scripts/init.sh to set up and ./turing config to choose an engine", command)
+	case "engine":
+		return env.engine(ctx, rest)
+	case "setup":
+		return env.setup(ctx, rest)
 	default:
 		// Not repeated, in case it is a secret typed in the wrong place.
 		return env.usageError("unknown command; run ./turing help")
@@ -200,7 +232,7 @@ func (e Env) compose() host.Compose {
 	return host.Compose{Runner: e.Runner, BackendDir: e.BackendDir, Environ: e.Environ}
 }
 
-var errNoDotEnv = errors.New("there is no .env file; run ./scripts/init.sh first")
+var errNoDotEnv = errors.New("there is no .env file; run ./turing setup first")
 
 // readDotEnv reads and parses .env, which must be a regular file.
 func (e Env) readDotEnv() (*envfile.File, error) {
@@ -248,7 +280,7 @@ func appEndpoint(file *envfile.File) (port int, key string, err error) {
 	}
 	key, _ = file.Get(clientKey)
 	if key == "" {
-		return 0, "", fmt.Errorf("%s is missing from .env; run ./scripts/init.sh first", clientKey)
+		return 0, "", fmt.Errorf("%s is missing from .env; run ./turing setup first", clientKey)
 	}
 	return port, key, nil
 }

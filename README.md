@@ -201,18 +201,30 @@ On Linux, `host.docker.internal` is the Docker bridge's gateway, so the
 engine must listen there, not only on `127.0.0.1`; avoid `0.0.0.0` on a
 shared network. The app's model picker shows the local route as
 `Local · <engine>`, and Settings names the engine and model serving it.
+`./turing engine detect` shows which engine suits your machine and which are
+answering; [Local inference engines](docs/architecture/local-engines.md) has the
+recommendation table, the Linux networking, and what `./turing engine check`
+proves.
 
 ## Install and run
 
-Clone the repository and initialize local backend secrets:
+Clone the repository and run the guided setup:
 
 ```bash
 git clone https://github.com/mcasillas17/TuringAgent.git
 cd TuringAgent/turing-backend
-./scripts/init.sh
+./turing setup
 ```
 
-`init.sh` rejects root execution, creates `turing-backend/.env`, generates local
+`./turing setup` provisions with `./scripts/init.sh`, builds the images, asks
+which local engine and model to use (it shows what answers on your machine and
+what Turing recommends for it), optionally a remote model and the agent team,
+checks and saves your choices, starts Turing, proves the engine works, and shows
+how the app connects. Run it again to change those choices; it never
+regenerates a secret. See [the `turing` command](#the-turing-command).
+
+Provisioning is `scripts/init.sh`, which you can also run by itself (it is
+non-interactive and writes no engine choice). `init.sh` rejects root execution, creates `turing-backend/.env`, generates local
 bearer tokens, records the current non-root UID/GID for bind-mounted storage,
 creates `data/`, `skills/`, `mcp/`, `team/` (seeding Dev, Inbox and Research
 on the first install only), a real (non-symlink) `sandbox/`, and the
@@ -223,13 +235,14 @@ secured to `0600` and never rewritten), and
 prints the Flutter client API key. It fails rather than changing ownership or
 permissions when existing sandbox content is inaccessible. Do not commit `.env`.
 
-Start the backend stack with the `turing` command in `turing-backend/`:
+After setup, operate the backend with the `turing` command in `turing-backend/`:
 
 ```bash
-./turing start     # build the images the first time, start Turing, and wait until it is healthy
-./turing status    # one-screen health report; exits 1 when a check fails
-./turing connect   # the backend URL and the key the app asks for
-./turing config    # change settings from a menu, without editing .env
+./turing start        # build the images the first time, start Turing, and wait until it is healthy
+./turing status       # one-screen health report; exits 1 when a check fails
+./turing connect      # the backend URL and the key the app asks for
+./turing config       # change settings from a menu, without editing .env
+./turing engine check # prove the local engine works for Turing, from inside the runtime
 ```
 
 `./turing start` builds and runs the orchestrator, agent runtime, and MCP servers through
@@ -288,8 +301,8 @@ flutter run -d macos
 On first launch, enter:
 
 - **Backend URL:** `http://localhost:3000`
-- **API key:** the `Flutter client API key` printed by `./scripts/init.sh`, which
-  `./turing connect` shows again at any time
+- **API key:** the `Flutter client API key` printed by `./scripts/init.sh` (which
+  `./turing setup` runs); `./turing connect` shows it again at any time
 
 The sandboxed macOS builds include the outbound-network entitlement required to
 reach the local backend.
@@ -330,6 +343,7 @@ your `PATH` to run it from anywhere. `./turing help` prints the full usage.
 
 | Command | What it does |
 |---|---|
+| `./turing setup [--yes] [--engine ollama\|openai] [--url URL] [--model M] [--label L] [--remote-url URL] [--remote-model M] [--remote-key-stdin] [--team on\|off]` | Sets Turing up, or goes through its main choices again, as described below. |
 | `./turing start [--build]` | Starts Turing and waits until it is healthy. `--build` rebuilds the images first; run it after pulling a new version. |
 | `./turing stop` | Stops Turing. It stays stopped after a reboot. |
 | `./turing restart [--build] [--yes]` | Stops, then starts. This ends a reply in progress, so it asks first. |
@@ -339,6 +353,9 @@ your `PATH` to run it from anywhere. `./turing help` prints the full usage.
 | `./turing config` | Changes settings from a menu, at a terminal. |
 | `./turing config show`, `get KEY` | Lists the settings you can change, or prints one. A secret shows only as set or not set, and is never printed. |
 | `./turing config set KEY [VALUE]`, `unset KEY` | Changes one setting, as described below. `--no-apply` saves without restarting, and `--yes` answers the questions. `KEY` may be `TURING_AGENT_API_KEYS.<name>` for one agent's key. |
+| `./turing engine detect [--url URL]` | Shows this machine's memory and GPU, the local model engines that answer on it, and the one Turing recommends. It changes nothing. `--url` also asks that address; `localhost` and `127.0.0.1` become `host.docker.internal`, which is how the containers name this machine. |
+| `./turing engine use <ollama\|openai> [--url URL] [--model M] [--context N] [--label L] [--api-key-stdin] [--yes] [--no-apply]` | Points Turing at a local engine, saved and applied as `config set` does, then runs `engine check`. `openai` needs `--url` and `--model`. The engine's API key is never taken on the command line: `--api-key-stdin` reads it from standard input, or asks with typing hidden at a terminal. |
+| `./turing engine check` | Proves the configured engine works for Turing from inside the runtime: it answers, lists the model, streams a reply and calls a tool. |
 
 `turing config` is how settings are changed without editing `.env`:
 
@@ -352,12 +369,41 @@ your `PATH` to run it from anywhere. `./turing help` prints the full usage.
 - **Applying a change recreates the containers it affects** and waits for them
   to be healthy. If they do not come up, it offers to restore the previous
   settings and apply them again.
+- **A key stays with its server.** A change that points the local engine or
+  the remote model at another server, without giving a key for it, removes the
+  saved key, so it is never sent there, and says which command sets a new one.
+  The same address written another way, such as `localhost` for
+  `host.docker.internal`, is the same server.
 
 The command never opens the database. It talks to the orchestrator only as a
 client, for its health check.
 
-`setup` and `engine` are listed in `./turing help` but are not available yet.
-Nor does this version reach the server from another machine: until SEC-001, the
+`./turing setup` and `./turing engine` follow the same rules:
+
+- **`setup` provisions, asks, saves, starts and proves.** It runs
+  `./scripts/init.sh` (a rerun fills in only what is missing, so no secret is
+  regenerated), builds the images, shows what answers on this machine and what
+  Turing recommends, asks for the local engine and its model, a remote model
+  and the agent team (experimental), saves them after a check by both services
+  and a confirmation, starts Turing, runs `engine check`, and shows the backend
+  URL and key. On a rerun the current choices are the defaults.
+- **Nothing blocks without a person.** `--yes` asks nothing: the flags win, a
+  rerun keeps every current choice, and a first run takes the recommended
+  engine only when it is the one engine answering and its model is clear;
+  otherwise it keeps Ollama with `qwen2.5:7b` and prints the command that
+  switches. Without a terminal and without `--yes`, `setup` exits 2. The remote
+  model's key is read with typing hidden, or with `--remote-key-stdin`.
+- **`engine check` is the only check that uses the network, and only to reach
+  the configured engine.** The runtime's `check-engine` runs four steps in a
+  one-off runtime container (reachable, model present, streaming, tool
+  calling), sends a fixed prompt and no user data, and never contacts the
+  orchestrator. `check-config` makes no request at all. Its steps and what each
+  failure means are in
+  [Local inference engines](docs/architecture/local-engines.md).
+- **Exit codes:** 0 on success, 1 on a failure or a refusal, 2 for a usage
+  error.
+
+This version does not reach the server from another machine: until SEC-001, the
 app runs on the machine that runs Turing, and `./turing connect` run over SSH
 says so.
 
@@ -523,7 +569,7 @@ orchestrator remains stopped, use a SQLite client to run
 
 - **Backend is not reachable:** run `./turing status`, which names the check that fails; `./turing logs` shows a service's recent log. Otherwise check that Docker Compose is running and port `3000` is free.
 - **Authentication fails:** confirm the Flutter API key matches `TURING_CLIENT_API_KEY` in `turing-backend/.env`; `./turing connect` shows it. If you changed the key but did not restart, `./turing restart` makes the orchestrator use it.
-- **No model response:** ensure Ollama is running on the host and the configured model is available.
+- **No model response:** run `./turing engine check`, which names the step that fails (the engine does not answer, the model is not there, it does not stream, or it does not call tools) and what to change. `./turing engine detect` shows which engines answer on this machine.
 - **Remote send is refused:** confirm the per-run disclosure in the client. If
   configuration fails at startup, use HTTPS for keyed non-loopback
   `OPENAI_BASE_URL` values; `host.docker.internal` is not a plaintext keyed

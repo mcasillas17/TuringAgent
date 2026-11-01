@@ -31,6 +31,7 @@ const (
 	// empty.
 	defaultEngineURL  = "http://host.docker.internal:11434"
 	defaultLocalModel = "qwen2.5:7b"
+	defaultRemoteURL  = "https://api.openai.com/v1"
 
 	dockerInternalHost = "host.docker.internal"
 	loopback           = "127.0.0.1"
@@ -142,24 +143,17 @@ func (e Env) engineProbe(ctx context.Context, file *envfile.File) engineResult {
 		return result
 	}
 
-	target := configured.Hostname()
-	onLinuxBridge := target == dockerInternalHost && e.GOOS == "linux"
-	switch {
-	case onLinuxBridge:
-		target, err = e.BridgeGateway(ctx)
-		var noIPv4 noIPv4GatewayError
-		if errors.As(err, &noIPv4) {
-			result.Problem = fmt.Sprintf("%v, which %s leads to on Linux; give the default bridge an IPv4 subnet (docker network inspect bridge shows it), then run ./turing status",
-				noIPv4, dockerInternalHost)
-			return result
-		}
-		if err != nil {
-			result.Problem = fmt.Sprintf("could not find Docker's bridge gateway, which %s leads to on Linux (%s); check that Docker is running, then run ./turing status",
-				dockerInternalHost, oneLine(err.Error()))
-			return result
-		}
-	case target == dockerInternalHost:
-		target = loopback
+	target, onLinuxBridge, err := e.hostTarget(ctx, configured.Hostname())
+	var noIPv4 noIPv4GatewayError
+	if errors.As(err, &noIPv4) {
+		result.Problem = fmt.Sprintf("%v, which %s leads to on Linux; give the default bridge an IPv4 subnet (docker network inspect bridge shows it), then run ./turing status",
+			noIPv4, dockerInternalHost)
+		return result
+	}
+	if err != nil {
+		result.Problem = fmt.Sprintf("could not find Docker's bridge gateway, which %s leads to on Linux (%s); check that Docker is running, then run ./turing status",
+			dockerInternalHost, oneLine(err.Error()))
+		return result
 	}
 
 	models, failure := e.listModels(ctx, settings, configured, target)
@@ -181,6 +175,63 @@ func (e Env) engineProbe(ctx context.Context, file *envfile.File) engineResult {
 		failure.clause, settings.urlKey)
 	return result
 }
+
+// hostTarget is the address this machine asks to reach what a container
+// reaches at name. host.docker.internal is this machine's loopback under
+// Docker Desktop, and the default bridge's gateway on Linux, which is looked
+// up; onLinuxBridge says it was. Any other name is asked as it is.
+func (e Env) hostTarget(ctx context.Context, name string) (target string, onLinuxBridge bool, err error) {
+	switch {
+	case name == dockerInternalHost && e.GOOS == "linux":
+		target, err = e.BridgeGateway(ctx)
+		return target, true, err
+	case name == dockerInternalHost:
+		return loopback, false, nil
+	default:
+		return name, false, nil
+	}
+}
+
+// containerEngineURL is raw as the containers reach it. A URL naming this
+// machine as localhost, 127.0.0.1 or [::1] names the container itself from
+// inside one, so it is rewritten to host.docker.internal, keeping the port and
+// path. The result is the canonical form of an address the runtime accepts:
+// an http or https URL on this machine with no user, password, query or
+// fragment. Anything else is refused, and the error never repeats raw, which
+// can carry a password.
+func containerEngineURL(raw string) (string, error) {
+	endpoint, err := egress.ParseLocalEndpoint(raw)
+	if err != nil {
+		return "", errEngineURLRefused
+	}
+	parsed, err := url.Parse(endpoint.Canonical)
+	if err != nil {
+		return "", errEngineURLRefused
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "localhost", "127.0.0.1", "::1":
+		parsed.Host = joinHostPort(dockerInternalHost, parsed.Port())
+	}
+	endpoint, err = egress.ParseLocalEndpoint(parsed.String())
+	if err != nil {
+		return "", errEngineURLRefused
+	}
+	rewritten, err := url.Parse(endpoint.Canonical)
+	if err != nil {
+		return "", errEngineURLRefused
+	}
+	if namesTheContainer(rewritten.Hostname()) {
+		return "", errEngineURLNamesTheContainer
+	}
+	return endpoint.Canonical, nil
+}
+
+var (
+	errEngineURLRefused = errors.New("the runtime takes only an http or https URL on this machine, with no user, password, query or fragment, " +
+		"such as http://" + dockerInternalHost + ":PORT with the engine's port (and its path, such as /v1); localhost and 127.0.0.1 are rewritten to " + dockerInternalHost)
+	errEngineURLNamesTheContainer = errors.New("that address is this machine's loopback, which inside the runtime's container is the container itself; " +
+		"use localhost, 127.0.0.1 or " + dockerInternalHost + " instead")
+)
 
 // namesTheContainer reports whether host, as ParseLocalEndpoint leaves it, is
 // localhost or a loopback address, which inside a container is the container.

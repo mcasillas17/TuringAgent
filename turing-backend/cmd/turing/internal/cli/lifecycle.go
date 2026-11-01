@@ -46,17 +46,23 @@ func (e Env) flagSet(command string) *flag.FlagSet {
 // ok means the exit code to return is already decided.
 func (e Env) parseFlags(set *flag.FlagSet, args []string) (code int, ok bool) {
 	if err := set.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			_, _ = io.WriteString(e.Stdout, Usage)
-			return 0, false
-		}
-		// The flag package's error repeats the argument, which could be a secret.
-		return e.usageError("turing %s: unknown option, or a value given to an option that takes none; run ./turing help", set.Name()), false
+		return e.flagError(set, err), false
 	}
 	if set.NArg() > 0 {
 		return e.usageError("turing %s takes no arguments; run ./turing help", set.Name()), false
 	}
 	return 0, true
+}
+
+// flagError answers an error from set.Parse: help is the usage text, anything
+// else a usage error.
+func (e Env) flagError(set *flag.FlagSet, err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		_, _ = io.WriteString(e.Stdout, Usage)
+		return 0
+	}
+	// The flag package's error repeats the argument, which could be a secret.
+	return e.usageError("turing %s: unknown option, or a value given to an option that takes none; run ./turing help", set.Name())
 }
 
 func (e Env) start(ctx context.Context, args []string) int {
@@ -83,6 +89,16 @@ func (e Env) endpoint() (port int, key string, err error) {
 
 // bringUp starts the stack and waits for it to be healthy.
 func (e Env) bringUp(ctx context.Context, port int, key string, build bool) int {
+	if code := e.upAndWait(ctx, port, key, build); code != 0 {
+		return code
+	}
+	_, _ = fmt.Fprintln(e.Stdout, "Turing is running. To connect the app, run ./turing connect")
+	return 0
+}
+
+// upAndWait starts the stack and waits for it to be healthy, saying nothing
+// once it is. A failure names the next thing to run.
+func (e Env) upAndWait(ctx context.Context, port int, key string, build bool) int {
 	args := []string{"up", "-d"}
 	if build {
 		args = append(args, "--build")
@@ -94,7 +110,6 @@ func (e Env) bringUp(ctx context.Context, port int, key string, build bool) int 
 	if err := e.waitHealthy(ctx, port, key); err != nil {
 		return e.fail("%v", err)
 	}
-	_, _ = fmt.Fprintln(e.Stdout, "Turing is running. To connect the app, run ./turing connect")
 	return 0
 }
 

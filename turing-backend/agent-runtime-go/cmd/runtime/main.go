@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -28,7 +29,10 @@ import (
 
 // checks are the subcommands that validate without serving. The Dockerfile's
 // org.turing.checks label must list exactly these; a test enforces it.
-var checks = []servicecmd.Check{{Name: "config", Run: checkConfig}}
+var checks = []servicecmd.Check{
+	{Name: "config", Run: checkConfig},
+	{Name: "engine", Run: checkEngine, Success: "the engine is usable for Turing"},
+}
 
 // offlineClient is the HTTP client check-config builds providers with. It
 // refuses every request, so the check can never reach an engine.
@@ -50,13 +54,13 @@ func main() {
 // checkConfig is startup without the connections: the loader run() starts
 // with, then the provider construction it performs after dialing the
 // orchestrator, which this never does.
-func checkConfig(environ []string) ([]string, error) {
+func checkConfig(environ []string, _ io.Writer) ([]string, error) {
 	env := servicecmd.EnvMap(environ)
 	cfg, err := config.LoadFromEnv(func(key string) string { return env[key] })
 	if err != nil {
 		return nil, err
 	}
-	if _, err := buildProviders(cfg, offlineClient); err != nil {
+	if _, err := buildProviders(cfg, offlineClient, offlineClient); err != nil {
 		return nil, err
 	}
 	return cfg.DeprecatedKeys, nil
@@ -75,7 +79,8 @@ func run() error {
 	}
 	defer func() { _ = client.Close() }()
 	reportDeprecatedKeys(cfg)
-	providers, err := buildProviders(cfg, http.DefaultClient)
+	local, remote := workerClients()
+	providers, err := buildProviders(cfg, local, remote)
 	if err != nil {
 		return err
 	}
@@ -179,9 +184,10 @@ func reportDeprecatedKeys(cfg config.Config) {
 	}
 }
 
-// buildProviders is the local route's engine under the local provider and,
-// when a key is configured, the remote OpenAI-compatible provider beside it.
-func buildProviders(cfg config.Config, client *http.Client) (map[turingv1.ModelProvider]llm.Provider, error) {
+// newLocalProvider is the local route's engine as the worker serves with it.
+// check-engine probes the provider this builds, so what it proves is what a
+// chat will run on.
+func newLocalProvider(cfg config.Config, client *http.Client) (llm.Provider, error) {
 	local, err := llm.NewLocal(llm.LocalOptions{
 		Engine: cfg.LocalEngine, BaseURL: cfg.LocalEngineURL, APIKey: cfg.LocalEngineAPIKey,
 		KeepAlive: cfg.OllamaKeepAlive, Client: client,
@@ -190,10 +196,29 @@ func buildProviders(cfg config.Config, client *http.Client) (map[turingv1.ModelP
 	if err != nil {
 		return nil, fmt.Errorf("configure the local engine: %w", err)
 	}
+	return local, nil
+}
+
+// workerClients are the HTTP clients the worker's providers use. The local
+// engine's is check-engine's own, which never goes through a proxy, so what
+// the check proves is the path a chat takes; the remote model may need the
+// proxy the container is given.
+func workerClients() (local, remote *http.Client) {
+	return newEngineClient(), http.DefaultClient
+}
+
+// buildProviders is the local route's engine under the local provider, which
+// uses localClient, and, when a key is configured, the remote
+// OpenAI-compatible provider beside it, which uses remoteClient.
+func buildProviders(cfg config.Config, localClient, remoteClient *http.Client) (map[turingv1.ModelProvider]llm.Provider, error) {
+	local, err := newLocalProvider(cfg, localClient)
+	if err != nil {
+		return nil, err
+	}
 	providers := map[turingv1.ModelProvider]llm.Provider{turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA: local}
 	if cfg.OpenAIAPIKey != "" {
 		remote, err := llm.NewOpenAICompatibleWithLimits(
-			cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, client, cfg.OpenAIContextWindowTokens, cfg.OpenAIMaxOutputTokens,
+			cfg.OpenAIBaseURL, cfg.OpenAIAPIKey, remoteClient, cfg.OpenAIContextWindowTokens, cfg.OpenAIMaxOutputTokens,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("configure OpenAI-compatible provider: %w", err)
