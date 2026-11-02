@@ -137,7 +137,7 @@ func TestConfigMenuNeedsADotEnv(t *testing.T) {
 	if code := h.config(); code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
-	if !strings.Contains(h.errOut.String(), "./scripts/init.sh") {
+	if !strings.Contains(h.errOut.String(), "run ./turing setup first") {
 		t.Fatalf("stderr = %q", h.errOut)
 	}
 }

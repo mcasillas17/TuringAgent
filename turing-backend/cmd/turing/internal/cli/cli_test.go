@@ -11,7 +11,7 @@ import (
 )
 
 func TestMainRefusesRootBeforeAnythingIsReadOrRun(t *testing.T) {
-	for _, args := range [][]string{{"start"}, {"stop"}, {"restart", "--yes"}, {"logs"}, {"status"}, {"connect"}, {"connect", "--rotate-key", "--yes"}, {"config"}, {"config", "show"}, {"config", "set", "TURING_LOCAL_MODEL", "x", "--yes"}, {"help"}, {"bogus"}, {}} {
+	for _, args := range [][]string{{"start"}, {"stop"}, {"restart", "--yes"}, {"logs"}, {"status"}, {"connect"}, {"connect", "--rotate-key", "--yes"}, {"config"}, {"config", "show"}, {"config", "set", "TURING_LOCAL_MODEL", "x", "--yes"}, {"setup"}, {"setup", "--yes"}, {"help"}, {"bogus"}, {}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			h := newHarness(t)
 			h.Geteuid = func() int { return 0 }
@@ -53,14 +53,14 @@ func TestMainRefusesAnUnknownCommandAndPointsToHelp(t *testing.T) {
 	}
 }
 
-func TestHelpListsTheCommandsAndNamesWhatIsComing(t *testing.T) {
+func TestHelpListsTheCommands(t *testing.T) {
 	for _, arg := range []string{"help", "--help", "-h"} {
 		h := newHarness(t)
 		if code := h.run(arg); code != 0 {
 			t.Fatalf("%s: exit = %d, want 0", arg, code)
 		}
 		out := h.out.String()
-		for _, want := range []string{"Usage:", "start", "stop", "restart", "logs", "status", "connect", "--rotate-key", "config", "config show", "config get KEY", "config set KEY", "--stdin", "--no-apply", "config unset KEY", "help", "setup", "engine", "coming in a later version"} {
+		for _, want := range []string{"Usage:", "start", "stop", "restart", "logs", "status", "connect", "--rotate-key", "config", "config show", "config get KEY", "config set KEY", "--stdin", "--no-apply", "config unset KEY", "help", "setup", "engine"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("%s: usage does not mention %q:\n%s", arg, want, out)
 			}
@@ -78,21 +78,6 @@ func TestHelpNoLongerCallsStatusOrConnectComingLater(t *testing.T) {
 		trimmed := strings.TrimSpace(line)
 		if (strings.HasPrefix(trimmed, "status") || strings.HasPrefix(trimmed, "connect")) && strings.Contains(line, "coming in a later version") {
 			t.Errorf("help says a shipped command is still coming: %q", line)
-		}
-	}
-}
-
-func TestACommandThatIsPlannedButNotShippedSaysSoAndDoesNothing(t *testing.T) {
-	for _, command := range []string{"setup", "engine"} {
-		h := newHarness(t)
-		if code := h.run(command); code != 1 {
-			t.Fatalf("%s: exit = %d, want 1", command, code)
-		}
-		if got := h.errOut.String(); !strings.Contains(got, "coming in a later version") || !strings.Contains(got, "./scripts/init.sh") {
-			t.Fatalf("%s: stderr = %q", command, got)
-		}
-		if len(h.runner.calls) != 0 {
-			t.Fatalf("%s ran %q", command, h.runner.commands())
 		}
 	}
 }

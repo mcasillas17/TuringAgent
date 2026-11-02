@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -27,7 +28,7 @@ func main() {
 // starts with, and nothing after it. app.New's other refusals need the
 // database, the files under the mounted roots, or concern generated secrets,
 // so they surface when the change is applied, not here.
-func checkConfig(environ []string) ([]string, error) {
+func checkConfig(environ []string, _ io.Writer) ([]string, error) {
 	cfg, err := config.LoadFromMap(servicecmd.EnvMap(environ))
 	if err != nil {
 		return nil, err

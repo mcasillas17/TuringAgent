@@ -22,5 +22,5 @@ USER turing-agent-runtime:turing-agent-runtime
 # reads this label before running a check: an image without it predates
 # check-config, and its binary would ignore the argument and connect to the
 # live orchestrator as a second worker. A test in cmd/runtime keeps it exact.
-LABEL org.turing.checks="config"
+LABEL org.turing.checks="config,engine"
 ENTRYPOINT ["/app/turing-agent-runtime-go"]

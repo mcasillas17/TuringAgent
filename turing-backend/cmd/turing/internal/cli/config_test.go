@@ -43,10 +43,23 @@ func checkConfigCall(service string) func(host.Command) bool {
 	return composeCall("run", "--rm", "--no-deps", service, "check-config")
 }
 
+func checkEngineCall() func(host.Command) bool {
+	return composeCall("run", "--rm", "--no-deps", "turing-agent-runtime-general", "check-engine")
+}
+
+// engineUsable is what the runtime's check-engine prints when every step passes.
+const engineUsable = "1/4 reachable: ok\n2/4 model present: ok\n3/4 streaming: ok\n4/4 tool calling: ok\nthe engine is usable for Turing\n"
+
+// imageLabels are the checks each image's label lists, as PR 3 builds them.
+var imageLabels = map[string]string{
+	"turing-orchestrator":          "config",
+	"turing-agent-runtime-general": "config,engine",
+}
+
 // configHarness is an installed server where every step of a save succeeds:
-// Docker answers, both images know check-config, both checks pass, and the
-// stack comes up healthy. A test scripts the step it is about before running
-// config, and its own step wins.
+// Docker answers, both images know check-config, both checks pass, the
+// stack comes up healthy, and the engine check passes. A test scripts the
+// step it is about before running config, and its own step wins.
 type configHarness struct {
 	*harness
 }
@@ -73,14 +86,21 @@ func newConfigHarness(t *testing.T) *configHarness {
 
 func (c *configHarness) config(args ...string) int {
 	c.t.Helper()
+	c.scriptSave()
+	return c.run(append([]string{"config"}, args...)...)
+}
+
+// scriptSave scripts every step of a save, and the engine check after it, to
+// succeed.
+func (c *configHarness) scriptSave() {
 	c.dockerUp()
 	for _, service := range checkedServices {
 		c.runner.on(imagesCall(service), fakeReply{stdout: imageOf(service) + "\n"})
-		c.runner.on(inspectCall(service), fakeReply{stdout: "config\n"})
+		c.runner.on(inspectCall(service), fakeReply{stdout: imageLabels[service] + "\n"})
 		c.runner.on(checkConfigCall(service), fakeReply{stdout: "configuration is valid\n"})
 	}
 	c.serveHealthy()
-	return c.run(append([]string{"config"}, args...)...)
+	c.runner.on(checkEngineCall(), fakeReply{stdout: engineUsable})
 }
 
 func (h *harness) envBytes() []byte {
@@ -292,7 +312,7 @@ func TestConfigShowNeedsADotEnvAndTakesNoArguments(t *testing.T) {
 	if code := h.config("show"); code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
-	if !strings.Contains(h.errOut.String(), "./scripts/init.sh") {
+	if !strings.Contains(h.errOut.String(), "run ./turing setup first") {
 		t.Fatalf("stderr = %q", h.errOut)
 	}
 
@@ -1292,14 +1312,14 @@ func TestSaveRefusesWhileAnotherCommandHoldsTheLock(t *testing.T) {
 	h.unchanged(before)
 }
 
-func TestSaveWithoutADotEnvSaysToRunInitAndMakesNoLock(t *testing.T) {
+func TestSaveWithoutADotEnvSaysToRunSetupAndMakesNoLock(t *testing.T) {
 	h := newConfigHarness(t)
 	h.removeEnv()
 
 	if code := h.config("set", "TURING_LOCAL_MODEL", "llama3.2", "--yes"); code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
-	if !strings.Contains(h.errOut.String(), "run ./scripts/init.sh first") {
+	if !strings.Contains(h.errOut.String(), "run ./turing setup first") {
 		t.Fatalf("stderr = %q", h.errOut)
 	}
 	if _, err := os.Lstat(filepath.Join(h.BackendDir, ".env.lock")); err == nil {
