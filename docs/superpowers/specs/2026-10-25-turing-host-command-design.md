@@ -1,19 +1,21 @@
 # The `turing` host command: design
 
-**Status:** approved (#170). PR 1 (`check-config`) and PR 2 (operate without
-editing files: `start`, `stop`, `restart`, `logs`, `status`, `connect` and
-`config`, and the Flutter Linux desktop build in CI) are implemented; `setup`
-and `engine` arrive in PR 3. On
+**Status:** approved (#170); OPS-001 is complete. PR 1 (`check-config`), PR 2
+(operate without editing files: `start`, `stop`, `restart`, `logs`, `status`,
+`connect` and `config`, and the Flutter Linux desktop build in CI) and PR 3
+(`setup`, `engine detect | use | check`, the runtime's `check-engine` and the
+[local engines guide](../../architecture/local-engines.md)) are implemented. On
 2026-10-26 the owner decided section 12's question 4: **b**, the app runs on
 the server until SEC-001.
 
 **Date:** 2026-10-25.
 
 **Reading this document:** The implementation status above is current through
-delivery slice 2 (#171 and #173). The baseline in section 2 and examples for
-`setup`, `engine`, and `check-engine` describe the original design or pending
-slice 3, not additional commands available today. Use the
-[current operator guide](../../../README.md#the-turing-command) and
+delivery slice 3 (#171, #173 and OPS-001 PR 3). The baseline in section 2
+describes the system before OPS-001, and the examples in section 6 are
+illustrative. Use the
+[current operator guide](../../../README.md#the-turing-command),
+`./turing help` and the
 [architecture flows](../../architecture/system-flows.md) for shipped behavior.
 
 **Roadmap:** OPS-001 in the [canonical roadmap](../../NORTH_STAR.md).

@@ -17,7 +17,7 @@ import (
 )
 
 // engineCheckNote says what a model list from this machine does not prove.
-const engineCheckNote = "(turing engine check, coming in a later version, proves it from inside the runtime)"
+const engineCheckNote = "(run ./turing engine check to prove it from inside the runtime)"
 
 // statusReport prints the check lines as they finish, and keeps the warnings
 // for the end.

@@ -83,7 +83,7 @@ func TestStartAndRestartWithoutADotEnvSayWhatToRun(t *testing.T) {
 		if code := h.run(args...); code != 1 {
 			t.Fatalf("%q: exit = %d, want 1", args, code)
 		}
-		if !strings.Contains(h.errOut.String(), "run ./scripts/init.sh first") {
+		if !strings.Contains(h.errOut.String(), "run ./turing setup first") {
 			t.Fatalf("%q: stderr = %q", args, h.errOut)
 		}
 		if len(h.runner.calls) != 0 {

@@ -103,7 +103,7 @@ func TestConnectOnTheMachineSaysNothingAboutAnotherMachine(t *testing.T) {
 	}
 }
 
-func TestConnectWithoutDotEnvSaysToRunInit(t *testing.T) {
+func TestConnectWithoutDotEnvSaysToRunSetup(t *testing.T) {
 	for _, args := range [][]string{{"connect"}, {"connect", "--rotate-key", "--yes"}} {
 		h := newHarness(t)
 		h.removeEnv()
@@ -111,7 +111,7 @@ func TestConnectWithoutDotEnvSaysToRunInit(t *testing.T) {
 		if code := h.run(args...); code != 1 {
 			t.Fatalf("%q: exit = %d, want 1", args, code)
 		}
-		if got := h.errOut.String(); !strings.Contains(got, "run ./scripts/init.sh first") {
+		if got := h.errOut.String(); !strings.Contains(got, "run ./turing setup first") {
 			t.Fatalf("%q: stderr = %q", args, got)
 		}
 		if _, err := os.Stat(filepath.Join(h.BackendDir, ".env")); !errors.Is(err, os.ErrNotExist) {
@@ -133,7 +133,7 @@ func TestConnectWithoutAClientKeyInDotEnvFails(t *testing.T) {
 	if code := h.run("connect"); code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
-	if got := h.errOut.String(); !strings.Contains(got, "TURING_CLIENT_API_KEY") || !strings.Contains(got, "./scripts/init.sh") {
+	if got := h.errOut.String(); !strings.Contains(got, "TURING_CLIENT_API_KEY") || !strings.Contains(got, "run ./turing setup first") {
 		t.Fatalf("stderr = %q", got)
 	}
 	if h.out.Len() != 0 {
