@@ -1,7 +1,7 @@
 # TuringAgent: current architecture and execution flows
 
-**Implementation snapshot:** `main` at `57461e49`, inspected 2026-10-31 UTC,
-plus OPS-001 PR 3. This is the shipped architecture, not a second roadmap. The
+**Implementation snapshot:** `main` at `310dbb36`, inspected 2026-11-03 UTC,
+after #175. This is the shipped architecture, not a second roadmap. The
 [canonical roadmap](../NORTH_STAR.md) owns feature status and future gates.
 
 Open [the animated runtime diagram](turing-flow.html) locally in a browser.
@@ -15,7 +15,7 @@ Mermaid diagrams below remain readable directly on GitHub.
 | --- | --- |
 | #171: orchestrator/runtime `check-config`, unknown-argument refusal, image support label | No database-backed startup validation inside the offline check |
 | #173: host `turing` status, lifecycle, logs, connect/key rotation, validated configuration | Guided setup and engine commands arrive in the next row |
-| OPS-001 PR 3: `turing setup`, `turing engine detect \| use \| check` and the runtime's `check-engine` | `check-engine` proves one engine's behavior, not model quality; no engine install or LAN engine |
+| #175: `turing setup`, `turing engine detect \| use \| check` and the runtime's `check-engine` | `check-engine` proves one engine's behavior, not model quality; no engine install or LAN engine |
 | #173: Flutter Linux debug build in CI | No proof of a running desktop/keyring from a compile alone |
 | #172: team/client/engine documentation reconciliation | No modern MCP protocol implementation |
 
@@ -104,7 +104,9 @@ sequenceDiagram
   participant Check as Service check-config
   participant Health as Running orchestrator
   Owner->>CLI: Edit a known setting (secret via hidden prompt/stdin)
-  CLI->>Env: Lock, read old bytes, build candidate in memory
+  CLI->>Env: Lock, read old bytes
+  CLI->>CLI: Keep each API key with its server (clear it for a new engine or remote address)
+  CLI->>Env: Build candidate in memory
   CLI->>CLI: Validate host port and migrate applicable deprecated keys
   CLI->>Docker: Check Docker and both image labels
   alt Image lacks config check support
@@ -128,9 +130,13 @@ sequenceDiagram
           end
         else Healthy
           CLI-->>Owner: Running with new settings
+          opt A local-engine setting changed
+            CLI->>Docker: Release lock, run the runtime's check-engine
+            CLI-->>Owner: Engine proved, or the failed step and its fix (non-zero exit)
+          end
         end
       else --no-apply or apply declined
-        CLI-->>Owner: Saved, effective on next start
+        CLI-->>Owner: Saved, effective on next start (a local-engine change also names engine check)
       end
     end
   end
@@ -143,12 +149,21 @@ explicit candidate overrides for validation. It does not expose secrets in
 arguments, `config show`, or errors. `connect` deliberately displays the
 client key; `connect --rotate-key` is a distinct flow, not ordinary config.
 
+Every save path (`config`, its menu, `engine use` and `setup`) keeps each API
+key with the server it was set for: pointing the local engine or the remote
+model at another address without a new key clears the saved one, so it is
+never sent there. A save that changes a local-engine setting is then proved:
+after a healthy apply, and with the `.env` lock released, the command runs the
+runtime's `check-engine` and exits non-zero if a step fails. `setup` skips that
+step because it checks the engine itself once Turing is up.
+
 Offline checks cannot see pending consent rows in SQLite. A database-dependent
 refusal can therefore happen when applying. Restore is offered after a failed
 apply/health wait, not a promise that every failure can be rolled back.
 This is configuration recovery, not an application-data backup.
 
 **Evidence:** [config save/validate/apply](../../turing-backend/cmd/turing/internal/cli/config_save.go),
+[engine check after a save](../../turing-backend/cmd/turing/internal/cli/engine.go),
 [atomic writer and lock](../../turing-backend/cmd/turing/internal/envfile/write.go),
 [Compose environment and image checks](../../turing-backend/cmd/turing/internal/host/host.go),
 [offline service checks](../../turing-backend/internal/servicecmd/servicecmd.go).

@@ -4,8 +4,9 @@
 label) are implemented together (#169). Slice 2 (choosing for the machine) moved
 into the [`turing` host command design](2026-10-25-turing-host-command-design.md),
 whose section 6.7 records what changes from section 5.4 below, and is
-implemented there (OPS-001 PR 3): `turing engine detect | use | check`, the
-runtime's `check-engine` and the [local engines guide](../../architecture/local-engines.md).
+implemented there (#175, OPS-001 PR 3): `turing engine detect | use | check`,
+the runtime's `check-engine` and the
+[local engines guide](../../architecture/local-engines.md).
 
 **Date:** 2026-10-25.
 

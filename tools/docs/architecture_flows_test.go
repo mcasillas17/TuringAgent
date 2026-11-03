@@ -29,6 +29,8 @@ const (
 var (
 	heroSVG      = regexp.MustCompile(`(?s)<svg\b[^>]*data-archflow-hero="1".*?</svg>`)
 	heroChapters = regexp.MustCompile(`(?s)<metadata id="afh-chapters">(.*?)</metadata>`)
+	fullSHA      = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	isoDate      = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 )
 
 func TestArchitectureFlowArtifacts(t *testing.T) {
@@ -48,6 +50,11 @@ func checkArchitectureFlowArtifacts(files fs.FS) error {
 	}
 	manifest, template, artifact, guide := content[0], content[1], content[2], content[3]
 	var model struct {
+		Project struct {
+			Subtitle string `json:"subtitle"`
+			Baseline string `json:"baseline"`
+			Checked  string `json:"checked"`
+		} `json:"project"`
 		Entities []struct {
 			ID       string `json:"id"`
 			Evidence []struct {
@@ -66,6 +73,9 @@ func checkArchitectureFlowArtifacts(files fs.FS) error {
 	}
 	if len(model.Entities) == 0 || len(model.Flows) == 0 {
 		return fmt.Errorf("flow manifest needs entities and flows")
+	}
+	if err := checkFlowSnapshot(model.Project.Baseline, model.Project.Checked, model.Project.Subtitle, template, artifact, guide); err != nil {
+		return err
 	}
 	if len(heroSVG.FindAll(artifact, -1)) != 1 || bytes.Count(template, []byte(heroToken)) != 1 {
 		return fmt.Errorf("expected one generated hero and one template placeholder")
@@ -140,13 +150,43 @@ func checkArchitectureFlowArtifacts(files fs.FS) error {
 	})
 }
 
+// checkFlowSnapshot keeps the one commit and date the artifacts were checked
+// against identical in the manifest, its subtitle, the rendered hero, the
+// template's footer and the guide's snapshot line, so advancing one cannot
+// leave another behind.
+func checkFlowSnapshot(baseline, checked, subtitle string, template, artifact, guide []byte) error {
+	if !fullSHA.MatchString(baseline) || !isoDate.MatchString(checked) {
+		return fmt.Errorf("flow manifest needs a full baseline commit and a checked date")
+	}
+	short := baseline[:8]
+	if !strings.Contains(subtitle, "main "+short) {
+		return fmt.Errorf("flow manifest subtitle does not name the baseline %s", short)
+	}
+	if hero := heroSVG.Find(artifact); hero != nil && !bytes.Contains(hero, []byte("main "+short)) {
+		return fmt.Errorf("rendered hero in %s does not name the baseline %s; regenerate it", flowHTML, short)
+	}
+	footer := "Snapshot <code>" + short + "</code> / " + checked + " UTC"
+	if !bytes.Contains(template, []byte(footer)) {
+		return fmt.Errorf("snapshot footer in %s does not match the manifest (%q)", flowTemplate, footer)
+	}
+	snapshot := "**Implementation snapshot:** `main` at `" + short + "`, inspected " + checked + " UTC"
+	if !strings.Contains(strings.Join(strings.Fields(string(guide)), " "), snapshot) {
+		return fmt.Errorf("snapshot line in %s does not match the manifest (%q)", flowGuide, snapshot)
+	}
+	return nil
+}
+
 func TestArchitectureFlowArtifactDrift(t *testing.T) {
 	chapters := `[{"id":"one"},{"id":"two"},{"id":"three"},{"id":"four"}]`
-	svg := `<svg data-archflow-hero="1"><metadata id="afh-chapters">` + html.EscapeString(chapters) +
-		`</metadata><g data-af-entity="node"/><g data-af-flow="edge"/></svg>`
-	template := "<html>" + heroToken + "</html>"
-	manifest := `{"entities":[{"id":"node","evidence":[{"path":"source.go","start_line":1,"end_line":2}]}],` +
+	svg := `<svg data-archflow-hero="1"><desc>Current runtime at main 0123abcd.</desc><metadata id="afh-chapters">` +
+		html.EscapeString(chapters) + `</metadata><g data-af-entity="node"/><g data-af-flow="edge"/></svg>`
+	template := "<html><span>Snapshot <code>0123abcd</code> / 2026-11-03 UTC</span>" + heroToken + "</html>"
+	manifest := `{"project":{"subtitle":"Current runtime at main 0123abcd.",` +
+		`"baseline":"0123abcd0123abcd0123abcd0123abcd0123abcd","checked":"2026-11-03"},` +
+		`"entities":[{"id":"node","evidence":[{"path":"source.go","start_line":1,"end_line":2}]}],` +
 		`"flows":[{"id":"edge"}],"chapters":` + chapters + `}`
+	guide := "**Implementation snapshot:** `main` at `0123abcd`, inspected\n2026-11-03 UTC.\n\n" +
+		"[Readme](../../README.md)\n[External](https://example.invalid)"
 	for _, fixture := range []struct {
 		name, file, before, after, problem string
 	}{
@@ -162,13 +202,20 @@ func TestArchitectureFlowArtifactDrift(t *testing.T) {
 		{"broken link", flowGuide, "../../README.md", "../../missing.md", "unresolved flow guide link"},
 		{"escaping link", flowGuide, "../../README.md", "../../../outside.md", "link escapes"},
 		{"code example", flowGuide, "[Readme]", "`[fake](missing.md)`\n\n[Readme]", ""},
+		{"short baseline", flowManifest, `"baseline":"0123abcd0123abcd0123abcd0123abcd0123abcd"`, `"baseline":"0123abcd"`, "full baseline commit"},
+		{"stale checked date", flowManifest, `"checked":"2026-11-03"`, `"checked":"2026-10-31"`, "snapshot footer"},
+		{"stale subtitle", flowManifest, "main 0123abcd.", "main 57461e49.", "subtitle does not name"},
+		{"stale rendered hero", flowHTML, "main 0123abcd.", "main 57461e49.", "rendered hero"},
+		{"stale footer", flowTemplate, "<code>0123abcd</code>", "<code>57461e49</code>", "snapshot footer"},
+		{"stale guide commit", flowGuide, "`0123abcd`", "`57461e49`", "snapshot line"},
+		{"stale guide date", flowGuide, "2026-11-03 UTC", "2026-10-31 UTC", "snapshot line"},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			files := fstest.MapFS{
 				flowManifest: {Data: []byte(manifest)},
 				flowTemplate: {Data: []byte(template)},
 				flowHTML:     {Data: []byte(strings.Replace(template, heroToken, svg, 1))},
-				flowGuide:    {Data: []byte("[Readme](../../README.md)\n[External](https://example.invalid)")},
+				flowGuide:    {Data: []byte(guide)},
 				"source.go":  {Data: []byte("first\nsecond\n")},
 				"README.md":  {Data: []byte("readme")},
 			}

@@ -14,11 +14,11 @@ specialist team landed in PRs #150, #152–#158, #162, #163 and #167
 Its roadmap amendments are applied to AGT-001 through AGT-004, WEB-001, AZ-001
 and the priority spine below. Delegation is experimental and off by default.
 
-**Local inference and operator UX:** Reconciled 2026-10-31 against `main`
-at `57461e49`, with OPS-001 PR 3. Local engine selection and app labels shipped
-in #169. OPS-001 is complete: #171 adds service `check-config`; #173 adds the
-host `turing` command for status, lifecycle, connection and validated
-configuration changes; OPS-001 PR 3 adds `turing setup`,
+**Local inference and operator UX:** Reconciled 2026-11-03 against `main`
+at `310dbb36`, after #175 (OPS-001 PR 3). Local engine selection and app
+labels shipped in #169. OPS-001 is complete: #171 adds service `check-config`;
+#173 adds the host `turing` command for status, lifecycle, connection and
+validated configuration changes; #175 adds `turing setup`,
 `turing engine detect | use | check` and the runtime's `check-engine`.
 OPS-002/003 remain pending. See the [current architecture and flows](architecture/system-flows.md) and
 [local inference engines](architecture/local-engines.md).
@@ -762,10 +762,10 @@ separate lifecycle, visibility and evaluation gates.
 
 #### OPS-001 - Host command for setup and operation
 
-- **Implementation status:** Shipped on `main` in #171, #173 and OPS-001 PR 3.
+- **Implementation status:** Shipped on `main` in #171, #173 and #175.
   #171 delivers `check-config` and safe argument handling in both services;
   #173 delivers the host `turing` command's `status`, lifecycle, `logs`,
-  `connect` and `config`, plus a CI Linux desktop build; PR 3 delivers guided
+  `connect` and `config`, plus a CI Linux desktop build; #175 delivers guided
   `setup`, `engine detect | use | check` and the runtime's `check-engine`, with
   the [local engines guide](architecture/local-engines.md). `setup` runs
   `scripts/init.sh` for provisioning, which stays non-interactive. The command
