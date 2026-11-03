@@ -74,7 +74,7 @@ func checkArchitectureFlowArtifacts(files fs.FS) error {
 	if len(model.Entities) == 0 || len(model.Flows) == 0 {
 		return fmt.Errorf("flow manifest needs entities and flows")
 	}
-	if err := checkFlowSnapshot(model.Project.Baseline, model.Project.Checked, model.Project.Subtitle, template, guide); err != nil {
+	if err := checkFlowSnapshot(model.Project.Baseline, model.Project.Checked, model.Project.Subtitle, template, artifact, guide); err != nil {
 		return err
 	}
 	if len(heroSVG.FindAll(artifact, -1)) != 1 || bytes.Count(template, []byte(heroToken)) != 1 {
@@ -151,15 +151,19 @@ func checkArchitectureFlowArtifacts(files fs.FS) error {
 }
 
 // checkFlowSnapshot keeps the one commit and date the artifacts were checked
-// against identical in the manifest, its subtitle, the template's footer and
-// the guide's snapshot line, so advancing one cannot leave another behind.
-func checkFlowSnapshot(baseline, checked, subtitle string, template, guide []byte) error {
+// against identical in the manifest, its subtitle, the rendered hero, the
+// template's footer and the guide's snapshot line, so advancing one cannot
+// leave another behind.
+func checkFlowSnapshot(baseline, checked, subtitle string, template, artifact, guide []byte) error {
 	if !fullSHA.MatchString(baseline) || !isoDate.MatchString(checked) {
 		return fmt.Errorf("flow manifest needs a full baseline commit and a checked date")
 	}
 	short := baseline[:8]
 	if !strings.Contains(subtitle, "main "+short) {
 		return fmt.Errorf("flow manifest subtitle does not name the baseline %s", short)
+	}
+	if hero := heroSVG.Find(artifact); hero != nil && !bytes.Contains(hero, []byte("main "+short)) {
+		return fmt.Errorf("rendered hero in %s does not name the baseline %s; regenerate it", flowHTML, short)
 	}
 	footer := "Snapshot <code>" + short + "</code> / " + checked + " UTC"
 	if !bytes.Contains(template, []byte(footer)) {
@@ -174,8 +178,8 @@ func checkFlowSnapshot(baseline, checked, subtitle string, template, guide []byt
 
 func TestArchitectureFlowArtifactDrift(t *testing.T) {
 	chapters := `[{"id":"one"},{"id":"two"},{"id":"three"},{"id":"four"}]`
-	svg := `<svg data-archflow-hero="1"><metadata id="afh-chapters">` + html.EscapeString(chapters) +
-		`</metadata><g data-af-entity="node"/><g data-af-flow="edge"/></svg>`
+	svg := `<svg data-archflow-hero="1"><desc>Current runtime at main 0123abcd.</desc><metadata id="afh-chapters">` +
+		html.EscapeString(chapters) + `</metadata><g data-af-entity="node"/><g data-af-flow="edge"/></svg>`
 	template := "<html><span>Snapshot <code>0123abcd</code> / 2026-11-03 UTC</span>" + heroToken + "</html>"
 	manifest := `{"project":{"subtitle":"Current runtime at main 0123abcd.",` +
 		`"baseline":"0123abcd0123abcd0123abcd0123abcd0123abcd","checked":"2026-11-03"},` +
@@ -201,6 +205,7 @@ func TestArchitectureFlowArtifactDrift(t *testing.T) {
 		{"short baseline", flowManifest, `"baseline":"0123abcd0123abcd0123abcd0123abcd0123abcd"`, `"baseline":"0123abcd"`, "full baseline commit"},
 		{"stale checked date", flowManifest, `"checked":"2026-11-03"`, `"checked":"2026-10-31"`, "snapshot footer"},
 		{"stale subtitle", flowManifest, "main 0123abcd.", "main 57461e49.", "subtitle does not name"},
+		{"stale rendered hero", flowHTML, "main 0123abcd.", "main 57461e49.", "rendered hero"},
 		{"stale footer", flowTemplate, "<code>0123abcd</code>", "<code>57461e49</code>", "snapshot footer"},
 		{"stale guide commit", flowGuide, "`0123abcd`", "`57461e49`", "snapshot line"},
 		{"stale guide date", flowGuide, "2026-11-03 UTC", "2026-10-31 UTC", "snapshot line"},
