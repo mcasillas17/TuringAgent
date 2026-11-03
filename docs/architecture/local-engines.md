@@ -1,9 +1,10 @@
 # Local inference engines
 
-**Status:** shipped (OPS-001 PR 3). Turing's local route runs on one engine on
-the machine that runs Turing: Ollama, the default, or any OpenAI-compatible
-server on that machine (`TURING_LOCAL_ENGINE=openai`), such as ds4, llama.cpp's
-`llama-server`, LM Studio, Lemonade or vLLM. This guide is what
+**Status:** shipped (#175, OPS-001 PR 3). Turing's local route runs on one
+engine on the machine that runs Turing: Ollama, the default, or any
+OpenAI-compatible server on that machine (`TURING_LOCAL_ENGINE=openai`), such
+as ds4, llama.cpp's `llama-server`, LM Studio, Lemonade or vLLM. This guide is
+what
 `./turing engine detect` and `./turing setup` point at: which engine suits a
 machine, where an engine must listen on Linux, what `./turing engine check`
 proves, and what an engine keeps. The designs are

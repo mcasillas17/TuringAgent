@@ -2,8 +2,8 @@
   "archflow_hero": 1,
   "project": {
     "title": "TuringAgent runtime",
-    "subtitle": "Current runtime at main 57461e49. The orchestrator owns durable truth; workers execute. Arrows name callers or update senders, not permission inheritance.",
-    "baseline": "57461e49cd9a3a96e693ec833886de7b112e525d",
+    "subtitle": "Current runtime at main 310dbb36. The orchestrator owns durable truth; workers execute. Arrows name callers or update senders, not permission inheritance.",
+    "baseline": "310dbb36b620afaf4d24714791979f70911f546d",
     "checked": "2026-10-31",
     "renderer": "rafaelolsr/archflow@40bff6a8ea632c545dbd308b2939ffdc1ff96d16"
   },

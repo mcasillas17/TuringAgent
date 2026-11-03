@@ -1,7 +1,7 @@
 # TuringAgent: current architecture and execution flows
 
-**Implementation snapshot:** `main` at `57461e49`, inspected 2026-10-31 UTC,
-plus OPS-001 PR 3. This is the shipped architecture, not a second roadmap. The
+**Implementation snapshot:** `main` at `310dbb36`, inspected 2026-11-03 UTC,
+after #175. This is the shipped architecture, not a second roadmap. The
 [canonical roadmap](../NORTH_STAR.md) owns feature status and future gates.
 
 Open [the animated runtime diagram](turing-flow.html) locally in a browser.
@@ -15,7 +15,7 @@ Mermaid diagrams below remain readable directly on GitHub.
 | --- | --- |
 | #171: orchestrator/runtime `check-config`, unknown-argument refusal, image support label | No database-backed startup validation inside the offline check |
 | #173: host `turing` status, lifecycle, logs, connect/key rotation, validated configuration | Guided setup and engine commands arrive in the next row |
-| OPS-001 PR 3: `turing setup`, `turing engine detect \| use \| check` and the runtime's `check-engine` | `check-engine` proves one engine's behavior, not model quality; no engine install or LAN engine |
+| #175: `turing setup`, `turing engine detect \| use \| check` and the runtime's `check-engine` | `check-engine` proves one engine's behavior, not model quality; no engine install or LAN engine |
 | #173: Flutter Linux debug build in CI | No proof of a running desktop/keyring from a compile alone |
 | #172: team/client/engine documentation reconciliation | No modern MCP protocol implementation |
 

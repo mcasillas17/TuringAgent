@@ -13,7 +13,7 @@ This is a **multi-module** Go repo. `go build -tags sqlite_fts5 ./...` / `go tes
 - `turing-backend/mcp-files/go.mod` — sandboxed file tools; has a `replace` back to root
 - `turing-backend/mcp-system/go.mod` — standalone system tools. The **shipped binary** is stdlib-only, and a test guards that (`TestTheShippedBinaryImportsOnlyTheStandardLibrary`); the module itself now has a `go.sum`, because its MCP conformance tests pin the official Go SDK. CI has its own `mcp-system` job, but the root `./...` never reaches it, so run it explicitly when you touch it
 
-**All three modules declare `go 1.26.0`.** `mcp-files` was raised by its `golang.org/x/text` v0.42.0 dependency, which requires Go 1.26; root and `mcp-system` follow the shared module floor. A local toolchain below 1.26 cannot build any of them directly — with the default `GOTOOLCHAIN=auto` Go selects a conforming toolchain (using one already present, downloading `go1.26.0` otherwise) instead of failing. Install **Go 1.26 or newer** and the question does not arise locally. CI pins `go-version: "1.26.x"` on all five jobs; `ci_test.go` asserts every job's pin.
+**All three modules declare `go 1.26.0`.** `mcp-files` was raised by its `golang.org/x/text` dependency, which has required Go 1.26 since v0.42.0; root and `mcp-system` follow the shared module floor. A local toolchain below 1.26 cannot build any of them directly — with the default `GOTOOLCHAIN=auto` Go selects a conforming toolchain (using one already present, downloading `go1.26.0` otherwise) instead of failing. Install **Go 1.26 or newer** and the question does not arise locally. CI pins `go-version: "1.26.x"` on all five jobs; `ci_test.go` asserts every job's pin.
 
 ## Toolchain versions (what is pinned, and where)
 

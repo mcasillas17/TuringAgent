@@ -372,8 +372,9 @@ your `PATH` to run it from anywhere. `./turing help` prints the full usage.
 - **A key stays with its server.** A change that points the local engine or
   the remote model at another server, without giving a key for it, removes the
   saved key, so it is never sent there, and says which command sets a new one.
-  The same address written another way, such as `localhost` for
-  `host.docker.internal`, is the same server.
+  Ollama takes no key, so switching the local engine to Ollama removes a saved
+  engine key without that notice. The same address written another way, such
+  as `localhost` for `host.docker.internal`, is the same server.
 
 The command never opens the database. It talks to the orchestrator only as a
 client, for its health check.
