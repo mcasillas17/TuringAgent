@@ -747,7 +747,9 @@ separate lifecycle, visibility and evaluation gates.
 - **Scope:** Durable idempotent delivery keyed by approval, run, assignment,
   attempt, and state version.
 - **Acceptance:** Loss/reconnect/duplicate tests resume only the matching waiter
-  and never execute twice.
+  and never execute twice; a newer state version supersedes an in-flight
+  delivery, and a deferral is not a failed attempt
+  (design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md)).
 - **Dependencies:** TUR-009 and TUR-011.
 
 #### TUR-014 - Provider usage and actionable health
@@ -757,7 +759,15 @@ separate lifecycle, visibility and evaluation gates.
 - **Scope:** Provider timing/usage, structured readiness, and local metrics with
   no sensitive content.
 - **Acceptance:** Health degrades for unavailable required dependencies;
-  provider-reported usage remains distinct from estimates and cost.
+  provider-reported usage remains distinct from estimates and cost. Each
+  component has one writer, reports an error only after three consecutive
+  failures, or at once for a definitive failure such as a watch's
+  401, and clears it only on its own success, says whether a restart may
+  fix it or a person must, reports only the owner's own acts as paused (a
+  watch suspended by a source failure is an error a person must fix, even
+  while quiet is on), and
+  never shows peer or provider text
+  (design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md)).
 - **Dependencies:** TUR-018.
 
 #### OPS-001 - Host command for setup and operation
@@ -797,7 +807,9 @@ separate lifecycle, visibility and evaluation gates.
   `.env`; host-owned settings (engine, ports, secrets) stay with OPS-001.
 - **Acceptance:** Each setting has one home; a change applies without a
   restart or reports that it cannot; `turing config` and the app never
-  disagree.
+  disagree; a save is compare-and-set on its group's revision inside the write
+  transaction, so a stale client changes nothing, and a no-op save writes
+  nothing (design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md)).
 - **Dependencies:** OPS-001.
 
 #### OPS-003 - Profile and skill editors
@@ -808,7 +820,10 @@ separate lifecycle, visibility and evaluation gates.
   orchestrator, reusing SKL-002's staging, diff and install-disabled path for
   skills, and the change to the read-only `/team` mount's threat model.
 - **Acceptance:** An authority change still requires a fresh grant; no agent
-  path can write a profile or a skill.
+  path can write a profile or a skill; a save is compare-and-set on the content
+  hash the editor read; a seeded profile still at an old default is shown its
+  updated default and never overwritten unasked
+  (design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md)).
 - **Dependencies:** OPS-002 and SKL-002.
 
 #### TUR-025 - Fence tool authorization cancellation
@@ -847,6 +862,82 @@ separate lifecycle, visibility and evaluation gates.
   as the live timeline.
 - **Dependencies:** TUR-009 and TUR-011.
 
+#### TUR-026 - Revalidate frozen grants at re-entry
+
+- **Status:** Proposed; not started.
+- **Outcome:** After the owner revokes or narrows a grant, a run's frozen
+  authority only narrows or ends, and an automation's allowlist bounds every
+  tool its runs call.
+- **Scope:** Re-read the automation and its allowlist at every unattended
+  tool call, at the beacon and again at registered-MCP dispatch, and inside
+  the transaction that commits an unattended approval;
+  cancel delegation children whose profile is disabled, re-granted or changed;
+  refuse an identical consumed mutation after a lease-loss retry; make the
+  allowlist a ceiling on safe tools too, while a memory or team tool is
+  refused without failing the run, as today. Design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md).
+- **Acceptance:** Deleting, disabling or narrowing an automation blocks its
+  run's next tool call, reads included, with an audit row; a revocation
+  between preview and commit leaves the approval unapproved; a child whose
+  profile no longer qualifies never reaches a worker; an unlisted safe tool
+  fails the run visibly; a direct registered-MCP call that skipped the
+  beacon reaches no server for an unlisted or revoked tool, and fails the
+  run with the same audit row, committed with the failure; a call refused
+  at entry spends no approval, and a revocation after the entry check and
+  before consumption is refused at dispatch with the approval spent and
+  nothing sent.
+- **Dependencies:** None.
+
+#### TUR-027 - Attended work first
+
+- **Status:** Proposed; not started.
+- **Outcome:** An owner's turn is never queued behind work nobody asked for.
+- **Scope:** Claim attended pending jobs before unattended ones through an
+  index-bounded first probe and a write-once `jobs.unattended` flag, with one
+  definition of unattended work. Concurrency is unchanged. Design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md).
+- **Acceptance:** An automation job queued before a chat job is claimed
+  after it; session turn order is unchanged; with 10,000 unattended jobs
+  pending, the attended probe visits no row; every enqueue path that exists
+  when it ships, and the backfilled automation jobs, carry the flag the one
+  definition gives, and each later unattended path (PRO-001's event fire and
+  assessor) is tested in the slice that adds it.
+- **Dependencies:** None.
+
+#### TUR-028 - Owner quiet switch
+
+- **Status:** Proposed; not started.
+- **Outcome:** The owner stops all new unattended work with one switch,
+  without a restart.
+- **Scope:** One owner-only, audited, persisted setting that gates scheduled
+  fires, watch polls, assessments and automatic watch fires; turning it on
+  fences unattended claims at once and cancels queued unattended runs and
+  pending automatic fires in bounded batches, and an unattended run that
+  would be requeued while quiet, on any path back to the queue, is
+  cancelled instead; no run pause state. Design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md).
+- **Acceptance:** While quiet, nothing unattended starts and no watch sends a
+  request, and a poll already running stops; running runs continue; no queue-wait, consent or approval clock
+  moves; afterwards each automation fires at most once and nothing held
+  starts unattended work; only the owner can set it, and a write from a
+  stale view of it changes nothing.
+- **Dependencies:** TUR-027.
+
+#### UX-002 - Needs-you queue
+
+- **Status:** Proposed; not started.
+- **Outcome:** The owner sees in one place everything that waits on them,
+  across conversations.
+- **Scope:** An orchestrator-computed, owner-only list of pending approvals,
+  delegation consents, blocked automations and suspended watches, retryable
+  deletions and watch proposals, with a closed first-match stage table, a
+  content-free refresh hint, and a Dismiss bound to one automation failure.
+  Design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md).
+- **Acceptance:** Every qualifying condition maps to exactly one row; the
+  badge equals the list it opens; opening the list reads no approval
+  details; a row leaves when its condition ends or the owner dismisses that
+  occurrence, never by age; approvals, consents and deletions cannot be
+  dismissed.
+- **Dependencies:** TUR-026a and TUR-026d (their block codes raise stage 3
+  rows); PRO-001 adds its rows.
+
 ### Workstream B - Measurable personal intelligence
 
 #### EVAL-001 - End-to-end personal-agent benchmark
@@ -855,7 +946,11 @@ separate lifecycle, visibility and evaluation gates.
 - **Scope:** Scenario fixtures for tool selection, consent, abstention,
   personalization, channel isolation, latency, and small-model recovery.
 - **Acceptance:** Reports separate capability, safety, privacy, and latency;
-  no score can hide a privacy failure behind higher task success.
+  no score can hide a privacy failure behind higher task success. A
+  deterministic tier (EVAL-001a) checks each role's offered tools, schema
+  limits, required framings and prompt bytes in CI with no model call, and
+  the proactive-intake, delegation-fidelity and ambiguous-brief scenarios
+  come from the [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md) design.
 - **Dependencies:** TUR-010, TUR-021, and MEM-003.
 
 #### MEM-004 - Structured one-call recall
@@ -981,7 +1076,9 @@ separate lifecycle, visibility and evaluation gates.
 - **Scope:** Raise concurrency above one in deterministic load fixtures and
   record claim, heartbeat, cancellation, recovery, and transaction metrics.
 - **Acceptance:** Thresholds are documented; failures identify the violated
-  budget; no broker is introduced without measured evidence.
+  budget; no broker is introduced without measured evidence; an attended
+  reserve slot is measured on the reference machine before the default of one
+  changes (design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md)).
 - **Dependencies:** TUR-010 and TUR-011.
 
 #### AGT-001 - Second specialized agent
@@ -1008,7 +1105,11 @@ separate lifecycle, visibility and evaluation gates.
 - **Scope:** Parent/child run identity, budgets, cancellation propagation,
   artifact return, and failure aggregation.
 - **Acceptance:** A parent can spawn, observe, cancel, and collect a child;
-  children cannot inherit undeclared tools, egress, memory, or approval.
+  children cannot inherit undeclared tools, egress, memory, or approval. Only
+  if EVAL-001's delegation-fidelity scenario fails, a follow-up adds the
+  owner's own message to a child's brief as framed, bounded data, never any
+  model-written or third-party text
+  (design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md)).
 - **Status:** Shipped behind `TURING_AGENT_TEAM_ENABLED`, default `false`
   (PRs #152–#158, #162, #163 and #167), including child-owned egress consent
   per task. The flag defaults to on only after EVAL-001's delegation scenarios
@@ -1088,7 +1189,10 @@ separate lifecycle, visibility and evaluation gates.
   orchestrator-owned egress tools for reviewed remote destinations, and
   complete cleanup.
 - **Acceptance:** Escape, undeclared network, undeclared files, credential
-  access, and stale-process fixtures fail closed; stdio remains unsupported.
+  access, and stale-process fixtures fail closed; stdio remains unsupported; a
+  sandbox's environment is built from an empty allowlist of declared names,
+  and known credential variables and git credential paths are fixtures that
+  must be absent (design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md)).
 - **Dependencies:** CON-001, TUR-014, and TUR-021.
 
 #### XTOOL-002 - Generated tool candidates
@@ -1131,7 +1235,10 @@ separate lifecycle, visibility and evaluation gates.
   approvals, delivery, channel-specific retention bounds, revocation, incident
   response, and group-chat non-scope.
 - **Acceptance:** Adversarial fixtures exist before the first adapter; product
-  copy names platform custody and prohibited claims.
+  copy names platform custody and prohibited claims; unsolicited sends come
+  only from a closed, host-owned set of reasons, never from progress or a
+  model's judgement, with no fallback destination
+  (design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md)).
 - **Dependencies:** SEC-001 and MEM-017. TUR-017 later unifies channel records
   with the product-wide retention system; this task must define safe bounded
   channel defaults before any adapter ships.
@@ -1152,7 +1259,10 @@ separate lifecycle, visibility and evaluation gates.
 - **Scope:** Platform event identity, idempotent enqueue, outbound delivery
   ledger, bounded retries, and visible ambiguity.
 - **Acceptance:** Crash-before-send, crash-mid-send, duplicate update, reorder,
-  and expiry fixtures have deterministic outcomes.
+  and expiry fixtures have deterministic outcomes; a later message is a new
+  run with a new disclosure; an older attempt cannot remove a newer payload;
+  `gone` comes only from a typed platform answer; queued is never shown as
+  delivered (design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md)).
 - **Dependencies:** CHN-001, TUR-001, and TUR-009.
 
 #### CHN-TG-001 - Telegram direct-message adapter
@@ -1371,6 +1481,24 @@ separate lifecycle, visibility and evaluation gates.
   separate; workspace content remains untrusted.
 - **Dependencies:** INT-002, CON-004, MEM-017, and TUR-021.
 
+#### INT-009 - Bounded, navigable GitHub reads
+
+- **Status:** Proposed; not started.
+- **Outcome:** GitHub reads give the model the fields it needs and can reach
+  past the first page.
+- **Scope:** Projected rows for `github.list_issues` and `github.get_issue`,
+  and page and body-slice continuation. Design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md).
+- **Acceptance:** Each list request asks GitHub only for as many rows as
+  one frame is guaranteed to hold, so the frame never cuts a result, no
+  page is fetched twice, and following the continuation reaches every row;
+  a page projects completely without the raw answer being held; every page
+  and slice passes the same run, selection, credential and egress gates as
+  the first; no model-supplied URL is followed; an over-long or malformed
+  answer is an error, never a projected prefix; a continuation names the
+  page size actually requested; a later body slice is refused when the
+  body has changed since the first.
+- **Dependencies:** None.
+
 ### Workstream H - Ownership, retention, and encrypted longevity
 
 #### TUR-015 - Session and memory export
@@ -1387,8 +1515,16 @@ separate lifecycle, visibility and evaluation gates.
 - **Scope:** WAL-aware backup, restore verification, migration checksums, and
   operator recovery.
 - **Acceptance:** Restored state passes invariants; altered applied migrations
-  are detected; secrets are not bundled accidentally.
-- **Dependencies:** TUR-015.
+  are detected; secrets are not bundled accidentally; a database written by a
+  newer build is refused before any row, schema or skills write; an upgrade can be rehearsed on a
+  restored backup copy with no network, bound to that copy alone and
+  unable to reach the live database or skills, and a copy a killed
+  rehearsal leaves is removed by the next `./turing` command or, while
+  Docker cannot confirm its container gone, named by every one
+  (design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md)).
+- **Dependencies:** TUR-015; TUR-016a (newer-build refusal) has none;
+  TUR-016c (rehearsal) refuses encrypted backups until TUR-022 defines a key
+  channel for its check.
 
 #### TUR-017 - Bounded retention
 
@@ -1410,7 +1546,9 @@ separate lifecycle, visibility and evaluation gates.
   rollback, and limitations.
 - **Acceptance:** The approved design's encryption, migration, restore,
   inventory, key-loss, and retirement tests pass without claiming per-session
-  forensic erasure.
+  forensic erasure. It defines how a one-off offline check receives the
+  database key, so TUR-016c can rehearse an upgrade on an encrypted backup
+  (design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md)).
 - **Dependencies:** TUR-004 and TUR-016. The design gate is shipped in PR #85.
 
 ### Workstream I - Evidence-gated modalities and prospective memory
@@ -1451,9 +1589,89 @@ separate lifecycle, visibility and evaluation gates.
 - **Scope:** Task/reminder domain, due times, timezone, completion, snooze,
   automation link, delivery targets, and approval boundaries.
 - **Acceptance:** Missed delivery remains visible; timezone changes are
-  deterministic; reminders cannot smuggle unattended tool permission.
+  deterministic; reminders cannot smuggle unattended tool permission; a
+  reminder is sent once per state version, and an automation's result is
+  pushed only as its owner setting allows
+  (design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md)).
 - **Dependencies:** TUR-010, the shipped automation substrate, MOB-001, and
   CHN-002 for channel delivery.
+
+#### PRO-001 - Observe-first proactive intake
+
+- **Status:** Proposed; not started.
+- **Outcome:** Turing notices events on watched GitHub repositories and
+  proposes work, and starts work unattended only where the owner explicitly
+  allows it.
+- **Scope:** Owner-authored watches, disabled by default, over repository
+  issue and comment streams; a deterministic gate; event automations with
+  deterministic predicates; a previewed, two-step Start in a limited thread
+  session; an optional local, observe-only assessor; and automatic starts
+  behind a server flag and an audited acknowledgement. Design: [superagent adoption](superpowers/specs/2026-11-01-turing-superagent-adoption-design.md).
+- **Acceptance:** Nothing polls by default; refused events store no content;
+  stranger text never reaches search, recall or another conversation and is
+  withdrawn within 30 days, except that a conversation the owner explicitly
+  keeps as a normal chat keeps its whole run history, as its dialog says; no
+  thread-session turn carries the owner's pinned persona or profile or any
+  owner skill, even one named in event text; text an author edits out, or
+  a thread the owner dismisses, while an assessment waits never reaches a
+  model, and an assessment of a rule the owner edits meanwhile records
+  nothing; an assessment runs with an enforced empty tool set and no team,
+  so a tool or delegation call from it, made directly to the orchestrator
+  too, is refused before any server, vault or profile file is read and
+  spends no approval, and its job, like an automatic run's, is claimed
+  after the owner's turns; a
+  detectably edited item (any item changed before Turing first reads it
+  counts), a label match, an event on a dismissed thread, an
+  event first read more than 15 minutes after it was created (after a quiet
+  period, a suspension or a backlog) and any rule with an assessor
+  instruction never start unattended work; listed actors and a rule's
+  actor terms are matched by GitHub's numeric account id, resolved when
+  the owner adds them, so an account that claims a listed account's former
+  login is never listed; a previewed Start runs only bundled,
+  sandbox-confined tools and the runtime's own skill loaders, never a
+  remote or third-party local MCP server's;
+  no polled item is lost when the
+  list shifts between page requests; an automatic run gets only allowlisted unattended read
+  tools and is stopped at its next tool call once revoked, including when
+  its event leaves the watch's scope or its rule gains an assessor
+  instruction or a label term; an edit Turing cannot detect (made in the
+  second the item was created, before Turing first reads it) is disclosed when the owner enables automatic starts
+  and starts at most such a read-only run; a watch is suspended and reported
+  as needing a person, never as paused, at once on a 401, a redirect on a
+  stream request (unexpected: every request names the repository by the
+  numeric id resolved when it was added, so a rename never interrupts a
+  watch and a reused old name never substitutes another repository; no
+  redirect is ever followed, and one on a label lookup only skips that
+  comment) or a revoked or changed
+  connection, or on the third
+  non-rate-limit 403, 404 or 410 without an intervening answered poll of
+  that stream (one with no failure and at least one 200 or 304; a request
+  the poll deadline cut, or a stream it never reached, counts as neither), while
+  any 429, with or without rate-limit headers, is rate limiting: it backs
+  off until the given reset or retry-after, or for at least a minute when
+  neither is given, with no failure counted, and 5xx, network and
+  malformed-response failures, including a missed request deadline, keep
+  retrying with no suspension and no needs-person row, and any three failed
+  polls in a row show an error; disabling, deleting or suspending a watch,
+  editing its scope, revoking or changing its connection, or turning quiet
+  on, stops a poll in flight before its next request, and the stopped poll
+  commits no event, state or page row, its only possible writes being the
+  rotation index, only when it changes, and the suspension when that is the
+  cause, while a poll that outlives an enable, a disable or a scope edit
+  (a repository removed and re-added included) commits nothing at all; no poll runs longer than ten minutes, so a
+  slow watch delays another's poll by a bounded time, and each poll starts
+  at the repository after the last one a poll began, even a stopped one
+  (at the first after a scope edit, which seeds an added repository at the
+  edit's time so nothing earlier is gated, and refuses the save when the
+  added repository's id cannot be read through the watch's connection or
+  repeats one already in the scope), reading
+  its issue stream before its comment stream, so a watch's slow
+  repositories never starve its others and a stream the deadline leaves
+  unreached shows as behind; deleting a
+  watch stops it at once and keeps its thread sessions out of search, recall
+  and new turns until each is withdrawn.
+- **Dependencies:** TUR-026, TUR-027, TUR-028 and UX-002; INT-009a, whose
+  streamed decoder the poller reuses; EVAL-001 before automatic starts.
 
 #### UX-001 - Learning journey and explanation
 
