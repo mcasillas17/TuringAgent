@@ -43,6 +43,16 @@ func Approve(t *testing.T, s Service, ctx context.Context, req *turingv1.Approve
 // service/repository logic; only the cross-module filesystem read is simulated.
 func Endpoint(t *testing.T, s interface{ SetPreviewEndpoint(string) }) {
 	t.Helper()
+	EndpointWithHook(t, s, nil)
+}
+
+// EndpointWithHook is Endpoint with a barrier: afterRead runs once the
+// simulated file has been read and its preview built, before the response is
+// written. The orchestrator is then waiting on this call and holds no database
+// transaction, so the hook can commit a change that lands after the preview
+// refresh and before anything the caller does with it.
+func EndpointWithHook(t *testing.T, s interface{ SetPreviewEndpoint(string) }, afterRead func(approvalpreview.Request)) {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req approvalpreview.Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -81,6 +91,9 @@ func Endpoint(t *testing.T, s interface{ SetPreviewEndpoint(string) }) {
 			}
 			file.UnifiedDiff = approvalpreview.Diff(file.BeforeText, after)
 			snap.File = file
+		}
+		if afterRead != nil {
+			afterRead(req)
 		}
 		_ = json.NewEncoder(w).Encode(snap)
 	}))
