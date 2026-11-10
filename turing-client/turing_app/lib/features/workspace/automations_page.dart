@@ -192,8 +192,8 @@ class _AutomationsPageState extends State<AutomationsPage> {
         title: Text('Delete "${automation.name}"?'),
         content: const Text(
           'It stops running from now on. The conversation it produced stays '
-          'where it is, and a run already underway finishes with the '
-          'permission it was given when it started.',
+          'where it is. A run already underway loses its permission: it '
+          'stops the next time it tries to use a tool.',
         ),
         actions: [
           TextButton(

@@ -45,6 +45,16 @@ var (
 	// tool. Delegation is offered only to attended runs: nobody is present on
 	// an unattended one to see what a specialist was asked to do.
 	ErrAutomationTeamToolUnsupported = errors.New("team tools are not available to automations")
+	// ErrAutomationGrantRevoked is an unattended run's consent withdrawn after
+	// it fired: its automation was deleted or disabled, or the pair it is
+	// about to use has left the automation's current allowlist.
+	ErrAutomationGrantRevoked = errors.New("automation grant revoked")
+	// ErrAutomationToolNotAllowlisted is a pair the run's frozen grant never
+	// held. Adding it to the automation afterwards does not add it here.
+	ErrAutomationToolNotAllowlisted = errors.New("tool is not on the automation's allowlist")
+	// ErrRunNotUnattended is a run no automation started, so it has no grant
+	// an unattended approval could rest on.
+	ErrRunNotUnattended = errors.New("run was not started by an automation")
 )
 
 // AutomationTool names a tool by the same (server, tool) pair the
@@ -89,14 +99,21 @@ type AutomationInput struct {
 
 // AutomationRunGrant is what an unattended run was permitted to do, as frozen
 // at the moment it fired.
+//
+// The frozen set only ever narrows: adding a tool to the automation later
+// adds nothing to a run already underway, while deleting or disabling the
+// automation, or removing a pair from its allowlist, withdraws that consent at
+// the run's next tool call (UnattendedGrantState).
 type AutomationRunGrant struct {
 	AutomationID   string
 	AutomationName string
 	AllowedTools   []AutomationTool
 }
 
-// Allows answers the only question the tool-policy path asks of it. There is
-// no wildcard branch, and adding one would have to be written here on purpose.
+// Allows is the frozen half of an unattended run's grant check: whether the
+// run was ever granted the pair. UnattendedGrantState.Revoked is the current
+// half. There is no wildcard branch, and adding one would have to be written
+// here on purpose.
 func (g AutomationRunGrant) Allows(serverName string, toolName string) bool {
 	for _, tool := range g.AllowedTools {
 		if tool.ServerName == serverName && tool.ToolName == toolName {
@@ -365,9 +382,16 @@ func (r *Repository) SetAutomationEnabled(ctx context.Context, automationID stri
 	return automation, nil
 }
 
-// DeleteAutomation stops future fires. It deliberately does not touch a run
-// already underway, or the conversation the automation produced: the record of
-// what it did while nobody was watching outlives the schedule that caused it.
+// DeleteAutomation stops future fires and withdraws the consent of any run
+// still underway. It deliberately keeps that run, its automation_runs record
+// and the conversation the automation produced: the record of what it did
+// while nobody was watching outlives the schedule that caused it. What the run
+// loses is its authority: its next tool call finds the automation gone and
+// fails with automation_grant_revoked (UnattendedGrantState).
+//
+// This reverses the choice recorded in migration 0009's comment on
+// automation_runs ("does not retract consent already given to a run
+// underway"). The migration stays as applied; this comment is current.
 func (r *Repository) DeleteAutomation(ctx context.Context, automationID string) error {
 	result, err := r.db.ExecContext(ctx, `DELETE FROM automations WHERE id = ?`, automationID)
 	if err != nil {
@@ -806,6 +830,84 @@ func (r *Repository) GetAutomationRunGrant(ctx context.Context, runID string) (A
 		return AutomationRunGrant{}, false, err
 	}
 	return grant, true, nil
+}
+
+// UnattendedGrantState is an unattended run's frozen grant read beside the
+// automation as it stands now, for one (server, tool) pair.
+type UnattendedGrantState struct {
+	Grant AutomationRunGrant
+	// AutomationActive is false when the automation is disabled, and when it
+	// has been deleted: the run's automation_runs row has no foreign key and
+	// outlives it.
+	AutomationActive bool
+	// PairAllowedNow is whether the pair is on the automation's current
+	// allowlist, as opposed to the frozen one in Grant.
+	PairAllowedNow bool
+}
+
+// Revoked reports whether the owner has withdrawn consent this run could
+// still be relying on for the pair: the automation is gone or disabled, which
+// ends the run's authority over every tool, or the pair was frozen into the
+// grant and has since left the current allowlist.
+//
+// It never widens. A pair the frozen grant never held is not revoked here,
+// whatever the current allowlist says; Grant.Allows refuses it on its own.
+func (s UnattendedGrantState) Revoked(serverName string, toolName string) bool {
+	if !s.AutomationActive {
+		return true
+	}
+	return s.Grant.Allows(serverName, toolName) && !s.PairAllowedNow
+}
+
+// Check is the whole grant check for pre-approving the pair:
+// ErrAutomationGrantRevoked when the owner has withdrawn the consent,
+// ErrAutomationToolNotAllowlisted when the frozen grant never held the pair,
+// and nil when the run may be pre-approved for it.
+func (s UnattendedGrantState) Check(serverName string, toolName string) error {
+	if s.Revoked(serverName, toolName) {
+		return ErrAutomationGrantRevoked
+	}
+	if !s.Grant.Allows(serverName, toolName) {
+		return ErrAutomationToolNotAllowlisted
+	}
+	return nil
+}
+
+// GetUnattendedGrantState reads a run's frozen grant and its automation's
+// current state for one pair, in one statement: the automation_runs primary
+// key, which misses for an attended run (found=false), then the automations
+// and automation_allowed_tools primary keys.
+func (r *Repository) GetUnattendedGrantState(ctx context.Context, runID string, serverName string, toolName string) (UnattendedGrantState, bool, error) {
+	return unattendedGrantState(ctx, r.db, runID, serverName, toolName)
+}
+
+func unattendedGrantState(ctx context.Context, q rowQuerier, runID string, serverName string, toolName string) (UnattendedGrantState, bool, error) {
+	var state UnattendedGrantState
+	var toolsJSON string
+	err := q.QueryRowContext(ctx, `
+		SELECT ar.automation_id, ar.automation_name, ar.allowed_tools_json,
+			COALESCE(a.enabled, 0) = 1,
+			EXISTS(
+				SELECT 1 FROM automation_allowed_tools t
+				WHERE t.automation_id = ar.automation_id AND t.server_name = ? AND t.tool_name = ?
+			)
+		FROM automation_runs ar
+		LEFT JOIN automations a ON a.id = ar.automation_id
+		WHERE ar.run_id = ?
+	`, serverName, toolName, runID).Scan(
+		&state.Grant.AutomationID, &state.Grant.AutomationName, &toolsJSON,
+		&state.AutomationActive, &state.PairAllowedNow,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return UnattendedGrantState{}, false, nil
+	}
+	if err != nil {
+		return UnattendedGrantState{}, false, err
+	}
+	if err := json.Unmarshal([]byte(toolsJSON), &state.Grant.AllowedTools); err != nil {
+		return UnattendedGrantState{}, false, err
+	}
+	return state, true, nil
 }
 
 const automationDueSelect = `

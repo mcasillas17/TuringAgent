@@ -477,13 +477,52 @@ func (s *Server) notifyPostCommit(approval repository.ApprovalRecord, approvalSt
 	cancelNotify()
 }
 
+// errAutomationGrantRevoked is how GrantUnattendedApproval refuses a grant the
+// owner has withdrawn. It answers as a gRPC PermissionDenied like the other
+// refusals, and also matches repository.ErrAutomationGrantRevoked under
+// errors.Is, which is what lets the runtime fail the run as
+// automation_grant_revoked rather than the generic automation_approval_failed.
+var errAutomationGrantRevoked error = automationGrantRevokedError{}
+
+type automationGrantRevokedError struct{}
+
+func (automationGrantRevokedError) Error() string {
+	return "automation grant revoked"
+}
+
+func (automationGrantRevokedError) GRPCStatus() *status.Status {
+	return status.New(codes.PermissionDenied, "automation grant revoked")
+}
+
+func (automationGrantRevokedError) Unwrap() error {
+	return repository.ErrAutomationGrantRevoked
+}
+
+// unattendedGrantError maps the repository's refusals of an unattended grant
+// to what GrantUnattendedApproval reports; anything else is an approval error
+// like any other.
+func unattendedGrantError(err error) error {
+	switch {
+	case errors.Is(err, repository.ErrAutomationGrantRevoked):
+		return errAutomationGrantRevoked
+	case errors.Is(err, repository.ErrAutomationToolNotAllowlisted):
+		return status.Error(codes.PermissionDenied, "tool is not on the automation's allowlist")
+	case errors.Is(err, repository.ErrRunNotUnattended):
+		return status.Error(codes.PermissionDenied, "run was not started by an automation")
+	case errors.Is(err, repository.ErrUnattendedApprovalUnrecorded):
+		return status.Error(codes.Internal, "unattended approval could not be recorded")
+	}
+	return mapApprovalError(err)
+}
+
 // GrantUnattendedApproval approves a pending approval on the strength of an
 // automation's allowlist rather than a person deciding in the moment.
 //
 // It deliberately takes the SAME path a human approval takes:
 // signApprovalToken mints the same short-lived HS256 token carrying the same
-// tool and args_hash, and ApproveApprovalWithEvent performs the same
-// pending -> approved transition and emits the same lifecycle event. mcp-files
+// tool and args_hash, and ApproveUnattendedApprovalWithEvent performs
+// ApproveApprovalWithEvent's own pending -> approved transition and emits the
+// same lifecycle event. mcp-files
 // verifies and consumes it exactly as before, so the token remains single-use
 // and bound to these arguments. What is weakened is who decided and when —
 // not what a decision is worth, and not the token.
@@ -497,6 +536,14 @@ func (s *Server) notifyPostCommit(approval repository.ApprovalRecord, approvalSt
 // automation's permissions by handing in an allowlist of its own, and a run
 // that is not an automation's has no grant to find, so it cannot be approved
 // through this door at all.
+//
+// It is read twice. Once up front, against the automation as it stands, so a
+// grant the owner has already withdrawn costs no preview I/O; and again in
+// the transaction that flips the approval (ApproveUnattendedApprovalWithEvent),
+// which is the check that binds: a revocation landing during the preview
+// refresh or the signing still refuses it. Either refusal for a withdrawn
+// grant is an error matching repository.ErrAutomationGrantRevoked, which the
+// runtime turns into the run's automation_grant_revoked failure.
 func (s *Server) GrantUnattendedApproval(ctx context.Context, approvalID string, serverName string, toolName string) error {
 	if approvalID == "" {
 		return status.Error(codes.InvalidArgument, "approval_id is required")
@@ -505,15 +552,15 @@ func (s *Server) GrantUnattendedApproval(ctx context.Context, approvalID string,
 	if err != nil {
 		return mapApprovalError(err)
 	}
-	grant, unattended, err := s.repo.GetAutomationRunGrant(ctx, approval.RunID)
+	state, unattended, err := s.repo.GetUnattendedGrantState(ctx, approval.RunID, serverName, toolName)
 	if err != nil {
 		return status.Error(codes.Internal, "read automation grant failed")
 	}
 	if !unattended {
-		return status.Error(codes.PermissionDenied, "run was not started by an automation")
+		return unattendedGrantError(repository.ErrRunNotUnattended)
 	}
-	if !grant.Allows(serverName, toolName) {
-		return status.Error(codes.PermissionDenied, "tool is not on the automation's allowlist")
+	if err := state.Check(serverName, toolName); err != nil {
+		return unattendedGrantError(err)
 	}
 	if approval.ToolName != toolName || approval.ServerName != serverName {
 		return status.Error(codes.FailedPrecondition, "approval does not match the tool being allowed")
@@ -543,38 +590,34 @@ func (s *Server) GrantUnattendedApproval(ctx context.Context, approvalID string,
 	if err != nil {
 		return mapApprovalError(err)
 	}
-	// Recorded BEFORE the token exists, and its failure returned rather than
-	// logged. Every other approval audits after the fact because a person
-	// watched themselves approve it; here the audit row is the only witness,
-	// so an unrecordable grant is not granted at all. Over-recording — a row
-	// for a grant that then failed to commit — is the safe direction, and the
-	// approvals table still says what actually happened.
-	recorded, err := s.audit.RecordForExistingRun(ctx, approval.RunID, "automation", grant.AutomationID, "approval.approved", approval.ApprovalID, map[string]any{
-		"toolName":       approval.ToolName,
-		"unattended":     true,
-		"automationId":   grant.AutomationID,
-		"automationName": grant.AutomationName,
-	})
-	if err != nil || !recorded {
-		return status.Error(codes.Internal, "unattended approval could not be recorded")
-	}
 	token, err := s.signApprovalToken(approval, previewBinding(details, scope.Generation))
 	if err != nil {
 		return err
 	}
-	transition, err := s.repo.ApproveApprovalWithEvent(ctx, approvalID, token, sql.NullString{}, "", details.PreviewHash)
-	if errors.Is(err, repository.ErrApprovalExpired) {
+	// The automation's approval.approved audit row is written inside this
+	// commit, not before it. That row is the only witness that nobody was
+	// asked, so an unrecordable grant is still not granted — the transaction
+	// rolls back — and a grant the commit refuses, a revocation included,
+	// leaves no row claiming an approval that never happened.
+	committed, err := s.repo.ApproveUnattendedApprovalWithEvent(ctx, approvalID, token, details.PreviewHash)
+	switch {
+	case errors.Is(err, repository.ErrApprovalExpired):
 		if _, expireErr := s.expireApproval(ctx, approvalID); expireErr != nil {
 			return mapApprovalError(expireErr)
 		}
 		return status.Error(codes.FailedPrecondition, "approval expired")
+	case err != nil:
+		return unattendedGrantError(err)
 	}
-	if err != nil {
-		return mapApprovalError(err)
+	// Already approved by a grant that raced this one: that grant wrote the
+	// audit row, the notice and the notification, and this one wrote nothing.
+	if !committed.Changed {
+		return nil
 	}
-	approved := transition.Approval
-	if transition.ApprovalEvent.EventID != "" {
-		s.publishEvent(transition.ApprovalEvent)
+	grant := state.Grant
+	approved := committed.Approval
+	if committed.ApprovalEvent.EventID != "" {
+		s.publishEvent(committed.ApprovalEvent)
 	}
 	// The approval event itself is byte-identical to a person's, so without
 	// this the conversation shows an approval card appearing and resolving

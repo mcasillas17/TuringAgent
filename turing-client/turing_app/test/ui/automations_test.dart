@@ -364,7 +364,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.textContaining('a run already underway finishes'),
+        find.textContaining('A run already underway loses its permission'),
         findsOneWidget,
       );
 

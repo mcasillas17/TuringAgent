@@ -558,8 +558,10 @@ func TestAutomationUsesFreshConversationWhenPreviousIsWithdrawing(t *testing.T) 
 	}
 }
 
-// The allowlist a run is judged against is the one that existed when it fired.
-// Widening it mid-run must not widen what that run may already be doing.
+// The frozen grant is the allowlist that existed when the run fired, and it
+// bounds the run: widening the automation mid-run must not widen what that
+// run may already be doing. (Narrowing does reach it; see
+// TestUnattendedGrantStateFollowsTheAutomationAsItStandsNow.)
 func TestTheRunGrantIsFrozenAtFireTime(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 
@@ -625,9 +627,11 @@ func TestAHandDrivenRunHasNoGrant(t *testing.T) {
 	}
 }
 
-// Deleting an automation stops future fires, and must not cascade the record
-// of what it already did out from under a run still executing.
-func TestDeletingAnAutomationLeavesAnInFlightRunItsGrant(t *testing.T) {
+// Deleting an automation stops future fires and keeps the record of what it
+// already did: the run's automation_runs row, with its frozen grant, has no
+// foreign key to cascade through. What the deletion now takes away is the
+// consent itself (TUR-026a): the run's next tool call finds it revoked.
+func TestDeletingAnAutomationKeepsItsRunsRecordButRetractsConsent(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 
 	automation, err := repo.CreateAutomation(ctx, AutomationInput{
@@ -645,12 +649,22 @@ func TestDeletingAnAutomationLeavesAnInFlightRunItsGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if got := countAutomationRuns(t, repo, ctx, automation.AutomationID); got != 1 {
+		t.Fatalf("automation_runs rows after delete = %d, want the run's record kept", got)
+	}
 	grant, found, err := repo.GetAutomationRunGrant(ctx, fire.RunID)
 	if err != nil || !found {
 		t.Fatalf("grant after delete = found %v err %v, want found", found, err)
 	}
-	if !grant.Allows("files", "files.create") {
-		t.Fatal("the in-flight run lost the consent it was already given")
+	if !grant.Allows("files", "files.create") || grant.AutomationName != "Digest" {
+		t.Fatalf("frozen grant after delete = %+v, want it unchanged", grant)
+	}
+	state, found, err := repo.GetUnattendedGrantState(ctx, fire.RunID, "files", "files.create")
+	if err != nil || !found {
+		t.Fatalf("grant state after delete = found %v err %v, want found", found, err)
+	}
+	if !state.Revoked("files", "files.create") {
+		t.Fatalf("grant state after delete = %+v, want the consent withdrawn", state)
 	}
 }
 
