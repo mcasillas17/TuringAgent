@@ -39,6 +39,8 @@ type fakeRoutes struct {
 	refuseTools bool
 	// dispatched and refreshed count the runtime nudges after a queue.
 	dispatched, refreshed int
+	// onCapabilities, when set, runs as a resolver reads the live models.
+	onCapabilities func()
 }
 
 func (f *fakeRoutes) DispatchPending(context.Context) error { f.dispatched++; return nil }
@@ -48,6 +50,9 @@ func (f *fakeRoutes) RefreshPendingRoutingState(context.Context, string) error {
 }
 
 func (f *fakeRoutes) ProviderCapabilities() map[turingv1.ModelProvider][]*turingv1.ModelCapability {
+	if f.onCapabilities != nil {
+		f.onCapabilities()
+	}
 	out := map[turingv1.ModelProvider][]*turingv1.ModelCapability{}
 	for _, model := range slices.Concat(f.older, f.models) {
 		out[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA] = append(out[turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA],
@@ -85,10 +90,11 @@ var builtinTools = []string{
 }
 
 type harness struct {
-	repo   *repository.Repository
-	root   string
-	routes *fakeRoutes
-	server *Server
+	repo     *repository.Repository
+	database *db.DB
+	root     string
+	routes   *fakeRoutes
+	server   *Server
 }
 
 func newHarness(t *testing.T) *harness {
@@ -105,7 +111,7 @@ func newHarness(t *testing.T) *harness {
 	root := t.TempDir()
 	repo.SetTeamStore(teamfiles.New(root))
 	routes := &fakeRoutes{models: []string{defaultModel}, tools: map[string][]string{defaultModel: builtinTools}}
-	h := &harness{repo: repo, root: root, routes: routes, server: New(repo, routes, defaultModel, true)}
+	h := &harness{repo: repo, database: database, root: root, routes: routes, server: New(repo, routes, defaultModel, true)}
 	h.server.SetMaxDelegationsPerRun(3)
 	h.registerTools(t,
 		repository.DiscoveredTool{ServerName: "files", ToolName: "files.read", SchemaJSON: `{}`, Policy: "safe"},

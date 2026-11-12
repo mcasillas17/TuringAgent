@@ -65,6 +65,24 @@ type Server struct {
 	// proves the bound and a test that is slow and flaky. Nil means the real
 	// clock; nothing outside this package can set it.
 	queueNow func() time.Time
+	// delegationAuthority resolves a delegated task's specialist from its
+	// profile file before the task is sent. Production wires the team
+	// service; with none wired, the claim's setting fence is the only check.
+	delegationAuthority DelegationAuthority
+}
+
+// DelegationAuthority says whether a delegated task's specialist still
+// resolves active, from its profile file, at the revision the task was
+// created under. The team service satisfies it with the resolver CallTeamTool
+// uses; it reads files, so it is called outside every lock and transaction.
+type DelegationAuthority interface {
+	DelegatedProfileActive(ctx context.Context, profileID, revision string) (bool, error)
+}
+
+// SetDelegationAuthority wires the profile check every delegated task passes
+// between its claim and its send.
+func (s *Server) SetDelegationAuthority(authority DelegationAuthority) {
+	s.delegationAuthority = authority
 }
 
 type approvalCreator interface {
@@ -1677,6 +1695,17 @@ func (s *Server) dispatchToWorker(
 			return workerCapabilitiesSupportRoute(capabilities, route)
 		},
 	)
+	if err == nil && job.JobID != "" {
+		withdrawn, withdrawErr := s.withdrawRevokedTask(ctx, workerID, job)
+		if withdrawn || withdrawErr != nil {
+			worker.mu.Lock()
+			worker.pendingClaims--
+			worker.mu.Unlock()
+			// The withdrawal may have joined a turn and queued its
+			// continuation, so dispatch starts over.
+			return false, false, withdrawErr == nil, withdrawErr
+		}
+	}
 	worker.mu.Lock()
 	worker.pendingClaims--
 	if err != nil {
@@ -1714,6 +1743,58 @@ func (s *Server) dispatchToWorker(
 		worker.mu.Unlock()
 		return false, false, false, errors.Join(ctx.Err(), s.releaseClaimedAssignment(claimedAssignment))
 	}
+}
+
+// withdrawRevokedTask checks a just-claimed delegated task against its
+// specialist's profile file, after the claim committed and before any worker
+// is sent it, outside every lock and transaction. A profile that no longer
+// resolves active at the task's revision withdraws the task as
+// profile_grant_revoked instead; one that cannot be resolved at all is
+// treated the same, because nothing then proves the task's authority. It
+// reports whether the task was withdrawn. A run that is not a task, or a
+// runtime with no authority wired, is never checked.
+func (s *Server) withdrawRevokedTask(ctx context.Context, workerID string, job repository.Job) (bool, error) {
+	if s.delegationAuthority == nil || job.DelegationProfileID == "" {
+		return false, nil
+	}
+	release := func() error {
+		return s.releaseClaimedAssignment(assignment{jobID: job.JobID, runID: job.RunID, attemptID: job.AssignmentAttemptID})
+	}
+	active, err := s.delegationAuthority.DelegatedProfileActive(ctx, job.DelegationProfileID, job.DelegationProfileRevision)
+	switch {
+	case ctx.Err() != nil:
+		// The dispatch ran out of time, not the profile, whatever the
+		// resolution made of it: the task goes back to the queue and is
+		// checked again on its next claim.
+		return true, errors.Join(ctx.Err(), release())
+	case err != nil:
+		log.Printf("runtime: resolve the specialist of task %s: %v; withdrawing it", job.RunID, err)
+	case active:
+		return false, nil
+	}
+	withdrawCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	result, err := s.repo.CancelUnsentRevokedDelegation(withdrawCtx, repository.Assignment{
+		JobID: job.JobID, RunID: job.RunID, WorkerID: workerID, AttemptID: job.AssignmentAttemptID,
+	})
+	if errors.Is(err, repository.ErrAssignmentFenced) {
+		// Something else ended the claim while the profile was read, such as
+		// the user cancelling the task; release whatever is left of it.
+		return true, release()
+	}
+	if err != nil {
+		return true, errors.Join(fmt.Errorf("withdraw task %s: %w", job.RunID, err), release())
+	}
+	// The claim's own events are durable already; publishing them first keeps
+	// each stream in order.
+	s.publishEvent(job.StartedEvent)
+	for _, event := range job.DelegationEvents {
+		s.publishEvent(event)
+	}
+	for _, event := range result.Events {
+		s.publishEvent(event)
+	}
+	return true, nil
 }
 
 // assignmentForClaim is the orchestrator's record of one claimed job.

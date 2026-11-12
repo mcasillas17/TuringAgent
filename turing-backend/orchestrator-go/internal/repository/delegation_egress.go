@@ -32,7 +32,11 @@ type DelegationEgress struct {
 	DelegationID   string
 	ChildSessionID string
 	ChildRunID     string
-	Model          string
+	// ProfileID and ProfileRevision are the specialist the task was created
+	// for, so consent is offered only while its profile is still that one.
+	ProfileID       string
+	ProfileRevision string
+	Model           string
 	// EgressTools are the tools waiting on consent, and SelectedTools those
 	// with the job's frozen set, sorted: the set a decision freezes.
 	EgressTools   []string
@@ -84,14 +88,15 @@ func pendingDelegationEgressTx(ctx context.Context, tx *sql.Tx, delegationID str
 	var egress DelegationEgress
 	var toolsJSON, consent, status, payloadJSON string
 	err := tx.QueryRowContext(ctx, `
-		SELECT d.id, d.child_session_id, d.child_run_id, child.model_name,
+		SELECT d.id, d.child_session_id, d.child_run_id, d.profile_id, d.profile_revision, child.model_name,
 			d.egress_tools_json, d.egress_consent, d.egress_required, child.status, job.payload_json
 		FROM delegations d
 		JOIN sessions parent ON parent.id = d.parent_session_id AND parent.deletion_state = 'active'
 		JOIN agent_runs child ON child.id = d.child_run_id
 		JOIN jobs job ON job.run_id = child.id
 		WHERE d.id = ?`, delegationID).Scan(&egress.DelegationID, &egress.ChildSessionID,
-		&egress.ChildRunID, &egress.Model, &toolsJSON, &consent, &egress.Required, &status, &payloadJSON)
+		&egress.ChildRunID, &egress.ProfileID, &egress.ProfileRevision, &egress.Model, &toolsJSON, &consent,
+		&egress.Required, &status, &payloadJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DelegationEgress{}, nil, ErrDelegationNotFound
 	}

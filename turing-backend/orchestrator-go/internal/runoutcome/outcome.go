@@ -104,6 +104,10 @@ const (
 	// CodeEgressConsentDeclined is a delegated task that was never run because
 	// the user declined the tools that leave the machine which it required.
 	CodeEgressConsentDeclined = "egress_consent_declined"
+	// CodeProfileGrantRevoked is a delegated task that was never run because
+	// its specialist was disabled, re-granted at another revision, or changed
+	// on disk before a worker took it.
+	CodeProfileGrantRevoked = "profile_grant_revoked"
 )
 
 // QueueWaitReason is the closed vocabulary persisted in
@@ -258,6 +262,14 @@ func UserCancellation() Cancellation {
 // they did not cancel this task.
 func ParentEndedCancellation() Cancellation {
 	return Cancellation{origin: OriginOrchestratorInternal, code: CodeParentRunEnded, reason: ReasonAbandoned}
+}
+
+// ProfileGrantRevokedCancellation withdraws a delegated task, never run, whose
+// specialist no longer holds the grant the task was created under. The
+// orchestrator withdraws it, so the reason is abandoned: the user changed the
+// profile, they did not cancel this task.
+func ProfileGrantRevokedCancellation() Cancellation {
+	return Cancellation{origin: OriginOrchestratorInternal, code: CodeProfileGrantRevoked, reason: ReasonAbandoned}
 }
 
 // EgressConsentDeclinedCancellation ends a delegated task, never run, whose
