@@ -107,8 +107,15 @@ func TestPreparingDisclosesWhereATasksToolCallsMayGo(t *testing.T) {
 	if left := time.Until(disclosure.GetExpiresAt().AsTime()); left <= 0 || left > 5*time.Minute {
 		t.Fatalf("challenge expires in %v", left)
 	}
-	if len(h.routes.validated) != 1 || !h.routes.validated[0].RemoteEgressDecision ||
-		!slices.Equal(h.routes.validated[0].SelectedTools, wantTools) || h.routes.validated[0].MinimumTeamProtocolVersion != 1 {
+	// Resolving the specialist checks its model's route too; the task's own
+	// route is the one validated with a decision.
+	var decided []repository.RoutingRequirements
+	for _, route := range h.routes.validated {
+		if route.RemoteEgressDecision {
+			decided = append(decided, route)
+		}
+	}
+	if len(decided) != 1 || !slices.Equal(decided[0].SelectedTools, wantTools) || decided[0].MinimumTeamProtocolVersion != 1 {
 		t.Fatalf("validated routes = %+v, want the task's whole route with a decision", h.routes.validated)
 	}
 }

@@ -196,6 +196,8 @@ func delegationStatePhrase(state, outcomeReason, code string) string {
 			return "was stopped because Turing's turn ended"
 		case code == runoutcome.CodeEgressConsentDeclined:
 			return "was not run because you declined the tools it needs"
+		case code == runoutcome.CodeProfileGrantRevoked:
+			return "was not run because its profile was disabled or changed"
 		}
 		return "was cancelled (" + code + ")"
 	default:

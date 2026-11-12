@@ -165,22 +165,15 @@ func (s *Server) admitDelegation(ctx context.Context, runID string, args map[str
 		return repository.CreateDelegationInput{}, status.Error(codes.FailedPrecondition, "that specialist is not on this run's team")
 	}
 	entry := roster[index]
-	profiles, err := s.repo.ListAgentProfiles(ctx)
-	if err != nil {
-		return repository.CreateDelegationInput{}, status.Error(codes.Internal, "read team profiles failed")
-	}
-	profileIndex := slices.IndexFunc(profiles, func(profile repository.AgentProfile) bool { return profile.ID == agent })
-	if profileIndex < 0 {
-		return repository.CreateDelegationInput{}, status.Error(codes.FailedPrecondition, fmt.Sprintf("%s is no longer on the team", entry.Name))
-	}
-	profile := profiles[profileIndex]
-	resolver, err := s.newResolver(ctx)
+	profile, resolved, found, err := s.resolveProfile(ctx, agent)
 	if err != nil {
 		return repository.CreateDelegationInput{}, status.Error(codes.Internal, "resolve team profiles failed")
 	}
+	if !found {
+		return repository.CreateDelegationInput{}, status.Error(codes.FailedPrecondition, fmt.Sprintf("%s is no longer on the team", entry.Name))
+	}
 	// A `team` name collision, the profile's enablement, its grant and its
 	// requires all land in its state.
-	resolved := resolver.resolve(profile)
 	if resolved.GetState() != turingv1.AgentProfileState_AGENT_PROFILE_STATE_ACTIVE {
 		reason := "it is not active"
 		if reasons := resolved.GetUnavailableReasons(); len(reasons) > 0 {

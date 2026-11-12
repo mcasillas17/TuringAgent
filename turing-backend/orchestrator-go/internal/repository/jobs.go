@@ -174,7 +174,14 @@ type Job struct {
 	AgentProfile         *AgentProfileSnapshot
 	EnforceSelectedTools bool
 	SkipAutomaticRecall  bool
-	StartedEvent         Event
+	// DelegationProfileID and DelegationProfileRevision name the specialist
+	// a delegated task was created for, from its delegation row, so the
+	// dispatcher can check that profile file is still active at that
+	// revision before any worker is sent the task. Both are empty on every
+	// run that is not a delegated task.
+	DelegationProfileID       string
+	DelegationProfileRevision string
+	StartedEvent              Event
 	// DelegationEvents are what starting a delegated task reported on its
 	// parent's stream.
 	DelegationEvents []Event
@@ -1386,9 +1393,12 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 			r.model_provider,
 			r.model_name,
 			j.payload_json,
-			j.attempt
+			j.attempt,
+			COALESCE(task.profile_id, ''),
+			COALESCE(task.profile_revision, '')
 		FROM jobs j
 		JOIN agent_runs r ON r.id = j.run_id
+		LEFT JOIN delegations task ON task.child_run_id = r.id
 		WHERE j.agent_id = ? AND j.status = 'pending' AND r.status = 'queued'
 			-- Turn order is anchored on the user message that initiated each
 			-- run, because that is the one message every run is guaranteed to
@@ -1417,11 +1427,10 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 					)
 			)
 			-- A delegated task waiting for the user's consent to tools that
-			-- leave the machine is not run until they decide.
-			AND NOT EXISTS (
-				SELECT 1 FROM delegations held
-				WHERE held.child_run_id = r.id AND held.egress_consent = 'pending'
-			)` + routingFilter + `
+			-- leave the machine is not run until they decide, and one whose
+			-- specialist no longer holds the grant it was created under is
+			-- not run at all: a revocation batch withdraws it.
+			AND (task.id IS NULL OR (task.egress_consent <> 'pending' AND ` + delegationGrantHeldSQL("task") + `))` + routingFilter + `
 		ORDER BY j.created_at_ns, j.id
 		LIMIT 1
 	`
@@ -1449,6 +1458,8 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 			&candidate.Model,
 			&payloadJSON,
 			&candidate.Attempt,
+			&candidate.DelegationProfileID,
+			&candidate.DelegationProfileRevision,
 		); err != nil {
 			return Job{}, err
 		}

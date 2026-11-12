@@ -14,6 +14,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/auth"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/config"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/maintenance"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/memoryfiles"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
@@ -41,6 +42,14 @@ import (
 const maxGRPCMessageSize = 4 * 1024 * 1024
 const gracefulStopTimeout = 5 * time.Second
 const defaultDeletionReconcileInterval = time.Minute
+
+// maintenanceTicks is the maintenance goroutine's clock: a ticker at
+// interval and the function that stops it. A test replaces it to tick without
+// waiting out a minute.
+var maintenanceTicks = func(interval time.Duration) (<-chan time.Time, func()) {
+	ticker := time.NewTicker(interval)
+	return ticker.C, ticker.Stop
+}
 
 type App struct {
 	PublicServer   *grpc.Server
@@ -79,7 +88,11 @@ type App struct {
 	schedulerDone           chan struct{}
 	deletionReconcileCancel context.CancelFunc
 	deletionReconcileDone   chan struct{}
-	authFailures            *auth.AsyncFailureRecorder
+	// The maintenance goroutine runs every background duty the reaper must
+	// not carry: it runs with the reaper off and never delays its recovery.
+	maintenanceCancel context.CancelFunc
+	maintenanceDone   chan struct{}
+	authFailures      *auth.AsyncFailureRecorder
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -403,6 +416,9 @@ func New(cfg config.Config) (*App, error) {
 	teamService.SetMaxDelegationsPerRun(cfg.MaxDelegationsPerRun)
 	teamService.SetDelegationResultMaxBytes(cfg.DelegationResultMaxBytes)
 	teamService.SetEgressSigningSecret(cfg.EgressSigningSecret)
+	// A task's profile file is authority too: the runtime resolves it through
+	// the team's resolver between a task's claim and its send.
+	runtimeService.SetDelegationAuthority(teamService)
 	// Off, no run is offered the team, and a send pays nothing to find out.
 	if cfg.AgentTeamEnabled {
 		chatService.SetTeamRoster(teamService)
@@ -459,6 +475,7 @@ func New(cfg config.Config) (*App, error) {
 		reaperDone:            make(chan struct{}),
 		schedulerDone:         make(chan struct{}),
 		deletionReconcileDone: make(chan struct{}),
+		maintenanceDone:       make(chan struct{}),
 	}
 	reaperCtx, reaperCancel := context.WithCancel(context.Background())
 	application.reaperCancel = reaperCancel
@@ -511,6 +528,19 @@ func New(cfg config.Config) (*App, error) {
 			}
 		}
 	}()
+	// One goroutine for every background duty, at the reaper's interval or a
+	// minute, whichever is shorter, and a minute with the reaper off. Later
+	// duties register here rather than starting a loop of their own.
+	maintenanceLoop := maintenance.New()
+	maintenanceLoop.Register("withdraw tasks of revoked specialists", teamService.CancelRevokedDelegations)
+	maintenanceCtx, maintenanceCancel := context.WithCancel(context.Background())
+	application.maintenanceCancel = maintenanceCancel
+	ticks, stopTicks := maintenanceTicks(maintenance.Interval(time.Duration(cfg.JobReaperIntervalMS) * time.Millisecond))
+	go func() {
+		defer close(application.maintenanceDone)
+		defer stopTicks()
+		maintenanceLoop.Run(maintenanceCtx, ticks)
+	}()
 	return application, nil
 }
 
@@ -536,6 +566,12 @@ func (a *App) Stop() {
 		}
 		if a.deletionReconcileDone != nil {
 			<-a.deletionReconcileDone
+		}
+		if a.maintenanceCancel != nil {
+			a.maintenanceCancel()
+		}
+		if a.maintenanceDone != nil {
+			<-a.maintenanceDone
 		}
 		var wg sync.WaitGroup
 		if a.PublicServer != nil {
