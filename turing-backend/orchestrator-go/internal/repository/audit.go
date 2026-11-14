@@ -166,7 +166,18 @@ func (r *Repository) RecordAudit(ctx context.Context, correlationID string, acto
 // concurrent session deletion either scrubs this row afterward or wins first
 // and prevents the row from being recreated.
 func (r *Repository) RecordAuditForExistingRun(ctx context.Context, correlationID string, actorType string, actorID string, action string, target string, payloadJSON string) (bool, error) {
-	result, err := r.db.ExecContext(ctx, `
+	return recordAuditForExistingRun(ctx, r.db, correlationID, actorType, actorID, action, target, payloadJSON)
+}
+
+type auditExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// recordAuditForExistingRun is RecordAuditForExistingRun on any executor, so a
+// transaction can make the same conditional insert part of the change it
+// records.
+func recordAuditForExistingRun(ctx context.Context, exec auditExecer, correlationID string, actorType string, actorID string, action string, target string, payloadJSON string) (bool, error) {
+	result, err := exec.ExecContext(ctx, `
 		INSERT INTO audit_logs (
 			id, correlation_id, actor_type, actor_id, action, target, payload_json, created_at
 		)

@@ -181,12 +181,11 @@ Remove it, or that tool, and the next worker registration restores the name. See
 - Go 1.26+ — all three modules (root, `turing-backend/mcp-files` and
   `turing-backend/mcp-system`) declare `go 1.26.0`, so 1.26 is the floor for
   building every module with one toolchain
-- Flutter, on a release bundling Dart 3.12.0 or newer within Dart 3.x:
-  the current [`cupertino_icons` 2.0.0 dependency](https://pub.dev/api/packages/cupertino_icons/versions/2.0.0)
-  requires `^3.12.0`. The app-declared Dart SDK constraint remains `^3.10.4`
-  in `turing-client/turing_app/pubspec.yaml`; that declaration alone is not
-  sufficient to resolve the current dependencies. CI tracks the `stable`
-  channel rather than pinning a Flutter version.
+- Flutter 3.47 or newer, which bundles Dart 3.13: the app-declared Dart SDK constraint is `^3.13.0`
+  with `flutter: ">=3.47.0"` in `turing-client/turing_app/pubspec.yaml`, the floor of
+  [`material_ui`](https://pub.dev/packages/material_ui). The app's widgets come
+  from that package because Flutter 3.50 deprecated `package:flutter/material.dart`.
+  CI tracks the `stable` channel rather than pinning a Flutter version.
 - A local inference engine on the host: Ollama for the default path, or any
   OpenAI-compatible server on the same machine (ds4, llama.cpp's
   `llama-server`, LM Studio, Lemonade, vLLM) with `TURING_LOCAL_ENGINE=openai`

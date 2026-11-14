@@ -535,9 +535,9 @@ func TestGrantingAnAlreadyApprovedApprovalIsANoOp(t *testing.T) {
 	}
 }
 
-// The audit row is the only record that nobody was awake for this. If it
-// cannot be written, the grant does not happen — over-recording is the safe
-// direction, silently unrecorded consent is not.
+// The audit row is the only record that nobody was awake for this. It commits
+// in the same transaction as the approval, so if it cannot be written the
+// grant does not happen either: silently unrecorded consent is not consent.
 func TestAnUnrecordableGrantIsNotGranted(t *testing.T) {
 	h := newHarness(t)
 	fire := h.fireAutomation(t, "Nightly note", []repository.AutomationTool{

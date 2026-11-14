@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/workspace/automations_page.dart';
 import 'package:turing_flutter_app/models/automation.dart';
@@ -364,7 +364,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.textContaining('a run already underway finishes'),
+        find.textContaining('A run already underway loses its permission'),
         findsOneWidget,
       );
 

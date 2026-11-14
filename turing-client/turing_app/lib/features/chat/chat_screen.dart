@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 
@@ -20,6 +20,7 @@ import '../../utils/content_presence.dart';
 import '../approvals/approval_card.dart';
 import 'delegation_card.dart';
 import 'delegation_transcript_screen.dart';
+import 'markdown_style.dart';
 import 'message_send_failure_card.dart';
 import 'message_send_unconfirmed_card.dart';
 import 'run_cancelled_card.dart';
@@ -2824,7 +2825,8 @@ class _SessionNotice extends StatelessWidget {
 /// Markdown styling for assistant turns. Code and inline code sit on the
 /// raised surface so they read as quoted machine output rather than prose,
 /// and headings stay close to body size — an answer inside a conversation
-/// should not shout like a document title.
+/// should not shout like a document title. Anything not set here (tables,
+/// smaller headings, blockquote text) keeps the app theme's style.
 MarkdownStyleSheet _assistantMarkdown(
   BuildContext context,
   AppPalette palette,
@@ -2836,32 +2838,37 @@ MarkdownStyleSheet _assistantMarkdown(
     height: 1.5,
     color: palette.text,
   );
-  return MarkdownStyleSheet(
-    p: body,
-    listBullet: body,
-    a: const TextStyle(color: AppColors.brand),
-    strong: body.copyWith(fontWeight: FontWeight.w600),
-    em: body.copyWith(fontStyle: FontStyle.italic),
-    h1: body.copyWith(fontSize: 19, fontWeight: FontWeight.w700),
-    h2: body.copyWith(fontSize: 17, fontWeight: FontWeight.w700),
-    h3: body.copyWith(fontSize: 15.5, fontWeight: FontWeight.w700),
-    code: mono.copyWith(backgroundColor: Colors.transparent),
-    codeblockDecoration: BoxDecoration(
-      color: palette.raised,
-      borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: palette.border),
+  return markdownStyleSheetFromTheme(Theme.of(context)).merge(
+    MarkdownStyleSheet(
+      p: body,
+      listBullet: body,
+      a: const TextStyle(color: AppColors.brand),
+      strong: body.copyWith(fontWeight: FontWeight.w600),
+      em: body.copyWith(fontStyle: FontStyle.italic),
+      h1: body.copyWith(fontSize: 19, fontWeight: FontWeight.w700),
+      h2: body.copyWith(fontSize: 17, fontWeight: FontWeight.w700),
+      h3: body.copyWith(fontSize: 15.5, fontWeight: FontWeight.w700),
+      code: mono.copyWith(backgroundColor: Colors.transparent),
+      codeblockDecoration: BoxDecoration(
+        color: palette.raised,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: palette.border),
+      ),
+      codeblockPadding: const EdgeInsets.all(12),
+      blockquoteDecoration: BoxDecoration(
+        border: Border(left: BorderSide(color: palette.border, width: 3)),
+      ),
+      blockquotePadding: const EdgeInsets.only(left: 12),
+      tableBorder: TableBorder.all(color: palette.border),
+      tableCellsPadding: const EdgeInsets.symmetric(
+        horizontal: 8,
+        vertical: 6,
+      ),
+      horizontalRuleDecoration: BoxDecoration(
+        border: Border(top: BorderSide(color: palette.border)),
+      ),
+      blockSpacing: 10,
     ),
-    codeblockPadding: const EdgeInsets.all(12),
-    blockquoteDecoration: BoxDecoration(
-      border: Border(left: BorderSide(color: palette.border, width: 3)),
-    ),
-    blockquotePadding: const EdgeInsets.only(left: 12),
-    tableBorder: TableBorder.all(color: palette.border),
-    tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-    horizontalRuleDecoration: BoxDecoration(
-      border: Border(top: BorderSide(color: palette.border)),
-    ),
-    blockSpacing: 10,
   );
 }
 

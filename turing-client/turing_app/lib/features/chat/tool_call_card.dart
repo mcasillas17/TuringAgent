@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Lifecycle status of a model-driven tool call, mirrored from the
 /// `tool.call.*` stream events emitted by the agent runtime.
