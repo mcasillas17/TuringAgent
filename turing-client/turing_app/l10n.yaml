@@ -10,4 +10,6 @@ format: true
 # only come from here. It reaches the generated files only; hand-written code
 # is analyzed in full. Remove this header once gen-l10n emits the material_ui
 # and cupertino_ui delegates: https://github.com/flutter/flutter/issues/196475
+# That change also drops the legacy delegates flutter_markdown's context menu
+# needs (lib/l10n/app_localizations_delegates.dart), so replace it first.
 header: "// ignore_for_file: deprecated_member_use"

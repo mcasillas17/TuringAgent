@@ -66,7 +66,7 @@ void main() {
     expect(find.text('Nothing to show yet.'), findsOneWidget);
   });
 
-  testWidgets('a transcript in a dark theme draws its text in the theme color', (
+  testWidgets('a transcript draws its markdown in the theme text color', (
     tester,
   ) async {
     // flutter_markdown cannot see material_ui's theme, so without a sheet
@@ -78,28 +78,41 @@ void main() {
           messageId: 'msg_result',
           runId: 'run_child',
           role: 'assistant',
-          content: 'Found three notes.',
+          content:
+              '# Notes\n\nFound three notes.\n\n#### Detail\n\n'
+              '> quoted\n\n- listed\n\n| name |\n|---|\n| cell |\n',
           sequence: 2,
           createdAt: DateTime.utc(2026, 10, 1),
         ),
       ];
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: ThemeData(brightness: Brightness.dark),
-        home: DelegationTranscriptScreen(delegation: _task, apiClient: api),
-      ),
+    Widget host(Brightness brightness) => MaterialApp(
+      theme: ThemeData(brightness: brightness),
+      home: DelegationTranscriptScreen(delegation: _task, apiClient: api),
     );
-    await tester.pumpAndSettle();
 
-    final text = tester.widget<EditableText>(
-      find.descendant(
-        of: find.byType(MarkdownBody),
-        matching: find.byType(EditableText),
-      ),
-    );
-    final theme = Theme.of(tester.element(find.byType(MarkdownBody)));
-    expect(text.controller.text, 'Found three notes.');
-    expect(text.style.color, theme.textTheme.bodyMedium!.color);
+    for (final brightness in [Brightness.dark, Brightness.light]) {
+      await tester.pumpWidget(host(brightness));
+      await tester.pumpAndSettle();
+
+      final theme = Theme.of(tester.element(find.byType(MarkdownBody)));
+      final texts = tester.widgetList<EditableText>(
+        find.descendant(
+          of: find.byType(MarkdownBody),
+          matching: find.byType(EditableText),
+        ),
+      );
+      expect(
+        texts.map((text) => text.controller.text),
+        containsAll(['Notes', 'Detail', 'quoted', 'listed', 'cell']),
+      );
+      for (final text in texts) {
+        expect(
+          text.style.color,
+          theme.textTheme.bodyMedium!.color,
+          reason: '${text.controller.text} in $brightness',
+        );
+      }
+    }
   });
 
   testWidgets('a card for a task with no recorded task names only who', (

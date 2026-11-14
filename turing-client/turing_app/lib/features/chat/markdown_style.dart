@@ -9,8 +9,10 @@ import 'package:material_ui/material_ui.dart';
 /// this app installs. On its own it therefore styles markdown from the
 /// default light theme, which in dark mode is dark text on a dark surface.
 /// Every [MarkdownBody] passes this sheet (or one merged onto it), so the app's
-/// theme decides every style. Remove it once the markdown package moves to
-/// material_ui.
+/// theme decides the text and block styles. What flutter_markdown draws with
+/// its own legacy widgets still follows the light default: the scrollbar of a
+/// code block and, on Linux and Windows, the selection context menu. Remove
+/// this once the markdown package moves to material_ui.
 MarkdownStyleSheet markdownStyleSheetFromTheme(ThemeData theme) {
   final body = theme.textTheme.bodyMedium!;
   return MarkdownStyleSheet(

@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart'
+    show GlobalMaterialLocalizations, MaterialLocalizations;
 
 import 'package:turing_flutter_app/app.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
@@ -30,6 +32,22 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Project Turing Settings'), findsOneWidget);
+  });
+
+  testWidgets('Turing app localizes material_ui widgets with its delegates', (
+    tester,
+  ) async {
+    await tester.pumpWidget(TuringApp(authStorage: _FakeAuthStorage()));
+    await tester.pumpAndSettle();
+
+    // Without material_ui's delegates, its MaterialApp falls back to the
+    // English-only defaults.
+    expect(
+      MaterialLocalizations.of(
+        tester.element(find.text('Project Turing Settings')),
+      ),
+      isA<GlobalMaterialLocalizations>(),
+    );
   });
 
   testWidgets('Turing app closes the configured API when disposed', (
