@@ -1,0 +1,11 @@
+processor	: 0
+vendor_id	: AuthenticAMD
+cpu family	: 26
+model name	: AMD RYZEN AI MAX+ 395 w/ Radeon 8060S
+stepping	: 0
+
+processor	: 1
+vendor_id	: AuthenticAMD
+cpu family	: 26
+model name	: AMD RYZEN AI MAX+ 395 w/ Radeon 8060S
+stepping	: 0

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/safejson"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/ids"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
@@ -271,6 +272,79 @@ func (r *Repository) GetApprovalByToolCall(ctx context.Context, runID string, to
 }
 
 func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID string, approvalToken string, approvalComment sql.NullString, decidedAt string, previewHashes ...string) (ApprovalTerminalization, error) {
+	return r.approveApproval(ctx, approvalID, approvalToken, approvalComment, decidedAt, previewHashes, nil)
+}
+
+// ErrUnattendedApprovalUnrecorded refuses an unattended approval whose audit
+// row could not be written in its transaction: the run or its session is
+// gone. That row is the only witness that nobody was asked, so without it
+// nothing is granted.
+var ErrUnattendedApprovalUnrecorded = errors.New("unattended approval could not be recorded")
+
+// ApproveUnattendedApprovalWithEvent approves a pending approval on the
+// strength of an automation's grant, re-checked in the transaction that flips
+// it. It reads, in that transaction and from the approval's own server and
+// tool, the run's frozen grant, the automation row and the pair's place on
+// its current allowlist, so a revocation committed at any point before this
+// one — after the beacon checked, during the preview refresh, while the token
+// was signed — refuses the approval with ErrAutomationGrantRevoked, and one
+// committed after it meets a call already approved, as a cancellation does.
+//
+// It then performs exactly ApproveApprovalWithEvent's update and event, and
+// writes the automation's approval.approved audit row in the same
+// transaction, under RecordAuditForExistingRun's condition (the run exists and
+// its session is active). The approval and its only record commit together or
+// not at all, so the audit trail never claims an approval that did not happen
+// and an unrecordable one is not granted (ErrUnattendedApprovalUnrecorded).
+func (r *Repository) ApproveUnattendedApprovalWithEvent(ctx context.Context, approvalID string, approvalToken string, previewHash string) (ApprovalTerminalization, error) {
+	var grant AutomationRunGrant
+	return r.approveApproval(ctx, approvalID, approvalToken, sql.NullString{}, "", []string{previewHash}, &approvalGuard{
+		beforeApprove: func(ctx context.Context, tx *sql.Tx, record ApprovalRecord) error {
+			state, unattended, err := unattendedGrantState(ctx, tx, record.RunID, record.ServerName, record.ToolName)
+			if err != nil {
+				return err
+			}
+			if !unattended {
+				return ErrRunNotUnattended
+			}
+			if err := state.Check(record.ServerName, record.ToolName); err != nil {
+				return err
+			}
+			grant = state.Grant
+			return nil
+		},
+		afterApprove: func(ctx context.Context, tx *sql.Tx, record ApprovalRecord) error {
+			payload, err := safejson.MarshalCanonical(map[string]any{
+				"toolName":       record.ToolName,
+				"unattended":     true,
+				"automationId":   grant.AutomationID,
+				"automationName": grant.AutomationName,
+			})
+			if err != nil {
+				return err
+			}
+			recorded, err := recordAuditForExistingRun(ctx, tx, record.RunID, "automation", grant.AutomationID, "approval.approved", record.ApprovalID, string(payload))
+			if err != nil {
+				return fmt.Errorf("%w: %w", ErrUnattendedApprovalUnrecorded, err)
+			}
+			if !recorded {
+				return ErrUnattendedApprovalUnrecorded
+			}
+			return nil
+		},
+	})
+}
+
+// approvalGuard adds checks and writes to an approval's own transaction. Its
+// hooks run only when the approval actually moves from pending to approved:
+// beforeApprove ahead of the update, afterApprove once the update and its
+// event are written. Either refusing rolls the whole decision back.
+type approvalGuard struct {
+	beforeApprove func(context.Context, *sql.Tx, ApprovalRecord) error
+	afterApprove  func(context.Context, *sql.Tx, ApprovalRecord) error
+}
+
+func (r *Repository) approveApproval(ctx context.Context, approvalID string, approvalToken string, approvalComment sql.NullString, decidedAt string, previewHashes []string, guard *approvalGuard) (ApprovalTerminalization, error) {
 	if decidedAt == "" {
 		decidedAt = now()
 	}
@@ -299,6 +373,11 @@ func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID st
 	}
 	if approvalExpiredAtDecision(record.ExpiresAt, decidedAt) {
 		return ApprovalTerminalization{Approval: record}, ErrApprovalExpired
+	}
+	if guard != nil && guard.beforeApprove != nil {
+		if err := guard.beforeApprove(ctx, tx, record); err != nil {
+			return ApprovalTerminalization{}, err
+		}
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE approvals
@@ -354,6 +433,11 @@ func (r *Repository) ApproveApprovalWithEvent(ctx context.Context, approvalID st
 	var delegation []Event
 	if row.lifecycle == lifecycleWaitingApproval {
 		if delegation, err = reportDelegationTx(ctx, tx, record.RunID, decidedAt); err != nil {
+			return ApprovalTerminalization{}, err
+		}
+	}
+	if guard != nil && guard.afterApprove != nil {
+		if err := guard.afterApprove(ctx, tx, record); err != nil {
 			return ApprovalTerminalization{}, err
 		}
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/envfile"
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/host"
 	"github.com/mcasillas17/TuringAgent/turing-backend/cmd/turing/internal/registry"
+	"github.com/mcasillas17/TuringAgent/turing-backend/internal/egress"
 	"github.com/mcasillas17/TuringAgent/turing-backend/internal/servicecmd"
 )
 
@@ -49,9 +50,17 @@ var zeroBounds = []string{"TURING_QUEUE_MAX_WAIT_MS", "TURING_JOB_REAPER_INTERVA
 var infrastructureMarkers = []string{"Compose launch failed", "Cannot connect to the Docker daemon", "Error response from daemon"}
 
 // saveOptions are answers the caller already has. Yes answers every question
-// with its default, yes; NoApply saves without applying.
+// with its default, yes; NoApply saves without applying. CallerStarts, with
+// NoApply, is for a caller that starts Turing itself straight after the save,
+// as setup does: the save then says only that it is saved, not that it takes
+// effect at the next start. SkipEngineCheck is for a caller that checks the
+// engine itself once Turing is up, as setup does: a save that changes the
+// local engine then neither checks it nor says to. Saved, when set, runs once
+// the change is written to .env and before it is applied, so a note about
+// what was saved is never shown for a change a check refused.
 type saveOptions struct {
-	Yes, NoApply bool
+	Yes, NoApply, CallerStarts, SkipEngineCheck bool
+	Saved                                       func()
 }
 
 // settingsEdit returns the changes to save, given .env as it is under the
@@ -59,54 +68,166 @@ type saveOptions struct {
 type settingsEdit func(current *envfile.File) (map[string]*string, error)
 
 // saveSettings checks changes with the services, writes them to .env, and
-// applies them. A nil value removes the key. It returns the exit code.
+// applies them. A nil value removes the key. A change to the local engine is
+// then proved with engineCheck once Turing is healthy. It returns the exit
+// code.
 func (e Env) saveSettings(ctx context.Context, changes map[string]*string, opts saveOptions) int {
 	return e.saveEdit(ctx, func(*envfile.File) (map[string]*string, error) { return changes, nil }, opts)
 }
 
 // saveEdit is saveSettings for changes that depend on what .env holds, worked
-// out under the lock.
+// out under the lock. The engine check runs after the lock is released: it
+// changes nothing, and a large model can take minutes to load.
 func (e Env) saveEdit(ctx context.Context, edit settingsEdit, opts saveOptions) int {
+	code, applied, engineChanged := e.saveLocked(ctx, edit, opts)
+	if code != 0 || opts.SkipEngineCheck || !engineChanged {
+		return code
+	}
+	if !applied {
+		_, _ = fmt.Fprintln(e.Stdout, engineCheckLater)
+		return 0
+	}
+	// Health has passed, so there is nothing to restore.
+	return e.checkEngineOnceRunning(ctx)
+}
+
+// saveLocked checks, writes and applies the changes under the lock. applied
+// is true when they are running and healthy, and engineChanged when they
+// touch the local engine.
+func (e Env) saveLocked(ctx context.Context, edit settingsEdit, opts saveOptions) (code int, applied, engineChanged bool) {
 	path := filepath.Join(e.BackendDir, ".env")
 	// A missing .env is said before the lock file is made.
 	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
-		return e.fail("%v", errNoDotEnv)
+		return e.fail("%v", errNoDotEnv), false, false
 	}
 	unlock, err := envfile.Lock(filepath.Join(e.BackendDir, ".env.lock"))
 	if errors.Is(err, envfile.ErrLocked) {
-		return e.fail("%v; wait for it to finish, then run this command again", err)
+		return e.fail("%v; wait for it to finish, then run this command again", err), false, false
 	}
 	if err != nil {
-		return e.fail("cannot lock .env: %v; check that %s is writable by you, then run this command again", err, e.BackendDir)
+		return e.fail("cannot lock .env: %v; check that %s is writable by you, then run this command again", err, e.BackendDir), false, false
 	}
 	defer unlock()
 
 	previous, current, err := e.readDotEnvBytes()
 	if err != nil {
-		return e.fail("%v", err)
+		return e.fail("%v", err), false, false
 	}
 	changes, err := edit(current)
 	if err != nil {
-		return e.fail("%v", err)
+		return e.fail("%v", err), false, false
 	}
+	changes, notices := scopeKeys(current, changes)
 	candidate, changed, err := buildCandidate(previous, changes)
 	if err != nil {
-		return e.fail("%v", err)
+		return e.fail("%v", err), false, false
 	}
 	if bytes.Equal(candidate.Bytes(), previous) {
 		_, _ = fmt.Fprintln(e.Stdout, "Nothing to change: .env already holds that.")
-		return 0
+		return 0, false, false
 	}
 	if err := checkAppPort(current, candidate, changed); err != nil {
-		return e.fail("%v", err)
+		return e.fail("%v", err), false, false
 	}
 	if code, ok := e.validate(ctx, changed); !ok {
-		return code
+		return code, false, false
 	}
 	if err := envfile.WriteAtomic(path, candidate.Bytes()); err != nil {
-		return e.fail("cannot save .env: %v; check .env, then run this command again", err)
+		return e.fail("cannot save .env: %v; check .env, then run this command again", err), false, false
 	}
-	return e.applySaved(ctx, path, previous, current, candidate, changed, opts)
+	for _, notice := range notices {
+		_, _ = fmt.Fprintln(e.Stdout, notice)
+	}
+	if opts.Saved != nil {
+		opts.Saved()
+	}
+	code, applied = e.applySaved(ctx, path, previous, current, candidate, changed, opts)
+	return code, applied, changesLocalEngine(changes)
+}
+
+// scopeKeys keeps each API key with the server it was set for. A change that
+// points the local engine or the remote model at another server, without
+// giving a key for it, also clears the key .env holds, so that it is never
+// sent there. It returns the changes with any key cleared, and a notice, to
+// show once the change is saved, for each cleared key that the new server
+// could still want. changes itself is left as it is.
+func scopeKeys(current *envfile.File, changes map[string]*string) (map[string]*string, []string) {
+	var notices []string
+	scoped, copied := changes, false
+	clearKey := func(name string) {
+		if !copied {
+			scoped, copied = make(map[string]*string, len(changes)+1), true
+			maps.Copy(scoped, changes)
+		}
+		cleared := ""
+		scoped[name] = &cleared
+	}
+	_, engineKeyGiven := changes[engineAPIKeyKey]
+	_, engineChanges := changes[engineKindKey]
+	_, urlChanges := changes[engineURLKey]
+	if !engineKeyGiven && (engineChanges || urlChanges) {
+		engine := cmp.Or(candidateValue(current, changes, engineKindKey), engineOllama)
+		if _, removed := engineKeyChange(current, engine, candidateValue(current, changes, engineURLKey)); removed {
+			clearKey(engineAPIKeyKey)
+			// Ollama takes no key, so there is none to give it.
+			if engine == engineOpenAI {
+				notices = append(notices, engineKeyRemovedConfigSet)
+			}
+		}
+	}
+	_, remoteKeyGiven := changes[remoteAPIKeyKey]
+	if _, ok := changes[remoteURLKey]; ok && !remoteKeyGiven && envValue(current, remoteAPIKeyKey) != "" &&
+		!sameRemoteDestination(remoteURL(envValue(current, remoteURLKey)), remoteURL(candidateValue(current, changes, remoteURLKey))) {
+		clearKey(remoteAPIKeyKey)
+		notices = append(notices, remoteKeyRemoved)
+	}
+	return scoped, notices
+}
+
+// candidateValue is what name will hold once changes are made to current.
+func candidateValue(current *envfile.File, changes map[string]*string, name string) string {
+	value, ok := changes[name]
+	switch {
+	case !ok:
+		return envValue(current, name)
+	case value == nil:
+		return ""
+	default:
+		return *value
+	}
+}
+
+// remoteURL is the remote model's base URL as the services read value: an
+// empty one is their default.
+func remoteURL(value string) string {
+	return cmp.Or(value, defaultRemoteURL)
+}
+
+// sameRemoteDestination reports whether a and b name the same server and
+// path: the same scheme, host, port and path once each is in canonical form,
+// with the host in lower case, a default port left out and no trailing slash.
+// A URL that cannot be put in that form is the same only as itself.
+func sameRemoteDestination(a, b string) bool {
+	if a == b {
+		return true
+	}
+	first, err := egress.ParseUnkeyedEndpoint(a)
+	second, otherErr := egress.ParseUnkeyedEndpoint(b)
+	return err == nil && otherErr == nil && first.Canonical == second.Canonical
+}
+
+// changesLocalEngine reports whether changes name a setting in the registry's
+// local engine section. A deprecated name the save moves to its new one is
+// not in changes, and does not count: the services read the same value either
+// way.
+func changesLocalEngine(changes map[string]*string) bool {
+	anchor, _ := registry.Lookup("TURING_LOCAL_ENGINE")
+	for name := range changes {
+		if key, ok := registry.Lookup(name); ok && key.Section == anchor.Section {
+			return true
+		}
+	}
+	return false
 }
 
 // buildCandidate is .env with the changes made and the deprecated names
@@ -278,31 +399,36 @@ func (e Env) indented(text string) {
 
 // applySaved applies a saved change if the person agrees, keeping the
 // previous bytes until the stack is healthy, so that a change only a running
-// service can refuse can be undone.
-func (e Env) applySaved(ctx context.Context, path string, previous []byte, current, candidate *envfile.File, changed map[string]string, opts saveOptions) int {
+// service can refuse can be undone. applied is true when the new settings are
+// running and healthy.
+func (e Env) applySaved(ctx context.Context, path string, previous []byte, current, candidate *envfile.File, changed map[string]string, opts saveOptions) (code int, applied bool) {
 	if !opts.NoApply {
 		// Ctrl-C at the prompt ends the process, so the save is said first.
 		_, _ = fmt.Fprintln(e.Stdout, "Saved in .env.")
 	}
 	if opts.NoApply || !e.confirm(applyPrompt, true, opts.Yes) {
-		_, _ = fmt.Fprintln(e.Stdout, savedMessage)
+		if opts.NoApply && opts.CallerStarts {
+			_, _ = fmt.Fprintln(e.Stdout, "Saved in .env.")
+		} else {
+			_, _ = fmt.Fprintln(e.Stdout, savedMessage)
+		}
 		for _, name := range zeroBounds {
 			if value, ok := changed[name]; ok && isZero(value) {
 				_, _ = fmt.Fprintf(e.Stdout, "Warning: the next start may refuse %s=0, because only a running orchestrator can see whether a delegated task is waiting for consent; if it does, run ./turing config set %s with a value above 0.\n",
 					name, name)
 			}
 		}
-		return 0
+		return 0, false
 	}
 
 	port, key, err := appEndpoint(candidate)
 	if err != nil {
-		return e.fail("the change is saved in .env, but it cannot be applied: %v", err)
+		return e.fail("the change is saved in .env, but it cannot be applied: %v", err), false
 	}
 	service, err := e.applyAndWait(ctx, port, key)
 	if err == nil {
 		_, _ = fmt.Fprintln(e.Stdout, "Turing is running with the new settings.")
-		return 0
+		return 0, true
 	}
 	_, _ = fmt.Fprintln(e.Stderr, err)
 
@@ -311,19 +437,19 @@ func (e Env) applySaved(ctx context.Context, path string, previous []byte, curre
 		subject, question, logs = "the "+service, "The "+service, "./turing logs "+service
 	}
 	if !e.confirm(question+" did not come up healthy. Restore the previous settings and apply again?", true, opts.Yes) {
-		return e.fail("the new settings are saved in .env, but %s did not come up healthy; run %s", subject, logs)
+		return e.fail("the new settings are saved in .env, but %s did not come up healthy; run %s", subject, logs), false
 	}
 	_, _ = fmt.Fprintln(e.Stdout, "Restoring the previous settings...")
 	if err := envfile.WriteAtomic(path, previous); err != nil {
-		return e.fail("could not restore the previous settings: %v; the new ones are still in .env, and %s shows why they did not come up healthy", err, logs)
+		return e.fail("could not restore the previous settings: %v; the new ones are still in .env, and %s shows why they did not come up healthy", err, logs), false
 	}
 	if port, key, err = appEndpoint(current); err != nil {
-		return e.fail("restored the previous settings, but %v", err)
+		return e.fail("restored the previous settings, but %v", err), false
 	}
 	if _, err := e.applyAndWait(ctx, port, key); err != nil {
-		return e.fail("restored the previous settings, but they did not come up healthy either: %v", err)
+		return e.fail("restored the previous settings, but they did not come up healthy either: %v", err), false
 	}
-	return e.fail("restored the previous settings, and Turing is running with them; %s shows why the change did not come up healthy", logs)
+	return e.fail("restored the previous settings, and Turing is running with them; %s shows why the change did not come up healthy", logs), false
 }
 
 // applyAndWait has Compose recreate the containers whose settings changed,

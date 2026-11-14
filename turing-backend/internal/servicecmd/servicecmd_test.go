@@ -3,6 +3,7 @@ package servicecmd
 import (
 	"bytes"
 	"errors"
+	"io"
 	"regexp"
 	"slices"
 	"strings"
@@ -23,7 +24,7 @@ func (r *recorder) serve(err error) func() error {
 }
 
 func (r *recorder) check(warnings []string, err error) Check {
-	return Check{Name: "config", Run: func(environ []string) ([]string, error) {
+	return Check{Name: "config", Run: func(environ []string, _ io.Writer) ([]string, error) {
 		r.checked = true
 		r.environ = environ
 		return warnings, err
@@ -67,6 +68,72 @@ func TestMainRunsARegisteredCheck(t *testing.T) {
 	}
 	if !slices.Equal(r.environ, environ) {
 		t.Fatalf("check saw environ %q, want %q", r.environ, environ)
+	}
+}
+
+func TestMainPrintsConfigurationIsValidWhenSuccessIsEmpty(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	check := Check{Name: "config", Run: func([]string, io.Writer) ([]string, error) { return nil, nil }}
+	if code := Main([]string{"check-config"}, nil, []Check{check}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d, want 0", code)
+	}
+	if stdout.String() != "configuration is valid\n" || stderr.Len() != 0 {
+		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestMainPrintsTheCheckSuccessLine(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	check := Check{
+		Name:    "engine",
+		Success: "the engine is usable for Turing",
+		Run:     func([]string, io.Writer) ([]string, error) { return nil, nil },
+	}
+	if code := Main([]string{"check-engine"}, nil, []Check{check}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d, want 0", code)
+	}
+	if stdout.String() != "the engine is usable for Turing\n" || stderr.Len() != 0 {
+		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestMainGivesAChecksProgressToStdoutBeforeTheSuccessLine(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	check := Check{
+		Name:    "engine",
+		Success: "all done",
+		Run: func(_ []string, progress io.Writer) ([]string, error) {
+			_, _ = io.WriteString(progress, "1/2 first: ok\n")
+			_, _ = io.WriteString(progress, "2/2 second: ok\n")
+			return nil, nil
+		},
+	}
+	if code := Main([]string{"check-engine"}, nil, []Check{check}, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d, want 0", code)
+	}
+	if want := "1/2 first: ok\n2/2 second: ok\nall done\n"; stdout.String() != want || stderr.Len() != 0 {
+		t.Fatalf("stdout = %q, stderr = %q; want stdout %q", stdout.String(), stderr.String(), want)
+	}
+}
+
+func TestMainKeepsProgressButNotTheSuccessLineWhenACheckFails(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	check := Check{
+		Name:    "engine",
+		Success: "all done",
+		Run: func(_ []string, progress io.Writer) ([]string, error) {
+			_, _ = io.WriteString(progress, "1/2 first: ok\n")
+			return []string{"careful"}, errors.New("step 2/2 (second) failed: boom; fix it")
+		},
+	}
+	if code := Main([]string{"check-engine"}, nil, []Check{check}, nil, &stdout, &stderr); code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if stdout.String() != "1/2 first: ok\n" {
+		t.Fatalf("stdout = %q, want only the progress", stdout.String())
+	}
+	if want := "warning: careful\nstep 2/2 (second) failed: boom; fix it\n"; stderr.String() != want {
+		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
 	}
 }
 

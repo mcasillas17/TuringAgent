@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../l10n/generated/app_localizations.dart';
 import '../../l10n/run_state_localizations.dart';
@@ -20,21 +20,17 @@ import '../../models/run_state.dart';
 ///    always resolved through generated localization
 ///    ([localizedRunStepNotice]).
 class RunNoticeCard extends StatelessWidget {
-  const RunNoticeCard({super.key, required String note})
-    : _note = note,
-      _category = null,
+  const RunNoticeCard({super.key, required String this._note})
+    : _category = null,
       _attempt = 0,
       _maxAttempts = 0;
 
   const RunNoticeCard.localized({
     super.key,
-    required RunStepNoticeCategory category,
-    required int attempt,
-    required int maxAttempts,
-  }) : _note = null,
-       _category = category,
-       _attempt = attempt,
-       _maxAttempts = maxAttempts;
+    required RunStepNoticeCategory this._category,
+    required this._attempt,
+    required this._maxAttempts,
+  }) : _note = null;
 
   final String? _note;
   final RunStepNoticeCategory? _category;

@@ -20,12 +20,19 @@ import (
 // as LabelValue renders them.
 const LabelKey = "org.turing.checks"
 
+// DefaultSuccess is the line a check prints on success when it names none.
+const DefaultSuccess = "configuration is valid"
+
 // Check is one check subcommand. Run receives the process environment as
-// os.Environ returns it, and returns notices to print as warnings, or the
-// error that refuses the configuration.
+// os.Environ returns it and the writer for progress lines (standard output,
+// ahead of the success line; a check with nothing to report ignores it). It
+// returns notices to print as warnings, or the error that refuses the
+// configuration. Success is the line printed when Run passes; empty means
+// DefaultSuccess.
 type Check struct {
-	Name string
-	Run  func(environ []string) (warnings []string, err error)
+	Name    string
+	Success string
+	Run     func(environ []string, progress io.Writer) (warnings []string, err error)
 }
 
 // Subcommand is the argument that runs the check called name.
@@ -80,7 +87,7 @@ func Main(args, environ []string, checks []Check, serve func() error, stdout, st
 }
 
 func runCheck(check Check, environ []string, stdout, stderr io.Writer) int {
-	warnings, err := check.Run(environ)
+	warnings, err := check.Run(environ, stdout)
 	for _, warning := range warnings {
 		_, _ = fmt.Fprintf(stderr, "warning: %s\n", warning)
 	}
@@ -88,7 +95,11 @@ func runCheck(check Check, environ []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
 	}
-	_, _ = fmt.Fprintln(stdout, "configuration is valid")
+	success := check.Success
+	if success == "" {
+		success = DefaultSuccess
+	}
+	_, _ = fmt.Fprintln(stdout, success)
 	return 0
 }
 
