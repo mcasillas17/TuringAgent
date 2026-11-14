@@ -1,4 +1,5 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/chat/delegation_card.dart';
 import 'package:turing_flutter_app/features/chat/delegation_transcript_screen.dart';
@@ -63,6 +64,42 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Nothing to show yet.'), findsOneWidget);
+  });
+
+  testWidgets('a transcript in a dark theme draws its text in the theme color', (
+    tester,
+  ) async {
+    // flutter_markdown cannot see material_ui's theme, so without a sheet
+    // built from it the text comes from the default light theme: dark text on
+    // a dark surface.
+    final api = _TranscriptApi()
+      ..messages = [
+        Message(
+          messageId: 'msg_result',
+          runId: 'run_child',
+          role: 'assistant',
+          content: 'Found three notes.',
+          sequence: 2,
+          createdAt: DateTime.utc(2026, 10, 1),
+        ),
+      ];
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(brightness: Brightness.dark),
+        home: DelegationTranscriptScreen(delegation: _task, apiClient: api),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final text = tester.widget<EditableText>(
+      find.descendant(
+        of: find.byType(MarkdownBody),
+        matching: find.byType(EditableText),
+      ),
+    );
+    final theme = Theme.of(tester.element(find.byType(MarkdownBody)));
+    expect(text.controller.text, 'Found three notes.');
+    expect(text.style.color, theme.textTheme.bodyMedium!.color);
   });
 
   testWidgets('a card for a task with no recorded task names only who', (

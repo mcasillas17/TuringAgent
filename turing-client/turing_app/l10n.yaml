@@ -4,3 +4,10 @@ output-dir: lib/l10n/generated
 output-localization-file: app_localizations.dart
 nullable-getter: false
 format: true
+# Flutter 3.50's gen-l10n still lists flutter_localizations' deprecated
+# GlobalMaterialLocalizations and GlobalCupertinoLocalizations delegates in
+# the generated file, and `flutter pub get` regenerates it, so the ignore can
+# only come from here. It reaches the generated files only; hand-written code
+# is analyzed in full. Remove this header once gen-l10n emits the material_ui
+# and cupertino_ui delegates: https://github.com/flutter/flutter/issues/196475
+header: "// ignore_for_file: deprecated_member_use"
