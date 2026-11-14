@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// The palette is built for long sessions in a dim room, which is how a
 /// local-first assistant actually gets used. Dark is the primary design target
