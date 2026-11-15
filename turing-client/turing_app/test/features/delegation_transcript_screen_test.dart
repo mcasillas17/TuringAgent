@@ -1,4 +1,5 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/chat/delegation_card.dart';
 import 'package:turing_flutter_app/features/chat/delegation_transcript_screen.dart';
@@ -63,6 +64,55 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Nothing to show yet.'), findsOneWidget);
+  });
+
+  testWidgets('a transcript draws its markdown in the theme text color', (
+    tester,
+  ) async {
+    // flutter_markdown cannot see material_ui's theme, so without a sheet
+    // built from it the text comes from the default light theme: dark text on
+    // a dark surface.
+    final api = _TranscriptApi()
+      ..messages = [
+        Message(
+          messageId: 'msg_result',
+          runId: 'run_child',
+          role: 'assistant',
+          content:
+              '# Notes\n\nFound three notes.\n\n#### Detail\n\n'
+              '> quoted\n\n- listed\n\n| name |\n|---|\n| cell |\n',
+          sequence: 2,
+          createdAt: DateTime.utc(2026, 10, 1),
+        ),
+      ];
+    Widget host(Brightness brightness) => MaterialApp(
+      theme: ThemeData(brightness: brightness),
+      home: DelegationTranscriptScreen(delegation: _task, apiClient: api),
+    );
+
+    for (final brightness in [Brightness.dark, Brightness.light]) {
+      await tester.pumpWidget(host(brightness));
+      await tester.pumpAndSettle();
+
+      final theme = Theme.of(tester.element(find.byType(MarkdownBody)));
+      final texts = tester.widgetList<EditableText>(
+        find.descendant(
+          of: find.byType(MarkdownBody),
+          matching: find.byType(EditableText),
+        ),
+      );
+      expect(
+        texts.map((text) => text.controller.text),
+        containsAll(['Notes', 'Detail', 'quoted', 'listed', 'cell']),
+      );
+      for (final text in texts) {
+        expect(
+          text.style.color,
+          theme.textTheme.bodyMedium!.color,
+          reason: '${text.controller.text} in $brightness',
+        );
+      }
+    }
   });
 
   testWidgets('a card for a task with no recorded task names only who', (

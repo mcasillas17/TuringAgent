@@ -1,10 +1,11 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
 import '../../models/delegation.dart';
 import '../../models/message.dart';
 import '../../networking/api_client.dart';
 import '../../utils/content_presence.dart';
+import 'markdown_style.dart';
 
 /// What a specialist did on a task, read-only: the task as Turing asked it,
 /// then the specialist's own conversation. The framed brief the specialist
@@ -100,7 +101,11 @@ class _DelegationTranscriptScreenState
             for (final message in messages)
               Padding(
                 padding: const EdgeInsets.only(bottom: 14),
-                child: MarkdownBody(data: message.content, selectable: true),
+                child: MarkdownBody(
+                  data: message.content,
+                  selectable: true,
+                  styleSheet: markdownStyleSheetFromTheme(theme),
+                ),
               ),
         ],
       ),

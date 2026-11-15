@@ -78,9 +78,9 @@ Runtime prerequisites and limits:
 
 ## Run Locally
 
-Use a Flutter release that meets the [repository's Dart and dependency
-requirements](../../README.md#requirements); the app's SDK declaration alone
-is not the effective build minimum.
+Use Flutter 3.47 or newer: the pubspec's environment (Dart `^3.13.0`, Flutter
+`>=3.47.0`, the floor of `material_ui`) is the minimum, as the
+[repository's requirements](../../README.md#requirements) explain.
 
 From the repository root:
 

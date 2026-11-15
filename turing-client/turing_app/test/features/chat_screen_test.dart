@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart' show GrpcError;
@@ -451,6 +451,56 @@ void main() {
     // makes a transcript you have to decode rather than read.
     expect(find.textContaining('**bold**'), findsNothing);
     expect(find.byType(MarkdownBody), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    unawaited(events.close());
+  });
+
+  testWidgets('assistant markdown the sheet leaves unset follows a dark theme', (
+    tester,
+  ) async {
+    // flutter_markdown reads the theme through the deprecated framework
+    // library, which cannot see material_ui's, so anything the assistant
+    // sheet does not set would otherwise come from the default light theme:
+    // dark table text on a dark surface.
+    final events = StreamController<TuringEvent>(sync: true);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(brightness: Brightness.dark),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: ChatScreen(
+          sessionId: 'sess_1',
+          apiClient: _FakeApiClient(),
+          eventSource: _FakeEventSource(events.stream),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    events.add(
+      _event(
+        type: 'message.delta',
+        sequence: 1,
+        payload: const {
+          'messageId': 'msg_a',
+          'role': 'assistant',
+          'delta': '| name | size |\n|---|---|\n| notes | three |\n',
+        },
+      ),
+    );
+    await tester.pump();
+
+    final cell = tester
+        .widgetList<EditableText>(
+          find.descendant(
+            of: find.byType(MarkdownBody),
+            matching: find.byType(EditableText),
+          ),
+        )
+        .singleWhere((text) => text.controller.text == 'three');
+    final theme = Theme.of(tester.element(find.byType(MarkdownBody)));
+    expect(cell.style.color, theme.textTheme.bodyMedium!.color);
 
     await tester.pumpWidget(const SizedBox.shrink());
     unawaited(events.close());

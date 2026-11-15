@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Shared presentational chrome for a non-routine, error-styled outcome the
 /// user must notice: a run failure, a run cancellation, a `sendMessage`
