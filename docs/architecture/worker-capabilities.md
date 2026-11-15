@@ -291,6 +291,36 @@ worker being disconnected and is answered with the stop, and the recovery loop
 tells the worker again while it still holds the task. A completed task is left
 as it was.
 
+**A specialist turned off or changed withdraws its queued tasks.** A task runs
+only under the grant it was created with. The claim skips a task unless its
+specialist's `agent_profile_settings` row is enabled and granted at the
+task's `delegations.profile_revision`; disabling a profile, or granting it at
+another revision, writes only that row, so from its commit no worker takes
+the profile's queued or consent-held tasks however many there are, and work
+queued behind them is still claimed. A re-enable restores a task only while
+the grant is still at its revision: a re-grant at another revision never
+does. The maintenance goroutine then withdraws them, in transactions of at
+most 100 tasks that each re-read the setting through the same predicate, so
+an interrupted pass resumes on the next tick with no marker. The profile file
+is authority too: between a task's claim and its send, the runtime resolves
+its specialist through the resolver `CallTeamTool` uses, outside every lock
+and transaction, and a profile that is not Active at the task's revision (its
+file deleted, an authority field edited, a requirement no longer met, or a
+team folder it cannot read) withdraws the task before any worker is sent it,
+releasing the claim's execution with it. Consent is refused, never signed or
+recorded, for a task in the same state. Each is cancelled `profile_grant_revoked`
+(reason `abandoned`, orchestrator-internal origin, never `user_cancelled`),
+reports and joins like any other end, and its card says it "was not run because
+its profile was disabled or changed". A task a worker already holds is never
+withdrawn: it finishes under the authority it started with.
+
+**The maintenance goroutine.** Background duties that must not depend on the
+job reaper run on one goroutine (`orchestrator-go/internal/maintenance`, wired
+in `app.New`), at `TURING_JOB_REAPER_INTERVAL_MS` or one minute, whichever is
+shorter, and at one minute with the reaper off; never longer. Each tick runs
+every registered duty once, in order, logging a failure and moving on. The
+revocation batches above are its first duty.
+
 **What the user sees.** Every change in what a task's card would show is a
 `delegation.updated` (`TURING_EVENT_TYPE_DELEGATION_UPDATED = 25`) on the
 parent's stream, appended in the transaction that made it: queued, working

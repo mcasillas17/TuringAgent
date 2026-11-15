@@ -210,6 +210,14 @@ func (s *Server) resolveDelegationEgress(ctx context.Context, id string) (delega
 	if err != nil {
 		return delegationEgressChallenge{}, delegationEgressError(err)
 	}
+	// The profile file is authority too: consent is never signed or recorded
+	// for a task its specialist no longer holds as it was granted.
+	if active, err := s.DelegatedProfileActive(ctx, egress.ProfileID, egress.ProfileRevision); err != nil {
+		return delegationEgressChallenge{}, status.Error(codes.Internal, "resolve the task's specialist failed")
+	} else if !active {
+		return delegationEgressChallenge{}, status.Error(codes.FailedPrecondition,
+			"this task's specialist was disabled or changed since it was asked, so the task will not run")
+	}
 	remotes, err := s.repo.RemoteMCPServersForTools(ctx, egress.EgressTools)
 	if err != nil {
 		return delegationEgressChallenge{}, status.Error(codes.Internal, "resolve remote MCP egress failed")

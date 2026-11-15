@@ -306,7 +306,7 @@ func TestAbandonedCancellationNeverClaimsUserIntent(t *testing.T) {
 	// enforces still stands — a user-cancelled constructor may only appear
 	// alongside an explicit typed cancel-intent RPC.
 	constructors := exportedFunctionsReturning(t, "Cancellation")
-	want := []string{"AbandonedCancellation", "EgressConsentDeclinedCancellation", "ParentEndedCancellation", "QueueTimeoutCancellation", "UserCancellation"}
+	want := []string{"AbandonedCancellation", "EgressConsentDeclinedCancellation", "ParentEndedCancellation", "ProfileGrantRevokedCancellation", "QueueTimeoutCancellation", "UserCancellation"}
 	if !reflect.DeepEqual(constructors, want) {
 		t.Fatalf("exported cancellation constructors = %v, want %v", constructors, want)
 	}
@@ -333,6 +333,18 @@ func TestParentEndedCancellationIsTheOrchestratorGivingUp(t *testing.T) {
 	if cancellation.Reason() != ReasonAbandoned || cancellation.Origin() != OriginOrchestratorInternal ||
 		cancellation.Code() != CodeParentRunEnded || CodeParentRunEnded != "parent_run_ended" {
 		t.Fatalf("parent-ended cancellation = %v/%v/%q", cancellation.Origin(), cancellation.Reason(), cancellation.Code())
+	}
+}
+
+// A delegated task whose specialist was turned off, re-granted at another
+// revision, or changed on disk before a worker took it is never run. The
+// orchestrator withdraws it on the profile's behalf: abandoned, not
+// user_cancelled, because the user changed the profile, not this task.
+func TestProfileGrantRevokedCancellationIsTheOrchestratorWithdrawingTheTask(t *testing.T) {
+	cancellation := ProfileGrantRevokedCancellation()
+	if cancellation.Reason() != ReasonAbandoned || cancellation.Origin() != OriginOrchestratorInternal ||
+		cancellation.Code() != CodeProfileGrantRevoked || CodeProfileGrantRevoked != "profile_grant_revoked" {
+		t.Fatalf("profile-revoked cancellation = %v/%v/%q", cancellation.Origin(), cancellation.Reason(), cancellation.Code())
 	}
 }
 

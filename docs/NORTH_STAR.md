@@ -864,14 +864,22 @@ separate lifecycle, visibility and evaluation gates.
 
 #### TUR-026 - Revalidate frozen grants at re-entry
 
-- **Status:** Partly shipped: TUR-026a (automation grants). Every tool call of
+- **Status:** Partly shipped: TUR-026a (automation grants) and TUR-026b
+  (delegation children). Every tool call of
   an automation's run is checked against the automation as it stands, reads
   included. The skill loaders and memory and team tools are the exception;
   their own services already refuse them for automation runs. The
   approval-commit transaction checks the grant again and records the
   approval's audit row. Deleting, disabling or narrowing an automation fails
-  the run's next tool call with `automation_grant_revoked`. TUR-026b (delegation
-  children), TUR-026c (repeat guard) and TUR-026d (allowlist ceiling and
+  the run's next tool call with `automation_grant_revoked`. A delegated task
+  is claimed only while its specialist is enabled and granted at the task's
+  revision; disabling the specialist or re-granting it at another revision
+  writes only its setting row, and a maintenance goroutine (running with the
+  job reaper on or off) then withdraws its queued and consent-held tasks as
+  `profile_grant_revoked`, at most 100 per transaction. A task whose profile
+  file was deleted or had an authority field edited is withdrawn between its
+  claim and its send, and its consent is refused; a running task is never
+  withdrawn. TUR-026c (repeat guard) and TUR-026d (allowlist ceiling and
   registered-MCP dispatch) are not started.
 - **Outcome:** After the owner revokes or narrows a grant, a run's frozen
   authority only narrows or ends, and an automation's allowlist bounds every

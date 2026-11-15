@@ -58,6 +58,10 @@ type Server struct {
 	egressSecret string
 	now          func() time.Time
 	nonce        func() (string, error)
+	// revocationBatchDone, when set (test-only; always nil in production),
+	// runs after each revocation batch has committed and been published, with
+	// the number of tasks it withdrew. A test uses it to act between batches.
+	revocationBatchDone func(cancelled int)
 }
 
 func New(repo *repository.Repository, routes Routes, defaultModel string, enabled bool) *Server {
