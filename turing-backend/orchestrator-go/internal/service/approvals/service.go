@@ -482,20 +482,29 @@ func (s *Server) notifyPostCommit(approval repository.ApprovalRecord, approvalSt
 // refusals, and also matches repository.ErrAutomationGrantRevoked under
 // errors.Is, which is what lets the runtime fail the run as
 // automation_grant_revoked rather than the generic automation_approval_failed.
-var errAutomationGrantRevoked error = automationGrantRevokedError{}
+var errAutomationGrantRevoked error = unattendedRefusal{repository.ErrAutomationGrantRevoked}
 
-type automationGrantRevokedError struct{}
+// errUnattendedRepeatBlocked is how GrantUnattendedApproval refuses a call the
+// run already spent an approval on. It matches
+// repository.ErrUnattendedRepeatBlocked under errors.Is, so the runtime fails
+// the run as unattended_repeat_blocked.
+var errUnattendedRepeatBlocked error = unattendedRefusal{repository.ErrUnattendedRepeatBlocked}
 
-func (automationGrantRevokedError) Error() string {
-	return "automation grant revoked"
+// unattendedRefusal is a refusal the runtime fails an automation's run with
+// under its own code: a gRPC PermissionDenied that still unwraps to the
+// repository error naming it.
+type unattendedRefusal struct{ cause error }
+
+func (r unattendedRefusal) Error() string {
+	return r.cause.Error()
 }
 
-func (automationGrantRevokedError) GRPCStatus() *status.Status {
-	return status.New(codes.PermissionDenied, "automation grant revoked")
+func (r unattendedRefusal) GRPCStatus() *status.Status {
+	return status.New(codes.PermissionDenied, r.cause.Error())
 }
 
-func (automationGrantRevokedError) Unwrap() error {
-	return repository.ErrAutomationGrantRevoked
+func (r unattendedRefusal) Unwrap() error {
+	return r.cause
 }
 
 // unattendedGrantError maps the repository's refusals of an unattended grant
@@ -505,6 +514,8 @@ func unattendedGrantError(err error) error {
 	switch {
 	case errors.Is(err, repository.ErrAutomationGrantRevoked):
 		return errAutomationGrantRevoked
+	case errors.Is(err, repository.ErrUnattendedRepeatBlocked):
+		return errUnattendedRepeatBlocked
 	case errors.Is(err, repository.ErrAutomationToolNotAllowlisted):
 		return status.Error(codes.PermissionDenied, "tool is not on the automation's allowlist")
 	case errors.Is(err, repository.ErrRunNotUnattended):
@@ -543,7 +554,10 @@ func unattendedGrantError(err error) error {
 // which is the check that binds: a revocation landing during the preview
 // refresh or the signing still refuses it. Either refusal for a withdrawn
 // grant is an error matching repository.ErrAutomationGrantRevoked, which the
-// runtime turns into the run's automation_grant_revoked failure.
+// runtime turns into the run's automation_grant_revoked failure. That
+// transaction also refuses a call the run already spent an approval on,
+// with an error matching repository.ErrUnattendedRepeatBlocked, which the
+// runtime turns into unattended_repeat_blocked.
 func (s *Server) GrantUnattendedApproval(ctx context.Context, approvalID string, serverName string, toolName string) error {
 	if approvalID == "" {
 		return status.Error(codes.InvalidArgument, "approval_id is required")
