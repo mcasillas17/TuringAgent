@@ -59,6 +59,11 @@ type Server struct {
 	// send and its delivered bookkeeping. The window between the two is where a
 	// concurrent fence lands, and nothing else can hold a test open inside it.
 	afterAssignmentSend func(repository.Assignment)
+	// afterClaim is a test seam fired when a dispatch's claim returns, while
+	// the claim still holds its slot on the worker. A dispatch that meets the
+	// held slot passes the worker over, and nothing else can hold a test open
+	// inside that window.
+	afterClaim func(repository.Job)
 	// queueNow is the clock the queue-wait sweep reads. It is a seam rather than
 	// a direct time.Now call so a deadline test can advance time deliberately
 	// instead of sleeping past one, which is the difference between a test that
@@ -148,6 +153,13 @@ type worker struct {
 	closed         bool
 	lastHeartbeat  time.Time
 	sender         *runtimeCommandSender
+
+	// passedOver counts the dispatches that skipped this worker while a claim
+	// was in flight. A claim that comes back empty after it moved restarts
+	// the dispatch: it may have read the queue before the skipping
+	// dispatch's job committed. A claim that ends in an error does not, and
+	// leaves that job to the next dispatch.
+	passedOver uint64
 }
 
 type workerToolset struct {
@@ -1684,11 +1696,18 @@ func (s *Server) dispatchToWorker(
 		worker.lastHeartbeat.IsZero() ||
 		!time.Now().UTC().Before(worker.lastHeartbeat.Add(s.dispatch.LeaseDuration)) ||
 		len(worker.assignments)+worker.pendingClaims >= worker.maxConcurrent {
+		if worker.pendingClaims > 0 {
+			// This dispatch may be for a job that a claim in flight read
+			// the queue too early to see; that claim restarts the dispatch
+			// if it comes back empty.
+			worker.passedOver++
+		}
 		worker.mu.Unlock()
 		return false, false, false, nil
 	}
 	capabilities := worker.capabilities
 	worker.pendingClaims++
+	passedOver := worker.passedOver
 	worker.mu.Unlock()
 	job, err := s.repo.ClaimNextCompatibleJobWithLimit(
 		ctx,
@@ -1701,6 +1720,9 @@ func (s *Server) dispatchToWorker(
 			return workerCapabilitiesSupportRoute(capabilities, route)
 		},
 	)
+	if s.afterClaim != nil {
+		s.afterClaim(job)
+	}
 	if err == nil && job.JobID != "" {
 		withdrawn, withdrawErr := s.withdrawRevokedTask(ctx, workerID, job)
 		if withdrawn || withdrawErr != nil {
@@ -1719,8 +1741,11 @@ func (s *Server) dispatchToWorker(
 		return false, false, false, err
 	}
 	if job.JobID == "" {
+		missed := worker.passedOver != passedOver
 		worker.mu.Unlock()
-		return false, true, false, nil
+		// A dispatch passed this worker over while the claim was in flight,
+		// so dispatch starts over rather than leave its job queued.
+		return false, !missed, missed, nil
 	}
 	claimedAssignment := assignmentForClaim(job)
 	assignedJob := claimedAssignment.job
