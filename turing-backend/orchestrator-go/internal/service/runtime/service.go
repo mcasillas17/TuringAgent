@@ -112,6 +112,12 @@ const AutomationNotAllowlistedCode = "automation_tool_not_allowlisted"
 // run meets the narrower grant at its next tool call, reads included.
 const AutomationGrantRevokedCode = "automation_grant_revoked"
 
+// UnattendedRepeatBlockedCode is the run error an automation's run gets when
+// it asks to pre-approve a call it already made: it spent an approval on the
+// same server, tool and arguments, typically in an attempt that ended in a
+// retryable failure before the run was sent back to the queue.
+const UnattendedRepeatBlockedCode = "unattended_repeat_blocked"
+
 // unattendedRevocationApplies reports whether a tool call of an unattended run
 // is held to its automation's current grant. Two kinds are left as they are
 // today:
@@ -3119,9 +3125,14 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 				log.Printf("grant unattended approval %s for automation %s: %v", approvalID, grant.AutomationID, err)
 				// A grant the owner withdrew while this call was being
 				// prepared is the same refusal the check above makes, found
-				// later; anything else is the grant itself failing.
-				if errors.Is(err, repository.ErrAutomationGrantRevoked) {
+				// later; a call this run already spent an approval on is
+				// refused at the same commit. Anything else is the grant
+				// itself failing.
+				switch {
+				case errors.Is(err, repository.ErrAutomationGrantRevoked):
 					return s.failBlockedUnattendedRun(ctx, beacon, grant, AutomationGrantRevokedCode)
+				case errors.Is(err, repository.ErrUnattendedRepeatBlocked):
+					return s.failBlockedUnattendedRun(ctx, beacon, grant, UnattendedRepeatBlockedCode)
 				}
 				return s.failUnattendedRun(ctx, beacon, runoutcome.NormalizeFailure(
 					runoutcome.OriginAutomationPolicy, "automation_approval_failed", runoutcome.RetryClassNever,
@@ -3217,8 +3228,9 @@ func (s *Server) blockUnattendedTool(ctx context.Context, beacon *turingv1.ToolC
 // fails the run under the automation-policy origin with code.
 //
 // It is the whole of the refusal once the tool call already has a decision of
-// its own: a revocation the approval commit found, after the call was recorded
-// as needing approval. Denying that call as well would add a tool.call.denied
+// its own: a revocation, or a repeat of a call the run already spent an
+// approval on, that the approval commit found after the call was recorded as
+// needing approval. Denying that call as well would add a tool.call.denied
 // event the stored call never reaches; the run's failure expires its approval
 // and fails the call, which is what happened to it.
 func (s *Server) failBlockedUnattendedRun(ctx context.Context, beacon *turingv1.ToolCallBeacon, grant repository.AutomationRunGrant, code string) (*turingv1.ToolPolicyDecision, error) {

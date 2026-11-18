@@ -78,6 +78,7 @@ func approvedFailureMappings() []failureMappingCase {
 		{name: "automation_approval_failed", origin: OriginAutomationPolicy, code: "automation_approval_failed", wantReason: ReasonPolicyDenied},
 		{name: "automation_tool_not_allowlisted", origin: OriginAutomationPolicy, code: "automation_tool_not_allowlisted", wantReason: ReasonPolicyDenied},
 		{name: "automation_grant_revoked", origin: OriginAutomationPolicy, code: "automation_grant_revoked", wantReason: ReasonPolicyDenied},
+		{name: "unattended_repeat_blocked", origin: OriginAutomationPolicy, code: "unattended_repeat_blocked", wantReason: ReasonPolicyDenied},
 		{name: "egress_decision_required", origin: OriginToolPolicy, code: "egress_decision_required", wantReason: ReasonPolicyDenied},
 		{name: "egress_decision_invalid", origin: OriginToolPolicy, code: "egress_decision_invalid", wantReason: ReasonPolicyDenied},
 		// The current transport path cannot tell a deliberate stop from a lost

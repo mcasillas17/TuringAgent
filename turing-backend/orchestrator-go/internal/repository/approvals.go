@@ -290,6 +290,14 @@ var ErrUnattendedApprovalUnrecorded = errors.New("unattended approval could not 
 // was signed — refuses the approval with ErrAutomationGrantRevoked, and one
 // committed after it meets a call already approved, as a cancellation does.
 //
+// In the same transaction it refuses, with ErrUnattendedRepeatBlocked, a
+// call the run has already made: one it spent an approval on, with the same
+// server, tool and arguments. A run requeued after its first attempt made a
+// mutation replays its history and may ask for the same call again; nobody is
+// present to notice, so it is not granted twice. That also refuses a
+// deliberate identical repeat within one attempt, and of any
+// approval-required tool, reads included; the run fails visibly.
+//
 // It then performs exactly ApproveApprovalWithEvent's update and event, and
 // writes the automation's approval.approved audit row in the same
 // transaction, under RecordAuditForExistingRun's condition (the run exists and
@@ -309,6 +317,14 @@ func (r *Repository) ApproveUnattendedApprovalWithEvent(ctx context.Context, app
 			}
 			if err := state.Check(record.ServerName, record.ToolName); err != nil {
 				return err
+			}
+			var repeated bool
+			if err := tx.QueryRowContext(ctx, unattendedRepeatQuery,
+				record.RunID, record.ServerName, record.ToolName, record.ArgsHash).Scan(&repeated); err != nil {
+				return err
+			}
+			if repeated {
+				return ErrUnattendedRepeatBlocked
 			}
 			grant = state.Grant
 			return nil
@@ -334,6 +350,24 @@ func (r *Repository) ApproveUnattendedApprovalWithEvent(ctx context.Context, app
 		},
 	})
 }
+
+// unattendedRepeatQuery reports whether a run has already spent an approval on
+// the same server, tool and argument hash. approvals has neither a server
+// column nor a run-scoped index, so the lookup starts from the run's tool
+// calls on idx_tool_calls_run and reaches each call's approval through its
+// unique tool_call_id. CROSS JOIN fixes that order: SQLite never reorders it,
+// so statistics cannot turn it into a walk of every consumed approval.
+const unattendedRepeatQuery = `
+	SELECT EXISTS(
+		SELECT 1
+		FROM tool_calls tc
+		CROSS JOIN approvals a ON a.tool_call_id = tc.id
+		WHERE tc.run_id = ?
+			AND tc.server_name = ?
+			AND tc.tool_name = ?
+			AND tc.args_hash = ?
+			AND a.status = 'consumed'
+	)`
 
 // approvalGuard adds checks and writes to an approval's own transaction. Its
 // hooks run only when the approval actually moves from pending to approved:
