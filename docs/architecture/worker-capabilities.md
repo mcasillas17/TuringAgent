@@ -107,6 +107,12 @@ change. Coarse provider/model/context/tool/capacity predicates run in SQLite bef
 the final typed matcher, and the indexed query claims at most one compatible row, so
 an incompatible backlog is not decoded and rescanned for every worker. Dispatch
 reserves worker capacity without holding the worker lock while waiting for SQLite.
+Dispatches are not serialized, so one that finds a worker's capacity held by claims in
+flight skips it and marks it; a claim that comes back empty after such a skip restarts
+the worker scan, because it may have read the queue before the skipping dispatch's job
+committed. Without that hand-off the job waited for the next dispatch, which for an
+idle worker is the reaper tick. A claim that ends in an error does not restart, and
+leaves such a job to the next dispatch.
 Immediately before assignment delivery, the sender revalidates the frozen route
 against the current registration, heartbeat lease, and committed live snapshot; a
 stale or incompatible claim is requeued instead of being sent. Capability fencing
@@ -489,6 +495,8 @@ Tests must fail without the implementation for:
 - approval Ready/Accepted replay, conflict fencing, and Accepted-delivery
   failure entering recovering before continuation;
 - post-claim fencing restarting dispatch when another compatible worker is available;
+- an empty claim restarting dispatch when a concurrent dispatch skipped its worker
+  meanwhile, so a job committed during the claim is assigned at once;
 - registration, capability, heartbeat revival, and recovery dispatch continuing when
   advisory queue-notice persistence fails;
 - populated pre-capability migration backfill and stable nanosecond keyset ordering;
