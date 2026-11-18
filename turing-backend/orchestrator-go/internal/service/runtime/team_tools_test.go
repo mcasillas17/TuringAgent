@@ -79,6 +79,10 @@ func TestCollidingTeamNamesAreWithdrawnFromWorkerCapabilities(t *testing.T) {
 		t.Fatalf("pseudo rows = %d and the user's tool is on %q, want none and mcp_user_team", pseudoRows, userServer)
 	}
 	_ = first.CloseSend()
+	// The route's tools are those every live worker serves, so the first
+	// worker's stream has to be gone, not just closing, before the second
+	// registers.
+	h.service.WaitForWorkerStreams()
 
 	if _, err := h.database.ExecContext(ctx, `DELETE FROM mcp_servers WHERE id = 'mcp_user_team'`); err != nil {
 		t.Fatal(err)

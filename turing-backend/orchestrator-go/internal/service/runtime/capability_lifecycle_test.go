@@ -309,10 +309,10 @@ func TestCapabilityLossAndDisconnectAppendQueueNotices(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			h := newHarness(t)
-			stream := connectWorkerCapabilities(t, h, "worker-loss", "registration-loss", modelCapabilities(
-				turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
-			))
-			defer func() { _ = stream.CloseSend() }()
+			// Queued before the worker connects. A dispatch that finds the
+			// only slot held by the worker's own dispatch on connecting passes
+			// the worker over, and that dispatch may already have read an
+			// empty queue.
 			session, err := h.repo.CreateSession(context.Background(), "Queued")
 			if err != nil {
 				t.Fatal(err)
@@ -324,9 +324,10 @@ func TestCapabilityLossAndDisconnectAppendQueueNotices(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := h.service.DispatchPending(context.Background()); err != nil {
-				t.Fatal(err)
-			}
+			stream := connectWorkerCapabilities(t, h, "worker-loss", "registration-loss", modelCapabilities(
+				turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1,
+			))
+			defer func() { _ = stream.CloseSend() }()
 			if assigned := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
 				return command.GetRunAssigned() != nil
 			}).GetRunAssigned(); assigned.GetRunId() != first.RunID {

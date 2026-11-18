@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -98,7 +99,7 @@ func testTuringDelegatesThroughTheRuntime(t *testing.T, approvalRequired bool) {
 		return app.RuntimeService.ValidateRouting(context.Background(), repository.RoutingRequirements{
 			AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
 			RequestedTools: []string{repository.TeamDelegateTool}, MinimumTeamProtocolVersion: 1,
-		}) == nil
+		}) == nil && toolsRecorded(app, repository.TeamDelegateTool)
 	})
 
 	team := turingv1.NewTeamServiceClient(publicConn)
@@ -259,7 +260,7 @@ func TestASpecialistsGitHubToolWaitsForTheUsersConsent(t *testing.T) {
 			AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
 			RequestedTools:             []string{repository.TeamDelegateTool, "integrations/github.get_issue"},
 			MinimumTeamProtocolVersion: 1, RemoteEgressDecision: true,
-		}) == nil
+		}) == nil && toolsRecorded(app, repository.TeamDelegateTool, "integrations/github.get_issue")
 	})
 
 	team := turingv1.NewTeamServiceClient(publicConn)
@@ -375,4 +376,23 @@ func waitFor(t *testing.T, what string, done func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// toolsRecorded reports whether every qualified tool is in the tool catalog.
+// A connecting worker is routable the moment it registers, a moment before
+// its tools are recorded, and profile resolution and policy edits read the
+// record.
+func toolsRecorded(app *App, qualified ...string) bool {
+	catalog, err := app.Repository.ListToolCatalog(context.Background())
+	if err != nil {
+		return false
+	}
+	for _, name := range qualified {
+		if !slices.ContainsFunc(catalog, func(entry repository.ToolCatalogEntry) bool {
+			return entry.ServerName+"/"+entry.ToolName == name
+		}) {
+			return false
+		}
+	}
+	return true
 }
