@@ -104,7 +104,9 @@ func TestATaskWhoseDispatchEndsDuringTheProfileCheckIsRequeued(t *testing.T) {
 	h := newHarness(t)
 	authority := &fakeAuthority{}
 	h.service.SetDelegationAuthority(authority)
-	stream := connectWorkerCapabilities(t, h, "team-worker", "registration-team", teamCapabilities(1, "system.time"))
+	// Registered rather than connected: a connecting worker's own dispatch
+	// would race this test's, which has to be the one that claims the task.
+	connected := registerWorkerCapabilities(t, h, "team-worker", "registration-team", teamCapabilities(1, "system.time"))
 	_, _, delegation := seedDelegatedParent(t, h, []string{"system/system.time"})
 	dispatchCtx, endDispatch := context.WithCancel(context.Background())
 	// The resolver's own routing reads see the ended context and report no
@@ -128,11 +130,8 @@ func TestATaskWhoseDispatchEndsDuringTheProfileCheckIsRequeued(t *testing.T) {
 	if err := h.service.DispatchPending(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	assigned := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
-		return command.GetRunAssigned() != nil
-	}).GetRunAssigned()
-	if assigned.GetRunId() != delegation.ChildRunID {
-		t.Fatalf("assigned %s, want the requeued task %s", assigned.GetRunId(), delegation.ChildRunID)
+	if assigned := assignedRun(t, connected); assigned != delegation.ChildRunID {
+		t.Fatalf("assigned %s, want the requeued task %s", assigned, delegation.ChildRunID)
 	}
 }
 
@@ -143,7 +142,10 @@ func TestATaskEndedDuringItsProfileCheckIsLeftAsItEnded(t *testing.T) {
 	h := newHarness(t)
 	authority := &fakeAuthority{}
 	h.service.SetDelegationAuthority(authority)
-	stream := connectWorkerCapabilities(t, h, "team-worker", "registration-team", teamCapabilities(1, "system.time"))
+	// Registered rather than connected, so this test's dispatch is the only
+	// one: a connecting worker's own could take the parent from the seed, or
+	// withdraw the task before the cancellation is in place.
+	connected := registerWorkerCapabilities(t, h, "team-worker", "registration-team", teamCapabilities(1, "system.time"))
 	sessionID, parent, delegation := seedDelegatedParent(t, h, []string{"system/system.time"})
 	authority.during = func(ctx context.Context) {
 		if _, err := h.repo.CancelUserRun(ctx, delegation.ChildSessionID, delegation.ChildRunID, "cancel-task"); err != nil {
@@ -162,11 +164,13 @@ func TestATaskEndedDuringItsProfileCheckIsLeftAsItEnded(t *testing.T) {
 		child.CancellationReason == runoutcome.CodeProfileGrantRevoked || child.ExecutionActive {
 		t.Fatalf("task = %+v; want it cancelled by the user, its execution released", child)
 	}
-	assigned := recvUntil(t, stream, func(command *turingv1.RuntimeCommand) bool {
-		return command.GetRunAssigned() != nil
-	}).GetRunAssigned()
-	if assigned.GetRunId() == delegation.ChildRunID || assigned.GetSessionId() != sessionID || assigned.GetRunId() == parent.RunID {
-		t.Fatalf("assigned %s, want the turn's continuation, never the task", assigned.GetRunId())
+	assigned := assignedRun(t, connected)
+	continuation, err := h.repo.GetRun(context.Background(), assigned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assigned == delegation.ChildRunID || continuation.SessionID != sessionID || assigned == parent.RunID {
+		t.Fatalf("assigned %s, want the turn's continuation, never the task", assigned)
 	}
 }
 

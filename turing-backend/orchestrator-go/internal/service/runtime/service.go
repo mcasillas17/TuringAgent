@@ -59,6 +59,11 @@ type Server struct {
 	// send and its delivered bookkeeping. The window between the two is where a
 	// concurrent fence lands, and nothing else can hold a test open inside it.
 	afterAssignmentSend func(repository.Assignment)
+	// afterClaim is a test seam fired when a dispatch's claim returns, while
+	// the claim still holds its slot on the worker. A dispatch that meets the
+	// held slot passes the worker over, and nothing else can hold a test open
+	// inside that window.
+	afterClaim func(repository.Job)
 	// queueNow is the clock the queue-wait sweep reads. It is a seam rather than
 	// a direct time.Now call so a deadline test can advance time deliberately
 	// instead of sleeping past one, which is the difference between a test that
@@ -112,6 +117,12 @@ const AutomationNotAllowlistedCode = "automation_tool_not_allowlisted"
 // run meets the narrower grant at its next tool call, reads included.
 const AutomationGrantRevokedCode = "automation_grant_revoked"
 
+// UnattendedRepeatBlockedCode is the run error an automation's run gets when
+// it asks to pre-approve a call it already made: it spent an approval on the
+// same server, tool and arguments, typically in an attempt that ended in a
+// retryable failure before the run was sent back to the queue.
+const UnattendedRepeatBlockedCode = "unattended_repeat_blocked"
+
 // unattendedRevocationApplies reports whether a tool call of an unattended run
 // is held to its automation's current grant. Two kinds are left as they are
 // today:
@@ -142,6 +153,13 @@ type worker struct {
 	closed         bool
 	lastHeartbeat  time.Time
 	sender         *runtimeCommandSender
+
+	// passedOver counts the dispatches that skipped this worker while a claim
+	// was in flight. A claim that comes back empty after it moved restarts
+	// the dispatch: it may have read the queue before the skipping
+	// dispatch's job committed. A claim that ends in an error does not, and
+	// leaves that job to the next dispatch.
+	passedOver uint64
 }
 
 type workerToolset struct {
@@ -1678,11 +1696,18 @@ func (s *Server) dispatchToWorker(
 		worker.lastHeartbeat.IsZero() ||
 		!time.Now().UTC().Before(worker.lastHeartbeat.Add(s.dispatch.LeaseDuration)) ||
 		len(worker.assignments)+worker.pendingClaims >= worker.maxConcurrent {
+		if worker.pendingClaims > 0 {
+			// This dispatch may be for a job that a claim in flight read
+			// the queue too early to see; that claim restarts the dispatch
+			// if it comes back empty.
+			worker.passedOver++
+		}
 		worker.mu.Unlock()
 		return false, false, false, nil
 	}
 	capabilities := worker.capabilities
 	worker.pendingClaims++
+	passedOver := worker.passedOver
 	worker.mu.Unlock()
 	job, err := s.repo.ClaimNextCompatibleJobWithLimit(
 		ctx,
@@ -1695,6 +1720,9 @@ func (s *Server) dispatchToWorker(
 			return workerCapabilitiesSupportRoute(capabilities, route)
 		},
 	)
+	if s.afterClaim != nil {
+		s.afterClaim(job)
+	}
 	if err == nil && job.JobID != "" {
 		withdrawn, withdrawErr := s.withdrawRevokedTask(ctx, workerID, job)
 		if withdrawn || withdrawErr != nil {
@@ -1713,8 +1741,11 @@ func (s *Server) dispatchToWorker(
 		return false, false, false, err
 	}
 	if job.JobID == "" {
+		missed := worker.passedOver != passedOver
 		worker.mu.Unlock()
-		return false, true, false, nil
+		// A dispatch passed this worker over while the claim was in flight,
+		// so dispatch starts over rather than leave its job queued.
+		return false, !missed, missed, nil
 	}
 	claimedAssignment := assignmentForClaim(job)
 	assignedJob := claimedAssignment.job
@@ -3119,9 +3150,14 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 				log.Printf("grant unattended approval %s for automation %s: %v", approvalID, grant.AutomationID, err)
 				// A grant the owner withdrew while this call was being
 				// prepared is the same refusal the check above makes, found
-				// later; anything else is the grant itself failing.
-				if errors.Is(err, repository.ErrAutomationGrantRevoked) {
+				// later; a call this run already spent an approval on is
+				// refused at the same commit. Anything else is the grant
+				// itself failing.
+				switch {
+				case errors.Is(err, repository.ErrAutomationGrantRevoked):
 					return s.failBlockedUnattendedRun(ctx, beacon, grant, AutomationGrantRevokedCode)
+				case errors.Is(err, repository.ErrUnattendedRepeatBlocked):
+					return s.failBlockedUnattendedRun(ctx, beacon, grant, UnattendedRepeatBlockedCode)
 				}
 				return s.failUnattendedRun(ctx, beacon, runoutcome.NormalizeFailure(
 					runoutcome.OriginAutomationPolicy, "automation_approval_failed", runoutcome.RetryClassNever,
@@ -3217,8 +3253,9 @@ func (s *Server) blockUnattendedTool(ctx context.Context, beacon *turingv1.ToolC
 // fails the run under the automation-policy origin with code.
 //
 // It is the whole of the refusal once the tool call already has a decision of
-// its own: a revocation the approval commit found, after the call was recorded
-// as needing approval. Denying that call as well would add a tool.call.denied
+// its own: a revocation, or a repeat of a call the run already spent an
+// approval on, that the approval commit found after the call was recorded as
+// needing approval. Denying that call as well would add a tool.call.denied
 // event the stored call never reaches; the run's failure expires its approval
 // and fails the call, which is what happened to it.
 func (s *Server) failBlockedUnattendedRun(ctx context.Context, beacon *turingv1.ToolCallBeacon, grant repository.AutomationRunGrant, code string) (*turingv1.ToolPolicyDecision, error) {

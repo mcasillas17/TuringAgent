@@ -450,9 +450,12 @@ var failureReasons = map[failureKey]Reason{
 	// TUR-026a: the owner deleted or disabled the automation, or narrowed its
 	// allowlist, while its run was still underway.
 	{OriginAutomationPolicy, "automation_grant_revoked"}: ReasonPolicyDenied,
-	{OriginToolPolicy, "egress_decision_required"}:       ReasonPolicyDenied,
-	{OriginToolPolicy, "egress_decision_invalid"}:        ReasonPolicyDenied,
-	{OriginClientLifecycle, "client_cancelled"}:          ReasonAbandoned,
+	// TUR-026c: the run already spent an approval on this exact call, most
+	// often in an attempt that ended in a retryable failure and was requeued.
+	{OriginAutomationPolicy, "unattended_repeat_blocked"}: ReasonPolicyDenied,
+	{OriginToolPolicy, "egress_decision_required"}:        ReasonPolicyDenied,
+	{OriginToolPolicy, "egress_decision_invalid"}:         ReasonPolicyDenied,
+	{OriginClientLifecycle, "client_cancelled"}:           ReasonAbandoned,
 	// TUR-010 queue bounds. Both are an expiry: the run was accepted, waited,
 	// and ran out of the time the operator allowed it to wait. Which bound it
 	// ran out of is recorded by the queue_wait_reason that same terminal
