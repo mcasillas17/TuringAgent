@@ -107,38 +107,21 @@ type unattendedApprover interface {
 }
 
 // AutomationNotAllowlistedCode is the run error an automation gets when it
-// reaches a tool it was not pre-approved for. Named because the client shows
-// it and a test asserts on it.
-const AutomationNotAllowlistedCode = "automation_tool_not_allowlisted"
+// reaches a tool its frozen allowlist never held, a safe read included. Named
+// because the client shows it and a test asserts on it.
+const AutomationNotAllowlistedCode = repository.AutomationToolNotAllowlistedCode
 
 // AutomationGrantRevokedCode is the run error an automation's run gets when the
 // owner withdrew its consent after it fired: the automation was deleted or
 // disabled, or the tool it is calling left the automation's allowlist. The
 // run meets the narrower grant at its next tool call, reads included.
-const AutomationGrantRevokedCode = "automation_grant_revoked"
+const AutomationGrantRevokedCode = repository.AutomationGrantRevokedCode
 
 // UnattendedRepeatBlockedCode is the run error an automation's run gets when
 // it asks to pre-approve a call it already made: it spent an approval on the
 // same server, tool and arguments, typically in an attempt that ended in a
 // retryable failure before the run was sent back to the queue.
-const UnattendedRepeatBlockedCode = "unattended_repeat_blocked"
-
-// unattendedRevocationApplies reports whether a tool call of an unattended run
-// is held to its automation's current grant. Two kinds are left as they are
-// today:
-//   - the skill loaders, which read only the owner-granted skills already
-//     pinned on the job and change nothing;
-//   - memory and team tools, which their own services refuse for any
-//     automation run without failing it.
-func unattendedRevocationApplies(serverName string, toolName string) bool {
-	switch serverName {
-	case "memory", "team":
-		return false
-	case "skills":
-		return toolName != "skills_list" && toolName != "skill_view"
-	}
-	return true
-}
+const UnattendedRepeatBlockedCode = repository.UnattendedRepeatBlockedCode
 
 type worker struct {
 	commands       chan workerCommand
@@ -3072,18 +3055,21 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, "unknown_tool")
 	}
 	// An automation's run carries the consent its automation gave when it
-	// fired, and that consent only narrows: every tool call, a safe read as
-	// much as a mutation, is checked against the automation as it stands now,
-	// before the policy decides anything. A run whose automation was deleted
-	// or disabled, or whose tool left the allowlist, stops here. For an
-	// attended run this is one primary-key miss.
-	grantState, unattended, err := s.repo.GetUnattendedGrantState(ctx, beacon.RunId, beaconServerName(beacon), beacon.ToolName)
+	// fired, and that consent is a ceiling that only narrows: every tool
+	// call, a safe read as much as a mutation, is checked against the frozen
+	// allowlist and the automation as it stands now, before the policy
+	// decides anything. A memory or team tool is refused here without
+	// failing the run; any other refusal fails it. For an attended run this
+	// is one primary-key miss.
+	unattended, err := s.repo.CheckUnattendedCall(ctx, beacon.RunId, beaconServerName(beacon), beacon.ToolName)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "read automation grant failed")
 	}
-	if unattended && unattendedRevocationApplies(beaconServerName(beacon), beacon.ToolName) &&
-		grantState.Revoked(beaconServerName(beacon), beacon.ToolName) {
-		return s.blockUnattendedTool(ctx, beacon, run, argsJSON, argsHash, grantState.Grant, AutomationGrantRevokedCode)
+	if unattended.Fatal() {
+		return s.blockUnattendedTool(ctx, beacon, run, argsJSON, argsHash, unattended.Grant, unattended.Refusal)
+	}
+	if unattended.Refusal != "" {
+		return s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, unattended.Refusal)
 	}
 	policy, ok, err := tools.GetPolicy(ctx, s.repo, beaconServerName(beacon), beacon.ToolName)
 	if err != nil {
@@ -3112,8 +3098,12 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 		// can mean here, so it is read before the approval is created rather
 		// than discovered while something waits. The frozen grant bounds the
 		// run: a tool added to the automation after it fired is not on it.
-		grant := grantState.Grant
-		if unattended && !grant.Allows(beaconServerName(beacon), beacon.ToolName) {
+		// The ceiling above has already refused every other unlisted tool;
+		// this holds an exempt skill loader at approval_required, its default,
+		// to the frozen allowlist, so it is refused exactly as before the
+		// ceiling.
+		grant := unattended.Grant
+		if unattended.Unattended && !grant.Allows(beaconServerName(beacon), beacon.ToolName) {
 			return s.blockUnattendedTool(ctx, beacon, run, argsJSON, argsHash, grant, AutomationNotAllowlistedCode)
 		}
 		eventInput, err := toolStartedEventInput(beacon, run)
@@ -3142,7 +3132,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 			}
 			return terminalRunDecision(beacon, "approval_delivery_failed"), err
 		}
-		if unattended {
+		if unattended.Unattended {
 			// Granted before the decision goes back, so the runtime's first
 			// poll already finds it approved. Nothing about the wait changes;
 			// there is simply no wait.
@@ -3159,9 +3149,7 @@ func (s *Server) handleToolBefore(ctx context.Context, beacon *turingv1.ToolCall
 				case errors.Is(err, repository.ErrUnattendedRepeatBlocked):
 					return s.failBlockedUnattendedRun(ctx, beacon, grant, UnattendedRepeatBlockedCode)
 				}
-				return s.failUnattendedRun(ctx, beacon, runoutcome.NormalizeFailure(
-					runoutcome.OriginAutomationPolicy, "automation_approval_failed", runoutcome.RetryClassNever,
-				))
+				return s.failUnattendedRun(ctx, beacon, automationPolicyFailure("automation_approval_failed"), nil)
 			}
 		}
 		return &turingv1.ToolPolicyDecision{
@@ -3224,9 +3212,10 @@ func (s *Server) grantUnattendedApproval(ctx context.Context, approvalID string,
 	return approver.GrantUnattendedApproval(ctx, approvalID, beaconServerName(beacon), beacon.ToolName)
 }
 
-// blockUnattendedTool is what happens when an automation reaches a tool it was
-// not pre-approved for (code AutomationNotAllowlistedCode), or one whose
-// consent the owner has since withdrawn (AutomationGrantRevokedCode).
+// blockUnattendedTool is what happens when an automation reaches a tool its
+// frozen allowlist never held, a safe read included (code
+// AutomationNotAllowlistedCode), or one whose consent the owner has since
+// withdrawn (AutomationGrantRevokedCode).
 //
 // The alternative — creating the approval and letting it sit — is the failure
 // mode this whole feature exists to avoid: a run waiting on a person who is
@@ -3234,7 +3223,9 @@ func (s *Server) grantUnattendedApproval(ctx context.Context, approvalID string,
 // denied and the run is failed under the automation-policy origin, which is
 // what the automation's last-run status reports and what the public
 // policy-denied outcome is projected from. Which automation and which tool are
-// in the audit record, not in the run's failure — see below.
+// in the audit row, written in the failure's own transaction and only when the
+// run moves, so a beacon that loses a race to another terminal transition
+// writes none.
 func (s *Server) blockUnattendedTool(ctx context.Context, beacon *turingv1.ToolCallBeacon, run repository.Run, argsJSON string, argsHash string, grant repository.AutomationRunGrant, code string) (*turingv1.ToolPolicyDecision, error) {
 	decision, err := s.denyToolBefore(ctx, beacon, run, argsJSON, argsHash, code)
 	if err != nil {
@@ -3249,8 +3240,8 @@ func (s *Server) blockUnattendedTool(ctx context.Context, beacon *turingv1.ToolC
 	return s.failBlockedUnattendedRun(ctx, beacon, grant, code)
 }
 
-// failBlockedUnattendedRun records which automation and tool were blocked, and
-// fails the run under the automation-policy origin with code.
+// failBlockedUnattendedRun fails the run under the automation-policy origin
+// with code, and records which automation and tool were blocked.
 //
 // It is the whole of the refusal once the tool call already has a decision of
 // its own: a revocation, or a repeat of a call the run already spent an
@@ -3259,24 +3250,17 @@ func (s *Server) blockUnattendedTool(ctx context.Context, beacon *turingv1.ToolC
 // event the stored call never reaches; the run's failure expires its approval
 // and fails the call, which is what happened to it.
 func (s *Server) failBlockedUnattendedRun(ctx context.Context, beacon *turingv1.ToolCallBeacon, grant repository.AutomationRunGrant, code string) (*turingv1.ToolPolicyDecision, error) {
-	if _, err := s.audit.RecordForExistingRun(ctx, beacon.RunId, "automation", grant.AutomationID, "automation.tool.blocked", beacon.ToolCallId, map[string]any{
-		"toolName":       beacon.ToolName,
-		"serverName":     beaconServerName(beacon),
-		"automationId":   grant.AutomationID,
-		"automationName": grant.AutomationName,
-		"code":           code,
-	}); err != nil {
-		log.Printf("record blocked automation tool audit for %s: %v", beacon.ToolCallId, err)
-	}
-	// The automation's name and the tool's name are in the audit record above,
-	// where they belong. They are deliberately not carried into the run's
-	// failure: agent_runs.error_message is a public diagnostic column, and a
-	// sentence naming an automation and a tool is exactly the kind of content
-	// TUR-009 stops persisting there. What is published instead is the
-	// policy-denied outcome, from which Flutter derives localized copy.
-	return s.failUnattendedRun(ctx, beacon, runoutcome.NormalizeFailure(
-		runoutcome.OriginAutomationPolicy, code, runoutcome.RetryClassNever,
-	))
+	// The automation's name and the tool's name are in the audit row, where
+	// they belong. They are deliberately not carried into the run's failure:
+	// agent_runs.error_message is a public diagnostic column, and a sentence
+	// naming an automation and a tool is exactly the kind of content TUR-009
+	// stops persisting there. What is published instead is the policy-denied
+	// outcome, from which Flutter derives localized copy.
+	return s.failUnattendedRun(ctx, beacon, automationPolicyFailure(code), &repository.UnattendedToolBlock{
+		AutomationID: grant.AutomationID, AutomationName: grant.AutomationName,
+		ServerName: beaconServerName(beacon), ToolName: beacon.ToolName,
+		ToolCallID: beacon.ToolCallId, Code: code,
+	})
 }
 
 // failUnattendedRun terminalises a run nobody is watching, and returns the
@@ -3285,32 +3269,61 @@ func (s *Server) failBlockedUnattendedRun(ctx context.Context, beacon *turingv1.
 // The failure arrives already normalized, because this is a reporting site the
 // orchestrator owns: it knows the run stopped on automation policy, and that
 // typed fact is what decides the public outcome. The sentence a person would
-// read is derived by the client from that outcome, not persisted here.
-func (s *Server) failUnattendedRun(ctx context.Context, beacon *turingv1.ToolCallBeacon, failure runoutcome.Failure) (*turingv1.ToolPolicyDecision, error) {
-	version, err := s.currentStateVersion(ctx, beacon.GetRunId())
-	if err != nil {
+// read is derived by the client from that outcome, not persisted here. block,
+// when given, is the automation.tool.blocked row written with the failure.
+func (s *Server) failUnattendedRun(ctx context.Context, beacon *turingv1.ToolCallBeacon, failure runoutcome.Failure, block *repository.UnattendedToolBlock) (*turingv1.ToolPolicyDecision, error) {
+	// A run that is already terminal, or that another writer moved first,
+	// is a no-op here. Telling the runtime to stop is still right; failing
+	// the RPC would only leave it waiting.
+	if _, err := s.failAndPublishUnattendedRun(ctx, beacon.GetRunId(), failure, block); err != nil {
 		return nil, err
 	}
-	result, err := s.repo.FailRunCanonical(ctx, repository.FailRunInput{
-		RunID:                beacon.GetRunId(),
-		ExpectedStateVersion: version,
-		Failure:              failure,
-		PreserveExecution:    true,
-	})
-	if err != nil {
-		// The run is already terminal (cancelled, or failed by another path),
-		// or another writer moved it between the read above and this update.
-		// Telling the runtime to stop is still right; failing the RPC would
-		// only leave it waiting.
-		if errors.Is(err, repository.ErrRunNotFailable) || errors.Is(err, repository.ErrRunTransitionConflict) {
-			return terminalRunDecision(beacon, failure.Code()), nil
-		}
-		return nil, err
+	return terminalRunDecision(beacon, failure.Code()), nil
+}
+
+// RefuseUnattendedCall is the registered-MCP refusal hook: a call an
+// unattended run made directly, with or without a beacon, that the dispatch
+// grant check refused. It fails the run and writes its automation.tool.blocked
+// row in one repository call, and publishes the failure on the bus, so a
+// beacon-less call is as visible as one the beacon refused. The worker sees
+// only a tool error, so the one that owns the run is also told to stop, as a
+// cancelled run's worker is. A repeat refusal on a run already failed writes,
+// publishes and changes nothing.
+func (s *Server) RefuseUnattendedCall(ctx context.Context, runID string, block repository.UnattendedToolBlock) error {
+	moved, err := s.failAndPublishUnattendedRun(ctx, runID, automationPolicyFailure(block.Code), &block)
+	if moved {
+		s.stopRunWorker(runID, block.Code)
+	}
+	return err
+}
+
+// automationPolicyFailure is the failure every automation-policy refusal
+// records: the code, under the automation-policy origin, never retried.
+func automationPolicyFailure(code string) runoutcome.Failure {
+	return runoutcome.NormalizeFailure(runoutcome.OriginAutomationPolicy, code, runoutcome.RetryClassNever)
+}
+
+func (s *Server) failAndPublishUnattendedRun(ctx context.Context, runID string, failure runoutcome.Failure, block *repository.UnattendedToolBlock) (bool, error) {
+	result, moved, err := s.repo.FailUnattendedRun(ctx, runID, failure, block)
+	if err != nil || !moved {
+		return false, err
 	}
 	for _, event := range result.Events {
 		s.publishEvent(event)
 	}
-	return terminalRunDecision(beacon, failure.Code()), nil
+	s.stopDelegatedTasks(result.StoppedTasks)
+	return true, nil
+}
+
+// stopRunWorker sends RunCancelled to the worker that owns a run this
+// orchestrator failed without a beacon to answer, on its own goroutine for
+// the same reason stopDelegatedTasks does; shutdown waits for it.
+func (s *Server) stopRunWorker(runID string, code string) {
+	s.workerStreams.Add(1)
+	go func() {
+		defer s.workerStreams.Done()
+		s.CancelRun(context.Background(), runID, code)
+	}()
 }
 
 func (s *Server) terminalizePostCommitApprovalFailure(_ context.Context, runID string, toolCallID string) error {

@@ -63,11 +63,14 @@ func TestApprovalRequiredMCPDispatchNeedsVersionedResume(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	active, err := h.repo.MCPDispatchActive(ctx, h.serverID, runID, "vendor.write", "approval_required")
+	dispatch, err := h.repo.MCPDispatchActive(ctx, repository.MCPDispatchCall{
+		ServerID: h.serverID, ServerName: "vendor", RunID: runID,
+		ToolName: "vendor.write", ExpectedPolicy: "approval_required",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if active {
+	if dispatch.Active {
 		t.Fatal("approval-required MCP dispatch became active before the worker resumed the run")
 	}
 

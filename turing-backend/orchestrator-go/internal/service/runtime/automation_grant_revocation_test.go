@@ -577,10 +577,11 @@ func TestAnUnattendedApprovalWhoseAuditRowCannotBeWrittenIsRolledBack(t *testing
 	}
 }
 
-// Two kinds of tool keep today's behaviour on a revoked automation: the skill
-// loaders, which read only the job's pinned owner-granted skills, and memory
-// and team tools, which their own services refuse for any automation run
-// without failing it. Neither fails the run here; the next ordinary call does.
+// Two kinds of tool are decided before the grant on a revoked automation: the
+// skill loaders, which read only the job's pinned owner-granted skills, and
+// memory and team tools, which are refused for any automation run without
+// failing it (TUR-026d). Neither fails the run here; the next ordinary call
+// does.
 func TestRevocationLeavesSkillLoadersAndMemoryAndTeamToolsAsTheyAre(t *testing.T) {
 	h := newHarness(t)
 	automation := h.createAutomation(t, "Nightly note", grantRead)

@@ -887,6 +887,91 @@ func (r *Repository) GetUnattendedGrantState(ctx context.Context, runID string, 
 	return unattendedGrantState(ctx, r.db, runID, serverName, toolName)
 }
 
+// The codes an unattended run's tool call is refused with. All but
+// AutomationToolUnsupportedCode fail the run under the automation-policy
+// origin; that one is a refusal the model reads as a tool error, and the run
+// carries on.
+const (
+	// AutomationToolNotAllowlistedCode is a tool the run's frozen allowlist
+	// never held, a safe read included. Adding it to the automation afterwards
+	// does not add it to a run already underway.
+	AutomationToolNotAllowlistedCode = "automation_tool_not_allowlisted"
+	// AutomationGrantRevokedCode is consent the owner withdrew after the run
+	// fired: the automation was deleted or disabled, or the tool left its
+	// allowlist.
+	AutomationGrantRevokedCode = "automation_grant_revoked"
+	// AutomationToolUnsupportedCode is a memory or team tool, which no
+	// automation may use and no allowlist may hold, so its refusal cannot be
+	// something the owner fixes by adding the tool.
+	AutomationToolUnsupportedCode = "automation_tool_unsupported"
+	// UnattendedRepeatBlockedCode is a call the run already spent an approval
+	// on, refused at the approval commit (ErrUnattendedRepeatBlocked).
+	UnattendedRepeatBlockedCode = "unattended_repeat_blocked"
+)
+
+// UnattendedCall is unattendedGrantCheck's answer for one tool call.
+type UnattendedCall struct {
+	// Unattended is false for a run no automation started, which the check
+	// leaves alone; nothing else is set then.
+	Unattended bool
+	// Grant is the run's frozen grant, for the refusal's audit row.
+	Grant AutomationRunGrant
+	// Refusal is empty when the call may go ahead, else one of the codes
+	// above.
+	Refusal string
+}
+
+// Fatal reports whether the refusal fails the run.
+func (c UnattendedCall) Fatal() bool {
+	return c.Refusal != "" && c.Refusal != AutomationToolUnsupportedCode
+}
+
+// CheckUnattendedCall runs unattendedGrantCheck for one tool call: one
+// primary-key read of automation_runs, which misses for an attended run, then
+// the automation and its allowlist by primary key.
+func (r *Repository) CheckUnattendedCall(ctx context.Context, runID string, serverName string, toolName string) (UnattendedCall, error) {
+	return unattendedGrantCheck(ctx, r.db, runID, serverName, toolName)
+}
+
+// unattendedGrantCheck is the one check every tool call of an unattended run
+// passes, at the beacon and at registered-MCP dispatch: the automation's
+// frozen allowlist is a ceiling on every tool, safe reads included, and the
+// automation as it stands now may only narrow it.
+//
+// Two kinds of tool are decided before the allowlist:
+//   - the skill loaders, skills/skills_list and skills/skill_view, which read
+//     only the owner-granted skills already pinned on the job and change
+//     nothing, are exempt;
+//   - a memory or team tool is refused with AutomationToolUnsupportedCode,
+//     without failing the run, because their own services already refuse
+//     every automation run that way and no allowlist may hold one.
+//
+// Everything else is held to UnattendedGrantState.Check, the same verdict the
+// approval commit reaches: AutomationGrantRevokedCode when the owner withdrew
+// consent the run could rely on (the automation gone or disabled, or a frozen
+// pair off its current allowlist), and AutomationToolNotAllowlistedCode when
+// the frozen allowlist never held it.
+func unattendedGrantCheck(ctx context.Context, q rowQuerier, runID string, serverName string, toolName string) (UnattendedCall, error) {
+	state, unattended, err := unattendedGrantState(ctx, q, runID, serverName, toolName)
+	if err != nil || !unattended {
+		return UnattendedCall{}, err
+	}
+	call := UnattendedCall{Unattended: true, Grant: state.Grant}
+	switch {
+	case serverName == "skills" && (toolName == "skills_list" || toolName == "skill_view"):
+	case serverName == "memory" || serverName == "team":
+		call.Refusal = AutomationToolUnsupportedCode
+	default:
+		switch err := state.Check(serverName, toolName); {
+		case errors.Is(err, ErrAutomationGrantRevoked):
+			call.Refusal = AutomationGrantRevokedCode
+		case errors.Is(err, ErrAutomationToolNotAllowlisted):
+			call.Refusal = AutomationToolNotAllowlistedCode
+		}
+	}
+	return call, nil
+}
+
 func unattendedGrantState(ctx context.Context, q rowQuerier, runID string, serverName string, toolName string) (UnattendedGrantState, bool, error) {
 	var state UnattendedGrantState
 	var toolsJSON string

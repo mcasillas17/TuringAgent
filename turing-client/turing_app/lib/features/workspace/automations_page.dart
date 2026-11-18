@@ -79,16 +79,19 @@ String formatLocalDaily(int minuteUtc, {DateTime? reference}) {
   return '$hour:$minute';
 }
 
-/// The sentence that IS the consent: exactly what this automation may do
-/// without stopping to ask you.
+/// The sentence that IS the consent: exactly what this automation may use,
+/// all of it without stopping to ask you.
 String describeAllowlist(List<AutomationTool> tools) {
+  const exceptions =
+      ' Skill loaders you have marked safe still run, and memory and team '
+      'tools are refused without stopping it.';
   if (tools.isEmpty) {
-    return 'This automation may not run any tool that needs approval. If it '
-        'tries, the run stops and says which tool it wanted.';
+    return 'This automation may not use any tool. If it tries, the run stops '
+        'and says which tool it wanted.$exceptions';
   }
   final names = tools.map(describeTool).join(', ');
   return 'Without asking you, this automation may run: $names. Nothing else — '
-      'any other tool that needs approval stops the run.';
+      'any other tool stops the run.$exceptions';
 }
 
 /// What is enforced is the (server, tool) pair, so the sentence has to name
@@ -774,7 +777,7 @@ class _AutomationEditorState extends State<_AutomationEditor> {
               _AutomationSkills(skills: _skills),
               const SizedBox(height: 20),
               Text(
-                'What it may do without asking',
+                'What it may use, without asking',
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
@@ -783,11 +786,12 @@ class _AutomationEditorState extends State<_AutomationEditor> {
               ),
               const SizedBox(height: 6),
               Text(
-                'These are the tools that would normally stop and ask you. '
-                'Nobody is there to answer when an automation runs, so tick '
-                'only the ones you are willing to have run on their own. '
-                'Ticking one here does not affect any conversation you drive '
-                'by hand.',
+                'These are the only tools this automation may use, reads '
+                'included, and it uses them without asking, even ones that '
+                'would normally stop and ask you. Nobody is there to answer '
+                'when an automation runs, so tick only the ones you are '
+                'willing to have run on their own. Ticking one here does not '
+                'affect any conversation you drive by hand.',
                 style: TextStyle(
                   fontSize: 12.5,
                   height: 1.5,
@@ -909,11 +913,11 @@ class _AutomationSkills extends StatelessWidget {
 /// fail at Save.
 const _serversUnavailableToAutomations = {'integrations', 'memory', 'team'};
 
-/// The tools that would otherwise stop and ask, with a tick against each.
+/// Every tool an automation may be allowed, with a tick against each.
 ///
-/// Only approval-gated tools appear: a safe tool needs no permission, and
-/// listing it would invite the user to grant something that was never
-/// withheld.
+/// Safe tools appear beside approval-gated ones: the allowlist bounds every
+/// tool an automation's run calls, so a safe read it was never given fails
+/// the run. A disabled tool does not appear, since nothing may run it.
 class _AllowlistPicker extends StatelessWidget {
   const _AllowlistPicker({
     required this.tools,
@@ -963,10 +967,11 @@ class _AllowlistPicker extends StatelessWidget {
             // offering one here would be a tick that can only fail at Save. A
             // stale entry from an older allowlist still shows below, because a
             // permission the user cannot see cannot be withdrawn.
-            final gated = (snapshot.data ?? const <ToolDescriptor>[])
+            final offered = (snapshot.data ?? const <ToolDescriptor>[])
                 .where(
                   (tool) =>
-                      tool.policy == ToolPolicy.approvalRequired &&
+                      (tool.policy == ToolPolicy.safe ||
+                          tool.policy == ToolPolicy.approvalRequired) &&
                       !_serversUnavailableToAutomations.contains(
                         tool.serverName,
                       ),
@@ -983,14 +988,13 @@ class _AllowlistPicker extends StatelessWidget {
             // would make it un-untickable — a permission the user cannot withdraw
             // because they cannot see it.
             final stale = selected
-                .where((tool) => !gated.contains(tool))
+                .where((tool) => !offered.contains(tool))
                 .toList();
-            final rows = [...gated, ...stale]
+            final rows = [...offered, ...stale]
               ..sort((a, b) => a.toolName.compareTo(b.toolName));
             if (rows.isEmpty) {
               return Text(
-                'No tool currently needs approval, so there is nothing to allow '
-                'in advance.',
+                'No tool is available to allow right now.',
                 style: TextStyle(fontSize: 12.5, color: palette.textMuted),
               );
             }

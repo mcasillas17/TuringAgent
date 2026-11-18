@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type ApprovalEnforcer interface {
@@ -33,6 +36,20 @@ func (s *Server) SetApprovalEnforcer(enforcer ApprovalEnforcer) {
 	s.approvals = enforcer
 }
 
+// UnattendedRefuser makes a refused call of an unattended run visible: it
+// fails the run and writes its automation.tool.blocked row in one
+// transaction, and publishes the failure. The runtime implements it, because
+// it owns the event bus.
+type UnattendedRefuser interface {
+	RefuseUnattendedCall(ctx context.Context, runID string, block repository.UnattendedToolBlock) error
+}
+
+// SetUnattendedRefuser wires the refusal hook. With none wired, every call
+// of an unattended run is refused.
+func (s *Server) SetUnattendedRefuser(refuser UnattendedRefuser) {
+	s.unattendedRefuser = refuser
+}
+
 func (s *Server) CallTool(ctx context.Context, input CallInput) (map[string]any, error) {
 	if input.ServerID == "" || input.RunID == "" || input.ToolName == "" {
 		return nil, errors.New("MCP server, run, and tool are required")
@@ -45,6 +62,22 @@ func (s *Server) CallTool(ctx context.Context, input CallInput) (map[string]any,
 		// Its row survives the upgrade, but its tools are withdrawn: the name
 		// belongs to the orchestrator's team pseudo-server now.
 		return nil, errors.New("MCP server named `team` is withdrawn; register it under another name")
+	}
+	// An unattended run's grant is checked first, for every tier and before
+	// anything is spent: an automation's frozen allowlist bounds every tool its
+	// run calls, and the automation as it stands now may only narrow it. A run
+	// that skipped the beacon is held to it here all the same.
+	unattended, err := s.repo.CheckUnattendedCall(ctx, input.RunID, server.Name, input.ToolName)
+	if err != nil {
+		return nil, errors.New("read automation grant")
+	}
+	if unattended.Unattended {
+		if s.unattendedRefuser == nil {
+			return nil, status.Error(codes.PermissionDenied, "unattended MCP calls are refused: no refusal hook is configured")
+		}
+		if unattended.Refusal != "" {
+			return nil, s.refuseUnattendedCall(ctx, input, server.Name, unattended)
+		}
 	}
 	// A job that enforces its frozen set may use nothing outside it, so the
 	// call ends before an approval is spent or the server is reached.
@@ -122,18 +155,27 @@ func (s *Server) CallTool(ctx context.Context, input CallInput) (map[string]any,
 			return nil, errors.New("remote MCP call was revoked before dispatch")
 		}
 	}
-	active, err := s.repo.MCPDispatchActive(
-		ctx, server.ID, input.RunID, input.ToolName, policy,
-	)
+	// The grant is read again here, for an unattended run, in the same read
+	// transaction as the liveness check: a revocation committed after the
+	// entry check, while the approval was handled, is refused with the
+	// approval spent and nothing sent.
+	dispatch, err := s.repo.MCPDispatchActive(ctx, repository.MCPDispatchCall{
+		ServerID: server.ID, ServerName: server.Name, RunID: input.RunID,
+		ToolName: input.ToolName, ExpectedPolicy: policy, Unattended: unattended.Unattended,
+	})
 	if err != nil {
 		return nil, errors.New("validate MCP dispatch state")
 	}
-	if !active {
+	if dispatch.Unattended.Refusal != "" {
+		return nil, s.refuseUnattendedCall(ctx, input, server.Name, dispatch.Unattended)
+	}
+	if !dispatch.Active {
 		return nil, errors.New("MCP call was revoked before dispatch")
 	}
 	// This final active-state check is the dispatch linearization point. A
-	// cancellation or policy change committed later observes an already
-	// in-flight call; it does not retroactively restore a consumed approval.
+	// cancellation, policy change or revocation of an automation's grant
+	// committed later observes an already in-flight call; it does not
+	// retroactively restore a consumed approval.
 	//
 	// The credential-fence critical section starts here, deliberately
 	// after every step above that either does not touch the server's
@@ -193,4 +235,25 @@ func (s *Server) CallTool(ctx context.Context, input CallInput) (map[string]any,
 		log.Printf("record successful MCP call liveness for %s: %v", server.Name, err)
 	}
 	return result, nil
+}
+
+// refuseUnattendedCall answers a call the grant check refused. A refusal that
+// fails the run goes to the runtime's hook, which fails it, writes its
+// automation.tool.blocked row and publishes the failure; the call is refused
+// with PermissionDenied naming the code even when that fails, which is logged.
+// The hook runs on a context of its own, so a caller that gives up on the call
+// cannot take the failure down with it. A direct call carries no tool call id,
+// so the row has no target.
+func (s *Server) refuseUnattendedCall(ctx context.Context, input CallInput, serverName string, call repository.UnattendedCall) error {
+	if call.Fatal() {
+		hookCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := s.unattendedRefuser.RefuseUnattendedCall(hookCtx, input.RunID, repository.UnattendedToolBlock{
+			AutomationID: call.Grant.AutomationID, AutomationName: call.Grant.AutomationName,
+			ServerName: serverName, ToolName: input.ToolName, Code: call.Refusal,
+		}); err != nil {
+			log.Printf("fail run %s after its MCP call was refused (%s): %v", input.RunID, call.Refusal, err)
+		}
+	}
+	return status.Error(codes.PermissionDenied, call.Refusal)
 }

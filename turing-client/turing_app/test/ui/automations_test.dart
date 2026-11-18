@@ -93,7 +93,7 @@ void main() {
   group('the sentence that is the consent', () {
     test('an empty allowlist says the run stops, not that nothing happens', () {
       final sentence = describeAllowlist(const []);
-      expect(sentence, contains('may not run any tool that needs approval'));
+      expect(sentence, contains('may not use any tool'));
       expect(sentence, contains('the run stops'));
     });
 
@@ -106,6 +106,10 @@ void main() {
       expect(sentence, contains('files.update'));
       // Without this the sentence reads as a floor rather than a ceiling.
       expect(sentence, contains('Nothing else'));
+      // The two exceptions to "stops the run" are named, so the sentence
+      // does not claim more than the server does.
+      expect(sentence, contains('memory and team tools are refused'));
+      expect(sentence, contains('Skill loaders you have marked safe'));
     });
 
     // What is enforced is the (server, tool) pair, so a name that does not
@@ -396,7 +400,7 @@ void main() {
       expect(find.textContaining('does not grant those tools'), findsOneWidget);
     });
 
-    testWidgets('offers only the tools that would otherwise stop and ask', (
+    testWidgets('offers every tool an automation may use, safe ones too', (
       tester,
     ) async {
       final api = _FakeApi();
@@ -405,16 +409,20 @@ void main() {
       await tester.tap(find.text('New automation'));
       await tester.pumpAndSettle();
 
-      // Approval-gated tools are offered...
+      // The allowlist is the whole of what an automation may use, so
+      // approval-gated tools are offered...
       expect(find.text('files.create'), findsOneWidget);
       expect(find.text('files.update'), findsOneWidget);
-      // ...and safe ones are not: listing them would invite the user to grant
-      // something that was never withheld.
-      expect(find.text('files.read'), findsNothing);
-      // Nor is an approval-gated memory or integration tool: the server
-      // refuses both to automations unconditionally, so a tick here could
-      // only fail at Save.
+      // ...and so are safe ones: an automation reads with files.read only if
+      // it is ticked here.
+      expect(find.text('files.read'), findsOneWidget);
+      // A disabled tool is not: nothing may run it, whatever is ticked.
+      expect(find.text('files.delete'), findsNothing);
+      // Nor is a memory, integration or team tool, safe or approval-gated:
+      // the server refuses all three to automations unconditionally, so a
+      // tick here could only fail at Save.
       expect(find.text('memory.remember'), findsNothing);
+      expect(find.text('memory.search'), findsNothing);
       expect(find.text('github.list_issues'), findsNothing);
       expect(find.text('team.delegate'), findsNothing);
       expect(
@@ -434,10 +442,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // With nothing ticked the sentence says the run stops.
-      expect(
-        find.textContaining('may not run any tool that needs approval'),
-        findsWidgets,
-      );
+      expect(find.textContaining('may not use any tool'), findsWidgets);
 
       await tester.ensureVisible(find.text('files.create'));
       await tester.pumpAndSettle();
@@ -469,6 +474,10 @@ void main() {
         'Summarise the sandbox.',
       );
       await tester.enterText(_field(tester, 'Minutes between runs'), '30');
+      // A focused field scrolls itself back into view on every frame, which
+      // would undo the scroll down to the picker's last row.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('files.update'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('files.update'));
@@ -606,9 +615,9 @@ void main() {
       expect(
         find.textContaining('could not be read'),
         findsOneWidget,
-        reason: 'a failed read must not read as "nothing needs approval"',
+        reason: 'a failed read must not read as "no tool to allow"',
       );
-      expect(find.textContaining('nothing to allow'), findsNothing);
+      expect(find.textContaining('No tool is available'), findsNothing);
     });
 
     // A permission you cannot see is a permission you cannot withdraw. The
@@ -959,6 +968,11 @@ class _FakeApi
       ),
       ToolDescriptor(
         serverName: 'files',
+        toolName: 'files.delete',
+        policy: ToolPolicy.disabled,
+      ),
+      ToolDescriptor(
+        serverName: 'files',
         toolName: 'files.create',
         policy: ToolPolicy.approvalRequired,
       ),
@@ -975,16 +989,23 @@ class _FakeApi
         toolName: 'memory.remember',
         policy: ToolPolicy.approvalRequired,
       ),
+      // Safe by default, and refused to automations all the same.
+      ToolDescriptor(
+        serverName: 'memory',
+        toolName: 'memory.search',
+        policy: ToolPolicy.safe,
+      ),
       ToolDescriptor(
         serverName: 'integrations',
         toolName: 'github.list_issues',
         policy: ToolPolicy.approvalRequired,
       ),
-      // An unattended run never delegates, so the team tool is refused too.
+      // An unattended run never delegates, so the team tool is refused too,
+      // at its default safe policy.
       ToolDescriptor(
         serverName: 'team',
         toolName: 'team.delegate',
-        policy: ToolPolicy.approvalRequired,
+        policy: ToolPolicy.safe,
       ),
     ];
   }

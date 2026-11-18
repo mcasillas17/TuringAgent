@@ -27,9 +27,9 @@ class Automation {
   final AutomationSchedule schedule;
   final bool enabled;
 
-  /// The tools this automation may run without asking, named one by one.
-  /// Empty means it may run none of them — a tool that needs approval stops
-  /// the run instead.
+  /// The only tools this automation may use, safe reads included, named one
+  /// by one; it runs them without asking. Empty means it may use none — any
+  /// tool it calls stops the run instead.
   final List<AutomationTool> allowedTools;
 
   final DateTime? lastRunAt;

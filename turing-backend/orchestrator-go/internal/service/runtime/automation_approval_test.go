@@ -387,10 +387,13 @@ func TestAHandDrivenRunStillStopsAndAsks(t *testing.T) {
 }
 
 // A safe tool needs no approval, and an automation must not change that in
-// either direction.
+// either direction — once it is on the automation's allowlist, which bounds
+// every tool its run calls (TUR-026d).
 func TestAnAutomationRunsSafeToolsWithoutAnApproval(t *testing.T) {
 	h := newHarness(t)
-	fire := h.fireAutomation(t, "Nightly note", nil)
+	fire := h.fireAutomation(t, "Nightly note", []repository.AutomationTool{
+		{ServerName: "files", ToolName: "files.list"},
+	})
 
 	args, err := structpb.NewStruct(map[string]any{"path": "."})
 	if err != nil {

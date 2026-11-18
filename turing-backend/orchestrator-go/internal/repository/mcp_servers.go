@@ -659,15 +659,62 @@ func (r *Repository) MCPToolAvailable(ctx context.Context, serverName string, to
 	return available, err
 }
 
-func (r *Repository) MCPDispatchActive(
-	ctx context.Context,
-	serverID string,
-	runID string,
-	toolName string,
-	expectedPolicy string,
-) (bool, error) {
+// MCPDispatchCall names one registered-MCP call at its dispatch fence.
+type MCPDispatchCall struct {
+	ServerID       string
+	ServerName     string
+	RunID          string
+	ToolName       string
+	ExpectedPolicy string
+	// Unattended re-runs unattendedGrantCheck for the call in the fence's
+	// read transaction. It is set only when the entry check found the run
+	// unattended, because a run's unattended status is fixed at insert.
+	Unattended bool
+}
+
+// MCPDispatchState is the dispatch fence's answer.
+type MCPDispatchState struct {
+	// Active is whether the server, the tool at its expected policy, the run
+	// and its session are all still live.
+	Active bool
+	// Unattended is the grant check's answer, read on the same snapshot as
+	// Active; it is the zero value when the call was not unattended.
+	Unattended UnattendedCall
+}
+
+// MCPDispatchActive is the dispatch linearization point of a registered-MCP
+// call. For an unattended call it runs unattendedGrantCheck and the liveness
+// read in one short read transaction, so they read one snapshot: the
+// database's single connection admits no commit between them, a revocation
+// committed before this refuses the call, and one committed after meets a
+// call already in flight. No network I/O runs inside it.
+func (r *Repository) MCPDispatchActive(ctx context.Context, call MCPDispatchCall) (MCPDispatchState, error) {
+	if !call.Unattended {
+		active, err := mcpDispatchLive(ctx, r.db, call)
+		return MCPDispatchState{Active: active}, err
+	}
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return MCPDispatchState{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	unattended, err := unattendedGrantCheck(ctx, tx, call.RunID, call.ServerName, call.ToolName)
+	if err != nil {
+		return MCPDispatchState{}, err
+	}
+	active, err := mcpDispatchLive(ctx, tx, call)
+	if err != nil {
+		return MCPDispatchState{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MCPDispatchState{}, err
+	}
+	return MCPDispatchState{Active: active, Unattended: unattended}, nil
+}
+
+func mcpDispatchLive(ctx context.Context, q rowQuerier, call MCPDispatchCall) (bool, error) {
 	var active bool
-	err := r.db.QueryRowContext(ctx, `
+	err := q.QueryRowContext(ctx, `
 		SELECT EXISTS(
 			SELECT 1
 			FROM mcp_servers server
@@ -684,7 +731,7 @@ func (r *Repository) MCPDispatchActive(
 				AND run.status = 'running'
 				AND session.deletion_state = 'active'
 		)
-	`, runID, serverID, toolName, expectedPolicy).Scan(&active)
+	`, call.RunID, call.ServerID, call.ToolName, call.ExpectedPolicy).Scan(&active)
 	return active, err
 }
 

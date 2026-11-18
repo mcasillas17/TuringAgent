@@ -4682,7 +4682,7 @@ func TestApprovalAndToolCallersSupplyTypedOriginBeforePersistence(t *testing.T) 
 			RunId: enqueued.RunID, ToolCallId: "call_automation", ToolName: "files.create",
 		}, runoutcome.NormalizeFailure(
 			runoutcome.OriginAutomationPolicy, AutomationNotAllowlistedCode, runoutcome.RetryClassNever,
-		)); err != nil {
+		), nil); err != nil {
 			t.Fatalf("failUnattendedRun: %v", err)
 		}
 
