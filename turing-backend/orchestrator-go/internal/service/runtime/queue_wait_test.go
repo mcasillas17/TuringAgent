@@ -84,26 +84,25 @@ func refreshQueue(t *testing.T, h *harness) {
 	}
 }
 
-// WorkerAccepted precedes registration-triggered dispatch. Observe an assignment
-// occupying the single slot before enqueueing work that must remain queued.
-func occupyQueueWorker(t *testing.T, h *harness, stream turingv1.RuntimeService_ConnectWorkerClient) repository.EnqueueUserMessageResult {
+// connectOccupiedQueueWorker connects a single-slot worker and observes it take
+// one run, so every run a test enqueues afterwards has to wait, and is accepted
+// while a compatible worker is live, as an enqueue must be in production. That
+// run is queued before the worker connects. A dispatch that finds the only
+// slot held by the worker's own dispatch on connecting passes the worker over,
+// and that dispatch may already have read an empty queue, so a run queued
+// after connecting could be left for a later dispatch.
+func connectOccupiedQueueWorker(t *testing.T, h *harness, workerID, registrationID string) (turingv1.RuntimeService_ConnectWorkerClient, repository.EnqueueUserMessageResult) {
 	t.Helper()
-	if err := h.service.ValidateRouting(context.Background(), repository.RoutingRequirements{
-		AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
-	}); err != nil {
-		t.Fatal(err)
-	}
 	occupying := h.enqueueRun(t, "occupy worker")
-	if err := h.service.DispatchPending(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	stream := connectWorkerCapabilities(t, h, workerID, registrationID,
+		modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1))
 	assigned := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
 		return cmd.GetRunAssigned() != nil
 	}).GetRunAssigned()
 	if assigned.GetRunId() != occupying.RunID {
 		t.Fatalf("assignment = %q, want occupying run %q", assigned.GetRunId(), occupying.RunID)
 	}
-	return occupying
+	return stream, occupying
 }
 
 func assertQueuedPendingRun(t *testing.T, h *harness, runID string) {
@@ -131,11 +130,9 @@ func TestQueuedRunLosingEveryEligibleWorkerGainsDurableQueueTruth(t *testing.T) 
 	h := newHarnessWithDispatch(t, queueWaitDispatch(runoutcome.QueueTimeoutPolicyFail))
 	h.service.queueNow = clock.read
 
+	stream, occupying := connectOccupiedQueueWorker(t, h, "worker-losing", "registration-losing")
 	// Accepted while a compatible worker was live, which is the only way an
 	// enqueue gets past routing validation in production.
-	stream := connectWorkerCapabilities(t, h, "worker-losing", "registration-losing",
-		modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1))
-	occupying := occupyQueueWorker(t, h, stream)
 	enqueued := h.enqueueRun(t, "answer me")
 	if err := h.service.DispatchPending(context.Background()); err != nil {
 		t.Fatal(err)
@@ -212,10 +209,8 @@ func TestIncompatibleLiveWorkerIsNotACompatibleOne(t *testing.T) {
 	h := newHarnessWithDispatch(t, queueWaitDispatch(runoutcome.QueueTimeoutPolicyFail))
 	h.service.queueNow = clock.read
 
-	stream := connectWorkerCapabilities(t, h, "worker-swap", "registration-swap",
-		modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1))
+	stream, _ := connectOccupiedQueueWorker(t, h, "worker-swap", "registration-swap")
 	defer func() { _ = stream.CloseSend() }()
-	occupyQueueWorker(t, h, stream)
 	enqueued := h.enqueueRun(t, "route me")
 	if err := h.service.DispatchPending(context.Background()); err != nil {
 		t.Fatal(err)
@@ -307,9 +302,7 @@ func TestCapabilityRestorationBeforeExpiryClearsTheQueueTruth(t *testing.T) {
 	h := newHarnessWithDispatch(t, dispatch)
 	h.service.queueNow = clock.read
 
-	first := connectWorkerCapabilities(t, h, "worker-gone", "registration-gone",
-		modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1))
-	occupyQueueWorker(t, h, first)
+	first, _ := connectOccupiedQueueWorker(t, h, "worker-gone", "registration-gone")
 	enqueued := h.enqueueRun(t, "come back")
 	if err := h.service.DispatchPending(context.Background()); err != nil {
 		t.Fatal(err)
@@ -357,9 +350,7 @@ func TestRepeatedReconciliationOverAnUnchangedQueueWritesNothing(t *testing.T) {
 	h := newHarnessWithDispatch(t, queueWaitDispatch(runoutcome.QueueTimeoutPolicyFail))
 	h.service.queueNow = clock.read
 
-	stream := connectWorkerCapabilities(t, h, "worker-idle", "registration-idle",
-		modelCapabilities(turingv1.ModelProvider_MODEL_PROVIDER_OLLAMA, "llama3.2", 8192, 1))
-	occupyQueueWorker(t, h, stream)
+	stream, _ := connectOccupiedQueueWorker(t, h, "worker-idle", "registration-idle")
 	enqueued := h.enqueueRun(t, "reconcile me")
 	if err := h.service.DispatchPending(context.Background()); err != nil {
 		t.Fatal(err)
