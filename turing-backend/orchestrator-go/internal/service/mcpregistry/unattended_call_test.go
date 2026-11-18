@@ -24,6 +24,8 @@ var vendorWrite = repository.AutomationTool{ServerName: "vendor", ToolName: "ven
 type unattendedRefusal struct {
 	runID string
 	block repository.UnattendedToolBlock
+	// ctxErr is the hook's context's error once beforeRecord has run.
+	ctxErr error
 }
 
 // recordingRefuser stands in for the runtime's hook, which owns failing the
@@ -32,12 +34,18 @@ type recordingRefuser struct {
 	mu      sync.Mutex
 	refused []unattendedRefusal
 	err     error
+	// beforeRecord, when set, runs as the hook is called, before it reads its
+	// own context.
+	beforeRecord func()
 }
 
-func (r *recordingRefuser) RefuseUnattendedCall(_ context.Context, runID string, block repository.UnattendedToolBlock) error {
+func (r *recordingRefuser) RefuseUnattendedCall(ctx context.Context, runID string, block repository.UnattendedToolBlock) error {
+	if r.beforeRecord != nil {
+		r.beforeRecord()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.refused = append(r.refused, unattendedRefusal{runID: runID, block: block})
+	r.refused = append(r.refused, unattendedRefusal{runID: runID, block: block, ctxErr: ctx.Err()})
 	return r.err
 }
 
@@ -129,7 +137,7 @@ func assertOneRefusal(t *testing.T, refuser *recordingRefuser, runID string, aut
 		AutomationID: automation.AutomationID, AutomationName: "Nightly sync",
 		ServerName: "vendor", ToolName: "vendor.write", Code: code,
 	}
-	if len(calls) != 1 || calls[0].runID != runID || calls[0].block != want {
+	if len(calls) != 1 || calls[0].runID != runID || calls[0].block != want || calls[0].ctxErr != nil {
 		t.Fatalf("refusals = %+v, want one for run %s: %+v", calls, runID, want)
 	}
 }
@@ -393,4 +401,69 @@ func (e *revokingEnforcer) ConsumeApprovalForThirdParty(ctx context.Context, app
 	e.reached = true
 	e.revoke()
 	return e.inner.ConsumeApprovalForThirdParty(ctx, approvalID, runID, serverName, serverID, toolName, args)
+}
+
+// The hook fails the run on a context of its own: a runtime that gives up on
+// the call, or lets its deadline run out, cannot take the failure and its
+// audit row down with it.
+func TestTheRefusalHookOutlivesTheCallersContext(t *testing.T) {
+	h := newRegistryCallHarness(t)
+	h.makeVendorWriteSafe(t)
+	args := map[string]any{"path": "x"}
+	_, runID := h.automationToolCall(t, "call_caller_gone", args)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	refuser := &recordingRefuser{beforeRecord: cancel}
+	h.registry.SetUnattendedRefuser(refuser)
+
+	_, err := h.registry.CallTool(ctx, CallInput{
+		ServerID: h.serverID, RunID: runID, ToolName: "vendor.write", Args: args,
+	})
+
+	assertRefusedWith(t, err, repository.AutomationToolNotAllowlistedCode)
+	if calls := refuser.calls(); len(calls) != 1 || calls[0].ctxErr != nil {
+		t.Fatalf("refusals = %+v, want one whose context outlived the caller's", calls)
+	}
+}
+
+// The entry check runs for every tier and before the server's own refusals:
+// an unattended call to a bundled server, or to a disabled one, is refused
+// with its code, and the hook fails the run, rather than getting the plain
+// error a cooperating runtime would see.
+func TestTheEntryCheckRunsBeforeTheServersOwnRefusals(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(t *testing.T, h *registryCallHarness)
+	}{
+		{name: "bundled", setup: func(t *testing.T, h *registryCallHarness) {
+			if _, err := h.database.ExecContext(context.Background(), `UPDATE mcp_servers SET tier = 'bundled' WHERE id = ?`, h.serverID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "disabled", setup: func(t *testing.T, h *registryCallHarness) {
+			if err := h.repo.SetMCPServerEnabled(context.Background(), h.serverID, false); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := newRegistryCallHarness(t)
+			refuser := &recordingRefuser{}
+			h.registry.SetUnattendedRefuser(refuser)
+			h.makeVendorWriteSafe(t)
+			args := map[string]any{"path": "x"}
+			automation, runID := h.automationToolCall(t, "call_"+test.name, args)
+			test.setup(t, h)
+
+			_, err := h.registry.CallTool(context.Background(), CallInput{
+				ServerID: h.serverID, RunID: runID, ToolName: "vendor.write", Args: args,
+			})
+
+			assertRefusedWith(t, err, repository.AutomationToolNotAllowlistedCode)
+			if got := h.reached.Load(); got != 0 {
+				t.Fatalf("vendor requests = %d, want none", got)
+			}
+			assertOneRefusal(t, refuser, runID, automation, repository.AutomationToolNotAllowlistedCode)
+		})
+	}
 }

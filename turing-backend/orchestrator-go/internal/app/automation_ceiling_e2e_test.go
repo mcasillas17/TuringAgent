@@ -162,6 +162,9 @@ type ceilingE2E struct {
 
 const ceilingSkillBody = "Write the digest in three lines."
 
+// ceilingVaultSentinel is in a belief memory.search would find.
+const ceilingVaultSentinel = "TUR026D-VAULT-SENTINEL"
+
 // newCeilingE2E starts the app with a memory vault, a granted skill and a
 // GitHub connection available, a fake local model and files server, a
 // registered third-party server with a safe tool, and a real worker.
@@ -172,6 +175,10 @@ func newCeilingE2E(t *testing.T, calls ...ceilingToolCall) *ceilingE2E {
 		if err := os.MkdirAll(filepath.Join(vault, dir), 0o700); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(vault, memoryfiles.BeliefsDirName, "plans.md"),
+		[]byte("# Plans\n\nThe user's plans: "+ceilingVaultSentinel+".\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	skills := t.TempDir()
 	skillPath := filepath.Join(skills, "writing", "digest", "SKILL.md")
@@ -470,6 +477,11 @@ func TestAnAutomationsMemorySearchIsRefusedAndTheRunCompletes(t *testing.T) {
 	requests := h.model.seen()
 	if len(requests) != 2 || !strings.Contains(requests[1], `"role":"tool"`) {
 		t.Fatalf("model requests = %d, want the refusal handed back as a tool result", len(requests))
+	}
+	for _, request := range requests {
+		if strings.Contains(request, ceilingVaultSentinel) {
+			t.Fatal("a belief from the vault reached the model")
+		}
 	}
 }
 

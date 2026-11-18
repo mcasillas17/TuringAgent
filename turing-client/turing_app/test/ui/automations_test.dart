@@ -106,6 +106,10 @@ void main() {
       expect(sentence, contains('files.update'));
       // Without this the sentence reads as a floor rather than a ceiling.
       expect(sentence, contains('Nothing else'));
+      // The two exceptions to "stops the run" are named, so the sentence
+      // does not claim more than the server does.
+      expect(sentence, contains('memory and team tools are refused'));
+      expect(sentence, contains('Skill loaders you have marked safe'));
     });
 
     // What is enforced is the (server, tool) pair, so a name that does not
@@ -414,10 +418,11 @@ void main() {
       expect(find.text('files.read'), findsOneWidget);
       // A disabled tool is not: nothing may run it, whatever is ticked.
       expect(find.text('files.delete'), findsNothing);
-      // Nor is an approval-gated memory or integration tool: the server
-      // refuses both to automations unconditionally, so a tick here could
-      // only fail at Save.
+      // Nor is a memory, integration or team tool, safe or approval-gated:
+      // the server refuses all three to automations unconditionally, so a
+      // tick here could only fail at Save.
       expect(find.text('memory.remember'), findsNothing);
+      expect(find.text('memory.search'), findsNothing);
       expect(find.text('github.list_issues'), findsNothing);
       expect(find.text('team.delegate'), findsNothing);
       expect(
@@ -984,16 +989,23 @@ class _FakeApi
         toolName: 'memory.remember',
         policy: ToolPolicy.approvalRequired,
       ),
+      // Safe by default, and refused to automations all the same.
+      ToolDescriptor(
+        serverName: 'memory',
+        toolName: 'memory.search',
+        policy: ToolPolicy.safe,
+      ),
       ToolDescriptor(
         serverName: 'integrations',
         toolName: 'github.list_issues',
         policy: ToolPolicy.approvalRequired,
       ),
-      // An unattended run never delegates, so the team tool is refused too.
+      // An unattended run never delegates, so the team tool is refused too,
+      // at its default safe policy.
       ToolDescriptor(
         serverName: 'team',
         toolName: 'team.delegate',
-        policy: ToolPolicy.approvalRequired,
+        policy: ToolPolicy.safe,
       ),
     ];
   }

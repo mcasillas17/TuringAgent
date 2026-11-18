@@ -82,13 +82,16 @@ String formatLocalDaily(int minuteUtc, {DateTime? reference}) {
 /// The sentence that IS the consent: exactly what this automation may use,
 /// all of it without stopping to ask you.
 String describeAllowlist(List<AutomationTool> tools) {
+  const exceptions =
+      ' Skill loaders you have marked safe still run, and memory and team '
+      'tools are refused without stopping it.';
   if (tools.isEmpty) {
     return 'This automation may not use any tool. If it tries, the run stops '
-        'and says which tool it wanted.';
+        'and says which tool it wanted.$exceptions';
   }
   final names = tools.map(describeTool).join(', ');
   return 'Without asking you, this automation may run: $names. Nothing else — '
-      'any other tool stops the run.';
+      'any other tool stops the run.$exceptions';
 }
 
 /// What is enforced is the (server, tool) pair, so the sentence has to name
@@ -964,7 +967,7 @@ class _AllowlistPicker extends StatelessWidget {
             // offering one here would be a tick that can only fail at Save. A
             // stale entry from an older allowlist still shows below, because a
             // permission the user cannot see cannot be withdrawn.
-            final gated = (snapshot.data ?? const <ToolDescriptor>[])
+            final offered = (snapshot.data ?? const <ToolDescriptor>[])
                 .where(
                   (tool) =>
                       (tool.policy == ToolPolicy.safe ||
@@ -985,9 +988,9 @@ class _AllowlistPicker extends StatelessWidget {
             // would make it un-untickable — a permission the user cannot withdraw
             // because they cannot see it.
             final stale = selected
-                .where((tool) => !gated.contains(tool))
+                .where((tool) => !offered.contains(tool))
                 .toList();
-            final rows = [...gated, ...stale]
+            final rows = [...offered, ...stale]
               ..sort((a, b) => a.toolName.compareTo(b.toolName));
             if (rows.isEmpty) {
               return Text(

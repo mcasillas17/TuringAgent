@@ -1986,7 +1986,11 @@ tool instead.
    (`orch/service/runtime/service.go:3212`) with
    `automation_tool_unsupported`, a recorded `tool.call.denied` the model
    reads as a tool error: today's outcome, now decided earlier and in one
-   place, and nothing on those servers runs. Integration tools are not in
+   place, and nothing on those servers runs. That holds whatever the tool's
+   policy. The one approval-required tool there, `memory.remember`, failed
+   the run today with `automation_tool_not_allowlisted` (the beacon's
+   approval branch), naming a tool the save path refuses to list; it now
+   gets the same non-fatal refusal, and still nothing is written. Integration tools are not in
    that group, although the save path refuses them as well
    (`orch/repository/automations.go:36-47`). The `github.*` tools default to
    `approval_required` (`orch/service/tools/defaults.go:53-64`) and are
@@ -2014,8 +2018,9 @@ tool instead.
    fails visibly at that call and works again once the owner adds the tool
    (the Automations page offers `safe` tools on the allowlist from this
    slice; it offered only approval-gated ones before);
-   one that called a memory tool gets the same refusal it gets today and
-   carries on, and one that called a `github.*` tool fails as it does today
+   one that called a memory or team tool gets a tool error and carries on
+   (as before, except `memory.remember`, which failed the run and now
+   carries on too), and one that called a `github.*` tool fails as it does today
    (or, for a read the owner marked `safe`, now fails instead of getting a
    tool error). The release notes say so. No allowlist is backfilled,
    because guessing what an automation should be allowed to do is the gap
@@ -2091,7 +2096,13 @@ tool instead.
      wired (tests only) refuses every unattended call, as `CallTool`
      refuses an approval-required call with no enforcer (`call.go:88-90`).
      The hook passes the run id, the automation id and name from the grant
-     the check read, the server and tool names and the code.
+     the check read, the server and tool names and the code, on a context
+     of its own (the caller's, detached, with a five-second bound), so a
+     runtime that abandons the call cannot take the failure with it. A
+     direct call's worker sees only a tool error, so when the run moved the
+     hook also sends the existing `RunCancelled` command to the worker that
+     owns it, as `stopDelegatedTasks` does for a stopped task; the worker
+     exits and acknowledges, which releases the preserved execution.
 
      **One repository call fails the run and writes its audit row.**
      `repository.FailUnattendedRun(ctx, runID, failure, audit)` does, in one
@@ -2107,10 +2118,11 @@ tool instead.
         execution stays active and is marked `uncertain`, not exited, until
         the worker acknowledges.
      2. Only when that transition applied and `audit` is not nil, the
-        `automation.tool.blocked` row through `recordAuditTx`
-        (`orch/repository/audit.go:201-209`), under the condition
-        `RecordAuditForExistingRun` checks today, that the run's session is
-        still active (`audit.go:164-199`): automation actor, correlated to
+        `automation.tool.blocked` row through `recordAuditForExistingRun` on
+        the transaction, the conditional insert `RecordAuditForExistingRun`
+        makes today, that the run's session is still active
+        (`audit.go:164-199`); a row it skips because the session is
+        withdrawing leaves the failure to commit on its own: automation actor, correlated to
         the run, the beacon's tool call id as target (empty on a direct
         call, whose request carries none, `proto/turing/v1/mcp.proto:142-148`),
         and a payload naming the server, the tool, the automation and the
@@ -2284,6 +2296,8 @@ not to the current grant.
 | TUR-026d implementation: the skill loaders' policy | implementation: the exemption was written as if the loaders ran unattended today, but neither is in the safe seed, so both default to `approval_required` (`orch/service/tools/defaults.go:53-65`) and an unlisted one already failed an automation's run with `automation_tool_not_allowlisted` in the approval branch | The exemption covers the ceiling only; the approval branch keeps its own frozen-grant check, so a loader at `approval_required` is refused exactly as before, and a `safe` one runs with nothing listed. Point 5 and TUR-026d's acceptance say so | Bypassing the approval branch for them would turn an owner's `approval_required` into an automatic approval nobody gave; refusing a `safe` one would take away the skills an automation has today. |
 | TUR-026d implementation: the allowlist picker | implementation: the Automations page offered only approval-gated tools on the allowlist (`turing_app/lib/features/workspace/automations_page.dart`), so an owner could never add the `safe` tool the ceiling now requires, and the upgrade path in point 5 did not exist | The picker offers every `safe` and approval-gated tool except on `integrations`, `memory` and `team`, and its copy and `Automation.allowed_tools`' comment say the list is everything the automation may use | Without it, an automation that relied on an unlisted read would fail on every run with no fix in the app. |
 | TUR-026d implementation: where the check lives | implementation: point 2 names one function used by the beacon and by `mcpregistry`, which cannot import the runtime | `repository.unattendedGrantCheck`, read through `CheckUnattendedCall` at the beacon and at `CallTool`'s entry, and inside `MCPDispatchActive`'s read transaction; the refusal codes are repository constants the runtime re-exports; the refusal hook takes a `repository.UnattendedToolBlock`, the same value `FailUnattendedRun` writes | One definition of the verdict and of the audit row, with no import cycle. |
+| TUR-026d implementation review: approval-required memory tools | opus: point 5 said memory and team tools are refused non-fatally today, but `memory.remember` defaults to `approval_required` and failed an automation's run with `automation_tool_not_allowlisted` in the beacon's approval branch | Kept non-fatal, as point 5 places the refusal ahead of the allowlist and the policy; point 5 and the upgrade note now say what changed for it | Failing the run names a tool the owner cannot list (round 3's reason for the non-fatal refusal), and nothing on the server runs either way: `CallMemoryTool` refuses every automation run. |
+| TUR-026d implementation review: the refusal hook's reach | opus: the hook ran on the direct call's own context, so a runtime that cancelled the call dropped the failure and its row; and a direct call's worker got only a tool error, so it kept spending model turns until its next beacon | The hook runs on the caller's context detached with a five-second bound, and, when the run moved, sends `RunCancelled` to the run's worker | The runtime that skips the beacon is the one this check exists for, and it controls its own deadline; the cancel command is the existing way an orchestrator-ended run's worker is told to exit. |
 
 ## 5. F3 — Proactive rule library
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"google.golang.org/grpc/codes"
@@ -240,10 +241,14 @@ func (s *Server) CallTool(ctx context.Context, input CallInput) (map[string]any,
 // fails the run goes to the runtime's hook, which fails it, writes its
 // automation.tool.blocked row and publishes the failure; the call is refused
 // with PermissionDenied naming the code even when that fails, which is logged.
-// A direct call carries no tool call id, so the row has no target.
+// The hook runs on a context of its own, so a caller that gives up on the call
+// cannot take the failure down with it. A direct call carries no tool call id,
+// so the row has no target.
 func (s *Server) refuseUnattendedCall(ctx context.Context, input CallInput, serverName string, call repository.UnattendedCall) error {
 	if call.Fatal() {
-		if err := s.unattendedRefuser.RefuseUnattendedCall(ctx, input.RunID, repository.UnattendedToolBlock{
+		hookCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := s.unattendedRefuser.RefuseUnattendedCall(hookCtx, input.RunID, repository.UnattendedToolBlock{
 			AutomationID: call.Grant.AutomationID, AutomationName: call.Grant.AutomationName,
 			ServerName: serverName, ToolName: input.ToolName, Code: call.Refusal,
 		}); err != nil {

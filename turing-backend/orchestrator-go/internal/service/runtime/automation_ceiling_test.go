@@ -12,6 +12,8 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/repository"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/events"
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/tools"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // TUR-026d: an automation's frozen allowlist is a ceiling on every tool its
@@ -33,6 +35,7 @@ func (h *harness) seedPseudoTools(t *testing.T) {
 		{ServerName: "skills", ToolName: "skills_list", SchemaJSON: `{}`, Policy: "approval_required"},
 		{ServerName: "skills", ToolName: "skill_view", SchemaJSON: `{}`, Policy: "approval_required"},
 		{ServerName: "memory", ToolName: "memory.search", SchemaJSON: `{}`, Policy: "safe"},
+		{ServerName: "memory", ToolName: "memory.remember", SchemaJSON: `{}`, Policy: "approval_required"},
 		{ServerName: "team", ToolName: "team.delegate", SchemaJSON: `{}`, Policy: "safe"},
 		{ServerName: "integrations", ToolName: "github.list_issues", SchemaJSON: `{}`, Policy: "approval_required"},
 		{ServerName: "integrations", ToolName: "github.create_comment", SchemaJSON: `{}`, Policy: "approval_required"},
@@ -85,6 +88,14 @@ func TestAnUnlistedToolFailsAnAutomationsRunWhateverItsPolicy(t *testing.T) {
 		{name: "github.create_comment", tool: func(*testing.T, *harness) repository.AutomationTool {
 			return repository.AutomationTool{ServerName: "integrations", ToolName: "github.create_comment"}
 		}},
+		// A GitHub read the owner marked safe used to reach the integration
+		// service and be refused there as a tool error; now it fails the run.
+		{name: "github.list_issues marked safe", tool: func(t *testing.T, h *harness) repository.AutomationTool {
+			if err := h.repo.SetToolPolicyByName(context.Background(), "integrations", "github.list_issues", "safe"); err != nil {
+				t.Fatal(err)
+			}
+			return repository.AutomationTool{ServerName: "integrations", ToolName: "github.list_issues"}
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -102,6 +113,9 @@ func TestAnUnlistedToolFailsAnAutomationsRunWhateverItsPolicy(t *testing.T) {
 			}
 			h.assertRunFailedFor(t, fire.RunID, AutomationNotAllowlistedCode)
 			blocked := h.auditRows(t, fire.RunID, "automation.tool.blocked")
+			if len(blocked) != 1 {
+				t.Fatalf("automation.tool.blocked rows = %d, want 1", len(blocked))
+			}
 			if !strings.Contains(blocked[0].Payload, `"toolName":"`+tool.ToolName+`"`) ||
 				!strings.Contains(blocked[0].Payload, `"serverName":"`+tool.ServerName+`"`) ||
 				strings.Contains(blocked[0].Payload, "note.txt") {
@@ -147,6 +161,10 @@ func TestMemoryAndTeamToolsAreRefusedWithoutFailingTheRun(t *testing.T) {
 	for _, tool := range []repository.AutomationTool{
 		{ServerName: "memory", ToolName: "memory.search"},
 		{ServerName: "team", ToolName: "team.delegate"},
+		// memory.remember needs approval, so before the ceiling it failed the
+		// run as not allowlisted, a tool the save path refuses to list. It is
+		// refused the same non-fatal way now, and still nothing is written.
+		{ServerName: "memory", ToolName: "memory.remember"},
 	} {
 		toolCallID := "call_" + strings.ReplaceAll(tool.ToolName, ".", "_")
 		decision, err := h.service.handleToolBeacon(context.Background(), automationToolBeacon(fire, toolCallID, tool, map[string]any{"query": "plans"}))
@@ -166,6 +184,13 @@ func TestMemoryAndTeamToolsAreRefusedWithoutFailingTheRun(t *testing.T) {
 	}
 	if rows := h.auditRows(t, fire.RunID, "automation.tool.blocked"); len(rows) != 0 {
 		t.Fatalf("automation.tool.blocked rows = %d, want none", len(rows))
+	}
+	var approvals int
+	if err := h.database.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM approvals WHERE run_id = ?`, fire.RunID).Scan(&approvals); err != nil {
+		t.Fatal(err)
+	}
+	if approvals != 0 {
+		t.Fatalf("approvals = %d, want none for a refused memory.remember", approvals)
 	}
 	if state := h.runState(t, fire.RunID); state.Lifecycle != "running" {
 		t.Fatalf("run lifecycle = %q, want it still running", state.Lifecycle)
@@ -205,19 +230,21 @@ func TestSkillLoadersStillWorkInAnAutomationWithNoSkillsToolListed(t *testing.T)
 			}
 		}
 	})
-	t.Run("at the default policy", func(t *testing.T) {
-		h := newHarness(t)
-		h.seedPseudoTools(t)
-		fire := h.fireAutomation(t, "Nightly note", []repository.AutomationTool{grantRead})
-		decision, err := h.service.handleToolBeacon(context.Background(), automationToolBeacon(fire, "call_skills_list", loaders[0], map[string]any{}))
-		if err != nil {
-			t.Fatalf("skills_list beacon: %v", err)
-		}
-		if !decision.GetTerminalRun() || decision.GetReason() != AutomationNotAllowlistedCode {
-			t.Fatalf("decision = %+v, want the terminal %s refusal it got before the ceiling", decision, AutomationNotAllowlistedCode)
-		}
-		h.assertRunFailedFor(t, fire.RunID, AutomationNotAllowlistedCode)
-	})
+	for _, loader := range loaders {
+		t.Run(loader.ToolName+" at the default policy", func(t *testing.T) {
+			h := newHarness(t)
+			h.seedPseudoTools(t)
+			fire := h.fireAutomation(t, "Nightly note", []repository.AutomationTool{grantRead})
+			decision, err := h.service.handleToolBeacon(context.Background(), automationToolBeacon(fire, "call_"+loader.ToolName, loader, map[string]any{}))
+			if err != nil {
+				t.Fatalf("%s beacon: %v", loader.ToolName, err)
+			}
+			if !decision.GetTerminalRun() || decision.GetReason() != AutomationNotAllowlistedCode {
+				t.Fatalf("decision = %+v, want the terminal %s refusal it got before the ceiling", decision, AutomationNotAllowlistedCode)
+			}
+			h.assertRunFailedFor(t, fire.RunID, AutomationNotAllowlistedCode)
+		})
+	}
 }
 
 // A refusing beacon replayed on the run it already failed writes no second
@@ -233,7 +260,25 @@ func TestARepeatedRefusalWritesNoSecondRow(t *testing.T) {
 		}
 		h.assertRunFailedFor(t, fire.RunID, AutomationNotAllowlistedCode)
 		before := h.runState(t, fire.RunID)
-		_, _ = h.service.handleToolBeacon(context.Background(), beacon)
+		run, err := h.repo.GetRun(context.Background(), fire.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// The beacon itself is refused before any check: the run is over.
+		if _, err := h.service.handleToolBeacon(context.Background(), beacon); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("replayed beacon err = %v, want FailedPrecondition", err)
+		}
+		// And the refusal it would reach writes nothing on a failed run.
+		argsJSON, argsHash, err := canonicalArgs(map[string]any{"path": "note.txt"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision, err := h.service.blockUnattendedTool(context.Background(), beacon, run, argsJSON, argsHash,
+			repository.AutomationRunGrant{AutomationID: fire.AutomationID, AutomationName: "Nightly note"}, AutomationNotAllowlistedCode)
+		if err != nil || !decision.GetTerminalRun() {
+			t.Fatalf("decision = %+v, %v; want the runtime told to stop", decision, err)
+		}
 		h.assertRunFailedFor(t, fire.RunID, AutomationNotAllowlistedCode)
 		if after := h.runState(t, fire.RunID); after.StateVersion != before.StateVersion {
 			t.Fatalf("state version = %d, want %d unchanged", after.StateVersion, before.StateVersion)
@@ -382,4 +427,30 @@ func assertNoBusEvent(t *testing.T, published <-chan events.Event) {
 		t.Fatalf("published %s, want nothing", event.Type)
 	case <-time.After(100 * time.Millisecond):
 	}
+}
+
+// A registered-MCP refusal reaches the run's worker only as a tool error, so
+// the hook also tells the worker that owns the run to stop, the way a
+// cancelled run's worker is told: it exits, acknowledges, and the run's
+// preserved execution is released.
+func TestRefuseUnattendedCallTellsTheRunsWorkerToStop(t *testing.T) {
+	h := newHarness(t)
+	automation := h.createAutomation(t, "Nightly note", grantUpdate)
+	fire := h.claimAutomation(t, automation)
+	stream, _ := h.connectAssignedWorker(t, "worker-refused-direct", fire.RunID)
+
+	if err := h.service.RefuseUnattendedCall(context.Background(), fire.RunID, repository.UnattendedToolBlock{
+		AutomationID: fire.AutomationID, AutomationName: "Nightly note",
+		ServerName: "vendor", ToolName: "vendor.lookup", Code: AutomationNotAllowlistedCode,
+	}); err != nil {
+		t.Fatalf("RefuseUnattendedCall: %v", err)
+	}
+
+	cancelled := recvUntil(t, stream, func(cmd *turingv1.RuntimeCommand) bool {
+		return cmd.GetRunCancelled() != nil && cmd.GetRunCancelled().GetRunId() == fire.RunID
+	}).GetRunCancelled()
+	if cancelled.GetReason() != AutomationNotAllowlistedCode {
+		t.Fatalf("RunCancelled reason = %q, want %s", cancelled.GetReason(), AutomationNotAllowlistedCode)
+	}
+	h.assertRunFailedFor(t, fire.RunID, AutomationNotAllowlistedCode)
 }

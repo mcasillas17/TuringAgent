@@ -881,13 +881,16 @@ separate lifecycle, visibility and evaluation gates.
   (before any approval is spent) and again in the read transaction that holds
   the dispatch fence; a refusal reaches no server, returns `PermissionDenied`
   naming the code, and fails the run through a runtime hook that publishes
-  `agent.run.failed`, and with no hook wired every unattended call is refused.
+  `agent.run.failed` and tells the run's worker to stop; with no hook wired
+  every unattended call is refused.
   A scheduled automation's job is unchanged (no selected set). The
   Automations page now offers safe tools on the allowlist and says the list
   is everything the automation may use. Upgrade note: an automation that
   relied on an unlisted safe tool (`files`, `system`, or a third-party server)
   now fails visibly at that call and works again once the owner lists the
-  tool; one that called a memory tool is refused as before and carries on.
+  tool; one that called a memory or team tool gets a tool error and carries
+  on, as before, except that `memory.remember`, which needs approval, used to
+  fail the run and now carries on too (nothing is written either way).
   The approval-commit transaction checks the grant again and records the
   approval's audit row. The
   same transaction refuses an unattended approval for a mutation the run

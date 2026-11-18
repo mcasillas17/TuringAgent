@@ -443,3 +443,61 @@ func waitForStreamEvent(t *testing.T, received <-chan *turingv1.TuringEvent, eve
 		}
 	}
 }
+
+// The same direct call from an attended run, and for an allowlisted tool on an
+// enabled automation, passes both grant checks and the dispatch fence and is
+// dispatched, failing nothing. The app's production transport refuses to dial
+// a loopback address, so the dial is as far as it gets here; the mcpregistry
+// tests, with an injected client, show the request reaching the server.
+func TestAllowedDirectCallsStillReachTheServer(t *testing.T) {
+	t.Run("attended", func(t *testing.T) {
+		h := newCeilingHarness(t, repository.MCPServerTierLocalContainer)
+		ctx := context.Background()
+		session, err := h.app.Repository.CreateSession(ctx, "By hand")
+		if err != nil {
+			t.Fatal(err)
+		}
+		enqueued, err := h.app.Repository.EnqueueUserMessage(ctx, repository.EnqueueUserMessageInput{
+			SessionID: session.SessionID, Content: "look it up", AgentID: "general_assistant",
+			ModelProvider: "ollama", Model: "llama3.2",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		job, err := h.app.Repository.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", ceilingWorkerID, 0, time.Hour, nil, nil)
+		if err != nil || job.RunID != enqueued.RunID {
+			t.Fatalf("claim = %+v, %v; want the attended run", job, err)
+		}
+		assignment := repository.Assignment{JobID: job.JobID, RunID: job.RunID, WorkerID: ceilingWorkerID, AttemptID: job.AssignmentAttemptID}
+		if err := h.app.Repository.BeginAssignmentSend(ctx, assignment); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.app.Repository.MarkAssignmentDelivered(ctx, assignment); err != nil {
+			t.Fatal(err)
+		}
+
+		h.assertDispatched(t, enqueued.RunID, h.call(enqueued.RunID, "", "vendor.lookup"))
+	})
+	t.Run("allowlisted", func(t *testing.T) {
+		h := newCeilingHarness(t, repository.MCPServerTierLocalContainer)
+		_, fire, _ := h.runningAutomation(t, vendorLookup)
+
+		h.assertDispatched(t, fire.RunID, h.call(fire.RunID, "", "vendor.lookup"))
+	})
+}
+
+// assertDispatched checks the call got past every check to the transport's
+// dial, and left the run running with no automation.tool.blocked row.
+func (h *ceilingHarness) assertDispatched(t *testing.T, runID string, err error) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "local MCP host must resolve only inside net-mcp-registry") {
+		t.Fatalf("CallRegisteredMcpTool err = %v, want it dispatched as far as the transport's dial", err)
+	}
+	run, err := h.app.Repository.GetRun(context.Background(), runID)
+	if err != nil || run.Status != "running" {
+		t.Fatalf("run = %+v, %v; want it still running", run, err)
+	}
+	if rows := h.blockedRows(t, runID); len(rows) != 0 {
+		t.Fatalf("automation.tool.blocked rows = %+v, want none", rows)
+	}
+}
