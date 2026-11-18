@@ -166,9 +166,12 @@ type Server struct {
 	sealer     *secretbox.Sealer
 	httpClient *http.Client
 	approvals  ApprovalEnforcer
-	notifier   RegistryChangeNotifier
-	audit      AuditRecorder
-	configRoot string
+	// unattendedRefuser fails and publishes an unattended run whose call the
+	// grant check refused; see SetUnattendedRefuser.
+	unattendedRefuser UnattendedRefuser
+	notifier          RegistryChangeNotifier
+	audit             AuditRecorder
+	configRoot        string
 	// beforeConfigFileOpen, when set (test-only, nil in production), is
 	// invoked by ReimportConfiguredJSON with mcp.json's full path
 	// immediately before it opens that path. It lets a test win a

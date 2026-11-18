@@ -864,17 +864,35 @@ separate lifecycle, visibility and evaluation gates.
 
 #### TUR-026 - Revalidate frozen grants at re-entry
 
-- **Status:** Partly shipped: TUR-026a (automation grants), TUR-026b
-  (delegation children) and TUR-026c (repeat guard). Every tool call of
-  an automation's run is checked against the automation as it stands, reads
-  included. The skill loaders and memory and team tools are the exception;
-  their own services already refuse them for automation runs. The
-  approval-commit transaction checks the grant again and records the
-  approval's audit row. Deleting, disabling or narrowing an automation fails
-  the run's next tool call with `automation_grant_revoked`. The same
-  transaction refuses an unattended approval for a mutation the run already
-  spent an approval on (same server, tool and arguments), failing the run
-  with `unattended_repeat_blocked`: a run requeued by a retryable failure
+- **Status:** Shipped: TUR-026a (automation grants), TUR-026b (delegation
+  children), TUR-026c (repeat guard) and TUR-026d (allowlist ceiling). An
+  automation's frozen allowlist is the whole of its runs' tool authority:
+  every tool call is checked against it, reads included, ahead of the policy,
+  and against the automation as it stands, so a tool the run was never given
+  fails it with `automation_tool_not_allowlisted` and deleting, disabling or
+  narrowing the automation fails its next tool call with
+  `automation_grant_revoked`, each with an `automation.tool.blocked` audit
+  row written in the failure's own transaction (`FailUnattendedRun`). A
+  memory or team tool is refused instead as a tool error the run carries on
+  past (`automation_tool_unsupported`), and the two skill loaders are exempt;
+  they default to `approval_required`, so they still need listing unless the
+  owner marks them `safe`. GitHub tools stay on the failing path. A
+  registered-MCP call the runtime makes directly is checked too, at entry
+  (before any approval is spent) and again in the read transaction that holds
+  the dispatch fence; a refusal reaches no server, returns `PermissionDenied`
+  naming the code, and fails the run through a runtime hook that publishes
+  `agent.run.failed`, and with no hook wired every unattended call is refused.
+  A scheduled automation's job is unchanged (no selected set). The
+  Automations page now offers safe tools on the allowlist and says the list
+  is everything the automation may use. Upgrade note: an automation that
+  relied on an unlisted safe tool (`files`, `system`, or a third-party server)
+  now fails visibly at that call and works again once the owner lists the
+  tool; one that called a memory tool is refused as before and carries on.
+  The approval-commit transaction checks the grant again and records the
+  approval's audit row. The
+  same transaction refuses an unattended approval for a mutation the run
+  already spent an approval on (same server, tool and arguments), failing the
+  run with `unattended_repeat_blocked`: a run requeued by a retryable failure
   after a mutation cannot be pre-approved for it again, and an identical
   repeat within one attempt fails the same way; attended runs are unchanged.
   It keys on the spent approval, so it covers every approval-required tool,
@@ -889,8 +907,7 @@ separate lifecycle, visibility and evaluation gates.
   `profile_grant_revoked`, at most 100 per transaction. A task whose profile
   file was deleted or had an authority field edited is withdrawn between its
   claim and its send, and its consent is refused; a running task is never
-  withdrawn. TUR-026d (allowlist ceiling and registered-MCP dispatch) is not
-  started.
+  withdrawn.
 - **Outcome:** After the owner revokes or narrows a grant, a run's frozen
   authority only narrows or ends, and an automation's allowlist bounds every
   tool its runs call.

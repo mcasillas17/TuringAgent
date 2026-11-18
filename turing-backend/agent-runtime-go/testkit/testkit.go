@@ -108,6 +108,11 @@ func RunWorker(ctx context.Context, cfg WorkerConfig) error {
 		IntegrationTools: func(context.Context) (agent.ToolLister, error) {
 			return mcp.NewIntegrationClient(client), nil
 		},
+		// As in production: the orchestrator lists no memory tools while
+		// memory is off or it has no vault.
+		MemoryTools: func(context.Context) (agent.ToolLister, error) {
+			return mcp.NewMemoryClient(client), nil
+		},
 		Team: client,
 	}
 	// A test without an MCP server leaves it out rather than discovering

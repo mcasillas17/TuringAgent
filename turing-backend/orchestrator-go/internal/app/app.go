@@ -292,6 +292,9 @@ func New(cfg config.Config) (*App, error) {
 	mcpRegistryService.SetAuditRecorder(auditService)
 	mcpRegistryService.SetMCPConfigRoot(cfg.MCPConfigRoot)
 	mcpRegistryService.SetApprovalEnforcer(approvalService)
+	// A registered-MCP call an unattended run may not make is failed and
+	// published by the runtime, which owns the event bus.
+	mcpRegistryService.SetUnattendedRefuser(runtimeService)
 	mcpRegistryService.SetRegistryChangeNotifier(runtimeService)
 	if cfg.MCPConfigRoot != "" {
 		// ReimportConfiguredJSON is the same path the public ReimportMcpJson

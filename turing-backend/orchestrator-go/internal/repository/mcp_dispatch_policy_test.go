@@ -42,11 +42,14 @@ func TestMCPDispatchActiveRequiresUnchangedPolicy(t *testing.T) {
 	if err := repo.SetMCPToolPolicy(ctx, server.Server.ID, "vendor.lookup", "approval_required"); err != nil {
 		t.Fatal(err)
 	}
-	active, err := repo.MCPDispatchActive(ctx, server.Server.ID, enqueued.RunID, "vendor.lookup", "safe")
+	dispatch, err := repo.MCPDispatchActive(ctx, MCPDispatchCall{
+		ServerID: server.Server.ID, ServerName: "vendor", RunID: enqueued.RunID,
+		ToolName: "vendor.lookup", ExpectedPolicy: "safe",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if active {
+	if dispatch.Active {
 		t.Fatal("dispatch remained active after policy changed from safe")
 	}
 }

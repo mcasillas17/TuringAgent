@@ -84,10 +84,12 @@ type Automation struct {
 	Prompt       string                 `protobuf:"bytes,3,opt,name=prompt,proto3" json:"prompt,omitempty"`
 	Schedule     *AutomationSchedule    `protobuf:"bytes,4,opt,name=schedule,proto3" json:"schedule,omitempty"`
 	Enabled      bool                   `protobuf:"varint,5,opt,name=enabled,proto3" json:"enabled,omitempty"`
-	// The tools this automation may run WITHOUT asking, named one by one. There
-	// is deliberately no wildcard: "everything" is not a consent anyone can
-	// give in advance. A tool that needs approval and is not in this list stops
-	// the run rather than waiting for a person who is not there.
+	// The tools this automation may run WITHOUT asking, named one by one, and
+	// the only tools its runs may use at all, safe reads included. There is
+	// deliberately no wildcard: "everything" is not a consent anyone can give
+	// in advance. A tool that is not in this list stops the run rather than
+	// waiting for a person who is not there. Memory and team tools are refused
+	// without stopping it, and a skill loader marked safe needs no entry here.
 	//
 	// Scoped to this automation only. It is never consulted for a conversation
 	// the user drives by hand.
