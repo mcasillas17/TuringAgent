@@ -52,6 +52,12 @@ var (
 	// ErrAutomationToolNotAllowlisted is a pair the run's frozen grant never
 	// held. Adding it to the automation afterwards does not add it here.
 	ErrAutomationToolNotAllowlisted = errors.New("tool is not on the automation's allowlist")
+	// ErrUnattendedRepeatBlocked is an unattended run asking to pre-approve a
+	// call it already made: it has spent an approval on the same server, tool
+	// and arguments. Every approval-required tool counts, a third-party read
+	// included, because nothing marks one read-only; a tool the owner marks
+	// safe needs no approval and is never refused this way.
+	ErrUnattendedRepeatBlocked = errors.New("unattended repeat of a call the run already spent an approval on")
 	// ErrRunNotUnattended is a run no automation started, so it has no grant
 	// an unattended approval could rest on.
 	ErrRunNotUnattended = errors.New("run was not started by an automation")

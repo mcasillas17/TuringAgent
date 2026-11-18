@@ -1967,8 +1967,13 @@ func TestApprovalRequiredToolFlow(t *testing.T) {
 
 func TestTerminalApprovalKeepsRuntimeWorkerLiveAndUnblocksSameSession(t *testing.T) {
 	for _, test := range []struct {
-		name  string
-		apply func(*grpcHarness, string)
+		name string
+		// options are the harness's for this case. Only the expiry case cuts
+		// the approval's lifetime: a one-millisecond lifetime ends at the next
+		// whole second, so a denial decided against one loses to the expiry
+		// whenever it lands past that boundary.
+		options []harnessOption
+		apply   func(*grpcHarness, string)
 	}{
 		{
 			name: "denied",
@@ -1980,7 +1985,8 @@ func TestTerminalApprovalKeepsRuntimeWorkerLiveAndUnblocksSameSession(t *testing
 			},
 		},
 		{
-			name: "expired",
+			name:    "expired",
+			options: []harnessOption{withApprovalTTL(time.Millisecond)},
 			apply: func(h *grpcHarness, approvalID string) {
 				deadline := time.Now().Add(3 * time.Second)
 				for time.Now().Before(deadline) {
@@ -1995,7 +2001,7 @@ func TestTerminalApprovalKeepsRuntimeWorkerLiveAndUnblocksSameSession(t *testing
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			harness := newGRPCHarness(t, withApprovalTTL(time.Millisecond), withFilesCreateTool())
+			harness := newGRPCHarness(t, append([]harnessOption{withFilesCreateTool()}, test.options...)...)
 			defer harness.close()
 			sessionID := harness.createSession(t, "terminal approval keeps worker")
 			ctx, cancel := context.WithTimeout(harness.clientContext(), 10*time.Second)
