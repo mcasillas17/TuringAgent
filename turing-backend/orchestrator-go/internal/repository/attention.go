@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/attention"
+	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/runoutcome"
 )
 
 // MaxAttentionPageLimit is the Needs-you queue's page ceiling, the audit
@@ -71,20 +73,6 @@ func (row AttentionRow) Cursor() AttentionCursor {
 	}
 }
 
-func (row AttentionRow) before(other AttentionRow) bool {
-	a, b := row.Cursor(), other.Cursor()
-	switch {
-	case a.Rank != b.Rank:
-		return a.Rank < b.Rank
-	case a.SinceNanos != b.SinceNanos:
-		return a.SinceNanos > b.SinceNanos
-	case a.Kind != b.Kind:
-		return a.Kind < b.Kind
-	default:
-		return a.ID < b.ID
-	}
-}
-
 // AttentionPage is at most Limit rows in order, whether more follow, and the
 // watermark every later page of the pass applies.
 type AttentionPage struct {
@@ -132,14 +120,9 @@ func (r *Repository) ListAttention(ctx context.Context, query AttentionQuery) (A
 		return AttentionPage{}, err
 	}
 	slices.SortFunc(rows, func(a, b AttentionRow) int {
-		switch {
-		case a.before(b):
-			return -1
-		case b.before(a):
-			return 1
-		default:
-			return 0
-		}
+		x, y := a.Cursor(), b.Cursor()
+		return cmp.Or(cmp.Compare(x.Rank, y.Rank), cmp.Compare(y.SinceNanos, x.SinceNanos),
+			cmp.Compare(x.Kind, y.Kind), strings.Compare(x.ID, y.ID))
 	})
 	page := AttentionPage{Rows: rows, Watermark: query.Watermark}
 	if len(rows) > query.Limit {
@@ -208,11 +191,13 @@ const automationOccurrenceFrom = `
 const automationOccurrenceKey = `COALESCE(blocked.id, a.last_run_id, '')`
 
 // automationOccurrenceFailing says the latest occurrence failed or was
-// blocked. A run the owner cancelled did neither.
+// blocked. A run the owner cancelled did neither: its committed outcome says
+// so, and that is the only cancellation that needs nobody until TUR-028a's
+// owner_quiet joins it. A run whose conversation is being deleted is the
+// owner's withdrawal, not a failure, and its row goes with the conversation.
 const automationOccurrenceFailing = `(blocked.id IS NOT NULL OR (run_session.id IS NOT NULL AND (
 		run.status = 'failed' OR (run.status = 'cancelled'
-			AND COALESCE(run.outcome_reason, '') <> 'user_cancelled'
-			AND COALESCE(run.cancellation_reason, '') <> 'user_cancelled'))))`
+			AND COALESCE(run.outcome_reason, '') <> '` + string(runoutcome.ReasonUserCancelled) + `'))))`
 
 // automationOccurrenceQuery is DismissAttention's read of one automation:
 // whether it is enabled with a failing latest occurrence, and that

@@ -167,3 +167,43 @@ func assertBareHint(t *testing.T, hint *turingv1.TuringEvent) {
 		t.Fatalf("hint = %+v, want a bare ATTENTION_CHANGED", hint)
 	}
 }
+
+// Every canonical event type is either a Needs-you source transition, which
+// hints, or not, so a new type cannot slip past the hint undecided.
+var (
+	attentionHintEventTypes = []string{
+		"approval.requested", "approval.approved", "approval.denied", "approval.expired", "approval.consumed",
+		"delegation.started", "delegation.updated", "delegation.finished",
+		"agent.run.completed", "agent.run.failed", "agent.run.cancelled",
+		"session.deleted",
+	}
+	attentionQuietEventTypes = []string{
+		"message.started", "message.delta", "message.completed",
+		"agent.run.queued", "agent.run.started", "agent.run.step", "agent.run.state_changed",
+		"tool.call.started", "tool.call.completed", "tool.call.failed", "tool.call.denied",
+		"error", "system", "session.updated", AttentionChangedType,
+	}
+)
+
+func TestEveryCanonicalEventTypeDecidesWhetherItHintsAttention(t *testing.T) {
+	classified := map[string]bool{}
+	for hints, types := range map[bool][]string{true: attentionHintEventTypes, false: attentionQuietEventTypes} {
+		for _, eventType := range types {
+			if _, twice := classified[eventType]; twice {
+				t.Fatalf("%s is classified twice", eventType)
+			}
+			classified[eventType] = hints
+			if got := changesAttention(eventType); got != hints {
+				t.Fatalf("changesAttention(%s) = %v, want %v", eventType, got, hints)
+			}
+		}
+	}
+	for eventType := range eventTypes {
+		if _, ok := classified[eventType]; !ok {
+			t.Fatalf("canonical type %s does not say whether it hints the Needs-you queue", eventType)
+		}
+	}
+	if len(classified) != len(eventTypes) {
+		t.Fatalf("classified %d types, want every one of the %d canonical types", len(classified), len(eventTypes))
+	}
+}

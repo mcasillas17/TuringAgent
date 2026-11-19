@@ -985,9 +985,11 @@ separate lifecycle, visibility and evaluation gates.
   nothing else can be dismissed. The updates stream carries a content-free
   `attention.changed` hint (`TURING_EVENT_TYPE_ATTENTION_CHANGED = 27`) for
   every approval, consent, run-ending and deletion event, and for the
-  transitions that publish none (a block, an automation enabled, disabled,
-  edited or deleted, a dismissal, a deletion receipt that starts or stops
-  being retryable). Migration 0031 adds the dismissal column and two
+  transitions that publish none (a scheduler fire that queues a run, records
+  a remote-egress block or disables an unreadable schedule; an automation
+  enabled, disabled, edited or deleted; a dismissal; a deletion that begins,
+  or whose receipt starts or stops being retryable or changes its cause).
+  Migration 0031 adds the dismissal column and two
   partial indexes. Suspended watches and watch proposals arrive with PRO-001.
   See [Needs-you queue](architecture/needs-you-queue.md).
 - **Outcome:** The owner sees in one place everything that waits on them,

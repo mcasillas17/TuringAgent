@@ -266,6 +266,28 @@ func TestListAttentionListsAnUnreadableExpiryAsUnclassified(t *testing.T) {
 	}
 }
 
+// A block whose payload is not JSON is still listed, with no cause, rather
+// than failing the whole read, and the automation library reads it alike.
+func TestAMalformedBlockPayloadStillListsItsRow(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	automation, err := repo.CreateAutomation(ctx, AutomationInput{Name: "Remote", Prompt: "x", Schedule: everyFiveMinutes(), Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditID := seedRemoteEgressBlock(t, ctx, repo, automation.AutomationID, time.Now().UTC().Add(-time.Hour))
+	if _, err := repo.db.ExecContext(ctx, `UPDATE audit_logs SET payload_json = 'not json' WHERE id = ?`, auditID); err != nil {
+		t.Fatal(err)
+	}
+	rows := attentionRowsOfKind(firstAttentionPage(t, ctx, repo), attention.KindAutomation)
+	if len(rows) != 1 || rows[0].OccurrenceKey != auditID || rows[0].Cause != "" {
+		t.Fatalf("rows = %+v, want the block listed by %s with no cause", rows, auditID)
+	}
+	library, err := repo.ListAutomations(ctx)
+	if err != nil || len(library) != 1 || library[0].LastOccurrenceFailureCode != "" || library[0].LastOccurrenceFailedAt == "" {
+		t.Fatalf("ListAutomations = %+v, %v; want the block's time and no code", library, err)
+	}
+}
+
 // Stage 3 lists an enabled automation whose latest occurrence failed or was
 // blocked, keyed by that occurrence, and nothing else.
 func TestListAttentionRaisesABlockedRowOnlyForAFailingLatestOccurrence(t *testing.T) {
@@ -288,6 +310,7 @@ func TestListAttentionRaisesABlockedRowOnlyForAFailingLatestOccurrence(t *testin
 		{name: "a run the owner cancelled", status: "cancelled", code: runoutcome.CodeUserCancelled, at: recent},
 		{name: "a disabled automation's failure", status: "failed", code: "provider_unavailable", at: recent, disable: true},
 		{name: "a run abandoned by deleting its conversation", status: "cancelled", code: runoutcome.CodeClientCancelled, at: recent, deleting: true},
+		{name: "a failed run whose conversation is being deleted", status: "failed", code: "provider_unavailable", at: recent, deleting: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repo, ctx := newTitleTestRepo(t)
@@ -591,8 +614,12 @@ func seedAutomationHistory(t *testing.T, ctx context.Context, repo *Repository) 
 	return noisy
 }
 
+// p95 times call after one untimed warm-up, so a cold cache is not a sample.
 func p95(t *testing.T, runs int, call func() error) time.Duration {
 	t.Helper()
+	if err := call(); err != nil {
+		t.Fatal(err)
+	}
 	samples := make([]time.Duration, 0, runs)
 	for range runs {
 		started := time.Now()
@@ -615,18 +642,25 @@ func TestAttentionLatestBlockLookupUsesItsPartialIndex(t *testing.T) {
 	noisy := seedAutomationHistory(t, ctx, repo)
 	const index = "idx_audit_remote_egress_blocked"
 
+	// One seek per automation: a search on the index by actor and time, never
+	// a scan of it or of the table.
+	seek := "SEARCH candidate USING INDEX " + index + " (actor_id=? AND created_at>?)"
 	listQuery, listArgs := attentionSourceStatement(t, attention.KindAutomation)
 	listPlan := explainQueryPlan(t, ctx, repo, listQuery, listArgs...)
-	if !strings.Contains(listPlan, index) {
-		t.Fatalf("ListAttention's automation plan does not use %s:\n%s", index, listPlan)
+	if !strings.Contains(listPlan, seek) || strings.Contains(listPlan, "SCAN candidate") {
+		t.Fatalf("ListAttention's latest-block lookup is not one seek on %s:\n%s", index, listPlan)
 	}
 	dismissPlan := explainQueryPlan(t, ctx, repo, automationOccurrenceQuery, noisy.AutomationID)
-	if !strings.Contains(dismissPlan, index) {
-		t.Fatalf("DismissAttention's lookup does not use %s:\n%s", index, dismissPlan)
+	if !strings.Contains(dismissPlan, seek) || strings.Contains(dismissPlan, "SCAN candidate") {
+		t.Fatalf("DismissAttention's latest-block lookup is not one seek on %s:\n%s", index, dismissPlan)
+	}
+	libraryPlan := explainQueryPlan(t, ctx, repo, automationSelect+` WHERE a.id = ?`, noisy.AutomationID)
+	if !strings.Contains(libraryPlan, seek) || strings.Contains(libraryPlan, "SCAN candidate") {
+		t.Fatalf("the automation library's latest-block lookup is not one seek on %s:\n%s", index, libraryPlan)
 	}
 	consentQuery, consentArgs := attentionSourceStatement(t, attention.KindDelegation)
 	consentPlan := explainQueryPlan(t, ctx, repo, consentQuery, consentArgs...)
-	if !strings.Contains(consentPlan, "idx_delegations_consent_pending") {
+	if !strings.Contains(consentPlan, "SCAN d USING INDEX idx_delegations_consent_pending") {
 		t.Fatalf("ListAttention's consent plan does not use idx_delegations_consent_pending:\n%s", consentPlan)
 	}
 
@@ -648,8 +682,9 @@ func TestAttentionLatestBlockLookupUsesItsPartialIndex(t *testing.T) {
 	}
 }
 
-// With 10,000 terminal runs behind them and 100 pending obligations, every
-// page of the pass reads within the budget.
+// With 10,000 terminal runs, 2,000 completed deletions and 200 stale consents
+// behind them and 100 pending obligations, every page of the pass reads within
+// the budget.
 func TestListAttentionPageStaysWithinItsBudget(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 	base := time.Now().UTC().Add(-48 * time.Hour)
@@ -674,6 +709,27 @@ func TestListAttentionPageStaysWithinItsBudget(t *testing.T) {
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
+	}
+	// History the reads must not grow with: completed deletion receipts, kept
+	// forever, and consents whose task stopped before anyone answered, which
+	// keep their pending mark.
+	tx, err = repo.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range 2000 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO session_deletions (session_id, lifecycle_version, state,
+				quiesce_deadline_at, terminal_sequence, retryable) VALUES (?, 1, 'completed', ?, 1, 0)`,
+			fmt.Sprintf("sess_deleted_%04d", index), FormatTimestamp(base)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	seedAttentionRun(t, ctx, repo, "sess_history", "run_parent", "completed", base)
+	for index := range 200 {
+		seedAttentionDelegation(t, ctx, repo, fmt.Sprintf("dlg_stale_%03d", index), "sess_history", "run_parent", "pending", "cancelled", base)
 	}
 	future := FormatTimestamp(time.Now().Add(time.Hour))
 	for index := range 100 {

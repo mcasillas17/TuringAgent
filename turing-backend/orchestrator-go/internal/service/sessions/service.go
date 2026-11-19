@@ -288,14 +288,30 @@ func (s *Server) withdrawSessionTree(ctx context.Context, sessionID string) (rep
 		return repository.SessionDeletionReceipt{}, err
 	}
 	receipt, err := s.withdrawBegunTree(ctx, sessionID)
-	// The Needs-you queue changed when this withdrawal began (the
-	// conversation's own rows leave it) or when the receipt started or
-	// stopped being one the owner can retry. A reconciler pass that changed
-	// neither hints nothing.
-	if err == nil && (beforeErr != nil || ownerCanRetry(before) != ownerCanRetry(receipt)) {
+	// A receipt read that failed for any reason counts as a begin: one hint
+	// too many costs a refetch, one too few a stale list.
+	if deletionChangedAttention(before, beforeErr != nil, receipt, err == nil) {
 		s.hintAttention()
 	}
 	return receipt, err
+}
+
+// deletionChangedAttention says whether one withdrawal pass changed what the
+// Needs-you queue lists. A withdrawal that began did, whatever its finish
+// did: the conversation's approvals, consents and automation runs left the
+// queue with it. Otherwise only a finished pass whose receipt started or
+// stopped being one the owner can retry, or whose listed cause changed, did;
+// a reconciler pass that changed neither hints nothing.
+func deletionChangedAttention(before repository.SessionDeletionReceipt, began bool, after repository.SessionDeletionReceipt, finished bool) bool {
+	switch {
+	case began:
+		return true
+	case !finished:
+		return false
+	default:
+		return ownerCanRetry(before) != ownerCanRetry(after) ||
+			(ownerCanRetry(after) && before.ErrorCode != after.ErrorCode)
+	}
 }
 
 // ownerCanRetry is the deletion stage of the Needs-you queue: an owner's

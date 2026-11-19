@@ -30,7 +30,7 @@ func (h *countingHints) take() int {
 }
 
 // UX-002a: whether an automation is listed as blocked changes when it is
-// enabled, disabled, edited or deleted, none of which publishes an event, so
+// disabled, enabled again, edited or deleted, none of which publishes an event, so
 // each hints the Needs-you queue. A refused change hints nothing.
 func TestAutomationChangesHintAttention(t *testing.T) {
 	server, _, ctx := newTestServer(t)
@@ -51,6 +51,10 @@ func TestAutomationChangesHintAttention(t *testing.T) {
 	}{
 		{"disable", func() error {
 			_, err := server.SetAutomationEnabled(ctx, &turingv1.SetAutomationEnabledRequest{AutomationId: created.GetAutomationId()})
+			return err
+		}},
+		{"enable", func() error {
+			_, err := server.SetAutomationEnabled(ctx, &turingv1.SetAutomationEnabledRequest{AutomationId: created.GetAutomationId(), Enabled: true})
 			return err
 		}},
 		{"edit", func() error {
@@ -143,5 +147,24 @@ func TestTickHintsAttentionForEachOccurrenceItRecords(t *testing.T) {
 	}
 	if got := schedulerAttentionHints(updates); got != 1 {
 		t.Fatalf("hints for a remote-egress block = %d, want 1", got)
+	}
+}
+
+// A schedule that cannot be read disables its automation, which takes any
+// failure of it off the Needs-you queue, so the tick hints.
+func TestTickHintsAttentionWhenItDisablesAnUnreadableSchedule(t *testing.T) {
+	h := newSchedulerHarness(t)
+	updates, unsubscribe := h.bus.SubscribeSessionUpdates()
+	defer unsubscribe()
+	automation := createEnabled(t, h.repo, h.ctx, "Broken", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
+	if _, err := h.database.ExecContext(h.ctx, `UPDATE automations SET interval_seconds = NULL WHERE id = ?`, automation.AutomationID); err != nil {
+		t.Fatal(err)
+	}
+	h.scheduler.now = func() time.Time { return parseTime(t, automation.NextDueAt) }
+	if err := h.scheduler.Tick(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := schedulerAttentionHints(updates); got != 1 {
+		t.Fatalf("hints for a schedule disabled as unreadable = %d, want 1", got)
 	}
 }

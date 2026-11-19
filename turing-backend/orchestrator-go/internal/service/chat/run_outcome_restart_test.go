@@ -1022,6 +1022,7 @@ func userCancelledVocabularyFiles() map[string]string {
 		filepath.Join(root, "internal", "service", "chat", "explicit_cancel.go"): "the explicit public RPC",
 		filepath.Join(root, "internal", "service", "runtime", "service.go"):      "redelivery of committed cancellation",
 		filepath.Join(root, "internal", "repository", "delegation_lifecycle.go"): "a delegation card's report of a task's committed cancellation",
+		filepath.Join(root, "internal", "repository", "attention.go"):            "the Needs-you queue's reading of an automation run's committed cancellation",
 	}
 }
 

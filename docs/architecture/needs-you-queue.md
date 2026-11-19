@@ -14,7 +14,7 @@ table that classifies one subject's conditions.
 | --- | --- | --- | --- |
 | 1 | `person/approval` | A pending approval whose expiry is in the future, on any run. A delegated task's is listed under its parent conversation. | It is decided, expires, or its conversation is deleted. |
 | 2 | `person/consent` | A delegated task still queued with `egress_consent = 'pending'`. | The owner allows or declines, or the task stops. |
-| 3 | `person/blocked` | An enabled automation whose latest occurrence failed or was blocked: a failed run, a cancelled run the owner did not cancel, or an `automation.remote_egress_blocked` record newer than its last run. | A later run succeeds or is still going, the automation is disabled or deleted, or the owner dismisses that occurrence. Never by age. |
+| 3 | `person/blocked` | An enabled automation whose latest occurrence failed or was blocked: a failed run, a cancelled run the owner did not cancel, or an `automation.remote_egress_blocked` record newer than its last run. | A later run succeeds or is still going, the automation is disabled or deleted, the failed run's conversation is deleted, or the owner dismisses that occurrence. Never by age. |
 | 4 | `person/deletion` | An owner's deletion receipt (no parent) held `failed_external` and retryable. | It completes or stops being retryable. |
 | 5 | `person/proposal` | None until PRO-001. | — |
 
@@ -52,7 +52,11 @@ compares its stage rank with the cursor's first (an earlier stage reads
 nothing, a later one everything), and within the cursor's stage compares
 `since` before kind. Later pages leave out rows whose `since` is after the
 watermark; the next first page shows them. A pass therefore shows no row
-twice and skips nothing that qualified at the watermark and still qualifies.
+twice, never reorders rows, and skips nothing that qualified at the watermark
+and still qualifies with the same sort key. A row committed late with a
+`since` at or before the watermark (an approval's `created_at` is taken
+before its transaction) is shown by a later page when it sorts after the
+cursor and otherwise by the next first page, at most once either way.
 
 ## Occurrence key and dismissal
 
@@ -72,8 +76,9 @@ no session, run, sequence, time or payload. The bus derives one from every
 every run ending hints). Transitions that publish no event call
 `Bus.PublishAttentionChanged`: a scheduler fire that queues a run, records a
 remote-egress block or disables an unreadable schedule; enabling, disabling,
-editing or deleting an automation; a dismissal; and a deletion that begins or
-whose receipt starts or stops being retryable. Hints coalesce per subscriber.
+editing or deleting an automation; a dismissal; and a deletion that begins,
+or whose receipt starts or stops being retryable or changes its cause. Hints
+coalesce per subscriber.
 Approval expiry publishes nothing; the app refetches on resume.
 
 ## Cost
@@ -83,5 +88,6 @@ One read transaction per page and no writes. Approvals use
 and each automation's latest-block lookup is one seek on the partial
 `idx_audit_remote_egress_blocked(actor_id, created_at)`, shared with the
 automation library's read. Tests pin the query plans and keep a page under
-100 ms at 10,000 terminal runs and 100 pending obligations, and with 1,000
-automations beside 100,000 blocks of another.
+100 ms at 10,000 terminal runs, 2,000 completed deletions, 200 stale consents
+and 100 pending obligations, and with 1,000 automations beside 100,000 blocks
+of another.

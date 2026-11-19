@@ -1011,7 +1011,7 @@ const automationSelect = `
 	SELECT a.id, a.name, a.prompt, a.schedule_kind, a.interval_seconds, a.daily_minute_utc, a.enabled,
 		a.next_due_at, a.last_run_at, a.last_run_id, a.session_id,
 		COALESCE(r.status, ''), '',
-		COALESCE(json_extract(blocked.payload_json, '$.code'), ''),
+		COALESCE(CASE WHEN json_valid(blocked.payload_json) THEN json_extract(blocked.payload_json, '$.code') END, ''),
 		COALESCE(blocked.created_at, ''),
 		a.created_at, a.updated_at
 	FROM automations a
