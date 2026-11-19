@@ -22,6 +22,12 @@ The project is designed for local development first: secrets stay in your local 
 - Provides an explicit **Stop** action for a run, backed by durable,
   retry-safe cancellation. Acceptance and worker shutdown are separate;
   completed side effects are not undone.
+- Exposes the owner's cross-conversation Needs-you queue
+  (`AttentionService.ListAttention`): pending approvals, delegated tasks
+  waiting for consent, blocked automations and retryable deletions, paged in
+  one order with a content-free refresh hint, and a Dismiss bound to one
+  automation failure. The app's destination for it is not built yet. See
+  [Needs-you queue](docs/architecture/needs-you-queue.md).
 - Exposes a redacted, paginated audit read API (`AuditService.ListAuditEntries`), including the approval comment or denial reason a person typed; audit inspection is exposed programmatically through the authenticated API, with no client or built-in viewer yet.
 - Withdraws a deleted session through a durable lifecycle: reads/search/replay
   fail closed once withdrawal starts, active work is cancelled and reconciled,

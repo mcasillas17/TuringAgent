@@ -50,6 +50,10 @@ enum TuringEventType {
   // continuation that answers from the results; its summary is written by the
   // orchestrator, never a model.
   TURING_EVENT_TYPE_DELEGATION_FINISHED = 26;
+  // On SubscribeSessionUpdates only, with no session, run or payload:
+  // something the Needs-you queue lists may have changed, so read
+  // AttentionService.ListAttention again. A hint, never the change itself.
+  TURING_EVENT_TYPE_ATTENTION_CHANGED = 27;
 }
 
 message TuringEvent {

@@ -48,6 +48,8 @@ var eventTypes = map[string]turingv1.TuringEventType{
 	"delegation.started":      turingv1.TuringEventType_TURING_EVENT_TYPE_DELEGATION_STARTED,
 	"delegation.updated":      turingv1.TuringEventType_TURING_EVENT_TYPE_DELEGATION_UPDATED,
 	"delegation.finished":     turingv1.TuringEventType_TURING_EVENT_TYPE_DELEGATION_FINISHED,
+	// Never persisted: the bus mints it for the global updates stream only.
+	AttentionChangedType: turingv1.TuringEventType_TURING_EVENT_TYPE_ATTENTION_CHANGED,
 }
 
 // canonicalByFoldedType indexes the same table by the spelling-insensitive form

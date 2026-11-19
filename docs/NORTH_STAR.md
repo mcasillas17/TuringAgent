@@ -968,7 +968,28 @@ separate lifecycle, visibility and evaluation gates.
 
 #### UX-002 - Needs-you queue
 
-- **Status:** Proposed; not started.
+- **Status:** Partly shipped: UX-002a (projection and API); UX-002b (the
+  app's Needs-you destination) is next. The public-only
+  `AttentionService.ListAttention` lists, across conversations, every
+  pending unexpired approval (a delegated task's under its parent), every
+  delegated task waiting for egress consent, every enabled automation whose
+  latest occurrence failed or was blocked (a run's failure, a cancellation
+  other than the owner's, or a remote-egress block with no run, TUR-026's
+  codes included) and every deletion the owner can retry, classified by the
+  pure `attention.Stage` table; a row it cannot classify is listed as
+  `unavailable`, never dropped. Rows carry ids, titles, `since` and closed
+  codes, never arguments or content, and page 100 at a time in one total
+  order under a first-page watermark. `DismissAttention` hides one
+  automation's occurrence (keyed by its latest remote-egress block after its
+  last run, else its last run) until a newer one, and refuses a stale key;
+  nothing else can be dismissed. The updates stream carries a content-free
+  `attention.changed` hint (`TURING_EVENT_TYPE_ATTENTION_CHANGED = 27`) for
+  every approval, consent, run-ending and deletion event, and for the
+  transitions that publish none (a block, an automation enabled, disabled,
+  edited or deleted, a dismissal, a deletion receipt that starts or stops
+  being retryable). Migration 0031 adds the dismissal column and two
+  partial indexes. Suspended watches and watch proposals arrive with PRO-001.
+  See [Needs-you queue](architecture/needs-you-queue.md).
 - **Outcome:** The owner sees in one place everything that waits on them,
   across conversations.
 - **Scope:** An orchestrator-computed, owner-only list of pending approvals,

@@ -67,6 +67,10 @@ const (
 	// continuation that answers from the results; its summary is written by the
 	// orchestrator, never a model.
 	TuringEventType_TURING_EVENT_TYPE_DELEGATION_FINISHED TuringEventType = 26
+	// On SubscribeSessionUpdates only, with no session, run or payload:
+	// something the Needs-you queue lists may have changed, so read
+	// AttentionService.ListAttention again. A hint, never the change itself.
+	TuringEventType_TURING_EVENT_TYPE_ATTENTION_CHANGED TuringEventType = 27
 )
 
 // Enum value maps for TuringEventType.
@@ -99,6 +103,7 @@ var (
 		24: "TURING_EVENT_TYPE_DELEGATION_STARTED",
 		25: "TURING_EVENT_TYPE_DELEGATION_UPDATED",
 		26: "TURING_EVENT_TYPE_DELEGATION_FINISHED",
+		27: "TURING_EVENT_TYPE_ATTENTION_CHANGED",
 	}
 	TuringEventType_value = map[string]int32{
 		"TURING_EVENT_TYPE_UNSPECIFIED":             0,
@@ -128,6 +133,7 @@ var (
 		"TURING_EVENT_TYPE_DELEGATION_STARTED":      24,
 		"TURING_EVENT_TYPE_DELEGATION_UPDATED":      25,
 		"TURING_EVENT_TYPE_DELEGATION_FINISHED":     26,
+		"TURING_EVENT_TYPE_ATTENTION_CHANGED":       27,
 	}
 )
 
@@ -513,7 +519,7 @@ const file_turing_v1_events_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12%\n" +
 	"\x0eafter_sequence\x18\x02 \x01(\x03R\rafterSequence\" \n" +
-	"\x1eSubscribeSessionUpdatesRequest*\xc4\b\n" +
+	"\x1eSubscribeSessionUpdatesRequest*\xed\b\n" +
 	"\x0fTuringEventType\x12!\n" +
 	"\x1dTURING_EVENT_TYPE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!TURING_EVENT_TYPE_MESSAGE_STARTED\x10\x01\x12#\n" +
@@ -542,7 +548,8 @@ const file_turing_v1_events_proto_rawDesc = "" +
 	")TURING_EVENT_TYPE_AGENT_RUN_STATE_CHANGED\x10\x17\x12(\n" +
 	"$TURING_EVENT_TYPE_DELEGATION_STARTED\x10\x18\x12(\n" +
 	"$TURING_EVENT_TYPE_DELEGATION_UPDATED\x10\x19\x12)\n" +
-	"%TURING_EVENT_TYPE_DELEGATION_FINISHED\x10\x1a2\x97\x02\n" +
+	"%TURING_EVENT_TYPE_DELEGATION_FINISHED\x10\x1a\x12'\n" +
+	"#TURING_EVENT_TYPE_ATTENTION_CHANGED\x10\x1b2\x97\x02\n" +
 	"\fEventService\x12I\n" +
 	"\n" +
 	"ListEvents\x12\x1c.turing.v1.ListEventsRequest\x1a\x1d.turing.v1.ListEventsResponse\x12\\\n" +

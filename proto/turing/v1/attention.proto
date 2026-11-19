@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package turing.v1;
+
+option go_package = "github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1";
+
+import "google/protobuf/timestamp.proto";
+import "turing/v1/common.proto";
+
+// The Needs-you queue's closed stage table, read top to bottom, first match
+// wins. Every row is an obligation on the owner: healthy states take no space.
+enum AttentionStage {
+  ATTENTION_STAGE_UNSPECIFIED = 0;
+  // A pending, unexpired approval on any run. A delegated task's appears under
+  // its parent conversation.
+  ATTENTION_STAGE_PERSON_APPROVAL = 1;
+  // A delegated task waiting for the owner's consent to tools that leave the
+  // machine.
+  ATTENTION_STAGE_PERSON_CONSENT = 2;
+  // An enabled automation whose latest occurrence failed or was blocked,
+  // unless the owner dismissed that occurrence.
+  ATTENTION_STAGE_PERSON_BLOCKED = 3;
+  // A deletion the owner can retry, held failed and retryable.
+  ATTENTION_STAGE_PERSON_DELETION = 4;
+  // An open watch proposal. Nothing raises it until PRO-001.
+  ATTENTION_STAGE_PERSON_PROPOSAL = 5;
+  // A row the projection could not classify. It is listed in its source's
+  // place, never dropped, so an empty list is always a fact.
+  ATTENTION_STAGE_UNAVAILABLE = 6;
+}
+
+// The source a row came from. Together with the stage it says which action
+// the row offers. The values are also the third key of the list's order.
+enum AttentionSourceKind {
+  ATTENTION_SOURCE_KIND_UNSPECIFIED = 0;
+  ATTENTION_SOURCE_KIND_APPROVAL = 1;
+  ATTENTION_SOURCE_KIND_DELEGATION = 2;
+  ATTENTION_SOURCE_KIND_AUTOMATION = 3;
+  ATTENTION_SOURCE_KIND_DELETION = 4;
+  // A watch suspended by a source failure. Nothing lists one until PRO-001.
+  ATTENTION_SOURCE_KIND_WATCH = 5;
+  // An open watch proposal. Nothing lists one until PRO-001.
+  ATTENTION_SOURCE_KIND_PROPOSAL = 6;
+}
+
+// One owner obligation. It never carries tool arguments, message content or
+// transcripts: only what a row's summary shows and the ids its action needs.
+message AttentionRow {
+  AttentionStage stage = 1;
+  AttentionSourceKind kind = 2;
+  // When the occurrence the row reports happened.
+  google.protobuf.Timestamp since = 3;
+  // The conversation the row belongs to: an approval's or a consent's (a
+  // delegated task's appears under its parent), an automation's own while it
+  // exists, or the conversation a deletion withdraws.
+  string session_id = 4;
+  // That conversation's title, empty for a deletion. Untrusted text: render
+  // it as plain text.
+  string session_title = 5;
+  // Set on an approval row.
+  string approval_id = 6;
+  // The approval's run, the delegated task's run, or the automation's run
+  // whose failure the row shows.
+  string run_id = 7;
+  // Set on a consent row, and on an approval row of a delegated task.
+  string delegation_id = 8;
+  // Set on an automation row, with the automation's name.
+  string automation_id = 9;
+  string automation_name = 10;
+  // Set on an automation row: the key of the occurrence it shows, a run id or
+  // an audit record id. DismissAttention takes it back unchanged.
+  string occurrence_key = 11;
+  // A closed, content-free code saying why the row needs a person: an
+  // automation's failure or block code, or a deletion's failure class.
+  string cause = 12;
+}
+
+message ListAttentionRequest {
+  // A limit from 1 to 100; 0 means 100. The cursor is the previous page's
+  // next_cursor, which carries the first page's watermark.
+  PageRequest page = 1;
+}
+
+message ListAttentionResponse {
+  // In the queue's total order: stage, then since (newest first), then
+  // source kind, then source id.
+  repeated AttentionRow rows = 1;
+  // next_cursor is set exactly when a next page exists.
+  PageResponse page = 2;
+}
+
+message DismissAttentionRequest {
+  string automation_id = 1;
+  // The listed row's occurrence_key, unchanged. A key that is no longer the
+  // automation's latest failing occurrence is refused.
+  string occurrence_key = 2;
+}
+
+message DismissAttentionResponse {}
+
+// The owner's Needs-you queue. Public only: the runtime and every internal
+// identity are refused.
+service AttentionService {
+  rpc ListAttention(ListAttentionRequest) returns (ListAttentionResponse);
+  // Hides one automation's failing occurrence until a newer one. Approvals,
+  // consents and deletions cannot be dismissed.
+  rpc DismissAttention(DismissAttentionRequest) returns (DismissAttentionResponse);
+}

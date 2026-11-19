@@ -4,6 +4,27 @@ import "sync"
 
 const maxTerminatedSessionFences = 1024
 
+// AttentionChangedType is the Needs-you queue's hint: something it lists may
+// have changed, so read ListAttention again. It carries nothing else.
+const AttentionChangedType = "attention.changed"
+
+// changesAttention reports whether an event is a transition of a source the
+// Needs-you queue lists: an approval, a delegated task's consent (reported by
+// its delegation events), an automation's outcome (a run ending; the bus
+// cannot tell an automation's run from a chat's, so every ending hints), or a
+// deletion.
+func changesAttention(eventType string) bool {
+	switch eventType {
+	case "approval.requested", "approval.approved", "approval.denied", "approval.expired", "approval.consumed",
+		"delegation.started", "delegation.updated", "delegation.finished",
+		"agent.run.completed", "agent.run.failed", "agent.run.cancelled",
+		"session.deleted":
+		return true
+	default:
+		return false
+	}
+}
+
 type Event struct {
 	EventID     string
 	SessionID   string
@@ -108,6 +129,20 @@ func (b *Bus) Publish(event Event) {
 			continue
 		}
 		sub.stream.publish(event)
+	}
+}
+
+// PublishAttentionChanged hints every updates subscriber that the Needs-you
+// queue may have changed, for a transition that publishes no event of its
+// own: a remote-egress block, an automation enabled, disabled, edited or
+// deleted, a dismissal, or a deletion receipt that failed.
+func (b *Bus) PublishAttentionChanged() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, sub := range b.subs {
+		if sub.updates != nil {
+			sub.updates.hintAttention()
+		}
 	}
 }
 
@@ -231,12 +266,15 @@ func (s *sessionEventSubscription) stop() {
 }
 
 type sessionUpdateSubscription struct {
-	mu       sync.Mutex
-	pending  map[string]Event
-	wake     chan struct{}
-	out      chan Event
-	done     chan struct{}
-	stopOnce sync.Once
+	mu      sync.Mutex
+	pending map[string]Event
+	// attention is one waiting attention.changed hint. Hints coalesce, so a
+	// burst of changes is one hint, not one per change.
+	attention bool
+	wake      chan struct{}
+	out       chan Event
+	done      chan struct{}
+	stopOnce  sync.Once
 }
 
 func newSessionUpdateSubscription() *sessionUpdateSubscription {
@@ -251,15 +289,31 @@ func newSessionUpdateSubscription() *sessionUpdateSubscription {
 }
 
 func (s *sessionUpdateSubscription) publish(event Event) {
-	if event.Type != "session.updated" && event.Type != "session.deleted" {
+	session := event.Type == "session.updated" || event.Type == "session.deleted"
+	attention := changesAttention(event.Type)
+	if !session && !attention {
 		return
 	}
 	s.mu.Lock()
-	previous, found := s.pending[event.SessionID]
-	if !found || event.Sequence >= previous.Sequence {
-		s.pending[event.SessionID] = event
+	if session {
+		previous, found := s.pending[event.SessionID]
+		if !found || event.Sequence >= previous.Sequence {
+			s.pending[event.SessionID] = event
+		}
 	}
+	s.attention = s.attention || attention
 	s.mu.Unlock()
+	s.signal()
+}
+
+func (s *sessionUpdateSubscription) hintAttention() {
+	s.mu.Lock()
+	s.attention = true
+	s.mu.Unlock()
+	s.signal()
+}
+
+func (s *sessionUpdateSubscription) signal() {
 	select {
 	case s.wake <- struct{}{}:
 	default:
@@ -281,8 +335,13 @@ func (s *sessionUpdateSubscription) run() {
 					delete(s.pending, sessionID)
 					break
 				}
+				// The hint goes after every waiting session event, so a
+				// client refetching on it already holds the deletions.
+				if next.SessionID == "" && s.attention {
+					next, s.attention = Event{Type: AttentionChangedType}, false
+				}
 				s.mu.Unlock()
-				if next.SessionID == "" {
+				if next.Type == "" {
 					break
 				}
 				select {

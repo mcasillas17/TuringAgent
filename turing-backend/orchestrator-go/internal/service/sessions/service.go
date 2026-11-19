@@ -283,9 +283,34 @@ func (s *Server) DeleteSession(ctx context.Context, req *turingv1.DeleteSessionR
 // wait for a retry. With no children this is exactly the single-session
 // withdrawal.
 func (s *Server) withdrawSessionTree(ctx context.Context, sessionID string) (repository.SessionDeletionReceipt, error) {
+	before, beforeErr := s.repo.SessionDeletionReceipt(ctx, sessionID)
 	if err := s.beginWithdrawal(ctx, sessionID, false); err != nil {
 		return repository.SessionDeletionReceipt{}, err
 	}
+	receipt, err := s.withdrawBegunTree(ctx, sessionID)
+	// The Needs-you queue changed when this withdrawal began (the
+	// conversation's own rows leave it) or when the receipt started or
+	// stopped being one the owner can retry. A reconciler pass that changed
+	// neither hints nothing.
+	if err == nil && (beforeErr != nil || ownerCanRetry(before) != ownerCanRetry(receipt)) {
+		s.hintAttention()
+	}
+	return receipt, err
+}
+
+// ownerCanRetry is the deletion stage of the Needs-you queue: an owner's
+// receipt held failed and retryable.
+func ownerCanRetry(receipt repository.SessionDeletionReceipt) bool {
+	return receipt.State == "failed_external" && receipt.Retryable
+}
+
+func (s *Server) hintAttention() {
+	if s.bus != nil {
+		s.bus.PublishAttentionChanged()
+	}
+}
+
+func (s *Server) withdrawBegunTree(ctx context.Context, sessionID string) (repository.SessionDeletionReceipt, error) {
 	children, err := s.repo.DelegationChildSessionIDs(ctx, sessionID)
 	if err != nil {
 		return repository.SessionDeletionReceipt{}, status.Error(codes.Internal, "delete session failed")
