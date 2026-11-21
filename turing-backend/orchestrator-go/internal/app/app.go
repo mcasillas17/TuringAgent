@@ -256,6 +256,7 @@ func New(cfg config.Config) (*App, error) {
 	agentService := agentsvc.New(repo, cfg.AgentCredentialNames)
 	automationService := automationsvc.New(repo)
 	automationService.SetAttentionHints(eventBus)
+	automationService.SetEventPublisher(eventBus)
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.NewWithEgressConfig(repo, eventBus, runtimeService, cfg.LocalModel, cfg.OpenAIModel, chatsvc.EgressConfig{
 		OpenAIBaseURL: cfg.OpenAIBaseURL,
@@ -438,7 +439,8 @@ func New(cfg config.Config) (*App, error) {
 	// memory tool is the runtime's. Neither facet can do the other's half.
 	turingv1.RegisterMemoryServiceServer(publicServer, memorysvc.NewPublicServer(memoryService))
 	// Public only: nothing outside the orchestrator schedules a run, and the
-	// runtime has no reason to read the automation library.
+	// runtime has no reason to read the automation library. The owner's quiet
+	// switch lives here too, so no internal identity can set it.
 	turingv1.RegisterAutomationServiceServer(publicServer, automationService)
 	// Public only, and read-only. The runtime has nothing to ask it, and there
 	// is no internal registration because nothing off this process should be
@@ -541,6 +543,10 @@ func New(cfg config.Config) (*App, error) {
 	// duties register here rather than starting a loop of their own.
 	maintenanceLoop := maintenance.New()
 	maintenanceLoop.Register("withdraw tasks of revoked specialists", teamService.CancelRevokedDelegations)
+	// The owner's quiet switch: turning it on kicks the loop so its drain
+	// starts at once, and a drain a crash cut short resumes on the next tick.
+	maintenanceLoop.Register("drain unattended work after quiet", automationService.DrainUnattendedQuiet)
+	automationService.SetQuietDrainTrigger(maintenanceLoop.Kick)
 	maintenanceCtx, maintenanceCancel := context.WithCancel(context.Background())
 	application.maintenanceCancel = maintenanceCancel
 	ticks, stopTicks := maintenanceTicks(maintenance.Interval(time.Duration(cfg.JobReaperIntervalMS) * time.Millisecond))

@@ -742,6 +742,220 @@ func (x *ListAutomationsResponse) GetAutomations() []*Automation {
 	return nil
 }
 
+// The owner's quiet switch for unattended work (TUR-028a). While it is on, no
+// automation fires, no unattended run starts, queued unattended runs are
+// cancelled, and one that would go back to the queue is cancelled instead. A
+// run already going finishes. Turning it off starts nothing by itself.
+type UnattendedQuiet struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// True while no unattended work starts. A stored value the server cannot
+	// read counts as on, so unavailable is then true as well.
+	Quiet bool `protobuf:"varint,1,opt,name=quiet,proto3" json:"quiet,omitempty"`
+	// The revision a SetUnattendedQuiet must name. Every change advances it.
+	Revision int64 `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
+	// The stored value cannot be read. Quiet counts as on until a write, naming
+	// this revision, repairs it.
+	Unavailable   bool `protobuf:"varint,3,opt,name=unavailable,proto3" json:"unavailable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnattendedQuiet) Reset() {
+	*x = UnattendedQuiet{}
+	mi := &file_turing_v1_automations_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnattendedQuiet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnattendedQuiet) ProtoMessage() {}
+
+func (x *UnattendedQuiet) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_automations_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnattendedQuiet.ProtoReflect.Descriptor instead.
+func (*UnattendedQuiet) Descriptor() ([]byte, []int) {
+	return file_turing_v1_automations_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *UnattendedQuiet) GetQuiet() bool {
+	if x != nil {
+		return x.Quiet
+	}
+	return false
+}
+
+func (x *UnattendedQuiet) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *UnattendedQuiet) GetUnavailable() bool {
+	if x != nil {
+		return x.Unavailable
+	}
+	return false
+}
+
+type GetUnattendedQuietRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUnattendedQuietRequest) Reset() {
+	*x = GetUnattendedQuietRequest{}
+	mi := &file_turing_v1_automations_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUnattendedQuietRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUnattendedQuietRequest) ProtoMessage() {}
+
+func (x *GetUnattendedQuietRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_automations_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUnattendedQuietRequest.ProtoReflect.Descriptor instead.
+func (*GetUnattendedQuietRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_automations_proto_rawDescGZIP(), []int{11}
+}
+
+type SetUnattendedQuietRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Quiet bool                   `protobuf:"varint,1,opt,name=quiet,proto3" json:"quiet,omitempty"`
+	// The revision the caller read. A write from an older view is refused, so a
+	// stale screen can never turn quiet off after it was turned on.
+	Revision      int64 `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetUnattendedQuietRequest) Reset() {
+	*x = SetUnattendedQuietRequest{}
+	mi := &file_turing_v1_automations_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetUnattendedQuietRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetUnattendedQuietRequest) ProtoMessage() {}
+
+func (x *SetUnattendedQuietRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_automations_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetUnattendedQuietRequest.ProtoReflect.Descriptor instead.
+func (*SetUnattendedQuietRequest) Descriptor() ([]byte, []int) {
+	return file_turing_v1_automations_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *SetUnattendedQuietRequest) GetQuiet() bool {
+	if x != nil {
+		return x.Quiet
+	}
+	return false
+}
+
+func (x *SetUnattendedQuietRequest) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+type SetUnattendedQuietResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The setting as it now stands: the one written, or, when stale is true,
+	// the current one, unchanged.
+	Setting *UnattendedQuiet `protobuf:"bytes,1,opt,name=setting,proto3" json:"setting,omitempty"`
+	// The named revision was not the current one, so nothing was written.
+	Stale         bool `protobuf:"varint,2,opt,name=stale,proto3" json:"stale,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetUnattendedQuietResponse) Reset() {
+	*x = SetUnattendedQuietResponse{}
+	mi := &file_turing_v1_automations_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetUnattendedQuietResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetUnattendedQuietResponse) ProtoMessage() {}
+
+func (x *SetUnattendedQuietResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turing_v1_automations_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetUnattendedQuietResponse.ProtoReflect.Descriptor instead.
+func (*SetUnattendedQuietResponse) Descriptor() ([]byte, []int) {
+	return file_turing_v1_automations_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *SetUnattendedQuietResponse) GetSetting() *UnattendedQuiet {
+	if x != nil {
+		return x.Setting
+	}
+	return nil
+}
+
+func (x *SetUnattendedQuietResponse) GetStale() bool {
+	if x != nil {
+		return x.Stale
+	}
+	return false
+}
+
 var File_turing_v1_automations_proto protoreflect.FileDescriptor
 
 const file_turing_v1_automations_proto_rawDesc = "" +
@@ -797,17 +1011,30 @@ const file_turing_v1_automations_proto_rawDesc = "" +
 	"\x18DeleteAutomationResponse\"\x18\n" +
 	"\x16ListAutomationsRequest\"R\n" +
 	"\x17ListAutomationsResponse\x127\n" +
-	"\vautomations\x18\x01 \x03(\v2\x15.turing.v1.AutomationR\vautomations*\x8d\x01\n" +
+	"\vautomations\x18\x01 \x03(\v2\x15.turing.v1.AutomationR\vautomations\"e\n" +
+	"\x0fUnattendedQuiet\x12\x14\n" +
+	"\x05quiet\x18\x01 \x01(\bR\x05quiet\x12\x1a\n" +
+	"\brevision\x18\x02 \x01(\x03R\brevision\x12 \n" +
+	"\vunavailable\x18\x03 \x01(\bR\vunavailable\"\x1b\n" +
+	"\x19GetUnattendedQuietRequest\"M\n" +
+	"\x19SetUnattendedQuietRequest\x12\x14\n" +
+	"\x05quiet\x18\x01 \x01(\bR\x05quiet\x12\x1a\n" +
+	"\brevision\x18\x02 \x01(\x03R\brevision\"h\n" +
+	"\x1aSetUnattendedQuietResponse\x124\n" +
+	"\asetting\x18\x01 \x01(\v2\x1a.turing.v1.UnattendedQuietR\asetting\x12\x14\n" +
+	"\x05stale\x18\x02 \x01(\bR\x05stale*\x8d\x01\n" +
 	"\x16AutomationScheduleKind\x12(\n" +
 	"$AUTOMATION_SCHEDULE_KIND_UNSPECIFIED\x10\x00\x12%\n" +
 	"!AUTOMATION_SCHEDULE_KIND_INTERVAL\x10\x01\x12\"\n" +
-	"\x1eAUTOMATION_SCHEDULE_KIND_DAILY\x10\x022\xbf\x03\n" +
+	"\x1eAUTOMATION_SCHEDULE_KIND_DAILY\x10\x022\xfa\x04\n" +
 	"\x11AutomationService\x12M\n" +
 	"\x10CreateAutomation\x12\".turing.v1.CreateAutomationRequest\x1a\x15.turing.v1.Automation\x12M\n" +
 	"\x10UpdateAutomation\x12\".turing.v1.UpdateAutomationRequest\x1a\x15.turing.v1.Automation\x12U\n" +
 	"\x14SetAutomationEnabled\x12&.turing.v1.SetAutomationEnabledRequest\x1a\x15.turing.v1.Automation\x12[\n" +
 	"\x10DeleteAutomation\x12\".turing.v1.DeleteAutomationRequest\x1a#.turing.v1.DeleteAutomationResponse\x12X\n" +
-	"\x0fListAutomations\x12!.turing.v1.ListAutomationsRequest\x1a\".turing.v1.ListAutomationsResponseB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
+	"\x0fListAutomations\x12!.turing.v1.ListAutomationsRequest\x1a\".turing.v1.ListAutomationsResponse\x12V\n" +
+	"\x12GetUnattendedQuiet\x12$.turing.v1.GetUnattendedQuietRequest\x1a\x1a.turing.v1.UnattendedQuiet\x12a\n" +
+	"\x12SetUnattendedQuiet\x12$.turing.v1.SetUnattendedQuietRequest\x1a%.turing.v1.SetUnattendedQuietResponseB>Z<github.com/mcasillas17/TuringAgent/gen/turing/v1/go;turingv1b\x06proto3"
 
 var (
 	file_turing_v1_automations_proto_rawDescOnce sync.Once
@@ -822,7 +1049,7 @@ func file_turing_v1_automations_proto_rawDescGZIP() []byte {
 }
 
 var file_turing_v1_automations_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_turing_v1_automations_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_turing_v1_automations_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_turing_v1_automations_proto_goTypes = []any{
 	(AutomationScheduleKind)(0),         // 0: turing.v1.AutomationScheduleKind
 	(*Automation)(nil),                  // 1: turing.v1.Automation
@@ -835,37 +1062,46 @@ var file_turing_v1_automations_proto_goTypes = []any{
 	(*DeleteAutomationResponse)(nil),    // 8: turing.v1.DeleteAutomationResponse
 	(*ListAutomationsRequest)(nil),      // 9: turing.v1.ListAutomationsRequest
 	(*ListAutomationsResponse)(nil),     // 10: turing.v1.ListAutomationsResponse
-	(*timestamppb.Timestamp)(nil),       // 11: google.protobuf.Timestamp
+	(*UnattendedQuiet)(nil),             // 11: turing.v1.UnattendedQuiet
+	(*GetUnattendedQuietRequest)(nil),   // 12: turing.v1.GetUnattendedQuietRequest
+	(*SetUnattendedQuietRequest)(nil),   // 13: turing.v1.SetUnattendedQuietRequest
+	(*SetUnattendedQuietResponse)(nil),  // 14: turing.v1.SetUnattendedQuietResponse
+	(*timestamppb.Timestamp)(nil),       // 15: google.protobuf.Timestamp
 }
 var file_turing_v1_automations_proto_depIdxs = []int32{
 	3,  // 0: turing.v1.Automation.schedule:type_name -> turing.v1.AutomationSchedule
 	2,  // 1: turing.v1.Automation.allowed_tools:type_name -> turing.v1.AutomationTool
-	11, // 2: turing.v1.Automation.last_run_at:type_name -> google.protobuf.Timestamp
-	11, // 3: turing.v1.Automation.next_run_at:type_name -> google.protobuf.Timestamp
-	11, // 4: turing.v1.Automation.created_at:type_name -> google.protobuf.Timestamp
-	11, // 5: turing.v1.Automation.updated_at:type_name -> google.protobuf.Timestamp
-	11, // 6: turing.v1.Automation.last_occurrence_failed_at:type_name -> google.protobuf.Timestamp
+	15, // 2: turing.v1.Automation.last_run_at:type_name -> google.protobuf.Timestamp
+	15, // 3: turing.v1.Automation.next_run_at:type_name -> google.protobuf.Timestamp
+	15, // 4: turing.v1.Automation.created_at:type_name -> google.protobuf.Timestamp
+	15, // 5: turing.v1.Automation.updated_at:type_name -> google.protobuf.Timestamp
+	15, // 6: turing.v1.Automation.last_occurrence_failed_at:type_name -> google.protobuf.Timestamp
 	0,  // 7: turing.v1.AutomationSchedule.kind:type_name -> turing.v1.AutomationScheduleKind
 	3,  // 8: turing.v1.CreateAutomationRequest.schedule:type_name -> turing.v1.AutomationSchedule
 	2,  // 9: turing.v1.CreateAutomationRequest.allowed_tools:type_name -> turing.v1.AutomationTool
 	3,  // 10: turing.v1.UpdateAutomationRequest.schedule:type_name -> turing.v1.AutomationSchedule
 	2,  // 11: turing.v1.UpdateAutomationRequest.allowed_tools:type_name -> turing.v1.AutomationTool
 	1,  // 12: turing.v1.ListAutomationsResponse.automations:type_name -> turing.v1.Automation
-	4,  // 13: turing.v1.AutomationService.CreateAutomation:input_type -> turing.v1.CreateAutomationRequest
-	5,  // 14: turing.v1.AutomationService.UpdateAutomation:input_type -> turing.v1.UpdateAutomationRequest
-	6,  // 15: turing.v1.AutomationService.SetAutomationEnabled:input_type -> turing.v1.SetAutomationEnabledRequest
-	7,  // 16: turing.v1.AutomationService.DeleteAutomation:input_type -> turing.v1.DeleteAutomationRequest
-	9,  // 17: turing.v1.AutomationService.ListAutomations:input_type -> turing.v1.ListAutomationsRequest
-	1,  // 18: turing.v1.AutomationService.CreateAutomation:output_type -> turing.v1.Automation
-	1,  // 19: turing.v1.AutomationService.UpdateAutomation:output_type -> turing.v1.Automation
-	1,  // 20: turing.v1.AutomationService.SetAutomationEnabled:output_type -> turing.v1.Automation
-	8,  // 21: turing.v1.AutomationService.DeleteAutomation:output_type -> turing.v1.DeleteAutomationResponse
-	10, // 22: turing.v1.AutomationService.ListAutomations:output_type -> turing.v1.ListAutomationsResponse
-	18, // [18:23] is the sub-list for method output_type
-	13, // [13:18] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	11, // 13: turing.v1.SetUnattendedQuietResponse.setting:type_name -> turing.v1.UnattendedQuiet
+	4,  // 14: turing.v1.AutomationService.CreateAutomation:input_type -> turing.v1.CreateAutomationRequest
+	5,  // 15: turing.v1.AutomationService.UpdateAutomation:input_type -> turing.v1.UpdateAutomationRequest
+	6,  // 16: turing.v1.AutomationService.SetAutomationEnabled:input_type -> turing.v1.SetAutomationEnabledRequest
+	7,  // 17: turing.v1.AutomationService.DeleteAutomation:input_type -> turing.v1.DeleteAutomationRequest
+	9,  // 18: turing.v1.AutomationService.ListAutomations:input_type -> turing.v1.ListAutomationsRequest
+	12, // 19: turing.v1.AutomationService.GetUnattendedQuiet:input_type -> turing.v1.GetUnattendedQuietRequest
+	13, // 20: turing.v1.AutomationService.SetUnattendedQuiet:input_type -> turing.v1.SetUnattendedQuietRequest
+	1,  // 21: turing.v1.AutomationService.CreateAutomation:output_type -> turing.v1.Automation
+	1,  // 22: turing.v1.AutomationService.UpdateAutomation:output_type -> turing.v1.Automation
+	1,  // 23: turing.v1.AutomationService.SetAutomationEnabled:output_type -> turing.v1.Automation
+	8,  // 24: turing.v1.AutomationService.DeleteAutomation:output_type -> turing.v1.DeleteAutomationResponse
+	10, // 25: turing.v1.AutomationService.ListAutomations:output_type -> turing.v1.ListAutomationsResponse
+	11, // 26: turing.v1.AutomationService.GetUnattendedQuiet:output_type -> turing.v1.UnattendedQuiet
+	14, // 27: turing.v1.AutomationService.SetUnattendedQuiet:output_type -> turing.v1.SetUnattendedQuietResponse
+	21, // [21:28] is the sub-list for method output_type
+	14, // [14:21] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_turing_v1_automations_proto_init() }
@@ -879,7 +1115,7 @@ func file_turing_v1_automations_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turing_v1_automations_proto_rawDesc), len(file_turing_v1_automations_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   10,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

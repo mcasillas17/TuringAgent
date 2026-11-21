@@ -1547,9 +1547,20 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 	routingFilter, routingArgs := claimRoutingFilterSQL(capabilities)
 	queryArgs := append([]any{agentID}, routingArgs...)
 	// Attended work first (TUR-027): the attended probe, then the claim as it
-	// was only when that finds nothing claimable.
+	// was only when that finds nothing claimable. The second probe is the only
+	// one that can claim an unattended job, so the owner's quiet switch
+	// (TUR-028a) skips it, after one read of its two keys.
 	var job Job
 	for _, attendedOnly := range []bool{true, false} {
+		if !attendedOnly {
+			fenced, err := unattendedWorkFencedTx(ctx, tx)
+			if err != nil {
+				return Job{}, err
+			}
+			if fenced {
+				break
+			}
+		}
 		job, err = claimProbeTx(ctx, tx, claimProbeQuery(attendedOnly, routingFilter), queryArgs, compatible)
 		if err != nil {
 			return Job{}, err

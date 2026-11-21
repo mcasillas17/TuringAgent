@@ -103,3 +103,64 @@ func TestATickStopsAtShutdown(t *testing.T) {
 		t.Fatalf("ran %v, want only the duty before shutdown", ran)
 	}
 }
+
+// A kick asks for one tick now, ahead of the next scheduled one. It never
+// blocks, whether the loop is not running yet or is busy in a tick, and kicks
+// that arrive before their tick runs are coalesced into it.
+func TestAKickTicksOnceSoonAndNeverBlocks(t *testing.T) {
+	var mu sync.Mutex
+	runs := 0
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ticked := make(chan struct{}, 4)
+	loop := New()
+	loop.Register("count", func(context.Context) error {
+		mu.Lock()
+		runs++
+		first := runs == 1
+		mu.Unlock()
+		if first {
+			close(started)
+			<-release
+		}
+		ticked <- struct{}{}
+		return nil
+	})
+	for range 3 {
+		loop.Kick()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		loop.Run(ctx, nil)
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the kicks before Run did not tick")
+	}
+	for range 3 {
+		loop.Kick()
+	}
+	close(release)
+	for range 2 {
+		select {
+		case <-ticked:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a kick did not tick")
+		}
+	}
+	select {
+	case <-ticked:
+		t.Fatal("kicks were not coalesced: a third tick ran")
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if runs != 2 {
+		t.Fatalf("duty ran %d times, want one tick for the kicks before Run and one for those during the first tick", runs)
+	}
+}
