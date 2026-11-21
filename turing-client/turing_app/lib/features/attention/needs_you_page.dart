@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:grpc/grpc.dart' show GrpcError, StatusCode;
 import 'package:material_ui/material_ui.dart';
 
 import '../../constants/app_colors.dart';
@@ -7,7 +8,6 @@ import '../../models/approval.dart';
 import '../../models/attention.dart';
 import '../../models/delegation.dart';
 import '../../models/remote_egress.dart';
-import '../../models/session_deletion.dart';
 import '../../networking/api_client.dart';
 import '../approvals/approval_card.dart';
 import '../chat/delegation_card.dart';
@@ -34,7 +34,7 @@ class NeedsYouPage extends StatefulWidget {
     required this.apiClient,
     required this.onOpenSession,
     required this.onOpenAutomations,
-    required this.onSessionDeleted,
+    required this.onRetryDeletion,
   });
 
   final AttentionQueue queue;
@@ -42,9 +42,9 @@ class NeedsYouPage extends StatefulWidget {
   final ValueChanged<String> onOpenSession;
   final VoidCallback onOpenAutomations;
 
-  /// A retried deletion that completed, so the shell can drop the
-  /// conversation without waiting for its event.
-  final ValueChanged<String> onSessionDeleted;
+  /// Advances the conversation's withdrawal through the shell's own deletion
+  /// path, which keeps the receipt bookkeeping and reports the outcome.
+  final Future<void> Function(String sessionId) onRetryDeletion;
 
   @override
   State<NeedsYouPage> createState() => _NeedsYouPageState();
@@ -60,15 +60,6 @@ class _NeedsYouPageState extends State<NeedsYouPage> {
     widget.queue.addListener(_onQueueChanged);
     // Opening the list is a reason to read it.
     widget.queue.requestRefresh();
-  }
-
-  @override
-  void didUpdateWidget(NeedsYouPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.queue, widget.queue)) {
-      oldWidget.queue.removeListener(_onQueueChanged);
-      widget.queue.addListener(_onQueueChanged);
-    }
   }
 
   @override
@@ -162,21 +153,11 @@ class _NeedsYouPageState extends State<NeedsYouPage> {
     failure: 'Could not dismiss it',
   );
 
-  Future<void> _retryDeletion(String key, AttentionRow row) =>
-      _act(key, () async {
-        final receipt = await widget.apiClient.deleteSession(
-          sessionId: row.sessionId,
-        );
-        if (receipt.state == SessionDeletionState.completed) {
-          widget.onSessionDeleted(row.sessionId);
-          return;
-        }
-        _report(
-          receipt.state == SessionDeletionState.failedExternal
-              ? 'This chat could not be fully withdrawn yet. Retry deletion.'
-              : 'This chat is still being withdrawn. Retry deletion shortly.',
-        );
-      }, failure: 'Could not retry the deletion');
+  Future<void> _retryDeletion(String key, AttentionRow row) => _act(
+    key,
+    () => widget.onRetryDeletion(row.sessionId),
+    failure: 'Could not retry the deletion',
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -245,12 +226,16 @@ class _NeedsYouPageState extends State<NeedsYouPage> {
             ),
           ),
         if (queue.nextCursor != null)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton(
-              onPressed: queue.reading ? null : queue.loadMore,
-              child: Text(queue.loadingMore ? 'Loading...' : 'Load more'),
-            ),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            children: [
+              TextButton(
+                onPressed: queue.loadingMore ? null : queue.loadMore,
+                child: Text(queue.loadingMore ? 'Loading...' : 'Load more'),
+              ),
+              if (queue.loadMoreFailed) const Text('Could not load more.'),
+            ],
           ),
       ],
     );
@@ -281,12 +266,23 @@ class _NeedsYouPageState extends State<NeedsYouPage> {
 }
 
 /// A refusal the orchestrator explains (the item changed, expired or is
-/// gone) is shown in its words; anything else is not echoed.
-String _attentionProblem(String lead, Exception error) =>
-    error is TuringApiException &&
-        (error.code == 'failed_precondition' || error.code == 'not_found')
-    ? '$lead: ${error.message}'
-    : '$lead. Try again.';
+/// gone) is shown in its words; anything else is not echoed. The approval and
+/// session calls surface gRPC statuses unmapped, so both shapes are read.
+String _attentionProblem(String lead, Exception error) {
+  final explained = switch (error) {
+    TuringApiException(:final code, :final message)
+        when code == 'failed_precondition' || code == 'not_found' =>
+      message,
+    GrpcError(:final code, :final message)
+        when code == StatusCode.failedPrecondition ||
+            code == StatusCode.notFound =>
+      message,
+    _ => null,
+  };
+  return explained == null || explained.isEmpty
+      ? '$lead. Try again.'
+      : '$lead: $explained';
+}
 
 class _AttentionRowCard extends StatelessWidget {
   const _AttentionRowCard({
@@ -404,66 +400,69 @@ class _AttentionRowCard extends StatelessWidget {
     final tone = row.stage == AttentionStage.unavailable
         ? palette.textMuted
         : AppColors.brand;
-    return Container(
-      key: const ValueKey('attention-row'),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-      decoration: BoxDecoration(
-        color: palette.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: palette.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(_icon, size: 18, color: tone),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _headline,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.3,
-                        color: palette.textMuted,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      _name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w600,
-                        color: palette.text,
-                      ),
-                    ),
-                    if (detail.isNotEmpty) ...[
-                      const SizedBox(height: 3),
+    return Semantics(
+      container: true,
+      child: Container(
+        key: const ValueKey('attention-row'),
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+        decoration: BoxDecoration(
+          color: palette.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: palette.border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(_icon, size: 18, color: tone),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        detail,
+                        _headline,
                         style: TextStyle(
-                          fontSize: 12.5,
-                          height: 1.45,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.3,
                           color: palette.textMuted,
                         ),
                       ),
+                      const SizedBox(height: 3),
+                      Text(
+                        _name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w600,
+                          color: palette.text,
+                        ),
+                      ),
+                      if (detail.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          detail,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            height: 1.45,
+                            color: palette.textMuted,
+                          ),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(spacing: 8, runSpacing: 4, children: _actions()),
-          ?review,
-        ],
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 4, children: _actions()),
+            ?review,
+          ],
+        ),
       ),
     );
   }
@@ -482,7 +481,9 @@ String _describeAttentionCause(String code) => switch (code) {
 
 /// An approval row's review: one `GetApprovalDetails` read, handed to the
 /// [ApprovalCard] the chat uses, so mounting the card does not read twice.
-/// Its Retry and Refresh read again, as they do in the chat.
+/// Its Retry and Refresh read again, as they do in the chat, and so does a
+/// refused decision, whose review may be what went stale. A delegated task's
+/// approval also reads the task, so the card names who is asking.
 class _ApprovalReview extends StatefulWidget {
   const _ApprovalReview({
     super.key,
@@ -507,6 +508,7 @@ class _ApprovalReview extends StatefulWidget {
 
 class _ApprovalReviewState extends State<_ApprovalReview> {
   ApprovalDetails? _first;
+  String? _requester;
   bool _handedOver = false;
   bool _failed = false;
   bool _busy = false;
@@ -546,15 +548,39 @@ class _ApprovalReviewState extends State<_ApprovalReview> {
       _first = null;
       _handedOver = false;
     });
+    final requester = widget.row.delegationId.isEmpty
+        ? Future<String?>.value()
+        : _readRequester();
     try {
       final details = await _details(false);
+      final specialist = await requester;
       if (!mounted) return;
-      setState(() => _first = details);
+      setState(() {
+        _first = details;
+        _requester = specialist;
+      });
       if (details.status != 'pending') widget.onStale();
     } on Exception {
       if (!mounted) return;
       setState(() => _failed = true);
       widget.onStale();
+    }
+  }
+
+  /// Who asks is context, not authority: a task that cannot be read leaves
+  /// the card without a name rather than without a decision.
+  Future<String?> _readRequester() async {
+    try {
+      final delegation = await widget.apiClient.getDelegation(
+        delegationId: widget.row.delegationId,
+      );
+      return delegation.delegationId == widget.row.delegationId &&
+              delegation.childRunId == widget.row.runId &&
+              delegation.specialist.isNotEmpty
+          ? delegation.specialist
+          : null;
+    } on Exception {
+      return null;
     }
   }
 
@@ -576,9 +602,13 @@ class _ApprovalReviewState extends State<_ApprovalReview> {
     } on Exception catch (error) {
       widget.onProblem(_attentionProblem(lead, error));
       widget.onStale();
-    } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+        unawaited(_read());
+      }
+      return;
     }
+    if (mounted) setState(() => _busy = false);
   }
 
   void _approve(ApprovalDetails details) {
@@ -611,6 +641,7 @@ class _ApprovalReviewState extends State<_ApprovalReview> {
     return ApprovalCard(
       approvalId: widget.row.approvalId,
       toolName: first.toolName,
+      requester: _requester,
       loadDetails: _load,
       onApprove: _approve,
       onDeny: _deny,

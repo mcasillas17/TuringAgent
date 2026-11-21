@@ -18,7 +18,9 @@ enum ShellDestination {
 
   /// First, because it answers "does anything need me now". The sidebar shows
   /// it only while something does (or while it cannot tell, or while it is
-  /// open): an empty queue takes no space.
+  /// open): an empty queue takes no space. Its row appearing moves the rows
+  /// below it, which happens only when the queue stops or starts being empty;
+  /// no place in the rail would move nothing.
   needsYou(
     label: 'Needs you',
     icon: Icons.pending_actions_outlined,

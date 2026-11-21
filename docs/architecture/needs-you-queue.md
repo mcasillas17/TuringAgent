@@ -90,13 +90,19 @@ UX-002b is the app's **Needs you** destination
   pages read in the current pass. The shell owns it because the badge beside
   the destination is the first page, read whether or not the page is open.
   It reads on four triggers: the shell starting, the page opening, an
-  `attention.changed` hint on the shell's existing updates stream (the
-  stream reconnecting counts too, since hints sent while it was down are
-  lost), and the app resuming. A row's action finishing is a fifth. Requests
-  are coalesced: at most one read starts per second, and never two at once.
-  Nothing reads on a timer of its own. A refetch starts a fresh pass from the
-  first page and reads as many pages as the last pass had, so a row reached
-  with **Load more** stays on screen. Pages of two passes are never mixed.
+  `attention.changed` hint on the shell's existing updates stream, and the
+  app resuming. A row's action finishing is a fifth. The updates stream
+  dropping adds two more, because hints sent while it was down are lost:
+  the first reconnect attempt after a drop reads, and so does a stream that
+  comes back and stays up after several attempts. Attempts in between do
+  not, so a stream that keeps failing never turns its backoff into polling.
+  Requests are coalesced: at most one read starts per second, and never two
+  at once. Nothing reads on a timer of its own. A refetch starts a fresh
+  pass from the first page and reads as many pages as the last pass had, so
+  a row reached with **Load more** stays on screen. Pages of two passes are
+  never mixed. Load more asked during a read runs when that read ends, and
+  a failed Load more is reported beside it, not as a stale list. The shell
+  rebuilds only when the badge changes.
 - **Badge.** The badge is the first page's row count, shown as "100+" when
   that page has a next page, so no second count query is needed. It reads
   "!" when the latest read failed and no row is known, because not knowing
@@ -114,10 +120,14 @@ UX-002b is the app's **Needs you** destination
   chat**.
 - **Expanding mounts the existing flow, one row at a time.** An approval row
   makes one `GetApprovalDetails` read and hands it to the chat's
-  `ApprovalCard`, so mounting the card does not read twice. A consent row
-  makes one `GetDelegation` read for the task's `DelegationCard`, whose
-  Allow… opens the chat's consent dialog. Expanding one row collapses any
-  other, and a refetch that still lists the open row keeps its card mounted.
+  `ApprovalCard`, so mounting the card does not read twice. The details must
+  name the row's approval and run, and its conversation unless the row is a
+  delegated task's (listed under the parent, while the approval is the
+  task's own). A delegated task's row also reads `GetDelegation`, so the
+  card names the specialist asking. A consent row makes one `GetDelegation`
+  read for the task's `DelegationCard`, whose Allow… opens the chat's
+  consent dialog. Expanding one row collapses any other, and a refetch that
+  still lists the open row keeps its card mounted.
 - **Actions go through the chat's RPCs**: `ApproveApproval` with the
   reviewed details, `DenyApproval`, `PrepareDelegationEgress` /
   `DecideDelegationEgress`, `DeleteSession` for **Retry deletion**, and
@@ -125,8 +135,11 @@ UX-002b is the app's **Needs you** destination
   3 automation row offers Dismiss. The server re-checks each action, so a
   stale row's action is refused, not replayed. The refusal is shown in the
   server's words when it explains itself (`failed_precondition`,
-  `not_found`), and the list is read again either way, so an expired row
-  disappears.
+  `not_found`, as a mapped code or a raw gRPC status), and the list is read
+  again either way, so an expired row disappears. A refused approval also
+  re-reads its review, as the chat does, since the preview may be what went
+  stale. Retry deletion runs the shell's own deletion path, so its receipt
+  bookkeeping and messages are the sidebar's.
 
 ## Cost
 

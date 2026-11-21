@@ -2197,6 +2197,34 @@ void main() {
       });
     }
 
+    // The Needs-you row joins the rail only while something waits, so the
+    // same sizes again with it there, plus one just above the height at which
+    // the rail is pinned.
+    for (final size in const [
+      Size(568, 320),
+      Size(740, 360),
+      Size(844, 390),
+      Size(300, 400),
+      Size(1000, 545),
+    ]) {
+      testWidgets(
+        'no overflow at ${size.width}x${size.height} with Needs you shown',
+        (tester) async {
+          await _pumpShell(
+            tester,
+            api: _FakeApi()..attentionRows = [_pendingApproval],
+            size: size,
+          );
+          if (size.width < 840) {
+            await tester.tap(find.byTooltip('Open navigation menu'));
+            await tester.pumpAndSettle();
+          }
+          expect(find.text('Needs you'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+
     testWidgets('Settings stays reachable on a short wide window', (
       tester,
     ) async {

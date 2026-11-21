@@ -14,16 +14,14 @@ import '../../networking/api_client.dart';
 /// starts at most one read every [minInterval] and never two at once. Nothing
 /// reads on a timer of its own: without a reason, there is no read.
 class AttentionQueue extends ChangeNotifier {
-  AttentionQueue({
-    required this.api,
-    this.minInterval = const Duration(seconds: 1),
-  });
+  AttentionQueue({required this.api});
 
   /// The server's page ceiling, so the badge counts what one page can hold.
   static const int pageSize = 100;
 
+  static const Duration minInterval = Duration(seconds: 1);
+
   final TuringApi api;
-  final Duration minInterval;
 
   List<AttentionRow> _rows = const [];
   int _firstPageCount = 0;
@@ -34,6 +32,8 @@ class AttentionQueue extends ChangeNotifier {
   bool _failed = false;
   bool _unsupported = false;
   bool _loadingMore = false;
+  bool _loadMoreQueued = false;
+  bool _loadMoreFailed = false;
 
   bool _dirty = false;
   bool _reading = false;
@@ -49,13 +49,19 @@ class AttentionQueue extends ChangeNotifier {
   /// At least one read has worked.
   bool get loaded => _loaded;
 
-  /// The latest read failed, so the rows (if any) may be out of date.
+  /// The latest first-page pass failed, so the rows (if any) may be out of
+  /// date.
   bool get failed => _failed;
 
   /// The server has no queue to read.
   bool get unsupported => _unsupported;
 
-  bool get loadingMore => _loadingMore;
+  /// A later page is being read, or will be once the read in flight ends.
+  bool get loadingMore => _loadingMore || _loadMoreQueued;
+
+  /// The latest later-page read failed. The rows already shown are not stale
+  /// because of it, so it is reported beside Load more, not as [failed].
+  bool get loadMoreFailed => _loadMoreFailed;
 
   /// A read is in flight.
   bool get reading => _reading;
@@ -118,6 +124,7 @@ class AttentionQueue extends ChangeNotifier {
       _pages = read;
       _loaded = true;
       _failed = false;
+      _loadMoreFailed = false;
       _unsupported = false;
     } catch (error) {
       if (_disposed) return;
@@ -137,17 +144,30 @@ class AttentionQueue extends ChangeNotifier {
     }
     if (_disposed) return;
     notifyListeners();
-    _pump();
+    _afterRead();
   }
 
   /// Reads the page after the last one, in the same pass. It waits for no
   /// cooldown, being the owner's own request for rows not yet shown, but it
-  /// still never runs beside another read.
-  Future<void> loadMore() async {
-    final cursor = _nextCursor;
-    if (_disposed || cursor == null || _reading) return;
+  /// never runs beside another read: asked during one, it runs as soon as
+  /// that read ends, from the cursor that read left.
+  void loadMore() {
+    if (_disposed || _nextCursor == null) return;
+    if (_reading) {
+      if (!_loadMoreQueued) {
+        _loadMoreQueued = true;
+        notifyListeners();
+      }
+      return;
+    }
+    unawaited(_readMore());
+  }
+
+  Future<void> _readMore() async {
+    final cursor = _nextCursor!;
     _reading = true;
     _loadingMore = true;
+    _loadMoreFailed = false;
     notifyListeners();
     try {
       final page = await api.listAttention(cursor: cursor, limit: pageSize);
@@ -155,16 +175,28 @@ class AttentionQueue extends ChangeNotifier {
       _rows = List.unmodifiable([..._rows, ...page.rows]);
       _nextCursor = page.nextCursor;
       _pages++;
-      _failed = false;
     } catch (_) {
       if (_disposed) return;
-      _failed = true;
+      _loadMoreFailed = true;
     } finally {
       _reading = false;
       _loadingMore = false;
     }
     if (_disposed) return;
     notifyListeners();
+    _afterRead();
+  }
+
+  void _afterRead() {
+    if (_disposed) return;
+    if (_loadMoreQueued) {
+      _loadMoreQueued = false;
+      if (_nextCursor != null) {
+        unawaited(_readMore());
+        return;
+      }
+      notifyListeners();
+    }
     _pump();
   }
 

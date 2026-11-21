@@ -133,6 +133,10 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   late final AttentionQueue _attention = AttentionQueue(api: widget.apiClient);
   late final AppLifecycleListener _lifecycle;
 
+  /// The badge the rail and the compact menu button show. The shell rebuilds
+  /// only when it changes; the Needs-you page follows the queue itself.
+  String? _attentionBadge;
+
   @override
   void initState() {
     super.initState();
@@ -145,7 +149,9 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   void _onAttentionChanged() {
-    if (mounted) setState(() {});
+    final badge = _attention.badge;
+    if (!mounted || badge == _attentionBadge) return;
+    setState(() => _attentionBadge = badge);
   }
 
   void _openSessionUpdateSubscription() {
@@ -165,6 +171,9 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       _sessionUpdateStabilityTimer = Timer(const Duration(seconds: 30), () {
         _sessionUpdateStabilityTimer = null;
         if (!mounted || !identical(_sessionUpdateSource, openedSource)) return;
+        // Back after more than one attempt: the hints of the attempts that
+        // did not read the queue were lost too.
+        if (_sessionUpdateReconnectAttempts > 1) _attention.requestRefresh();
         _sessionUpdateReconnectAttempts = 0;
       });
     } catch (_) {
@@ -195,8 +204,11 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       if (!mounted) return;
       _openSessionUpdateSubscription();
       unawaited(_refreshSessions());
-      // Hints sent while the stream was down are lost, not replayed.
-      _attention.requestRefresh();
+      // Hints sent while the stream was down are lost, not replayed, so the
+      // first attempt after a drop reads the queue. Later attempts do not: a
+      // stream that keeps failing must not turn the backoff into polling.
+      // The stability timer reads once more if it comes back after them.
+      if (_sessionUpdateReconnectAttempts == 1) _attention.requestRefresh();
     });
   }
 
@@ -732,6 +744,32 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         ),
       );
       if (confirmed != true) return;
+      await _withdrawConversation(session);
+    } finally {
+      _deleting.remove(session.sessionId);
+    }
+  }
+
+  /// Retries a withdrawal the owner already confirmed, from the Needs-you
+  /// queue. The receipt names no title, so it stands in as the placeholder
+  /// [_refreshSessions] lists for a pending receipt.
+  Future<void> _retryDeletion(String sessionId) async {
+    if (!_deleting.add(sessionId)) return;
+    try {
+      await _withdrawConversation(
+        Session(
+          sessionId: sessionId,
+          title: 'Deletion pending',
+          updatedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        ),
+      );
+    } finally {
+      _deleting.remove(sessionId);
+    }
+  }
+
+  Future<void> _withdrawConversation(Session session) async {
+    try {
       final receipt = await widget.apiClient.deleteSession(
         sessionId: session.sessionId,
       );
@@ -753,8 +791,6 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
             ? 'That chat has a run in progress. Wait for it to finish, then try again.'
             : 'Could not delete this chat: $error',
       );
-    } finally {
-      _deleting.remove(session.sessionId);
     }
   }
 
@@ -973,7 +1009,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           loadingMore: _sessionsLoadingMore,
           activeSessionId: _activeSessionId,
           destination: _destination,
-          attentionBadge: _attention.badge,
+          attentionBadge: _attentionBadge,
           creating: _creating,
           onNewConversation: _newConversation,
           onSelect: _selectSession,
@@ -1025,11 +1061,14 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       scrolledUnderElevation: 0,
       shape: Border(bottom: BorderSide(color: palette.border)),
       // The rail is in the drawer here, so its badge would be out of sight.
-      leading: switch (_attention.badge) {
+      leading: switch (_attentionBadge) {
         final badge? => IconButton(
           icon: Badge(
             key: const ValueKey('needs-you-menu-badge'),
-            label: Text(badge),
+            label: Semantics(
+              label: _attentionBadgeLabel(badge),
+              child: ExcludeSemantics(child: Text(badge)),
+            ),
             child: const Icon(Icons.menu),
           ),
           tooltip: MaterialLocalizations.of(context).openAppDrawerTooltip,
@@ -1080,7 +1119,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           onOpenSession: _selectSession,
           onOpenAutomations: () =>
               _selectDestination(ShellDestination.automations),
-          onSessionDeleted: _applySessionDeleted,
+          onRetryDeletion: _retryDeletion,
         );
       case ShellDestination.mcps:
         return McpsPage(apiClient: widget.apiClient);
@@ -1471,9 +1510,7 @@ class _NavItem extends StatelessWidget {
                       borderRadius: BorderRadius.circular(9),
                     ),
                     child: Semantics(
-                      label: badge == '!'
-                          ? 'Could not check'
-                          : '$badge waiting',
+                      label: _attentionBadgeLabel(badge),
                       child: ExcludeSemantics(
                         child: Text(
                           badge,
@@ -1593,6 +1630,10 @@ class _SessionTileState extends State<_SessionTile> {
     );
   }
 }
+
+/// What a screen reader says for the Needs-you badge.
+String _attentionBadgeLabel(String badge) =>
+    badge == '!' ? 'Could not check what needs you' : '$badge waiting';
 
 String? _validateSessionTitle(String value) {
   final normalized = value.trim();
