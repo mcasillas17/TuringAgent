@@ -55,8 +55,9 @@ The shell opens `SubscribeSessionUpdates`, which first replays the latest
 durable snapshot for the same 50 most-recent sessions returned by the session
 list and then receives live updates from every session, including inactive
 conversations and new automation conversations. The service filters this
-subscription to `session.updated` and `session.deleted`; the bus coalesces
-backlog by session, so a slow
+subscription to `session.updated`, `session.deleted` and the content-free
+`attention.changed` hint of the [Needs-you queue](needs-you-queue.md); the
+bus coalesces backlog by session, and hints into one, so a slow
 client retains each session's latest update without an unrelated event evicting
 it. The active chat's per-session stream can deliver the same event; timestamp
 idempotency makes the duplicate harmless.

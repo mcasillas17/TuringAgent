@@ -152,7 +152,7 @@ func (s *Server) SubscribeSessionUpdates(_ *turingv1.SubscribeSessionUpdatesRequ
 			if !ok {
 				return nil
 			}
-			if event.Type != "session.updated" && event.Type != "session.deleted" {
+			if event.Type != "session.updated" && event.Type != "session.deleted" && event.Type != AttentionChangedType {
 				continue
 			}
 			if err := stream.Send(mapBusEvent(event)); err != nil {

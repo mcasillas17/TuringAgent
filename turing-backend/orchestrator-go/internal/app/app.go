@@ -21,6 +21,7 @@ import (
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/secretbox"
 	agentsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/agents"
 	approvalsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/approvals"
+	attentionsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/attention"
 	auditsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/audit"
 	automationsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/automations"
 	chatsvc "github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/service/chat"
@@ -254,6 +255,7 @@ func New(cfg config.Config) (*App, error) {
 	skillService := skillsvc.New(repo)
 	agentService := agentsvc.New(repo, cfg.AgentCredentialNames)
 	automationService := automationsvc.New(repo)
+	automationService.SetAttentionHints(eventBus)
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.NewWithEgressConfig(repo, eventBus, runtimeService, cfg.LocalModel, cfg.OpenAIModel, chatsvc.EgressConfig{
 		OpenAIBaseURL: cfg.OpenAIBaseURL,
@@ -449,6 +451,9 @@ func New(cfg config.Config) (*App, error) {
 	// install. The runtime has nothing to ask it and holding the internal
 	// token should never be enough to read every client's audit trail.
 	turingv1.RegisterAuditServiceServer(publicServer, auditService)
+	// Public only, for the same reason: the Needs-you queue is what waits on
+	// the owner, and no internal identity has anything to ask it.
+	turingv1.RegisterAttentionServiceServer(publicServer, attentionsvc.New(repo, eventBus))
 	turingv1.RegisterSessionServiceServer(internalServer, sessionService)
 	turingv1.RegisterApprovalServiceServer(internalServer, approvalsvc.NewInternalServer(approvalService))
 	turingv1.RegisterRuntimeServiceServer(internalServer, runtimeService)

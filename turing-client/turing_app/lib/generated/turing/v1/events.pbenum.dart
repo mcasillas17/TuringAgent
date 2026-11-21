@@ -112,6 +112,13 @@ class TuringEventType extends $pb.ProtobufEnum {
       TuringEventType._(
           26, _omitEnumNames ? '' : 'TURING_EVENT_TYPE_DELEGATION_FINISHED');
 
+  /// On SubscribeSessionUpdates only, with no session, run or payload:
+  /// something the Needs-you queue lists may have changed, so read
+  /// AttentionService.ListAttention again. A hint, never the change itself.
+  static const TuringEventType TURING_EVENT_TYPE_ATTENTION_CHANGED =
+      TuringEventType._(
+          27, _omitEnumNames ? '' : 'TURING_EVENT_TYPE_ATTENTION_CHANGED');
+
   static const $core.List<TuringEventType> values = <TuringEventType>[
     TURING_EVENT_TYPE_UNSPECIFIED,
     TURING_EVENT_TYPE_MESSAGE_STARTED,
@@ -140,10 +147,11 @@ class TuringEventType extends $pb.ProtobufEnum {
     TURING_EVENT_TYPE_DELEGATION_STARTED,
     TURING_EVENT_TYPE_DELEGATION_UPDATED,
     TURING_EVENT_TYPE_DELEGATION_FINISHED,
+    TURING_EVENT_TYPE_ATTENTION_CHANGED,
   ];
 
   static final $core.List<TuringEventType?> _byValue =
-      $pb.ProtobufEnum.$_initByValueList(values, 26);
+      $pb.ProtobufEnum.$_initByValueList(values, 27);
   static TuringEventType? valueOf($core.int value) =>
       value < 0 || value >= _byValue.length ? null : _byValue[value];
 

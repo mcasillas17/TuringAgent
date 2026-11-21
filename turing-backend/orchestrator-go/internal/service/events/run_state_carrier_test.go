@@ -64,6 +64,8 @@ var runStateNonCarrierEventTypes = []string{
 	"delegation.started",
 	"delegation.updated",
 	"delegation.finished",
+	// The Needs-you queue's hint carries nothing at all.
+	AttentionChangedType,
 	"an.unknown.type.this.build.never.wrote",
 }
 

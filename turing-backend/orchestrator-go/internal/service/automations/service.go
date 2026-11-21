@@ -16,11 +16,30 @@ import (
 
 type Server struct {
 	turingv1.UnimplementedAutomationServiceServer
-	repo *repository.Repository
+	repo  *repository.Repository
+	hints AttentionHints
+}
+
+// AttentionHints tells the Needs-you queue's subscribers it may have changed.
+type AttentionHints interface {
+	PublishAttentionChanged()
 }
 
 func New(repo *repository.Repository) *Server {
 	return &Server{repo: repo}
+}
+
+// SetAttentionHints wires the Needs-you queue's hint. Enabling, disabling,
+// editing and deleting an automation change whether, and as what, its failure
+// is listed, and none of them publishes an event of its own.
+func (s *Server) SetAttentionHints(hints AttentionHints) {
+	s.hints = hints
+}
+
+func (s *Server) hintAttention() {
+	if s.hints != nil {
+		s.hints.PublishAttentionChanged()
+	}
 }
 
 func (s *Server) CreateAutomation(ctx context.Context, req *turingv1.CreateAutomationRequest) (*turingv1.Automation, error) {
@@ -61,6 +80,7 @@ func (s *Server) UpdateAutomation(ctx context.Context, req *turingv1.UpdateAutom
 	if err != nil {
 		return nil, automationError(err, "update automation failed")
 	}
+	s.hintAttention()
 	return toProto(automation), nil
 }
 
@@ -72,6 +92,7 @@ func (s *Server) SetAutomationEnabled(ctx context.Context, req *turingv1.SetAuto
 	if err != nil {
 		return nil, automationError(err, "update automation failed")
 	}
+	s.hintAttention()
 	return toProto(automation), nil
 }
 
@@ -82,6 +103,7 @@ func (s *Server) DeleteAutomation(ctx context.Context, req *turingv1.DeleteAutom
 	if err := s.repo.DeleteAutomation(ctx, req.GetAutomationId()); err != nil {
 		return nil, automationError(err, "delete automation failed")
 	}
+	s.hintAttention()
 	return &turingv1.DeleteAutomationResponse{}, nil
 }
 

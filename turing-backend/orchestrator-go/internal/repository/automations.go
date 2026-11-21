@@ -1011,21 +1011,12 @@ const automationSelect = `
 	SELECT a.id, a.name, a.prompt, a.schedule_kind, a.interval_seconds, a.daily_minute_utc, a.enabled,
 		a.next_due_at, a.last_run_at, a.last_run_id, a.session_id,
 		COALESCE(r.status, ''), '',
-		COALESCE(json_extract(blocked.payload_json, '$.code'), ''),
+		COALESCE(CASE WHEN json_valid(blocked.payload_json) THEN json_extract(blocked.payload_json, '$.code') END, ''),
 		COALESCE(blocked.created_at, ''),
 		a.created_at, a.updated_at
 	FROM automations a
 	LEFT JOIN agent_runs r ON r.id = a.last_run_id
-	LEFT JOIN audit_logs blocked ON blocked.rowid = (
-		SELECT candidate.rowid
-		FROM audit_logs candidate
-		WHERE candidate.actor_type = 'automation'
-			AND candidate.actor_id = a.id
-			AND candidate.action = 'automation.remote_egress_blocked'
-			AND candidate.created_at > COALESCE(a.last_run_at, '')
-		ORDER BY candidate.created_at DESC, candidate.rowid DESC
-		LIMIT 1
-	)`
+	LEFT JOIN audit_logs blocked ON blocked.rowid = ` + latestRemoteEgressBlockRowID
 
 func automationByIDTx(ctx context.Context, tx *sql.Tx, automationID string) (Automation, error) {
 	rows, err := tx.QueryContext(ctx, automationSelect+` WHERE a.id = ?`, automationID)

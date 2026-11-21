@@ -90,6 +90,13 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 		if !found {
 			return nil
 		}
+		// What the Needs-you queue lists for this automation changed: a block
+		// raises a row (and writes only an audit record), a queued run takes
+		// a failure's place, and an unreadable schedule disables it. An
+		// occurrence passed by changes nothing.
+		if s.bus != nil && (fire.Failed || fire.RunID != "" || fire.SkippedReason == repository.SkippedScheduleUnreadable) {
+			s.bus.PublishAttentionChanged()
+		}
 		if fire.Skipped {
 			// Logged rather than swallowed: an automation that keeps skipping
 			// is running slower than its schedule, and the only place that is

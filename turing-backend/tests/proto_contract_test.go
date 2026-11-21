@@ -600,6 +600,7 @@ func TestRunStateChangedReservesEventTypeTwentyThree(t *testing.T) {
 		"TURING_EVENT_TYPE_DELEGATION_STARTED":      24,
 		"TURING_EVENT_TYPE_DELEGATION_UPDATED":      25,
 		"TURING_EVENT_TYPE_DELEGATION_FINISHED":     26,
+		"TURING_EVENT_TYPE_ATTENTION_CHANGED":       27,
 	}
 	for name, number := range required {
 		value := enum.Values().ByName(name)
@@ -1147,6 +1148,73 @@ func TestDelegationEgressProtoContract(t *testing.T) {
 	assertProtoField(t, decide, "delegation_id", 1, protoreflect.StringKind, false, "")
 	assertProtoField(t, decide, "consent", 2, protoreflect.MessageKind, false, "turing.v1.RemoteEgressConsent")
 	assertProtoFieldMembers(t, decide, map[protoreflect.Name]protoreflect.FieldNumber{"delegation_id": 1, "consent": 2})
+}
+
+// The Needs-you queue: a closed stage table, one row shape carrying only ids,
+// titles and closed codes, keyset paging through the shared page messages,
+// and an occurrence-bound dismissal of one automation failure.
+func TestAttentionProtoContract(t *testing.T) {
+	file := turingv1.File_turing_v1_attention_proto
+	for name, want := range map[protoreflect.Name][2]protoreflect.FullName{
+		"ListAttention":    {"turing.v1.ListAttentionRequest", "turing.v1.ListAttentionResponse"},
+		"DismissAttention": {"turing.v1.DismissAttentionRequest", "turing.v1.DismissAttentionResponse"},
+	} {
+		method := file.Services().ByName("AttentionService").Methods().ByName(name)
+		if method == nil || method.Input().FullName() != want[0] || method.Output().FullName() != want[1] {
+			t.Fatalf("AttentionService.%s = %v, want %v", name, method, want)
+		}
+	}
+	if file.Services().ByName("AttentionService").Methods().Len() != 2 {
+		t.Fatal("AttentionService has methods beyond ListAttention and DismissAttention")
+	}
+	for enumName, values := range map[protoreflect.Name]map[protoreflect.Name]protoreflect.EnumNumber{
+		"AttentionStage": {
+			"ATTENTION_STAGE_UNSPECIFIED": 0, "ATTENTION_STAGE_PERSON_APPROVAL": 1, "ATTENTION_STAGE_PERSON_CONSENT": 2,
+			"ATTENTION_STAGE_PERSON_BLOCKED": 3, "ATTENTION_STAGE_PERSON_DELETION": 4, "ATTENTION_STAGE_PERSON_PROPOSAL": 5,
+			"ATTENTION_STAGE_UNAVAILABLE": 6,
+		},
+		"AttentionSourceKind": {
+			"ATTENTION_SOURCE_KIND_UNSPECIFIED": 0, "ATTENTION_SOURCE_KIND_APPROVAL": 1, "ATTENTION_SOURCE_KIND_DELEGATION": 2,
+			"ATTENTION_SOURCE_KIND_AUTOMATION": 3, "ATTENTION_SOURCE_KIND_DELETION": 4, "ATTENTION_SOURCE_KIND_WATCH": 5,
+			"ATTENTION_SOURCE_KIND_PROPOSAL": 6,
+		},
+	} {
+		enum := file.Enums().ByName(enumName)
+		if enum == nil || enum.Values().Len() != len(values) {
+			t.Fatalf("%s = %v, want exactly %d values", enumName, enum, len(values))
+		}
+		for name, number := range values {
+			if value := enum.Values().ByName(name); value == nil || value.Number() != number {
+				t.Fatalf("%s.%s = %v, want %d", enumName, name, value, number)
+			}
+		}
+	}
+	row := file.Messages().ByName("AttentionRow")
+	assertProtoField(t, row, "stage", 1, protoreflect.EnumKind, false, "")
+	assertProtoField(t, row, "kind", 2, protoreflect.EnumKind, false, "")
+	assertProtoField(t, row, "since", 3, protoreflect.MessageKind, false, "google.protobuf.Timestamp")
+	stringFields := map[protoreflect.Name]protoreflect.FieldNumber{
+		"session_id": 4, "session_title": 5, "approval_id": 6, "run_id": 7, "delegation_id": 8,
+		"automation_id": 9, "automation_name": 10, "occurrence_key": 11, "cause": 12,
+	}
+	for name, number := range stringFields {
+		assertProtoField(t, row, name, number, protoreflect.StringKind, false, "")
+	}
+	members := map[protoreflect.Name]protoreflect.FieldNumber{"stage": 1, "kind": 2, "since": 3}
+	for name, number := range stringFields {
+		members[name] = number
+	}
+	assertProtoFieldMembers(t, row, members)
+	assertProtoField(t, file.Messages().ByName("ListAttentionRequest"), "page", 1, protoreflect.MessageKind, false, "turing.v1.PageRequest")
+	assertProtoFieldMembers(t, file.Messages().ByName("ListAttentionRequest"), map[protoreflect.Name]protoreflect.FieldNumber{"page": 1})
+	response := file.Messages().ByName("ListAttentionResponse")
+	assertProtoField(t, response, "rows", 1, protoreflect.MessageKind, true, "turing.v1.AttentionRow")
+	assertProtoField(t, response, "page", 2, protoreflect.MessageKind, false, "turing.v1.PageResponse")
+	assertProtoFieldMembers(t, response, map[protoreflect.Name]protoreflect.FieldNumber{"rows": 1, "page": 2})
+	assertProtoFieldMembers(t, file.Messages().ByName("DismissAttentionRequest"), map[protoreflect.Name]protoreflect.FieldNumber{
+		"automation_id": 1, "occurrence_key": 2,
+	})
+	assertProtoFieldMembers(t, file.Messages().ByName("DismissAttentionResponse"), map[protoreflect.Name]protoreflect.FieldNumber{})
 }
 
 // A worker names the engine serving each model, for display; routing never
