@@ -921,4 +921,3 @@ func waitingApprovalRun(t *testing.T, repo *Repository, worker string) (EnqueueU
 	}
 	return enqueued, claimed, approval
 }
-

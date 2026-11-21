@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:turing_flutter_app/features/workspace/automations_page.dart';
@@ -349,6 +351,269 @@ void main() {
 
       expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
       expect(find.textContaining('Could not change it'), findsOneWidget);
+    });
+  });
+
+  // The one switch that stops every automation at once. It only ever shows a
+  // setting the backend answered with, never the one a tap asked for.
+  group('the quiet switch', () {
+    final quietSwitch = find.byKey(const Key('unattended-quiet-switch'));
+    final offCopy = find.textContaining('Turn on to stop unattended work');
+    final onCopy = find.textContaining(
+      'Turning quiet off starts nothing by itself',
+    );
+    final unavailableCopy = find.textContaining(
+      "The saved setting can't be read, so nothing unattended starts",
+    );
+
+    testWidgets('off says what turning it on stops, and a tap turns it on', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..quietSetting = const UnattendedQuiet(quiet: false, revision: 0);
+      await _pumpAutomations(tester, api);
+
+      expect(find.text('Quiet unattended work'), findsOneWidget);
+      expect(tester.widget<Switch>(quietSwitch).value, isFalse);
+      expect(offCopy, findsOneWidget);
+      // A run nobody stops is not one the copy may claim to stop.
+      expect(
+        find.textContaining('A run already going finishes'),
+        findsOneWidget,
+      );
+      expect(onCopy, findsNothing);
+
+      await tester.tap(quietSwitch);
+      await tester.pumpAndSettle();
+
+      expect(api.quietCalls, [(true, 0)]);
+      expect(tester.widget<Switch>(quietSwitch).value, isTrue);
+      expect(onCopy, findsOneWidget);
+      expect(offCopy, findsNothing);
+    });
+
+    testWidgets('turning it off names the revision it was read at', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..quietSetting = const UnattendedQuiet(quiet: true, revision: 3);
+      await _pumpAutomations(tester, api);
+
+      expect(tester.widget<Switch>(quietSwitch).value, isTrue);
+      expect(onCopy, findsOneWidget);
+
+      await tester.tap(quietSwitch);
+      await tester.pumpAndSettle();
+
+      expect(api.quietCalls, [(false, 3)]);
+      expect(tester.widget<Switch>(quietSwitch).value, isFalse);
+      expect(offCopy, findsOneWidget);
+    });
+
+    // Someone else wrote it between this screen's read and this tap. Showing
+    // what the tap asked for would claim quiet is off while it is on.
+    testWidgets('a stale write shows the current setting and says so', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..quietSetting = const UnattendedQuiet(quiet: true, revision: 1)
+        ..quietChangedElsewhere = const UnattendedQuiet(
+          quiet: true,
+          revision: 2,
+        );
+      await _pumpAutomations(tester, api);
+
+      await tester.tap(quietSwitch);
+      await tester.pumpAndSettle();
+
+      expect(api.quietCalls, [(false, 1)], reason: 'it must not retry alone');
+      expect(tester.widget<Switch>(quietSwitch).value, isTrue);
+      expect(
+        find.text(
+          'Quiet was changed somewhere else, so nothing changed here. This '
+          'is its current setting.',
+        ),
+        findsOneWidget,
+      );
+
+      // The setting shown is the one the next write is decided against.
+      await tester.tap(quietSwitch);
+      await tester.pumpAndSettle();
+
+      expect(api.quietCalls, [(false, 1), (false, 2)]);
+      expect(tester.widget<Switch>(quietSwitch).value, isFalse);
+    });
+
+    // A setting nobody can read counts as on. A switch that could be flipped
+    // would have to pretend to know which way it currently points.
+    testWidgets('an unreadable setting shows on and is repaired to off', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..quietSetting = const UnattendedQuiet(
+          quiet: true,
+          revision: 4,
+          unavailable: true,
+        );
+      await _pumpAutomations(tester, api);
+
+      expect(unavailableCopy, findsOneWidget);
+      final shown = tester.widget<Switch>(quietSwitch);
+      expect(shown.value, isTrue);
+      expect(shown.onChanged, isNull);
+
+      await tester.tap(find.text('Turn quiet off'));
+      await tester.pumpAndSettle();
+
+      expect(api.quietCalls, [(false, 4)]);
+      expect(unavailableCopy, findsNothing);
+      expect(find.text('Turn quiet off'), findsNothing);
+      final repaired = tester.widget<Switch>(quietSwitch);
+      expect(repaired.value, isFalse);
+      expect(repaired.onChanged, isNotNull);
+      expect(offCopy, findsOneWidget);
+    });
+
+    testWidgets('an unreadable setting can be repaired to on as well', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..quietSetting = const UnattendedQuiet(
+          quiet: true,
+          revision: 4,
+          unavailable: true,
+        );
+      await _pumpAutomations(tester, api);
+
+      await tester.tap(find.text('Keep quiet on'));
+      await tester.pumpAndSettle();
+
+      expect(api.quietCalls, [(true, 4)]);
+      expect(unavailableCopy, findsNothing);
+      final repaired = tester.widget<Switch>(quietSwitch);
+      expect(repaired.value, isTrue);
+      expect(repaired.onChanged, isNotNull);
+      expect(onCopy, findsOneWidget);
+    });
+
+    testWidgets('an unreadable setting fits a phone', (tester) async {
+      final api = _FakeApi()
+        ..quietSetting = const UnattendedQuiet(
+          quiet: true,
+          revision: 4,
+          unavailable: true,
+        );
+      await _pumpAutomations(tester, api, size: const Size(300, 400));
+
+      expect(find.text('Keep quiet on'), findsOneWidget);
+      expect(find.text('Turn quiet off'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    // A switch drawn before the answer would be a guess about whether
+    // anything runs tonight.
+    testWidgets('draws no switch until the backend has answered', (
+      tester,
+    ) async {
+      final read = Completer<void>();
+      final api = _FakeApi()
+        ..quietSetting = const UnattendedQuiet(quiet: true, revision: 1)
+        ..quietReadGate = read;
+      await _pumpAutomations(tester, api, settle: false);
+
+      expect(quietSwitch, findsNothing);
+
+      read.complete();
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<Switch>(quietSwitch).value, isTrue);
+    });
+
+    testWidgets('a failed read says so, and reading it again shows it', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..quietSetting = const UnattendedQuiet(quiet: true, revision: 1)
+        ..quietReadError = StateError('backend down');
+      await _pumpAutomations(tester, api);
+
+      expect(find.text('Could not read the quiet setting.'), findsOneWidget);
+      expect(quietSwitch, findsNothing);
+
+      api.quietReadError = null;
+      await tester.tap(find.text('Read it again'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Could not read the quiet setting.'), findsNothing);
+      expect(tester.widget<Switch>(quietSwitch).value, isTrue);
+    });
+
+    testWidgets('a tap while a write is in flight sends no second write', (
+      tester,
+    ) async {
+      final gate = Completer<void>();
+      final api = _FakeApi()
+        ..quietSetting = const UnattendedQuiet(quiet: false, revision: 0)
+        ..quietWriteGate = gate;
+      await _pumpAutomations(tester, api);
+
+      // Held from before the tap, as a second activation landing in the same
+      // frame would be: it reaches the switch before it is rebuilt disabled.
+      final beforeTap = tester.widget<Switch>(quietSwitch).onChanged!;
+      await tester.tap(quietSwitch);
+      await tester.pump();
+
+      final inFlight = tester.widget<Switch>(quietSwitch);
+      expect(inFlight.onChanged, isNull);
+      // Not yet on: the backend has not said so.
+      expect(inFlight.value, isFalse);
+      await tester.tap(quietSwitch, warnIfMissed: false);
+      beforeTap(true);
+      await tester.pump();
+      expect(api.quietCalls, [(true, 0)]);
+
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(api.quietCalls, [(true, 0)]);
+      final settled = tester.widget<Switch>(quietSwitch);
+      expect(settled.value, isTrue);
+      expect(settled.onChanged, isNotNull);
+    });
+
+    // The write may have landed before its answer was lost, so neither side
+    // of the tap can be trusted; only a fresh read can.
+    testWidgets('a failed write says why and shows what a re-read finds', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..quietSetting = const UnattendedQuiet(quiet: false, revision: 0);
+      await _pumpAutomations(tester, api);
+
+      api
+        ..quietSetting = const UnattendedQuiet(quiet: true, revision: 1)
+        ..quietWriteError = StateError('connection reset');
+      await tester.tap(quietSwitch);
+      await tester.pumpAndSettle();
+
+      expect(api.quietCalls, [(true, 0)]);
+      expect(find.textContaining('Could not change quiet:'), findsOneWidget);
+      final reread = tester.widget<Switch>(quietSwitch);
+      expect(reread.value, isTrue);
+      expect(reread.onChanged, isNotNull);
+    });
+
+    testWidgets('is there even when the automations could not be read', (
+      tester,
+    ) async {
+      final api = _FakeApi()
+        ..quietSetting = const UnattendedQuiet(quiet: true, revision: 1)
+        ..automationsError = StateError('backend down');
+      await _pumpAutomations(tester, api);
+
+      expect(find.text('Could not reach the backend'), findsOneWidget);
+      expect(tester.widget<Switch>(quietSwitch).value, isTrue);
+      expect(onCopy, findsOneWidget);
     });
   });
 
@@ -822,6 +1087,7 @@ Future<void> _pumpAutomations(
   _FakeApi api, {
   Size size = const Size(1000, 900),
   void Function(String sessionId)? onOpenSession,
+  bool settle = true,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -838,7 +1104,12 @@ Future<void> _pumpAutomations(
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  // A read held open shows a spinner that never settles.
+  if (settle) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump();
+  }
 }
 
 /// A working in-memory automation library, so the UI is tested against
@@ -863,6 +1134,69 @@ class _FakeApi
   Object? toggleError;
   Object? toolsError;
   int nextId = 1;
+
+  /// What the backend holds for the quiet switch. Null for every test that is
+  /// not about it: the read then fails, so its page draws no second Switch.
+  UnattendedQuiet? quietSetting;
+  Object? quietReadError;
+  Object? quietWriteError;
+
+  /// Held open until completed, so a test can look at the screen mid-read.
+  Completer<void>? quietReadGate;
+
+  /// Held open until completed, so a test can look at the screen mid-write.
+  Completer<void>? quietWriteGate;
+
+  /// Written somewhere else just before the next write is decided, which
+  /// leaves that write naming a revision that is no longer current.
+  UnattendedQuiet? quietChangedElsewhere;
+
+  /// Every write, as (quiet, revision), whatever came of it.
+  final List<(bool, int)> quietCalls = [];
+
+  @override
+  Future<UnattendedQuiet> getUnattendedQuiet() async {
+    final gate = quietReadGate;
+    if (gate != null) await gate.future;
+    final error = quietReadError;
+    if (error != null) throw error;
+    final setting = quietSetting;
+    if (setting == null) {
+      throw UnimplementedError('this test does not read the quiet switch');
+    }
+    return setting;
+  }
+
+  /// Compare-and-set, as the backend decides it: a write naming a revision
+  /// that is not the current one changes nothing and answers stale with the
+  /// current setting; the value already held is a no-op; anything else is
+  /// written at the next revision, which repairs an unreadable setting too.
+  @override
+  Future<UnattendedQuietWrite> setUnattendedQuiet({
+    required bool quiet,
+    required int revision,
+  }) async {
+    quietCalls.add((quiet, revision));
+    final gate = quietWriteGate;
+    if (gate != null) await gate.future;
+    final error = quietWriteError;
+    if (error != null) throw error;
+    final elsewhere = quietChangedElsewhere;
+    if (elsewhere != null) {
+      quietChangedElsewhere = null;
+      quietSetting = elsewhere;
+    }
+    final current = quietSetting!;
+    if (revision != current.revision) {
+      return UnattendedQuietWrite(setting: current, stale: true);
+    }
+    if (!current.unavailable && current.quiet == quiet) {
+      return UnattendedQuietWrite(setting: current, stale: false);
+    }
+    final written = UnattendedQuiet(quiet: quiet, revision: revision + 1);
+    quietSetting = written;
+    return UnattendedQuietWrite(setting: written, stale: false);
+  }
 
   @override
   Future<List<Skill>> listSkills() async => List.unmodifiable(skills);

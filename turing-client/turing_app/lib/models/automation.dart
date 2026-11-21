@@ -85,3 +85,43 @@ class AutomationTool {
   @override
   int get hashCode => Object.hash(serverName, toolName);
 }
+
+/// The owner's quiet switch for unattended work.
+///
+/// While it is on, no automation fires and no unattended run starts: queued
+/// automation runs are cancelled, and one that would go back to the queue is
+/// cancelled instead. A run already going finishes. Turning it off starts
+/// nothing by itself; each automation runs next at its scheduled time.
+class UnattendedQuiet {
+  const UnattendedQuiet({
+    required this.quiet,
+    required this.revision,
+    this.unavailable = false,
+  });
+
+  /// True while no unattended work starts, which includes while
+  /// [unavailable]. A setting never written is off.
+  final bool quiet;
+
+  /// The revision a write must name. Every change advances it, and the backend
+  /// refuses a write naming an older one, so a stale screen cannot undo a
+  /// change it never saw.
+  final int revision;
+
+  /// The stored value cannot be read, which counts as on. [revision] is still
+  /// real: a write naming it repairs the setting, to either value.
+  final bool unavailable;
+}
+
+/// The backend's answer to a quiet write.
+class UnattendedQuietWrite {
+  const UnattendedQuietWrite({required this.setting, required this.stale});
+
+  /// The setting as it now stands: the one written, or, when [stale], the
+  /// current one, unchanged.
+  final UnattendedQuiet setting;
+
+  /// The revision the write named was no longer current, so nothing was
+  /// written.
+  final bool stale;
+}
