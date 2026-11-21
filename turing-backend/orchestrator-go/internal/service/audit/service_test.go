@@ -304,6 +304,9 @@ func TestListAuditEntriesReturnsEveryCurrentActionUnderExplicitPolicy(t *testing
 		{"a_mcpreimp", "mcp.server.reimported", `{"imported":2,"skipped":1,"refused":3,"status":"completed","names":["SENTINEL_MCP_TOKEN"]}`},
 		{"a_mcpdel", "mcp.server.deleted", `{"name":"vendor","tier":"remote_url","token":"SENTINEL_MCP_TOKEN","url":"https://vendor.example/mcp"}`},
 		{"a_mcppol", "mcp.server.tool_policy_changed", `{"name":"vendor","toolName":"vendor.write","toolPolicy":"approval_required","schema":{"type":"SENTINEL_MCP_SCHEMA"},"args":{"path":"SENTINEL_MCP_ARGS"}}`},
+		// The owner's quiet switch (TUR-028a): which way it was set, and
+		// nothing else the row might carry.
+		{"a_quiet", "unattended.quiet.changed", `{"quiet":true,"revision":4,"prompt":"SENTINEL_CONTENT"}`},
 		// session.routed / session.unrouted are direct recordAuditTx writes with
 		// no reviewed field rule, so they are default-deny: retrievable, PRESENT,
 		// but every payload field (agentId/agent/endpoint/model) must be dropped.
@@ -455,6 +458,11 @@ func TestListAuditEntriesReturnsEveryCurrentActionUnderExplicitPolicy(t *testing
 	}, func(p *turingv1.AuditPayload) {
 		if p.GetServerName() != "vendor" || p.GetToolName() != "vendor.write" || p.GetToolPolicy() != "approval_required" {
 			t.Fatalf("mcp.server.tool_policy_changed values wrong: %+v", p)
+		}
+	})
+	check("unattended.quiet.changed", []string{"status"}, func(p *turingv1.AuditPayload) {
+		if p.GetStatus() != "on" {
+			t.Fatalf("unattended.quiet.changed values wrong: %+v", p)
 		}
 	})
 	// Direct-write routing actions have no reviewed field rule: PRESENT with no

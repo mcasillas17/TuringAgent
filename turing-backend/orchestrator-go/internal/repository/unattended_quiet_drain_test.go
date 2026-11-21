@@ -14,9 +14,16 @@ import (
 // drainTransactionBudget bounds one drain batch's p95 against a large
 // backlog: it cancels at most MaxQuietDrainBatch jobs, however many wait, and
 // holds the database's one connection for that long while attended work
-// waits. TestTheDrainReadDoesNotSortTheQueue pins that its read stops at the
-// batch.
-const drainTransactionBudget = time.Second
+// waits. A batch measured about 30 ms on its own (about 55 ms under -race);
+// the budget leaves room for a loaded runner, and grows under the race
+// detector. TestTheDrainReadDoesNotSortTheQueue pins that its read stops at
+// the batch.
+func drainTransactionBudget() time.Duration {
+	if raceDetectorEnabled {
+		return time.Second
+	}
+	return 250 * time.Millisecond
+}
 
 // finishQuietDrain runs drain batches until one reports the drain done, and
 // returns every batch's cancellations in order.
@@ -174,8 +181,8 @@ func TestTheDrainCancelsALargeUnattendedBacklogInBoundedBatches(t *testing.T) {
 	}
 	p50, p95 := percentile(samples, 50), percentile(samples, 95)
 	t.Logf("drain transaction of %d jobs against a %d-job backlog: p50 %s, p95 %s", MaxQuietDrainBatch, backlog, p50, p95)
-	if p95 > drainTransactionBudget {
-		t.Fatalf("drain batch p95 = %s, want under %s", p95, drainTransactionBudget)
+	if p95 > drainTransactionBudget() {
+		t.Fatalf("drain batch p95 = %s, want under %s", p95, drainTransactionBudget())
 	}
 	wantFenced(t, ctx, repo, false)
 	if got := claimNext(t, ctx, repo, 0); got.RunID != "" {
@@ -243,8 +250,24 @@ func TestQuietLeavesAnAttendedRunsQueueClockAlone(t *testing.T) {
 
 // SQLite serializes a due claim with the switch: either the switch commits
 // first and the claim fires nothing, or the claim commits first and the drain
-// cancels its run. Either way no unattended run is left to start.
+// cancels its run. Either way no unattended run is left to start. Both
+// orders are run on purpose first, then raced.
 func TestADueClaimRacingTheQuietSwitchFiresNothingOrIsDrained(t *testing.T) {
+	t.Run("the claim commits first", func(t *testing.T) {
+		repo, ctx := newTitleTestRepo(t)
+		fire := fireAutomation(t, ctx, repo, "Digest")
+		mustSetQuiet(t, ctx, repo, true, 0)
+		finishQuietDrain(t, ctx, repo)
+		wantOwnerQuiet(t, ctx, repo, fire.RunID)
+	})
+	t.Run("the switch commits first", func(t *testing.T) {
+		repo, ctx := newTitleTestRepo(t)
+		automation := mustCreateDueAutomation(t, repo, ctx, "Digest", everyFiveMinutes())
+		mustSetQuiet(t, ctx, repo, true, 0)
+		if fire, found, err := repo.ClaimDueAutomation(ctx, mustParse(t, automation.NextDueAt), attendedTestDefaults); err != nil || found {
+			t.Fatalf("claim after the switch = %+v, found %v, %v; want nothing fired", fire, found, err)
+		}
+	})
 	fired, refused := 0, 0
 	for attempt := range 20 {
 		repo, ctx := newTitleTestRepo(t)

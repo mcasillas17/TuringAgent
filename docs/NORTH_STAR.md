@@ -989,8 +989,11 @@ separate lifecycle, visibility and evaluation gates.
   maintenance goroutine, kicked when quiet turns on and resumed by the next
   tick after a crash, with the reaper on or off: each transaction cancels at
   most 100 queued unattended jobs as `owner_quiet` (abandoned), and the batch
-  that finds none clears the drain; with 10,000 queued, a batch holds the
-  database about 60 ms and attended work is claimed between batches. Every
+  that finds none clears the drain; with 10,000 queued, each batch stays
+  within its 250 ms budget and attended work is claimed between batches. A
+  batch that cancelled something dispatches pending work, as does turning
+  quiet off, since an owner's turn may have waited behind a cancelled run in
+  its own conversation. Every
   path back to the queue now goes through `releaseJobToPendingTx`, which a
   source guard pins as the only statement that sets a job pending (the
   test-only `RequeueClaimedJob`, and what only it reached, are gone); while
@@ -998,7 +1001,8 @@ separate lifecycle, visibility and evaluation gates.
   with the execution release the requeue would have written, so its slot is
   free at once. A run already going finishes. Turning quiet off starts
   nothing by itself: each automation fires at most once, at its next tick. An
-  `owner_quiet` cancellation raises no Needs-you row. The Automations page
+  `owner_quiet` cancellation raises no Needs-you row, and the audit read API
+  shows each change as `on` or `off`. The Automations page
   has the switch, showing its state and an unreadable setting, and a stale
   write shows the current one.
 - **Outcome:** The owner stops all new unattended work with one switch,

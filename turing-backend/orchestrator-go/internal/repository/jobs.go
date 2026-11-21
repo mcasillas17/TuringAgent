@@ -774,16 +774,10 @@ func releaseJobToPendingTx(
 	if err != nil {
 		return err
 	}
+	guardArgs := []any{runID, jobID, jobID, attemptID, attemptID}
 	if fenced {
 		var unattended bool
-		err := tx.QueryRowContext(ctx, `
-			SELECT unattended
-			FROM jobs
-			WHERE run_id = ?
-				AND status = 'in_progress'
-				AND (? = '' OR id = ?)
-				AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
-		`, runID, jobID, jobID, attemptID, attemptID).Scan(&unattended)
+		err := tx.QueryRowContext(ctx, `SELECT unattended FROM jobs WHERE `+inProgressJobGuard, guardArgs...).Scan(&unattended)
 		if errors.Is(err, sql.ErrNoRows) {
 			return noMatch
 		}
@@ -814,16 +808,22 @@ func releaseJobToPendingTx(
 			picked_up_at = NULL,
 			assignment_attempt_id = NULL,
 			attempt = attempt + ?
-		WHERE run_id = ?
-			AND status = 'in_progress'
-			AND (? = '' OR id = ?)
-			AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
-	`, attemptIncrement, runID, jobID, jobID, attemptID, attemptID)
+		WHERE `+inProgressJobGuard, append([]any{attemptIncrement}, guardArgs...)...)
 	if err != nil {
 		return err
 	}
 	return expectOneRowErr(result, noMatch)
 }
+
+// inProgressJobGuard selects the job releaseJobToPendingTx acts on: the
+// run's in-progress job, narrowed by its optional job and attempt guards. The
+// quiet check and the release share it, so the job whose flag decides between
+// them is the one the release would move. Its arguments are the run, then the
+// job and the attempt, each twice.
+const inProgressJobGuard = `run_id = ?
+			AND status = 'in_progress'
+			AND (? = '' OR id = ?)
+			AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)`
 
 // quietCancellation is what releaseJobToPendingTx returns in place of a
 // release while the owner's quiet switch is on or draining: the run was

@@ -128,7 +128,8 @@ func TestThePendingStatementGuardFindsMultiLineStatements(t *testing.T) {
 
 // What only the deleted RequeueClaimedJob reached is gone with it:
 // requeueAssignment always names a delivery state and never increments the
-// attempt, so it takes exactly three parameters.
+// attempt, so it takes exactly three parameters, and it never takes the
+// uncertain recovery edge.
 func TestRequeueClaimedJobIsGoneAndRequeueAssignmentNeverIncrementsTheAttempt(t *testing.T) {
 	var requeueAssignment *ast.FuncDecl
 	for name, file := range parseRepositorySources(t) {
@@ -157,4 +158,16 @@ func TestRequeueClaimedJobIsGoneAndRequeueAssignmentNeverIncrementsTheAttempt(t 
 	if strings.Join(parameters, ",") != "ctx,assignment,requiredExecutionState" {
 		t.Fatalf("requeueAssignment parameters = %v, want ctx, assignment, requiredExecutionState", parameters)
 	}
+	// Its proof is that no worker received the assignment, so it takes only
+	// the unsent edge; the uncertain recovery edge was RequeueClaimedJob's.
+	ast.Inspect(requeueAssignment.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if callee, ok := call.Fun.(*ast.Ident); ok && callee.Name == "requeueRunLifecycleTx" {
+			t.Fatal("requeueAssignment still reaches requeueRunLifecycleTx, the uncertain recovery edge")
+		}
+		return true
+	})
 }

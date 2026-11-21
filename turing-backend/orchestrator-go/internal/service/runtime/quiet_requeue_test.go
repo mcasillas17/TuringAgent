@@ -111,7 +111,9 @@ func transientFailure(runID string, version int64) *turingv1.RuntimeRunFailed {
 
 // A retryable failure of an unattended run during quiet is cancelled instead
 // of requeued, and a subscribed conversation sees the cancellation live,
-// with no retry notice; the dispatch that follows a failure still runs.
+// with no retry notice; the dispatch that follows a failure still runs. The
+// live event carries the public, closed reason (abandoned); owner_quiet is
+// the code stored on the run, which wantQuietCancelled reads.
 func TestARetryableFailureDuringQuietIsACancellationSeenLive(t *testing.T) {
 	for name, owned := range map[string]bool{"reported by its owner": true, "nobody can attribute": false} {
 		t.Run(name, func(t *testing.T) {

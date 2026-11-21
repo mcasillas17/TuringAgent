@@ -360,7 +360,7 @@ void main() {
     final quietSwitch = find.byKey(const Key('unattended-quiet-switch'));
     final offCopy = find.textContaining('Turn on to stop unattended work');
     final onCopy = find.textContaining(
-      'Turning quiet off starts nothing by itself',
+      'each automation that came due runs once, soon after',
     );
     final unavailableCopy = find.textContaining(
       "The saved setting can't be read, so nothing unattended starts",

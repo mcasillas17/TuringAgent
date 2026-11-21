@@ -91,7 +91,8 @@ class AutomationTool {
 /// While it is on, no automation fires and no unattended run starts: queued
 /// automation runs are cancelled, and one that would go back to the queue is
 /// cancelled instead. A run already going finishes. Turning it off starts
-/// nothing by itself; each automation runs next at its scheduled time.
+/// nothing queued before it; each automation that came due while it was on
+/// runs once, soon after, then keeps its schedule.
 class UnattendedQuiet {
   const UnattendedQuiet({
     required this.quiet,

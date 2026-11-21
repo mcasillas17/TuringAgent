@@ -943,7 +943,8 @@ class ListAutomationsResponse extends $pb.GeneratedMessage {
 /// The owner's quiet switch for unattended work (TUR-028a). While it is on, no
 /// automation fires, no unattended run starts, queued unattended runs are
 /// cancelled, and one that would go back to the queue is cancelled instead. A
-/// run already going finishes. Turning it off starts nothing by itself.
+/// run already going finishes. Turning it off starts nothing queued before
+/// it: each automation that came due fires once, at the scheduler's next tick.
 class UnattendedQuiet extends $pb.GeneratedMessage {
   factory UnattendedQuiet({
     $core.bool? quiet,

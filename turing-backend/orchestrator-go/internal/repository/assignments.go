@@ -293,7 +293,7 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 			// back to the queue instead of publishing a recovery.
 			_, requeueEvents, err := requeueUnsentAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, false)
 			if quiet, ok := asQuietCancellation(err); ok {
-				return quietReconciliationTx(tx, quiet)
+				return commitQuietReconciliation(tx, quiet)
 			}
 			if err != nil {
 				return AssignmentReconciliation{}, err
@@ -317,7 +317,7 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 		}
 		requeued, requeueEvents, err := requeueAssignmentTx(ctx, tx, assignment.RunID, assignment.JobID, executionAttemptID, true)
 		if quiet, ok := asQuietCancellation(err); ok {
-			return quietReconciliationTx(tx, quiet)
+			return commitQuietReconciliation(tx, quiet)
 		}
 		if err != nil {
 			return AssignmentReconciliation{}, err
@@ -368,11 +368,11 @@ func (r *Repository) reconcileAssignment(ctx context.Context, assignment Assignm
 	}
 }
 
-// quietReconciliationTx commits a reconciliation whose requeue the owner's
-// quiet switch turned into a cancellation: the run is cleared, not requeued,
-// so no retry notice is written, and the caller publishes the cancellation
-// and keeps dispatching pending work.
-func quietReconciliationTx(tx *sql.Tx, quiet *quietCancellation) (AssignmentReconciliation, error) {
+// commitQuietReconciliation commits a reconciliation whose requeue the
+// owner's quiet switch turned into a cancellation: the run is cleared, not
+// requeued, so no retry notice is written, and the caller publishes the
+// cancellation and keeps dispatching pending work.
+func commitQuietReconciliation(tx *sql.Tx, quiet *quietCancellation) (AssignmentReconciliation, error) {
 	if err := tx.Commit(); err != nil {
 		return AssignmentReconciliation{}, err
 	}

@@ -338,6 +338,7 @@ else in the JSON object is silently ignored, whatever the action:
 | `mcp.server.reimported` | imported/skipped/refused server counts, status (`completed` or `partial`) — never the server names or refusal reasons |
 | `mcp.server.deleted` | server name, MCP server tier |
 | `mcp.server.tool_policy_changed` | server name, tool name, tool policy (the canonical `safe` / `approval_required` / `disabled` string) |
+| `unattended.quiet.changed` | status: `on` or `off`, the way the owner set the quiet switch (TUR-028a) — nothing else |
 | `session.routed`, `session.unrouted`, and any unknown or future action | metadata only — no payload fields at all |
 
 MCP server tier, MCP server URL, and tool policy are their own typed fields

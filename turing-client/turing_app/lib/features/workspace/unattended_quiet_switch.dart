@@ -189,8 +189,9 @@ class _UnattendedQuietSwitchState extends State<UnattendedQuietSwitch> {
     }
     if (setting.quiet) {
       return 'No automation starts, and queued automation runs are cancelled. '
-          'A run already going finishes. Turning quiet off starts nothing by '
-          'itself: each automation runs next at its scheduled time.';
+          'A run already going finishes. When you turn quiet off, nothing '
+          'queued before it starts: each automation that came due runs once, '
+          'soon after, then keeps its schedule.';
     }
     return 'Turn on to stop unattended work: no automation starts, and queued '
         'automation runs are cancelled. A run already going finishes.';

@@ -257,6 +257,7 @@ func New(cfg config.Config) (*App, error) {
 	automationService := automationsvc.New(repo)
 	automationService.SetAttentionHints(eventBus)
 	automationService.SetEventPublisher(eventBus)
+	automationService.SetDispatcher(runtimeService)
 	eventService := eventsvc.NewServer(repo, eventBus)
 	chatService := chatsvc.NewWithEgressConfig(repo, eventBus, runtimeService, cfg.LocalModel, cfg.OpenAIModel, chatsvc.EgressConfig{
 		OpenAIBaseURL: cfg.OpenAIBaseURL,

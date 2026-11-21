@@ -337,3 +337,19 @@ func TestAQuietReleaseOfAJobNoLongerHeldIsFencedAndCancelsNothing(t *testing.T) 
 		t.Fatalf("run after a fenced abort = %+v, %v; want it untouched", run, err)
 	}
 }
+
+// requeueAssignment names the job it releases. An abort naming none is
+// refused as fenced, as the statement it replaced refused it, rather than
+// releasing whatever job the run holds.
+func TestAnAbortNamingNoJobIsFenced(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	enqueueLocalTurn(t, ctx, repo, "Owner")
+	claimed, assignment := claimInto(t, ctx, repo, "pending_send")
+	assignment.JobID = ""
+	if err := repo.AbortPendingAssignment(ctx, assignment); !errors.Is(err, ErrAssignmentFenced) {
+		t.Fatalf("abort naming no job = %v, want fenced", err)
+	}
+	if got := readJobProgress(t, repo, claimed.JobID); got != (jobProgress{status: "in_progress", attempt: 1}) {
+		t.Fatalf("job after a refused abort = %+v, want it untouched", got)
+	}
+}

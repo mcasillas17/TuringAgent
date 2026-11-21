@@ -3,6 +3,7 @@ package automations
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -95,7 +96,8 @@ func TestTheQuietSwitchIsReadAndSetCompareAndSet(t *testing.T) {
 }
 
 // A stored value that cannot be read is shown as on and unavailable, with
-// the revision that repairs it.
+// the revision that repairs it; repairing it to on starts the drain like any
+// other change to on.
 func TestACorruptQuietValueIsShownUnavailable(t *testing.T) {
 	h := newSchedulerHarness(t)
 	server, ctx := New(h.repo), h.ctx
@@ -107,29 +109,50 @@ func TestACorruptQuietValueIsShownUnavailable(t *testing.T) {
 	if err != nil || !proto.Equal(got, &turingv1.UnattendedQuiet{Quiet: true, Revision: 6, Unavailable: true}) {
 		t.Fatalf("GetUnattendedQuiet = %v, %v; want on, unavailable, at revision 6", got, err)
 	}
-	repaired := setQuiet(t, ctx, server, false, 6)
-	if !proto.Equal(repaired.GetSetting(), &turingv1.UnattendedQuiet{Revision: 7}) || repaired.GetStale() {
-		t.Fatalf("repair = %v, want off at revision 7", repaired)
+	kicks := 0
+	server.SetQuietDrainTrigger(func() { kicks++ })
+	repaired := setQuiet(t, ctx, server, true, 6)
+	if !proto.Equal(repaired.GetSetting(), &turingv1.UnattendedQuiet{Quiet: true, Revision: 7}) || repaired.GetStale() || kicks != 1 {
+		t.Fatalf("repair to on = %v with %d kicks, want on at revision 7 and the drain started", repaired, kicks)
 	}
 }
 
-// The maintenance duty finishes a drain: the queued automation run is
-// cancelled owner_quiet and its cancellation is published, and a duty
-// interrupted between batches is finished by the next one.
+// queueAutomationRuns fires count automations once each, leaving their
+// unattended runs queued, and returns the runs.
+func queueAutomationRuns(t *testing.T, h *schedulerHarness, count int) []string {
+	t.Helper()
+	runs := make([]string, 0, count)
+	for index := range count {
+		automation := createEnabled(t, h.repo, h.ctx, fmt.Sprintf("Digest %03d", index),
+			repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
+		fire, found, err := h.repo.ClaimDueAutomation(h.ctx, parseTime(t, automation.NextDueAt), schedulerDefaults)
+		if err != nil || !found {
+			t.Fatalf("fire %d = %v, %v", index, found, err)
+		}
+		runs = append(runs, fire.RunID)
+	}
+	return runs
+}
+
+func (h *schedulerHarness) count(t *testing.T, query string, args ...any) int {
+	t.Helper()
+	var count int
+	if err := h.database.QueryRowContext(h.ctx, query, args...).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+// The maintenance duty finishes a drain: every queued automation run is
+// cancelled owner_quiet and its cancellation is published once. A duty cut
+// short after a committed batch, with work left, leaves the drain pending,
+// and the next run of the duty finishes it.
 func TestTheDrainDutyCancelsQueuedRunsAndPublishesThem(t *testing.T) {
 	h := newSchedulerHarness(t)
 	server := New(h.repo)
 	publisher := &recordingPublisher{}
 	server.SetEventPublisher(publisher)
-	runs := make([]string, 0, 2)
-	for _, name := range []string{"Digest", "Inbox"} {
-		automation := createEnabled(t, h.repo, h.ctx, name, repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
-		fire, found, err := h.repo.ClaimDueAutomation(h.ctx, parseTime(t, automation.NextDueAt), schedulerDefaults)
-		if err != nil || !found {
-			t.Fatalf("fire %s = %v, %v", name, found, err)
-		}
-		runs = append(runs, fire.RunID)
-	}
+	runs := queueAutomationRuns(t, h, repository.MaxQuietDrainBatch+1)
 	setQuiet(t, h.ctx, server, true, 0)
 
 	interrupted, interrupt := context.WithCancel(h.ctx)
@@ -138,6 +161,12 @@ func TestTheDrainDutyCancelsQueuedRunsAndPublishesThem(t *testing.T) {
 		t.Fatalf("interrupted drain = %v, want it cut short", err)
 	}
 	server.quietDrainBatchDone = nil
+	if cancelled := h.count(t, `SELECT COUNT(*) FROM agent_runs WHERE cancellation_reason = 'owner_quiet'`); cancelled != repository.MaxQuietDrainBatch {
+		t.Fatalf("cancelled after one batch = %d, want %d", cancelled, repository.MaxQuietDrainBatch)
+	}
+	if pending := h.count(t, `SELECT COUNT(*) FROM settings WHERE key = 'unattended_quiet_drain'`); pending != 1 {
+		t.Fatal("a drain cut short with work left cleared its key")
+	}
 	if err := server.DrainUnattendedQuiet(h.ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -283,5 +312,74 @@ func TestADailyAutomationQuietForThreeDaysFiresOnce(t *testing.T) {
 	}
 	if next := parseTime(t, fired.NextDueAt); !next.After(resumed) || next.Sub(resumed) > 24*time.Hour {
 		t.Fatalf("next due = %s, want the next 07:00Z after %s", next, resumed)
+	}
+}
+
+// A queued unattended run blocks the later turns of its own conversation, so
+// cancelling it can make an owner's turn claimable that no other event will
+// dispatch, with the reaper off. Each drain batch that cancelled something
+// dispatches pending work, as does turning quiet off; turning it on does
+// not, and a failing dispatch fails neither.
+func TestTheDrainAndTurningQuietOffDispatchPendingWork(t *testing.T) {
+	h := newSchedulerHarness(t)
+	server := New(h.repo)
+	dispatcher := &countingDispatcher{err: errors.New("no worker answered")}
+	server.SetDispatcher(dispatcher)
+	automation := createEnabled(t, h.repo, h.ctx, "Digest", repository.Schedule{Kind: repository.ScheduleInterval, Interval: 5 * time.Minute})
+	if _, found, err := h.repo.ClaimDueAutomation(h.ctx, parseTime(t, automation.NextDueAt), schedulerDefaults); err != nil || !found {
+		t.Fatalf("fire = %v, %v", found, err)
+	}
+
+	setQuiet(t, h.ctx, server, true, 0)
+	if got := dispatcher.count(); got != 0 {
+		t.Fatalf("dispatches after turning quiet on = %d, want none", got)
+	}
+	if err := server.DrainUnattendedQuiet(h.ctx); err != nil {
+		t.Fatalf("drain with a failing dispatch = %v, want it finished", err)
+	}
+	if got := dispatcher.count(); got != 1 {
+		t.Fatalf("dispatches after the drain = %d, want one, after the batch that cancelled", got)
+	}
+	if err := server.DrainUnattendedQuiet(h.ctx); err != nil || dispatcher.count() != 1 {
+		t.Fatalf("a drain with nothing to do = %v with %d dispatches, want none more", err, dispatcher.count())
+	}
+	setQuiet(t, h.ctx, server, false, 1)
+	if got := dispatcher.count(); got != 2 {
+		t.Fatalf("dispatches after turning quiet off = %d, want one more", got)
+	}
+	setQuiet(t, h.ctx, server, false, 2)
+	if got := dispatcher.count(); got != 2 {
+		t.Fatalf("dispatches after a no-op write = %d, want none more", got)
+	}
+}
+
+// A batch that fails rolls back whole and the duty reports it; the drain stays
+// pending, so the next tick's run of the duty finishes it.
+func TestAFailingDrainBatchIsRetriedOnTheNextTick(t *testing.T) {
+	h := newSchedulerHarness(t)
+	server := New(h.repo)
+	runs := queueAutomationRuns(t, h, 1)
+	setQuiet(t, h.ctx, server, true, 0)
+	if _, err := h.database.ExecContext(h.ctx, `
+		CREATE TRIGGER refuse_quiet_cancel BEFORE UPDATE ON agent_runs
+		WHEN NEW.cancellation_reason = 'owner_quiet'
+		BEGIN SELECT RAISE(ABORT, 'injected cancellation failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.DrainUnattendedQuiet(h.ctx); err == nil {
+		t.Fatal("a failing batch reported no error")
+	}
+	if runStatus, _ := quietRunStatus(t, h.repo, h.ctx, runs[0]); runStatus != "queued" ||
+		h.count(t, `SELECT COUNT(*) FROM settings WHERE key = 'unattended_quiet_drain'`) != 1 {
+		t.Fatalf("after a failed batch the run is %s, want it still queued with the drain pending", runStatus)
+	}
+	if _, err := h.database.ExecContext(h.ctx, `DROP TRIGGER refuse_quiet_cancel`); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.DrainUnattendedQuiet(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if runStatus, code := quietRunStatus(t, h.repo, h.ctx, runs[0]); runStatus != "cancelled" || code != runoutcome.CodeOwnerQuiet {
+		t.Fatalf("after the retry the run is %s/%s, want cancelled owner_quiet", runStatus, code)
 	}
 }

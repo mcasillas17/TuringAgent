@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mcasillas17/TuringAgent/turing-backend/orchestrator-go/internal/db"
 )
@@ -333,5 +334,48 @@ func TestTheUnattendedFenceHoldsWhileQuietIsOnOrDraining(t *testing.T) {
 			}
 			wantFenced(t, ctx, repo, test.want)
 		})
+	}
+}
+
+// Repairing an unreadable value to on is a change like any other: the next
+// revision, the drain raised, and an audit record.
+func TestACorruptQuietValueCanBeRepairedToOn(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	if _, err := repo.db.ExecContext(ctx, `
+		INSERT INTO settings (key, value_json, revision, updated_at) VALUES ('unattended_quiet', '1', 2, '2026-11-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	repaired, changed, err := repo.SetUnattendedQuiet(ctx, true, 2)
+	if err != nil || !changed || repaired != (UnattendedQuiet{Quiet: true, Revision: 3}) {
+		t.Fatalf("repair to on = %+v, changed %v, %v; want on at revision 3", repaired, changed, err)
+	}
+	if !drainPending(t, ctx, repo) {
+		t.Fatal("repairing to on raised no drain")
+	}
+	audits := quietAuditRows(t, ctx, repo)
+	if len(audits) != 1 || audits[0].payload["quiet"] != true || audits[0].payload["revision"] != float64(3) {
+		t.Fatalf("audit records = %+v, want the repair's", audits)
+	}
+}
+
+// Nothing on the attended probe: the claim reads the fence only before its
+// second probe. With the settings table unreadable, an owner's turn is still
+// claimed, and a claim that would reach unattended work fails rather than
+// claiming it unfenced.
+func TestTheAttendedProbeNeverReadsTheQuietFence(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	fire := fireAutomation(t, ctx, repo, "Digest")
+	turn := enqueueLocalTurn(t, ctx, repo, "Owner")
+	if _, err := repo.db.ExecContext(ctx, `ALTER TABLE settings RENAME TO settings_unreadable`); err != nil {
+		t.Fatal(err)
+	}
+	if got := claimNext(t, ctx, repo, 0); got.RunID != turn.RunID {
+		t.Fatalf("claim with the fence unreadable = %q, want the owner's turn %q", got.RunID, turn.RunID)
+	}
+	claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-1", 0, time.Hour,
+		localWorkerAt(0), func(RoutingRequirements) bool { return true })
+	if err == nil || claimed.RunID != "" {
+		t.Fatalf("claim reaching the automation run %s with the fence unreadable = %+v, %v; want an error and nothing claimed",
+			fire.RunID, claimed, err)
 	}
 }

@@ -19,6 +19,9 @@ type Server struct {
 	repo   *repository.Repository
 	hints  AttentionHints
 	events EventPublisher
+	// dispatcher tells workers there is work after the quiet switch changes
+	// what is claimable.
+	dispatcher PendingDispatcher
 	// quietDrainTrigger starts the quiet drain after turning quiet on commits.
 	quietDrainTrigger func()
 	// quietDrainBatchDone, when set by a test, is told how many runs each
