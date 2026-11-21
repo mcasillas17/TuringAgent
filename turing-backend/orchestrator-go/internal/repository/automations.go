@@ -730,6 +730,8 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 		AgentID:       defaults.AgentID,
 		ModelProvider: defaults.ModelProvider,
 		Model:         defaults.Model,
+		// Its automation_runs row is written below, in this transaction.
+		Unattended: true,
 	})
 	if err != nil {
 		return AutomationFire{}, false, err

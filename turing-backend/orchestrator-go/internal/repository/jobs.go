@@ -54,7 +54,12 @@ type EnqueueUserMessageInput struct {
 	// TeamContinuation is what the run's continuation may use if it delegates.
 	// It is frozen only beside a roster that is kept.
 	TeamContinuation TeamContinuation
-	ValidateRouting  func(context.Context, RoutingRequirements) error
+	// Unattended marks work nobody asked for when it runs (RunUnattended).
+	// Only a caller that writes the run's automation_runs row in the same
+	// transaction sets it. It is written once, into jobs.unattended, which
+	// the claim reads to take attended work first.
+	Unattended      bool
+	ValidateRouting func(context.Context, RoutingRequirements) error
 }
 
 type RoutingRequirements struct {
@@ -821,6 +826,9 @@ func requeueUnsentRunLifecycleTx(
 }
 
 func (r *Repository) EnqueueUserMessage(ctx context.Context, input EnqueueUserMessageInput) (EnqueueUserMessageResult, error) {
+	if input.Unattended {
+		return EnqueueUserMessageResult{}, errUnattendedSend
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
@@ -1200,7 +1208,7 @@ func (r *Repository) enqueueUserMessageTx(ctx context.Context, tx *sql.Tx, input
 	if err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id, run_id, agent_id, status, payload_json, created_at, created_at_ns) VALUES (?, ?, ?, 'pending', ?, ?, ?)`, jobID, runID, input.AgentID, string(jobPayload), createdAt, created.UnixNano()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id, run_id, agent_id, status, payload_json, created_at, created_at_ns, unattended) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)`, jobID, runID, input.AgentID, string(jobPayload), createdAt, created.UnixNano(), input.Unattended); err != nil {
 		return EnqueueUserMessageResult{}, err
 	}
 	queuedPayload, err := marshalRunStatePayload(map[string]any{
@@ -1344,44 +1352,19 @@ func normalizeEnqueueUserMessageInput(input EnqueueUserMessageInput) EnqueueUser
 	return input
 }
 
-func (r *Repository) ClaimNextCompatibleJobWithLimit(
-	ctx context.Context,
-	agentID string,
-	leaseOwner string,
-	globalLimit int,
-	leaseDuration time.Duration,
-	capabilities *WorkerRoutingCapabilities,
-	compatible func(RoutingRequirements) bool,
-) (Job, error) {
-	pickedUpAt := now()
-	if leaseDuration <= 0 {
-		leaseDuration = 5 * time.Minute
+// claimProbeQuery is one probe of the claim. Both probes keep claim order,
+// job creation then id, with LIMIT 1. The attended probe adds
+// j.unattended = 0, which lets the planner walk the partial
+// idx_jobs_attended_claim, so it visits attended pending jobs alone and a
+// backlog of unattended ones costs it nothing; the other is the claim as it
+// was before TUR-027, on idx_jobs_capability_claim. Priority is never a
+// leading sort key, which would sort every pending job on each claim.
+func claimProbeQuery(attendedOnly bool, routingFilter string) string {
+	attended := ""
+	if attendedOnly {
+		attended = " AND j.unattended = 0"
 	}
-	leaseExpires := time.Now().UTC().Add(leaseDuration)
-	leaseExpiresAt := FormatTimestamp(leaseExpires)
-	leaseExpiresAtNanos := leaseExpires.UnixNano()
-	assignmentAttemptID := ids.New("attempt")
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Job{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	if globalLimit > 0 {
-		var active int
-		if err := tx.QueryRowContext(ctx, `
-			SELECT COUNT(*)
-			FROM agent_runs
-			WHERE agent_id = ?
-				AND execution_active = 1
-		`, agentID).Scan(&active); err != nil {
-			return Job{}, err
-		}
-		if active >= globalLimit {
-			return Job{}, nil
-		}
-	}
-	routingFilter, routingArgs := claimRoutingFilterSQL(capabilities)
-	claimQuery := `
+	return `
 		SELECT
 			j.id,
 			j.run_id,
@@ -1399,7 +1382,7 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 		FROM jobs j
 		JOIN agent_runs r ON r.id = j.run_id
 		LEFT JOIN delegations task ON task.child_run_id = r.id
-		WHERE j.agent_id = ? AND j.status = 'pending' AND r.status = 'queued'
+		WHERE j.agent_id = ? AND j.status = 'pending'` + attended + ` AND r.status = 'queued'
 			-- Turn order is anchored on the user message that initiated each
 			-- run, because that is the one message every run is guaranteed to
 			-- have. Anchoring on the assistant message instead would drop a run
@@ -1434,9 +1417,12 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 		ORDER BY j.created_at_ns, j.id
 		LIMIT 1
 	`
-	queryArgs := []any{agentID}
-	queryArgs = append(queryArgs, routingArgs...)
-	rows, err := tx.QueryContext(ctx, claimQuery, queryArgs...)
+}
+
+// claimProbeTx runs one probe and returns its candidate if the worker can
+// serve it, or a zero Job.
+func claimProbeTx(ctx context.Context, tx *sql.Tx, query string, args []any, compatible func(RoutingRequirements) bool) (Job, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return Job{}, err
 	}
@@ -1517,6 +1503,59 @@ func (r *Repository) ClaimNextCompatibleJobWithLimit(
 	}
 	if err := rows.Close(); err != nil {
 		return Job{}, err
+	}
+	return job, nil
+}
+
+func (r *Repository) ClaimNextCompatibleJobWithLimit(
+	ctx context.Context,
+	agentID string,
+	leaseOwner string,
+	globalLimit int,
+	leaseDuration time.Duration,
+	capabilities *WorkerRoutingCapabilities,
+	compatible func(RoutingRequirements) bool,
+) (Job, error) {
+	pickedUpAt := now()
+	if leaseDuration <= 0 {
+		leaseDuration = 5 * time.Minute
+	}
+	leaseExpires := time.Now().UTC().Add(leaseDuration)
+	leaseExpiresAt := FormatTimestamp(leaseExpires)
+	leaseExpiresAtNanos := leaseExpires.UnixNano()
+	assignmentAttemptID := ids.New("attempt")
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Job{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if globalLimit > 0 {
+		var active int
+		if err := tx.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM agent_runs
+			WHERE agent_id = ?
+				AND execution_active = 1
+		`, agentID).Scan(&active); err != nil {
+			return Job{}, err
+		}
+		if active >= globalLimit {
+			return Job{}, nil
+		}
+	}
+	routingFilter, routingArgs := claimRoutingFilterSQL(capabilities)
+	queryArgs := append([]any{agentID}, routingArgs...)
+	// Attended work first (TUR-027): the attended probe, then the claim as it
+	// was only when that finds nothing claimable.
+	var job Job
+	for _, attendedOnly := range []bool{true, false} {
+		job, err = claimProbeTx(ctx, tx, claimProbeQuery(attendedOnly, routingFilter), queryArgs, compatible)
+		if err != nil {
+			return Job{}, err
+		}
+		if job.JobID != "" {
+			break
+		}
 	}
 	if job.JobID == "" {
 		return Job{}, nil
