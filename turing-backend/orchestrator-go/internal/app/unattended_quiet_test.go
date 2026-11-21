@@ -17,15 +17,15 @@ import (
 
 var quietTestDefaults = repository.AutomationRunDefaults{AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2"}
 
-func quietTestConfig(databasePath string) config.Config {
+func quietTestConfig(databasePath string, reaperIntervalMS int) config.Config {
 	return config.Config{
 		ClientAPIKey: "client",
 		RuntimeToken: "internal", ApprovalConsumerToken: "internal-approval-consumer",
-		ApprovalJWTSecret: "approval-secret",
-		DatabasePath:      databasePath,
-		LocalModel:        "llama3.2",
-		// The reaper off: the drain must not depend on it.
-		JobReaperIntervalMS: 0,
+		ApprovalJWTSecret:   "approval-secret",
+		DatabasePath:        databasePath,
+		LocalModel:          "llama3.2",
+		QueueMaxWaitMS:      3600000,
+		JobReaperIntervalMS: reaperIntervalMS,
 	}
 }
 
@@ -111,7 +111,7 @@ func TestTheQuietSwitchIsAuthenticatedAndPublicOnly(t *testing.T) {
 // maintenance goroutine, with the job reaper off and no scheduled tick.
 func TestTurningQuietOnDrainsAtOnceWithTheReaperOff(t *testing.T) {
 	controlMaintenanceTicks(t)
-	app, err := New(quietTestConfig(filepath.Join(t.TempDir(), "turing.db")))
+	app, err := New(quietTestConfig(filepath.Join(t.TempDir(), "turing.db"), 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,64 +131,68 @@ func TestTurningQuietOnDrainsAtOnceWithTheReaperOff(t *testing.T) {
 }
 
 // A crash after turning quiet on and before its drain leaves the fence in
-// place: after a restart with the reaper off, nothing unattended is claimed,
-// and the next maintenance tick finishes the drain. Turning quiet off then
-// lets an automation that came due meanwhile fire once.
+// place: after a restart, with the reaper on or off, nothing unattended is
+// claimed, and the next maintenance tick finishes the drain. Turning quiet
+// off then lets an automation that came due meanwhile fire once.
 func TestADrainCutShortByACrashIsFinishedByTheNextMaintenanceTick(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "turing.db")
-	ticks := controlMaintenanceTicks(t)
-	before, err := New(quietTestConfig(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var queued []string
-	for _, name := range []string{"Digest", "Inbox"} {
-		queued = append(queued, fireDueAutomation(t, before.Repository, name).RunID)
-	}
-	due := createDueAutomation(t, before.Repository, "Morning")
-	// The switch commits, and the process dies before its service drains.
-	if _, _, err := before.Repository.SetUnattendedQuiet(context.Background(), true, 0); err != nil {
-		t.Fatal(err)
-	}
-	before.Stop()
+	for name, reaperMS := range map[string]int{"reaper off": 0, "reaper on": 20} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "turing.db")
+			ticks := controlMaintenanceTicks(t)
+			before, err := New(quietTestConfig(path, reaperMS))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var queued []string
+			for _, name := range []string{"Digest", "Inbox"} {
+				queued = append(queued, fireDueAutomation(t, before.Repository, name).RunID)
+			}
+			due := createDueAutomation(t, before.Repository, "Morning")
+			// The switch commits, and the process dies before its service drains.
+			if _, _, err := before.Repository.SetUnattendedQuiet(context.Background(), true, 0); err != nil {
+				t.Fatal(err)
+			}
+			before.Stop()
 
-	app, err := New(quietTestConfig(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(app.Stop)
-	if claimed, err := app.Repository.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-1",
-		0, time.Hour, nil, nil); err != nil || claimed.RunID != "" {
-		t.Fatalf("claim after the restart = %+v, %v; want nothing while the fence holds", claimed, err)
-	}
-	if got := app.quietCancelled(t); got != 0 {
-		t.Fatalf("cancelled before any tick = %d, want the drain still pending", got)
-	}
-	ticks.ticks <- time.Now()
-	waitFor(t, "the next tick to finish the drain", func() bool {
-		return app.quietCancelled(t) == len(queued) &&
-			app.countRows(t, `SELECT COUNT(*) FROM settings WHERE key = 'unattended_quiet_drain'`) == 0
-	})
+			app, err := New(quietTestConfig(path, reaperMS))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(app.Stop)
+			if claimed, err := app.Repository.ClaimNextCompatibleJobWithLimit(context.Background(), "general_assistant", "worker-1",
+				0, time.Hour, nil, nil); err != nil || claimed.RunID != "" {
+				t.Fatalf("claim after the restart = %+v, %v; want nothing while the fence holds", claimed, err)
+			}
+			if got := app.quietCancelled(t); got != 0 {
+				t.Fatalf("cancelled before any tick = %d, want the drain still pending", got)
+			}
+			ticks.ticks <- time.Now()
+			waitFor(t, "the next tick to finish the drain", func() bool {
+				return app.quietCancelled(t) == len(queued) &&
+					app.countRows(t, `SELECT COUNT(*) FROM settings WHERE key = 'unattended_quiet_drain'`) == 0
+			})
 
-	automations := turingv1.NewAutomationServiceClient(newBufconnClient(t, app.PublicServer))
-	if _, err := automations.SetUnattendedQuiet(clientContext(), &turingv1.SetUnattendedQuietRequest{Quiet: false, Revision: 1}); err != nil {
-		t.Fatal(err)
-	}
-	at, err := time.Parse(time.RFC3339Nano, due.NextDueAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fires := 0
-	for range 3 {
-		fire, found, err := app.Repository.ClaimDueAutomation(context.Background(), at.Add(time.Minute), quietTestDefaults)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if found && fire.AutomationID == due.AutomationID && fire.RunID != "" {
-			fires++
-		}
-	}
-	if fires != 1 {
-		t.Fatalf("the automation due during quiet fired %d times after it, want once", fires)
+			automations := turingv1.NewAutomationServiceClient(newBufconnClient(t, app.PublicServer))
+			if _, err := automations.SetUnattendedQuiet(clientContext(), &turingv1.SetUnattendedQuietRequest{Quiet: false, Revision: 1}); err != nil {
+				t.Fatal(err)
+			}
+			at, err := time.Parse(time.RFC3339Nano, due.NextDueAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fires := 0
+			for range 3 {
+				fire, found, err := app.Repository.ClaimDueAutomation(context.Background(), at.Add(time.Minute), quietTestDefaults)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if found && fire.AutomationID == due.AutomationID && fire.RunID != "" {
+					fires++
+				}
+			}
+			if fires != 1 {
+				t.Fatalf("the automation due during quiet fired %d times after it, want once", fires)
+			}
+		})
 	}
 }
