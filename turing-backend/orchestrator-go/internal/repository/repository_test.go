@@ -584,46 +584,6 @@ func TestClaimNextJobRollsBackWhenStartedEventAppendFails(t *testing.T) {
 	}
 }
 
-func TestRequeueClaimedJobIncrementsAttempt(t *testing.T) {
-	database := openTestDB(t)
-	repo := New(database)
-	ctx := context.Background()
-	session, err := repo.CreateSession(ctx, "Retry attempts")
-	if err != nil {
-		t.Fatal(err)
-	}
-	enqueued, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
-		SessionID: session.SessionID, Content: "retry me", AgentID: "general_assistant", ModelProvider: "ollama", Model: "llama3.2",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-1", 0, 0, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.Attempt != 1 {
-		t.Fatalf("first attempt = %d, want 1", first.Attempt)
-	}
-	if err := repo.RequeueClaimedJob(ctx, enqueued.JobID, enqueued.RunID); err != nil {
-		t.Fatal(err)
-	}
-	second, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-2", 0, 0, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.Attempt != 2 {
-		t.Fatalf("second attempt = %d, want 2", second.Attempt)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(second.StartedEvent.PayloadJSON), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["attempt"] != float64(2) {
-		t.Fatalf("started retry payload = %+v", payload)
-	}
-}
-
 func TestCompleteRunUpdatesRunJobAndAssistantMessage(t *testing.T) {
 	database := openTestDB(t)
 	repo := New(database)

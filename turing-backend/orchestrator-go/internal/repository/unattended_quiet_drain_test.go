@@ -96,6 +96,7 @@ func TestAttendedWorkIsClaimedWhileQuietAndUnattendedWorkIsNot(t *testing.T) {
 	}
 	finishQuietDrain(t, f.ctx, f.repo)
 	wantOwnerQuiet(t, f.ctx, f.repo, fire.RunID)
+	wantNoAutomationAttention(t, f.ctx, f.repo)
 }
 
 // With 10,000 unattended jobs queued, turning quiet on is one bounded write

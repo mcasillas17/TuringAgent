@@ -564,6 +564,15 @@ func (r *Repository) RequeueOrFailRetryableRun(ctx context.Context, input Retrya
 
 	if requeueable && attempt < maxAttempts {
 		requeued, requeueEvents, err := requeueRetryableRunTx(ctx, tx, jobID, input)
+		if quiet, ok := asQuietCancellation(err); ok {
+			// Cancelled instead, while quiet: not requeued, so no retry
+			// notice, and the caller publishes the cancellation and keeps
+			// dispatching.
+			if err := tx.Commit(); err != nil {
+				return RetryDecision{}, err
+			}
+			return RetryDecision{Events: quiet.result.Events, StoppedTasks: quiet.result.StoppedTasks}, nil
+		}
 		if err != nil {
 			return RetryDecision{}, err
 		}
@@ -730,7 +739,17 @@ func requeueRunThroughRecoveryTx(
 	return requeueRunLifecycleTx(ctx, tx, runID, identity, "uncertain")
 }
 
-// releaseJobToPendingTx hands a run's in-progress job back to the queue.
+// releaseJobToPendingTx hands a run's in-progress job back to the queue. It
+// is the only statement that sets a job back to pending
+// (TestOnlyReleaseJobToPendingTxSetsAJobBackToPending), so every requeue
+// passes the owner's quiet switch here.
+//
+// While quiet is on or its drain is pending (TUR-028a), an unattended job is
+// not released: its run is cancelled owner_quiet in the caller's transaction,
+// with the execution release the requeue would have written, and the helper
+// returns a *quietCancellation carrying what the cancellation committed. Its
+// caller skips its requeue lifecycle step, commits, and reports a run that was
+// not requeued. Attended work is released as ever.
 //
 // jobID and attemptID are optional guards. Retry after an anonymous worker
 // rejection knows neither and requeues whatever in-progress job the run has;
@@ -744,6 +763,44 @@ func releaseJobToPendingTx(
 	attemptID string,
 	incrementAttempt bool,
 ) error {
+	// A caller that supplied a job or attempt guard is reconciling a specific
+	// assignment, so a row that no longer matches means a newer attempt owns
+	// the run — that is a fence, not a missing job.
+	noMatch := errors.New("in-progress job not found for retry requeue")
+	if jobID != "" || attemptID != "" {
+		noMatch = ErrAssignmentFenced
+	}
+	fenced, err := unattendedWorkFencedTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if fenced {
+		var unattended bool
+		err := tx.QueryRowContext(ctx, `
+			SELECT unattended
+			FROM jobs
+			WHERE run_id = ?
+				AND status = 'in_progress'
+				AND (? = '' OR id = ?)
+				AND (? = '' OR COALESCE(assignment_attempt_id, '') = ?)
+		`, runID, jobID, jobID, attemptID, attemptID).Scan(&unattended)
+		if errors.Is(err, sql.ErrNoRows) {
+			return noMatch
+		}
+		if err != nil {
+			return err
+		}
+		if unattended {
+			cancelled, err := cancelRunTx(ctx, tx, CancelRunInput{
+				RunID: runID, Cancellation: runoutcome.OwnerQuietCancellation(),
+				resolveVersionInTx: true, releaseExecution: true,
+			})
+			if err != nil {
+				return err
+			}
+			return &quietCancellation{result: cancelled}
+		}
+	}
 	attemptIncrement := 0
 	if incrementAttempt {
 		attemptIncrement = 1
@@ -765,14 +822,26 @@ func releaseJobToPendingTx(
 	if err != nil {
 		return err
 	}
-	// A caller that supplied a job or attempt guard is reconciling a specific
-	// assignment, so a row that no longer matches means a newer attempt owns
-	// the run — that is a fence, not a missing job.
-	noMatch := errors.New("in-progress job not found for retry requeue")
-	if jobID != "" || attemptID != "" {
-		noMatch = ErrAssignmentFenced
-	}
 	return expectOneRowErr(result, noMatch)
+}
+
+// quietCancellation is what releaseJobToPendingTx returns in place of a
+// release while the owner's quiet switch is on or draining: the run was
+// cancelled owner_quiet, its execution released, inside the caller's
+// transaction, which the caller commits.
+type quietCancellation struct {
+	result RunTransitionResult
+}
+
+func (*quietCancellation) Error() string {
+	return "unattended run cancelled by the owner's quiet switch instead of being requeued"
+}
+
+// asQuietCancellation reports whether err is releaseJobToPendingTx's quiet
+// cancellation, and returns it.
+func asQuietCancellation(err error) (*quietCancellation, bool) {
+	var quiet *quietCancellation
+	return quiet, errors.As(err, &quiet)
 }
 
 // requeueRunLifecycleTx commits the lifecycle half of an uncertain requeue:
@@ -1798,27 +1867,28 @@ func (r *Repository) ListPendingRoutingWorkPage(
 	return work, next, nil
 }
 
-func (r *Repository) RequeueClaimedJob(ctx context.Context, jobID string, runID string) error {
-	return r.requeueAssignment(ctx, Assignment{JobID: jobID, RunID: runID}, "", true)
-}
-
 func (r *Repository) AbortPendingAssignment(ctx context.Context, assignment Assignment) error {
-	return r.requeueAssignment(ctx, assignment, "pending_send", false)
+	return r.requeueAssignment(ctx, assignment, "pending_send")
 }
 
 // AbortUnsentAssignment is valid only after the delivery caller has proved no
 // stream.Send goroutine was started. The stored "sending" state fences the
 // assignment identity; by itself it does not prove the command was unsent.
 func (r *Repository) AbortUnsentAssignment(ctx context.Context, assignment Assignment) error {
-	return r.requeueAssignment(ctx, assignment, "sending", false)
+	return r.requeueAssignment(ctx, assignment, "sending")
 }
 
+// requeueAssignment releases an assignment its delivery caller proved never
+// reached a worker, in the delivery state that proof names, straight back to
+// the queue with its attempt unchanged.
 func (r *Repository) requeueAssignment(
 	ctx context.Context,
 	assignment Assignment,
 	requiredExecutionState string,
-	incrementAttempt bool,
 ) error {
+	if assignment.JobID == "" {
+		return ErrAssignmentFenced
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1840,40 +1910,23 @@ func (r *Repository) requeueAssignment(
 	if assignment.WorkerID != "" && (!workerID.Valid || workerID.String != assignment.WorkerID) {
 		return ErrAssignmentFenced
 	}
-	if requiredExecutionState != "" && executionState != requiredExecutionState {
+	if executionState != requiredExecutionState {
 		return ErrAssignmentFenced
-	}
-	if requiredExecutionState == "" && (executionState == "sending" || executionState == "uncertain") {
-		return ErrAssignmentFenced
-	}
-	attemptIncrement := 0
-	if incrementAttempt {
-		attemptIncrement = 1
-	}
-	result, err := tx.ExecContext(ctx, `
-		UPDATE jobs
-		SET status = 'pending',
-			lease_owner = NULL,
-			lease_expires_at = NULL,
-			lease_expires_at_ns = NULL,
-			picked_up_at = NULL,
-			assignment_attempt_id = NULL,
-			attempt = attempt + ?
-		WHERE id = ? AND run_id = ? AND status = 'in_progress'
-	`, attemptIncrement, assignment.JobID, assignment.RunID)
-	if err != nil {
-		return err
-	}
-	if err := expectOneRowErr(result, ErrAssignmentFenced); err != nil {
-		return err
 	}
 	// Both the job and the run move here, and this signature returns only an
-	// error, so its three callers publish nothing live: a client that is
+	// error, so its two callers publish nothing live: a client that is
 	// watching sees the requeue when it replays, not when it happens. Widening
-	// these three signatures is the streaming task's work, and doing it here
-	// would change public shapes that task has to change anyway. What this
-	// boundary owes today is that the events exist, in order, on commit.
-	//
+	// these signatures is the streaming task's work, and doing it here would
+	// change public shapes that task has to change anyway. What this boundary
+	// owes today is that the events exist, in order, on commit. The same holds
+	// for a quiet cancellation in place of the requeue: it commits here and is
+	// seen on replay, and the caller keeps dispatching as after a requeue.
+	if err := releaseJobToPendingTx(ctx, tx, assignment.RunID, assignment.JobID, "", false); err != nil {
+		if _, quiet := asQuietCancellation(err); quiet {
+			return tx.Commit()
+		}
+		return err
+	}
 	// An assignment aborted before send provably never reached a worker. The
 	// pending-send path proves that from the stored state. AbortUnsentAssignment
 	// supplies the other proof at its sole call site: sendTracked reported that
@@ -1881,21 +1934,6 @@ func (r *Repository) requeueAssignment(
 	// the same assignment. There is no executor to be uncertain about, so the
 	// run goes straight back to the queue rather than announcing a recovery it
 	// is not having.
-	//
-	// RequeueClaimedJob pins no delivery state, worker, or attempt, so
-	// transaction-observed pending_send is the only state that proves no send
-	// for that API. Once its assignment has been delivered — or fenced, or
-	// landed in any state past the point of no send — there may be an executor
-	// holding the run, and the honest edge is the uncertain one that publishes
-	// recovering before queued.
-	if requiredExecutionState == "" && executionState != "pending_send" {
-		if _, _, err := requeueRunLifecycleTx(
-			ctx, tx, assignment.RunID, assignmentIdentity(assignment), "uncertain",
-		); err != nil {
-			return mapRequeueConflict(err)
-		}
-		return tx.Commit()
-	}
 	if _, _, err := requeueUnsentRunLifecycleTx(ctx, tx, assignment.RunID, assignmentIdentity(assignment)); err != nil {
 		if errors.Is(err, ErrRunTransitionConflict) {
 			return ErrAssignmentFenced
