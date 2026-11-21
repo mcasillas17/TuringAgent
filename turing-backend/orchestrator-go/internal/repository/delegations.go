@@ -410,6 +410,8 @@ func insertQueuedRunTx(ctx context.Context, tx *sql.Tx, run queuedRun) (Event, e
 	if err != nil {
 		return Event{}, err
 	}
+	// A child or a continuation is attended (RunUnattended), so its job keeps
+	// the unattended column's default.
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO jobs (id, run_id, agent_id, status, payload_json, created_at, created_at_ns)
 		VALUES (?, ?, 'general_assistant', 'pending', ?, ?, ?)`,

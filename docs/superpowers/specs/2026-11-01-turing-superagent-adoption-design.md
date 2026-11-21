@@ -3526,8 +3526,9 @@ MCPP-005. The 30-minute background grace is rejected.
 2. **TUR-027 claim order: two index-ordered probes.** The claim runs its
    existing query twice at most, both keeping `ORDER BY j.created_at_ns, j.id
    LIMIT 1`. Probe 1 adds `j.unattended = 0` and is served by a new partial
-   index, `idx_jobs_attended_claim ON jobs (agent_id, created_at_ns, id)
-   WHERE status = 'pending' AND unattended = 0`, so it visits only attended
+   index, `idx_jobs_attended_claim ON jobs (agent_id, status, created_at_ns,
+   id) WHERE status = 'pending' AND unattended = 0`, the claim index's own
+   key (decision log, "TUR-027 implementation"), so it visits only attended
    pending jobs and costs nothing when none is queued, however many
    unattended jobs wait. `jobs.unattended` is a new column, `INTEGER NOT NULL
    DEFAULT 0 CHECK (unattended IN (0, 1))`, written once, at insert, from an
@@ -3595,7 +3596,21 @@ slice that spends a model call.
 
 ### Open questions
 
-None.
+- **An owner's turn behind an unattended run in its own conversation**
+  (raised by TUR-027's implementation review). Turn order binds inside a
+  conversation, so the owner's turn waits for that run. Being unattended,
+  the run is claimed only once no attended job elsewhere is claimable, even
+  one queued after it. Under first-in-first-out the run, and so the turn,
+  waited only for older work. The only bound is the queue-wait terminal
+  (`TURING_QUEUE_MAX_WAIT_MS`, 12 hours by default). For the run to take the
+  turn's priority, the claim would need either a third probe, which the
+  two-probe bound above rules out, or a second flag that the turn's enqueue
+  sets on the unattended jobs it waits behind in its conversation and that
+  probe 1's predicate and partial index also admit. That flag keeps two
+  probes, but it is written after insert, which point 2's write-once
+  `jobs.unattended` never is. Neither is in TUR-027's scope. Settle this
+  before PRO-001d, whose `auto` runs queue in thread sessions the owner also
+  writes in.
 
 ### Decision log
 
@@ -3613,6 +3628,7 @@ None.
 | Round 41 review: the memory gate already refuses an assessor run (tur027-memory-refusal-justified-by-false-no-selection-check-claim) | opus: the memory service checks the run's selection right after `authorizeRun` (`orch/service/memory/call.go:76-82`), so an enforced empty set already refuses an assessor there; keeping `RunUnattended` in that gate added a session read to every memory call and refused nothing | Round 40's memory-gate exception is superseded: no gate reads `RunUnattended`; it is the definition `jobs.unattended` is written from and the query its test compares against; the memory acceptance clause now asserts the empty enforced set, which fails without PRO-001c's assessor payload (corrected in round 42: the clause and the payload are PRO-001c's; see that row) | All three gates already enforce the selection, so the definition belongs to the enqueue path and its test, not to a hot path. |
 | Round 42 review: assessor tests in a slice that ships before the assessor, and the refusals' order (tur027-assessor-acceptance-in-slice-before-assessor-exists, tur027-mcp-refusal-reads-server-row, assessor-direct-team-call-not-refused) | opus: TUR-027 ships before PRO-001, but its acceptance tested assessor jobs, which PRO-001c adds with the `watch` kind (`orch/db/schema/0024_delegation_groundwork.sql:8-9` allows only `chat` and `delegation`), and PRO-001c asserted only that the payload "carries no tools"; grok: `CallTool` reads the server row, `sealed_token` included, before the selection check (`orch/service/mcpregistry/call.go:36-57`; `orch/repository/mcp_servers.go:1488-1496`), and point 1 named three gates while `CallTeamTool` decides from the roster alone | TUR-027 tests only the enqueue paths that exist when it ships, plus the backfill; the event fire's flag and claim-order checks move to PRO-001d and the assessor's, with its explicit enforced-empty payload and the beacon, registered-MCP, memory and team refusals, to PRO-001c; point 1 points to section 5, point 3, which states the payload and the refusals once | A slice's acceptance can test only what exists when it ships, and each refusal must happen before the secret or file it guards is read. |
 | Round 43 review: the Start-confirmed path's flag (start-confirmed-unattended-flag-untested) | opus: TUR-027 always ships before PRO-001b, so its 'Start-confirmed turn if PRO-001b has shipped' clause never runs, and PRO-001b did not test its new attended enqueue | The clause leaves TUR-027; PRO-001b asserts its Start-confirmed job is written `jobs.unattended = 0`, equal to `RunUnattended`, and is claimed ahead of an older automation job | Every new enqueue path, attended or not, is tested in the slice that adds it. |
+| TUR-027 implementation: the attended index's key | design: `(agent_id, created_at_ns, id)`; first build: that key, forced with `INDEXED BY` | `(agent_id, status, created_at_ns, id)`, `idx_jobs_capability_claim`'s key, under the same partial predicate, and no `INDEXED BY` | SQLite keeps no statistics here, and its default estimates prefer the claim index's two equality columns, so with the design's key probe 1 never used the partial index and walked every pending unattended job. `INDEXED BY` pinned it but failed every claim of a worker that serves no destination: its routing filter is `AND (0)`, SQLite folds the whole WHERE to false, and the forced index then has no query solution. With the claim index's key the two weigh alike and the planner takes the smaller, partial one; `status` is constant inside it, so it costs a few bytes per attended pending job. The plan test guards the choice. |
 
 ## 10. F7 — Credential shims and environment scrubbing
 
@@ -5648,7 +5664,8 @@ None.
    whose streamed decoder its poller reuses, and PRO-001w is w1 then w2.
 7. **PRO-001c**: the assessor, after TUR-027 and EVAL-001 scaffolding.
 8. **PRO-001d**: `auto`, last, after EVAL-001 evidence from recorded `observe`
-   decisions.
+   decisions, and once section 9's open question (an owner's turn behind an
+   unattended run in its own conversation) is settled.
 9. **TUR-016c**: after TUR-016's backup and restore verification and TUR-016a.
 10. **EVAL-001 scenarios** for F24 (delegation fidelity) and F13's
     replacement (ambiguous brief) when EVAL-001's harness exists; F24's frame

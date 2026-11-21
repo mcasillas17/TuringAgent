@@ -104,8 +104,15 @@ The accepted requirements are frozen into the job payload. Dispatch claims only 
 that match the selected worker's current snapshot. A route that was valid when
 accepted therefore cannot be handed to an incompatible worker after capabilities
 change. Coarse provider/model/context/tool/capacity predicates run in SQLite before
-the final typed matcher, and the indexed query claims at most one compatible row, so
-an incompatible backlog is not decoded and rescanned for every worker. Dispatch
+the final typed matcher, and each indexed probe of the claim reads at most one
+compatible row, so an incompatible backlog is not decoded and rescanned for every
+worker. The claim takes attended work first (TUR-027): its first probe reads attended
+pending jobs alone (`jobs.unattended = 0`, on the partial `idx_jobs_attended_claim`),
+and only when that finds nothing claimable does the second, the claim as it was,
+consider every pending job, attended or not, on `idx_jobs_capability_claim`. Both
+keep creation order and every predicate, a conversation's turn order included, so an
+owner's turn behind an unattended run in its own conversation waits for that run, and
+the run waits until no attended job elsewhere is claimable. Dispatch
 reserves worker capacity without holding the worker lock while waiting for SQLite.
 Dispatches are not serialized, so one that finds a worker's capacity held by claims in
 flight skips it and marks it; a claim that comes back empty after such a skip restarts

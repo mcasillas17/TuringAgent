@@ -935,7 +935,27 @@ separate lifecycle, visibility and evaluation gates.
 
 #### TUR-027 - Attended work first
 
-- **Status:** Proposed; not started.
+- **Status:** Shipped. A claim runs at most two `LIMIT 1` probes, both in job
+  creation order: attended pending jobs first, on the partial
+  `idx_jobs_attended_claim`, and only when none is claimable the claim as it
+  was, on `idx_jobs_capability_claim`. Migration 0032 adds `jobs.unattended`,
+  written once at insert from `EnqueueUserMessageInput.Unattended`, which only
+  a scheduled automation fire sets, in the transaction that writes its
+  `automation_runs` row (a send that asks for it is refused), and backfilled
+  for every job an automation already queued. `RunUnattended` is the one
+  definition (an `automation_runs` row; PRO-001c adds `watch` sessions) and no
+  gate reads it. Concurrency, a conversation's turn order, consent holds, the
+  delegation grant fence and routing are unchanged, nothing running is
+  preempted, and the routing page keeps creation order. The index carries the
+  claim index's own key, `(agent_id, status, created_at_ns, id)`, under the
+  design's partial predicate: with the design's three-column key the planner,
+  which keeps no statistics, never chose it. With 10,000 unattended jobs
+  queued the attended probe visits no row, and an owner's turn sent behind
+  them is the next claim once the running job ends. One case waits longer
+  than first-in-first-out: an owner's turn sent into an automation's
+  conversation behind that automation's queued run waits for the run, which
+  is claimed only once no attended job elsewhere is claimable (an open
+  question in the design, to settle before PRO-001d).
 - **Outcome:** An owner's turn is never queued behind work nobody asked for.
 - **Scope:** Claim attended pending jobs before unattended ones through an
   index-bounded first probe and a write-once `jobs.unattended` flag, with one
