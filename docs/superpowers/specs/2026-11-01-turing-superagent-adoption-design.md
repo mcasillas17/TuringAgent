@@ -3602,11 +3602,15 @@ slice that spends a model call.
   the run is claimed only once no attended job elsewhere is claimable, even
   one queued after it. Under first-in-first-out the run, and so the turn,
   waited only for older work. The only bound is the queue-wait terminal
-  (`TURING_QUEUE_MAX_WAIT_MS`, 12 hours by default). For the blocking run to
-  take the turn's priority, the claim would need a third probe or a second
-  flag beside `jobs.unattended`, and the two-probe bound above rules both
-  out for TUR-027. Settle this before PRO-001d, whose `auto` runs queue in
-  thread sessions the owner also writes in.
+  (`TURING_QUEUE_MAX_WAIT_MS`, 12 hours by default). For the run to take the
+  turn's priority, the claim would need either a third probe, which the
+  two-probe bound above rules out, or a second flag that the turn's enqueue
+  sets on the unattended jobs it waits behind in its conversation and that
+  probe 1's predicate and partial index also admit. That flag keeps two
+  probes, but it is written after insert, which point 2's write-once
+  `jobs.unattended` never is. Neither is in TUR-027's scope. Settle this
+  before PRO-001d, whose `auto` runs queue in thread sessions the owner also
+  writes in.
 
 ### Decision log
 
@@ -5660,7 +5664,8 @@ None.
    whose streamed decoder its poller reuses, and PRO-001w is w1 then w2.
 7. **PRO-001c**: the assessor, after TUR-027 and EVAL-001 scaffolding.
 8. **PRO-001d**: `auto`, last, after EVAL-001 evidence from recorded `observe`
-   decisions.
+   decisions, and once section 9's open question (an owner's turn behind an
+   unattended run in its own conversation) is settled.
 9. **TUR-016c**: after TUR-016's backup and restore verification and TUR-016a.
 10. **EVAL-001 scenarios** for F24 (delegation fidelity) and F13's
     replacement (ambiguous brief) when EVAL-001's harness exists; F24's frame

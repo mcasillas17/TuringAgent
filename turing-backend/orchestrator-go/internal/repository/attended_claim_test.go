@@ -132,10 +132,10 @@ func seedUnattendedBacklog(t *testing.T, ctx context.Context, repo *Repository, 
 	}
 }
 
-// TUR-027: an owner's turn is never queued behind work nobody asked for. An
-// automation run queued before a chat turn is claimed after it, and is still
-// claimed once nothing attended waits. Once running it is not preempted, and
-// no slot is held back for attended work.
+// TUR-027: an owner's turn is not queued behind work nobody asked for in
+// other conversations. An automation run queued before a chat turn is
+// claimed after it, and is still claimed once nothing attended waits. Once
+// running it is not preempted, and no slot is held back for attended work.
 func TestAChatTurnIsClaimedBeforeAnOlderAutomationRun(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 	fire := fireAutomation(t, ctx, repo, "Digest")

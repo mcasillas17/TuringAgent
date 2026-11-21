@@ -9,7 +9,7 @@ import (
 // TUR-027: the attended probe's index is partial on attended pending jobs,
 // so a backlog of unattended work never grows what it walks, and it carries
 // the claim index's own key, so the planner weighs the two alike and takes
-// the smaller. The flag it filters on is exactly 0 or 1.
+// the smaller. The flag it filters on defaults to 0 and is exactly 0 or 1.
 func TestAttendedClaimMigrationAddsTheFlagAndItsPartialIndex(t *testing.T) {
 	ctx := context.Background()
 	database := openMigratedInvariantDB(t, ctx)
@@ -31,6 +31,23 @@ func TestAttendedClaimMigrationAddsTheFlagAndItsPartialIndex(t *testing.T) {
 		INSERT INTO jobs (id, run_id, agent_id, status, payload_json, created_at, created_at_ns)
 		VALUES ('job_flag', ?, 'general_assistant', 'pending', '{}', '2026-11-01T00:00:00.000000000Z', 1)`, runID); err != nil {
 		t.Fatal(err)
+	}
+	readFlag := func() int {
+		t.Helper()
+		var flag int
+		if err := database.QueryRowContext(ctx, `SELECT unattended FROM jobs WHERE id = 'job_flag'`).Scan(&flag); err != nil {
+			t.Fatal(err)
+		}
+		return flag
+	}
+	if got := readFlag(); got != 0 {
+		t.Fatalf("jobs.unattended of a job inserted without it = %d, want the default 0", got)
+	}
+	if _, err := database.ExecContext(ctx, `UPDATE jobs SET unattended = ? WHERE id = 'job_flag'`, 1); err != nil {
+		t.Fatalf("jobs.unattended = 1 was refused: %v", err)
+	}
+	if got := readFlag(); got != 1 {
+		t.Fatalf("jobs.unattended = %d after setting 1, want 1", got)
 	}
 	for _, value := range []any{2, nil} {
 		if _, err := database.ExecContext(ctx, `UPDATE jobs SET unattended = ? WHERE id = 'job_flag'`, value); err == nil {
