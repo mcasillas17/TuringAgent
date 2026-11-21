@@ -134,7 +134,8 @@ func seedUnattendedBacklog(t *testing.T, ctx context.Context, repo *Repository, 
 
 // TUR-027: an owner's turn is never queued behind work nobody asked for. An
 // automation run queued before a chat turn is claimed after it, and is still
-// claimed once nothing attended waits.
+// claimed once nothing attended waits. Once running it is not preempted, and
+// no slot is held back for attended work.
 func TestAChatTurnIsClaimedBeforeAnOlderAutomationRun(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 	fire := fireAutomation(t, ctx, repo, "Digest")
@@ -150,15 +151,26 @@ func TestAChatTurnIsClaimedBeforeAnOlderAutomationRun(t *testing.T) {
 	if _, err := completeRunAtCurrentVersion(t, repo, chat.RunID, chat.AssistantMessageID, "Answered.", nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := claimNext(t, ctx, repo, 1); got.RunID != fire.RunID {
-		t.Fatalf("claim with nothing attended waiting = %q, want the automation run %q", got.RunID, fire.RunID)
+	automation := claimNext(t, ctx, repo, 1)
+	if automation.RunID != fire.RunID {
+		t.Fatalf("claim with nothing attended waiting = %q, want the automation run %q", automation.RunID, fire.RunID)
+	}
+	later := enqueueLocalTurn(t, ctx, repo, "Owner again")
+	if got := claimNext(t, ctx, repo, 1); got.RunID != "" {
+		t.Fatalf("claim while the automation run holds the only slot = %q, want nothing: no slot is reserved for attended work", got.RunID)
+	}
+	completeClaimed(t, repo, automation)
+	if got := claimNext(t, ctx, repo, 1); got.RunID != later.RunID {
+		t.Fatalf("claim after the automation run = %q, want the owner's turn %q", got.RunID, later.RunID)
 	}
 }
 
-// Attended work goes first between conversations, never within one: an
+// Attended work goes first between conversations, never within one. An
 // owner's turn sent into an automation's conversation behind its queued run
-// still waits for that run, which is claimed although an attended job is
-// pending.
+// waits for that run, and the run, being unattended, is claimed only once no
+// attended job elsewhere is claimable, even one queued after it. That turn
+// waits longer than under first-in-first-out; spec §9 keeps it as an open
+// question.
 func TestAConversationsTurnOrderStillHoldsForAnAttendedTurn(t *testing.T) {
 	repo, ctx := newTitleTestRepo(t)
 	fire := fireAutomation(t, ctx, repo, "Digest")
@@ -169,17 +181,65 @@ func TestAConversationsTurnOrderStillHoldsForAnAttendedTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	elsewhere := enqueueLocalTurn(t, ctx, repo, "Elsewhere")
+	wantQueuedBefore(t, ctx, repo, fire.RunID, elsewhere.RunID)
 
-	running := claimNext(t, ctx, repo, 0)
+	first := claimNext(t, ctx, repo, 1)
+	if first.RunID != elsewhere.RunID {
+		t.Fatalf("first claim = %q, want the turn elsewhere %q ahead of the older automation run %q, which %q waits behind",
+			first.RunID, elsewhere.RunID, fire.RunID, reply.RunID)
+	}
+	completeClaimed(t, repo, first)
+	running := claimNext(t, ctx, repo, 1)
 	if running.RunID != fire.RunID {
-		t.Fatalf("first claim = %q, want the automation run %q, earlier in the conversation than %q", running.RunID, fire.RunID, reply.RunID)
+		t.Fatalf("claim with nothing else attended claimable = %q, want the automation run %q, earlier in the conversation than %q",
+			running.RunID, fire.RunID, reply.RunID)
 	}
 	if got := claimNext(t, ctx, repo, 0); got.RunID != "" {
-		t.Fatalf("claim while the conversation's earlier run is going = %q, want nothing", got.RunID)
+		t.Fatalf("claim while the conversation's earlier run is going = %q, want nothing, whatever the capacity", got.RunID)
 	}
 	completeClaimed(t, repo, running)
-	if got := claimNext(t, ctx, repo, 0); got.RunID != reply.RunID {
+	if got := claimNext(t, ctx, repo, 1); got.RunID != reply.RunID {
 		t.Fatalf("claim after the automation run = %q, want the owner's turn %q", got.RunID, reply.RunID)
+	}
+}
+
+// The worker's typed matcher sees one candidate per probe. An attended job
+// only it refuses is not claimable, so the second probe runs and the claim
+// keeps creation order, as it did before TUR-027: an older unattended job is
+// claimed, and a newer one is not claimed around the refused job.
+func TestAJobOnlyTheTypedMatcherRefusesLeavesCreationOrder(t *testing.T) {
+	repo, ctx := newTitleTestRepo(t)
+	older := fireAutomation(t, ctx, repo, "Older")
+	session, err := repo.CreateSession(ctx, "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused, err := repo.EnqueueUserMessage(ctx, EnqueueUserMessageInput{
+		SessionID: session.SessionID, Content: "what time is it", AgentID: "general_assistant",
+		ModelProvider: "ollama", Model: "llama3.2", RequestedTools: []string{"system/system.time"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := fireAutomation(t, ctx, repo, "Newer")
+	wantQueuedBefore(t, ctx, repo, older.RunID, refused.RunID)
+	wantQueuedBefore(t, ctx, repo, refused.RunID, newer.RunID)
+
+	claim := func() string {
+		t.Helper()
+		claimed, err := repo.ClaimNextCompatibleJobWithLimit(ctx, "general_assistant", "worker-1", 0, time.Hour, nil,
+			func(route RoutingRequirements) bool { return len(route.RequestedTools) == 0 })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return claimed.RunID
+	}
+	if got := claim(); got != older.RunID {
+		t.Fatalf("claim = %q, want the older automation run %q once the matcher refuses %q", got, older.RunID, refused.RunID)
+	}
+	if got := claim(); got != "" {
+		t.Fatalf("claim = %q, want nothing: the newer automation run %q is not claimed around the refused %q", got, newer.RunID, refused.RunID)
 	}
 }
 
@@ -335,22 +395,13 @@ func TestTheAttendedProbeVisitsNoRowBehindAnUnattendedBacklog(t *testing.T) {
 	args := append([]any{"general_assistant"}, filterArgs...)
 
 	// No per-statement row counter reaches Go through this driver, so the
-	// bound is shown from the plan and the index: the probe's outer loop is a
-	// search of the partial index, which holds attended pending jobs alone
-	// (TestAttendedClaimMigrationAddsThePartialIndex pins its predicate), and
-	// with this backlog queued it holds none, so the probe visits no row.
+	// bound is shown from the plan: the probe's outer loop is a search of the
+	// partial index, whose predicate admits attended pending jobs alone
+	// (TestAttendedClaimMigrationAddsTheFlagAndItsPartialIndex pins it), and
+	// this backlog holds none, so the probe has no row to visit.
 	plan := explainQueryPlan(t, ctx, repo, claimProbeQuery(true, filter), args...)
 	if !strings.HasPrefix(plan, "SEARCH j USING INDEX idx_jobs_attended_claim (agent_id=? AND status=?)") {
 		t.Fatalf("attended probe plan\n%s\nwant its outer loop on idx_jobs_attended_claim", plan)
-	}
-	var indexed int
-	if err := repo.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM jobs INDEXED BY idx_jobs_attended_claim
-		WHERE agent_id = 'general_assistant' AND status = 'pending' AND unattended = 0`).Scan(&indexed); err != nil {
-		t.Fatal(err)
-	}
-	if indexed != 0 {
-		t.Fatalf("attended probe index entries = %d, want none for it to visit", indexed)
 	}
 
 	samples := make([]time.Duration, 0, 50)

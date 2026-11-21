@@ -1419,8 +1419,9 @@ func claimProbeQuery(attendedOnly bool, routingFilter string) string {
 	`
 }
 
-// claimProbeTx runs one probe and returns its candidate if the worker can
-// serve it, or a zero Job.
+// claimProbeTx runs one probe, which reads at most one row, and returns it if
+// the worker's typed matcher accepts it. A refused row, like no row, leaves
+// the probe with nothing claimable, and it returns a zero Job.
 func claimProbeTx(ctx context.Context, tx *sql.Tx, query string, args []any, compatible func(RoutingRequirements) bool) (Job, error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {

@@ -951,7 +951,11 @@ separate lifecycle, visibility and evaluation gates.
   design's partial predicate: with the design's three-column key the planner,
   which keeps no statistics, never chose it. With 10,000 unattended jobs
   queued the attended probe visits no row, and an owner's turn sent behind
-  them is the next claim once the running job ends.
+  them is the next claim once the running job ends. One case waits longer
+  than first-in-first-out: an owner's turn sent into an automation's
+  conversation behind that automation's queued run waits for the run, which
+  is claimed only once no attended job elsewhere is claimable (an open
+  question in the design, to settle before PRO-001d).
 - **Outcome:** An owner's turn is never queued behind work nobody asked for.
 - **Scope:** Claim attended pending jobs before unattended ones through an
   index-bounded first probe and a write-once `jobs.unattended` flag, with one

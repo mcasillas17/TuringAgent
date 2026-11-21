@@ -2,7 +2,6 @@ package db_test
 
 import (
 	"context"
-	"slices"
 	"strings"
 	"testing"
 
@@ -38,8 +37,7 @@ func seedQueuedRun(t *testing.T, ctx context.Context, database *db.DB, sessionID
 // TUR-027: the migration marks every job an automation already queued,
 // whatever its state, so for history too the flag is what the one
 // definition gives; an owner's turn, in an automation's conversation or not,
-// stays attended, and the attended probe's index holds the attended pending
-// jobs alone.
+// stays attended.
 func TestAttendedClaimMigrationBackfillsTheUnattendedFlag(t *testing.T) {
 	ctx := context.Background()
 	database := db.DatabaseBeforeMigration(t, ctx, "0032_attended_claim.sql")
@@ -73,70 +71,5 @@ func TestAttendedClaimMigrationBackfillsTheUnattendedFlag(t *testing.T) {
 		if flag != unattended || flag != want {
 			t.Fatalf("run %s: jobs.unattended = %v, RunUnattended = %v; want both %v", runID, flag, unattended, want)
 		}
-	}
-	rows, err := database.QueryContext(ctx, `
-		SELECT run_id FROM jobs INDEXED BY idx_jobs_attended_claim
-		WHERE status = 'pending' AND unattended = 0 ORDER BY agent_id, created_at_ns, id`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = rows.Close() }()
-	var indexed []string
-	for rows.Next() {
-		var runID string
-		if err := rows.Scan(&runID); err != nil {
-			t.Fatal(err)
-		}
-		indexed = append(indexed, runID)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"run_owner", "run_reply"}; !slices.Equal(indexed, want) {
-		t.Fatalf("attended probe index = %v, want the attended pending jobs %v", indexed, want)
-	}
-}
-
-// The attended probe's index is partial on attended pending jobs, so a
-// backlog of unattended work never grows what it walks, and it carries the
-// claim index's own key, so the planner weighs the two alike and takes the
-// smaller.
-func TestAttendedClaimMigrationAddsThePartialIndex(t *testing.T) {
-	ctx := context.Background()
-	database, err := db.Open(":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	if err := db.ApplyMigrations(ctx, database); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := database.QueryContext(ctx, `SELECT name FROM pragma_index_info('idx_jobs_attended_claim') ORDER BY seqno`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = rows.Close() }()
-	var columns []string
-	for rows.Next() {
-		var column string
-		if err := rows.Scan(&column); err != nil {
-			t.Fatal(err)
-		}
-		columns = append(columns, column)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"agent_id", "status", "created_at_ns", "id"}; !slices.Equal(columns, want) {
-		t.Fatalf("idx_jobs_attended_claim columns = %v, want %v", columns, want)
-	}
-	var definition string
-	if err := database.QueryRowContext(ctx,
-		`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_jobs_attended_claim' AND tbl_name = 'jobs'`).
-		Scan(&definition); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasSuffix(definition, "WHERE status = 'pending' AND unattended = 0") {
-		t.Fatalf("idx_jobs_attended_claim = %q, want a partial index on attended pending jobs", definition)
 	}
 }

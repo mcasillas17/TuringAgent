@@ -3596,7 +3596,17 @@ slice that spends a model call.
 
 ### Open questions
 
-None.
+- **An owner's turn behind an unattended run in its own conversation**
+  (raised by TUR-027's implementation review). Turn order binds inside a
+  conversation, so the owner's turn waits for that run. Being unattended,
+  the run is claimed only once no attended job elsewhere is claimable, even
+  one queued after it. Under first-in-first-out the run, and so the turn,
+  waited only for older work. The only bound is the queue-wait terminal
+  (`TURING_QUEUE_MAX_WAIT_MS`, 12 hours by default). For the blocking run to
+  take the turn's priority, the claim would need a third probe or a second
+  flag beside `jobs.unattended`, and the two-probe bound above rules both
+  out for TUR-027. Settle this before PRO-001d, whose `auto` runs queue in
+  thread sessions the owner also writes in.
 
 ### Decision log
 
