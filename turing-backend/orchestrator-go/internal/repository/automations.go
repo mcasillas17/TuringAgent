@@ -464,7 +464,11 @@ func (r *Repository) ListAutomations(ctx context.Context) ([]Automation, error) 
 // its untitled-session check.
 //
 // It returns found=false when nothing is due, which is also how the caller
-// knows to stop looping.
+// knows to stop looping. It also claims nothing while the owner's quiet
+// switch is on or its drain is pending (TUR-028a), so next_due_at stays where
+// it was and a due automation fires once, at a tick after quiet ends. The
+// fence is read inside this transaction, so a claim racing the switch either
+// fires nothing or queues a run the drain then cancels.
 func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defaults AutomationRunDefaults) (AutomationFire, bool, error) {
 	at = at.UTC()
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -472,6 +476,13 @@ func (r *Repository) ClaimDueAutomation(ctx context.Context, at time.Time, defau
 		return AutomationFire{}, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	fenced, err := unattendedWorkFencedTx(ctx, tx)
+	if err != nil {
+		return AutomationFire{}, false, err
+	}
+	if fenced {
+		return AutomationFire{}, false, nil
+	}
 
 	var automationID, name, prompt, scheduleKind, dueAt string
 	var intervalSeconds, dailyMinute sql.NullInt64

@@ -108,6 +108,10 @@ const (
 	// its specialist was disabled, re-granted at another revision, or changed
 	// on disk before a worker took it.
 	CodeProfileGrantRevoked = "profile_grant_revoked"
+	// CodeOwnerQuiet is unattended work the owner's quiet switch stopped: a
+	// queued run its drain cancelled, or one cancelled instead of being sent
+	// back to the queue while quiet was on.
+	CodeOwnerQuiet = "owner_quiet"
 )
 
 // QueueWaitReason is the closed vocabulary persisted in
@@ -270,6 +274,14 @@ func ParentEndedCancellation() Cancellation {
 // profile, they did not cancel this task.
 func ProfileGrantRevokedCancellation() Cancellation {
 	return Cancellation{origin: OriginOrchestratorInternal, code: CodeProfileGrantRevoked, reason: ReasonAbandoned}
+}
+
+// OwnerQuietCancellation stops unattended work while the owner's quiet switch
+// is on: a queued run the drain cancels, or one that would otherwise go back
+// to the queue. The orchestrator stops it on the owner's behalf, so the reason
+// is abandoned: the owner turned quiet on, they did not cancel this run.
+func OwnerQuietCancellation() Cancellation {
+	return Cancellation{origin: OriginOrchestratorInternal, code: CodeOwnerQuiet, reason: ReasonAbandoned}
 }
 
 // EgressConsentDeclinedCancellation ends a delegated task, never run, whose

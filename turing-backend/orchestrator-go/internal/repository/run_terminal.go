@@ -81,6 +81,13 @@ type CancelRunInput struct {
 	// queueWaitReason carries the same assertion as FailRunInput's, for the
 	// cancel half of the configurable queue policy.
 	queueWaitReason string
+	// releaseExecution also writes the execution release a failure writes.
+	// Only releaseJobToPendingTx's quiet branch sets it: it cancels a run in
+	// place of a requeue, and the requeue it replaces would have cleared the
+	// run's execution containment, so its slot is freed exactly as that
+	// requeue would have freed it. Unexported, because every other
+	// cancellation keeps containment until the worker acknowledges its exit.
+	releaseExecution bool
 }
 
 // terminalExpectation resolves how a terminal command names the version it
@@ -355,6 +362,17 @@ func cancelRunTx(ctx context.Context, tx *sql.Tx, input CancelRunInput) (RunTran
 	content := terminalContentIdentity(row, input.AssistantMessageID, "", false)
 	storedReason := input.Cancellation.Code()
 	payload := map[string]any{"runId": input.RunID, "reason": string(input.Cancellation.Reason())}
+	extraSet := `cancellation_reason = ?`
+	extraArgs := []any{storedReason}
+	if input.releaseExecution {
+		extraSet += `,
+			execution_active = 0,
+			execution_exit_acknowledged_at = COALESCE(execution_exit_acknowledged_at, ?),
+			execution_state = 'exited',
+			execution_lease_expires_at = NULL,
+			execution_lease_expires_at_ns = NULL`
+		extraArgs = append(extraArgs, transitionTime)
+	}
 	result, err := applyRunTransitionTx(ctx, tx, runTransition{
 		runID:            input.RunID,
 		expectedVersion:  expected,
@@ -365,8 +383,8 @@ func cancelRunTx(ctx context.Context, tx *sql.Tx, input CancelRunInput) (RunTran
 		terminal:         &content,
 		queueWaitReason:  input.queueWaitReason,
 		rejection:        ErrRunNotCancellable,
-		extraSet:         `cancellation_reason = ?`,
-		extraArgs:        []any{storedReason},
+		extraSet:         extraSet,
+		extraArgs:        extraArgs,
 		eventType:        "agent.run.cancelled",
 		eventPayload:     payload,
 	}, func(ctx context.Context, state RunState, at string) ([]Event, error) {

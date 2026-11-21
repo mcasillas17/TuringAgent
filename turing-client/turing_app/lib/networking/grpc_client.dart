@@ -1597,6 +1597,28 @@ class TuringGrpcApi
   }
 
   @override
+  Future<UnattendedQuiet> getUnattendedQuiet() async {
+    final response = await _automations.getUnattendedQuiet(
+      automationpb.GetUnattendedQuietRequest(),
+    );
+    return GrpcMappers.unattendedQuietToModel(response);
+  }
+
+  @override
+  Future<UnattendedQuietWrite> setUnattendedQuiet({
+    required bool quiet,
+    required int revision,
+  }) async {
+    final response = await _automations.setUnattendedQuiet(
+      automationpb.SetUnattendedQuietRequest(
+        quiet: quiet,
+        revision: Int64(revision),
+      ),
+    );
+    return GrpcMappers.unattendedQuietWriteToModel(response);
+  }
+
+  @override
   Future<TelemetrySummary> getTelemetrySummary({
     required int windowDays,
   }) async {

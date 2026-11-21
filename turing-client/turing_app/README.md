@@ -182,8 +182,12 @@ authorization: Bearer <api-key>
   separate from protocol conformance: the transport is MCP 2025-11-25 over
   Streamable HTTP, and resources, prompts, sampling, elicitation, OAuth and
   stdio are not implemented.
-- **Automations** manages interval/daily runs and their explicit tool allowlists;
-  it does not provide mobile/channel delivery.
+- **Automations** manages interval/daily runs and their explicit tool allowlists,
+  and holds the owner's quiet switch (`Get`/`SetUnattendedQuiet`): one switch
+  that stops all unattended work, written against the revision it read, so a
+  stale write is refused and the switch shows the current setting instead; a
+  setting the backend cannot read shows as unavailable, counting as on, with
+  a choice that repairs it. It does not provide mobile/channel delivery.
 - **Agents** manages remote model endpoint records. The conversation's
   `SessionAgentBar` selects, reads and clears its route through
   `ExternalAgentService`; model execution stays in the runtime. Vendor labels

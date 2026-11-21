@@ -3,12 +3,23 @@ import 'package:turing_flutter_app/models/automation.dart';
 /// Fills in the automation surface for fakes belonging to tests that are not
 /// about automations.
 ///
-/// Reads answer empty; every mutation throws. A test that unexpectedly reaches
-/// one of these should fail loudly rather than quietly succeed against a stub
-/// that records nothing — silent success is how a broken call site survives a
-/// green suite. This mirrors [NoSkillsApi] in the neighbouring file.
+/// Reads answer empty — the quiet switch reads as off at revision 0, which is
+/// what the backend says of a setting never written; every mutation throws. A
+/// test that unexpectedly reaches one of these should fail loudly rather than
+/// quietly succeed against a stub that records nothing — silent success is how
+/// a broken call site survives a green suite. This mirrors [NoSkillsApi] in
+/// the neighbouring file.
 mixin NoAutomationsApi {
   Future<List<Automation>> listAutomations() async => const [];
+
+  Future<UnattendedQuiet> getUnattendedQuiet() async =>
+      const UnattendedQuiet(quiet: false, revision: 0);
+
+  Future<UnattendedQuietWrite> setUnattendedQuiet({
+    required bool quiet,
+    required int revision,
+  }) async =>
+      throw UnimplementedError('this test does not exercise automations');
 
   Future<Automation> createAutomation({
     required String name,

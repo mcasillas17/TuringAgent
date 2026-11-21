@@ -970,7 +970,41 @@ separate lifecycle, visibility and evaluation gates.
 
 #### TUR-028 - Owner quiet switch
 
-- **Status:** Proposed; not started.
+- **Status:** Partly shipped: TUR-028a (switch and scheduler). TUR-028b (the
+  watch gates: polls, assessments and automatic fires) ships with PRO-001,
+  because no watch exists yet. The switch is the `unattended_quiet` setting,
+  read and set only through the public `AutomationService.GetUnattendedQuiet`
+  and `SetUnattendedQuiet` (no internal identity can reach them), and
+  compare-and-set on a revision (migration 0033 adds `settings.revision`): a
+  write naming a stale revision is refused, writes nothing and returns the
+  current setting, so a write from a stale view never turns quiet off; the
+  value already held writes nothing; a change writes the next revision and a
+  content-free `unattended.quiet.changed` audit row in one transaction, and a
+  failed audit write refuses it. A missing row is off; a value that cannot be
+  read counts as on and shows as unavailable until a write repairs it.
+  Turning it on also writes `unattended_quiet_drain`; while either is up the
+  claim skips its second probe, the only one that can claim unattended work,
+  and no automation fires, so its next due time stays where it was. Owner
+  turns, delegated tasks and continuations run as ever. The drain runs on the
+  maintenance goroutine, kicked when quiet turns on and resumed by the next
+  tick after a crash, with the reaper on or off: each transaction cancels at
+  most 100 queued unattended jobs as `owner_quiet` (abandoned), and the batch
+  that finds none clears the drain; with 10,000 queued, each batch stays
+  within its 250 ms budget and attended work is claimed between batches. A
+  batch that cancelled something dispatches pending work, as does turning
+  quiet off, since an owner's turn may have waited behind a cancelled run in
+  its own conversation. Every
+  path back to the queue now goes through `releaseJobToPendingTx`, which a
+  source guard pins as the only statement that sets a job pending (the
+  test-only `RequeueClaimedJob`, and what only it reached, are gone); while
+  quiet is on or draining it cancels an unattended run `owner_quiet` instead,
+  with the execution release the requeue would have written, so its slot is
+  free at once. A run already going finishes. Turning quiet off starts
+  nothing by itself: each automation fires at most once, at its next tick. An
+  `owner_quiet` cancellation raises no Needs-you row, and the audit read API
+  shows each change as `on` or `off`. The Automations page
+  has the switch, showing its state and an unreadable setting, and a stale
+  write shows the current one.
 - **Outcome:** The owner stops all new unattended work with one switch,
   without a restart.
 - **Scope:** One owner-only, audited, persisted setting that gates scheduled

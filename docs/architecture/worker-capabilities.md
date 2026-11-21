@@ -109,7 +109,10 @@ compatible row, so an incompatible backlog is not decoded and rescanned for ever
 worker. The claim takes attended work first (TUR-027): its first probe reads attended
 pending jobs alone (`jobs.unattended = 0`, on the partial `idx_jobs_attended_claim`),
 and only when that finds nothing claimable does the second, the claim as it was,
-consider every pending job, attended or not, on `idx_jobs_capability_claim`. Both
+consider every pending job, attended or not, on `idx_jobs_capability_claim`. While
+the owner's quiet switch is on or its drain is pending (TUR-028a), the claim skips that
+second probe, the only one that can claim unattended work, after one read of the
+switch's two keys. Both
 keep creation order and every predicate, a conversation's turn order included, so an
 owner's turn behind an unattended run in its own conversation waits for that run, and
 the run waits until no attended job elsewhere is claimable. Dispatch

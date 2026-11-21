@@ -12,6 +12,7 @@
 
 import 'dart:core' as $core;
 
+import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
 import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
     as $1;
@@ -937,6 +938,297 @@ class ListAutomationsResponse extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(1)
   $pb.PbList<Automation> get automations => $_getList(0);
+}
+
+/// The owner's quiet switch for unattended work (TUR-028a). While it is on, no
+/// automation fires, no unattended run starts, queued unattended runs are
+/// cancelled, and one that would go back to the queue is cancelled instead. A
+/// run already going finishes. Turning it off starts nothing queued before
+/// it: each automation that came due fires once, at the scheduler's next tick.
+class UnattendedQuiet extends $pb.GeneratedMessage {
+  factory UnattendedQuiet({
+    $core.bool? quiet,
+    $fixnum.Int64? revision,
+    $core.bool? unavailable,
+  }) {
+    final result = UnattendedQuiet._();
+    if (quiet != null) result.quiet = quiet;
+    if (revision != null) result.revision = revision;
+    if (unavailable != null) result.unavailable = unavailable;
+    return result;
+  }
+
+  UnattendedQuiet._();
+
+  factory UnattendedQuiet.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      UnattendedQuiet()..mergeFromBuffer(data, registry);
+  factory UnattendedQuiet.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      UnattendedQuiet()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'UnattendedQuiet',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: UnattendedQuiet.$_createMessage)
+    ..aOB(1, _omitFieldNames ? '' : 'quiet')
+    ..aInt64(2, _omitFieldNames ? '' : 'revision')
+    ..aOB(3, _omitFieldNames ? '' : 'unavailable')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  UnattendedQuiet clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  UnattendedQuiet copyWith(void Function(UnattendedQuiet) updates) =>
+      super.copyWith((message) => updates(message as UnattendedQuiet))
+          as UnattendedQuiet;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated('Use UnattendedQuiet() / UnattendedQuiet.new instead')
+  static UnattendedQuiet create() => UnattendedQuiet._();
+  static $pb.GeneratedMessage $_createMessage() => UnattendedQuiet._();
+  @$core.override
+  UnattendedQuiet createEmptyInstance() => UnattendedQuiet._();
+  @$core.pragma('dart2js:noInline')
+  static UnattendedQuiet getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<UnattendedQuiet>(
+          UnattendedQuiet.$_createMessage);
+  static UnattendedQuiet? _defaultInstance;
+
+  /// True while no unattended work starts. A stored value the server cannot
+  /// read counts as on, so unavailable is then true as well.
+  @$pb.TagNumber(1)
+  $core.bool get quiet => $_getBF(0);
+  @$pb.TagNumber(1)
+  set quiet($core.bool value) => $_setBool(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasQuiet() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearQuiet() => $_clearField(1);
+
+  /// The revision a SetUnattendedQuiet must name. Every change advances it.
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get revision => $_getI64(1);
+  @$pb.TagNumber(2)
+  set revision($fixnum.Int64 value) => $_setInt64(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRevision() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRevision() => $_clearField(2);
+
+  /// The stored value cannot be read. Quiet counts as on until a write, naming
+  /// this revision, repairs it.
+  @$pb.TagNumber(3)
+  $core.bool get unavailable => $_getBF(2);
+  @$pb.TagNumber(3)
+  set unavailable($core.bool value) => $_setBool(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasUnavailable() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearUnavailable() => $_clearField(3);
+}
+
+class GetUnattendedQuietRequest extends $pb.GeneratedMessage {
+  factory GetUnattendedQuietRequest() => GetUnattendedQuietRequest._();
+
+  GetUnattendedQuietRequest._();
+
+  factory GetUnattendedQuietRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      GetUnattendedQuietRequest()..mergeFromBuffer(data, registry);
+  factory GetUnattendedQuietRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      GetUnattendedQuietRequest()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'GetUnattendedQuietRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: GetUnattendedQuietRequest.$_createMessage)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetUnattendedQuietRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetUnattendedQuietRequest copyWith(
+          void Function(GetUnattendedQuietRequest) updates) =>
+      super.copyWith((message) => updates(message as GetUnattendedQuietRequest))
+          as GetUnattendedQuietRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use GetUnattendedQuietRequest() / GetUnattendedQuietRequest.new instead')
+  static GetUnattendedQuietRequest create() => GetUnattendedQuietRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      GetUnattendedQuietRequest._();
+  @$core.override
+  GetUnattendedQuietRequest createEmptyInstance() =>
+      GetUnattendedQuietRequest._();
+  @$core.pragma('dart2js:noInline')
+  static GetUnattendedQuietRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<GetUnattendedQuietRequest>(
+          GetUnattendedQuietRequest.$_createMessage);
+  static GetUnattendedQuietRequest? _defaultInstance;
+}
+
+class SetUnattendedQuietRequest extends $pb.GeneratedMessage {
+  factory SetUnattendedQuietRequest({
+    $core.bool? quiet,
+    $fixnum.Int64? revision,
+  }) {
+    final result = SetUnattendedQuietRequest._();
+    if (quiet != null) result.quiet = quiet;
+    if (revision != null) result.revision = revision;
+    return result;
+  }
+
+  SetUnattendedQuietRequest._();
+
+  factory SetUnattendedQuietRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      SetUnattendedQuietRequest()..mergeFromBuffer(data, registry);
+  factory SetUnattendedQuietRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      SetUnattendedQuietRequest()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SetUnattendedQuietRequest',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: SetUnattendedQuietRequest.$_createMessage)
+    ..aOB(1, _omitFieldNames ? '' : 'quiet')
+    ..aInt64(2, _omitFieldNames ? '' : 'revision')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SetUnattendedQuietRequest clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SetUnattendedQuietRequest copyWith(
+          void Function(SetUnattendedQuietRequest) updates) =>
+      super.copyWith((message) => updates(message as SetUnattendedQuietRequest))
+          as SetUnattendedQuietRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SetUnattendedQuietRequest() / SetUnattendedQuietRequest.new instead')
+  static SetUnattendedQuietRequest create() => SetUnattendedQuietRequest._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      SetUnattendedQuietRequest._();
+  @$core.override
+  SetUnattendedQuietRequest createEmptyInstance() =>
+      SetUnattendedQuietRequest._();
+  @$core.pragma('dart2js:noInline')
+  static SetUnattendedQuietRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SetUnattendedQuietRequest>(
+          SetUnattendedQuietRequest.$_createMessage);
+  static SetUnattendedQuietRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.bool get quiet => $_getBF(0);
+  @$pb.TagNumber(1)
+  set quiet($core.bool value) => $_setBool(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasQuiet() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearQuiet() => $_clearField(1);
+
+  /// The revision the caller read. A write from an older view is refused, so a
+  /// stale screen can never turn quiet off after it was turned on.
+  @$pb.TagNumber(2)
+  $fixnum.Int64 get revision => $_getI64(1);
+  @$pb.TagNumber(2)
+  set revision($fixnum.Int64 value) => $_setInt64(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRevision() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRevision() => $_clearField(2);
+}
+
+class SetUnattendedQuietResponse extends $pb.GeneratedMessage {
+  factory SetUnattendedQuietResponse({
+    UnattendedQuiet? setting,
+    $core.bool? stale,
+  }) {
+    final result = SetUnattendedQuietResponse._();
+    if (setting != null) result.setting = setting;
+    if (stale != null) result.stale = stale;
+    return result;
+  }
+
+  SetUnattendedQuietResponse._();
+
+  factory SetUnattendedQuietResponse.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      SetUnattendedQuietResponse()..mergeFromBuffer(data, registry);
+  factory SetUnattendedQuietResponse.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      SetUnattendedQuietResponse()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'SetUnattendedQuietResponse',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'turing.v1'),
+      createEmptyInstance: SetUnattendedQuietResponse.$_createMessage)
+    ..aOM<UnattendedQuiet>(1, _omitFieldNames ? '' : 'setting',
+        subBuilder: UnattendedQuiet.$_createMessage)
+    ..aOB(2, _omitFieldNames ? '' : 'stale')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SetUnattendedQuietResponse clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SetUnattendedQuietResponse copyWith(
+          void Function(SetUnattendedQuietResponse) updates) =>
+      super.copyWith(
+              (message) => updates(message as SetUnattendedQuietResponse))
+          as SetUnattendedQuietResponse;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  @$core.Deprecated(
+      'Use SetUnattendedQuietResponse() / SetUnattendedQuietResponse.new instead')
+  static SetUnattendedQuietResponse create() => SetUnattendedQuietResponse._();
+  static $pb.GeneratedMessage $_createMessage() =>
+      SetUnattendedQuietResponse._();
+  @$core.override
+  SetUnattendedQuietResponse createEmptyInstance() =>
+      SetUnattendedQuietResponse._();
+  @$core.pragma('dart2js:noInline')
+  static SetUnattendedQuietResponse getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<SetUnattendedQuietResponse>(
+          SetUnattendedQuietResponse.$_createMessage);
+  static SetUnattendedQuietResponse? _defaultInstance;
+
+  /// The setting as it now stands: the one written, or, when stale is true,
+  /// the current one, unchanged.
+  @$pb.TagNumber(1)
+  UnattendedQuiet get setting => $_getN(0);
+  @$pb.TagNumber(1)
+  set setting(UnattendedQuiet value) => $_setField(1, value);
+  @$pb.TagNumber(1)
+  $core.bool hasSetting() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearSetting() => $_clearField(1);
+  @$pb.TagNumber(1)
+  UnattendedQuiet ensureSetting() => $_ensure(0);
+
+  /// The named revision was not the current one, so nothing was written.
+  @$pb.TagNumber(2)
+  $core.bool get stale => $_getBF(1);
+  @$pb.TagNumber(2)
+  set stale($core.bool value) => $_setBool(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasStale() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearStale() => $_clearField(2);
 }
 
 const $core.bool _omitFieldNames =
