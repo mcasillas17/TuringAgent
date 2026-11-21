@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:material_ui/material_ui.dart';
 
 import '../../constants/app_colors.dart';
+import '../../features/attention/attention_queue.dart';
+import '../../features/attention/needs_you_page.dart';
 import '../../features/chat/chat_screen.dart';
 import '../../features/search/search_screen.dart';
 import '../../features/settings/settings_screen.dart';
@@ -125,12 +127,31 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   int _sessionStateRevision = 0;
   int _sessionRefreshRequest = 0;
 
+  /// Held here rather than by the Needs-you page because the badge beside its
+  /// destination is the queue's first page, read whether or not the page is
+  /// open.
+  late final AttentionQueue _attention = AttentionQueue(api: widget.apiClient);
+  late final AppLifecycleListener _lifecycle;
+
+  /// The badge the rail and the compact menu button show. The shell rebuilds
+  /// only when it changes; the Needs-you page follows the queue itself.
+  String? _attentionBadge;
+
   @override
   void initState() {
     super.initState();
+    _attention.addListener(_onAttentionChanged);
+    _lifecycle = AppLifecycleListener(onResume: _attention.requestRefresh);
     _openSessionUpdateSubscription();
     unawaited(_refreshSessions());
     unawaited(_loadModelProvider());
+    _attention.requestRefresh();
+  }
+
+  void _onAttentionChanged() {
+    final badge = _attention.badge;
+    if (!mounted || badge == _attentionBadge) return;
+    setState(() => _attentionBadge = badge);
   }
 
   void _openSessionUpdateSubscription() {
@@ -150,6 +171,9 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       _sessionUpdateStabilityTimer = Timer(const Duration(seconds: 30), () {
         _sessionUpdateStabilityTimer = null;
         if (!mounted || !identical(_sessionUpdateSource, openedSource)) return;
+        // Back after more than one attempt: the hints of the attempts that
+        // did not read the queue were lost too.
+        if (_sessionUpdateReconnectAttempts > 1) _attention.requestRefresh();
         _sessionUpdateReconnectAttempts = 0;
       });
     } catch (_) {
@@ -180,11 +204,20 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       if (!mounted) return;
       _openSessionUpdateSubscription();
       unawaited(_refreshSessions());
+      // Hints sent while the stream was down are lost, not replayed, so the
+      // first attempt after a drop reads the queue. Later attempts do not: a
+      // stream that keeps failing must not turn the backoff into polling.
+      // The stability timer reads once more if it comes back after them.
+      if (_sessionUpdateReconnectAttempts == 1) _attention.requestRefresh();
     });
   }
 
   @override
   void dispose() {
+    _lifecycle.dispose();
+    _attention
+      ..removeListener(_onAttentionChanged)
+      ..dispose();
     _sessionUpdateReconnectTimer?.cancel();
     _sessionUpdateStabilityTimer?.cancel();
     unawaited(_sessionUpdateSubscription?.cancel());
@@ -368,6 +401,10 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
   }
 
   void _applyGlobalSessionUpdated(TuringEvent event) {
+    if (event.type == 'attention.changed') {
+      _attention.requestRefresh();
+      return;
+    }
     if (event.type == 'session.deleted') {
       _applySessionDeleted(event.sessionId);
       return;
@@ -707,6 +744,32 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
         ),
       );
       if (confirmed != true) return;
+      await _withdrawConversation(session);
+    } finally {
+      _deleting.remove(session.sessionId);
+    }
+  }
+
+  /// Retries a withdrawal the owner already confirmed, from the Needs-you
+  /// queue. The receipt names no title, so it stands in as the placeholder
+  /// [_refreshSessions] lists for a pending receipt.
+  Future<void> _retryDeletion(String sessionId) async {
+    if (!_deleting.add(sessionId)) return;
+    try {
+      await _withdrawConversation(
+        Session(
+          sessionId: sessionId,
+          title: 'Deletion pending',
+          updatedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        ),
+      );
+    } finally {
+      _deleting.remove(sessionId);
+    }
+  }
+
+  Future<void> _withdrawConversation(Session session) async {
+    try {
       final receipt = await widget.apiClient.deleteSession(
         sessionId: session.sessionId,
       );
@@ -728,8 +791,6 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
             ? 'That chat has a run in progress. Wait for it to finish, then try again.'
             : 'Could not delete this chat: $error',
       );
-    } finally {
-      _deleting.remove(session.sessionId);
     }
   }
 
@@ -948,6 +1009,7 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
           loadingMore: _sessionsLoadingMore,
           activeSessionId: _activeSessionId,
           destination: _destination,
+          attentionBadge: _attentionBadge,
           creating: _creating,
           onNewConversation: _newConversation,
           onSelect: _selectSession,
@@ -998,6 +1060,23 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
       elevation: 0,
       scrolledUnderElevation: 0,
       shape: Border(bottom: BorderSide(color: palette.border)),
+      // The rail is in the drawer here, so its badge would be out of sight.
+      leading: switch (_attentionBadge) {
+        final badge? => IconButton(
+          icon: Badge(
+            key: const ValueKey('needs-you-menu-badge'),
+            label: Semantics(
+              label: _attentionBadgeLabel(badge),
+              child: ExcludeSemantics(child: Text(badge)),
+            ),
+            child: const Icon(Icons.menu),
+          ),
+          tooltip: MaterialLocalizations.of(context).openAppDrawerTooltip,
+          color: palette.text,
+          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+        ),
+        null => null,
+      },
       title: Text(
         _compactTitle,
         maxLines: 1,
@@ -1033,6 +1112,15 @@ class _ResponsiveShellState extends State<ResponsiveShell> {
     switch (_destination) {
       case ShellDestination.chats:
         return _conversation(palette);
+      case ShellDestination.needsYou:
+        return NeedsYouPage(
+          queue: _attention,
+          apiClient: widget.apiClient,
+          onOpenSession: _selectSession,
+          onOpenAutomations: () =>
+              _selectDestination(ShellDestination.automations),
+          onRetryDeletion: _retryDeletion,
+        );
       case ShellDestination.mcps:
         return McpsPage(apiClient: widget.apiClient);
       case ShellDestination.agents:
@@ -1103,6 +1191,7 @@ class _Sidebar extends StatelessWidget {
     required this.loadingMore,
     required this.activeSessionId,
     required this.destination,
+    required this.attentionBadge,
     required this.creating,
     required this.onNewConversation,
     required this.onSelect,
@@ -1125,6 +1214,9 @@ class _Sidebar extends StatelessWidget {
   final bool loadingMore;
   final String? activeSessionId;
   final ShellDestination destination;
+
+  /// The Needs-you queue's badge, or null when nothing needs the owner.
+  final String? attentionBadge;
   final bool creating;
   final VoidCallback onNewConversation;
   final ValueChanged<String> onSelect;
@@ -1146,7 +1238,7 @@ class _Sidebar extends StatelessWidget {
   /// Raised with each destination added: every nav row is about 37 logical
   /// pixels of FIXED height, and the thing that overflows first when there is
   /// not enough room is the footer, where Settings lives.
-  static const double _pinnedNavMinHeight = 500;
+  static const double _pinnedNavMinHeight = 540;
 
   @override
   Widget build(BuildContext context) {
@@ -1169,12 +1261,18 @@ class _Sidebar extends StatelessWidget {
   Widget _content({required bool pinNav, required bool showingChats}) {
     final navItems = [
       for (final item in ShellDestination.navigation)
-        _NavItem(
-          destination: item,
-          palette: palette,
-          selected: destination == item,
-          onTap: () => onSelectDestination(item),
-        ),
+        // An empty queue takes no space; it stays while it is open, so the
+        // page in view never loses its place in the rail.
+        if (item != ShellDestination.needsYou ||
+            attentionBadge != null ||
+            destination == item)
+          _NavItem(
+            destination: item,
+            palette: palette,
+            selected: destination == item,
+            badge: item == ShellDestination.needsYou ? attentionBadge : null,
+            onTap: () => onSelectDestination(item),
+          ),
     ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1359,12 +1457,14 @@ class _NavItem extends StatelessWidget {
     required this.palette,
     required this.selected,
     required this.onTap,
+    this.badge,
   });
 
   final ShellDestination destination;
   final AppPalette palette;
   final bool selected;
   final VoidCallback onTap;
+  final String? badge;
 
   @override
   Widget build(BuildContext context) {
@@ -1398,6 +1498,31 @@ class _NavItem extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (badge case final badge?)
+                  Container(
+                    key: const ValueKey('needs-you-badge'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 1,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.brand,
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: Semantics(
+                      label: _attentionBadgeLabel(badge),
+                      child: ExcludeSemantics(
+                        child: Text(
+                          badge,
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -1505,6 +1630,10 @@ class _SessionTileState extends State<_SessionTile> {
     );
   }
 }
+
+/// What a screen reader says for the Needs-you badge.
+String _attentionBadgeLabel(String badge) =>
+    badge == '!' ? 'Could not check what needs you' : '$badge waiting';
 
 String? _validateSessionTitle(String value) {
   final normalized = value.trim();

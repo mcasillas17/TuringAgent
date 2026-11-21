@@ -4,6 +4,7 @@ import '../models/agent_descriptor.dart';
 import '../models/agent_profile.dart';
 import '../models/delegation.dart';
 import '../models/approval.dart';
+import '../models/attention.dart';
 import '../models/external_agent.dart';
 import '../models/integration.dart';
 import '../models/automation.dart';
@@ -283,6 +284,42 @@ abstract class TuringApi implements RemoteEgressApi {
     throw const TuringApiException(
       code: 'team_unsupported',
       message: 'This client cannot read delegations',
+    );
+  }
+
+  /// One delegated task, as its card shows it. NotFound once its conversation
+  /// is being deleted.
+  Future<Delegation> getDelegation({required String delegationId}) {
+    throw const TuringApiException(
+      code: 'team_unsupported',
+      message: 'This client cannot read a delegation',
+    );
+  }
+
+  /// One page of the Needs-you queue: everything waiting on the owner, across
+  /// conversations, in the queue's total order. [cursor] is the previous
+  /// page's [AttentionPage.nextCursor], unchanged.
+  ///
+  /// Defaults to refusing: a client that cannot ask has not learned that
+  /// nothing needs the owner.
+  Future<AttentionPage> listAttention({String? cursor, int limit = 100}) {
+    throw const TuringApiException(
+      code: 'attention_unsupported',
+      message: 'This client cannot read what needs you',
+    );
+  }
+
+  /// Hides one automation's failing occurrence until a newer one.
+  /// [occurrenceKey] is the listed row's, unchanged; the server refuses a key
+  /// that is no longer the automation's latest, so a stale screen cannot hide
+  /// a newer failure.
+  Future<void> dismissAttention({
+    required String automationId,
+    required String occurrenceKey,
+  }) {
+    throw const TuringApiException(
+      code: 'attention_unsupported',
+      message: 'This client cannot dismiss what needs you',
     );
   }
 

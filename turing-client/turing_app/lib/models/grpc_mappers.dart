@@ -7,6 +7,7 @@ import 'package:protobuf/well_known_types/google/protobuf/timestamp.pb.dart'
 
 import '../generated/turing/v1/agents.pb.dart' as agentpb;
 import '../generated/turing/v1/approvals.pb.dart' as approvalpb;
+import '../generated/turing/v1/attention.pb.dart' as attentionpb;
 import '../generated/turing/v1/automations.pb.dart' as automationpb;
 import '../generated/turing/v1/chat.pb.dart' as chatpb;
 import '../generated/turing/v1/common.pb.dart' as commonpb;
@@ -22,6 +23,7 @@ import 'model_provider.dart';
 import 'agent_descriptor.dart' as model_agent;
 import 'agent_profile.dart' as model_agent_profile;
 import 'approval.dart' as model_approval;
+import 'attention.dart' as model_attention;
 import 'delegation.dart' as model_delegation;
 import 'external_agent.dart' as model_external_agent;
 import 'integration.dart' as model_integration;
@@ -608,6 +610,105 @@ class GrpcMappers {
     );
   }
 
+  static model_attention.AttentionPage attentionPageToModel(
+    attentionpb.ListAttentionResponse response,
+  ) {
+    final cursor = response.page.nextCursor;
+    return model_attention.AttentionPage(
+      rows: List.unmodifiable(response.rows.map(attentionRowToModel)),
+      nextCursor: cursor.isEmpty ? null : cursor,
+    );
+  }
+
+  /// A row whose stage or kind this build does not know, or that lacks an id
+  /// its stage's action needs, maps to `unavailable`: still listed, so the
+  /// queue never reads emptier than it is, but offering no action that would
+  /// send an empty or mismatched id.
+  static model_attention.AttentionRow attentionRowToModel(
+    attentionpb.AttentionRow row,
+  ) {
+    final kind = switch (decodeClosedEnum(
+      message: row,
+      fieldNumber: 2,
+      readValue: () => row.kind,
+      unknownValue:
+          attentionpb.AttentionSourceKind.ATTENTION_SOURCE_KIND_UNSPECIFIED,
+    )) {
+      attentionpb.AttentionSourceKind.ATTENTION_SOURCE_KIND_APPROVAL =>
+        model_attention.AttentionSourceKind.approval,
+      attentionpb.AttentionSourceKind.ATTENTION_SOURCE_KIND_DELEGATION =>
+        model_attention.AttentionSourceKind.delegation,
+      attentionpb.AttentionSourceKind.ATTENTION_SOURCE_KIND_AUTOMATION =>
+        model_attention.AttentionSourceKind.automation,
+      attentionpb.AttentionSourceKind.ATTENTION_SOURCE_KIND_DELETION =>
+        model_attention.AttentionSourceKind.deletion,
+      attentionpb.AttentionSourceKind.ATTENTION_SOURCE_KIND_WATCH =>
+        model_attention.AttentionSourceKind.watch,
+      attentionpb.AttentionSourceKind.ATTENTION_SOURCE_KIND_PROPOSAL =>
+        model_attention.AttentionSourceKind.proposal,
+      _ => model_attention.AttentionSourceKind.unknown,
+    };
+    final stage = switch (decodeClosedEnum(
+      message: row,
+      fieldNumber: 1,
+      readValue: () => row.stage,
+      unknownValue: attentionpb.AttentionStage.ATTENTION_STAGE_UNSPECIFIED,
+    )) {
+      attentionpb.AttentionStage.ATTENTION_STAGE_PERSON_APPROVAL =>
+        model_attention.AttentionStage.approval,
+      attentionpb.AttentionStage.ATTENTION_STAGE_PERSON_CONSENT =>
+        model_attention.AttentionStage.consent,
+      attentionpb.AttentionStage.ATTENTION_STAGE_PERSON_BLOCKED =>
+        model_attention.AttentionStage.blocked,
+      attentionpb.AttentionStage.ATTENTION_STAGE_PERSON_DELETION =>
+        model_attention.AttentionStage.deletion,
+      attentionpb.AttentionStage.ATTENTION_STAGE_PERSON_PROPOSAL =>
+        model_attention.AttentionStage.proposal,
+      _ => model_attention.AttentionStage.unavailable,
+    };
+    return model_attention.AttentionRow(
+      stage: _attentionStageHolds(stage, kind, row)
+          ? stage
+          : model_attention.AttentionStage.unavailable,
+      kind: kind,
+      since: row.hasSince() ? _validatedTimestamp(row.since) : null,
+      sessionId: row.sessionId,
+      sessionTitle: row.sessionTitle,
+      approvalId: row.approvalId,
+      runId: row.runId,
+      delegationId: row.delegationId,
+      automationId: row.automationId,
+      automationName: row.automationName,
+      occurrenceKey: row.occurrenceKey,
+      cause: row.cause,
+    );
+  }
+
+  static bool _attentionStageHolds(
+    model_attention.AttentionStage stage,
+    model_attention.AttentionSourceKind kind,
+    attentionpb.AttentionRow row,
+  ) => switch (stage) {
+    model_attention.AttentionStage.approval =>
+      kind == model_attention.AttentionSourceKind.approval &&
+          row.approvalId.isNotEmpty &&
+          row.runId.isNotEmpty,
+    model_attention.AttentionStage.consent =>
+      kind == model_attention.AttentionSourceKind.delegation &&
+          row.delegationId.isNotEmpty,
+    model_attention.AttentionStage.blocked =>
+      kind == model_attention.AttentionSourceKind.watch ||
+          kind == model_attention.AttentionSourceKind.automation &&
+              row.automationId.isNotEmpty &&
+              row.occurrenceKey.isNotEmpty,
+    model_attention.AttentionStage.deletion =>
+      kind == model_attention.AttentionSourceKind.deletion &&
+          row.sessionId.isNotEmpty,
+    model_attention.AttentionStage.proposal =>
+      kind == model_attention.AttentionSourceKind.proposal,
+    model_attention.AttentionStage.unavailable => true,
+  };
+
   static model_event.TuringEvent turingEventToTuringEvent(
     eventpb.TuringEvent event,
   ) {
@@ -941,6 +1042,8 @@ class GrpcMappers {
         return 'delegation.updated';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_DELEGATION_FINISHED:
         return 'delegation.finished';
+      case eventpb.TuringEventType.TURING_EVENT_TYPE_ATTENTION_CHANGED:
+        return 'attention.changed';
       case eventpb.TuringEventType.TURING_EVENT_TYPE_UNSPECIFIED:
       default:
         return 'system';

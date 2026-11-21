@@ -8,6 +8,7 @@ import '../generated/turing/v1/agents.pb.dart' as agentpb;
 import '../generated/turing/v1/agents.pbgrpc.dart' as agentgrpc;
 import '../generated/turing/v1/approvals.pb.dart' as approvalpb;
 import '../generated/turing/v1/approvals.pbgrpc.dart' as approvalgrpc;
+import '../generated/turing/v1/attention.pbgrpc.dart' as attentiongrpc;
 import '../generated/turing/v1/automations.pb.dart' as automationpb;
 import '../generated/turing/v1/automations.pbgrpc.dart' as automationgrpc;
 import '../generated/turing/v1/chat.pb.dart' as chatpb;
@@ -33,6 +34,7 @@ import '../models/agent_descriptor.dart';
 import '../models/agent_profile.dart';
 import '../models/delegation.dart';
 import '../models/approval.dart';
+import '../models/attention.dart';
 import '../models/automation.dart';
 import '../models/external_agent.dart';
 import '../models/grpc_mappers.dart';
@@ -123,6 +125,10 @@ class TuringGrpcApi
     );
     _skills = skillgrpc.SkillServiceClient(_channel, options: options);
     _team = teamgrpc.TeamServiceClient(_channel, options: options);
+    _attention = attentiongrpc.AttentionServiceClient(
+      _channel,
+      options: options,
+    );
     _externalAgents = agentgrpc.ExternalAgentServiceClient(
       _channel,
       options: options,
@@ -153,6 +159,7 @@ class TuringGrpcApi
   late final approvalgrpc.ApprovalServiceClient _approvals;
   late final skillgrpc.SkillServiceClient _skills;
   late final teamgrpc.TeamServiceClient _team;
+  late final attentiongrpc.AttentionServiceClient _attention;
   late final agentgrpc.ExternalAgentServiceClient _externalAgents;
   late final integrationgrpc.IntegrationServiceClient _integrations;
   late final automationgrpc.AutomationServiceClient _automations;
@@ -1169,7 +1176,7 @@ class TuringGrpcApi
     }
   }
 
-  /// The status names the memory and team pages both branch on; anything
+  /// The status names the memory, team and Needs-you pages branch on; anything
   /// else is reported as [fallback].
   static String _statusCode(int code, {required String fallback}) {
     switch (code) {
@@ -1238,6 +1245,46 @@ class TuringGrpcApi
         options: grpc.CallOptions(timeout: _startupUnaryTimeout),
       );
       return response.delegations.map(GrpcMappers.delegationToModel).toList();
+    });
+  }
+
+  @override
+  Future<Delegation> getDelegation({required String delegationId}) {
+    return _statusCall('team', () async {
+      final response = await _team.getDelegation(
+        teampb.GetDelegationRequest(delegationId: delegationId),
+        options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+      );
+      return GrpcMappers.delegationToModel(response);
+    });
+  }
+
+  @override
+  Future<AttentionPage> listAttention({String? cursor, int limit = 100}) {
+    return _statusCall('attention', () async {
+      final response = await _attention.listAttention(
+        attentiongrpc.ListAttentionRequest(
+          page: commonpb.PageRequest(limit: limit, cursor: cursor ?? ''),
+        ),
+        options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+      );
+      return GrpcMappers.attentionPageToModel(response);
+    });
+  }
+
+  @override
+  Future<void> dismissAttention({
+    required String automationId,
+    required String occurrenceKey,
+  }) {
+    return _statusCall('attention', () async {
+      await _attention.dismissAttention(
+        attentiongrpc.DismissAttentionRequest(
+          automationId: automationId,
+          occurrenceKey: occurrenceKey,
+        ),
+        options: grpc.CallOptions(timeout: _startupUnaryTimeout),
+      );
     });
   }
 
