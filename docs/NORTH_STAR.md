@@ -968,8 +968,8 @@ separate lifecycle, visibility and evaluation gates.
 
 #### UX-002 - Needs-you queue
 
-- **Status:** Partly shipped: UX-002a (projection and API); UX-002b (the
-  app's Needs-you destination) is next. The public-only
+- **Status:** Shipped: UX-002a (projection and API) and UX-002b (the app's
+  Needs-you destination). The public-only
   `AttentionService.ListAttention` lists, across conversations, every
   pending unexpired approval (a delegated task's under its parent), every
   delegated task waiting for egress consent, every enabled automation whose
@@ -990,7 +990,14 @@ separate lifecycle, visibility and evaluation gates.
   enabled, disabled, edited or deleted; a dismissal; a deletion that begins,
   or whose receipt starts or stops being retryable or changes its cause).
   Migration 0031 adds the dismissal column and two
-  partial indexes. Suspended watches and watch proposals arrive with PRO-001.
+  partial indexes. The app's **Needs you** destination badges the first
+  page's row count ("100+" when a next page exists) and takes no space when
+  nothing waits. It refetches on the hint, on resume and on open, coalesced
+  to at most one read a second and never polling. Its rows are summaries of
+  that one response; expanding a row (one at a time) mounts the chat's own
+  `ApprovalCard` or a task's consent card, and every action goes through the
+  chat's RPCs, so a stale row's action is refused. Suspended watches and
+  watch proposals arrive with PRO-001.
   See [Needs-you queue](architecture/needs-you-queue.md).
 - **Outcome:** The owner sees in one place everything that waits on them,
   across conversations.

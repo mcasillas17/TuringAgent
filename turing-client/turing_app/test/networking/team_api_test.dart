@@ -110,6 +110,39 @@ void main() {
     },
   );
 
+  test('getDelegation asks for one task and maps its card', () async {
+    final service = _TeamService();
+    final api = await connect(service);
+
+    final delegation = await api.getDelegation(delegationId: 'dlg_7');
+
+    expect(service.delegationReads.single.delegationId, 'dlg_7');
+    expect(service.getDelegationDeadline, isNotNull);
+    expect(delegation.delegationId, 'dlg_7');
+    expect(delegation.specialist, '🔬 Research');
+    expect(delegation.childRunId, 'run_child');
+    expect(delegation.waitingForConsent, isTrue);
+    expect(delegation.egressTools, ['integrations/github.get_issue']);
+    expect(delegation.egressRequired, isTrue);
+  });
+
+  test('a task that is gone surfaces as not_found', () async {
+    final api = await connect(
+      _TeamService(listFailure: grpc.StatusCode.notFound),
+    );
+
+    await expectLater(
+      api.getDelegation(delegationId: 'dlg_7'),
+      throwsA(
+        isA<TuringApiException>().having(
+          (error) => error.code,
+          'code',
+          'not_found',
+        ),
+      ),
+    );
+  });
+
   test('preparing a task\'s consent maps the whole disclosure', () async {
     final service = _TeamService();
     final api = await connect(service);
@@ -223,6 +256,8 @@ class _TeamService extends teamgrpc.TeamServiceBase {
   final delegationRequests = <teampb.ListDelegationsRequest>[];
   final prepared = <teampb.PrepareDelegationEgressRequest>[];
   final decided = <teampb.DecideDelegationEgressRequest>[];
+  final delegationReads = <teampb.GetDelegationRequest>[];
+  DateTime? getDelegationDeadline;
   DateTime? prepareDeadline;
   DateTime? delegationDeadline;
   Map<String, String> metadata = const {};
@@ -385,5 +420,25 @@ class _TeamService extends teamgrpc.TeamServiceBase {
   Future<teampb.Delegation> getDelegation(
     grpc.ServiceCall call,
     teampb.GetDelegationRequest request,
-  ) async => throw grpc.GrpcError.unimplemented('not used by these tests');
+  ) async {
+    delegationReads.add(request);
+    getDelegationDeadline = call.deadline;
+    final failure = listFailure;
+    if (failure != null) {
+      throw grpc.GrpcError.custom(failure, 'the delegation is gone');
+    }
+    return teampb.Delegation(
+      delegationId: request.delegationId,
+      parentRunId: 'run_1',
+      childSessionId: 'sess_child',
+      childRunId: 'run_child',
+      displayName: 'Research',
+      emoji: '🔬',
+      task: 'Gather the notes',
+      state: 'waiting_consent',
+      egressTools: ['integrations/github.get_issue'],
+      egressConsent: 'pending',
+      egressRequired: true,
+    );
+  }
 }

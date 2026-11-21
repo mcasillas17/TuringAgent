@@ -2,7 +2,7 @@
 
 The Needs-you queue (UX-002) is one orchestrator-computed list of everything
 that waits on the owner, across conversations. UX-002a ships the projection
-and the API; UX-002b is the app. The design is section 8 of the
+and the API; UX-002b ships the app's destination (see [The app](#the-app)). The design is section 8 of the
 [superagent adoption spec](../superpowers/specs/2026-11-01-turing-superagent-adoption-design.md).
 
 ## Stage table
@@ -80,6 +80,53 @@ editing or deleting an automation; a dismissal; and a deletion that begins,
 or whose receipt starts or stops being retryable or changes its cause. Hints
 coalesce per subscriber.
 Approval expiry publishes nothing; the app refetches on resume.
+
+## The app
+
+UX-002b is the app's **Needs you** destination
+(`turing-client/turing_app/lib/features/attention/`).
+
+- **One queue, owned by the shell.** `AttentionQueue` holds the rows of the
+  pages read in the current pass. The shell owns it because the badge beside
+  the destination is the first page, read whether or not the page is open.
+  It reads on four triggers: the shell starting, the page opening, an
+  `attention.changed` hint on the shell's existing updates stream (the
+  stream reconnecting counts too, since hints sent while it was down are
+  lost), and the app resuming. A row's action finishing is a fifth. Requests
+  are coalesced: at most one read starts per second, and never two at once.
+  Nothing reads on a timer of its own. A refetch starts a fresh pass from the
+  first page and reads as many pages as the last pass had, so a row reached
+  with **Load more** stays on screen. Pages of two passes are never mixed.
+- **Badge.** The badge is the first page's row count, shown as "100+" when
+  that page has a next page, so no second count query is needed. It reads
+  "!" when the latest read failed and no row is known, because not knowing
+  is not the same as nothing waiting. The empty state takes no space: with
+  nothing waiting, the destination is not in the rail at all (it stays while
+  it is open). A backend without `AttentionService` (`unimplemented`) gets
+  no destination. On the compact layout the menu button carries the badge,
+  since the rail is hidden in the drawer there.
+- **Rows.** Each row is a summary built only from the `ListAttention`
+  response: stage, the conversation's title (or the automation's name),
+  `since`, a closed cause code put into words, and its actions. Titles and
+  names render as plain `Text`, never markdown or links. The mapper turns a
+  stage or kind this build does not know, or a row missing an id its action
+  needs, into `unavailable`, which is listed with no action except **Open
+  chat**.
+- **Expanding mounts the existing flow, one row at a time.** An approval row
+  makes one `GetApprovalDetails` read and hands it to the chat's
+  `ApprovalCard`, so mounting the card does not read twice. A consent row
+  makes one `GetDelegation` read for the task's `DelegationCard`, whose
+  Allow… opens the chat's consent dialog. Expanding one row collapses any
+  other, and a refetch that still lists the open row keeps its card mounted.
+- **Actions go through the chat's RPCs**: `ApproveApproval` with the
+  reviewed details, `DenyApproval`, `PrepareDelegationEgress` /
+  `DecideDelegationEgress`, `DeleteSession` for **Retry deletion**, and
+  `DismissAttention` with the row's `occurrence_key`, unchanged. Only a stage
+  3 automation row offers Dismiss. The server re-checks each action, so a
+  stale row's action is refused, not replayed. The refusal is shown in the
+  server's words when it explains itself (`failed_precondition`,
+  `not_found`), and the list is read again either way, so an expired row
+  disappears.
 
 ## Cost
 

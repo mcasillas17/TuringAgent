@@ -12,6 +12,7 @@ import 'package:turing_flutter_app/features/workspace/skills_page.dart';
 import 'package:turing_flutter_app/features/workspace/telemetry_page.dart';
 import 'package:turing_flutter_app/l10n/generated/app_localizations.dart';
 import 'package:turing_flutter_app/models/agent_descriptor.dart';
+import 'package:turing_flutter_app/models/attention.dart';
 import 'package:turing_flutter_app/models/external_agent.dart';
 import 'package:turing_flutter_app/models/automation.dart';
 import 'package:turing_flutter_app/models/message.dart';
@@ -51,7 +52,12 @@ void main() {
       // the rail but forgotten here would go unchecked, and nothing would
       // fail.
       for (final label in ShellDestination.navigation.map((d) => d.label)) {
-        await _pumpShell(tester, api: _FakeApi(), size: _desktop);
+        // Needs you is in the rail only while something needs you.
+        await _pumpShell(
+          tester,
+          api: _FakeApi()..attentionRows = [_pendingApproval],
+          size: _desktop,
+        );
         await tester.tap(find.text(label));
         await tester.pumpAndSettle();
 
@@ -2145,7 +2151,9 @@ void main() {
               title: 'Conversation number $i',
               updatedAt: DateTime.utc(2026, 5, 10),
             ),
-        ];
+        ]
+        // Needs you is in the rail only while something needs you.
+        ..attentionRows = [_pendingApproval];
       await _pumpShell(tester, api: api, size: _desktop);
       expect(find.text('Skills'), findsOneWidget);
 
@@ -2328,6 +2336,15 @@ void main() {
   });
 }
 
+const _pendingApproval = AttentionRow(
+  stage: AttentionStage.approval,
+  kind: AttentionSourceKind.approval,
+  sessionId: 'sess_existing',
+  sessionTitle: 'Existing chat',
+  approvalId: 'appr_1',
+  runId: 'run_1',
+);
+
 Future<void> _pumpShell(
   WidgetTester tester, {
   required _FakeApi api,
@@ -2372,6 +2389,7 @@ class _FakeApi extends TuringApi
     ),
   ];
   List<ToolDescriptor> tools = const [];
+  List<AttentionRow> attentionRows = const [];
   McpRegistrySnapshot? mcpRegistry;
   List<AgentDescriptor> agents = const [];
   Object? toolsError;
@@ -2469,6 +2487,12 @@ class _FakeApi extends TuringApi
       nextCursor: nextSessionCursor,
     );
   }
+
+  @override
+  Future<AttentionPage> listAttention({
+    String? cursor,
+    int limit = 100,
+  }) async => AttentionPage(rows: attentionRows);
 
   @override
   Future<List<ToolDescriptor>> listTools() async {

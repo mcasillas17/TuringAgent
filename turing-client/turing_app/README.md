@@ -163,6 +163,15 @@ authorization: Bearer <api-key>
 - **Chats** lists active sessions in `ResponsiveShell`, loads additional cursor
   pages, opens backend-connected `ChatScreen` instances, and exposes search and
   archived-conversation management.
+- **Needs you** lists, across conversations, what waits on the owner through
+  `AttentionService.ListAttention`: pending approvals, task egress consents,
+  blocked automations and deletions to retry. Its badge is the first page's
+  row count ("100+" when a next page exists), and it is not in the rail while
+  nothing waits. It refetches on the `attention.changed` hint, on resume and
+  on open, at most once a second, and never polls. Expanding a row, one at a
+  time, mounts the chat's own approval or task card; actions use the chat's
+  RPCs, and Dismiss (blocked automations only) sends the row's occurrence key
+  unchanged. See [Needs-you queue](../../docs/architecture/needs-you-queue.md).
 - **Skills** lists file-backed skills and manages enablement and capability grants.
 - **Memory** displays the file-backed vault, pinned documents and proposal
   decisions. This does not imply automatic learning from conversation.
