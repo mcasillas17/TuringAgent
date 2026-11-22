@@ -574,6 +574,7 @@ orchestrator remains stopped, use a SQLite client to run
 ## Troubleshooting
 
 - **Backend is not reachable:** run `./turing status`, which names the check that fails; `./turing logs` shows a service's recent log. Otherwise check that Docker Compose is running and port `3000` is free.
+- **The orchestrator refuses its database** (`./turing logs orchestrator` shows `database refused`): a newer Turing build, or a development branch with a migration this build lacks, migrated it, or it holds tables without a `schema_migrations` ledger. The refusal changes no table or row, and there is no override. Restore the backup taken before the upgrade (for a development branch, the one taken before applying its migrations), recreate a disposable development database (stop the stack and move `turing-backend/data/turing.db*` aside), or run the matching newer build. Deleting a `schema_migrations` row does not undo a migration.
 - **Authentication fails:** confirm the Flutter API key matches `TURING_CLIENT_API_KEY` in `turing-backend/.env`; `./turing connect` shows it. If you changed the key but did not restart, `./turing restart` makes the orchestrator use it.
 - **No model response:** run `./turing engine check`, which names the step that fails (the engine does not answer, the model is not there, it does not stream, or it does not call tools) and what to change. `./turing engine detect` shows which engines answer on this machine.
 - **Remote send is refused:** confirm the per-run disclosure in the client. If

@@ -4483,7 +4483,9 @@ its check runs after a chmod, the WAL pragma and `CREATE TABLE IF NOT EXISTS`
 
 The first statement of `ApplyMigrationsWithSkillsRoot`, before the skills
 recovery and before `CREATE TABLE IF NOT EXISTS`: when `schema_migrations`
-exists, read its versions; any version not in the embedded name set returns
+exists, read its versions; any version neither in the embedded name set
+nor among the two retired names older builds wrote (see the TUR-016a
+implementation row) returns
 `ErrDatabaseNewerThanBuild`, naming those versions, the three recoveries
 below, and that deleting a `schema_migrations` row does not undo a
 migration. `app.New` fails and the process
@@ -4557,6 +4559,7 @@ None.
 | Round 52 review: an empty ledger beside a schema (f15-empty-ledger-nonempty-db) | mai: a database holding tables and an empty `schema_migrations` was neither missing its ledger nor carrying an unknown version, so it would pass | A ledger that is missing or holds no row means a fresh install only when no other table exists; otherwise it is refused the same way; TUR-016a adds the fixture | Every migration commits its ledger row with its own changes (`orch/db/migrations.go:70-89`, `orch/db/run_outcomes_migration.go:197-249`), so no build leaves tables beside an empty ledger, and the same `sqlite_master` read covers both cases. |
 | Round 72 review: a read-only preflight before `db.Open` (f15-preflight-after-db-open) | mai: `db.Open` may chmod the file and switch it to WAL before the check, so the refusal is not before any write | Rejected, as in round 46 (see that row and the dispositions appendix); the summary row now says 'before any row, schema or skills write' | A database a newer Turing build wrote is already WAL and 0600, so `db.Open` changes nothing on it; only a foreign file can change mode or journal, neither touches a row, and a second open path would be new code for no row of protection. |
 | Round 73 review: the roadmap's wording (TUR016_NORTH_STAR_BEFORE_ANY_WRITE, north-star-f15-write-boundary-mismatch) | grok, mai: `docs/NORTH_STAR.md` TUR-016 still said 'refused before any write', against round 72's narrowed summary | The roadmap says 'refused before any row, schema or skills write', the same words as section 2 | The roadmap and the spec must promise the same thing. |
+| TUR-016a implementation: ledger names no build embeds any more | design: refuse any version not in the embedded name set; first build: that set alone, which refused two databases only older Turing builds wrote | The embedded names plus a closed list of two retired names (`retiredMigrationVersions`): `0001_initial.sql`, which the TypeScript orchestrator recorded (#7) for the file embedded as `0001_initial`, in the database the Go orchestrator took over (#10), and `0014_session_lifecycle`, #68's name for `0015_session_lifecycle` until #67 took 0014, which `0015_session_lifecycle` re-applies over (`TestSessionLifecycleMigrationUpgradesDatabaseThatAppliedOldVersion`) | The check refuses changes this build does not know, and it knows both; refusing them would stop a database only older builds wrote, with no newer build to run and no backup to restore. A branch migration renumbered before it merges from now on leaves its old name only in development databases, which are refused and recreated, so the list does not grow. |
 
 ## 18. F16 — Owner quiet switch for unattended work
 

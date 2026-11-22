@@ -1607,6 +1607,21 @@ separate lifecycle, visibility and evaluation gates.
 
 #### TUR-016 - Backup, restore, and migration integrity
 
+- **Status:** Partly shipped: TUR-016a (newer-build refusal). Before the
+  migration runner writes anything, the orchestrator reads
+  `schema_migrations` and refuses (`db.ErrDatabaseNewerThanBuild`) a database
+  that records a migration this build does not have, naming it, or that holds
+  tables beside a missing or empty ledger; `app.New` fails, and Compose's
+  restarts repeat the refusal without writing. The message names the three
+  recoveries (restore the pre-upgrade backup, or for a development branch the
+  one taken before applying its migrations; recreate a disposable development
+  database; run the matching newer build) and says that deleting a
+  `schema_migrations` row does not undo a migration; there is no override.
+  Two ledger names older builds wrote for migrations this build embeds under
+  other names, the TypeScript orchestrator's `0001_initial.sql` and #68's
+  pre-merge `0014_session_lifecycle`, still start. Backup, restore
+  verification, migration checksums and the rehearsal (TUR-016c) are not
+  started.
 - **Outcome:** Local state can be recovered without silent schema drift.
 - **Scope:** WAL-aware backup, restore verification, migration checksums, and
   operator recovery.
