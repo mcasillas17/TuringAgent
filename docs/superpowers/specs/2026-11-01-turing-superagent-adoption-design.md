@@ -1,13 +1,13 @@
 # DeepSeek Super-agent adoption for Turing: design
 
-**Status:** proposed; panel review rounds 1 to 96 are done: round 96
-returned no findings from any of the four reviewers, so the implementation
-review has converged, and the final-phase round 97 reviews this documented
-state. Phase 1 (nine candidate features, F1 to F9) and Phase 2 (fifteen
+**Status:** accepted; the panel review converged: round 96 (implementation)
+and round 97 (final) returned no findings from any of the four reviewers.
+Phase 1 (nine candidate features, F1 to F9) and Phase 2 (fifteen
 candidates, F10 to F24, from the GPT 6 Astra and Claude Sonnet 5.5 gap
 analysis) are unified: fourteen Phase 2 candidates are adopted or adapted
-with a unified plan, and one (F13) is rejected with a reason. This revision
-carries the round 95 fixes.
+with a unified plan, and one (F13) is rejected with a reason. Corrections
+made while delivering slices are recorded as rows in each feature's decision
+log.
 
 **Date:** 2026-11-01.
 
@@ -25,7 +25,8 @@ EVAL-001, AGT-000, AGT-002, XTOOL-001, CHN-000, CHN-002 and PRS-001 in the
 the new IDs, one added acceptance sentence for the amended ones (plus, for
 TUR-016, a note that TUR-016a has no dependency and that TUR-016c refuses
 encrypted backups until TUR-022 defines a key channel, which TUR-022's
-sentence records). Nothing here is shipped.
+sentence records). Each item's delivery status is its Status line in
+`docs/NORTH_STAR.md`; this document is the design.
 
 **Citation conventions:** `orch/` means `turing-backend/orchestrator-go/internal/`,
 and `agent-runtime-go/` means `turing-backend/agent-runtime-go/`. Other Turing
