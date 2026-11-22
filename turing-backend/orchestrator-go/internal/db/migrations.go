@@ -127,8 +127,8 @@ func refuseDatabaseNewerThanBuild(ctx context.Context, database *DB) error {
 	var ledgers, otherTables int
 	if err := database.QueryRowContext(ctx, `
 		SELECT
-			COUNT(*) FILTER (WHERE name = 'schema_migrations' COLLATE NOCASE),
-			COUNT(*) FILTER (WHERE name <> 'schema_migrations' COLLATE NOCASE)
+			COUNT(*) FILTER (WHERE name = 'schema_migrations'),
+			COUNT(*) FILTER (WHERE name <> 'schema_migrations')
 		FROM sqlite_master
 		WHERE type = 'table' AND name NOT LIKE 'sqlite\_%' ESCAPE '\'
 	`).Scan(&ledgers, &otherTables); err != nil {

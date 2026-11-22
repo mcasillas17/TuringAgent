@@ -33,25 +33,64 @@ func TestApplyMigrationsRefusesANullLedgerVersion(t *testing.T) {
 	}
 }
 
-// A first start that stopped after creating the ledger, before its first
-// migration committed, leaves an empty ledger and nothing else: still a fresh
-// install, not a refusal.
-func TestApplyMigrationsInstallsOverAnEmptyLedgerWithNothingElse(t *testing.T) {
+// Prefixes repeat (three 0012_* are embedded), so a parallel branch's
+// migration most likely shares one, and sorts below the newest version. Only
+// a comparison of whole names refuses it.
+func TestApplyMigrationsRefusesAnUnknownVersionThatSharesAPrefix(t *testing.T) {
 	ctx := context.Background()
+	const parallel = "0012_from_a_parallel_branch"
 	database, err := Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
+	if err := ApplyMigrations(ctx, database); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.ExecContext(ctx,
-		`CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
+		`INSERT INTO schema_migrations (version, applied_at) VALUES (?, datetime('now'))`, parallel); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := ApplyMigrations(ctx, database); err != nil {
-		t.Fatalf("install over an empty ledger: %v", err)
+	err = ApplyMigrations(ctx, database)
+	if !errors.Is(err, ErrDatabaseNewerThanBuild) {
+		t.Fatalf("ApplyMigrations error = %v, want ErrDatabaseNewerThanBuild", err)
 	}
-	assertEveryEmbeddedMigrationApplied(t, ctx, database)
+	if !strings.Contains(err.Error(), `("`+parallel+`")`) {
+		t.Fatalf("refusal %q does not name %s alone", err, parallel)
+	}
+}
+
+// A database holding no table of its own is a fresh install, whatever else
+// it holds.
+func TestApplyMigrationsInstallsBesideNoTableOfItsOwn(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		setup string
+	}{
+		// A first start that stopped after creating the ledger, before its
+		// first migration committed.
+		{name: "empty ledger", setup: `CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`},
+		// SQLite keeps sqlite_sequence after the last AUTOINCREMENT table goes.
+		{name: "only internal tables", setup: `CREATE TABLE counter (id INTEGER PRIMARY KEY AUTOINCREMENT); DROP TABLE counter`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := context.Background()
+			database, err := Open(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			if _, err := database.ExecContext(ctx, testCase.setup); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := ApplyMigrations(ctx, database); err != nil {
+				t.Fatalf("install beside %s: %v", testCase.name, err)
+			}
+			assertEveryEmbeddedMigrationApplied(t, ctx, database)
+		})
+	}
 }
 
 // The TypeScript orchestrator (#7) recorded its one migration under the file
