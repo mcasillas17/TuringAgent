@@ -1,13 +1,13 @@
 # DeepSeek Super-agent adoption for Turing: design
 
-**Status:** proposed; panel review rounds 1 to 96 are done: round 96
-returned no findings from any of the four reviewers, so the implementation
-review has converged, and the final-phase round 97 reviews this documented
-state. Phase 1 (nine candidate features, F1 to F9) and Phase 2 (fifteen
+**Status:** accepted; the panel review converged: round 96 (implementation)
+and round 97 (final) returned no findings from any of the four reviewers.
+Phase 1 (nine candidate features, F1 to F9) and Phase 2 (fifteen
 candidates, F10 to F24, from the GPT 6 Astra and Claude Sonnet 5.5 gap
 analysis) are unified: fourteen Phase 2 candidates are adopted or adapted
-with a unified plan, and one (F13) is rejected with a reason. This revision
-carries the round 95 fixes.
+with a unified plan, and one (F13) is rejected with a reason. Corrections
+made while delivering slices are recorded as rows in each feature's decision
+log.
 
 **Date:** 2026-11-01.
 
@@ -25,7 +25,8 @@ EVAL-001, AGT-000, AGT-002, XTOOL-001, CHN-000, CHN-002 and PRS-001 in the
 the new IDs, one added acceptance sentence for the amended ones (plus, for
 TUR-016, a note that TUR-016a has no dependency and that TUR-016c refuses
 encrypted backups until TUR-022 defines a key channel, which TUR-022's
-sentence records). Nothing here is shipped.
+sentence records). Each item's delivery status is its Status line in
+`docs/NORTH_STAR.md`; this document is the design.
 
 **Citation conventions:** `orch/` means `turing-backend/orchestrator-go/internal/`,
 and `agent-runtime-go/` means `turing-backend/agent-runtime-go/`. Other Turing
@@ -4262,7 +4263,8 @@ In `orch/service/integrations` only:
    page it requests fits one frame whole and no result is ever cut inside
    a page. `list_issues` gains `page` (any positive integer, with no ceiling
    of its own: the run's tool-call limit bounds how far it pages, and a page
-   past the end answers `complete`). Every result ends with exactly one
+   past the end answers `complete`; INT-009a's implementation caps it at
+   2^53, see that row). Every result ends with exactly one
    continuation: `next: {page: page + 1, limit: per_page}` when GitHub's
    `Link` header has `rel="next"`, and `complete` otherwise. The
    continuation carries the `per_page` actually sent, not the `limit`
@@ -4359,6 +4361,7 @@ None.
 | Round 11 review: the bandwidth figure (INT009-WORST-CASE-BANDWIDTH-MISCONVERSION) | mai: 1.1 Mbit/s was read as the rate for the 15 MiB bound, which needs about 4.2 Mbit/s in 30 seconds | Performance states both: about 1.1 Mbit/s for the realistic worst case of about 4 MiB, and about 4.2 Mbit/s for the 15 MiB bound | Each figure now names the size it is computed from. |
 | Round 14 review: the poller's response bytes (PRO001_POLLER_RESPONSE_BYTE_BUDGET) | sol: PRO-001a's poller had no response-byte or decoding-memory bound, while this decoder already bounds both | PRO-001a's poller reuses this streamed decoder and its 1 MiB per-element bound, skipping and counting an over-bound element where `list_issues` returns a typed error (superseded in round 15: the poller treats that typed error as a malformed response; see that row); INT-009a therefore ships before PRO-001a | One bounded decoder serves both GitHub readers; see section 3's decision log. |
 | Round 15 review: the over-bound element (pro001a-overbound-element-skip-incompatible-with-reused-decoder) | opus: `json.Decoder.Decode` buffers a whole value and a mid-value reader error is sticky, so this decoder cannot read past an over-bound element and continue | The decoder is unchanged: an element over 1 MiB is its typed error for both readers, and PRO-001a's poller treats it as a malformed response, failing that stream's poll with its cursor held | GitHub caps a body at 65,536 characters (at most 256 KiB), so no real element reaches the bound; see section 3's decision log. |
+| INT-009a implementation: the highest page | design: any positive `page`, with no ceiling of its own | `page` is at most 2^53, which the schema declares as its maximum; a result for page 2^53 whose `Link` says `rel="next"` is refused rather than given a continuation | A model passes `page` back as a JSON number, which carries integers exactly only up to 2^53, so past it `page + 1` would name a page already read. No repository has that many pages, and the run's tool-call limit still bounds paging. |
 
 ## 16. F14 — Purpose-gated, low-noise outward notifications
 
