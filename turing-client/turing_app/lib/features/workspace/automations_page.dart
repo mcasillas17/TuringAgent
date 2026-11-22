@@ -5,6 +5,7 @@ import '../../models/automation.dart';
 import '../../models/skill.dart';
 import '../../models/tool_descriptor.dart';
 import '../../networking/api_client.dart';
+import 'unattended_quiet_switch.dart';
 import 'workspace_pages.dart';
 
 /// Renders a schedule as a sentence, in the reader's own time zone.
@@ -235,62 +236,75 @@ class _AutomationsPageState extends State<AutomationsPage> {
           'yours on a schedule, into its own conversation. Because nobody is '
           'watching when it runs, an automation can only use the tools you '
           'name for it — anything else stops the run and says so.',
-      child: FutureBuilder<List<Automation>>(
-        future: _automations,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const WorkspaceLoading();
-          }
-          if (snapshot.hasError) {
-            return WorkspaceNotice(
-              icon: Icons.error_outline,
-              title: 'Could not reach the backend',
-              body: '${snapshot.error}',
-              onRetry: _reload,
-              tone: AppColors.danger,
-            );
-          }
-          final automations = snapshot.data ?? const <Automation>[];
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilledButton.icon(
-                  onPressed: () => _edit(),
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('New automation'),
-                ),
-              ),
-              const SizedBox(height: 18),
-              if (automations.isEmpty)
-                WorkspaceNotice(
-                  icon: Icons.schedule_outlined,
-                  title: 'No automations yet',
-                  body:
-                      'An automation is a prompt you save once and let run on '
-                      'its own: a morning summary of what changed in the '
-                      'sandbox, an hourly check of something you care about. '
-                      'You choose what it may do unattended before it ever '
-                      'runs.',
-                )
-              else
-                for (final automation in automations)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _AutomationCard(
-                      automation: automation,
-                      palette: palette,
-                      onEdit: () => _edit(existing: automation),
-                      onDelete: () => _delete(automation),
-                      onToggle: (enabled) => _toggle(automation, enabled),
-                      onOpenSession: widget.onOpenSession,
-                    ),
-                  ),
-            ],
-          );
-        },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Outside the list's FutureBuilder: the one control that stops every
+          // automation has to be there while their list loads, or fails to.
+          UnattendedQuietSwitch(apiClient: widget.apiClient),
+          const SizedBox(height: 18),
+          _automationList(palette),
+        ],
       ),
+    );
+  }
+
+  Widget _automationList(AppPalette palette) {
+    return FutureBuilder<List<Automation>>(
+      future: _automations,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const WorkspaceLoading();
+        }
+        if (snapshot.hasError) {
+          return WorkspaceNotice(
+            icon: Icons.error_outline,
+            title: 'Could not reach the backend',
+            body: '${snapshot.error}',
+            onRetry: _reload,
+            tone: AppColors.danger,
+          );
+        }
+        final automations = snapshot.data ?? const <Automation>[];
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.icon(
+                onPressed: () => _edit(),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('New automation'),
+              ),
+            ),
+            const SizedBox(height: 18),
+            if (automations.isEmpty)
+              WorkspaceNotice(
+                icon: Icons.schedule_outlined,
+                title: 'No automations yet',
+                body:
+                    'An automation is a prompt you save once and let run on '
+                    'its own: a morning summary of what changed in the '
+                    'sandbox, an hourly check of something you care about. '
+                    'You choose what it may do unattended before it ever '
+                    'runs.',
+              )
+            else
+              for (final automation in automations)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _AutomationCard(
+                    automation: automation,
+                    palette: palette,
+                    onEdit: () => _edit(existing: automation),
+                    onDelete: () => _delete(automation),
+                    onToggle: (enabled) => _toggle(automation, enabled),
+                    onOpenSession: widget.onOpenSession,
+                  ),
+                ),
+          ],
+        );
+      },
     );
   }
 }

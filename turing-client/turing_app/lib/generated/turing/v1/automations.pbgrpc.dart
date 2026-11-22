@@ -70,6 +70,24 @@ class AutomationServiceClient extends $grpc.Client {
     return $createUnaryCall(_$listAutomations, request, options: options);
   }
 
+  /// The owner's quiet switch. Public only: no internal identity can read or
+  /// set it, so no tool or run can turn it off.
+  $grpc.ResponseFuture<$0.UnattendedQuiet> getUnattendedQuiet(
+    $0.GetUnattendedQuietRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$getUnattendedQuiet, request, options: options);
+  }
+
+  /// Compare-and-set on the revision named. Setting the current value writes
+  /// nothing; a change is audited.
+  $grpc.ResponseFuture<$0.SetUnattendedQuietResponse> setUnattendedQuiet(
+    $0.SetUnattendedQuietRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$setUnattendedQuiet, request, options: options);
+  }
+
   // method descriptors
 
   static final _$createAutomation =
@@ -97,6 +115,16 @@ class AutomationServiceClient extends $grpc.Client {
           '/turing.v1.AutomationService/ListAutomations',
           ($0.ListAutomationsRequest value) => value.writeToBuffer(),
           $0.ListAutomationsResponse.fromBuffer);
+  static final _$getUnattendedQuiet =
+      $grpc.ClientMethod<$0.GetUnattendedQuietRequest, $0.UnattendedQuiet>(
+          '/turing.v1.AutomationService/GetUnattendedQuiet',
+          ($0.GetUnattendedQuietRequest value) => value.writeToBuffer(),
+          $0.UnattendedQuiet.fromBuffer);
+  static final _$setUnattendedQuiet = $grpc.ClientMethod<
+          $0.SetUnattendedQuietRequest, $0.SetUnattendedQuietResponse>(
+      '/turing.v1.AutomationService/SetUnattendedQuiet',
+      ($0.SetUnattendedQuietRequest value) => value.writeToBuffer(),
+      $0.SetUnattendedQuietResponse.fromBuffer);
 }
 
 @$pb.GrpcServiceName('turing.v1.AutomationService')
@@ -147,6 +175,24 @@ abstract class AutomationServiceBase extends $grpc.Service {
         ($core.List<$core.int> value) =>
             $0.ListAutomationsRequest.fromBuffer(value),
         ($0.ListAutomationsResponse value) => value.writeToBuffer()));
+    $addMethod(
+        $grpc.ServiceMethod<$0.GetUnattendedQuietRequest, $0.UnattendedQuiet>(
+            'GetUnattendedQuiet',
+            getUnattendedQuiet_Pre,
+            false,
+            false,
+            ($core.List<$core.int> value) =>
+                $0.GetUnattendedQuietRequest.fromBuffer(value),
+            ($0.UnattendedQuiet value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.SetUnattendedQuietRequest,
+            $0.SetUnattendedQuietResponse>(
+        'SetUnattendedQuiet',
+        setUnattendedQuiet_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.SetUnattendedQuietRequest.fromBuffer(value),
+        ($0.SetUnattendedQuietResponse value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.Automation> createAutomation_Pre($grpc.ServiceCall $call,
@@ -190,4 +236,22 @@ abstract class AutomationServiceBase extends $grpc.Service {
 
   $async.Future<$0.ListAutomationsResponse> listAutomations(
       $grpc.ServiceCall call, $0.ListAutomationsRequest request);
+
+  $async.Future<$0.UnattendedQuiet> getUnattendedQuiet_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.GetUnattendedQuietRequest> $request) async {
+    return getUnattendedQuiet($call, await $request);
+  }
+
+  $async.Future<$0.UnattendedQuiet> getUnattendedQuiet(
+      $grpc.ServiceCall call, $0.GetUnattendedQuietRequest request);
+
+  $async.Future<$0.SetUnattendedQuietResponse> setUnattendedQuiet_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.SetUnattendedQuietRequest> $request) async {
+    return setUnattendedQuiet($call, await $request);
+  }
+
+  $async.Future<$0.SetUnattendedQuietResponse> setUnattendedQuiet(
+      $grpc.ServiceCall call, $0.SetUnattendedQuietRequest request);
 }

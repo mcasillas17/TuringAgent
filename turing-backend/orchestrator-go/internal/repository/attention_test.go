@@ -308,6 +308,7 @@ func TestListAttentionRaisesABlockedRowOnlyForAFailingLatestOccurrence(t *testin
 		{name: "a completed run", status: "completed", at: recent},
 		{name: "a run still going", status: "running", at: recent},
 		{name: "a run the owner cancelled", status: "cancelled", code: runoutcome.CodeUserCancelled, at: recent},
+		{name: "a run the owner's quiet switch cancelled", status: "cancelled", code: runoutcome.CodeOwnerQuiet, at: recent},
 		{name: "a disabled automation's failure", status: "failed", code: "provider_unavailable", at: recent, disable: true},
 		{name: "a run abandoned by deleting its conversation", status: "cancelled", code: runoutcome.CodeClientCancelled, at: recent, deleting: true},
 		{name: "a failed run whose conversation is being deleted", status: "failed", code: "provider_unavailable", at: recent, deleting: true},
@@ -504,6 +505,10 @@ func TestDismissAttentionRefusesWhatIsNotAFailingAutomation(t *testing.T) {
 	healthy, runID := seedFailedAutomation(t, ctx, repo, "Healthy", "running", "", base)
 	if err := repo.DismissAttention(ctx, healthy.AutomationID, runID); !errors.Is(err, ErrAttentionOccurrenceStale) {
 		t.Fatalf("pre-dismissing a run still going = %v, want ErrAttentionOccurrenceStale", err)
+	}
+	quieted, quietedRun := seedFailedAutomation(t, ctx, repo, "Quieted", "cancelled", runoutcome.CodeOwnerQuiet, base)
+	if err := repo.DismissAttention(ctx, quieted.AutomationID, quietedRun); !errors.Is(err, ErrAttentionOccurrenceStale) {
+		t.Fatalf("dismissing a run the quiet switch cancelled = %v, want ErrAttentionOccurrenceStale", err)
 	}
 	disabled, disabledRun := seedFailedAutomation(t, ctx, repo, "Disabled", "failed", "provider_unavailable", base)
 	if _, err := repo.SetAutomationEnabled(ctx, disabled.AutomationID, false); err != nil {

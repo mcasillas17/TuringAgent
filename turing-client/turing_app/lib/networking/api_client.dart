@@ -595,6 +595,35 @@ abstract class TuringApi implements RemoteEgressApi {
   /// that caused it.
   Future<void> deleteAutomation({required String automationId});
 
+  /// The owner's quiet switch for unattended work, with the revision a write
+  /// must name.
+  ///
+  /// Defaults to refusing: a client that cannot ask has not learned that
+  /// quiet is off.
+  Future<UnattendedQuiet> getUnattendedQuiet() {
+    throw const TuringApiException(
+      code: 'quiet_unsupported',
+      message: 'This client cannot read the quiet switch',
+    );
+  }
+
+  /// Sets quiet to [quiet] if the setting is still at [revision], the one
+  /// last read.
+  ///
+  /// Compare-and-set: when it has moved on, nothing is written and the answer
+  /// is stale and carries the current setting, so a screen that missed a
+  /// change cannot overwrite it. Naming the revision of an unreadable setting
+  /// repairs it.
+  Future<UnattendedQuietWrite> setUnattendedQuiet({
+    required bool quiet,
+    required int revision,
+  }) {
+    throw const TuringApiException(
+      code: 'quiet_unsupported',
+      message: 'This client cannot change the quiet switch',
+    );
+  }
+
   /// What this installation has been doing over the last [windowDays] days.
   ///
   /// Read-only, and computed by the backend from its own database — no counter

@@ -255,6 +255,25 @@ class GrpcMappers {
     );
   }
 
+  static model_automation.UnattendedQuiet unattendedQuietToModel(
+    automationpb.UnattendedQuiet quiet,
+  ) {
+    return model_automation.UnattendedQuiet(
+      quiet: quiet.quiet,
+      revision: quiet.revision.toInt(),
+      unavailable: quiet.unavailable,
+    );
+  }
+
+  static model_automation.UnattendedQuietWrite unattendedQuietWriteToModel(
+    automationpb.SetUnattendedQuietResponse response,
+  ) {
+    return model_automation.UnattendedQuietWrite(
+      setting: unattendedQuietToModel(response.setting),
+      stale: response.stale,
+    );
+  }
+
   static model_skill.Skill skillToModel(skillpb.Skill skill) {
     return model_skill.Skill(
       skillId: skill.skillId,
