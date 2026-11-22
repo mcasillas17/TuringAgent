@@ -72,7 +72,7 @@ func TestAnIssueRowIsAtMostOneKiBWhateverTheIssueHolds(t *testing.T) {
 		Number:      math.MinInt64,
 		Title:       strings.Repeat("<", 300<<10),
 		State:       strings.Repeat("\u2028", 100<<10),
-		PullRequest: true,
+		PullRequest: &struct{}{},
 		User:        &githubUser{Login: strings.Repeat("&", 100<<10)},
 		Labels:      labels,
 		Comments:    math.MinInt64,
@@ -138,6 +138,9 @@ func TestLinkHeaderNamesANextPageOnlyThroughItsRelation(t *testing.T) {
 		{name: "next written inside another parameter", links: []string{`<https://x/>; title="rel=\"next\" here"; rel="prev"`}},
 		{name: "one of several relation types", links: []string{`<https://x/>; rel="prev next"`}, want: true},
 		{name: "a second header", links: []string{`<https://x/>; rel="prev"`, `<https://x/?page=2>; rel="next"`}, want: true},
+		{name: "a malformed parameter before the next link", links: []string{`<https://x/?page=1>; rel=prev x, <https://x/?page=3>; rel="next"`}, want: true},
+		{name: "an unclosed quote before the next link", links: []string{`<https://x/?page=1>; title="x, <https://x/?page=3>; rel="next"`}, want: true},
+		{name: "spaces around the equals sign", links: []string{`<https://x/?page=2> ; rel = "next"`}, want: true},
 		{name: "no target", links: []string{`rel="next"`}},
 		{name: "no header"},
 	} {

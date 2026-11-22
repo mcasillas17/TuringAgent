@@ -575,6 +575,7 @@ func TestSuccessfulGitHubResponseCannotReflectCredentialIntoToolResult(t *testin
 	reflecting := func(authorization, credential string) string {
 		return `{"number":1,"title":` + strconv.Quote(authorization) + `,"state":` + strconv.Quote(credential) +
 			`,"user":{"login":` + strconv.Quote(credential) + `},"labels":[{"name":` + strconv.Quote(credential) + `}]` +
+			`,"updated_at":` + strconv.Quote(credential) +
 			`,"html_url":` + strconv.Quote("https://github.com/owner/repo/issues/1#"+credential) + `,"body":` + strconv.Quote(credential) +
 			`,"token":` + strconv.Quote(credential) + `}`
 	}

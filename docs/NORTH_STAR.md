@@ -1585,7 +1585,7 @@ separate lifecycle, visibility and evaluation gates.
   `updated_at`, `html_url`; never a body), and asks GitHub for at most
   `rowsPerFrame` (15) issues a call, the rows one frame holds whole beside
   the longest continuation, so the frame never cuts a page. It takes `page`
-  and ends every result with `next: {page, limit}`, naming the page size
+  (at most 2^53) and ends every result with `next: {page, limit}`, naming the page size
   actually sent, when GitHub's `Link` header says `rel="next"` (read, never
   followed), or `complete`. The answer is decoded one issue at a time, each
   at most 1 MiB and no more than the page size, and an answer over a bound

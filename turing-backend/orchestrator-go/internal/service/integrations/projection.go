@@ -42,11 +42,13 @@ const (
 
 // githubIssueFields is what a row reads from one issue. It has no body field:
 // a list decodes each issue into it, so every body is read past and dropped.
+// GitHub marks a pull request listed among issues by its pull_request object,
+// which decodes to non-nil with none of its members kept.
 type githubIssueFields struct {
 	Number      int64         `json:"number"`
 	Title       string        `json:"title"`
 	State       string        `json:"state"`
-	PullRequest presence      `json:"pull_request"`
+	PullRequest *struct{}     `json:"pull_request"`
 	User        *githubUser   `json:"user"`
 	Labels      []githubLabel `json:"labels"`
 	Comments    int64         `json:"comments"`
@@ -62,16 +64,6 @@ type githubIssue struct {
 
 type githubUser struct {
 	Login string `json:"login"`
-}
-
-// presence records whether a field held anything but null, without keeping
-// it: GitHub marks a pull request listed among issues by its pull_request
-// object.
-type presence bool
-
-func (p *presence) UnmarshalJSON(data []byte) error {
-	*p = string(data) != "null"
-	return nil
 }
 
 // githubLabel is one label's name. GitHub writes a label as an object; its
@@ -122,7 +114,7 @@ func projectIssueRow(issue githubIssueFields, credential []byte) issueRow {
 		Number:        issue.Number,
 		Title:         shownText(issue.Title, credential, maxTitleBytes),
 		State:         shownText(issue.State, credential, maxStateBytes),
-		IsPullRequest: bool(issue.PullRequest),
+		IsPullRequest: issue.PullRequest != nil,
 		Author:        shownText(author, credential, maxAuthorBytes),
 		Labels:        labels,
 		LabelCount:    len(issue.Labels),
@@ -281,9 +273,9 @@ func issueListContent(rows []json.RawMessage, next *issueListContinuation) ([]by
 }
 
 // issueListRows decodes one page of issues into rows, one issue at a time:
-// the page is never held whole and every body is dropped unread. An issue
-// over maxGitHubElementBytes, more issues than perPage, or an answer that
-// does not parse is a typed refusal, never a projected prefix.
+// the page is never held whole and every body is read past and dropped. An
+// issue over maxGitHubElementBytes, more issues than perPage, or an answer
+// that does not parse is a typed refusal, never a projected prefix.
 func issueListRows(body io.Reader, perPage int, credential []byte) ([]json.RawMessage, error) {
 	rows := make([]json.RawMessage, 0, perPage)
 	limits := boundedjson.ArrayLimits{MaxElements: perPage, MaxElementBytes: maxGitHubElementBytes}
@@ -383,47 +375,26 @@ func refusedAnswer(err error, wanted string) error {
 }
 
 // linkHasNext reports whether GitHub's Link header names a next page. Only
-// the relation is read: no link target is parsed or followed, and the next
-// page is asked for by number, from arguments this server validated.
+// relations are read: no link target is parsed or followed, and the next page
+// is asked for by number, from arguments this server validated. It reads
+// leniently, so a header it misreads errs toward a next page: a needless
+// continuation costs one call that answers complete, where a missed one would
+// hide every later page.
 func linkHasNext(header http.Header) bool {
 	for _, value := range header.Values("Link") {
-		if linkValueHasNext(value) {
-			return true
-		}
-	}
-	return false
-}
-
-// linkValueHasNext reads one Link value (RFC 8288): comma-separated links,
-// each a target in angle brackets and then ;-separated parameters. A value it
-// cannot read names no next page.
-func linkValueHasNext(value string) bool {
-	rest := value
-	for {
-		rest = strings.TrimLeft(rest, " \t,")
-		if rest == "" || rest[0] != '<' {
-			return false
-		}
-		end := strings.IndexByte(rest, '>')
-		if end < 0 {
-			return false
-		}
-		rest = rest[end+1:]
-		for {
-			rest = strings.TrimLeft(rest, " \t")
-			if rest == "" || rest[0] == ',' {
-				break
+		// Each link is a <target> and then its ;-separated parameters. A
+		// target holds no raw '<' or '>', so cutting at them skips each whole.
+		for _, link := range strings.Split(value, "<")[1:] {
+			_, parameters, found := strings.Cut(link, ">")
+			if !found {
+				continue
 			}
-			if rest[0] != ';' {
-				return false
-			}
-			var name, parameter string
-			var ok bool
-			if name, parameter, rest, ok = linkParameter(rest[1:]); !ok {
-				return false
-			}
-			if strings.EqualFold(name, "rel") {
-				for _, relation := range strings.Fields(parameter) {
+			for _, parameter := range strings.Split(parameters, ";") {
+				name, relations, _ := strings.Cut(parameter, "=")
+				if !strings.EqualFold(strings.TrimSpace(name), "rel") {
+					continue
+				}
+				for _, relation := range strings.Fields(strings.Trim(strings.TrimSpace(relations), `",`)) {
 					if strings.EqualFold(relation, "next") {
 						return true
 					}
@@ -431,43 +402,5 @@ func linkValueHasNext(value string) bool {
 			}
 		}
 	}
-}
-
-// linkParameter reads one parameter, a name and an optional token or quoted
-// string value, and returns what follows it.
-func linkParameter(text string) (name, value, rest string, ok bool) {
-	text = strings.TrimLeft(text, " \t")
-	end := strings.IndexAny(text, "=;, \t")
-	if end < 0 {
-		end = len(text)
-	}
-	name, text = text[:end], strings.TrimLeft(text[end:], " \t")
-	if name == "" {
-		return "", "", "", false
-	}
-	if !strings.HasPrefix(text, "=") {
-		return name, "", text, true
-	}
-	text = strings.TrimLeft(text[1:], " \t")
-	if !strings.HasPrefix(text, `"`) {
-		end = strings.IndexAny(text, ";, \t")
-		if end < 0 {
-			end = len(text)
-		}
-		return name, text[:end], text[end:], true
-	}
-	var quoted strings.Builder
-	for index := 1; index < len(text); index++ {
-		switch text[index] {
-		case '\\':
-			if index++; index < len(text) {
-				quoted.WriteByte(text[index])
-			}
-		case '"':
-			return name, quoted.String(), text[index+1:], true
-		default:
-			quoted.WriteByte(text[index])
-		}
-	}
-	return "", "", "", false
+	return false
 }

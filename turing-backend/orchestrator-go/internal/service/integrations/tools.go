@@ -27,7 +27,7 @@ var githubTools = []integrationTool{
 		"connection_id": stringSchema("Connected GitHub account id"), "owner": stringSchema("Repository owner"), "repo": stringSchema("Repository name"),
 		"state": map[string]any{"type": "string", "enum": []any{"open", "closed", "all"}},
 		"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": maxListLimit, "description": fmt.Sprintf("Rows per page, default %d; a call returns at most %d, so a larger limit is read as %d", rowsPerFrame, rowsPerFrame, rowsPerFrame)},
-		"page":  map[string]any{"type": "integer", "minimum": 1, "description": "Page to read, counted in pages of limit rows, default 1"},
+		"page":  map[string]any{"type": "integer", "minimum": 1, "maximum": maxListPage, "description": "Page to read, counted in pages of limit rows, default 1"},
 	})},
 	{name: "github.get_issue", description: "Get one GitHub issue or pull request: the fields a list shows and its body, cut with a visible marker where it does not fit", readOnly: true, schema: objectSchema([]string{"connection_id", "owner", "repo", "issue_number"}, map[string]any{
 		"connection_id": stringSchema("Connected GitHub account id"), "owner": stringSchema("Repository owner"), "repo": stringSchema("Repository name"), "issue_number": map[string]any{"type": "integer", "minimum": 1},

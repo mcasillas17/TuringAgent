@@ -1,12 +1,14 @@
 package integrations
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -439,7 +441,8 @@ func TestARecordedShapePageOverOneMiBProjectsEveryRow(t *testing.T) {
 func TestListRowsHoldOnlyTheProjectedFields(t *testing.T) {
 	issue := recordedIssue(t)
 	issue["body"] = "body-sentinel-not-for-lists"
-	github := &pagedGitHub{issues: []string{encodeIssue(t, issue), encodeIssue(t, recordedPullRequest(t, 1348))}}
+	nulls := `{"number":1349,"title":"Nothing else known","state":"open","pull_request":null,"user":null,"labels":null,"comments":0,"updated_at":null,"html_url":"https://github.com/octo-org/octo-repo/issues/1349"}`
+	github := &pagedGitHub{issues: []string{encodeIssue(t, issue), encodeIssue(t, recordedPullRequest(t, 1348)), nulls}}
 	result, err := readServer(github).callGitHub(context.Background(), "github.list_issues", listArgs(nil), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -448,9 +451,15 @@ func TestListRowsHoldOnlyTheProjectedFields(t *testing.T) {
 	want := []string{
 		`{"number":1347,"title":"Found a bug in the release pipeline","state":"open","is_pull_request":false,"author":"octocat","labels":["bug","release"],"label_count":2,"comments":3,"updated_at":"2026-11-21T09:56:27Z","html_url":"https://github.com/octo-org/octo-repo/issues/1347"}`,
 		`{"number":1348,"title":"Found a bug in the release pipeline","state":"open","is_pull_request":true,"author":"octocat","labels":["bug","release"],"label_count":2,"comments":3,"updated_at":"2026-11-21T09:56:27Z","html_url":"https://github.com/octo-org/octo-repo/pull/1348"}`,
+		`{"number":1349,"title":"Nothing else known","state":"open","is_pull_request":false,"author":"","labels":[],"label_count":0,"comments":0,"updated_at":"","html_url":"https://github.com/octo-org/octo-repo/issues/1349"}`,
 	}
-	if len(page.Issues) != 2 || string(page.Issues[0]) != want[0] || string(page.Issues[1]) != want[1] || !page.Complete {
+	if len(page.Issues) != len(want) || !page.Complete {
 		t.Fatalf("result = %s", framedContent(t, result))
+	}
+	for index, row := range page.Issues {
+		if string(row) != want[index] {
+			t.Fatalf("row %d = %s, want %s", index, row, want[index])
+		}
 	}
 	if strings.Contains(result, "body-sentinel-not-for-lists") {
 		t.Fatal("a body reached a list result")
@@ -465,23 +474,24 @@ func TestACredentialInOneTitleLeavesEveryOtherRowReachable(t *testing.T) {
 	for _, character := range credential {
 		escaped += fmt.Sprintf(`\u%04x`, character)
 	}
-	for name, write := range map[string]func(string) string{
-		"as written":        func(encoded string) string { return encoded },
-		"with JSON escapes": func(encoded string) string { return strings.Replace(encoded, credential, escaped, 1) },
-		"beside other text": func(encoded string) string { return encoded },
+	unchanged := func(encoded string) string { return encoded }
+	for _, test := range []struct {
+		name  string
+		title string
+		write func(string) string
+	}{
+		{name: "as written", title: credential, write: unchanged},
+		{name: "with JSON escapes", title: credential, write: func(encoded string) string { return strings.Replace(encoded, credential, escaped, 1) }},
+		{name: "beside other text", title: "token " + credential + " leaked", write: unchanged},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			issues := smallIssues(t, 100)
-			title := credential
-			if name == "beside other text" {
-				title = "token " + credential + " leaked"
-			}
 			holding := encodeIssue(t, map[string]any{
-				"number": 37, "title": title, "state": "open", "user": map[string]any{"login": "octocat"}, "labels": []any{},
+				"number": 37, "title": test.title, "state": "open", "user": map[string]any{"login": "octocat"}, "labels": []any{},
 				"comments": 0, "updated_at": "2026-11-01T10:00:00Z", "html_url": "https://github.com/octo/app/issues/37",
 			})
-			issues[36] = write(holding)
-			if name == "with JSON escapes" && strings.Contains(issues[36], credential) {
+			issues[36] = test.write(holding)
+			if test.name == "with JSON escapes" && strings.Contains(issues[36], credential) {
 				t.Fatal("fixture still holds the credential unescaped")
 			}
 			rows, _, framed := followNext(t, readServer(&pagedGitHub{issues: issues}), listArgs(nil), credential)
@@ -497,6 +507,81 @@ func TestACredentialInOneTitleLeavesEveryOtherRowReachable(t *testing.T) {
 				t.Fatalf("title of the issue holding the credential = %q, want it replaced in place", got)
 			}
 		})
+	}
+}
+
+// GitHub's schema lets a label be a bare name as well as an object; both are
+// listed, and a label of another shape refuses the answer.
+func TestLabelsAreListedWhetherNamedOrObjects(t *testing.T) {
+	github := &pagedGitHub{issues: []string{`{"number":1,"title":"t","labels":["bug",{"name":"ui","color":"fff"},"docs"]}`}}
+	result, err := readServer(github).callGitHub(context.Background(), "github.list_issues", listArgs(nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rows := listResult(t, result)
+	if len(rows) != 1 || !slices.Equal(rows[0].Labels, []string{"bug", "ui", "docs"}) || rows[0].LabelCount != 3 {
+		t.Fatalf("rows = %+v, want labels bug, ui and docs", rows)
+	}
+	github = &pagedGitHub{issues: []string{`{"number":1,"title":"t","labels":[7]}`}}
+	if _, err := readServer(github).callGitHub(context.Background(), "github.list_issues", listArgs(nil), nil); !errors.Is(err, boundedjson.ErrMalformed) {
+		t.Fatalf("err = %v, want ErrMalformed for a numeric label", err)
+	}
+}
+
+// The credential is replaced before a field is cut, so a cut that falls inside
+// it shows none of it rather than the part before the cut.
+func TestACredentialAcrossAFieldsBoundIsReplacedBeforeTheCut(t *testing.T) {
+	const credential = "ghp_int009aSentinelCredential0123456789"
+	github := &pagedGitHub{issues: []string{encodeIssue(t, map[string]any{
+		"number":     1,
+		"title":      strings.Repeat("a", 150) + credential + strings.Repeat("b", 100),
+		"state":      credential,
+		"user":       map[string]any{"login": credential + strings.Repeat("x", 40)},
+		"labels":     []any{map[string]any{"name": credential + strings.Repeat("x", 20)}},
+		"updated_at": credential,
+		"html_url":   "https://github.com/" + strings.Repeat("a", 140) + credential + strings.Repeat("b", 50),
+	})}}
+	result, err := readServer(github).callGitHub(context.Background(), "github.list_issues", listArgs(nil), []byte(credential))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoPartOf(t, framedContent(t, result), credential)
+	_, rows := listResult(t, result)
+	// A 32-byte field: the marker takes 26 bytes, so three newlines, two
+	// escaped bytes each, are all that is shown of the 39 replaced.
+	const shown = "\n\n\n [cut: 36 bytes not shown]"
+	if rows[0].State != shown || rows[0].UpdatedAt != shown {
+		t.Fatalf("state %q and updated_at %q, want %q", rows[0].State, rows[0].UpdatedAt, shown)
+	}
+}
+
+// Wherever the body's cut falls, one of these shifts puts a copy of the
+// credential across it.
+func TestACredentialAcrossTheBodysCutIsReplacedBeforeTheCut(t *testing.T) {
+	const credential = "ghp_int009aSentinelCredential0123456789"
+	issue := recordedIssue(t)
+	for shift := range len(credential) {
+		issue["body"] = strings.Repeat("a", shift) + strings.Repeat(credential, 1000)
+		answer := encodeIssue(t, issue)
+		server := readServer(roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return githubAnswer(http.StatusOK, answer, nil), nil
+		}))
+		result, err := server.callGitHub(context.Background(), "github.get_issue", listArgs(map[string]any{"issue_number": float64(1347)}), []byte(credential))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertNoPartOf(t, framedContent(t, result), credential)
+	}
+}
+
+// assertNoPartOf fails when any eight consecutive bytes of secret appear in
+// content.
+func assertNoPartOf(t *testing.T, content []byte, secret string) {
+	t.Helper()
+	for start := 0; start+8 <= len(secret); start++ {
+		if part := secret[start : start+8]; bytes.Contains(content, []byte(part)) {
+			t.Fatalf("result holds %q, part of the credential", part)
+		}
 	}
 }
 
@@ -593,6 +678,85 @@ func TestAContinuationNamesOnlyArgumentsTheListSchemaAccepts(t *testing.T) {
 	}
 }
 
+// A connection that fails mid-answer and an answer that cannot be trusted are
+// told apart, for both reads, and neither error carries what GitHub sent.
+func TestAReadFailureIsNotReportedAsAMalformedAnswer(t *testing.T) {
+	const sentinel = "answer-text-sentinel"
+	issue := listArgs(map[string]any{"issue_number": float64(1)})
+	for _, test := range []struct {
+		name   string
+		tool   string
+		args   map[string]any
+		answer func() io.Reader
+		want   error
+	}{
+		{name: "a list cut off by the connection", tool: "github.list_issues", args: listArgs(nil), answer: func() io.Reader {
+			return io.MultiReader(strings.NewReader(`[{"number":1,"title":"`+sentinel+`"},{"number":2,"title":"`+sentinel), brokenConnection{})
+		}},
+		{name: "an issue cut off by the connection", tool: "github.get_issue", args: issue, answer: func() io.Reader {
+			return io.MultiReader(strings.NewReader(`{"number":1,"title":"`+sentinel), brokenConnection{})
+		}},
+		{name: "an issue answered with a list", tool: "github.get_issue", args: issue, want: boundedjson.ErrMalformed, answer: func() io.Reader {
+			return strings.NewReader(`[{"number":1,"title":"` + sentinel + `"}]`)
+		}},
+		{name: "an issue cut short", tool: "github.get_issue", args: issue, want: boundedjson.ErrMalformed, answer: func() io.Reader {
+			return strings.NewReader(`{"number":1,"title":"` + sentinel)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := readServer(roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(test.answer()), Header: http.Header{}}, nil
+			}))
+			result, err := server.callGitHub(context.Background(), test.tool, test.args, nil)
+			if err == nil || result != "" || strings.Contains(err.Error(), sentinel) {
+				t.Fatalf("result %q err %v, want a refusal that quotes nothing", result, err)
+			}
+			for _, typed := range []error{boundedjson.ErrMalformed, boundedjson.ErrTooLarge, boundedjson.ErrTooManyElements} {
+				if errors.Is(err, typed) != (typed == test.want) {
+					t.Fatalf("err = %v, want it typed as %v and nothing else", err, test.want)
+				}
+			}
+		})
+	}
+}
+
+type brokenConnection struct{}
+
+func (brokenConnection) Read([]byte) (int, error) { return 0, errors.New("connection reset by peer") }
+
+// The schema is how a model learns what the server accepts, so each integer
+// argument declares the bounds the server enforces.
+func TestTheListSchemaDeclaresTheBoundsTheServerEnforces(t *testing.T) {
+	tool, ok := lookupIntegrationTool("github.list_issues")
+	if !ok {
+		t.Fatal("github.list_issues is not a tool")
+	}
+	properties := tool.schema["properties"].(map[string]any)
+	for _, name := range []string{"limit", "page"} {
+		declared := properties[name].(map[string]any)
+		minimum, hasMinimum := declared["minimum"].(int)
+		maximum, hasMaximum := declared["maximum"].(int)
+		if !hasMinimum || !hasMaximum {
+			t.Fatalf("%s declares minimum %v and maximum %v, want both", name, declared["minimum"], declared["maximum"])
+		}
+		// A JSON number carries integers exactly only up to 2^53, so the
+		// first value past a maximum there is the next one it can carry.
+		above := float64(maximum) + 1
+		if above == float64(maximum) {
+			above = math.Nextafter(float64(maximum), math.Inf(1))
+		}
+		for _, value := range []struct {
+			number   float64
+			accepted bool
+		}{{float64(minimum) - 1, false}, {float64(minimum), true}, {float64(maximum), true}, {above, false}} {
+			_, err := githubRequest("github.list_issues", listArgs(map[string]any{name: value.number}))
+			if (err == nil) != value.accepted {
+				t.Fatalf("%s=%v: err = %v, want accepted %v", name, value.number, err, value.accepted)
+			}
+		}
+	}
+}
+
 func TestGetIssueOverOneMiBIsRefused(t *testing.T) {
 	answer := encodeIssue(t, map[string]any{"number": 7, "title": "big", "body": strings.Repeat("b", 1<<20)})
 	server := readServer(roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -634,5 +798,10 @@ func TestGetIssueShowsItsRowAndAsMuchBodyAsOneFrameHolds(t *testing.T) {
 	}
 	if !strings.HasPrefix(got.Body, "Credential "+strings.Repeat("\n", len(credential))+" pasted here. <é") || !strings.HasSuffix(got.Body, " bytes not shown]") {
 		t.Fatalf("body = %q, want the redacted start and a visible cut", got.Body)
+	}
+	// The body fills the frame: the widest character here escapes to six
+	// bytes, so a cut leaves fewer than six of the frame's bytes unused.
+	if unused := backendegress.MaxFramedContentBytes - len(result); unused >= 6 {
+		t.Fatalf("the framed issue leaves %d of %d bytes unused, want the body to fill the frame", unused, backendegress.MaxFramedContentBytes)
 	}
 }

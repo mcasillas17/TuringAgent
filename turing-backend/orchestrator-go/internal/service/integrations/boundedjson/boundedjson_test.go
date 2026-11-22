@@ -165,9 +165,11 @@ func TestDecodeArrayPassesAReadFailureThroughUntyped(t *testing.T) {
 }
 
 // An answer far larger than the element bound decodes as long as each element
-// fits, and the decoder never reads further ahead than one bound.
+// fits, and the decoder never reads more than one bound past the end of the
+// element before the one it hands over. The bound here is one element and a
+// little room, which json.Decoder's own read-ahead would pass.
 func TestDecodeArrayReadsALargeAnswerOneElementAtATime(t *testing.T) {
-	const elements, bound = 100, 1 << 20
+	const elements, bound = 100, 64<<10 + 64
 	var input strings.Builder
 	input.WriteString("[")
 	ends := make([]int, elements)
@@ -175,7 +177,7 @@ func TestDecodeArrayReadsALargeAnswerOneElementAtATime(t *testing.T) {
 		if index > 0 {
 			input.WriteString(",")
 		}
-		fmt.Fprintf(&input, `{"id":%d,"text":"%s"}`, index, strings.Repeat("z", 64<<10))
+		fmt.Fprintf(&input, `{"id":%d,"text":"%s"}`, index, strings.Repeat("z", 64<<10-32))
 		ends[index] = input.Len()
 	}
 	input.WriteString("]")
@@ -185,8 +187,12 @@ func TestDecodeArrayReadsALargeAnswerOneElementAtATime(t *testing.T) {
 		if element.ID != next {
 			return fmt.Errorf("element %d arrived in place of %d", element.ID, next)
 		}
-		if ahead := source.read - int64(ends[next]); ahead > bound {
-			return fmt.Errorf("read %d bytes past element %d, want at most %d", ahead, next, bound)
+		previousEnd := 1 // just past the opening bracket
+		if next > 0 {
+			previousEnd = ends[next-1]
+		}
+		if source.read > int64(previousEnd)+bound {
+			return fmt.Errorf("read %d bytes by element %d, over %d past the element before it", source.read, next, bound)
 		}
 		next++
 		return nil
