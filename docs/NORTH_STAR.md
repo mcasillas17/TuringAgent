@@ -1579,7 +1579,21 @@ separate lifecycle, visibility and evaluation gates.
 
 #### INT-009 - Bounded, navigable GitHub reads
 
-- **Status:** Proposed; not started.
+- **Status:** Partly shipped: INT-009a (projection). `github.list_issues`
+  returns rows of at most 1 KiB (number, title, state, `is_pull_request`,
+  author, up to five label names and their count, comment count,
+  `updated_at`, `html_url`; never a body), and asks GitHub for at most
+  `rowsPerFrame` (15) issues a call, the rows one frame holds whole beside
+  the longest continuation, so the frame never cuts a page. It takes `page`
+  and ends every result with `next: {page, limit}`, naming the page size
+  actually sent, when GitHub's `Link` header says `rel="next"` (read, never
+  followed), or `complete`. The answer is decoded one issue at a time, each
+  at most 1 MiB and no more than the page size, and an answer over a bound
+  or malformed is a typed error. `get_issue` reads at most 1 MiB and shows
+  the same fields and as much body as one frame holds, cut visibly. The
+  credential is redacted from decoded strings. On a recorded-shape issue a
+  row is 274 bytes against 5.9 KB raw (18.1 KB with a 12 KiB body), and 100
+  issues take seven calls. INT-009b (body slices) is next.
 - **Outcome:** GitHub reads give the model the fields it needs and can reach
   past the first page.
 - **Scope:** Projected rows for `github.list_issues` and `github.get_issue`,

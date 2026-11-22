@@ -570,23 +570,43 @@ func TestGitHubCredentialTravelsOnlyInAuthorizationHeader(t *testing.T) {
 }
 
 func TestSuccessfulGitHubResponseCannotReflectCredentialIntoToolResult(t *testing.T) {
-	for _, credential := range []string{"successful-response-reflection-secret", "[REDACTED]", strings.Repeat("*", 16)} {
-		t.Run(credential, func(t *testing.T) {
-			server, _, _ := newIntegrationServer(t)
-			server.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-				body := `{"authorization":` + strconv.Quote(request.Header.Get("Authorization")) + `,"token":` + strconv.Quote(credential) + `}`
-				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
-			})})
-			result, err := server.callGitHub(context.Background(), "github.list_issues", map[string]any{
-				"connection_id": "conn", "owner": "owner", "repo": "repo",
-			}, []byte(credential))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(result, credential) {
-				t.Fatalf("provider reflected credential into result %q", result)
-			}
-		})
+	// Each read tool answers in its own shape: the issue reads are parsed and
+	// redacted field by field, a file is redacted as the bytes it is.
+	reflecting := func(authorization, credential string) string {
+		return `{"number":1,"title":` + strconv.Quote(authorization) + `,"state":` + strconv.Quote(credential) +
+			`,"user":{"login":` + strconv.Quote(credential) + `},"labels":[{"name":` + strconv.Quote(credential) + `}]` +
+			`,"html_url":` + strconv.Quote("https://github.com/owner/repo/issues/1#"+credential) + `,"body":` + strconv.Quote(credential) +
+			`,"token":` + strconv.Quote(credential) + `}`
+	}
+	for _, tool := range []struct {
+		name   string
+		args   map[string]any
+		answer func(authorization, credential string) string
+	}{
+		{name: "github.list_issues", answer: func(authorization, credential string) string {
+			return "[" + reflecting(authorization, credential) + "]"
+		}},
+		{name: "github.get_issue", args: map[string]any{"issue_number": float64(1)}, answer: reflecting},
+		{name: "github.get_file", args: map[string]any{"path": "README.md"}, answer: reflecting},
+	} {
+		for _, credential := range []string{"successful-response-reflection-secret", "[REDACTED]", strings.Repeat("*", 16)} {
+			t.Run(tool.name+"/"+credential, func(t *testing.T) {
+				server, _, _ := newIntegrationServer(t)
+				server.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+					body := tool.answer(request.Header.Get("Authorization"), credential)
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+				})})
+				result, err := server.callGitHub(context.Background(), tool.name, withArgs(map[string]any{
+					"connection_id": "conn", "owner": "owner", "repo": "repo",
+				}, tool.args), []byte(credential))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(result, credential) {
+					t.Fatalf("provider reflected credential into result %q", result)
+				}
+			})
+		}
 	}
 }
 
@@ -624,7 +644,7 @@ func TestFullCallFailuresNeverPersistReportOrLogPlaintextCredential(t *testing.T
 	}
 
 	server.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"token":` + strconv.Quote(credential) + `}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`[{"number":1,"title":` + strconv.Quote(credential) + `}]`)), Header: make(http.Header)}, nil
 	})})
 	successResponse, successErr := server.CallIntegrationTool(context.Background(), request)
 	if successErr != nil || successResponse == nil || strings.Contains(successResponse.GetResult().String(), credential) {
@@ -766,7 +786,7 @@ func TestProviderReflectedCredentialCannotReachRuntimeEventOrAudit(t *testing.T)
 		}
 	}
 	integrationServer.SetHTTPClient(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"authorization":` + strconv.Quote(request.Header.Get("Authorization")) + `}`)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`[{"number":1,"title":` + strconv.Quote(request.Header.Get("Authorization")) + `}]`)), Header: make(http.Header)}, nil
 	})})
 	response, err := integrationServer.CallIntegrationTool(ctx, &turingv1.CallIntegrationToolRequest{
 		RunId: job.GetRunId(), ToolName: "github.list_issues", Args: args,
@@ -870,23 +890,21 @@ func TestIntegrationResultFramesUsePerCallNonceAndBoundedUTF8(t *testing.T) {
 
 func TestGitHubRequestRejectsMalformedOptionalArguments(t *testing.T) {
 	base := map[string]any{"connection_id": "connection", "owner": "owner", "repo": "repo"}
-	for name, value := range map[string]any{
-		"non_string_state": 3,
-		"fractional_limit": 1.5,
-		"string_limit":     "10",
+	for name, extra := range map[string]map[string]any{
+		"non_string_state":         {"state": 3},
+		"fractional_limit":         {"limit": 1.5},
+		"string_limit":             {"limit": "10"},
+		"limit_over_100":           {"limit": float64(101)},
+		"zero_page":                {"page": float64(0)},
+		"negative_page":            {"page": float64(-1)},
+		"fractional_page":          {"page": 2.5},
+		"string_page":              {"page": "2"},
+		"page_past_exact_integers": {"page": float64(maxListPage) + 2},
+		"page_past_int64":          {"page": 1e19},
 	} {
 		t.Run(name, func(t *testing.T) {
-			args := make(map[string]any, len(base)+1)
-			for key, item := range base {
-				args[key] = item
-			}
-			if name == "non_string_state" {
-				args["state"] = value
-			} else {
-				args["limit"] = value
-			}
-			if _, _, _, err := githubRequest("github.list_issues", args); err == nil {
-				t.Fatal("malformed optional argument was treated as absent")
+			if _, err := githubRequest("github.list_issues", withArgs(base, extra)); err == nil {
+				t.Fatal("malformed optional argument was accepted")
 			}
 		})
 	}

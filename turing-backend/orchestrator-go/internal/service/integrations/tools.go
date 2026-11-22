@@ -21,11 +21,15 @@ type integrationTool struct {
 }
 
 var githubTools = []integrationTool{
-	{name: "github.list_issues", description: "List issues in a GitHub repository", readOnly: true, schema: objectSchema([]string{"connection_id", "owner", "repo"}, map[string]any{
+	{name: "github.list_issues", description: fmt.Sprintf("List the issues and pull requests in a GitHub repository, one page per call: at most %d rows, each a summary without its body (read a body with github.get_issue). "+
+		"A result ends with either next, the page and limit to call with to read the following page, or complete when there is no next page. "+
+		"The limit in next is the page size this call actually used, and page counts pages of that size, so pass both unchanged", rowsPerFrame), readOnly: true, schema: objectSchema([]string{"connection_id", "owner", "repo"}, map[string]any{
 		"connection_id": stringSchema("Connected GitHub account id"), "owner": stringSchema("Repository owner"), "repo": stringSchema("Repository name"),
-		"state": map[string]any{"type": "string", "enum": []any{"open", "closed", "all"}}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+		"state": map[string]any{"type": "string", "enum": []any{"open", "closed", "all"}},
+		"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": maxListLimit, "description": fmt.Sprintf("Rows per page, default %d; a call returns at most %d, so a larger limit is read as %d", rowsPerFrame, rowsPerFrame, rowsPerFrame)},
+		"page":  map[string]any{"type": "integer", "minimum": 1, "description": "Page to read, counted in pages of limit rows, default 1"},
 	})},
-	{name: "github.get_issue", description: "Get one GitHub issue", readOnly: true, schema: objectSchema([]string{"connection_id", "owner", "repo", "issue_number"}, map[string]any{
+	{name: "github.get_issue", description: "Get one GitHub issue or pull request: the fields a list shows and its body, cut with a visible marker where it does not fit", readOnly: true, schema: objectSchema([]string{"connection_id", "owner", "repo", "issue_number"}, map[string]any{
 		"connection_id": stringSchema("Connected GitHub account id"), "owner": stringSchema("Repository owner"), "repo": stringSchema("Repository name"), "issue_number": map[string]any{"type": "integer", "minimum": 1},
 	})},
 	{name: "github.get_file", description: "Get a file from a GitHub repository", readOnly: true, schema: objectSchema([]string{"connection_id", "owner", "repo", "path"}, map[string]any{
