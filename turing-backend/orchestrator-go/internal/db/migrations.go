@@ -2,9 +2,12 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -21,6 +24,19 @@ var afterRecoverySkillsExportHook func()
 
 const sessionLifecycleMigrationVersion = "0015_session_lifecycle"
 
+// ErrDatabaseNewerThanBuild is the refusal ApplyMigrationsWithSkillsRoot
+// returns before it writes anything, for a database this build cannot
+// account for: its ledger records a migration this build does not have, or it
+// holds tables beside a missing or empty ledger, which no Turing build leaves.
+var ErrDatabaseNewerThanBuild = errors.New("database refused")
+
+// databaseRecoveries is the whole recovery, stated once (spec section 17):
+// there is no override, and deleting a ledger row reverses none of its
+// migration's changes.
+const databaseRecoveries = "restore the pre-upgrade backup (for a development branch, the backup taken before applying its migrations), " +
+	"recreate a disposable development database, or run the matching newer build; " +
+	"deleting a schema_migrations row does not undo a migration"
+
 func ApplyMigrations(ctx context.Context, database *DB) error {
 	return ApplyMigrationsWithSkillsRoot(ctx, database, "")
 }
@@ -28,8 +44,12 @@ func ApplyMigrations(ctx context.Context, database *DB) error {
 // ApplyMigrationsWithSkillsRoot exports legacy database-backed skills before
 // the migration that removes their tables. The filesystem side effect happens
 // first and is idempotent, so a crash before the database transaction commits
-// can safely retry without duplicating or overwriting a skill.
+// can safely retry without duplicating or overwriting a skill. Ahead of both,
+// it refuses a database it cannot account for (ErrDatabaseNewerThanBuild).
 func ApplyMigrationsWithSkillsRoot(ctx context.Context, database *DB, skillsRoot string) error {
+	if err := refuseDatabaseNewerThanBuild(ctx, database); err != nil {
+		return err
+	}
 	if err := recoverPendingLegacySkills(ctx, database, skillsRoot); err != nil {
 		return fmt.Errorf("recover legacy skill export: %w", err)
 	}
@@ -95,6 +115,119 @@ func ApplyMigrationsWithSkillsRoot(ctx context.Context, database *DB, skillsRoot
 		}
 	}
 	return nil
+}
+
+// refuseDatabaseNewerThanBuild reads before the runner writes anything: one
+// sqlite_master read, then the ledger's versions, compared with this build's
+// as whole names, because numeric prefixes repeat (three 0012_*). A ledger
+// that is missing or holds no row means a fresh install only beside no other
+// table; every migration commits its ledger row with its own changes, so no
+// Turing build leaves tables without one.
+func refuseDatabaseNewerThanBuild(ctx context.Context, database *DB) error {
+	var ledgers, otherTables int
+	if err := database.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE name = 'schema_migrations'),
+			COUNT(*) FILTER (WHERE name <> 'schema_migrations')
+		FROM sqlite_master
+		WHERE type = 'table' AND name NOT LIKE 'sqlite\_%' ESCAPE '\'
+	`).Scan(&ledgers, &otherTables); err != nil {
+		return fmt.Errorf("read schema: %w", err)
+	}
+	var applied []sql.NullString
+	if ledgers > 0 {
+		var err error
+		if applied, err = appliedMigrationVersions(ctx, database); err != nil {
+			return err
+		}
+	}
+	if len(applied) == 0 {
+		if otherTables == 0 {
+			return nil
+		}
+		ledger := "no schema_migrations ledger"
+		if ledgers > 0 {
+			ledger = "an empty schema_migrations ledger"
+		}
+		return fmt.Errorf("%w: it holds tables but %s, which no Turing build leaves; %s",
+			ErrDatabaseNewerThanBuild, ledger, databaseRecoveries)
+	}
+	known, err := knownMigrationVersions()
+	if err != nil {
+		return err
+	}
+	var unknown []string
+	for _, version := range applied {
+		if !version.Valid {
+			unknown = append(unknown, "NULL")
+			continue
+		}
+		if _, ok := known[version.String]; !ok {
+			unknown = append(unknown, strconv.Quote(version.String))
+		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("%w: a newer Turing build applied migrations this build does not have (%s); %s",
+			ErrDatabaseNewerThanBuild, strings.Join(unknown, ", "), databaseRecoveries)
+	}
+	return nil
+}
+
+// appliedMigrationVersions reads the ledger; a NULL version, which the
+// primary key admits and no build writes, stays NULL.
+func appliedMigrationVersions(ctx context.Context, database *DB) ([]sql.NullString, error) {
+	rows, err := database.QueryContext(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		return nil, fmt.Errorf("read schema_migrations: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var versions []sql.NullString
+	for rows.Next() {
+		var version sql.NullString
+		if err := rows.Scan(&version); err != nil {
+			return nil, fmt.Errorf("read schema_migrations: %w", err)
+		}
+		versions = append(versions, version)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read schema_migrations: %w", err)
+	}
+	return versions, nil
+}
+
+// knownMigrationVersions is every version this build embeds, read from the
+// embedded schema directory so a new migration needs no edit here, plus the
+// retired names below.
+func knownMigrationVersions() (map[string]struct{}, error) {
+	names, err := migrationNames()
+	if err != nil {
+		return nil, err
+	}
+	known := make(map[string]struct{}, len(names)+len(retiredMigrationVersions))
+	for _, name := range names {
+		known[strings.TrimSuffix(name, ".sql")] = struct{}{}
+	}
+	for version := range retiredMigrationVersions {
+		known[version] = struct{}{}
+	}
+	return known, nil
+}
+
+// retiredMigrationVersions are the ledger names older Turing builds wrote for
+// a migration this build embeds under another name, so this build knows their
+// changes. The list is closed: both were written before the check existed,
+// by builds whose successors promised to upgrade them. A branch migration
+// renumbered before it merges now leaves its old name only in development
+// databases, which the check refuses; recreate those instead of adding here.
+var retiredMigrationVersions = map[string]struct{}{
+	// The TypeScript orchestrator (#7) recorded file names, in the database
+	// the Go orchestrator took over (#10); its 0001_initial.sql is the file
+	// embedded here as 0001_initial, which the Go runner re-applies (every
+	// statement is IF NOT EXISTS) under its own name.
+	"0001_initial.sql": {},
+	// #68's branch named its migration 0014_session_lifecycle until #67 took
+	// 0014; 0015_session_lifecycle re-applies over it.
+	"0014_session_lifecycle": {},
 }
 
 func recoverPendingLegacySkills(ctx context.Context, database *DB, skillsRoot string) error {
