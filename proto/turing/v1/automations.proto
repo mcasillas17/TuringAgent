@@ -115,6 +115,39 @@ message ListAutomationsResponse {
   repeated Automation automations = 1;
 }
 
+// The owner's quiet switch for unattended work (TUR-028a). While it is on, no
+// automation fires, no unattended run starts, queued unattended runs are
+// cancelled, and one that would go back to the queue is cancelled instead. A
+// run already going finishes. Turning it off starts nothing queued before
+// it: each automation that came due fires once, at the scheduler's next tick.
+message UnattendedQuiet {
+  // True while no unattended work starts. A stored value the server cannot
+  // read counts as on, so unavailable is then true as well.
+  bool quiet = 1;
+  // The revision a SetUnattendedQuiet must name. Every change advances it.
+  int64 revision = 2;
+  // The stored value cannot be read. Quiet counts as on until a write, naming
+  // this revision, repairs it.
+  bool unavailable = 3;
+}
+
+message GetUnattendedQuietRequest {}
+
+message SetUnattendedQuietRequest {
+  bool quiet = 1;
+  // The revision the caller read. A write from an older view is refused, so a
+  // stale screen can never turn quiet off after it was turned on.
+  int64 revision = 2;
+}
+
+message SetUnattendedQuietResponse {
+  // The setting as it now stands: the one written, or, when stale is true,
+  // the current one, unchanged.
+  UnattendedQuiet setting = 1;
+  // The named revision was not the current one, so nothing was written.
+  bool stale = 2;
+}
+
 service AutomationService {
   rpc CreateAutomation(CreateAutomationRequest) returns (Automation);
   rpc UpdateAutomation(UpdateAutomationRequest) returns (Automation);
@@ -125,4 +158,11 @@ service AutomationService {
   rpc SetAutomationEnabled(SetAutomationEnabledRequest) returns (Automation);
   rpc DeleteAutomation(DeleteAutomationRequest) returns (DeleteAutomationResponse);
   rpc ListAutomations(ListAutomationsRequest) returns (ListAutomationsResponse);
+
+  // The owner's quiet switch. Public only: no internal identity can read or
+  // set it, so no tool or run can turn it off.
+  rpc GetUnattendedQuiet(GetUnattendedQuietRequest) returns (UnattendedQuiet);
+  // Compare-and-set on the revision named. Setting the current value writes
+  // nothing; a change is audited.
+  rpc SetUnattendedQuiet(SetUnattendedQuietRequest) returns (SetUnattendedQuietResponse);
 }

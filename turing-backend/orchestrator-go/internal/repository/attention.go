@@ -192,12 +192,14 @@ const automationOccurrenceKey = `COALESCE(blocked.id, a.last_run_id, '')`
 
 // automationOccurrenceFailing says the latest occurrence failed or was
 // blocked. A run the owner cancelled did neither: its committed outcome says
-// so, and that is the only cancellation that needs nobody until TUR-028a's
-// owner_quiet joins it. A run whose conversation is being deleted is the
+// so, and nobody needs to act on it. Neither did a run the owner's quiet
+// switch cancelled (owner_quiet, TUR-028a), which is the owner's own choice,
+// not an obligation. A run whose conversation is being deleted is the
 // owner's withdrawal, not a failure, and its row goes with the conversation.
 const automationOccurrenceFailing = `(blocked.id IS NOT NULL OR (run_session.id IS NOT NULL AND (
 		run.status = 'failed' OR (run.status = 'cancelled'
-			AND COALESCE(run.outcome_reason, '') <> '` + string(runoutcome.ReasonUserCancelled) + `'))))`
+			AND COALESCE(run.outcome_reason, '') <> '` + string(runoutcome.ReasonUserCancelled) + `'
+			AND COALESCE(run.cancellation_reason, '') <> '` + runoutcome.CodeOwnerQuiet + `'))))`
 
 // automationOccurrenceQuery is DismissAttention's read of one automation:
 // whether it is enabled with a failing latest occurrence, and that

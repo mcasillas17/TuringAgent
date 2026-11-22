@@ -307,7 +307,7 @@ func TestAbandonedCancellationNeverClaimsUserIntent(t *testing.T) {
 	// enforces still stands — a user-cancelled constructor may only appear
 	// alongside an explicit typed cancel-intent RPC.
 	constructors := exportedFunctionsReturning(t, "Cancellation")
-	want := []string{"AbandonedCancellation", "EgressConsentDeclinedCancellation", "ParentEndedCancellation", "ProfileGrantRevokedCancellation", "QueueTimeoutCancellation", "UserCancellation"}
+	want := []string{"AbandonedCancellation", "EgressConsentDeclinedCancellation", "OwnerQuietCancellation", "ParentEndedCancellation", "ProfileGrantRevokedCancellation", "QueueTimeoutCancellation", "UserCancellation"}
 	if !reflect.DeepEqual(constructors, want) {
 		t.Fatalf("exported cancellation constructors = %v, want %v", constructors, want)
 	}
@@ -334,6 +334,18 @@ func TestParentEndedCancellationIsTheOrchestratorGivingUp(t *testing.T) {
 	if cancellation.Reason() != ReasonAbandoned || cancellation.Origin() != OriginOrchestratorInternal ||
 		cancellation.Code() != CodeParentRunEnded || CodeParentRunEnded != "parent_run_ended" {
 		t.Fatalf("parent-ended cancellation = %v/%v/%q", cancellation.Origin(), cancellation.Reason(), cancellation.Code())
+	}
+}
+
+// A queued unattended run the owner's quiet switch stopped, or one it
+// cancelled instead of sending back to the queue, was given up on by the
+// orchestrator: abandoned, never user_cancelled, because the owner turned
+// quiet on rather than cancelling this run.
+func TestOwnerQuietCancellationIsTheOrchestratorStoppingUnattendedWork(t *testing.T) {
+	cancellation := OwnerQuietCancellation()
+	if cancellation.Reason() != ReasonAbandoned || cancellation.Origin() != OriginOrchestratorInternal ||
+		cancellation.Code() != CodeOwnerQuiet || CodeOwnerQuiet != "owner_quiet" {
+		t.Fatalf("owner-quiet cancellation = %v/%v/%q", cancellation.Origin(), cancellation.Reason(), cancellation.Code())
 	}
 }
 

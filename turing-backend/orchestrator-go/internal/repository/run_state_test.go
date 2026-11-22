@@ -1153,8 +1153,9 @@ func absentLinkSurfaces() []absentLinkSurface {
 			},
 		},
 		{
-			// The uncertain edge: the command was delivered, so the run has to
-			// pass through recovering before it returns to the queue.
+			// The uncertain edge: the command was delivered, so its stale
+			// recovery has to pass the run through recovering before it
+			// returns to the queue.
 			name: "uncertain requeue of a delivered assignment",
 			arrange: func(t *testing.T, repo *Repository) (string, func() error) {
 				t.Helper()
@@ -1176,7 +1177,11 @@ func absentLinkSurfaces() []absentLinkSurface {
 					t.Fatalf("MarkAssignmentDelivered: %v", err)
 				}
 				return enqueued.RunID, func() error {
-					return repo.RequeueClaimedJob(ctx, claimed.JobID, enqueued.RunID)
+					_, err := repo.RecoverAssignmentWithLimit(ctx, Assignment{
+						JobID: claimed.JobID, RunID: enqueued.RunID,
+						WorkerID: "worker-absent-delivered", AttemptID: claimed.AssignmentAttemptID,
+					}, 3)
+					return err
 				}
 			},
 		},

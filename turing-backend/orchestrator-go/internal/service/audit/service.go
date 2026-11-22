@@ -822,6 +822,15 @@ func applyAuditActionPolicy(payload *turingv1.AuditPayload, action string, objec
 		payload.ServerName = auditString(object, "name", maxAuditServerNameBytes)
 		payload.ToolName = auditString(object, "toolName", maxAuditToolNameBytes)
 		payload.ToolPolicy = auditString(object, "toolPolicy", maxAuditToolPolicyBytes)
+	case "unattended.quiet.changed":
+		// Which way the owner set the quiet switch, as a closed word.
+		if quiet := auditBool(object, "quiet"); quiet != nil {
+			status := "off"
+			if *quiet {
+				status = "on"
+			}
+			payload.Status = &status
+		}
 	default:
 		// Unknown / future action: metadata only, no payload fields.
 	}

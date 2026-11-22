@@ -14,7 +14,7 @@ table that classifies one subject's conditions.
 | --- | --- | --- | --- |
 | 1 | `person/approval` | A pending approval whose expiry is in the future, on any run. A delegated task's is listed under its parent conversation. | It is decided, expires, or its conversation is deleted. |
 | 2 | `person/consent` | A delegated task still queued with `egress_consent = 'pending'`. | The owner allows or declines, or the task stops. |
-| 3 | `person/blocked` | An enabled automation whose latest occurrence failed or was blocked: a failed run, a cancelled run the owner did not cancel, or an `automation.remote_egress_blocked` record newer than its last run. | A later run succeeds or is still going, the automation is disabled or deleted, the failed run's conversation is deleted, or the owner dismisses that occurrence. Never by age. |
+| 3 | `person/blocked` | An enabled automation whose latest occurrence failed or was blocked: a failed run, a cancelled run neither the owner nor the owner's quiet switch (`owner_quiet`) cancelled, or an `automation.remote_egress_blocked` record newer than its last run. | A later run succeeds or is still going, the automation is disabled or deleted, the failed run's conversation is deleted, or the owner dismisses that occurrence. Never by age. |
 | 4 | `person/deletion` | An owner's deletion receipt (no parent) held `failed_external` and retryable. | It completes or stops being retryable. |
 | 5 | `person/proposal` | None until PRO-001. | — |
 

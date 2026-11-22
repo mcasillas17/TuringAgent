@@ -40,9 +40,21 @@ type registeredDuty struct {
 // before Run starts; a Loop is not safe to register on concurrently with Run.
 type Loop struct {
 	duties []registeredDuty
+	kicks  chan struct{}
 }
 
-func New() *Loop { return &Loop{} }
+func New() *Loop { return &Loop{kicks: make(chan struct{}, 1)} }
+
+// Kick asks for one tick now, ahead of the next scheduled one, for work that
+// should not wait up to a minute, such as the drain turning quiet on starts.
+// It never blocks: a kick that arrives while another is waiting for its tick
+// is coalesced into it, and one sent before Run starts is kept for it.
+func (l *Loop) Kick() {
+	select {
+	case l.kicks <- struct{}{}:
+	default:
+	}
+}
 
 // Register adds a duty, run on every tick after the duties registered before
 // it. The name only labels its errors in the log.
@@ -64,13 +76,16 @@ func (l *Loop) Tick(ctx context.Context) {
 	}
 }
 
-// Run ticks once for every value ticks delivers, until ctx ends.
+// Run ticks once for every value ticks delivers, and once for each
+// coalesced kick, until ctx ends.
 func (l *Loop) Run(ctx context.Context, ticks <-chan time.Time) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticks:
+			l.Tick(ctx)
+		case <-l.kicks:
 			l.Tick(ctx)
 		}
 	}

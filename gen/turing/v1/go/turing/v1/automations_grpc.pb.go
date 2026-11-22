@@ -24,6 +24,8 @@ const (
 	AutomationService_SetAutomationEnabled_FullMethodName = "/turing.v1.AutomationService/SetAutomationEnabled"
 	AutomationService_DeleteAutomation_FullMethodName     = "/turing.v1.AutomationService/DeleteAutomation"
 	AutomationService_ListAutomations_FullMethodName      = "/turing.v1.AutomationService/ListAutomations"
+	AutomationService_GetUnattendedQuiet_FullMethodName   = "/turing.v1.AutomationService/GetUnattendedQuiet"
+	AutomationService_SetUnattendedQuiet_FullMethodName   = "/turing.v1.AutomationService/SetUnattendedQuiet"
 )
 
 // AutomationServiceClient is the client API for AutomationService service.
@@ -38,6 +40,12 @@ type AutomationServiceClient interface {
 	SetAutomationEnabled(ctx context.Context, in *SetAutomationEnabledRequest, opts ...grpc.CallOption) (*Automation, error)
 	DeleteAutomation(ctx context.Context, in *DeleteAutomationRequest, opts ...grpc.CallOption) (*DeleteAutomationResponse, error)
 	ListAutomations(ctx context.Context, in *ListAutomationsRequest, opts ...grpc.CallOption) (*ListAutomationsResponse, error)
+	// The owner's quiet switch. Public only: no internal identity can read or
+	// set it, so no tool or run can turn it off.
+	GetUnattendedQuiet(ctx context.Context, in *GetUnattendedQuietRequest, opts ...grpc.CallOption) (*UnattendedQuiet, error)
+	// Compare-and-set on the revision named. Setting the current value writes
+	// nothing; a change is audited.
+	SetUnattendedQuiet(ctx context.Context, in *SetUnattendedQuietRequest, opts ...grpc.CallOption) (*SetUnattendedQuietResponse, error)
 }
 
 type automationServiceClient struct {
@@ -98,6 +106,26 @@ func (c *automationServiceClient) ListAutomations(ctx context.Context, in *ListA
 	return out, nil
 }
 
+func (c *automationServiceClient) GetUnattendedQuiet(ctx context.Context, in *GetUnattendedQuietRequest, opts ...grpc.CallOption) (*UnattendedQuiet, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UnattendedQuiet)
+	err := c.cc.Invoke(ctx, AutomationService_GetUnattendedQuiet_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *automationServiceClient) SetUnattendedQuiet(ctx context.Context, in *SetUnattendedQuietRequest, opts ...grpc.CallOption) (*SetUnattendedQuietResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetUnattendedQuietResponse)
+	err := c.cc.Invoke(ctx, AutomationService_SetUnattendedQuiet_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AutomationServiceServer is the server API for AutomationService service.
 // All implementations must embed UnimplementedAutomationServiceServer
 // for forward compatibility.
@@ -110,6 +138,12 @@ type AutomationServiceServer interface {
 	SetAutomationEnabled(context.Context, *SetAutomationEnabledRequest) (*Automation, error)
 	DeleteAutomation(context.Context, *DeleteAutomationRequest) (*DeleteAutomationResponse, error)
 	ListAutomations(context.Context, *ListAutomationsRequest) (*ListAutomationsResponse, error)
+	// The owner's quiet switch. Public only: no internal identity can read or
+	// set it, so no tool or run can turn it off.
+	GetUnattendedQuiet(context.Context, *GetUnattendedQuietRequest) (*UnattendedQuiet, error)
+	// Compare-and-set on the revision named. Setting the current value writes
+	// nothing; a change is audited.
+	SetUnattendedQuiet(context.Context, *SetUnattendedQuietRequest) (*SetUnattendedQuietResponse, error)
 	mustEmbedUnimplementedAutomationServiceServer()
 }
 
@@ -134,6 +168,12 @@ func (UnimplementedAutomationServiceServer) DeleteAutomation(context.Context, *D
 }
 func (UnimplementedAutomationServiceServer) ListAutomations(context.Context, *ListAutomationsRequest) (*ListAutomationsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListAutomations not implemented")
+}
+func (UnimplementedAutomationServiceServer) GetUnattendedQuiet(context.Context, *GetUnattendedQuietRequest) (*UnattendedQuiet, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetUnattendedQuiet not implemented")
+}
+func (UnimplementedAutomationServiceServer) SetUnattendedQuiet(context.Context, *SetUnattendedQuietRequest) (*SetUnattendedQuietResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetUnattendedQuiet not implemented")
 }
 func (UnimplementedAutomationServiceServer) mustEmbedUnimplementedAutomationServiceServer() {}
 func (UnimplementedAutomationServiceServer) testEmbeddedByValue()                           {}
@@ -246,6 +286,42 @@ func _AutomationService_ListAutomations_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AutomationService_GetUnattendedQuiet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUnattendedQuietRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutomationServiceServer).GetUnattendedQuiet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AutomationService_GetUnattendedQuiet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutomationServiceServer).GetUnattendedQuiet(ctx, req.(*GetUnattendedQuietRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AutomationService_SetUnattendedQuiet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetUnattendedQuietRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AutomationServiceServer).SetUnattendedQuiet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AutomationService_SetUnattendedQuiet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AutomationServiceServer).SetUnattendedQuiet(ctx, req.(*SetUnattendedQuietRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AutomationService_ServiceDesc is the grpc.ServiceDesc for AutomationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -272,6 +348,14 @@ var AutomationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListAutomations",
 			Handler:    _AutomationService_ListAutomations_Handler,
+		},
+		{
+			MethodName: "GetUnattendedQuiet",
+			Handler:    _AutomationService_GetUnattendedQuiet_Handler,
+		},
+		{
+			MethodName: "SetUnattendedQuiet",
+			Handler:    _AutomationService_SetUnattendedQuiet_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

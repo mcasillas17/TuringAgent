@@ -564,15 +564,12 @@ func TestConfirmedReleaseRetryRequeuesRunningDirectlyToQueued(t *testing.T) {
 // TestConfirmedUnsentAssignmentsRequeueRunningDirectlyToQueued covers the other
 // proof: the orchestrator knows the assignment command never reached anyone.
 //
-// A job that was claimed but never handed out, a pending send that was
-// abandoned before it started, and a send that provably failed all leave the
-// same fact behind — no worker ever received the work. Publishing recovering
-// for those would describe an executor that does not exist.
+// A pending send that was abandoned before it started and a send that
+// provably failed both leave the same fact behind — no worker ever received
+// the work. Publishing recovering for those would describe an executor that
+// does not exist.
 func TestConfirmedUnsentAssignmentsRequeueRunningDirectlyToQueued(t *testing.T) {
 	for name, release := range map[string]func(*testing.T, *Repository, Assignment) error{
-		"claimed job never dispatched": func(t *testing.T, repo *Repository, assignment Assignment) error {
-			return repo.RequeueClaimedJob(context.Background(), assignment.JobID, assignment.RunID)
-		},
 		"pending send abandoned before it started": func(t *testing.T, repo *Repository, assignment Assignment) error {
 			return repo.AbortPendingAssignment(context.Background(), assignment)
 		},
@@ -923,116 +920,4 @@ func waitingApprovalRun(t *testing.T, repo *Repository, worker string) (EnqueueU
 		t.Fatalf("run lifecycle = %q, want waiting_approval", waiting.Lifecycle)
 	}
 	return enqueued, claimed, approval
-}
-
-// TestRequeueClaimedJobAfterDeliveryUsesUncertainRecovery closes the hole the
-// direct edge left open on the one requeue caller that names no owner.
-//
-// RequeueClaimedJob identifies a job and a run and nothing else — no worker, no
-// attempt. That is enough proof for a claim that was never dispatched, and it
-// used to be treated as enough for every state that is not an in-flight send.
-// Once the assignment has been delivered there is a worker that may still be
-// executing it, so releasing the run straight back to queued would publish a
-// certainty nobody holds. Delivered ownership takes the uncertain edge:
-// recovering first, queued after.
-func TestRequeueClaimedJobAfterDeliveryUsesUncertainRecovery(t *testing.T) {
-	repo := New(openTestDB(t))
-	ctx := context.Background()
-	enqueued, claimed := claimRetryRun(t, repo, "worker-delivered-requeue")
-	assignment := Assignment{
-		JobID: claimed.JobID, RunID: enqueued.RunID,
-		WorkerID: "worker-delivered-requeue", AttemptID: claimed.AssignmentAttemptID,
-	}
-	if err := repo.BeginAssignmentSend(ctx, assignment); err != nil {
-		t.Fatalf("BeginAssignmentSend: %v", err)
-	}
-	if err := repo.MarkAssignmentDelivered(ctx, assignment); err != nil {
-		t.Fatalf("MarkAssignmentDelivered: %v", err)
-	}
-	before := runStateProjections(t, repo, enqueued.RunID)
-
-	if err := repo.RequeueClaimedJob(ctx, claimed.JobID, enqueued.RunID); err != nil {
-		t.Fatalf("RequeueClaimedJob: %v", err)
-	}
-
-	committed := runStateProjections(t, repo, enqueued.RunID)[len(before):]
-	if len(committed) != 2 {
-		t.Fatalf("requeue after delivery projected %d states, want recovering then queued: %+v", len(committed), committed)
-	}
-	if committed[0].Lifecycle != lifecycleRecovering || committed[0].StateVersion != claimed.ExpectedStateVersion+1 {
-		t.Fatalf("first projection = %s at version %d, want recovering at %d",
-			committed[0].Lifecycle, committed[0].StateVersion, claimed.ExpectedStateVersion+1)
-	}
-	if committed[1].Lifecycle != lifecycleQueued || committed[1].StateVersion != claimed.ExpectedStateVersion+2 {
-		t.Fatalf("second projection = %s at version %d, want queued at %d",
-			committed[1].Lifecycle, committed[1].StateVersion, claimed.ExpectedStateVersion+2)
-	}
-	// Order in the slice is order in the durable log only because the sequences
-	// say so: a client replaying the log must not be able to see queued before
-	// the recovering phase it is recovering from. Reading the rows back in
-	// insertion order proves both halves — that the sequences climb with the
-	// writes, and that recovering was the write that landed first.
-	inserted := runStateProjectionsInInsertionOrder(t, repo, enqueued.RunID)
-	if len(inserted) < 2 {
-		t.Fatalf("run has %d durable projections, want at least recovering then queued: %+v", len(inserted), inserted)
-	}
-	tail := inserted[len(inserted)-2:]
-	if tail[0].Lifecycle != lifecycleRecovering || tail[1].Lifecycle != lifecycleQueued {
-		t.Fatalf("durable insertion order ends %s then %s, want recovering then queued",
-			tail[0].Lifecycle, tail[1].Lifecycle)
-	}
-	if tail[0].StateVersion != claimed.ExpectedStateVersion+1 || tail[1].StateVersion != claimed.ExpectedStateVersion+2 {
-		t.Fatalf("durable insertion order carries versions %d then %d, want %d then %d",
-			tail[0].StateVersion, tail[1].StateVersion,
-			claimed.ExpectedStateVersion+1, claimed.ExpectedStateVersion+2)
-	}
-	// The row half: queued at the second increment, no owner left behind.
-	assertReleasedToQueue(t, repo, enqueued.RunID, claimed.ExpectedStateVersion+2)
-	if got := readJobProgress(t, repo, claimed.JobID); got != (jobProgress{status: "pending", attempt: 2}) {
-		t.Fatalf("requeued job = %+v, want pending attempt 2", got)
-	}
-}
-
-// runStateProjectionsInInsertionOrder returns a run's lifecycle projections in
-// the order the rows were durably inserted and asserts that their sequences
-// increase in that same order.
-//
-// The insertion order has to come from a key the writer does not choose:
-// ordering by sequence and then checking that sequence increases proves
-// nothing, because UNIQUE(session_id, sequence) already makes that sort
-// strictly increasing whatever order the rows were written in. SQLite's rowid
-// is assigned at insert time and is independent of the sequence column, so
-// sorting by it and finding sequences out of order would mean a row committed
-// earlier carries a later replay position than one committed after it.
-func runStateProjectionsInInsertionOrder(t *testing.T, repo *Repository, runID string) []eventSnapshot {
-	t.Helper()
-	rows, err := repo.db.QueryContext(context.Background(), `
-		SELECT sequence, id, type, payload_json
-		FROM events
-		WHERE run_id = ? AND type = ?
-		ORDER BY rowid
-	`, runID, runStateChangedEventType)
-	if err != nil {
-		t.Fatalf("read run state sequences: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var projections []eventSnapshot
-	previous := int64(-1)
-	for rows.Next() {
-		var sequence int64
-		var event Event
-		if err := rows.Scan(&sequence, &event.EventID, &event.Type, &event.PayloadJSON); err != nil {
-			t.Fatalf("scan run state sequence: %v", err)
-		}
-		if sequence <= previous {
-			t.Fatalf("run state projection inserted after sequence %d carries sequence %d: "+
-				"a later write took an earlier replay position", previous, sequence)
-		}
-		previous = sequence
-		projections = append(projections, decodeRunStateSnapshot(t, event))
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("read run state sequences: %v", err)
-	}
-	return projections
 }

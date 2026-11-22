@@ -28,6 +28,12 @@ The project is designed for local development first: secrets stay in your local 
   one order with a content-free refresh hint, and a Dismiss bound to one
   automation failure. The app's destination for it is not built yet. See
   [Needs-you queue](docs/architecture/needs-you-queue.md).
+- Lets the owner stop all unattended work with one switch on the
+  Automations page (`AutomationService.SetUnattendedQuiet`, compare-and-set
+  on a revision and audited): while it is on no automation fires, queued
+  automation runs are cancelled and none goes back to the queue; a run
+  already going finishes. Turning it off starts nothing queued before it,
+  and each automation that came due runs once, at the scheduler's next tick.
 - Exposes a redacted, paginated audit read API (`AuditService.ListAuditEntries`), including the approval comment or denial reason a person typed; audit inspection is exposed programmatically through the authenticated API, with no client or built-in viewer yet.
 - Withdraws a deleted session through a durable lifecycle: reads/search/replay
   fail closed once withdrawal starts, active work is cancelled and reconciled,

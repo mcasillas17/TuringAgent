@@ -1150,6 +1150,42 @@ func TestDelegationEgressProtoContract(t *testing.T) {
 	assertProtoFieldMembers(t, decide, map[protoreflect.Name]protoreflect.FieldNumber{"delegation_id": 1, "consent": 2})
 }
 
+// The owner's quiet switch (TUR-028a): a value and the revision a write must
+// name, read and written by two public methods on the automation service; a
+// write answers with the setting as it stands, and whether its revision was
+// stale.
+func TestUnattendedQuietProtoContract(t *testing.T) {
+	file := turingv1.File_turing_v1_automations_proto
+	service := file.Services().ByName("AutomationService")
+	for name, want := range map[protoreflect.Name][2]protoreflect.FullName{
+		"GetUnattendedQuiet": {"turing.v1.GetUnattendedQuietRequest", "turing.v1.UnattendedQuiet"},
+		"SetUnattendedQuiet": {"turing.v1.SetUnattendedQuietRequest", "turing.v1.SetUnattendedQuietResponse"},
+	} {
+		method := service.Methods().ByName(name)
+		if method == nil || method.Input().FullName() != want[0] || method.Output().FullName() != want[1] ||
+			method.IsStreamingClient() || method.IsStreamingServer() {
+			t.Fatalf("AutomationService.%s = %v, want unary %v", name, method, want)
+		}
+	}
+	if turingv1.AutomationService_SetUnattendedQuiet_FullMethodName != "/turing.v1.AutomationService/SetUnattendedQuiet" {
+		t.Fatalf("full method name = %q", turingv1.AutomationService_SetUnattendedQuiet_FullMethodName)
+	}
+	setting := file.Messages().ByName("UnattendedQuiet")
+	assertProtoField(t, setting, "quiet", 1, protoreflect.BoolKind, false, "")
+	assertProtoField(t, setting, "revision", 2, protoreflect.Int64Kind, false, "")
+	assertProtoField(t, setting, "unavailable", 3, protoreflect.BoolKind, false, "")
+	assertProtoFieldMembers(t, setting, map[protoreflect.Name]protoreflect.FieldNumber{"quiet": 1, "revision": 2, "unavailable": 3})
+	assertProtoFieldMembers(t, file.Messages().ByName("GetUnattendedQuietRequest"), map[protoreflect.Name]protoreflect.FieldNumber{})
+	request := file.Messages().ByName("SetUnattendedQuietRequest")
+	assertProtoField(t, request, "quiet", 1, protoreflect.BoolKind, false, "")
+	assertProtoField(t, request, "revision", 2, protoreflect.Int64Kind, false, "")
+	assertProtoFieldMembers(t, request, map[protoreflect.Name]protoreflect.FieldNumber{"quiet": 1, "revision": 2})
+	response := file.Messages().ByName("SetUnattendedQuietResponse")
+	assertProtoField(t, response, "setting", 1, protoreflect.MessageKind, false, "turing.v1.UnattendedQuiet")
+	assertProtoField(t, response, "stale", 2, protoreflect.BoolKind, false, "")
+	assertProtoFieldMembers(t, response, map[protoreflect.Name]protoreflect.FieldNumber{"setting": 1, "stale": 2})
+}
+
 // The Needs-you queue: a closed stage table, one row shape carrying only ids,
 // titles and closed codes, keyset paging through the shared page messages,
 // and an occurrence-bound dismissal of one automation failure.

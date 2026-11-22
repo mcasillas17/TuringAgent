@@ -297,3 +297,64 @@ final $typed_data.Uint8List listAutomationsResponseDescriptor =
     $convert.base64Decode(
         'ChdMaXN0QXV0b21hdGlvbnNSZXNwb25zZRI3CgthdXRvbWF0aW9ucxgBIAMoCzIVLnR1cmluZy'
         '52MS5BdXRvbWF0aW9uUgthdXRvbWF0aW9ucw==');
+
+@$core.Deprecated('Use unattendedQuietDescriptor instead')
+const UnattendedQuiet$json = {
+  '1': 'UnattendedQuiet',
+  '2': [
+    {'1': 'quiet', '3': 1, '4': 1, '5': 8, '10': 'quiet'},
+    {'1': 'revision', '3': 2, '4': 1, '5': 3, '10': 'revision'},
+    {'1': 'unavailable', '3': 3, '4': 1, '5': 8, '10': 'unavailable'},
+  ],
+};
+
+/// Descriptor for `UnattendedQuiet`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List unattendedQuietDescriptor = $convert.base64Decode(
+    'Cg9VbmF0dGVuZGVkUXVpZXQSFAoFcXVpZXQYASABKAhSBXF1aWV0EhoKCHJldmlzaW9uGAIgAS'
+    'gDUghyZXZpc2lvbhIgCgt1bmF2YWlsYWJsZRgDIAEoCFILdW5hdmFpbGFibGU=');
+
+@$core.Deprecated('Use getUnattendedQuietRequestDescriptor instead')
+const GetUnattendedQuietRequest$json = {
+  '1': 'GetUnattendedQuietRequest',
+};
+
+/// Descriptor for `GetUnattendedQuietRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List getUnattendedQuietRequestDescriptor =
+    $convert.base64Decode('ChlHZXRVbmF0dGVuZGVkUXVpZXRSZXF1ZXN0');
+
+@$core.Deprecated('Use setUnattendedQuietRequestDescriptor instead')
+const SetUnattendedQuietRequest$json = {
+  '1': 'SetUnattendedQuietRequest',
+  '2': [
+    {'1': 'quiet', '3': 1, '4': 1, '5': 8, '10': 'quiet'},
+    {'1': 'revision', '3': 2, '4': 1, '5': 3, '10': 'revision'},
+  ],
+};
+
+/// Descriptor for `SetUnattendedQuietRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List setUnattendedQuietRequestDescriptor =
+    $convert.base64Decode(
+        'ChlTZXRVbmF0dGVuZGVkUXVpZXRSZXF1ZXN0EhQKBXF1aWV0GAEgASgIUgVxdWlldBIaCghyZX'
+        'Zpc2lvbhgCIAEoA1IIcmV2aXNpb24=');
+
+@$core.Deprecated('Use setUnattendedQuietResponseDescriptor instead')
+const SetUnattendedQuietResponse$json = {
+  '1': 'SetUnattendedQuietResponse',
+  '2': [
+    {
+      '1': 'setting',
+      '3': 1,
+      '4': 1,
+      '5': 11,
+      '6': '.turing.v1.UnattendedQuiet',
+      '10': 'setting'
+    },
+    {'1': 'stale', '3': 2, '4': 1, '5': 8, '10': 'stale'},
+  ],
+};
+
+/// Descriptor for `SetUnattendedQuietResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List setUnattendedQuietResponseDescriptor =
+    $convert.base64Decode(
+        'ChpTZXRVbmF0dGVuZGVkUXVpZXRSZXNwb25zZRI0CgdzZXR0aW5nGAEgASgLMhoudHVyaW5nLn'
+        'YxLlVuYXR0ZW5kZWRRdWlldFIHc2V0dGluZxIUCgVzdGFsZRgCIAEoCFIFc3RhbGU=');
